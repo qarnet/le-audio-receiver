@@ -1,0 +1,11 @@
+CompileFlags:
+  Remove:
+    - -mthumb
+    - -mcpu=*
+    - -march=*
+    - -mabi=*
+    - -mfp*
+    - -mfloat-abi=hard
+  Add:
+    - --target=arm-none-eabi
+    - -nostdlibinc

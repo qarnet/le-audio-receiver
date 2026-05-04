@@ -1,0 +1,9 @@
+mainmenu "LE Audio Receiver (nRF5340 + PCM5102A)"
+
+config INFO_REPORTING_INTERVAL
+	int "Number of SDUs between log reports"
+	default 0
+	help
+	  Set to 0 to disable periodic logging to avoid UART spam.
+
+source "Kconfig.zephyr"

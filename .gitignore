@@ -1,0 +1,21 @@
+build/
+
+# Editor / IDE
+.idea/
+.vscode/
+
+# Claude / agent tooling
+.agents/
+.claude/
+.mcp.json
+.ripgreprc
+
+# Shell rc files (per-machine)
+.bash_profile
+.bashrc
+.profile
+.zprofile
+.zshrc
+
+# Docker safe.directory leftover
+.gitconfig
