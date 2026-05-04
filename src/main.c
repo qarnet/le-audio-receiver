@@ -56,19 +56,26 @@
 				 BT_AUDIO_CONTEXT_TYPE_INSTRUCTIONAL)
 
 static const struct bt_audio_codec_cap lc3_codec_cap = BT_AUDIO_CODEC_CAP_LC3(
-	BT_AUDIO_CODEC_CAP_FREQ_ANY, BT_AUDIO_CODEC_CAP_DURATION_10,
+	BT_AUDIO_CODEC_CAP_FREQ_48KHZ, BT_AUDIO_CODEC_CAP_DURATION_10,
 	BT_AUDIO_CODEC_CAP_CHAN_COUNT_SUPPORT(2), 40u, 120u, 1u,
 	BT_AUDIO_CONTEXT_TYPE_MEDIA);
 
 static struct bt_conn *default_conn;
 
+#if defined(CONFIG_LIBLC3)
+#define SAMPLES_PER_CHANNEL_MAX  480   /* 48 kHz × 10 ms */
+#define STEREO_OUT_MAX           (SAMPLES_PER_CHANNEL_MAX * 2)
+#endif
+
 struct audio_sink {
 	struct bt_bap_stream stream;
 	size_t recv_cnt;
-	int chan_count;		/* per-ASE channel count from codec cfg */
+	int chan_count;
 #if defined(CONFIG_LIBLC3)
+	int samples_per_ch;
+	int frames_per_sdu;
 	lc3_decoder_t decoder;
-	void *decoder_mem;	/* points to lc3_decoder_mem_48k_t */
+	lc3_decoder_mem_48k_t dec_mem;
 #endif
 };
 
@@ -99,28 +106,14 @@ static const struct bt_data ad[] = {
 
 #if defined(CONFIG_LIBLC3)
 
-#define SAMPLE_RATE          48000
-#define FRAME_DURATION_US    10000
-#define SAMPLES_PER_CHANNEL  ((FRAME_DURATION_US * SAMPLE_RATE) / USEC_PER_SEC)
-/* Largest output the decoder might produce in one recv callback */
-#define OUT_BUF_SAMPLES      (SAMPLES_PER_CHANNEL * MAX_SINK_CHANNELS)
-
-static lc3_decoder_mem_48k_t decoder_mem[MAX_SINK_ASE];
-static int frames_per_sdu[MAX_SINK_ASE];
-
-/* Scratch buffer for mono decode, then interleaved stereo push buffer */
-static int16_t mono_buf[SAMPLES_PER_CHANNEL];
-static int16_t l_buf[SAMPLES_PER_CHANNEL];
-static int16_t r_buf[SAMPLES_PER_CHANNEL];
-static int16_t stereo_out[OUT_BUF_SAMPLES];
-
-/* Synchronisation: each ASE recv pushes its decoded data into the
- * channel slot, then we push stereo when both (or the single) ASE
- * have been received in this 10 ms window.
- */
+static int16_t l_buf[SAMPLES_PER_CHANNEL_MAX];
+static int16_t r_buf[SAMPLES_PER_CHANNEL_MAX];
+static int16_t stereo_out[STEREO_OUT_MAX];
 static bool l_received;
 static bool r_received;
 
+#else
+#define samples_per_channel_max 0
 #endif /* CONFIG_LIBLC3 */
 
 /* ── helpers ─────────────────────────────────────────────────────── */
@@ -225,13 +218,27 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 	}
 
 	*stream = &sinks[idx].stream;
+#if defined(CONFIG_LIBLC3)
 	sinks[idx].decoder = NULL;
+#endif
 	sinks[idx].recv_cnt = 0;
 	num_sink_ase++;
 
-	int cc = bt_audio_codec_cfg_get_chan_allocation(codec_cfg, NULL, false);
-	printk("  (chan alloc get returned code %d; using chan_count=1 per ASE)\n", cc);
-	sinks[idx].chan_count = 1;
+	enum bt_audio_location chan_alloc;
+	int cc = bt_audio_codec_cfg_get_chan_allocation(codec_cfg, &chan_alloc, false);
+	if (cc > 0) {
+		int cnt = 0;
+		for (int b = 0; b < 32; b++) {
+			if (chan_alloc & BIT(b)) {
+				cnt++;
+			}
+		}
+		sinks[idx].chan_count = cnt;
+		printk("  chan alloc 0x%08x count=%d\n", chan_alloc, cnt);
+	} else {
+		printk("  (chan alloc get returned %d; defaulting chan_count=1)\n", cc);
+		sinks[idx].chan_count = 1;
+	}
 
 	*pref = qos_pref;
 	return 0;
@@ -252,9 +259,8 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 	printk("Enable: stream[%zu] meta_len %zu\n", idx, meta_len);
 
 #if defined(CONFIG_LIBLC3)
-	int ret;
-
-	ret = bt_audio_codec_cfg_get_freq(stream->codec_cfg);
+	int cc = sinks[idx].chan_count;
+	int ret = bt_audio_codec_cfg_get_freq(stream->codec_cfg);
 	if (ret <= 0) {
 		printk("Error: freq not set\n");
 		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
@@ -272,17 +278,18 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 	}
 	int frame_us = bt_audio_codec_cfg_frame_dur_to_frame_dur_us(ret);
 
-	frames_per_sdu[idx] =
+	sinks[idx].samples_per_ch = (frame_us * freq) / USEC_PER_SEC;
+	sinks[idx].frames_per_sdu =
 		bt_audio_codec_cfg_get_frame_blocks_per_sdu(stream->codec_cfg, true);
 
-	sinks[idx].decoder = lc3_setup_decoder(frame_us, freq, 0, &decoder_mem[idx]);
+	sinks[idx].decoder = lc3_setup_decoder(frame_us, freq, 0, &sinks[idx].dec_mem);
 	if (!sinks[idx].decoder) {
-		printk("LC3 decoder setup failed\n");
+		printk("LC3 decoder setup failed (freq=%d dur=%d)\n", freq, frame_us);
 		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
 				       BT_BAP_ASCS_REASON_CODEC_DATA);
 		return -1;
 	}
-	printk("LC3 decoder[%zu]: %d Hz, %d us\n", idx, freq, frame_us);
+	printk("LC3 decoder[%zu]: %d Hz %d us ch=%d\n", idx, freq, frame_us, cc);
 #endif
 	return 0;
 }
@@ -305,7 +312,9 @@ static int lc3_metadata(struct bt_bap_stream *stream, const uint8_t meta[], size
 static int lc3_disable(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
 {
 	printk("Disable: stream %p\n", stream);
+#if defined(CONFIG_LIBLC3)
 	sinks[sink_idx(stream)].decoder = NULL;
+#endif
 	return 0;
 }
 
@@ -319,7 +328,9 @@ static int lc3_release(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp
 {
 	printk("Release: stream %p\n", stream);
 	size_t idx = sink_idx(stream);
+#if defined(CONFIG_LIBLC3)
 	sinks[idx].decoder = NULL;
+#endif
 	memset(&sinks[idx], 0, sizeof(sinks[idx]));
 	if (num_sink_ase > 0) {
 		num_sink_ase--;
@@ -349,23 +360,13 @@ static const struct bt_bap_unicast_server_cb unicast_server_cb = {
 
 static void push_stereo(void)
 {
-	if (num_sink_ase == 2 && l_received && r_received) {
-		/* Two separate mono ASEs — interleave */
-		for (int n = 0; n < SAMPLES_PER_CHANNEL; n++) {
-			stereo_out[2 * n]     = l_buf[n];
-			stereo_out[2 * n + 1] = r_buf[n];
+	if (num_sink_ase >= 1 && l_received && r_received) {
+		int n = sinks[0].samples_per_ch;
+		for (int i = 0; i < n; i++) {
+			stereo_out[2 * i]     = l_buf[i];
+			stereo_out[2 * i + 1] = r_buf[i];
 		}
-		audio_i2s_push(stereo_out, SAMPLES_PER_CHANNEL * 2);
-		l_received = false;
-		r_received = false;
-
-	} else if (num_sink_ase == 1) {
-		/* Single mono ASE — duplicate to both channels */
-		for (int n = 0; n < SAMPLES_PER_CHANNEL; n++) {
-			stereo_out[2 * n]     = l_received ? l_buf[n] : r_buf[n];
-			stereo_out[2 * n + 1] = l_received ? l_buf[n] : r_buf[n];
-		}
-		audio_i2s_push(stereo_out, SAMPLES_PER_CHANNEL * 2);
+		audio_i2s_push(stereo_out, n * 2);
 		l_received = false;
 		r_received = false;
 	}
@@ -378,12 +379,14 @@ static void stream_recv(struct bt_bap_stream *stream,
 	size_t idx = sink_idx(stream);
 	struct audio_sink *as = &sinks[idx];
 	const bool valid = (info->flags & BT_ISO_FLAGS_VALID) != 0;
-	const int octets_per_frame =
-		frames_per_sdu[idx] > 0 ? (buf->len / frames_per_sdu[idx]) : buf->len;
+	const int f_per_sdu = as->frames_per_sdu;
+	const int spc = as->samples_per_ch;
+	const int octets_per_frame = f_per_sdu > 0 ? (buf->len / f_per_sdu) : buf->len;
 
 	if (valid) {
 		as->recv_cnt++;
-		if (CONFIG_INFO_REPORTING_INTERVAL > 0 &&
+		if (IS_ENABLED(CONFIG_INFO_REPORTING_INTERVAL) &&
+		    CONFIG_INFO_REPORTING_INTERVAL > 0 &&
 		    (as->recv_cnt % CONFIG_INFO_REPORTING_INTERVAL) == 0U) {
 			printk("Audio stream[%zu]: %zu SDU\n", idx, as->recv_cnt);
 		}
@@ -396,31 +399,57 @@ static void stream_recv(struct bt_bap_stream *stream,
 		return;
 	}
 
-	for (int i = 0; i < frames_per_sdu[idx]; i++) {
-		const int err = lc3_decode(
-			as->decoder,
-			valid ? net_buf_pull_mem(buf, octets_per_frame) : NULL,
-			octets_per_frame,
-			LC3_PCM_FORMAT_S16,
-			mono_buf, 1);
-
-		if (err == 1) {
-			/* PLC performed by codec itself */
-		} else if (err < 0) {
-			printk("[%zu:%d]: LC3 decode error %d\n", idx, i, err);
+	if (as->chan_count >= 2) {
+		for (int i = 0; i < f_per_sdu; i++) {
+			const int err = lc3_decode(
+				as->decoder,
+				valid ? net_buf_pull_mem(buf, octets_per_frame) : NULL,
+				octets_per_frame,
+				LC3_PCM_FORMAT_S16,
+				stereo_out, 2);
+			if (err == 1) {
+			} else if (err < 0) {
+				printk("[%zu:%d]: LC3 decode error %d\n", idx, i, err);
+			}
+		}
+		audio_i2s_push(stereo_out, spc * 2);
+	} else {
+		for (int i = 0; i < f_per_sdu; i++) {
+			const int err = lc3_decode(
+				as->decoder,
+				valid ? net_buf_pull_mem(buf, octets_per_frame) : NULL,
+				octets_per_frame,
+				LC3_PCM_FORMAT_S16,
+				idx == 0 ? l_buf : r_buf, 1);
+			if (err == 1) {
+			} else if (err < 0) {
+				printk("[%zu:%d]: LC3 decode error %d\n", idx, i, err);
+			}
+		}
+		if (idx == 0) {
+			l_received = true;
+		} else {
+			r_received = true;
+		}
+		if (num_sink_ase == 1) {
+			if (l_received) {
+				for (int i = 0; i < spc; i++) {
+					stereo_out[2 * i]     = l_buf[i];
+					stereo_out[2 * i + 1] = l_buf[i];
+				}
+			} else {
+				for (int i = 0; i < spc; i++) {
+					stereo_out[2 * i]     = r_buf[i];
+					stereo_out[2 * i + 1] = r_buf[i];
+				}
+			}
+			audio_i2s_push(stereo_out, spc * 2);
+			l_received = false;
+			r_received = false;
+		} else {
+			push_stereo();
 		}
 	}
-
-	/* Store decoded mono into the correct channel slot */
-	if (idx == 0) {
-		memcpy(l_buf, mono_buf, SAMPLES_PER_CHANNEL * sizeof(int16_t));
-		l_received = true;
-	} else {
-		memcpy(r_buf, mono_buf, SAMPLES_PER_CHANNEL * sizeof(int16_t));
-		r_received = true;
-	}
-
-	push_stereo();
 }
 
 #else /* !LIBLC3 — pass-thru path, mostly for compile check */
@@ -496,9 +525,11 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
 	audio_i2s_stop();
 
+#if defined(CONFIG_LIBLC3)
 	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
 		sinks[i].decoder = NULL;
 	}
+#endif
 	num_sink_ase = 0;
 
 	bt_conn_unref(default_conn);
