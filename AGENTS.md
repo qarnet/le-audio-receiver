@@ -28,9 +28,10 @@ No MCK — internal PLL via hardware bridge. Pin-configured, no codec binding.
 
 | Signal | nRF Pin | Arduino |
 |--------|---------|---------|
-| SCK/BCLK | P1.15 | D13 |
-| LRCK/WS | P1.12 | D10 |
-| SDOUT/DIN | P1.13 | D11 |
+| PCM5102A BCK → nRF SCK (BCLK) | P1.15 | D13 |
+| PCM5102A LRCK → nRF LRCK (WS) | P1.12 | D10 |
+| PCM5102A DIN → nRF SDOUT | P1.13 | D11 |
+| PCM5102A SCK — NC (MCK bypass, internal PLL) | — | — |
 
 ACLK 12.288 MHz, `CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y`, I2S master (nRF generates BCLK+LRCK).
 
