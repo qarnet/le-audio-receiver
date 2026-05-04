@@ -4,6 +4,7 @@
 
 - **`ACCEPT_JLINK_LICENSE=1` kills non-interactive containers** — J-Link dpkg fails (no udev) and the container startup script exits. Used in `docker-run.sh` (interactive), omitted in `docker-build.sh`.
 - **west init -l puts topdir at the manifest's *parent*** — so this repo is mounted as `/workspace/app` inside the container, with `/workspace` bound to a host cache dir (`~/.cache/le-audio-receiver-workspace`). west clones (zephyr, nrf, modules…) live in that cache, not in this repo. `west.yml` has `self.path: app` to match.
+- **The sdk-nrf project must be named `nrf`** in `west.yml` (not `sdk-nrf`). `sdk-nrf/modules/modules.cmake` hardcodes `SYSBUILD_NRF_KCONFIG`, which derives from the west project name. Naming it `sdk-nrf` makes Zephyr generate `osource "$(SYSBUILD_SDK_NRF_KCONFIG)"` — an undefined var that resolves to `$ZEPHYR_BASE/`, and cmake fails with "Could not open '/workspace/zephyr/' (EISDIR)".
 - **Container runs as host UID:GID** (`--user $(id -u):$(id -g)` + `HOME=/tmp`). Avoids root-owned build artifacts on the host.
 
 ## Stack
@@ -58,3 +59,9 @@ Reference samples (in west cache, e.g. `~/.cache/le-audio-receiver-workspace/`):
 - `zephyr/samples/bluetooth/bap_unicast_server/`
 - `zephyr/samples/drivers/i2s/echo/`
 - `nrf/applications/nrf5340_audio/src/modules/audio_i2s.c`
+
+## Known broken (as of commit 801fb5c)
+
+Build infrastructure works end-to-end; app source has unresolved errors:
+- `src/main.c:66` — `unknown type name 'lc3_decoder_t'`. Missing `#include <lc3.h>`. Cascade of `-Wint-conversion` warnings on the `decoder` field (lines 225/275/305/319/398/497) confirms the field type is wrong (declared as `int`, should be `lc3_decoder_t`).
+- `src/audio_i2s.c:44` — `.timeout = K_NO_WAIT` initializes an `int` field with a `k_timeout_t`. The `i2s_config.timeout` field is `int32_t` (milliseconds) — use `0` or `SYS_FOREVER_MS`.
