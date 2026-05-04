@@ -42,6 +42,10 @@
 
 #include "audio_i2s.h"
 
+#if defined(CONFIG_LIBLC3)
+#include "lc3.h"
+#endif
+
 #define MAX_SINK_ASE          CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT
 #define MAX_SINK_CHANNELS     2
 
@@ -64,6 +68,7 @@ struct audio_sink {
 	int chan_count;		/* per-ASE channel count from codec cfg */
 #if defined(CONFIG_LIBLC3)
 	lc3_decoder_t decoder;
+	void *decoder_mem;	/* points to lc3_decoder_mem_48k_t */
 #endif
 };
 
@@ -93,8 +98,6 @@ static const struct bt_data ad[] = {
 /* ── LC3 decoder static storage ─────────────────────────────────── */
 
 #if defined(CONFIG_LIBLC3)
-
-#include "lc3.h"
 
 #define SAMPLE_RATE          48000
 #define FRAME_DURATION_US    10000

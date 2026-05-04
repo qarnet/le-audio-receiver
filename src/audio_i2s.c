@@ -41,7 +41,7 @@ int audio_i2s_init(void)
 		.frame_clk_freq  = SAMPLE_RATE,
 		.mem_slab        = &i2s_slab,
 		.block_size      = BLOCK_SIZE,
-		.timeout         = K_NO_WAIT,
+		.timeout         = 0,
 	};
 
 	int ret = i2s_configure(i2s_dev, I2S_DIR_TX, &cfg);
