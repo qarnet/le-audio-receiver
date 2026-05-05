@@ -1,11 +1,11 @@
 CompileFlags:
+  CompilationDatabase: build/app
   Remove:
-    - -mthumb
-    - -mcpu=*
-    - -march=*
-    - -mabi=*
-    - -mfp*
-    - -mfloat-abi=hard
+    - -fno-printf-return-value
+    - -fno-reorder-functions
+    - -mfp16-format=*
+    - --specs=*
+    - -fno-defer-pop
+    - -fno-freestanding
   Add:
     - --target=arm-none-eabi
-    - -nostdlibinc

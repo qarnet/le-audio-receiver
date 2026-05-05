@@ -1,19 +1,23 @@
 {
-    "$schema": "https://opencode.ai/config.json",
-    "permission": {
-        "skill": {
-            "*": "allow"
-        },
-        "external_directory": {
-            "~/ncs/**": "allow",
-            "/tmp/**": "allow",
-            "/dev/**": "allow"
-        }
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "skill": {
+      "*": "allow"
     },
-    "lsp": {
-        "clangd": {
-            "command": ["clangd"],
-            "args": []
-        }
+    "external_directory": {
+      "~/ncs/**": "allow",
+      "/tmp/**": "allow",
+      "/dev/**": "allow"
     }
+  },
+  "lsp": {
+    "clangd": {
+      "command": [
+        "clangd",
+        "--background-index",
+        "--clang-tidy",
+        "--query-driver=/home/thomas-win/ncs/toolchains/*/opt/zephyr-sdk/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc"
+      ],
+    }
+  }
 }
