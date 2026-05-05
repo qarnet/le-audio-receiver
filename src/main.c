@@ -36,6 +36,7 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/util.h>
+#include <zephyr/settings/settings.h>
 #include <zephyr/sys/util_macro.h>
 #include <zephyr/sys_clock.h>
 #include <zephyr/types.h>
@@ -83,13 +84,13 @@ static struct audio_sink sinks[MAX_SINK_ASE];
 static size_t num_sink_ase;
 
 static const struct bt_bap_qos_cfg_pref qos_pref =
-	BT_BAP_QOS_CFG_PREF(true, BT_GAP_LE_PHY_2M, 0x02, 10, 40000, 40000, 40000, 40000);
+	BT_BAP_QOS_CFG_PREF(true, BT_GAP_LE_PHY_2M, 0x02, 10, 10000, 80000, 40000, 40000);
 
 static K_SEM_DEFINE(sem_disconnected, 0, 1);
 
 static uint8_t unicast_server_addata[] = {
 	BT_UUID_16_ENCODE(BT_UUID_ASCS_VAL),
-	BT_AUDIO_UNICAST_ANNOUNCEMENT_TARGETED,
+	BT_AUDIO_UNICAST_ANNOUNCEMENT_GENERAL,
 	BT_BYTES_LIST_LE16(AVAILABLE_SINK_CONTEXT),
 	BT_BYTES_LIST_LE16(0),		/* no source */
 	0x00,
@@ -577,6 +578,34 @@ static int set_available_contexts(void)
 	return err;
 }
 
+/* ── Pairing callbacks (Just Works) ────────────────────────────────── */
+
+static enum bt_security_err pairing_accept(struct bt_conn *conn,
+					   const struct bt_conn_pairing_feat *const feat)
+{
+	printk("Pairing accepted\n");
+	return BT_SECURITY_ERR_SUCCESS;
+}
+
+static void pairing_complete(struct bt_conn *conn, bool bonded)
+{
+	printk("Pairing complete, bonded: %d\n", bonded);
+}
+
+static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
+{
+	printk("Pairing failed: %d\n", reason);
+}
+
+static struct bt_conn_auth_info_cb conn_auth_info_cb = {
+	.pairing_complete = pairing_complete,
+	.pairing_failed = pairing_failed,
+};
+
+static struct bt_conn_auth_cb conn_auth_cb = {
+	.pairing_accept = pairing_accept,
+};
+
 /* ── main ─────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -586,12 +615,17 @@ int main(void)
 	};
 	int err;
 
+	bt_conn_auth_cb_register(&conn_auth_cb);
+	bt_conn_auth_info_cb_register(&conn_auth_info_cb);
+
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed: %d\n", err);
 		return 0;
 	}
 	printk("BLE ready\n");
+
+	settings_load();
 
 	if (bt_pacs_register(&pacs_param)) {
 		printk("PACS register failed\n");
