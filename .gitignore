@@ -4,8 +4,7 @@ build/
 .idea/
 .vscode/
 
-# Claude / agent tooling
-.agents/
+# Agent tooling
 .claude/
 .mcp.json
 .ripgreprc
