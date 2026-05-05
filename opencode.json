@@ -5,7 +5,9 @@
             "*": "allow"
         },
         "external_directory": {
-            "~/ncs/**": "allow"
+            "~/ncs/**": "allow",
+            "/tmp/**": "allow",
+            "/dev/**": "allow"
         }
     },
     "lsp": {
