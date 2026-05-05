@@ -625,16 +625,35 @@ int main(void)
 	}
 	printk("BLE ready\n");
 
-	settings_load();
+	err = settings_load();
+	if (err) {
+		printk("settings_load() failed: %d\n", err);
+		return 0;
+	}
+	printk("settings_load() OK\n");
 
 	if (bt_pacs_register(&pacs_param)) {
 		printk("PACS register failed\n");
 		return 0;
 	}
 
-	bt_bap_unicast_server_register(&param);
-	bt_bap_unicast_server_register_cb(&unicast_server_cb);
-	bt_pacs_cap_register(BT_AUDIO_DIR_SINK, &cap_sink);
+	err = bt_bap_unicast_server_register(&param);
+	if (err) {
+		printk("BAP unicast server register failed: %d\n", err);
+		return 0;
+	}
+
+	err = bt_bap_unicast_server_register_cb(&unicast_server_cb);
+	if (err) {
+		printk("BAP unicast server cb register failed: %d\n", err);
+		return 0;
+	}
+
+	err = bt_pacs_cap_register(BT_AUDIO_DIR_SINK, &cap_sink);
+	if (err) {
+		printk("PACS cap register failed: %d\n", err);
+		return 0;
+	}
 
 	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
 		bt_bap_stream_cb_register(&sinks[i].stream, &stream_ops);
