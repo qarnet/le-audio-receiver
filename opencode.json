@@ -1,0 +1,17 @@
+{
+    "$schema": "https://opencode.ai/config.json",
+    "permission": {
+        "skill": {
+            "*": "allow"
+        },
+        "external_directory": {
+            "~/ncs/**": "allow"
+        }
+    },
+    "lsp": {
+        "clangd": {
+            "command": ["clangd"],
+            "args": []
+        }
+    }
+}
