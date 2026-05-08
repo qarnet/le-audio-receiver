@@ -23,7 +23,8 @@
 K_MEM_SLAB_DEFINE_STATIC(i2s_slab, BLOCK_SIZE, BLOCK_COUNT, 4);
 
 static const struct device *i2s_dev;
-static bool initialized;
+static bool configured;
+static bool started;
 
 int audio_i2s_init(void)
 {
@@ -50,37 +51,58 @@ int audio_i2s_init(void)
 		return ret;
 	}
 
-	/* Prime two blocks with silence so DMA has something to send immediately */
-	for (int i = 0; i < 2; i++) {
-		void *block;
-		ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
-		if (ret < 0) {
-			printk("I2S prime alloc failed: block %d\n", ret);
-			return ret;
-		}
-		memset(block, 0, BLOCK_SIZE);
-		ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
-		if (ret < 0) {
-			printk("I2S prime write failed: %d\n", ret);
-			return ret;
-		}
-	}
-
-	ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
-	if (ret < 0) {
-		printk("I2S trigger START failed: %d\n", ret);
-		return ret;
-	}
-
-	initialized = true;
-	printk("I2S output started (48 kHz, 16-bit, stereo)\n");
+	configured = true;
+	printk("I2S configured (48 kHz, 16-bit, stereo)\n");
 	return 0;
 }
 
 int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 {
-	if (!initialized) {
+	if (!configured) {
 		return -EIO;
+	}
+
+	if (!started) {
+		void *block;
+		int ret;
+
+		for (int i = 0; i < 2; i++) {
+			ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
+			if (ret < 0) {
+				return -ENOMEM;
+			}
+			memset(block, 0, BLOCK_SIZE);
+			ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
+			if (ret < 0) {
+				k_mem_slab_free(&i2s_slab, block);
+				return ret;
+			}
+		}
+
+		ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
+		if (ret < 0) {
+			return -ENOMEM;
+		}
+		size_t bytes = sample_count * sizeof(int16_t);
+		if (bytes > BLOCK_SIZE) {
+			bytes = BLOCK_SIZE;
+		}
+		memcpy(block, stereo_data, bytes);
+		ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
+		if (ret < 0) {
+			k_mem_slab_free(&i2s_slab, block);
+			return ret;
+		}
+
+		ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
+		if (ret < 0) {
+			printk("I2S trigger START failed: %d\n", ret);
+			return ret;
+		}
+
+		started = true;
+		printk("I2S DMA started\n");
+		return 0;
 	}
 
 	void *block;
@@ -108,11 +130,10 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 
 void audio_i2s_stop(void)
 {
-	if (!initialized) {
-		return;
+	if (started) {
+		i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
+		started = false;
+		printk("I2S output stopped\n");
 	}
-
-	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
-	initialized = false;
-	printk("I2S output stopped\n");
+	configured = false;
 }
