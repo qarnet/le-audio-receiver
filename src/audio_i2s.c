@@ -83,10 +83,16 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 	memcpy(block, stereo_data, bytes);
 
 	if (!started) {
-		ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
-		if (ret < 0) {
-			k_mem_slab_free(&i2s_slab, block);
-			return ret;
+		/* Pre-fill 4 silent blocks (~40 ms) to absorb clock drift between HFCLKAUDIO and BLE ISO */
+		for (int pre = 0; pre < 4; pre++) {
+			void *sil;
+
+			if (k_mem_slab_alloc(&i2s_slab, &sil, K_NO_WAIT) == 0) {
+				memset(sil, 0, BLOCK_SIZE);
+				if (i2s_write(i2s_dev, sil, BLOCK_SIZE) < 0) {
+					k_mem_slab_free(&i2s_slab, sil);
+				}
+			}
 		}
 
 		ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
@@ -97,7 +103,6 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 
 		ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
 		if (ret < 0) {
-			k_mem_slab_free(&i2s_slab, block);
 			return ret;
 		}
 
@@ -109,6 +114,11 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 	ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
 	if (ret < 0) {
 		k_mem_slab_free(&i2s_slab, block);
+		if (ret == -EIO) {
+			/* DMA underrun: reset to re-arm on next push */
+			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_PREPARE);
+			started = false;
+		}
 		return ret;
 	}
 
@@ -118,13 +128,9 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 void audio_i2s_stop(void)
 {
 	if (!started) {
-		configured = false;
 		return;
 	}
 
 	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
-	i2s_configure(i2s_dev, I2S_DIR_TX,
-		      &(struct i2s_config){.frame_clk_freq = 0});
 	started = false;
-	configured = false;
 }

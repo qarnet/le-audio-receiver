@@ -77,6 +77,8 @@ struct audio_sink {
 	int frames_per_sdu;
 	lc3_decoder_t decoder;
 	lc3_decoder_mem_48k_t dec_mem;
+	lc3_decoder_t decoder_r;
+	lc3_decoder_mem_48k_t dec_mem_r;
 #endif
 };
 
@@ -227,17 +229,17 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 
 	enum bt_audio_location chan_alloc;
 	int cc = bt_audio_codec_cfg_get_chan_allocation(codec_cfg, &chan_alloc, false);
-	if (cc > 0) {
+	if (cc == 0) {
 		int cnt = 0;
 		for (int b = 0; b < 32; b++) {
 			if (chan_alloc & BIT(b)) {
 				cnt++;
 			}
 		}
-		sinks[idx].chan_count = cnt;
-		printk("  chan alloc 0x%08x count=%d\n", chan_alloc, cnt);
+		sinks[idx].chan_count = (cnt > 0) ? cnt : 1;
+		printk("  chan alloc 0x%08x count=%d\n", chan_alloc, sinks[idx].chan_count);
 	} else {
-		printk("  (chan alloc get returned %d; defaulting chan_count=1)\n", cc);
+		printk("  (chan alloc not found %d; defaulting chan_count=1)\n", cc);
 		sinks[idx].chan_count = 1;
 	}
 
@@ -292,6 +294,15 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 				       BT_BAP_ASCS_REASON_CODEC_DATA);
 		return -1;
 	}
+	if (cc >= 2) {
+		sinks[idx].decoder_r = lc3_setup_decoder(frame_us, freq, 0, &sinks[idx].dec_mem_r);
+		if (!sinks[idx].decoder_r) {
+			printk("LC3 decoder_r setup failed\n");
+			*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
+					       BT_BAP_ASCS_REASON_CODEC_DATA);
+			return -1;
+		}
+	}
 	printk("LC3 decoder[%zu]: %d Hz %d us ch=%d\n", idx, freq, frame_us, cc);
 #endif
 	return 0;
@@ -316,7 +327,9 @@ static int lc3_disable(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp
 {
 	printk("Disable: stream %p\n", stream);
 #if defined(CONFIG_LIBLC3)
-	sinks[sink_idx(stream)].decoder = NULL;
+	size_t idx = sink_idx(stream);
+	sinks[idx].decoder = NULL;
+	sinks[idx].decoder_r = NULL;
 #endif
 	return 0;
 }
@@ -333,6 +346,7 @@ static int lc3_release(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp
 	size_t idx = sink_idx(stream);
 #if defined(CONFIG_LIBLC3)
 	sinks[idx].decoder = NULL;
+	sinks[idx].decoder_r = NULL;
 #endif
 	memset(&sinks[idx], 0, sizeof(sinks[idx]));
 	if (num_sink_ase > 0) {
@@ -410,16 +424,23 @@ static void stream_recv(struct bt_bap_stream *stream,
 	}
 
 	if (as->chan_count >= 2) {
+		/* SDU = [L_frame][R_frame] per frame block; split per-channel */
+		const int octets_per_channel = octets_per_frame / as->chan_count;
+
 		for (int i = 0; i < f_per_sdu; i++) {
-			const int err = lc3_decode(
-				as->decoder,
-				valid ? net_buf_pull_mem(buf, octets_per_frame) : NULL,
-				octets_per_frame,
-				LC3_PCM_FORMAT_S16,
-				stereo_out, 2);
-			if (err == 1) {
-			} else if (err < 0) {
-				printk("[%zu:%d]: LC3 decode error %d\n", idx, i, err);
+			const void *l_data = valid ? net_buf_pull_mem(buf, octets_per_channel) : NULL;
+			const void *r_data = valid ? net_buf_pull_mem(buf, octets_per_channel) : NULL;
+			int err;
+
+			err = lc3_decode(as->decoder, l_data, octets_per_channel,
+					 LC3_PCM_FORMAT_S16, stereo_out, 2);
+			if (err < 0) {
+				printk("[%zu:%d]: LC3 L decode error %d\n", idx, i, err);
+			}
+			err = lc3_decode(as->decoder_r, r_data, octets_per_channel,
+					 LC3_PCM_FORMAT_S16, stereo_out + 1, 2);
+			if (err < 0) {
+				printk("[%zu:%d]: LC3 R decode error %d\n", idx, i, err);
 			}
 		}
 		audio_i2s_push(stereo_out, spc * 2);

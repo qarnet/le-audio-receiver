@@ -90,9 +90,31 @@ stty -F /dev/ttyACM1 115200 raw -echo && cat /dev/ttyACM1
 ```
 
 Expected after boot: `BLE ready`, `settings_load() OK`,
-`Advertising as "LE Audio Receiver"`. The `i2s_nrfx: Next buffers not
-supplied on time` error is normal until a client connects and starts
-streaming.
+`Advertising as "LE Audio Receiver"`. During streaming,
+`i2s_nrfx: Next buffers not supplied on time` occurs periodically due to
+HFCLKAUDIO clock drift vs. the BLE ISO clock — recovery is automatic
+(`TRIGGER_PREPARE` + re-arm). Increase pre-fill depth in `audio_i2s.c`
+to reduce frequency.
+
+### Capturing dual-core logs during testing
+
+When debugging, both ACM ports must be captured **before** the device resets.
+The `scripts/read_acm.py` helper (pyserial + auto-reopen) handles the USB
+disconnect during reset.  Use `tmux` to keep readers alive between tool calls:
+
+```bash
+# Start background readers
+tmux new-session -d -s acm0 \
+  "python3 scripts/read_acm.py ttyACM0 /tmp/acm0.log"
+tmux new-session -d -s acm1 \
+  "python3 scripts/read_acm.py ttyACM1 /tmp/acm1.log"
+
+# Reset so boot capture is clean
+nrfutil device reset
+```
+
+Always reset **after** starting the readers.  The readers auto-exit after 30 s.
+Stop with `tmux kill-session -t acm0` / `acm1`.
 
 ## Gotchas
 
@@ -106,11 +128,51 @@ bt-ll-sw-split.overlay)` the net core quietly stays on SoftDevice and
 
 See `sysbuild.cmake` for how both overlays are applied to `hci_ipc`.
 
-### `settings_load()` must run after `bt_enable()`
+### `settings_load()` must run after `bt_enable()` and before `bt_pacs_register()`
 
 `CONFIG_BT_GATT_DYNAMIC_DB=y` registers PACS/ASCS dynamically. Without
 `settings_load()` these characteristics are invisible to remote peers.
 The call must be after `bt_enable(NULL)` and before `bt_pacs_register()`.
+**Do NOT skip `settings_load()`** to "clear bonds" — it will break PACS registration.
+
+### `west flash` does NOT erase the settings partition
+
+`west flash` only erases the firmware address ranges. The ZMS settings
+partition (bonds, PACS registered handles) persists across flashes.
+If you suspect a stale bond or corrupted settings:
+
+```bash
+nrfutil device recover  # ERASEALL via CTRL-AP: wipes ALL non-volatile memory
+west flash --build-dir build
+```
+
+The recover command disables AP-Protect and triggers an ERASEALL, clearing
+both firmware and the settings partition. This is the correct way to get a
+clean slate for testing.
+
+### Stale bonds cause pairing failures that block PACS/ASCS reads
+
+If a phone was previously bonded and the bond info is reloaded from the
+settings partition on boot (`settings_load()`), but the phone still tries
+to pair fresh or the firmware version changed security params, pairing
+will fail.  The phone then disconnects before it can read the encrypted
+PACS/ASCS services.
+
+**Fix:** Either do a full chip erase (`nrfutil device recover`) before
+flashing, or update the phone (delete device in Bluetooth settings → re-scan).
+
+### printk and LOG output race on the same UART
+
+When both `printk()` and `LOG_*()` macros write to the same UART console
+simultaneously, lines can interleave and become unreadable. Add the
+following to `prj.conf` to route `printk()` through the same backend as
+`LOG_*()`:
+
+```
+CONFIG_LOG_PRINTK=y
+```
+
+This serializes output and eliminates garbled lines.
 
 ### ZMS settings backend requires explicit flash deps
 
@@ -143,12 +205,68 @@ Without a passkey UI the phone shows "incorrect PIN". Disable MITM
 WSL2 requires `usbipd` on the Windows host to bind the J-Link to WSL2.
 Without it, `west flash` fails with "Cannot connect to the probe".
 
+### `bt_audio_codec_cfg_get_chan_allocation` returns 0 on success
+
+The API fills `*chan_allocation` via pointer and returns **0 on success**,
+negative errno on failure. Checking `if (ret > 0)` silently falls through
+to the mono default for every phone that sends a valid channel allocation
+LTV — making all stereo ASEs appear mono. Use `if (ret == 0)`.
+
+### Stereo single-ASE (Mode B) needs two LC3 decoders
+
+A phone may send one ASE with `chan_count=2` (stereo) rather than two
+mono ASEs. In that case, the SDU is `[L_frame][R_frame]` concatenated.
+One `lc3_decode` call with stride=2 only fills even (L) positions;
+odd (R) positions stay zero → right channel silent. Two independent
+`lc3_decoder_t` instances are required: decode L into `stereo_out[0]`
+stride 2, R into `stereo_out[1]` stride 2.
+
+Per-channel octets = `(sdu_len / frames_per_sdu) / chan_count`.
+
+### I2S double-write of same slab block causes DMA corruption
+
+Passing the same `void *block` pointer to `i2s_write` twice queues the
+same DMA buffer twice. When the first DMA transfer completes the driver
+frees the slab block; the second DMA transfer then operates on freed
+memory → underrun or heap corruption. Always allocate a separate slab
+block for each `i2s_write` call.
+
+### I2S DMA underrun recovery requires `TRIGGER_PREPARE`
+
+After `i2s_nrfx: Next buffers not supplied on time`, subsequent
+`i2s_write` calls return `-EIO` (state 4 = ERROR). Call
+`i2s_trigger(dev, TX, I2S_TRIGGER_PREPARE)` to reset to READY, then
+re-arm: set `started = false` so the next `audio_i2s_push` pre-fills
+and re-triggers.
+
+### `audio_i2s_stop` must not clear `configured`
+
+After disconnect, `audio_i2s_stop` drops the DMA (`TRIGGER_DROP`) and
+resets `started`. Clearing `configured` causes every subsequent
+`audio_i2s_push` on reconnect to return `-EIO`. Keep `configured = true`
+so reconnect works without re-calling `audio_i2s_init`.
+
+### CJMCU-1334 (UDA1334A) wiring
+
+| nRF5340 pin | CJMCU-1334 pin |
+|-------------|----------------|
+| P1.15 BCK   | BCLK           |
+| P1.13 DIN   | DIN            |
+| P1.12 LRCK  | WSEL           |
+| 3.3 V       | VIN            |
+| GND         | GND + AGND     |
+
+Config pins: **SF0 → GND**, **SF1 → GND** (I2S format), **MUTE → GND or
+float** (LOW = unmuted — opposite of most mute pins), SCLK/PLL leave
+unconnected (internal PLL locks to BCLK). Audio out: Lout / Rout to
+headphone L/R, AGND to sleeve.
+
 ## Stack
 
 - App: BAP Unicast Server sink-only, 2 sink ASEs, LC3 decode → I2S
 - Net: `hci_ipc` with `nrf5340_cpunet_iso_peripheral-bt_ll_sw_split.conf`
 - Link Layer: BT_LL_SW_SPLIT (Zephyr open-source controller, ISO required)
-- DAC: PCM5102A, no MCK, `CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y`
+- DAC: CJMCU-1334 (UDA1334A), no MCK, `CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y`
 
 ## Key Files
 
