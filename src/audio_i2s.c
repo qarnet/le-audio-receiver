@@ -11,9 +11,12 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/i2s.h>
 #include <zephyr/sys/printk.h>
+#include <hal/nrf_clock.h>
+#if NRF_CLOCK_HAS_HFCLKAUDIO
 #include <nrfx_clock_hfclkaudio.h>
+#endif
 
-#define I2S_NODE           DT_NODELABEL(i2s0)
+#define I2S_NODE           DT_ALIAS(i2s_audio)
 #define SAMPLE_RATE        48000
 #define BIT_WIDTH          16
 #define CHANNELS           2
@@ -21,6 +24,7 @@
 #define BLOCK_SIZE         (SAMPLES_PER_FRAME * CHANNELS * (BIT_WIDTH / 8))
 #define BLOCK_COUNT        12
 
+#if NRF_CLOCK_HAS_HFCLKAUDIO
 /* APLL register values for nRF5340 HFCLKAUDIO (12.288 MHz band) */
 #define APLL_FREQ_CENTER   0x9BA6U
 #define APLL_FREQ_MIN      0x8FD8U
@@ -40,6 +44,7 @@
  */
 #define APLL_STEP_UNDERRUN  5
 #define APLL_STEP_OVERRUN   5
+#endif /* NRF_CLOCK_HAS_HFCLKAUDIO */
 
 /*
  * Packet-repeat fallback: when the DMA queue drops below DRIFT_THRESHOLD
@@ -58,11 +63,13 @@ static bool configured;
 static bool started;
 static int16_t saved_frame[BLOCK_SIZE / sizeof(int16_t)];
 
+#if NRF_CLOCK_HAS_HFCLKAUDIO
 /*
  * apll_freq persists across stream restarts (underrun → re-arm) so that
  * corrections accumulate. Only reset to center on full disconnect.
  */
 static uint16_t apll_freq = APLL_FREQ_CENTER;
+#endif
 
 static int i2s_do_configure(void)
 {
@@ -114,6 +121,7 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 	void *block;
 	int ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
 	if (ret < 0) {
+#if NRF_CLOCK_HAS_HFCLKAUDIO
 		/* Slab full: I2S consuming too slowly → speed up APLL */
 		uint16_t f = MIN(apll_freq + APLL_STEP_OVERRUN, APLL_FREQ_MAX);
 
@@ -122,6 +130,7 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 			nrfx_clock_hfclkaudio_config_set(apll_freq);
 			printk("APLL: slab full → 0x%04X\n", apll_freq);
 		}
+#endif
 		return -ENOMEM;
 	}
 
@@ -152,11 +161,14 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 			return ret;
 		}
 
+#if NRF_CLOCK_HAS_HFCLKAUDIO
 		/* Apply retained APLL correction immediately */
 		nrfx_clock_hfclkaudio_config_set(apll_freq);
-
-		started = true;
 		printk("I2S DMA started (APLL=0x%04X)\n", apll_freq);
+#else
+		printk("I2S DMA started\n");
+#endif
+		started = true;
 		return 0;
 	}
 
@@ -166,6 +178,7 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 	if (ret < 0) {
 		k_mem_slab_free(&i2s_slab, block);
 		if (ret == -EIO) {
+#if NRF_CLOCK_HAS_HFCLKAUDIO
 			/* Underrun: I2S consuming too fast → slow APLL down */
 			uint16_t f = MAX(apll_freq - APLL_STEP_UNDERRUN, APLL_FREQ_MIN);
 
@@ -173,6 +186,7 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 				apll_freq = f;
 				printk("APLL: underrun → 0x%04X\n", apll_freq);
 			}
+#endif
 			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_PREPARE);
 			started = false;
 		}
@@ -203,7 +217,9 @@ void audio_i2s_stop(void)
 	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
 	started = false;
 
+#if NRF_CLOCK_HAS_HFCLKAUDIO
 	/* Reset APLL on disconnect — new connection may be a different device */
 	apll_freq = APLL_FREQ_CENTER;
 	nrfx_clock_hfclkaudio_config_set(apll_freq);
+#endif
 }
