@@ -19,12 +19,15 @@
 #define SAMPLES_PER_FRAME  480
 #define BLOCK_SIZE         (SAMPLES_PER_FRAME * CHANNELS * (BIT_WIDTH / 8))
 #define BLOCK_COUNT        8
+/* Free-slab threshold: if this many blocks free, DMA queue is draining */
+#define DRIFT_THRESHOLD    (BLOCK_COUNT - 3)
 
 K_MEM_SLAB_DEFINE_STATIC(i2s_slab, BLOCK_SIZE, BLOCK_COUNT, 4);
 
 static const struct device *i2s_dev;
 static bool configured;
 static bool started;
+static int16_t saved_frame[BLOCK_SIZE / sizeof(int16_t)];
 
 static int i2s_do_configure(void)
 {
@@ -111,6 +114,8 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 		return 0;
 	}
 
+	memcpy(saved_frame, block, BLOCK_SIZE);
+
 	ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
 	if (ret < 0) {
 		k_mem_slab_free(&i2s_slab, block);
@@ -120,6 +125,18 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 			started = false;
 		}
 		return ret;
+	}
+
+	/* Drift compensation: duplicate frame when DMA queue is draining */
+	if (k_mem_slab_num_free_get(&i2s_slab) >= DRIFT_THRESHOLD) {
+		void *dup;
+
+		if (k_mem_slab_alloc(&i2s_slab, &dup, K_NO_WAIT) == 0) {
+			memcpy(dup, saved_frame, BLOCK_SIZE);
+			if (i2s_write(i2s_dev, dup, BLOCK_SIZE) < 0) {
+				k_mem_slab_free(&i2s_slab, dup);
+			}
+		}
 	}
 
 	return 0;

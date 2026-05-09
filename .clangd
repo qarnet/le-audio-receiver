@@ -1,5 +1,6 @@
+# Global block — applies to all files
 CompileFlags:
-  CompilationDatabase: build/app
+  CompilationDatabase: /home/thomas-win/ncs/v3.3.0/build/le-audio-receiver # or merged DB
   Remove:
     - -fno-printf-return-value
     - -fno-reorder-functions
