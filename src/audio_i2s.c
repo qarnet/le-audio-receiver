@@ -16,9 +16,9 @@
 #define SAMPLE_RATE        48000
 #define BIT_WIDTH          16
 #define CHANNELS           2
-#define SAMPLES_PER_FRAME  480       /* 10 ms at 48 kHz = 480 samples/channel */
-#define BLOCK_SIZE         (SAMPLES_PER_FRAME * CHANNELS * (BIT_WIDTH / 8))  /* 1920 bytes */
-#define BLOCK_COUNT        4
+#define SAMPLES_PER_FRAME  480
+#define BLOCK_SIZE         (SAMPLES_PER_FRAME * CHANNELS * (BIT_WIDTH / 8))
+#define BLOCK_COUNT        8
 
 K_MEM_SLAB_DEFINE_STATIC(i2s_slab, BLOCK_SIZE, BLOCK_COUNT, 4);
 
@@ -26,14 +26,8 @@ static const struct device *i2s_dev;
 static bool configured;
 static bool started;
 
-int audio_i2s_init(void)
+static int i2s_do_configure(void)
 {
-	i2s_dev = DEVICE_DT_GET(I2S_NODE);
-	if (!device_is_ready(i2s_dev)) {
-		printk("I2S device not ready\n");
-		return -ENODEV;
-	}
-
 	struct i2s_config cfg = {
 		.word_size       = BIT_WIDTH,
 		.channels        = CHANNELS,
@@ -45,14 +39,26 @@ int audio_i2s_init(void)
 		.timeout         = 0,
 	};
 
-	int ret = i2s_configure(i2s_dev, I2S_DIR_TX, &cfg);
+	return i2s_configure(i2s_dev, I2S_DIR_TX, &cfg);
+}
+
+int audio_i2s_init(void)
+{
+	i2s_dev = DEVICE_DT_GET(I2S_NODE);
+	if (!device_is_ready(i2s_dev)) {
+		printk("I2S device not ready\n");
+		return -ENODEV;
+	}
+
+	int ret = i2s_do_configure();
 	if (ret < 0) {
 		printk("I2S configure failed: %d\n", ret);
 		return ret;
 	}
 
 	configured = true;
-	printk("I2S configured (48 kHz, 16-bit, stereo)\n");
+	printk("I2S ready (%d kHz, %d-bit, stereo, %d blocks)\n",
+	       SAMPLE_RATE / 1000, BIT_WIDTH, BLOCK_COUNT);
 	return 0;
 }
 
@@ -62,32 +68,27 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 		return -EIO;
 	}
 
+	size_t bytes = sample_count * sizeof(int16_t);
+	if (bytes > BLOCK_SIZE) {
+		bytes = BLOCK_SIZE;
+	}
+
+	void *block;
+	int ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
+	if (ret < 0) {
+		return -ENOMEM;
+	}
+
+	memset(block, 0, BLOCK_SIZE);
+	memcpy(block, stereo_data, bytes);
+
 	if (!started) {
-		void *block;
-		int ret;
-
-		for (int i = 0; i < 2; i++) {
-			ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
-			if (ret < 0) {
-				return -ENOMEM;
-			}
-			memset(block, 0, BLOCK_SIZE);
-			ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
-			if (ret < 0) {
-				k_mem_slab_free(&i2s_slab, block);
-				return ret;
-			}
-		}
-
-		ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
+		ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
 		if (ret < 0) {
-			return -ENOMEM;
+			k_mem_slab_free(&i2s_slab, block);
+			return ret;
 		}
-		size_t bytes = sample_count * sizeof(int16_t);
-		if (bytes > BLOCK_SIZE) {
-			bytes = BLOCK_SIZE;
-		}
-		memcpy(block, stereo_data, bytes);
+
 		ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
 		if (ret < 0) {
 			k_mem_slab_free(&i2s_slab, block);
@@ -96,7 +97,7 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 
 		ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
 		if (ret < 0) {
-			printk("I2S trigger START failed: %d\n", ret);
+			k_mem_slab_free(&i2s_slab, block);
 			return ret;
 		}
 
@@ -105,22 +106,8 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 		return 0;
 	}
 
-	void *block;
-	int ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
-	if (ret < 0) {
-		printk("I2S slab exhausted (underrun)\n");
-		return -ENOMEM;
-	}
-
-	size_t bytes = sample_count * sizeof(int16_t);
-	if (bytes > BLOCK_SIZE) {
-		bytes = BLOCK_SIZE;
-	}
-
-	memcpy(block, stereo_data, bytes);
 	ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
 	if (ret < 0) {
-		printk("I2S write failed: %d\n", ret);
 		k_mem_slab_free(&i2s_slab, block);
 		return ret;
 	}
@@ -130,10 +117,14 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 
 void audio_i2s_stop(void)
 {
-	if (started) {
-		i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
-		started = false;
-		printk("I2S output stopped\n");
+	if (!started) {
+		configured = false;
+		return;
 	}
+
+	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
+	i2s_configure(i2s_dev, I2S_DIR_TX,
+		      &(struct i2s_config){.frame_clk_freq = 0});
+	started = false;
 	configured = false;
 }

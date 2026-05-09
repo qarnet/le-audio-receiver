@@ -241,6 +241,8 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 		sinks[idx].chan_count = 1;
 	}
 
+	printk("  ASE[%zu] configured: num_sink_ase=%zu\n", idx, num_sink_ase);
+
 	*pref = qos_pref;
 	return 0;
 }
@@ -383,6 +385,13 @@ static void stream_recv(struct bt_bap_stream *stream,
 	const int f_per_sdu = as->frames_per_sdu;
 	const int spc = as->samples_per_ch;
 	const int octets_per_frame = f_per_sdu > 0 ? (buf->len / f_per_sdu) : buf->len;
+	static size_t diagnostic_cnt;
+
+	if (diagnostic_cnt < 5) {
+		printk("stream_recv[%zu]: valid=%d buf_len=%u f_per_sdu=%d spc=%d cc=%d num_ase=%zu\n",
+		       idx, valid, buf->len, f_per_sdu, spc, as->chan_count, num_sink_ase);
+		diagnostic_cnt++;
+	}
 
 	if (valid) {
 		as->recv_cnt++;
@@ -605,6 +614,23 @@ static struct bt_conn_auth_info_cb conn_auth_info_cb = {
 static struct bt_conn_auth_cb conn_auth_cb = {
 	.pairing_accept = pairing_accept,
 };
+
+/* ── Bond management ─────────────────────────────────────────────── */
+
+static void delete_bond_cb(const struct bt_bond_info *info, void *user_data)
+{
+	char addr[BT_ADDR_LE_STR_LEN];
+	bt_addr_le_to_str(&info->addr, addr, sizeof(addr));
+	printk("Deleting bond: %s\n", addr);
+	bt_unpair(BT_ID_DEFAULT, &info->addr);
+}
+
+static void delete_all_bonds(void)
+{
+	printk("Clearing all stored bonds...\n");
+	bt_foreach_bond(BT_ID_DEFAULT, delete_bond_cb, NULL);
+	printk("Bonds cleared\n");
+}
 
 /* ── main ─────────────────────────────────────────────────────────── */
 
