@@ -11,6 +11,7 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/i2s.h>
 #include <zephyr/sys/printk.h>
+#include <nrfx_clock_hfclkaudio.h>
 
 #define I2S_NODE           DT_NODELABEL(i2s0)
 #define SAMPLE_RATE        48000
@@ -18,9 +19,37 @@
 #define CHANNELS           2
 #define SAMPLES_PER_FRAME  480
 #define BLOCK_SIZE         (SAMPLES_PER_FRAME * CHANNELS * (BIT_WIDTH / 8))
-#define BLOCK_COUNT        8
-/* Free-slab threshold: if this many blocks free, DMA queue is draining */
-#define DRIFT_THRESHOLD    (BLOCK_COUNT - 3)
+#define BLOCK_COUNT        12
+
+/* APLL register values for nRF5340 HFCLKAUDIO (12.288 MHz band) */
+#define APLL_FREQ_CENTER   0x9BA6U
+#define APLL_FREQ_MIN      0x8FD8U
+#define APLL_FREQ_MAX      0xA774U
+
+/*
+ * Event-driven APLL drift correction.
+ *
+ * Underrun  → I2S consuming too fast → reduce APLL frequency (slow I2S down)
+ * Slab full → I2S consuming too slow → raise APLL frequency (speed I2S up)
+ *
+ * One underrun event applies APLL_STEP_UNDERRUN register steps. Each step is
+ * ~40.7 Hz = ~3.3 ppm. 5 steps ≈ 16.5 ppm per event. At 100 ppm true offset,
+ * ~6 underrun cycles bring the clock into range. apll_freq is NOT reset on
+ * stream restart — only on disconnect — so corrections accumulate across
+ * BLE ISO retransmit gaps.
+ */
+#define APLL_STEP_UNDERRUN  5
+#define APLL_STEP_OVERRUN   5
+
+/*
+ * Packet-repeat fallback: when the DMA queue drops below DRIFT_THRESHOLD
+ * free blocks, duplicate the last decoded frame to prevent a hard cutout
+ * while the APLL loop converges.
+ *
+ * Normal operating point after pre-fill: 5 free (7 of 12 blocks in DMA).
+ * Natural jitter reaches 6. Trigger at 8 = only 4 blocks remain in DMA.
+ */
+#define DRIFT_THRESHOLD    (BLOCK_COUNT - 4)
 
 K_MEM_SLAB_DEFINE_STATIC(i2s_slab, BLOCK_SIZE, BLOCK_COUNT, 4);
 
@@ -28,6 +57,12 @@ static const struct device *i2s_dev;
 static bool configured;
 static bool started;
 static int16_t saved_frame[BLOCK_SIZE / sizeof(int16_t)];
+
+/*
+ * apll_freq persists across stream restarts (underrun → re-arm) so that
+ * corrections accumulate. Only reset to center on full disconnect.
+ */
+static uint16_t apll_freq = APLL_FREQ_CENTER;
 
 static int i2s_do_configure(void)
 {
@@ -79,6 +114,14 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 	void *block;
 	int ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
 	if (ret < 0) {
+		/* Slab full: I2S consuming too slowly → speed up APLL */
+		uint16_t f = MIN(apll_freq + APLL_STEP_OVERRUN, APLL_FREQ_MAX);
+
+		if (f != apll_freq) {
+			apll_freq = f;
+			nrfx_clock_hfclkaudio_config_set(apll_freq);
+			printk("APLL: slab full → 0x%04X\n", apll_freq);
+		}
 		return -ENOMEM;
 	}
 
@@ -86,8 +129,8 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 	memcpy(block, stereo_data, bytes);
 
 	if (!started) {
-		/* Pre-fill 4 silent blocks (~40 ms) to absorb clock drift between HFCLKAUDIO and BLE ISO */
-		for (int pre = 0; pre < 4; pre++) {
+		/* Pre-fill 6 silent blocks (~60 ms) to absorb jitter */
+		for (int pre = 0; pre < 6; pre++) {
 			void *sil;
 
 			if (k_mem_slab_alloc(&i2s_slab, &sil, K_NO_WAIT) == 0) {
@@ -109,8 +152,11 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 			return ret;
 		}
 
+		/* Apply retained APLL correction immediately */
+		nrfx_clock_hfclkaudio_config_set(apll_freq);
+
 		started = true;
-		printk("I2S DMA started\n");
+		printk("I2S DMA started (APLL=0x%04X)\n", apll_freq);
 		return 0;
 	}
 
@@ -120,14 +166,20 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 	if (ret < 0) {
 		k_mem_slab_free(&i2s_slab, block);
 		if (ret == -EIO) {
-			/* DMA underrun: reset to re-arm on next push */
+			/* Underrun: I2S consuming too fast → slow APLL down */
+			uint16_t f = MAX(apll_freq - APLL_STEP_UNDERRUN, APLL_FREQ_MIN);
+
+			if (f != apll_freq) {
+				apll_freq = f;
+				printk("APLL: underrun → 0x%04X\n", apll_freq);
+			}
 			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_PREPARE);
 			started = false;
 		}
 		return ret;
 	}
 
-	/* Drift compensation: duplicate frame when DMA queue is draining */
+	/* Packet-repeat fallback: pad queue when it is draining */
 	if (k_mem_slab_num_free_get(&i2s_slab) >= DRIFT_THRESHOLD) {
 		void *dup;
 
@@ -150,4 +202,8 @@ void audio_i2s_stop(void)
 
 	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
 	started = false;
+
+	/* Reset APLL on disconnect — new connection may be a different device */
+	apll_freq = APLL_FREQ_CENTER;
+	nrfx_clock_hfclkaudio_config_set(apll_freq);
 }
