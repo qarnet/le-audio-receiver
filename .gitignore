@@ -18,3 +18,6 @@ build/
 
 # Docker safe.directory leftover
 .gitconfig
+
+compile_commands.json
+env_ncs.sh
