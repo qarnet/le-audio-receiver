@@ -10,11 +10,14 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/i2s.h>
-#include <zephyr/sys/printk.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/sys/util.h>
 #include <hal/nrf_clock.h>
 #if NRF_CLOCK_HAS_HFCLKAUDIO
 #include <nrfx_clock_hfclkaudio.h>
 #endif
+
+LOG_MODULE_REGISTER(audio_i2s, LOG_LEVEL_INF);
 
 #define I2S_NODE           DT_ALIAS(i2s_audio)
 #define SAMPLE_RATE        48000
@@ -23,28 +26,6 @@
 #define SAMPLES_PER_FRAME  480
 #define BLOCK_SIZE         (SAMPLES_PER_FRAME * CHANNELS * (BIT_WIDTH / 8))
 #define BLOCK_COUNT        12
-
-#if NRF_CLOCK_HAS_HFCLKAUDIO
-/* APLL register values for nRF5340 HFCLKAUDIO (12.288 MHz band) */
-#define APLL_FREQ_CENTER   0x9BA6U
-#define APLL_FREQ_MIN      0x8FD8U
-#define APLL_FREQ_MAX      0xA774U
-
-/*
- * Event-driven APLL drift correction.
- *
- * Underrun  → I2S consuming too fast → reduce APLL frequency (slow I2S down)
- * Slab full → I2S consuming too slow → raise APLL frequency (speed I2S up)
- *
- * One underrun event applies APLL_STEP_UNDERRUN register steps. Each step is
- * ~40.7 Hz = ~3.3 ppm. 5 steps ≈ 16.5 ppm per event. At 100 ppm true offset,
- * ~6 underrun cycles bring the clock into range. apll_freq is NOT reset on
- * stream restart — only on disconnect — so corrections accumulate across
- * BLE ISO retransmit gaps.
- */
-#define APLL_STEP_UNDERRUN  5
-#define APLL_STEP_OVERRUN   5
-#endif /* NRF_CLOCK_HAS_HFCLKAUDIO */
 
 /*
  * Packet-repeat fallback: when the DMA queue drops below DRIFT_THRESHOLD
@@ -63,13 +44,147 @@ static bool configured;
 static bool started;
 static int16_t saved_frame[BLOCK_SIZE / sizeof(int16_t)];
 
-#if NRF_CLOCK_HAS_HFCLKAUDIO
-/*
- * apll_freq persists across stream restarts (underrun → re-arm) so that
- * corrections accumulate. Only reset to center on full disconnect.
+/* ── APLL state-machine drift compensation ──────────────────────────────
+ *
+ * Principle: the ISO controller provides a reference timestamp (sdu_ref_us)
+ * every frame. Consecutive timestamps should advance by exactly
+ * CONFIG_AUDIO_FRAME_DURATION_US. Any systematic deviation indicates a
+ * frequency offset between the local HFCLKAUDIO and the BLE controller clock.
+ *
+ * Over a DRIFT_MEAS_PERIOD_US window we measure the actual elapsed sdu_ref
+ * time vs the expected 100 ms. The error drives an APLL register adjustment.
+ *
+ * States:
+ *   DRIFT_INIT  — waiting for first valid timestamp
+ *   DRIFT_CALIB — measuring and correcting; transitions to LOCKED when
+ *                 error < DRIFT_ERR_THRESH_LOCK
+ *   DRIFT_LOCKED — fine maintenance corrections; resets to CALIB on large error
+ *
+ * Formula (from NCS audio reference): APLL_FREQ_ADJ(err_us) = -(err_us*1000)/331
+ * One register step ≈ 3.3 ppm. Positive err → increase APLL freq (speed up).
  */
-static uint16_t apll_freq = APLL_FREQ_CENTER;
-#endif
+#if NRF_CLOCK_HAS_HFCLKAUDIO
+
+#define APLL_FREQ_CENTER        0x9BA6U
+#define APLL_FREQ_MIN           0x8FD8U
+#define APLL_FREQ_MAX           0xA774U
+#define DRIFT_MEAS_PERIOD_US    100000U
+#define DRIFT_ERR_THRESH_LOCK   16
+#define DRIFT_ERR_THRESH_UNLOCK 32
+#define APLL_FREQ_ADJ(err_us)   (-((int32_t)(err_us) * 1000) / 331)
+
+enum drift_state {
+	DRIFT_INIT,
+	DRIFT_CALIB,
+	DRIFT_LOCKED,
+};
+
+static struct {
+	enum drift_state state;
+	uint32_t meas_start_us;
+	uint16_t center_freq;
+	uint16_t apll_freq;
+} drift = {
+	.state = DRIFT_INIT,
+	.center_freq = APLL_FREQ_CENTER,
+	.apll_freq = APLL_FREQ_CENTER,
+};
+
+static void drift_reset(void)
+{
+	drift.state = DRIFT_INIT;
+	drift.center_freq = APLL_FREQ_CENTER;
+	drift.apll_freq = APLL_FREQ_CENTER;
+	nrfx_clock_hfclkaudio_config_set(APLL_FREQ_CENTER);
+}
+
+void audio_i2s_sdu_ref_update(uint32_t sdu_ref_us)
+{
+	if (sdu_ref_us == 0) {
+		return;
+	}
+
+	switch (drift.state) {
+	case DRIFT_INIT:
+		drift.meas_start_us = sdu_ref_us;
+		drift.state = DRIFT_CALIB;
+		break;
+
+	case DRIFT_CALIB: {
+		uint32_t elapsed = sdu_ref_us - drift.meas_start_us;
+
+		if (elapsed < DRIFT_MEAS_PERIOD_US) {
+			break;
+		}
+		if (elapsed > 3 * DRIFT_MEAS_PERIOD_US) {
+			/* Gap in stream — restart measurement window */
+			drift.meas_start_us = sdu_ref_us;
+			break;
+		}
+
+		int32_t err_us = (int32_t)DRIFT_MEAS_PERIOD_US - (int32_t)elapsed;
+		int32_t adj = APLL_FREQ_ADJ(err_us);
+
+		drift.center_freq = (uint16_t)CLAMP((int32_t)APLL_FREQ_CENTER + adj,
+						    (int32_t)APLL_FREQ_MIN,
+						    (int32_t)APLL_FREQ_MAX);
+		drift.apll_freq = drift.center_freq;
+		nrfx_clock_hfclkaudio_config_set(drift.apll_freq);
+		LOG_INF("APLL calib: err=%d us → 0x%04X", err_us, drift.apll_freq);
+
+		drift.meas_start_us = sdu_ref_us;
+
+		if (abs(err_us) <= DRIFT_ERR_THRESH_LOCK) {
+			drift.state = DRIFT_LOCKED;
+			LOG_INF("APLL locked at 0x%04X", drift.apll_freq);
+		}
+		break;
+	}
+
+	case DRIFT_LOCKED: {
+		uint32_t elapsed = sdu_ref_us - drift.meas_start_us;
+
+		if (elapsed < DRIFT_MEAS_PERIOD_US) {
+			break;
+		}
+		if (elapsed > 3 * DRIFT_MEAS_PERIOD_US) {
+			drift.state = DRIFT_CALIB;
+			drift.meas_start_us = sdu_ref_us;
+			LOG_WRN("APLL: gap detected, back to calib");
+			break;
+		}
+
+		int32_t err_us = (int32_t)DRIFT_MEAS_PERIOD_US - (int32_t)elapsed;
+		/* Halved correction magnitude to avoid oscillation when locked */
+		int32_t adj = APLL_FREQ_ADJ(err_us / 2);
+
+		drift.apll_freq = (uint16_t)CLAMP((int32_t)drift.center_freq + adj,
+						  (int32_t)APLL_FREQ_MIN,
+						  (int32_t)APLL_FREQ_MAX);
+		nrfx_clock_hfclkaudio_config_set(drift.apll_freq);
+
+		drift.meas_start_us = sdu_ref_us;
+
+		if (abs(err_us) > DRIFT_ERR_THRESH_UNLOCK) {
+			drift.state = DRIFT_CALIB;
+			drift.center_freq = APLL_FREQ_CENTER;
+			LOG_WRN("APLL lost lock (err=%d us), recalibrating", err_us);
+		}
+		break;
+	}
+	}
+}
+
+#else /* !NRF_CLOCK_HAS_HFCLKAUDIO */
+
+void audio_i2s_sdu_ref_update(uint32_t sdu_ref_us)
+{
+	ARG_UNUSED(sdu_ref_us);
+}
+
+static void drift_reset(void) {}
+
+#endif /* NRF_CLOCK_HAS_HFCLKAUDIO */
 
 static int i2s_do_configure(void)
 {
@@ -91,19 +206,20 @@ int audio_i2s_init(void)
 {
 	i2s_dev = DEVICE_DT_GET(I2S_NODE);
 	if (!device_is_ready(i2s_dev)) {
-		printk("I2S device not ready\n");
+		LOG_ERR("I2S device not ready");
 		return -ENODEV;
 	}
 
 	int ret = i2s_do_configure();
+
 	if (ret < 0) {
-		printk("I2S configure failed: %d\n", ret);
+		LOG_ERR("I2S configure failed: %d", ret);
 		return ret;
 	}
 
 	configured = true;
-	printk("I2S ready (%d kHz, %d-bit, stereo, %d blocks)\n",
-	       SAMPLE_RATE / 1000, BIT_WIDTH, BLOCK_COUNT);
+	LOG_INF("I2S ready (%d kHz, %d-bit, stereo, %d blocks)",
+		SAMPLE_RATE / 1000, BIT_WIDTH, BLOCK_COUNT);
 	return 0;
 }
 
@@ -114,23 +230,16 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 	}
 
 	size_t bytes = sample_count * sizeof(int16_t);
+
 	if (bytes > BLOCK_SIZE) {
 		bytes = BLOCK_SIZE;
 	}
 
 	void *block;
 	int ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
-	if (ret < 0) {
-#if NRF_CLOCK_HAS_HFCLKAUDIO
-		/* Slab full: I2S consuming too slowly → speed up APLL */
-		uint16_t f = MIN(apll_freq + APLL_STEP_OVERRUN, APLL_FREQ_MAX);
 
-		if (f != apll_freq) {
-			apll_freq = f;
-			nrfx_clock_hfclkaudio_config_set(apll_freq);
-			printk("APLL: slab full → 0x%04X\n", apll_freq);
-		}
-#endif
+	if (ret < 0) {
+		LOG_WRN("I2S slab full — dropping frame");
 		return -ENOMEM;
 	}
 
@@ -162,11 +271,10 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 		}
 
 #if NRF_CLOCK_HAS_HFCLKAUDIO
-		/* Apply retained APLL correction immediately */
-		nrfx_clock_hfclkaudio_config_set(apll_freq);
-		printk("I2S DMA started (APLL=0x%04X)\n", apll_freq);
+		nrfx_clock_hfclkaudio_config_set(drift.apll_freq);
+		LOG_INF("I2S DMA started (APLL=0x%04X)", drift.apll_freq);
 #else
-		printk("I2S DMA started\n");
+		LOG_INF("I2S DMA started");
 #endif
 		started = true;
 		return 0;
@@ -178,15 +286,8 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 	if (ret < 0) {
 		k_mem_slab_free(&i2s_slab, block);
 		if (ret == -EIO) {
-#if NRF_CLOCK_HAS_HFCLKAUDIO
-			/* Underrun: I2S consuming too fast → slow APLL down */
-			uint16_t f = MAX(apll_freq - APLL_STEP_UNDERRUN, APLL_FREQ_MIN);
-
-			if (f != apll_freq) {
-				apll_freq = f;
-				printk("APLL: underrun → 0x%04X\n", apll_freq);
-			}
-#endif
+			/* DMA underrun — restart */
+			LOG_WRN("I2S underrun, restarting DMA");
 			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_PREPARE);
 			started = false;
 		}
@@ -216,10 +317,5 @@ void audio_i2s_stop(void)
 
 	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
 	started = false;
-
-#if NRF_CLOCK_HAS_HFCLKAUDIO
-	/* Reset APLL on disconnect — new connection may be a different device */
-	apll_freq = APLL_FREQ_CENTER;
-	nrfx_clock_hfclkaudio_config_set(apll_freq);
-#endif
+	drift_reset();
 }

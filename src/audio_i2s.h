@@ -44,4 +44,16 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count);
  */
 void audio_i2s_stop(void);
 
+/**
+ * @brief Feed ISO SDU reference timestamp for APLL drift compensation.
+ *
+ * Must be called on every ISO RX event (valid or PLC) with the controller-
+ * provided anchor timestamp. Drives a state machine (INIT→CALIB→LOCKED) that
+ * adjusts HFCLKAUDIO to track the BLE controller clock. No-op on hardware
+ * without HFCLKAUDIO.
+ *
+ * @param sdu_ref_us  ISO SDU reference timestamp in microseconds (info->ts).
+ */
+void audio_i2s_sdu_ref_update(uint32_t sdu_ref_us);
+
 #endif /* AUDIO_I2S_H */
