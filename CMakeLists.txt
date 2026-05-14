@@ -8,7 +8,11 @@ target_sources(app PRIVATE
   src/main.c
   src/audio_i2s.c
   src/audio_drift.c
+  src/audio_stats.c
+  src/audio_volume.c
 )
+
+zephyr_sources_ifdef(CONFIG_SHELL src/audio_shell.c)
 
 zephyr_sources_ifdef(CONFIG_BT_AUDIO_TX src/stream_tx.c)
 

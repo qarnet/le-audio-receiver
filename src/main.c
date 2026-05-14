@@ -42,12 +42,68 @@
 #include <zephyr/types.h>
 
 #include "audio_i2s.h"
+#include "audio_stats.h"
+#include "audio_volume.h"
 
 #if defined(CONFIG_LIBLC3)
 #include "lc3.h"
 #endif
 
+#if defined(CONFIG_WATCHDOG)
+#include <zephyr/drivers/watchdog.h>
+#endif
+#include <zephyr/sys/reboot.h>
+
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
+
+#if defined(CONFIG_WATCHDOG)
+#define WDT_NODE DT_NODELABEL(wdt0)
+#if DT_NODE_HAS_STATUS(WDT_NODE, okay)
+static const struct device *const wdt_dev = DEVICE_DT_GET(WDT_NODE);
+static int wdt_chan;
+
+static void wdt_feed_thread_fn(void *a, void *b, void *c)
+{
+	while (true) {
+		wdt_feed(wdt_dev, wdt_chan);
+		k_sleep(K_SECONDS(2));
+	}
+}
+K_THREAD_DEFINE(wdt_tid, 512, wdt_feed_thread_fn, NULL, NULL, NULL,
+		K_PRIO_PREEMPT(10), 0, 0);
+
+static int wdt_init(void)
+{
+	if (!device_is_ready(wdt_dev)) {
+		LOG_ERR("WDT not ready");
+		return -ENODEV;
+	}
+	struct wdt_timeout_cfg cfg = {
+		.window.min = 0,
+		.window.max = 5000,
+		.callback   = NULL,
+		.flags      = WDT_FLAG_RESET_SOC,
+	};
+	wdt_chan = wdt_install_timeout(wdt_dev, &cfg);
+	if (wdt_chan < 0) {
+		LOG_ERR("WDT install failed: %d", wdt_chan);
+		return wdt_chan;
+	}
+	int err = wdt_setup(wdt_dev, WDT_OPT_PAUSE_HALTED_BY_DBG);
+
+	if (err) {
+		LOG_ERR("WDT setup failed: %d", err);
+		return err;
+	}
+	LOG_INF("Watchdog started (5 s timeout)");
+	return 0;
+}
+#else
+static inline int wdt_init(void) { return 0; }
+#endif /* DT_NODE_HAS_STATUS */
+#else
+static inline int wdt_init(void) { return 0; }
+#endif /* CONFIG_WATCHDOG */
 
 #define MAX_SINK_ASE CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT
 #define MAX_SINK_CHANNELS 2
@@ -385,6 +441,7 @@ static void push_stereo(void) {
       stereo_out[2 * i] = l_buf[i];
       stereo_out[2 * i + 1] = r_buf[i];
     }
+    audio_volume_apply(stereo_out, n * 2);
     audio_i2s_push(stereo_out, n * 2);
     l_received = false;
     r_received = false;
@@ -442,15 +499,22 @@ static void stream_recv(struct bt_bap_stream *stream,
 
       err = lc3_decode(as->decoder, l_data, octets_per_channel,
                        LC3_PCM_FORMAT_S16, stereo_out, 2);
-      if (err < 0) {
+      if (err == 1) {
+        audio_stats_frame_plc();
+      } else if (err < 0) {
         LOG_WRN("[%zu:%d]: LC3 L decode error %d", idx, i, err);
+        audio_stats_decode_error();
+      } else {
+        audio_stats_frame_decoded();
       }
       err = lc3_decode(as->decoder_r, r_data, octets_per_channel,
                        LC3_PCM_FORMAT_S16, stereo_out + 1, 2);
       if (err < 0) {
         LOG_WRN("[%zu:%d]: LC3 R decode error %d", idx, i, err);
+        audio_stats_decode_error();
       }
     }
+    audio_volume_apply(stereo_out, spc * 2);
     audio_i2s_push(stereo_out, spc * 2);
   } else {
     for (int i = 0; i < f_per_sdu; i++) {
@@ -458,9 +522,12 @@ static void stream_recv(struct bt_bap_stream *stream,
           as->decoder, valid ? net_buf_pull_mem(buf, octets_per_frame) : NULL,
           octets_per_frame, LC3_PCM_FORMAT_S16, idx == 0 ? l_buf : r_buf, 1);
       if (err == 1) {
-        /* err==1: PLC concealment applied, not an error */
+        audio_stats_frame_plc();
       } else if (err < 0) {
         LOG_WRN("[%zu:%d]: LC3 decode error %d", idx, i, err);
+        audio_stats_decode_error();
+      } else {
+        audio_stats_frame_decoded();
       }
     }
     if (idx == 0) {
@@ -481,6 +548,7 @@ static void stream_recv(struct bt_bap_stream *stream,
           stereo_out[2 * i + 1] = r_buf[i];
         }
       }
+      audio_volume_apply(stereo_out, spc * 2);
       audio_i2s_push(stereo_out, spc * 2);
       l_received = false;
       r_received = false;
@@ -546,6 +614,10 @@ static void connected(struct bt_conn *conn, uint8_t err) {
   }
   LOG_INF("Connected: %s", a);
   default_conn = bt_conn_ref(conn);
+
+  /* Signal no contexts available while this connection owns the ASEs */
+  bt_pacs_set_available_contexts(BT_AUDIO_DIR_SINK,
+                                 BT_AUDIO_CONTEXT_TYPE_NONE);
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason) {
@@ -559,6 +631,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
   LOG_INF("Disconnected: %s reason 0x%02x", a, reason);
 
   audio_i2s_stop();
+  audio_stats_reset();
 
 #if defined(CONFIG_LIBLC3)
   for (size_t i = 0; i < MAX_SINK_ASE; i++) {
@@ -569,6 +642,10 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
 
   bt_conn_unref(default_conn);
   default_conn = NULL;
+
+  /* Restore available contexts for the next client */
+  bt_pacs_set_available_contexts(BT_AUDIO_DIR_SINK, AVAILABLE_SINK_CONTEXT);
+
   k_sem_give(&sem_disconnected);
 }
 
@@ -644,44 +721,57 @@ int main(void) {
   };
   int err;
 
+  if (wdt_init()) {
+    LOG_ERR("Watchdog init failed");
+    sys_reboot(SYS_REBOOT_COLD);
+  }
+
   bt_conn_auth_cb_register(&conn_auth_cb);
   bt_conn_auth_info_cb_register(&conn_auth_info_cb);
 
   err = bt_enable(NULL);
   if (err) {
     LOG_ERR("Bluetooth init failed: %d", err);
-    return 0;
+    sys_reboot(SYS_REBOOT_COLD);
   }
   LOG_INF("BLE ready");
 
   err = settings_load();
   if (err) {
     LOG_ERR("settings_load() failed: %d", err);
-    return 0;
+    sys_reboot(SYS_REBOOT_COLD);
   }
   LOG_INF("settings_load() OK");
 
+  /* CAS (Common Audio Service) registered automatically via CONFIG_BT_CAP_ACCEPTOR */
+
+  err = audio_volume_init();
+  if (err) {
+    LOG_ERR("VCP init failed: %d", err);
+    sys_reboot(SYS_REBOOT_COLD);
+  }
+
   if (bt_pacs_register(&pacs_param)) {
     LOG_ERR("PACS register failed");
-    return 0;
+    sys_reboot(SYS_REBOOT_COLD);
   }
 
   err = bt_bap_unicast_server_register(&param);
   if (err) {
     LOG_ERR("BAP unicast server register failed: %d", err);
-    return 0;
+    sys_reboot(SYS_REBOOT_COLD);
   }
 
   err = bt_bap_unicast_server_register_cb(&unicast_server_cb);
   if (err) {
     LOG_ERR("BAP unicast server cb register failed: %d", err);
-    return 0;
+    sys_reboot(SYS_REBOOT_COLD);
   }
 
   err = bt_pacs_cap_register(BT_AUDIO_DIR_SINK, &cap_sink);
   if (err) {
     LOG_ERR("PACS cap register failed: %d", err);
-    return 0;
+    sys_reboot(SYS_REBOOT_COLD);
   }
 
   for (size_t i = 0; i < MAX_SINK_ASE; i++) {
@@ -689,13 +779,13 @@ int main(void) {
   }
 
   if (set_location() || set_supported_contexts() || set_available_contexts()) {
-    return 0;
+    sys_reboot(SYS_REBOOT_COLD);
   }
 
   err = audio_i2s_init();
   if (err) {
     LOG_ERR("I2S init failed: %d", err);
-    return 0;
+    sys_reboot(SYS_REBOOT_COLD);
   }
 
   struct bt_le_ext_adv *adv;
@@ -703,17 +793,17 @@ int main(void) {
   err = bt_le_ext_adv_create(BT_BAP_ADV_PARAM_CONN_QUICK, NULL, &adv);
   if (err) {
     LOG_ERR("Adv create failed: %d", err);
-    return 0;
+    sys_reboot(SYS_REBOOT_COLD);
   }
   err = bt_le_ext_adv_set_data(adv, ad, ARRAY_SIZE(ad), NULL, 0);
   if (err) {
     LOG_ERR("Adv data failed: %d", err);
-    return 0;
+    sys_reboot(SYS_REBOOT_COLD);
   }
   err = bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
   if (err) {
     LOG_ERR("Adv start failed: %d", err);
-    return 0;
+    sys_reboot(SYS_REBOOT_COLD);
   }
 
   LOG_INF("Advertising as \"%s\"", CONFIG_BT_DEVICE_NAME);
@@ -725,10 +815,11 @@ int main(void) {
     err = bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
     if (err) {
       LOG_ERR("Adv restart failed: %d", err);
-      break;
+      sys_reboot(SYS_REBOOT_COLD);
     }
     LOG_INF("Advertising again");
   }
 
+  /* Unreachable — loop exits only on reboot */
   return 0;
 }

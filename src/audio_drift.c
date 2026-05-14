@@ -104,3 +104,13 @@ void audio_drift_reset(void)
 	drift.center_freq = AUDIO_DRIFT_APLL_CENTER;
 	drift.meas_start_us = 0;
 }
+
+const char *audio_drift_state_str(void)
+{
+	switch (drift.state) {
+	case DRIFT_INIT:   return "INIT";
+	case DRIFT_CALIB:  return "CALIB";
+	case DRIFT_LOCKED: return "LOCKED";
+	default:           return "?";
+	}
+}

@@ -6,4 +6,13 @@ config INFO_REPORTING_INTERVAL
 	help
 	  Set to 0 to disable periodic logging to avoid UART spam.
 
+config BT_AUDIO_VOL_DEFAULT
+	int "Default VCP volume level (0-255)"
+	default 195
+	range 0 255
+	depends on BT_VCP_VOL_REND
+	help
+	  Initial volume applied by the VCP Volume Renderer at startup.
+	  195 is approximately 76% of full scale.
+
 source "Kconfig.zephyr"

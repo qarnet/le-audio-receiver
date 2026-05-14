@@ -33,4 +33,7 @@ uint16_t audio_drift_update(uint32_t sdu_ref_us);
  */
 void audio_drift_reset(void);
 
+/** @brief Current state as a short string: "INIT", "CALIB", or "LOCKED". */
+const char *audio_drift_state_str(void);
+
 #endif /* AUDIO_DRIFT_H */

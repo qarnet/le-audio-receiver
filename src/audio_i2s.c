@@ -5,6 +5,7 @@
 
 #include "audio_i2s.h"
 #include "audio_drift.h"
+#include "audio_stats.h"
 
 #include <string.h>
 
@@ -121,6 +122,7 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 
 	if (ret < 0) {
 		LOG_WRN("I2S slab full — dropping frame");
+		audio_stats_i2s_underrun();
 		return -ENOMEM;
 	}
 
@@ -165,6 +167,7 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 			/* DMA underrun — restart */
 			LOG_WRN("I2S underrun, restarting DMA");
 			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_PREPARE);
+			audio_stats_stream_reset();
 			started = false;
 		}
 		return ret;
