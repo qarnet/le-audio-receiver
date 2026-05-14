@@ -1,0 +1,9 @@
+tests:
+  bsim.le_audio_receiver:
+    platform_allow: nrf5340bsim/nrf5340/cpuapp
+    integration_platforms:
+      - nrf5340bsim/nrf5340/cpuapp
+    tags: bluetooth audio bap bsim
+    build_only: false
+    extra_configs:
+      - CONFIG_BT_TESTING=y

@@ -7,6 +7,7 @@ project(le_audio_receiver)
 target_sources(app PRIVATE
   src/main.c
   src/audio_i2s.c
+  src/audio_drift.c
 )
 
 zephyr_sources_ifdef(CONFIG_BT_AUDIO_TX src/stream_tx.c)
