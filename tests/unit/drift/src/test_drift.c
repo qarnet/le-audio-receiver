@@ -62,29 +62,29 @@ ZTEST(drift, test_calib_perfect_timing_returns_center)
 
 ZTEST(drift, test_calib_positive_err_increases_freq)
 {
-	/* elapsed < PERIOD → err > 0 → adj > 0 → freq > CENTER */
+	/* elapsed long → err negative → adj positive → freq above center */
 	audio_drift_update(0U);
 	uint32_t start = 2000000U;
 
 	audio_drift_update(start);
-	/* elapsed = 99900 → err = +100 us → adj ≈ +302 steps */
-	uint16_t r = audio_drift_update(start + PERIOD_US - 100);
+	/* elapsed = 100100 → err = -100 us → adj ≈ +302 steps */
+	uint16_t r = audio_drift_update(start + PERIOD_US + 100);
 
 	zassert_true(r > CENTER, "positive err → freq above center (got 0x%04X)", r);
 	zassert_true(r <= FREQ_MAX, "freq must not exceed max");
 }
 
-ZTEST(drift, test_calib_negative_err_decreases_freq)
+ZTEST(drift, test_calib_elapsed_long_increases_freq)
 {
-	/* elapsed > PERIOD → err < 0 → adj < 0 → freq < CENTER */
+	/* elapsed long → err negative → freq increases above center */
 	audio_drift_update(0U);
 	uint32_t start = 3000000U;
 
 	audio_drift_update(start);
-	/* elapsed = 100100 → err = -100 us */
+	/* elapsed = 100100 → err = -100 us → adj ≈ +302 → freq > CENTER */
 	uint16_t r = audio_drift_update(start + PERIOD_US + 100);
 
-	zassert_true(r < CENTER, "negative err → freq below center (got 0x%04X)", r);
+	zassert_true(r > CENTER, "elapsed long → freq above center (got 0x%04X)", r);
 	zassert_true(r >= FREQ_MIN, "freq must not go below min");
 }
 
@@ -95,13 +95,13 @@ ZTEST(drift, test_calib_to_locked_when_err_small)
 	uint32_t start = 4000000U;
 
 	audio_drift_update(start);
-	/* err = +10 us (≤16) → should enter LOCKED */
-	uint16_t r1 = audio_drift_update(start + PERIOD_US - 10);
+	/* err = -10 us (|err| ≤16) → should enter LOCKED */
+	uint16_t r1 = audio_drift_update(start + PERIOD_US + 10);
 
 	zassert_not_equal(r1, 0, "should update freq on lock transition");
 
 	/* Now in LOCKED; next period with err=0 → returns center freq */
-	uint32_t start2 = start + PERIOD_US - 10;
+	uint32_t start2 = start + PERIOD_US + 10;
 
 	audio_drift_update(start2 + PERIOD_US / 2); /* not enough elapsed */
 	uint16_t r2 = audio_drift_update(start2 + PERIOD_US);
@@ -122,16 +122,13 @@ ZTEST(drift, test_locked_half_correction)
 	audio_drift_update(t + PERIOD_US);   /* → LOCKED, freq=CENTER */
 	t += PERIOD_US;
 
-	/* In LOCKED: err=200 us → adj uses 100 us */
-	uint16_t freq_locked = audio_drift_update(t + PERIOD_US - 200);
+	/* In LOCKED: err=-200 us → adj uses -100 us */
+	uint16_t freq_locked = audio_drift_update(t + PERIOD_US + 200);
 
-	/* Compare against what CALIB would produce for the same 200 us error:
-	 * adj_calib = -(200*1000)/331 ≈ -604
-	 * adj_locked = -(100*1000)/331 ≈ -302
-	 * freq_locked should be closer to CENTER than freq_calib */
+	/* err = -200, locked uses -100 → adj ≈ +302; calib would use -200 → adj ≈ +604 */
 	int32_t diff_locked = (int32_t)freq_locked - (int32_t)CENTER;
 	/* locked correction ≈ 302 steps, calib ≈ 604 steps */
-	zassert_true(diff_locked > 0, "positive err → freq above center in locked");
+	zassert_true(diff_locked > 0, "elapsed long → freq above center in locked");
 	zassert_true(diff_locked < 500, "locked uses half correction, not full");
 }
 

@@ -1,4 +1,4 @@
 tests:
   unit.drift:
-    platform_allow: native_sim/native native_posix
+    platform_allow: native_sim/native/64
     tags: audio drift apll
