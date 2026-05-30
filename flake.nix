@@ -34,6 +34,7 @@
 
           export ZEPHYR_BASE=/home/thomas-workstation/ncs/v3.3.0/zephyr
           export ZEPHYR_SDK_INSTALL_DIR=/home/thomas-workstation/ncs/toolchains/911f4c5c26/opt/zephyr-sdk
+          export LD_LIBRARY_PATH=/home/thomas-workstation/ncs/toolchains/911f4c5c26/usr/local/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
         '';
       };
     };
