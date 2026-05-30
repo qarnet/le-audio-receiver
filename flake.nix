@@ -18,14 +18,22 @@
     in {
       devShells.${system}.default = pkgs.mkShell {
         name = "le-audio-receiver";
+
         buildInputs = with pkgs; [
           nrfutil
           pyocd
         ];
+
         shellHook = ''
-          # Load the full nRF Connect SDK v3.3.0 toolchain environment.
-          # export -p inside the toolchain shell gives safe, quotable exports.
-          eval "$(${pkgs.nrfutil}/bin/nrfutil sdk-manager toolchain launch --ncs-version v3.3.0 -- bash -c 'export -p' | grep -v "^declare -x LS_COLORS=" | grep -v "^declare -x SUDO_" | sed 's/^declare -x /export /')"
+          eval "$(
+            ${pkgs.nrfutil}/bin/nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh \
+              | grep -v '^export LD_LIBRARY_PATH=' \
+              | grep -v '^export PYTHONHOME=' \
+              | grep -v '^export PYTHONPATH='
+          )"
+
+          export ZEPHYR_BASE=/home/thomas-workstation/ncs/v3.3.0/zephyr
+          export ZEPHYR_SDK_INSTALL_DIR=/home/thomas-workstation/ncs/toolchains/911f4c5c26/opt/zephyr-sdk
         '';
       };
     };
