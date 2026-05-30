@@ -17,7 +17,7 @@
         "--background-index",
         "--clang-tidy",
         "--query-driver=/home/thomas-win/ncs/toolchains/*/opt/zephyr-sdk/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc"
-      ],
+      ]
     }
   }
 }
