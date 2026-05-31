@@ -45,6 +45,7 @@ int audio_volume_init(void)
 	struct bt_vcp_vol_rend_register_param param = {
 		.mute   = BT_VCP_STATE_UNMUTED,
 		.volume = CONFIG_BT_AUDIO_VOL_DEFAULT,
+		.step   = 16,
 		.cb     = &vcp_cb,
 	};
 
