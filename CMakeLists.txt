@@ -2,11 +2,6 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
-# Explicit overlay: auto-discovery expects nrf5340_audio_dk_nrf5340_cpuapp.overlay
-# but this project uses the short name nrf5340dk_nrf5340_cpuapp.overlay.
-list(APPEND DTC_OVERLAY_FILE
-    "${CMAKE_CURRENT_SOURCE_DIR}/boards/nrf5340dk_nrf5340_cpuapp.overlay")
-
 # West flash runner: OpenOCD with CMSIS-DAP Pico probe, flashing both cores.
 # Set BOARD_FLASH_RUNNER before find_package so board_set_flasher_ifnset()
 # (called by nrfutil/jlink board.cmake) does not override it (uses NOT DEFINED check).
