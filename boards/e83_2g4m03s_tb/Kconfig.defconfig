@@ -1,0 +1,31 @@
+# E83-2G4M03S Test Board (10414-PCB-V1.2) — nRF5340 board configuration
+
+# Copyright (c) 2019-2020 Nordic Semiconductor ASA
+# SPDX-License-Identifier: Apache-2.0
+
+config HW_STACK_PROTECTION
+	default ARCH_HAS_STACK_PROTECTION
+
+if BOARD_E83_2G4M03S_TB_NRF5340_CPUAPP || BOARD_E83_2G4M03S_TB_NRF5340_CPUAPP_NS
+
+if BOARD_E83_2G4M03S_TB_NRF5340_CPUAPP && TRUSTED_EXECUTION_SECURE
+
+# Workaround for not being able to have commas in macro arguments
+DT_CHOSEN_Z_SRAM_PARTITION := zephyr,sram-secure-partition
+
+config SRAM_SIZE
+	default $(dt_chosen_reg_size_int,$(DT_CHOSEN_Z_SRAM_PARTITION),0,K)
+
+endif # BOARD_E83_2G4M03S_TB_NRF5340_CPUAPP && TRUSTED_EXECUTION_SECURE
+
+config BOARD_E83_2G4M03S_TB
+	select USE_DT_CODE_PARTITION if BOARD_E83_2G4M03S_TB_NRF5340_CPUAPP_NS
+
+config BT_HCI_IPC
+	default y if BT_HCI
+
+config HEAP_MEM_POOL_ADD_SIZE_BOARD
+	int
+	default 4096 if BT_HCI_IPC
+
+endif # BOARD_E83_2G4M03S_TB_NRF5340_CPUAPP || BOARD_E83_2G4M03S_TB_NRF5340_CPUAPP_NS

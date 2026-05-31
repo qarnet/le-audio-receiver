@@ -1,0 +1,9 @@
+/*
+ * Copyright (c) 2022 Nordic Semiconductor
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * E83-2G4M03S Test Board (10414-PCB-V1.2) — network core pin control.
+ *
+ * The net core runs BLE controller only (SW Split LL). No UART, I2C, or SPI
+ * pins are routed to the net core on this board.
+ */

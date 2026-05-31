@@ -6,6 +6,7 @@
 #ifndef AUDIO_VOLUME_H
 #define AUDIO_VOLUME_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 

@@ -57,28 +57,34 @@ Nordic samples are the best learning resource:
 ## Build
 
 Build **from the NCS root** (`~/ncs/v3.3.0`). The app is a freestanding source
-directory there. `ZEPHYR_BASE` and sample paths must resolve.
+directory there. `ZEPHYR_BASE` and sample paths must resolve. The custom board
+definition lives in the app's `boards/` directory — pass `BOARD_ROOT` so the
+build system finds it.
 
 ```bash
 cd ~/ncs/v3.3.0
-nrfutil sdk-manager toolchain launch --ncs-version v3.3.0 -- \
-  bash -c "cd ~/ncs/v3.3.0 && west build -b nrf5340dk/nrf5340/cpuapp --sysbuild --pristine"
+west build -b e83_2g4m03s_tb/nrf5340/cpuapp -s /home/thomas/repos/le-audio-receiver \
+  --sysbuild --pristine -d /tmp/build_e83 -- \
+  -DBOARD_ROOT=/home/thomas/repos/le-audio-receiver
 ```
 
 Use `--pristine` after any `prj.conf`, overlay, or `sysbuild.cmake` change.
-The build tree is at `~/ncs/v3.3.0/build/` (not in the repo).
+The build tree is at `/tmp/build_e83/`.
 
 ## Flash
 
-Both app core and hci_ipc network core must be flashed:
+Both app core and hci_ipc network core must be flashed **via PyOCD** (PicoProbe).
+J-Link/nrfjprog/nrfutil runners are NOT available on this board.
 
 ```bash
-cd ~/ncs/v3.3.0
-nrfutil sdk-manager toolchain launch --ncs-version v3.3.0 -- \
-  bash -c "cd ~/ncs/v3.3.0 && west flash --build-dir build"
+pyocd flash -t nrf5340_xxaa_app --erase chip build/zephyr/merged.hex
+pyocd flash -t nrf5340_xxaa_net --erase chip build/hci_ipc/zephyr/zephyr.hex
 ```
 
-This flashes `build/merged.hex` (app) then `build/merged_CPUNET.hex` (net).
+With sysbuild output at `/tmp/build_e83/`:
+```bash
+pyocd flash -t nrf5340_xxaa_app --erase chip /tmp/build_e83/merged.hex
+pyocd flash -t nrf5340_xxaa_net --erase chip /tmp/build_e83/merged_CPUNET.hex
 
 ## Serial
 
@@ -278,3 +284,115 @@ headphone L/R, AGND to sleeve.
 | `prj.conf` | App Kconfig (ACL/ISO buffers, SMP, 2 ASEs, liblc3, FPU, ZMS) |
 | `sysbuild.cmake` | Applies SW Split DT overlay + Kconfig overlay to hci_ipc |
 | `sysbuild.conf` | `SB_CONFIG_NETCORE_HCI_IPC=y` |
+
+---
+
+# Board Porting — Custom Board (E83-2G4M03S-TB / 10414-PCB-V1.2)
+
+## Hardware Identity
+
+| Item | Value |
+|------|-------|
+| **Board name** (proposed) | `e83_2g4m03s_tb` |
+| **SoC** | nRF5340-QKAA (same as nRF5340 DK) |
+| **Module** | Ebyte E83-2G4M03S — nRF5340 SMD module, 16×16 mm, IPEX antenna |
+| **Custom PCB** | 10414-PCB-V1.2 — integrates E83 module, LDO, CH340X UART bridge |
+| **Debug probe** | PicoProbe (CMSIS-DAP via PyOCD) — **NOT J-Link** |
+| **SoC DTSI files** | Same as DK: `nrf5340_cpuapp_qkaa.dtsi`, `nrf5340_cpunet_qkaa.dtsi` |
+
+## Architecture (same dual-core split as DK)
+
+| Core | Target identifier | RAM | Flash |
+|------|-------------------|-----|-------|
+| Application | `e83_2g4m03s_tb/nrf5340/cpuapp` | 512 KB | 1 MB |
+| Network | `e83_2g4m03s_tb/nrf5340/cpunet` | 64 KB | 256 KB |
+
+## Hardware Differences from nRF5340 DK
+
+| Feature | nRF5340 DK | Custom board |
+|---------|-----------|--------------|
+| **UART** | P0.29 TX, P0.28 RX (VCOM) | P0.20 TX, P0.22 RX, P0.21 CTS (CH340X bridge) |
+| **USB** | J3 nRF USB port | JK1 Micro USB direct to D+/D- |
+| **QSPI flash** | 8 MB external MX25R64 | None |
+| **Arduino headers** | Yes | No (P2/P3 GPIO expansion headers) |
+| **Buttons** | 4 (BTN1–BTN4) + RESET | RESET only (S1) |
+| **LEDs** | 4 (LED1–LED4) | 1 power LED (D1) |
+| **I2S DAC** | Cirrus CS47L63 on I2S0 | External CJMCU-1334 wired to P1.15/P1.13/P1.12 |
+| **32.768 kHz XTAL** | P0.00/P0.01, internal caps | P0.00/P0.01, external 12 pF caps |
+| **Flashing** | J-Link OB (nrfjprog/nrfutil) | PicoProbe SWD → PyOCD runner |
+| **Power** | USB/VIN/LiPo regulators | USB VBUS → ME6214C33 LDO → 3.3V |
+
+## Pin Assignments (critical for overlay)
+
+### UART0 (CH340X bridge, app core console)
+| Signal | Pin |
+|--------|-----|
+| TXD | P0.20 |
+| RXD | P0.22 |
+| CTS | P0.21 (flow control) |
+| RTS | not connected |
+
+### SWD Debug (P3 header)
+| Signal | P3 pin |
+|--------|--------|
+| SWDIO | P3.7 |
+| SWDCLK | P3.9 |
+| RESET | P3.5 |
+| GND | P3.1 |
+
+### I2S0 (CJMCU-1334 DAC — wired via P3 header)
+| Signal | nRF5340 pin | P3 pin |
+|--------|-------------|--------|
+| BCK (SCK) | P1.15 | P3.27 |
+| LRCK (WS) | P1.12 | P3.21 |
+| DIN (SDIN) | P1.13 | P3.23 |
+
+### I2C (available on P2 header for codec control)
+| Signal | Pin | P2 pin |
+|--------|-----|--------|
+| SDA | P1.03 | P2.21 |
+| SCL | P1.02 | P2.23 |
+
+## Flashing with PicoProbe (NOT J-Link)
+
+The board uses a Raspberry Pi Pico running picoprobe firmware (CMSIS-DAP).
+Standard `CONFIG_BOARD_NRF5340DK_NRF5340_CPUAPP` in `board.cmake` sets
+J-Link device args — this won't work. The new board definition must:
+- **board.cmake**: Set `pyocd` runner args with `--target nrf5340_xxaa_app` / `nrf5340_xxaa_net`
+- **No nrfjprog/jlink/nrfutil**: Those runners are J-Link only
+
+PyOCD flash commands (already documented):
+```bash
+pyocd flash -t nrf5340_xxaa_app --erase chip build/zephyr/merged.hex
+pyocd flash -t nrf5340_xxaa_net --erase chip build/hci_ipc/zephyr/zephyr.hex
+```
+
+## What a Board Definition Needs (nRF5340 dual-core)
+
+For each board target (cpuapp, cpunet):
+
+| File | Purpose |
+|------|---------|
+| `board.yml` | Top-level: board name, vendor, SoC variants |
+| `Kconfig.<board>` | Defines `BOARD_<NAME>`, selects SoC per core |
+| `Kconfig.defconfig` | Board-level defaults (IPC, memory, MPU) |
+| `board.cmake` | Runner args — **pyocd**, not jlink |
+| `<board>_<soc>_cpuapp.yaml` | cpuapp target: identifier, RAM/flash, features |
+| `<board>_<soc>_cpunet.yaml` | cpunet target: identifier, RAM/flash, features |
+| `<board>_<soc>_cpuapp.dts` | cpuapp DT: includes SoC DTSI + board common + partition |
+| `<board>_<soc>_cpunet.dts` | cpunet DT: includes SoC DTSI + board common + pinctrl |
+| `<board>_<soc>_cpuapp_defconfig` | cpuapp minimal boot config (MPU, TrustZone, GPIO, serial) |
+| `<board>_<soc>_cpunet_defconfig` | cpunet minimal boot config (MPU, GPIO, serial) |
+| `<board>_common.dtsi` | Shared DT: LEDs, buttons, aliases |
+| `*-pinctrl.dtsi` | Pin control — split per core (different pins per core) |
+
+## Plan
+
+1. Create board directory: `boards/e83_2g4m03s_tb/` in repo
+2. Create all board definition files (listed above)
+3. Replace current `boards/nrf5340dk_nrf5340_cpuapp.overlay` with board DTS
+4. Update `prj.conf` → remove DK-specific CONFIGs, add board-appropriate ones
+5. Update `sysbuild.cmake` → use new board name for cpunet overlay
+6. Update `sysbuild.conf` → ensure it works with new board
+7. Test build: `west build -b e83_2g4m03s_tb/nrf5340/cpuapp --sysbuild`
+8. Flash with PyOCD (not west flash with jlink runner)

@@ -1,0 +1,13 @@
+identifier: e83_2g4m03s_tb/nrf5340/cpunet
+name: E83-2G4M03S-TB-NRF5340-network-MCU
+type: mcu
+arch: arm
+toolchain:
+  - gnuarmemb
+  - zephyr
+ram: 64
+flash: 256
+supported:
+  - gpio
+  - watchdog
+vendor: ebyte
