@@ -5,7 +5,8 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
   };
 
-  outputs = { nixpkgs, ... }:
+  outputs =
+    { nixpkgs, ... }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -15,23 +16,44 @@
           segger-jlink.acceptLicense = true;
         };
       };
+
       toolchain = "/home/thomas-workstation/ncs/toolchains/911f4c5c26";
-    in {
+      ncs = "/home/thomas-workstation/ncs/v3.3.0";
+    in
+    {
       devShells.${system}.default = pkgs.mkShell {
         name = "le-audio-receiver";
+
         buildInputs = with pkgs; [
           nrfutil
           pyocd
         ];
+
         shellHook = ''
           # nRF Connect SDK v3.3.0 toolchain environment.
           TC=${toolchain}
+          NCS=${ncs}
+
           export PATH="$TC/usr/bin:$TC/usr/local/bin:$TC/opt/bin:$TC/opt/zephyr-sdk/arm-zephyr-eabi/bin:$TC/opt/zephyr-sdk/riscv64-zephyr-elf/bin:$TC/opt/nanopb/generator-bin:$TC/nrfutil/bin:$PATH"
+
           export LD_LIBRARY_PATH="$TC/usr/lib:$TC/usr/lib/x86_64-linux-gnu:$TC/usr/local/lib:$LD_LIBRARY_PATH"
-          export PYTHONHOME="$TC/usr/local"
-          export PYTHONPATH="$TC/usr/local/lib/python3.12:$TC/usr/local/lib/python3.12/site-packages:$PYTHONPATH"
-          export ZEPHYR_BASE=/home/thomas-workstation/ncs/v3.3.0/zephyr
-          export ZEPHYR_SDK_INSTALL_DIR=$TC
+
+          export ZEPHYR_BASE="$NCS/zephyr"
+          export ZEPHYR_SDK_INSTALL_DIR="$TC"
+
+          # Do not leak Nordic Python into unrelated Python tools.
+          unset PYTHONHOME
+          unset PYTHONPATH
+          unset _PYTHON_HOST_PLATFORM
+          unset _PYTHON_SYSCONFIGDATA_NAME
+
+          # Run west with the Nordic toolchain Python explicitly.
+          west-ncs() {
+            "$TC/usr/local/bin/python3" -m west "$@"
+          }
+
+          # Optional convenience aliases.
+          alias west='west-ncs'
         '';
       };
     };
