@@ -6,12 +6,9 @@ pkgs.openocd.overrideAttrs (old: {
   src = pkgs.fetchFromGitHub {
     owner = "openocd-org";
     repo = "openocd";
-
-    # Use a fixed commit eventually.
-    # For first testing, you can use master, but Nix needs the hash.
-    rev = "master";
-
-    hash = pkgs.lib.fakeHash;
+    rev = "e6752ecbcf72efe4e213e8418e381ff2e0ffdf54";
+    hash = "sha256-5aW7C061BUmbNPENrCeEUg6PRqukLRF+asnJ4KPrL0w=";
+    fetchSubmodules = true;
   };
 
   # Git checkout needs bootstrap/autoreconf.

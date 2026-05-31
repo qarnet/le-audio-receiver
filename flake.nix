@@ -3,11 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   };
 
   outputs =
-    { nixpkgs, nixpkgs-unstable, ... }:
+    { nixpkgs, ... }:
     let
       system = "x86_64-linux";
 
@@ -19,23 +18,20 @@
         };
       };
 
-      pkgs-unstable = import nixpkgs-unstable {
-        inherit system;
-        config = {
-          allowUnfree = true;
-          segger-jlink.acceptLicense = true;
-        };
+      openocd-master = import ./nix/openocd-master.nix {
+        inherit pkgs;
       };
 
       toolchain = "/home/thomas-workstation/ncs/toolchains/911f4c5c26";
       ncs = "/home/thomas-workstation/ncs/v3.3.0";
 
       openocdWrapped = pkgs.writeShellScriptBin "openocd" ''
-        export LD_LIBRARY_PATH="${pkgs-unstable.systemd}/lib:''${LD_LIBRARY_PATH:-}"
-        exec ${pkgs-unstable.openocd}/bin/openocd "$@"
+        export LD_LIBRARY_PATH="${pkgs.systemd}/lib:''${LD_LIBRARY_PATH:-}"
+        exec ${openocd-master}/bin/openocd "$@"
       '';
     in
     {
+      packages.${system}.openocd-master = openocd-master;
       devShells.${system}.default = pkgs.mkShell {
         name = "le-audio-receiver";
 
@@ -44,10 +40,10 @@
           [
             nrfutil
             pyocd
+            systemd
           ]
           ++ [
             openocdWrapped
-            pkgs-unstable.systemd
           ];
 
         shellHook = ''
