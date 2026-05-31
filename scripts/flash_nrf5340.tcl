@@ -5,6 +5,39 @@
 #               -f scripts/flash_nrf5340.tcl \
 #               -c "flash_both APP_HEX NET_HEX" -c shutdown
 
+# ── west flash integration ─────────────────────────────────────────────────
+# check_approtect: called via --cmd-pre-load (after init, before reset halt).
+# Recovers the device if APPROTECT is engaged so the subsequent reset halt works.
+proc check_approtect {} {
+    set locked [catch {nrf53.cpuapp arp_examine} err]
+    if {$locked} {
+        puts "App core locked — running nrf53_recover..."
+        nrf53_recover
+    }
+}
+
+# flash_west: called via --cmd-load (after init + reset halt done by west runner).
+# app_hex is passed by the runner from runners.yaml config.hex_file (merged.hex).
+# NET_CORE_HEX is a TCL variable set via --cmd-pre-init in CMakeLists.txt.
+proc flash_west {app_hex} {
+    global NET_CORE_HEX
+    puts "Flashing app core: $app_hex"
+    flash write_image erase $app_hex
+
+    nrf53_cpunet_release nrf53
+    catch {nrf53.cpunet arp_examine}
+    targets nrf53.cpunet
+    halt
+    wait_halt 2000
+    flash probe 2
+    puts "Flashing net core: $NET_CORE_HEX"
+    flash write_image erase $NET_CORE_HEX
+
+    puts "Resetting both cores..."
+    reset run
+}
+
+# ── manual flash fallback ───────────────────────────────────────────────────
 proc flash_both {app_hex net_hex} {
     init
 
