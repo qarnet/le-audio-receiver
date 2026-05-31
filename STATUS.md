@@ -1,5 +1,7 @@
 # Board Porting Status
 
+**Last verified: 2026-05-31 on `thomas-workstation` (working PicoProbe)**
+
 ## What was done
 
 Created a custom Zephyr board definition for the Ebyte E83-2G4M03S-TB
@@ -37,9 +39,8 @@ nRF21540 FEM, nrfjprog/jlink/nrfutil runners.
 
 ## Build
 
-Both cores compile and link successfully (verified). Build command from
-this machine (requires NCS toolchain at ~/ncs/toolchains/911f4c5c26 and
-nix for OpenOCD):
+Both cores compile and link successfully (verified on two machines).
+Replace repo and NCS paths below to match your install location.
 
 ```bash
 export TOOLCHAIN=~/ncs/toolchains/911f4c5c26
@@ -50,11 +51,11 @@ export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
 export ZEPHYR_SDK_INSTALL_DIR=$TOOLCHAIN/opt/zephyr-sdk
 cd ~/ncs/v3.3.0
 west build -b e83_2g4m03s_tb/nrf5340/cpuapp \
-  -s /home/thomas/repos/le-audio-receiver --sysbuild --pristine \
-  -d /tmp/build_e83 -- -DBOARD_ROOT=/home/thomas/repos/le-audio-receiver
+  -s /path/to/le-audio-receiver --sysbuild --pristine \
+  -d /tmp/build_e83 -- -DBOARD_ROOT=/path/to/le-audio-receiver
 ```
 
-Build output (from last successful build):
+Build output (2026-05-31):
   merged.hex:         991,728 B  (app core: 34.93% flash, 29.72% RAM)
   merged_CPUNET.hex:  400,192 B  (net core: 55.51% flash, 61.77% RAM)
 
@@ -69,54 +70,85 @@ Flash runner is configured in two layers:
   2. board.cmake: includes pyocd.board.cmake as trigger so that
      board_finalize_runner_args() calls app_set_runner_args()
 
-OpenOCD is provided by the project's nix flake (openocd-master.nix,
-built from git master for nrf53 support).
+OpenOCD is available system-wide (nix flake provides openocd-master with
+nrf53 support).
 
-Flash command (must be run from a machine with PicoProbe connected):
+### west flash (simplest)
+
 ```bash
-nix develop /home/thomas/repos/le-audio-receiver --command bash -c '
 export TOOLCHAIN=~/ncs/toolchains/911f4c5c26
 export PATH=$TOOLCHAIN/usr/local/bin:$TOOLCHAIN/usr/bin:$TOOLCHAIN/bin:$PATH
-export LD_LIBRARY_PATH=$TOOLCHAIN/usr/local/lib:$TOOLCHAIN/usr/lib:$TOOLCHAIN/usr/lib/x86_64-linux-gnu:$TOOLCHAIN/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=$TOOLCHAIN/usr/local/lib:$TOOLCHAIN/usr/lib:$TOOLCHAIN/usr/lib/x86_64-linux-gnu:$TOOLCHAIN/lib
 export ZEPHYR_BASE=$HOME/ncs/v3.3.0/zephyr
 export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
 export ZEPHYR_SDK_INSTALL_DIR=$TOOLCHAIN/opt/zephyr-sdk
 cd $HOME/ncs/v3.3.0
 west flash --build-dir /tmp/build_e83
-'
 ```
 
-Constructed OpenOCD command line (verified working, last tested 2026-05-31):
-```
-openocd
-  -s .../boards/e83_2g4m03s_tb/support
-  -s .../scripts
-  -f interface/cmsis-dap.cfg
-  -f target/nordic/nrf53.cfg
-  -f .../scripts/flash_nrf5340.tcl
-  -c 'cmsis_dap_serial E6635C08CB1F502B'
-  -c 'transport select swd'
-  -c 'adapter speed 100'
-  -c 'set NET_CORE_HEX {/tmp/build_e83/merged_CPUNET.hex}'
-  -c init -c targets
-  -c check_approtect
-  -c 'reset init'
-  -c 'flash_west /tmp/build_e83/merged.hex'
-  -c 'reset run'
+### Direct OpenOCD flash (what `west flash` expands to)
+
+```bash
+openocd \
+  -s .../ncs/v3.3.0/zephyr/scripts \
+  -s .../boards/e83_2g4m03s_tb/support \
+  -f interface/cmsis-dap.cfg \
+  -f target/nordic/nrf53.cfg \
+  -f .../scripts/flash_nrf5340.tcl \
+  -c 'cmsis_dap_serial E6635C08CB1F502B' \
+  -c 'transport select swd' \
+  -c 'adapter speed 100' \
+  -c 'set NET_CORE_HEX {/tmp/build_e83/merged_CPUNET.hex}' \
+  -c init -c targets \
+  -c check_approtect \
+  -c 'reset init' \
+  -c 'flash_west /tmp/build_e83/merged.hex' \
+  -c 'reset run' \
   -c shutdown
 ```
 
 Probe: PicoProbe CMSIS-DAP serial E6635C08CB1F502B
 SWD pins: P3.7=SWDIO, P3.9=SWDCLK, P3.5=RESET, P3.1=GND
 
+## Verification (2026-05-31, thomas-workstation)
+
+Items 1-4 completed and verified:
+
+1. PicoProbe connected: `Raspberry Pi Debugprobe on Pico (CMSIS-DAP)` at serial
+   `E6635C08CB1F502B`
+2. Flash both cores: OpenOCD direct command (see above) — app + net core flashed,
+   reset, running.
+3. Serial terminal: **`/dev/ttyUSB0` (CH340X bridge) at 115200 8N1** —
+   NOT `/dev/ttyACM1`. The PicoProbe ACM0 port is the debug probe's own UART,
+   not the nRF5340 console.
+4. Boot verified:
+
+```
+*** Booting nRF Connect SDK v3.3.0-ba167d9f3db4 ***
+*** Using Zephyr OS v4.3.99-fd9204a02d52 ***
+[00:00:00.253,265] <inf> main: Watchdog started (5 s timeout)
+[00:00:00.254,180] <inf> fs_zms: 2 Sectors of 4096 bytes
+[00:00:00.277,282] <inf> bt_hci_core: HW Platform: Nordic Semiconductor (0x0002)
+[00:00:00.277,343] <inf> bt_hci_core: HW Variant: nRF53x (0x0003)
+[00:00:00.278,564] <inf> bt_hci_core: No ID address. App must call settings_load()
+[00:00:00.278,564] <inf> main: BLE ready
+[00:00:00.279,876] <inf> bt_hci_core: HCI transport: IPC
+[00:00:00.279,968] <inf> bt_hci_core: Identity: E8:54:F0:E0:D9:42 (random)
+[00:00:00.279,998] <inf> bt_hci_core: HCI: version 5.4 (0x0d) revision 0x0000
+[00:00:00.280,029] <inf> bt_hci_core: LMP: version 5.4 (0x0d) subver 0xffff
+[00:00:00.281,280] <inf> main: settings_load() OK
+[00:00:00.281,341] <inf> audio_volume: VCP ready (default vol=195)
+[00:00:00.281,494] <inf> audio_i2s: I2S ready (48 kHz, 16-bit, stereo, 12 blocks)
+[00:00:00.283,874] <inf> main: Advertising as "LE Audio Receiver"
+```
+
+All expected milestones present: BLE ready, settings_load() OK, I2S init,
+advertising started. Shell prompt active at `uart:~$ `.
+
 ## What remains
 
-1. Connect PicoProbe to target machine (currently not connected —
-   "Error: unable to find a matching CMSIS-DAP device" on this machine)
-2. Run `west flash --build-dir /tmp/build_e83` with combined nix+NCS env
-3. Open serial terminal on /dev/ttyACM1 at 115200 8N1
-4. Verify boot: "BLE ready", settings_load OK, "Advertising as LE Audio Receiver"
-5. Connect phone, pair, stream audio, verify I2S output on CJMCU-1334
+5. Connect phone, pair to "LE Audio Receiver", stream audio, verify I2S
+   output on CJMCU-1334 DAC.
 
 ## Also fixed (pre-existing bugs)
 
@@ -131,15 +163,16 @@ SWD pins: P3.7=SWDIO, P3.9=SWDCLK, P3.5=RESET, P3.1=GND
 
 ## Key references
 
-- Project repo: /home/thomas/repos/le-audio-receiver (branch: board-porting)
-- NCS version: v3.3.0 at ~/ncs/v3.3.0/
-- Toolchain: ~/ncs/toolchains/911f4c5c26/
-- Build tree: /tmp/build_e83/
-- Hardware docs: ~/Nextcloud/Development-Resources/le-audio/Present-Hardware/
-- Flashing docs: docs/flashing.md
-- Flash TCL: scripts/flash_nrf5340.tcl
-- Custom OpenOCD build: nix/openocd-master.nix
-- Board definition: boards/e83_2g4m03s_tb/
-- sysbuild config: sysbuild.cmake (hci_ipc BUILD_ONLY TRUE)
-- sysbuild.conf: SB_CONFIG_NETCORE_HCI_IPC=y
-- NCS board reference: ~/ncs/v3.3.0/zephyr/boards/nordic/nrf5340dk/
+- Project repo: `le-audio-receiver` (branch: `board-porting`)
+- NCS version: v3.3.0 at `~/ncs/v3.3.0/`
+- Toolchain: `~/ncs/toolchains/911f4c5c26/`
+- Build tree: `/tmp/build_e83/`
+- Serial console: `/dev/ttyUSB0` (CH340X bridge), 115200 8N1
+- Hardware docs: `~/Nextcloud/Development-Resources/le-audio/Present-Hardware/`
+- Flashing docs: `docs/flashing.md`
+- Flash TCL: `scripts/flash_nrf5340.tcl`
+- Custom OpenOCD build: `nix/openocd-master.nix`
+- Board definition: `boards/e83_2g4m03s_tb/`
+- sysbuild config: `sysbuild.cmake` (hci_ipc BUILD_ONLY TRUE)
+- sysbuild.conf: `SB_CONFIG_NETCORE_HCI_IPC=y`
+- NCS board reference: `~/ncs/v3.3.0/zephyr/boards/nordic/nrf5340dk/`

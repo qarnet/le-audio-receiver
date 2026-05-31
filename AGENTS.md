@@ -73,23 +73,39 @@ The build tree is at `/tmp/build_e83/`.
 
 ## Flash
 
-Both app core and hci_ipc network core must be flashed **via PyOCD** (PicoProbe).
+Both app core and hci_ipc network core must be flashed **via OpenOCD** (PicoProbe).
 J-Link/nrfjprog/nrfutil runners are NOT available on this board.
 
 ```bash
-pyocd flash -t nrf5340_xxaa_app --erase chip build/zephyr/merged.hex
-pyocd flash -t nrf5340_xxaa_net --erase chip build/hci_ipc/zephyr/zephyr.hex
+openocd -s ~/ncs/v3.3.0/zephyr/scripts \
+  -s boards/e83_2g4m03s_tb/support \
+  -f interface/cmsis-dap.cfg -f target/nordic/nrf53.cfg \
+  -f scripts/flash_nrf5340.tcl \
+  -c 'cmsis_dap_serial E6635C08CB1F502B' \
+  -c 'transport select swd' -c 'adapter speed 100' \
+  -c "set NET_CORE_HEX {/tmp/build_e83/merged_CPUNET.hex}" \
+  -c init -c targets -c check_approtect -c 'reset init' \
+  -c 'flash_west /tmp/build_e83/merged.hex' \
+  -c 'reset run' -c shutdown
 ```
 
-With sysbuild output at `/tmp/build_e83/`:
+Or use `west flash` (which expands to the above):
 ```bash
-pyocd flash -t nrf5340_xxaa_app --erase chip /tmp/build_e83/merged.hex
-pyocd flash -t nrf5340_xxaa_net --erase chip /tmp/build_e83/merged_CPUNET.hex
+cd ~/ncs/v3.3.0
+west flash --build-dir /tmp/build_e83
+```
 
 ## Serial
 
-App core output: `/dev/ttyACM1` (not ACM0) at **115200 8N1**.
-Net core output: `/dev/ttyACM1` sometimes forwards both.
+**Custom board (E83-2G4M03S-TB):** `/dev/ttyUSB0` (CH340X bridge) at **115200 8N1**.
+PicoProbe ACM0 is the debug probe's built-in UART — NOT the nRF5340 console.
+
+```bash
+stty -F /dev/ttyUSB0 115200 raw -echo && cat /dev/ttyUSB0
+```
+
+**nRF5340 DK:** App core output is `/dev/ttyACM1` (not ACM0) at **115200 8N1**.
+Net core output may also appear on ACM1.
 
 ```bash
 stty -F /dev/ttyACM1 115200 raw -echo && cat /dev/ttyACM1
@@ -102,25 +118,30 @@ HFCLKAUDIO clock drift vs. the BLE ISO clock — recovery is automatic
 (`TRIGGER_PREPARE` + re-arm). Increase pre-fill depth in `audio_i2s.c`
 to reduce frequency.
 
-### Capturing dual-core logs during testing
+### Capturing logs during testing (custom board)
 
-When debugging, both ACM ports must be captured **before** the device resets.
-The `scripts/read_acm.py` helper (pyserial + auto-reopen) handles the USB
-disconnect during reset.  Use `tmux` to keep readers alive between tool calls:
+Single UART on custom board (CH340X bridge). Reset via OpenOCD to get clean boot:
 
 ```bash
-# Start background readers
-tmux new-session -d -s acm0 \
-  "python3 scripts/read_acm.py ttyACM0 /tmp/acm0.log"
-tmux new-session -d -s acm1 \
-  "python3 scripts/read_acm.py ttyACM1 /tmp/acm1.log"
+# Start logger in background
+stty -F /dev/ttyUSB0 115200 raw -echo && cat /dev/ttyUSB0 > /tmp/boot.log &
+CATPID=$!
+sleep 1
 
-# Reset so boot capture is clean
-nrfutil device reset
+# Reset via OpenOCD to capture full boot
+openocd -s .../ncs/v3.3.0/zephyr/scripts \
+  -f interface/cmsis-dap.cfg \
+  -c 'adapter serial E6635C08CB1F502B' \
+  -c 'transport select swd' -c 'adapter speed 100' \
+  -f target/nordic/nrf53.cfg \
+  -c init -c 'targets nrf53.cpuapp' -c 'reset run' -c shutdown 2>&1
+
+sleep 5
+kill $CATPID 2>/dev/null; wait $CATPID 2>/dev/null
+cat /tmp/boot.log
 ```
 
-Always reset **after** starting the readers.  The readers auto-exit after 30 s.
-Stop with `tmux kill-session -t acm0` / `acm1`.
+Always start cat **before** resetting.  The cat keeps reading until killed.
 
 ## Gotchas
 
