@@ -13,4 +13,8 @@ if(SB_CONFIG_NETCORE_HCI_IPC)
     hci_ipc
     ${NET_APP_SRC_DIR}/nrf5340_cpunet_iso_peripheral-bt_ll_sw_split.conf
   )
+
+  # Exclude hci_ipc from west flash domain sequence: the le-audio-receiver app domain
+  # runner (flash_west proc) flashes both cores in a single OpenOCD session.
+  set_target_properties(hci_ipc PROPERTIES BUILD_ONLY TRUE)
 endif()
