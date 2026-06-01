@@ -1,5 +1,5 @@
 {
-  description = "LE Audio Receiver — nRF5340 Audio DK";
+  description = "LE Audio Receiver — nRF5340";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
@@ -18,9 +18,6 @@
         };
       };
 
-      toolchain = "/home/thomas-workstation/ncs/toolchains/911f4c5c26";
-      ncs = "/home/thomas-workstation/ncs/v3.3.0";
-
       openocd-master = import ./nix/openocd-master.nix {
         inherit pkgs;
       };
@@ -30,17 +27,12 @@
         exec ${openocd-master}/bin/openocd "$@"
       '';
 
-      westWrapped = pkgs.writeShellScriptBin "west" ''
-        TC="${toolchain}"
-
+      pyocdWrapped = pkgs.writeShellScriptBin "pyocd" ''
         unset PYTHONHOME
         unset PYTHONPATH
         unset _PYTHON_HOST_PLATFORM
         unset _PYTHON_SYSCONFIGDATA_NAME
-
-        export LD_LIBRARY_PATH="$TC/usr/lib:$TC/usr/lib/x86_64-linux-gnu:$TC/usr/local/lib:''${LD_LIBRARY_PATH:-}"
-
-        exec "$TC/usr/local/bin/python3" -m west "$@"
+        exec ${pkgs.pyocd}/bin/pyocd "$@"
       '';
     in
     {
@@ -49,30 +41,26 @@
       devShells.${system}.default = pkgs.mkShell {
         name = "le-audio-receiver";
 
-        buildInputs = with pkgs; [
-          nrfutil
-          pyocd
-          systemd
-          westWrapped
+        buildInputs = [
+          pkgs.nrfutil
+          pkgs.systemd
           openocdWrapped
+          pyocdWrapped
         ];
 
         shellHook = ''
-          TC=${toolchain}
-          NCS=${ncs}
+          # Source NCS toolchain env AFTER nix shell is up, so nix binary
+          # isn't broken by toolchain LD_LIBRARY_PATH during eval.
+          eval "$(nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh 2>/dev/null)"
 
-          export ZEPHYR_BASE="$NCS/zephyr"
-          export ZEPHYR_SDK_INSTALL_DIR="$TC"
+          # Derive ZEPHYR_BASE from toolchain path.
+          # ZEPHYR_SDK_INSTALL_DIR = .../ncs/toolchains/<hash>/opt/zephyr-sdk
+          # NCS root = .../ncs (4 dirname levels up)
+          NCS_ROOT="$(dirname "$(dirname "$(dirname "$(dirname "$ZEPHYR_SDK_INSTALL_DIR")")")")"
+          export ZEPHYR_BASE="$NCS_ROOT/v3.3.0/zephyr"
 
-          # Put wrappers first.
-          export PATH="${westWrapped}/bin:${openocdWrapped}/bin:$TC/usr/bin:$TC/usr/local/bin:$TC/opt/bin:$TC/opt/zephyr-sdk/arm-zephyr-eabi/bin:$TC/opt/zephyr-sdk/riscv64-zephyr-elf/bin:$TC/opt/nanopb/generator-bin:$TC/nrfutil/bin:$PATH"
-
-          # Keep global shell clean.
-          unset PYTHONHOME
-          unset PYTHONPATH
-          unset _PYTHON_HOST_PLATFORM
-          unset _PYTHON_SYSCONFIGDATA_NAME
-          unset LD_LIBRARY_PATH
+          # Prepend wrappers so they win over toolchain-bundled versions.
+          export PATH="${openocdWrapped}/bin:${pyocdWrapped}/bin:$PATH"
         '';
       };
     };
