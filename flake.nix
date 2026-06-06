@@ -15,6 +15,7 @@
         config = {
           allowUnfree = true;
           segger-jlink.acceptLicense = true;
+          permittedInsecurePackages = [ "segger-jlink-qt4-874" ];
         };
       };
 
@@ -42,6 +43,7 @@
         name = "le-audio-receiver";
 
         buildInputs = [
+          pkgs.segger-jlink
           pkgs.nrfutil
           pkgs.systemd
           openocdWrapped
