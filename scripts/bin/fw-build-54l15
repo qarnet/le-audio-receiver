@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# Build the nRF54L15 firmware.
+#
+# NOTE: nRF54L15 target is known-broken (design.md F1). This script exists as
+# the Phase 1 entry point. Expect build failures until Phase 1 lands.
+#
+# Build dir:  build/nrf54l15
+# Result:     build/nrf54l15/le_audio_receiver/zephyr/zephyr.elf
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/bin/fw-common.sh
+source "$SCRIPT_DIR/fw-common.sh"
+
+_fw_require_env
+
+cd "$(_fw_repo_dir)"
+
+BUILD_DIR="$(_fw_repo_dir)/build/nrf54l15"
+
+exec west build -b nrf54l15dk/nrf54l15/cpuapp --pristine -d "$BUILD_DIR" -- "$@"

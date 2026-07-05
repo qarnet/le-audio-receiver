@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# Build the nRF5340 firmware.
+#
+# Build dir:  build/nrf5340
+# Result:     build/nrf5340/le_audio_receiver/zephyr/zephyr.elf
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/bin/fw-common.sh
+source "$SCRIPT_DIR/fw-common.sh"
+
+_fw_require_env
+
+cd "$(_fw_repo_dir)"
+
+BUILD_DIR="$(_fw_repo_dir)/build/nrf5340"
+
+exec west build -b nrf5340dk/nrf5340/cpuapp --sysbuild --pristine -d "$BUILD_DIR" -- "$@"
