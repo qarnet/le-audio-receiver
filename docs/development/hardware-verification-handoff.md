@@ -1,7 +1,38 @@
 # Hardware Verification Handoff — Phase 0/1 E83 + Xiao nRF54L15
 
-Status: **blocked — needs different model/operator**
+Status: **RESOLVED 2026-07-05 (later session) — nRF5340 flashes and boots.
+The probe mapping below is WRONG; see correction.**
 Date: 2026-07-05
+
+## Correction (2026-07-05, resolving session)
+
+The "Hardware setup (verified)" table below is **inverted** and the entire
+recovery analysis in this document chased a phantom problem on the wrong chip.
+Verified by DP/AP identification scan with openocd-master on both probes:
+
+| Probe serial | Actual SWD target | Evidence |
+|--------------|-------------------|----------|
+| `E6635C08CB1F502B` (ACM2) | **Ebyte E83 nRF5340** | DPIDR `0x6ba02477`, Cortex-M33 r0p4, AP0/1 AHB-AP `0x84770001`, AP2/3 CTRL-AP `0x12880000` — exact nrf53.cfg layout |
+| `554D45060B913E6A` (ACM0) | **nRF52-family chip** (Cortex-M4 r0p1, NOT an nRF5340 or nRF54L15) | DPIDR `0x2ba01477` (DPv1/M4), AP0 AHB-AP `0x24770011`, AP1 CTRL-AP `0x02880000` — nRF52 signature |
+
+Consequences:
+
+- There was **no APPROTECT lock, no CTRL-AP visibility problem, and no
+  multidrop requirement** on the nRF5340. All of those symptoms (CPUID 0x1,
+  CTRL-AP IDR 0, "AP lock engaged") were nRF52 behavior observed through the
+  `554D...` probe while believing it was the E83.
+- Fix was one line: `scripts/probe-serial.local` → `E6635C08CB1F502B`
+  (plus patching the stale serial baked into the existing
+  `build/nrf5340/.../runners.yaml`; fresh builds pick it up automatically).
+- `fw-flash-5340` then flashed both cores via the picoprobe + openocd-master
+  and the E83 booted to `Advertising as "LE Audio Receiver"` on `/dev/ttyUSB0`.
+- **Open question for the operator**: the `554D...` probe's target reads as
+  Cortex-M4 nRF52-family silicon. An nRF54L15 would read Cortex-M33 with
+  DPIDR `0x6ba02477`. Either that board is actually a Xiao nRF52840 (visually
+  near-identical to the Xiao nRF54L15) or the probe is wired to something else.
+  Check before attempting any nRF54L15 flashing through it.
+
+Everything from here down is the (superseded) original handoff.
 
 ## Context
 
