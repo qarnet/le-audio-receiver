@@ -73,6 +73,4 @@ target_sources(app PRIVATE
 
 zephyr_sources_ifdef(CONFIG_SHELL src/audio_shell.c)
 
-zephyr_sources_ifdef(CONFIG_BT_AUDIO_TX src/stream_tx.c)
-
 zephyr_library_include_directories(${ZEPHYR_BASE}/samples/bluetooth)
