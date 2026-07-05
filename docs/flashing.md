@@ -7,7 +7,9 @@
   - `cpunet`: network core, 256 KB flash, 64 KB RAM
 - **Module**: Ebyte E83-2G4M03S-TB (nRF5340 module, no external QSPI flash)
 - **Dev board base**: nRF5340DK footprint, custom UART0 pinout (CH340X USB-serial), no QSPI
-- **Debug probe**: Raspberry Pi Pico running CMSIS-DAP firmware (probe serial configured via scripts/probe-serial.local, see AGENTS.md)
+- **Debug probe**: Raspberry Pi Pico running CMSIS-DAP firmware. The probe is
+  identified at flash time by the chip behind it (`fw-probes --find nrf53`);
+  never assume a serial↔board mapping from docs — run `fw-probes`.
 
 ## Build system
 
@@ -30,7 +32,11 @@ flashed by the app domain runner instead of by a separate west domain flash.
 fw-flash-5340
 ```
 
-This helper runs `west flash --build-dir build/nrf5340`, which uses OpenOCD via CMSIS-DAP probe. Flashes both cores in one session.
+This helper resolves the probe at flash time — `scripts/probe-serial.local`
+override if present, else `fw-probes --find nrf53` (auto-detect by target
+identity), else OpenOCD auto-detection — and runs
+`west flash --build-dir build/nrf5340 -- --cmd-pre-init="adapter serial <SER>"`.
+Flashes both cores in one session.
 
 OpenOCD command constructed by west runner:
 
@@ -39,9 +45,8 @@ openocd
   -f interface/cmsis-dap.cfg
   -f target/nordic/nrf53.cfg
   -f boards/ebyte/e83_nrf5340/support/flash_nrf5340.tcl
-  -c 'cmsis_dap_serial <from scripts/probe-serial.local or auto-detect>'
   -c 'transport select swd'
-  -c 'adapter speed 100'
+  -c 'adapter speed 1000'
   -c 'set NET_CORE_HEX {/path/to/build/merged_CPUNET.hex}'
   -c init
   -c targets
@@ -55,10 +60,14 @@ openocd
 `flash_west` proc (in `boards/ebyte/e83_nrf5340/support/flash_nrf5340.tcl`):
 
 1. Flashes app core (`merged.hex`, passed as arg by runner)
-2. Releases net core from FORCEOFF (`nrf53_cpunet_release`)
-3. Switches target to `nrf53.cpunet`, halts, probes flash bank 2
-4. Flashes net core (`merged_CPUNET.hex`, from `global NET_CORE_HEX`)
-5. `reset run` — both cores start
+2. Programs `UICR.APPROTECT`/`UICR.SECUREAPPROTECT` = Unprotected
+   (`0x50FA50FA`) so debug access survives resets (see AGENTS.md APPROTECT
+   gotcha — an erased UICR hard-locks the debug AP at every reset)
+3. Releases net core from FORCEOFF (`nrf53_cpunet_release`)
+4. Switches target to `nrf53.cpunet`, halts, probes flash bank 2
+5. Flashes net core (`merged_CPUNET.hex`, from `global NET_CORE_HEX`)
+6. Programs net `UICR.APPROTECT` = Unprotected
+7. `reset run` — both cores start
 
 `check_approtect` proc: if app core APPROTECT is engaged, runs `nrf53_recover` before
 the runner's `reset init`, otherwise a no-op.
@@ -73,13 +82,15 @@ in `CMakeLists.txt`.
 **board.cmake (cpuapp)** calls `board_set_flasher(openocd)` (not
 `board_set_flasher_ifnset`) — OpenOCD is the sole flasher for this board. The
 runner args (`--config`, `--cmd-pre-init`, `--cmd-pre-load`, `--cmd-load`) are
-set directly via `board_runner_args(openocd ...)`. Two values come from
-`CMakeLists.txt` as CMake variables (set before `find_package(Zephyr)`):
+set directly via `board_runner_args(openocd ...)`. One value comes from
+`CMakeLists.txt` as a CMake variable (set before `find_package(Zephyr)`):
 
-- `_PROBE_SERIAL` — read from `scripts/probe-serial.local` at configure time.
-  Empty → OpenOCD auto-detects the CMSIS-DAP probe.
 - `_NET_CORE_HEX` — derived as `${CMAKE_BINARY_DIR}/../merged_CPUNET.hex`,
   resolving to the sysbuild top-level net core hex.
+
+The probe serial is intentionally NOT a configure-time value (it went stale
+whenever probes were replugged); `fw-flash-5340` passes it as an extra
+runner arg at flash time.
 
 The cpunet board target does not register a flasher — the app-domain runner
 flashes both cores in one OpenOCD session (`BUILD_ONLY TRUE` on hci_ipc in
@@ -88,7 +99,6 @@ flashes both cores in one OpenOCD session (`BUILD_ONLY TRUE` on hci_ipc in
 Items that remain project-level in `CMakeLists.txt` (sysbuild/project-specific,
 not board-specific):
 
-- Probe-serial read from `scripts/probe-serial.local`
 - `_NET_CORE_HEX` path derivation (depends on sysbuild output layout)
 - `BOARD_ROOT` — exposes the project's `boards/` dir for custom board discovery
 

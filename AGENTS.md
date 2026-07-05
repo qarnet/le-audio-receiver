@@ -93,8 +93,11 @@ into `build/nrf5340/`. Use `--pristine` after any `prj.conf`, overlay, or
 fw-build-5340 -- -DCONFIG_FOO=y
 ```
 
-The nRF54L15 target has a stub helper (`fw-build-54l15`) that is known-broken
-(Phase 1 entry point).
+The nRF54L15 target builds with `fw-build-54l15` into `build/nrf54l15/`
+(Phase 1) and flashes with `fw-flash-54l15` (probe-rs via the Xiao's
+built-in CMSIS-DAP; probe auto-detected by target identity). The build
+targets `nrf54l15dk` pins, so the Xiao's console is silent until the
+custom Xiao board port lands.
 
 ## Flash
 
@@ -105,16 +108,17 @@ fw-flash-5340
 ```
 
 The OpenOCD runner config in `boards/ebyte/e83_nrf5340/board.cmake` chains the
-dual-core flash TCL (`boards/ebyte/e83_nrf5340/support/flash_nrf5340.tcl`). The runner reads the
-probe serial from `scripts/probe-serial.local` (see below).
+dual-core flash TCL (`boards/ebyte/e83_nrf5340/support/flash_nrf5340.tcl`).
+The probe is resolved **at flash time** (see "Probe identification" below) —
+no serial is baked into the build.
 
 ## Serial
 
-App core output: `/dev/ttyACM1` (not ACM0) at **115200 8N1**.
-Net core output: `/dev/ttyACM1` sometimes forwards both.
+App core (E83) console: **`/dev/ttyUSB0`** (CH340X bridge) at **115200 8N1**.
+The picoprobe's own CDC ports (`/dev/ttyACM*`) are NOT the nRF5340 console.
 
 ```bash
-stty -F /dev/ttyACM1 115200 raw -echo && cat /dev/ttyACM1
+stty -F /dev/ttyUSB0 115200 raw -echo && cat /dev/ttyUSB0
 ```
 
 Expected after boot: `BLE ready`, `settings_load() OK`,
@@ -124,38 +128,47 @@ HFCLKAUDIO clock drift vs. the BLE ISO clock — recovery is automatic
 (`TRIGGER_PREPARE` + re-arm). Increase pre-fill depth in `audio_i2s.c`
 to reduce frequency.
 
-### Probe serial
+### Probe identification — NEVER assume the probe↔board mapping
 
-The CMSIS-DAP probe serial is read from `scripts/probe-serial.local` (gitignored,
-not committed). Copy the example and put your probe serial in it:
-
-```bash
-cp scripts/probe-serial.local.example scripts/probe-serial.local
-# Edit: single line, just the serial (e.g. E6635C08CB1F502B)
-```
-
-If the file is absent, OpenOCD auto-detects the probe (works for single-probe
-setups).
-
-### Capturing dual-core logs during testing
-
-When debugging, both ACM ports must be captured **before** the device resets.
-The `scripts/read_acm.py` helper (pyserial + auto-reopen) handles the USB
-disconnect during reset.  Use `tmux` to keep readers alive between tool calls:
+Probes get replugged; documentation rots. `fw-probes` is the source of truth:
 
 ```bash
-# Start background readers
-tmux new-session -d -s acm0 \
-  "python3 scripts/read_acm.py ttyACM0 /tmp/acm0.log"
-tmux new-session -d -s acm1 \
-  "python3 scripts/read_acm.py ttyACM1 /tmp/acm1.log"
-
-# Reset so boot capture is clean
-nrfutil device reset
+fw-probes            # table: probe serial → chip behind it (read-only)
+fw-probes --find nrf53   # serial of the probe wired to an nRF53
 ```
 
-Always reset **after** starting the readers.  The readers auto-exit after 30 s.
-Stop with `tmux kill-session -t acm0` / `acm1`.
+It fingerprints each CMSIS-DAP probe's target over SWD (DPIDR → AP IDR map →
+FICR INFO.PART/VARIANT) and works even when the chip is APPROTECT-locked
+(identity from the DP/AP signature). `fw-flash-5340` calls it automatically
+to pick the right probe at flash time.
+
+`scripts/probe-serial.local` (gitignored) is now only a manual **override**
+for when auto-detection must be bypassed. Normally it should not exist.
+
+**Doc hygiene rule:** never write a static probe-serial↔board table into
+docs or handoffs — reference `fw-probes` instead. Any hardware-identity
+claim in a handoff MUST include the raw evidence it rests on (DPIDR, AP IDR
+map, FICR PART value), not just the conclusion. A 2026-07-05 session lost a
+day chasing a phantom APPROTECT problem because a handoff asserted an
+inverted probe mapping without evidence.
+
+### Capturing boot logs during testing
+
+The console must be captured **before** the device resets. The
+`scripts/read_acm.py` helper (pyserial + auto-reopen) survives USB
+disconnects during reset:
+
+```bash
+# Start the reader first (E83 console = ttyUSB0), THEN reset via OpenOCD
+python3 scripts/read_acm.py ttyUSB0 /tmp/e83.log 30 &
+sleep 2
+openocd -f interface/cmsis-dap.cfg \
+  -c "adapter serial $(fw-probes --find nrf53)" \
+  -c "transport select swd" -c "adapter speed 1000" \
+  -f target/nordic/nrf53.cfg -c init -c "reset run" -c shutdown
+```
+
+Always reset **after** the reader has opened the port.
 
 ## Gotchas
 
@@ -180,16 +193,48 @@ The call must be after `bt_enable(NULL)` and before `bt_pacs_register()`.
 
 `west flash` only erases the firmware address ranges. The ZMS settings
 partition (bonds, PACS registered handles) persists across flashes.
-If you suspect a stale bond or corrupted settings:
+If you suspect a stale bond or corrupted settings, mass-erase via the
+CTRL-AP with the openocd-master build (no J-Link needed), then reflash:
 
 ```bash
-nrfutil device recover  # ERASEALL via CTRL-AP: wipes ALL non-volatile memory
-west flash --build-dir build
+openocd -f interface/cmsis-dap.cfg -c "adapter serial $(fw-probes --find nrf53)" \
+  -c "transport select swd" -c "adapter speed 1000" -f target/nordic/nrf53.cfg \
+  -c init -c nrf53_recover -c shutdown
+fw-flash-5340
 ```
 
-The recover command disables AP-Protect and triggers an ERASEALL, clearing
-both firmware and the settings partition. This is the correct way to get a
-clean slate for testing.
+`nrf53_recover` wipes ALL non-volatile memory (both cores, incl. UICR and
+settings). `fw-flash-5340` afterwards re-programs UICR.APPROTECT (see the
+APPROTECT gotcha below), so the chip stays debuggable.
+
+### nRF5340 APPROTECT is a SOFT branch — an erased UICR bricks debug access
+
+On the nRF5340, debug access after any reset is only open if
+`UICR.APPROTECT == 0x50FA50FA` (Unprotected): SystemInit copies that UICR
+word into `CTRLAP.APPROTECT.DISABLE` at boot. After a mass erase, UICR reads
+`0xFFFFFFFF` → the AP hard-locks at every reset **even though the firmware
+boots and runs fine**. Symptoms: `Examination failed` /
+`Failed to read memory at 0xe000ed00` on connect while the board happily
+advertises. The only way back in is a CTRL-AP recovery (= another mass erase).
+
+`flash_nrf5340.tcl` therefore programs `UICR.APPROTECT`,
+`UICR.SECUREAPPROTECT` (app, `0x00FF8000`/`0x00FF801C`) and net
+`UICR.APPROTECT` (`0x01FF8000`) to `0x50FA50FA` after every flash
+(`uicr_unprotect_app` / `uicr_unprotect_net`). Do not remove these calls.
+
+### Do NOT use probe-rs on the nRF5340
+
+Evaluated 2026-07-05 (probe-rs 0.31.0): its attach sequence reset-catches the
+core *before* SystemInit runs the APPROTECT soft-unlock, concludes the chip
+is locked, and its only remedy is `--allow-erase-all` — a full mass erase
+that also wipes UICR, re-creating the lock for the next invocation. Any
+mid-flash fault leaves a blank, locked chip. It also has no notion of the
+dual-core flash ordering (net FORCEOFF release). The openocd-master flow in
+this repo handles all of this; use `fw-flash-5340`.
+
+probe-rs on the **nRF54L15** is fine (evaluated same day: fast, repeatable,
+verify passes, chip stays debuggable across resets) — that is what
+`fw-flash-54l15` uses.
 
 ### Stale bonds cause pairing failures that block PACS/ASCS reads
 
