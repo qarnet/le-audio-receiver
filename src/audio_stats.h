@@ -9,11 +9,11 @@
 #include <stdint.h>
 
 struct audio_stats {
-	uint32_t total_frames;    /* good + PLC frames decoded */
-	uint32_t plc_frames;      /* LC3 PLC concealment events (err==1) */
-	uint32_t decode_errors;   /* hard LC3 decode failures (err<0) */
-	uint32_t i2s_underruns;   /* I2S slab-full drops */
-	uint32_t stream_resets;   /* I2S DMA restarts due to underrun */
+	uint32_t total_frames;  /* good + PLC frames decoded */
+	uint32_t plc_frames;    /* LC3 PLC concealment events (err==1) */
+	uint32_t decode_errors; /* hard LC3 decode failures (err<0) */
+	uint32_t i2s_underruns; /* I2S slab-full drops */
+	uint32_t stream_resets; /* I2S DMA restarts due to underrun */
 };
 
 void audio_stats_frame_decoded(void);

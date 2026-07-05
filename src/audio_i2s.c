@@ -21,13 +21,13 @@
 
 LOG_MODULE_REGISTER(audio_i2s, LOG_LEVEL_INF);
 
-#define I2S_NODE           DT_NODELABEL(i2s0)
-#define SAMPLE_RATE        48000
-#define BIT_WIDTH          16
-#define CHANNELS           2
-#define SAMPLES_PER_FRAME  480
-#define BLOCK_SIZE         (SAMPLES_PER_FRAME * CHANNELS * (BIT_WIDTH / 8))
-#define BLOCK_COUNT        12
+#define I2S_NODE          DT_NODELABEL(i2s0)
+#define SAMPLE_RATE       48000
+#define BIT_WIDTH         16
+#define CHANNELS          2
+#define SAMPLES_PER_FRAME 480
+#define BLOCK_SIZE        (SAMPLES_PER_FRAME * CHANNELS * (BIT_WIDTH / 8))
+#define BLOCK_COUNT       12
 
 /*
  * Packet-repeat fallback: when the DMA queue drops below DRIFT_THRESHOLD
@@ -37,7 +37,7 @@ LOG_MODULE_REGISTER(audio_i2s, LOG_LEVEL_INF);
  * Normal operating point after pre-fill: 5 free (7 of 12 blocks in DMA).
  * Natural jitter reaches 6. Trigger at 8 = only 4 blocks remain in DMA.
  */
-#define DRIFT_THRESHOLD    (BLOCK_COUNT - 4)
+#define DRIFT_THRESHOLD (BLOCK_COUNT - 4)
 
 K_MEM_SLAB_DEFINE_STATIC(i2s_slab, BLOCK_SIZE, BLOCK_COUNT, 4);
 
@@ -71,14 +71,14 @@ static void drift_reset(void)
 static int i2s_do_configure(void)
 {
 	struct i2s_config cfg = {
-		.word_size       = BIT_WIDTH,
-		.channels        = CHANNELS,
-		.format          = I2S_FMT_DATA_FORMAT_I2S,
-		.options         = I2S_OPT_BIT_CLK_MASTER | I2S_OPT_FRAME_CLK_MASTER,
-		.frame_clk_freq  = SAMPLE_RATE,
-		.mem_slab        = &i2s_slab,
-		.block_size      = BLOCK_SIZE,
-		.timeout         = 0,
+		.word_size = BIT_WIDTH,
+		.channels = CHANNELS,
+		.format = I2S_FMT_DATA_FORMAT_I2S,
+		.options = I2S_OPT_BIT_CLK_MASTER | I2S_OPT_FRAME_CLK_MASTER,
+		.frame_clk_freq = SAMPLE_RATE,
+		.mem_slab = &i2s_slab,
+		.block_size = BLOCK_SIZE,
+		.timeout = 0,
 	};
 
 	return i2s_configure(i2s_dev, I2S_DIR_TX, &cfg);
@@ -100,8 +100,8 @@ int audio_i2s_init(void)
 	}
 
 	configured = true;
-	LOG_INF("I2S ready (%d kHz, %d-bit, stereo, %d blocks)",
-		SAMPLE_RATE / 1000, BIT_WIDTH, BLOCK_COUNT);
+	LOG_INF("I2S ready (%d kHz, %d-bit, stereo, %d blocks)", SAMPLE_RATE / 1000, BIT_WIDTH,
+		BLOCK_COUNT);
 	return 0;
 }
 

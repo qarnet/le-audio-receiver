@@ -24,6 +24,6 @@ int audio_volume_init(void);
 void audio_volume_apply(int16_t *buf, size_t samples);
 
 uint8_t audio_volume_get(void);
-bool    audio_volume_is_muted(void);
+bool audio_volume_is_muted(void);
 
 #endif /* AUDIO_VOLUME_H */

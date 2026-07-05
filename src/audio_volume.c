@@ -14,11 +14,12 @@ LOG_MODULE_REGISTER(audio_volume, LOG_LEVEL_INF);
 
 /* Pack volume (8-bit) and mute (1-bit) into one atomic word.
  * High byte: mute flag.  Low byte: volume level. */
-#define VOL_PACK(vol, mute)  (((uint32_t)(mute) << 8) | (uint8_t)(vol))
-#define VOL_UNPACK_VOL(v)    ((uint8_t)((v) & 0xFFU))
-#define VOL_UNPACK_MUTE(v)   ((uint8_t)(((v) >> 8) & 0x1U))
+#define VOL_PACK(vol, mute) (((uint32_t)(mute) << 8) | (uint8_t)(vol))
+#define VOL_UNPACK_VOL(v)   ((uint8_t)((v) & 0xFFU))
+#define VOL_UNPACK_MUTE(v)  ((uint8_t)(((v) >> 8) & 0x1U))
 
-#define DEFAULT_VOL IS_ENABLED(CONFIG_BT_AUDIO_VOL_DEFAULT) \
+#define DEFAULT_VOL                                                                                \
+	IS_ENABLED(CONFIG_BT_AUDIO_VOL_DEFAULT)                                                    \
 	? CONFIG_BT_AUDIO_VOL_DEFAULT : 195
 
 static atomic_t vol_state = ATOMIC_INIT(VOL_PACK(195, 0));
@@ -43,10 +44,10 @@ static struct bt_vcp_vol_rend_cb vcp_cb = {
 int audio_volume_init(void)
 {
 	struct bt_vcp_vol_rend_register_param param = {
-		.mute   = BT_VCP_STATE_UNMUTED,
+		.mute = BT_VCP_STATE_UNMUTED,
 		.volume = CONFIG_BT_AUDIO_VOL_DEFAULT,
-		.step   = 16,
-		.cb     = &vcp_cb,
+		.step = 16,
+		.cb = &vcp_cb,
 	};
 
 	atomic_set(&vol_state, VOL_PACK(CONFIG_BT_AUDIO_VOL_DEFAULT, 0));
@@ -83,7 +84,7 @@ bool audio_volume_is_muted(void)
 void audio_volume_apply(int16_t *buf, size_t samples)
 {
 	uint32_t state = (uint32_t)atomic_get(&vol_state);
-	uint8_t vol   = VOL_UNPACK_VOL(state);
+	uint8_t vol = VOL_UNPACK_VOL(state);
 	uint8_t muted = VOL_UNPACK_MUTE(state);
 
 	if (muted || vol == 0) {

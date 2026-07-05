@@ -108,9 +108,13 @@ void audio_drift_reset(void)
 const char *audio_drift_state_str(void)
 {
 	switch (drift.state) {
-	case DRIFT_INIT:   return "INIT";
-	case DRIFT_CALIB:  return "CALIB";
-	case DRIFT_LOCKED: return "LOCKED";
-	default:           return "?";
+	case DRIFT_INIT:
+		return "INIT";
+	case DRIFT_CALIB:
+		return "CALIB";
+	case DRIFT_LOCKED:
+		return "LOCKED";
+	default:
+		return "?";
 	}
 }
