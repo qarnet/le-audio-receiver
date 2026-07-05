@@ -94,10 +94,15 @@ fw-build-5340 -- -DCONFIG_FOO=y
 ```
 
 The nRF54L15 target builds with `fw-build-54l15` into `build/nrf54l15/`
-(Phase 1) and flashes with `fw-flash-54l15` (probe-rs via the Xiao's
-built-in CMSIS-DAP; probe auto-detected by target identity). The build
-targets `nrf54l15dk` pins, so the Xiao's console is silent until the
-custom Xiao board port lands.
+(Phase 1) and flashes with `fw-flash-54l15` (OpenOCD via the Xiao's
+built-in CMSIS-DAP; probe auto-detected by target identity). nRF54L15
+RRAM needs no flash driver — with RRAMC write-enable (`mww 0x5004b500
+0x101`) it is plain writable memory, so `load_image` + `verify_image`
+suffice. **FLPR firmware flashes the same way**: the FLPR code partition
+is a RRAM slice at `0x165000` in the app core address space (verified by
+write/read-back with both OpenOCD and probe-rs) — relevant for Phase 6
+FLPR offload. The build targets `nrf54l15dk` pins, so the Xiao's console
+is silent until the custom Xiao board port lands.
 
 ## Flash
 
@@ -233,8 +238,9 @@ dual-core flash ordering (net FORCEOFF release). The openocd-master flow in
 this repo handles all of this; use `fw-flash-5340`.
 
 probe-rs on the **nRF54L15** is fine (evaluated same day: fast, repeatable,
-verify passes, chip stays debuggable across resets) — that is what
-`fw-flash-54l15` uses.
+verify passes, chip stays debuggable across resets) and remains a
+documented fallback, but `fw-flash-54l15` uses OpenOCD so both targets
+share one backend.
 
 ### Stale bonds cause pairing failures that block PACS/ASCS reads
 

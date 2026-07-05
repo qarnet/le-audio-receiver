@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
-# Flash the nRF54L15 firmware via probe-rs (CMSIS-DAP).
+# Flash the nRF54L15 firmware via OpenOCD (CMSIS-DAP, Xiao built-in probe).
 #
-# probe-rs was evaluated 2026-07-05: reliable on the nRF54L15 (single core,
-# no soft-APPROTECT trap — unlike the nRF5340, where probe-rs must NOT be
-# used; see AGENTS.md). Fallback: openocd -f target/nordic/nrf54l.cfg.
+# nRF54L15 RRAM needs no flash driver: with RRAMC write-enable set
+# (mww 0x5004b500 0x101) it is plain byte-writable memory, so load_image
+# suffices — that is exactly what Zephyr's xiao_nrf54l15 openocd.cfg
+# `nrf54l-load` proc does. The same mechanism flashes FLPR firmware (the
+# FLPR code partition is a RRAM slice at 0x165000 in the app core's
+# address space) — verified 2026-07-05.
+#
+# probe-rs also works on this chip (evaluated 2026-07-05: 12 s flash,
+# repeatable, no APPROTECT trap):
+#   probe-rs download --chip nRF54L15 --probe 2886:0066:<SER> \
+#     --binary-format hex build/nrf54l15/merged.hex
 #
 # The probe is auto-detected by target identity (fw-probes --find nrf54l).
 #
@@ -17,15 +25,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/bin/fw-common.sh
 source "$SCRIPT_DIR/fw-common.sh"
 
+_fw_require_env
+
 cd "$(_fw_repo_dir)"
 
 BUILD_DIR="$(_fw_repo_dir)/build/nrf54l15"
 HEX="$BUILD_DIR/merged.hex"
-
-if ! command -v probe-rs >/dev/null 2>&1; then
-  printf 'fw-flash-54l15: probe-rs not found on PATH\n' >&2
-  exit 1
-fi
+OPENOCD_CFG="$ZEPHYR_BASE/boards/seeed/xiao_nrf54l15/support/openocd.cfg"
 
 if [ ! -f "$HEX" ]; then
   printf 'No build artifacts found at %s\n' "$HEX" >&2
@@ -34,21 +40,14 @@ if [ ! -f "$HEX" ]; then
 fi
 
 SERIAL="$("$SCRIPT_DIR/fw-probes" --find nrf54l)"
+printf 'Probe %s (auto-detected: target identifies as nRF54L15)\n' "$SERIAL"
 
-# probe-rs selects probes as VID:PID:SERIAL — resolve VID:PID from sysfs.
-VIDPID=""
-for d in /sys/bus/usb/devices/*/; do
-  if [ -f "$d/serial" ] && [ "$(cat "$d/serial")" = "$SERIAL" ]; then
-    VIDPID="$(cat "$d/idVendor"):$(cat "$d/idProduct")"
-    break
-  fi
-done
-if [ -z "$VIDPID" ]; then
-  printf 'fw-flash-54l15: probe %s not found in sysfs\n' "$SERIAL" >&2
-  exit 1
-fi
-
-printf 'Probe %s:%s (auto-detected: target identifies as nRF54L15)\n' "$VIDPID" "$SERIAL"
-probe-rs download --chip nRF54L15 --probe "$VIDPID:$SERIAL" \
-  --binary-format hex "$HEX" "$@"
-exec probe-rs reset --chip nRF54L15 --probe "$VIDPID:$SERIAL"
+exec openocd \
+  -c "adapter serial $SERIAL" \
+  -f "$OPENOCD_CFG" \
+  -c "init" \
+  -c "reset halt" \
+  -c "nrf54l-load $HEX" \
+  -c "verify_image $HEX" \
+  -c "reset run" \
+  -c "shutdown"
