@@ -52,7 +52,31 @@ Nordic samples are the best learning resource:
 
 ---
 
-# AGENTS.md — LE Audio Receiver (nRF5340 DK + PCM5102A)
+# AGENTS.md — LE Audio Receiver (nRF5340 + UDA1334A)
+
+## Plan of record
+
+`docs/design.md` is the accepted design doc and phased plan (Phases 0–6) for
+supporting both nRF5340 and nRF54L15. Read it before structural changes.
+Current status: **no phase started yet** — everything below describes the
+pre-Phase-0 state and will change as phases land (Phase 0 replaces the build
+workflow, Phase 1 the board/overlay setup).
+
+Consequences for work in this repo today:
+
+- **nRF54L15 target does not build.** Known, analyzed (design.md Part I, F1).
+  Do not attempt ad-hoc fixes; that is Phase 1.
+- **Dead code slated for deletion** (Phase 0): `src/net_core_bootloader.c`,
+  `src/net_core_fw.h`, `src/stream_tx.c`, `src/stream_tx.h`. Do not extend
+  or "fix" these.
+- **Known bug**: PACS advertises 16/24/48 kHz but the pipeline is hardcoded
+  to 48 kHz (design.md F4). Resolution is decided (restrict to 48 kHz,
+  Phase 2) — do not patch differently.
+- `docs/nrf54l15-drift-compensation.md` is superseded — reference only,
+  never update it.
+- Tooling reference: `~/repos/serial-mcp` holds the direnv + nrfutil
+  workflow that Phase 0 ports here.
+- Every change must keep the nRF5340 target building, flashing, streaming.
 
 ## Build
 

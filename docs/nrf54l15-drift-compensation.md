@@ -1,5 +1,10 @@
 # nRF54L15 Clock Drift Compensation — Options Analysis
 
+> **SUPERSEDED (2026-07-05)** by [`design.md`](design.md). The analysis below
+> is absorbed there (Part II §Clock recovery and Appendix A), and the option
+> dispositions were decided: E → Phase 4, A → Phase 5, B → Phase 6 (gated),
+> C/D rejected, F/G backlog. Kept for reference only — do not update.
+
 ## Problem statement
 
 I2S sample clock (derived from HFPLL/HFXO) and BLE ISO clock are independent
