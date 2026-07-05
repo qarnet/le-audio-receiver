@@ -8,8 +8,8 @@
 - **Module**: Ebyte E83-2G4M03S-TB (nRF5340 module, no external QSPI flash)
 - **Dev board base**: nRF5340DK footprint, custom UART0 pinout (CH340X USB-serial), no QSPI
 - **Debug probe**: Raspberry Pi Pico running CMSIS-DAP firmware. The probe is
-  identified at flash time by the chip behind it (`fw-probes --find nrf53`);
-  never assume a serial↔board mapping from docs — run `fw-probes`.
+  identified at flash time by the chip behind it (`nrf-probes --find nrf53`);
+  never assume a serial↔board mapping from docs — run `nrf-probes`.
 
 ## Build system
 
@@ -33,7 +33,7 @@ fw-flash-5340
 ```
 
 This helper resolves the probe at flash time — `scripts/probe-serial.local`
-override if present, else `fw-probes --find nrf53` (auto-detect by target
+override if present, else `nrf-probes --find nrf53` (auto-detect by target
 identity), else OpenOCD auto-detection — and runs
 `west flash --build-dir build/nrf5340 -- --cmd-pre-init="adapter serial <SER>"`.
 Flashes both cores in one session.

@@ -10,7 +10,7 @@
 # FLPR code partition is a RRAM slice at 0x165000 in the app core's
 # address space) — verified 2026-07-05.
 #
-# The probe is auto-detected by target identity (fw-probes --find nrf54l).
+# The probe is auto-detected by target identity (nrf-probes --find nrf54l).
 #
 # Build dir:  build/nrf54l15
 
@@ -34,7 +34,7 @@ if [ ! -f "$HEX" ]; then
   exit 1
 fi
 
-SERIAL="$("$SCRIPT_DIR/fw-probes" --find nrf54l)"
+SERIAL="$(nrf-probes --find nrf54l)"
 printf 'Probe %s (auto-detected: target identifies as nRF54L15)\n' "$SERIAL"
 
 exec openocd \

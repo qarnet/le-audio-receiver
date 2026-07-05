@@ -1,3 +1,5 @@
 .direnv/
 build/
 scripts/probe-serial.local
+scripts/probe-serial.local.*
+CLAUDE.md

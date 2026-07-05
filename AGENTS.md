@@ -135,11 +135,13 @@ to reduce frequency.
 
 ### Probe identification — NEVER assume the probe↔board mapping
 
-Probes get replugged; documentation rots. `fw-probes` is the source of truth:
+Probes get replugged; documentation rots. `nrf-probes` (provided on PATH by
+the [nix-nrf-dev](https://github.com/qarnet/nix-nrf-dev) flake, along with
+openocd-master and the NCS toolchain shell) is the source of truth:
 
 ```bash
-fw-probes            # table: probe serial → chip behind it (read-only)
-fw-probes --find nrf53   # serial of the probe wired to an nRF53
+nrf-probes            # table: probe serial → chip behind it (read-only)
+nrf-probes --find nrf53   # serial of the probe wired to an nRF53
 ```
 
 It fingerprints each CMSIS-DAP probe's target over SWD (DPIDR → AP IDR map →
@@ -151,7 +153,7 @@ to pick the right probe at flash time.
 for when auto-detection must be bypassed. Normally it should not exist.
 
 **Doc hygiene rule:** never write a static probe-serial↔board table into
-docs or handoffs — reference `fw-probes` instead. Any hardware-identity
+docs or handoffs — reference `nrf-probes` instead. Any hardware-identity
 claim in a handoff MUST include the raw evidence it rests on (DPIDR, AP IDR
 map, FICR PART value), not just the conclusion. A 2026-07-05 session lost a
 day chasing a phantom APPROTECT problem because a handoff asserted an
@@ -168,7 +170,7 @@ disconnects during reset:
 python3 scripts/read_acm.py ttyUSB0 /tmp/e83.log 30 &
 sleep 2
 openocd -f interface/cmsis-dap.cfg \
-  -c "adapter serial $(fw-probes --find nrf53)" \
+  -c "adapter serial $(nrf-probes --find nrf53)" \
   -c "transport select swd" -c "adapter speed 1000" \
   -f target/nordic/nrf53.cfg -c init -c "reset run" -c shutdown
 ```
@@ -202,7 +204,7 @@ If you suspect a stale bond or corrupted settings, mass-erase via the
 CTRL-AP with the openocd-master build (no J-Link needed), then reflash:
 
 ```bash
-openocd -f interface/cmsis-dap.cfg -c "adapter serial $(fw-probes --find nrf53)" \
+openocd -f interface/cmsis-dap.cfg -c "adapter serial $(nrf-probes --find nrf53)" \
   -c "transport select swd" -c "adapter speed 1000" -f target/nordic/nrf53.cfg \
   -c init -c nrf53_recover -c shutdown
 fw-flash-5340

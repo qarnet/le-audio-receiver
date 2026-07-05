@@ -5,7 +5,7 @@
 #
 # The probe is resolved at flash time, in order:
 #   1. scripts/probe-serial.local (gitignored override, single line serial)
-#   2. fw-probes --find nrf53 (auto-detect: the probe whose TARGET is an nRF53)
+#   2. nrf-probes --find nrf53 (auto-detect: the probe whose TARGET is an nRF53)
 #   3. no serial — OpenOCD auto-detects (fine for single-probe setups)
 #
 # Build dir:  build/nrf5340
@@ -32,7 +32,7 @@ SERIAL=""
 if [ -s "scripts/probe-serial.local" ]; then
   SERIAL="$(head -n1 scripts/probe-serial.local | tr -d '[:space:]')"
   printf 'Probe %s (from scripts/probe-serial.local override)\n' "$SERIAL"
-elif SERIAL="$("$SCRIPT_DIR/fw-probes" --find nrf53)"; then
+elif SERIAL="$(nrf-probes --find nrf53)"; then
   printf 'Probe %s (auto-detected: target identifies as nRF53)\n' "$SERIAL"
 else
   SERIAL=""
