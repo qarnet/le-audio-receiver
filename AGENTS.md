@@ -227,6 +227,22 @@ advertises. The only way back in is a CTRL-AP recovery (= another mass erase).
 `UICR.APPROTECT` (`0x01FF8000`) to `0x50FA50FA` after every flash
 (`uicr_unprotect_app` / `uicr_unprotect_net`). Do not remove these calls.
 
+### Recovery coverage: nRF5340 only — the nRF54L15 has NO recovery path
+
+Known gap (documented 2026-07-05, deliberately not fixed yet):
+
+- **nRF5340**: recovery works but is nRF53-specific — `nrf53_recover` /
+  `check_approtect` chain to `_nrf_ctrl_ap_recover` in openocd's
+  `common.cfg`, which hardcodes the nRF53 CTRL-AP IDR (`0x12880000`).
+- **nRF54L15**: **no valid recovery exists in our tooling.** Upstream
+  OpenOCD (master) has no `nrf54l_recover`, no flash bank, nothing; the
+  generic CTRL-AP proc rejects the 54L's CTRL-AP (different IDR, AP#2).
+  If a 54L15 ever ends up APPROTECT-locked, current options are Nordic's
+  official path (`nrfutil device recover` — requires a J-Link) or writing
+  and testing an adapted CTRL-AP TCL proc against a sacrificial board.
+  Nothing we do in normal operation locks the 54L15 (its APPROTECT is not
+  the 5340's soft-branch design), but treat this as unprotected territory.
+
 ### Do NOT use probe-rs — openocd-master is the only flash backend
 
 Project policy: all flashing goes through openocd-master (`fw-flash-5340`,
