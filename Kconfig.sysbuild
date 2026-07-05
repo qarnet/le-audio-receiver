@@ -1,4 +1,6 @@
-# Copyright 2023 Nordic Semiconductor ASA
 # SPDX-License-Identifier: Apache-2.0
+
+config NRF_DEFAULT_BLUETOOTH
+	default y if SOC_NRF5340_CPUAPP
 
 source "share/sysbuild/Kconfig"
