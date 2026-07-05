@@ -1,5 +1,5 @@
 CompileFlags:
-  CompilationDatabase: build/nrf5340
+  CompilationDatabase: build/nrf5340/le-audio-receiver
   Remove:
     - -fno-printf-return-value
     - -fno-reorder-functions
