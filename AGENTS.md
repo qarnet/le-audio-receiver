@@ -227,20 +227,18 @@ advertises. The only way back in is a CTRL-AP recovery (= another mass erase).
 `UICR.APPROTECT` (`0x01FF8000`) to `0x50FA50FA` after every flash
 (`uicr_unprotect_app` / `uicr_unprotect_net`). Do not remove these calls.
 
-### Do NOT use probe-rs on the nRF5340
+### Do NOT use probe-rs — openocd-master is the only flash backend
 
-Evaluated 2026-07-05 (probe-rs 0.31.0): its attach sequence reset-catches the
-core *before* SystemInit runs the APPROTECT soft-unlock, concludes the chip
-is locked, and its only remedy is `--allow-erase-all` — a full mass erase
-that also wipes UICR, re-creating the lock for the next invocation. Any
-mid-flash fault leaves a blank, locked chip. It also has no notion of the
-dual-core flash ordering (net FORCEOFF release). The openocd-master flow in
-this repo handles all of this; use `fw-flash-5340`.
-
-probe-rs on the **nRF54L15** is fine (evaluated same day: fast, repeatable,
-verify passes, chip stays debuggable across resets) and remains a
-documented fallback, but `fw-flash-54l15` uses OpenOCD so both targets
-share one backend.
+Project policy: all flashing goes through openocd-master (`fw-flash-5340`,
+`fw-flash-54l15`). probe-rs was evaluated 2026-07-05 (0.31.0) and rejected:
+on the nRF5340 its attach sequence reset-catches the core *before*
+SystemInit runs the APPROTECT soft-unlock, concludes the chip is locked,
+and its only remedy is `--allow-erase-all` — a full mass erase that also
+wipes UICR, re-creating the lock for the next invocation (it bricked debug
+access three times during the eval; openocd recovered it each time). It
+also has no notion of the dual-core flash ordering (net FORCEOFF release).
+It did work on the nRF54L15, but a second backend for one chip is not
+worth the complexity.
 
 ### Stale bonds cause pairing failures that block PACS/ASCS reads
 

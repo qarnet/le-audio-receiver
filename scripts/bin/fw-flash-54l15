@@ -10,11 +10,6 @@
 # FLPR code partition is a RRAM slice at 0x165000 in the app core's
 # address space) — verified 2026-07-05.
 #
-# probe-rs also works on this chip (evaluated 2026-07-05: 12 s flash,
-# repeatable, no APPROTECT trap):
-#   probe-rs download --chip nRF54L15 --probe 2886:0066:<SER> \
-#     --binary-format hex build/nrf54l15/merged.hex
-#
 # The probe is auto-detected by target identity (fw-probes --find nrf54l).
 #
 # Build dir:  build/nrf54l15
