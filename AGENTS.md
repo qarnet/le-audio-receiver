@@ -58,17 +58,13 @@ Nordic samples are the best learning resource:
 
 `docs/design.md` is the accepted design doc and phased plan (Phases 0–6) for
 supporting both nRF5340 and nRF54L15. Read it before structural changes.
-Current status: **no phase started yet** — everything below describes the
-pre-Phase-0 state and will change as phases land (Phase 0 replaces the build
-workflow, Phase 1 the board/overlay setup).
+Current status: **Phases 0–1 complete** — the build workflow (Phase 0) and
+the custom board foundation (Phase 1) have landed. nRF54L15 now compiles;
+audio bring-up is Phase 4. The gotchas below that describe runtime behavior
+(SW Split LL, settings_load, pairing, I2S DMA, etc.) remain valid.
 
 Consequences for work in this repo today:
 
-- **nRF54L15 target does not build.** Known, analyzed (design.md Part I, F1).
-  Do not attempt ad-hoc fixes; that is Phase 1.
-- **Dead code slated for deletion** (Phase 0): `src/net_core_bootloader.c`,
-  `src/net_core_fw.h`, `src/stream_tx.c`, `src/stream_tx.h`. Do not extend
-  or "fix" these.
 - **Known bug**: PACS advertises 16/24/48 kHz but the pipeline is hardcoded
   to 48 kHz (design.md F4). Resolution is decided (restrict to 48 kHz,
   Phase 2) — do not patch differently.
@@ -89,7 +85,7 @@ direnv allow         # or: nix develop
 fw-build-5340
 ```
 
-The build runs `west build -b nrf5340dk/nrf5340/cpuapp --sysbuild --pristine`
+The build runs `west build -b ebyte_e83_nrf5340/nrf5340/cpuapp --sysbuild --pristine`
 into `build/nrf5340/`. Use `--pristine` after any `prj.conf`, overlay, or
 `sysbuild.cmake` change.  Pass extra cmake args through:
 
@@ -108,9 +104,9 @@ Both app core and hci_ipc network core must be flashed:
 fw-flash-5340
 ```
 
-The OpenOCD runner config in `CMakeLists.txt` chains the dual-core flash TCL
-(`scripts/flash_nrf5340.tcl`). The runner reads the probe serial from
-`scripts/probe-serial.local` (see below).
+The OpenOCD runner config in `boards/ebyte/e83_nrf5340/board.cmake` chains the
+dual-core flash TCL (`boards/support/flash_nrf5340.tcl`). The runner reads the
+probe serial from `scripts/probe-serial.local` (see below).
 
 ## Serial
 
@@ -319,7 +315,7 @@ headphone L/R, AGND to sleeve.
 |------|---------|
 | `src/main.c` | BAP server, ASCS callbacks, LC3 decode, I2S push, pairing |
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA, 48 kHz stereo) |
-| `boards/nrf5340dk_nrf5340_cpuapp.overlay` | I2S0 pins, ACLK 12.288 MHz |
+| `boards/ebyte/e83_nrf5340/` | Custom board definition for Ebyte E83-2G4M03S: I2S0 pins, ACLK 12.288 MHz, QSPI disabled, i2s-audio alias, OpenOCD flash runner |
 | `prj.conf` | App Kconfig (ACL/ISO buffers, SMP, 2 ASEs, liblc3, FPU, ZMS) |
 | `sysbuild.cmake` | Applies SW Split DT overlay + Kconfig overlay to hci_ipc |
-| `sysbuild.conf` | `SB_CONFIG_NETCORE_HCI_IPC=y` |
+| `Kconfig.sysbuild` | `NRF_DEFAULT_BLUETOOTH=y` conditional on nRF5340, gates netcore |
