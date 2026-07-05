@@ -18,4 +18,4 @@ cd "$(_fw_repo_dir)"
 
 BUILD_DIR="$(_fw_repo_dir)/build/nrf5340"
 
-exec west build -b ebyte_e83_nrf5340/nrf5340/cpuapp --sysbuild --pristine -d "$BUILD_DIR" -- "$@"
+exec west build -b ebyte_e83_nrf5340/nrf5340/cpuapp --sysbuild --pristine -d "$BUILD_DIR" -- -DBOARD_ROOT="$(_fw_repo_dir)" "$@"
