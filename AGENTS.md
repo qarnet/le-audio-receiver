@@ -105,7 +105,7 @@ fw-flash-5340
 ```
 
 The OpenOCD runner config in `boards/ebyte/e83_nrf5340/board.cmake` chains the
-dual-core flash TCL (`boards/support/flash_nrf5340.tcl`). The runner reads the
+dual-core flash TCL (`boards/ebyte/e83_nrf5340/support/flash_nrf5340.tcl`). The runner reads the
 probe serial from `scripts/probe-serial.local` (see below).
 
 ## Serial

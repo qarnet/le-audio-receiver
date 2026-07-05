@@ -38,7 +38,7 @@ OpenOCD command constructed by west runner:
 openocd
   -f interface/cmsis-dap.cfg
   -f target/nordic/nrf53.cfg
-  -f boards/support/flash_nrf5340.tcl
+  -f boards/ebyte/e83_nrf5340/support/flash_nrf5340.tcl
   -c 'cmsis_dap_serial <from scripts/probe-serial.local or auto-detect>'
   -c 'transport select swd'
   -c 'adapter speed 100'
@@ -52,7 +52,7 @@ openocd
   -c shutdown
 ```
 
-`flash_west` proc (in `boards/support/flash_nrf5340.tcl`):
+`flash_west` proc (in `boards/ebyte/e83_nrf5340/support/flash_nrf5340.tcl`):
 
 1. Flashes app core (`merged.hex`, passed as arg by runner)
 2. Releases net core from FORCEOFF (`nrf53_cpunet_release`)
@@ -106,6 +106,6 @@ was previously an overlay on the nRF5340DK. The board files are:
 | `Kconfig.ebyte_e83_nrf5340` | SoC selection for cpuapp/cpunet |
 | `pre_dt_board.cmake` | DTC warning suppression (overlapping unit addresses) |
 
-The `boards/support/flash_nrf5340.tcl` (moved from `scripts/`) provides the
+The `boards/ebyte/e83_nrf5340/support/flash_nrf5340.tcl` (moved from `scripts/`) provides the
 `flash_west` and `check_approtect` TCL procs used by the OpenOCD runner.
 
