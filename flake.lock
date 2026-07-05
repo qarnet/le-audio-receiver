@@ -44,11 +44,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783285197,
-        "narHash": "sha256-2o7ET9su2Ud4m6NUtI3D4BtpdAQKQotw6snLfDmmRRA=",
+        "lastModified": 1783286698,
+        "narHash": "sha256-4L6RYP6t+oT4lRxUHZ2HhMCssbxXvZ2uDSIn6bRWLF0=",
         "owner": "qarnet",
         "repo": "nix-nrf-dev",
-        "rev": "07ab31f6212296f3adada32f9ba9db77bd3eb78e",
+        "rev": "e9d77367e334213417c10fa7a7ded3e9195f78c0",
         "type": "github"
       },
       "original": {
