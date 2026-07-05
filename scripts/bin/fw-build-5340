@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
-# Build the nRF5340 firmware.
+# Build the nRF5340 firmware for the Ebyte E83-2G4M03S custom board.
 #
 # Build dir:  build/nrf5340
 # Result:     build/nrf5340/le-audio-receiver/zephyr/zephyr.elf
@@ -18,4 +18,4 @@ cd "$(_fw_repo_dir)"
 
 BUILD_DIR="$(_fw_repo_dir)/build/nrf5340"
 
-exec west build -b nrf5340dk/nrf5340/cpuapp --sysbuild --pristine -d "$BUILD_DIR" -- "$@"
+exec west build -b ebyte_e83_nrf5340/nrf5340/cpuapp --sysbuild --pristine -d "$BUILD_DIR" -- "$@"

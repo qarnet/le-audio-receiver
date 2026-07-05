@@ -1,0 +1,6 @@
+board:
+  name: ebyte_e83_nrf5340
+  full_name: Ebyte E83-2G4M03S nRF5340
+  vendor: ebyte
+  socs:
+  - name: 'nrf5340'

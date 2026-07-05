@@ -21,7 +21,7 @@
 
 LOG_MODULE_REGISTER(audio_i2s, LOG_LEVEL_INF);
 
-#define I2S_NODE          DT_NODELABEL(i2s0)
+#define I2S_NODE          DT_ALIAS(i2s_audio)
 #define SAMPLE_RATE       48000
 #define BIT_WIDTH         16
 #define CHANNELS          2

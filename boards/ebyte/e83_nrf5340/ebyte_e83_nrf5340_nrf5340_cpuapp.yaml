@@ -1,0 +1,15 @@
+identifier: ebyte_e83_nrf5340/nrf5340/cpuapp
+name: Ebyte-E83-2G4M03S-nRF5340-Application
+type: mcu
+arch: arm
+toolchain:
+  - gnuarmemb
+  - zephyr
+ram: 448
+flash: 1024
+supported:
+  - gpio
+  - i2s
+  - watchdog
+  - uart
+vendor: ebyte
