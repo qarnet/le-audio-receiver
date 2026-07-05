@@ -3,6 +3,11 @@
 #
 # Flash the nRF5340 firmware (app core + net core via OpenOCD TCL chain).
 #
+# The probe is resolved at flash time, in order:
+#   1. scripts/probe-serial.local (gitignored override, single line serial)
+#   2. fw-probes --find nrf53 (auto-detect: the probe whose TARGET is an nRF53)
+#   3. no serial — OpenOCD auto-detects (fine for single-probe setups)
+#
 # Build dir:  build/nrf5340
 
 set -euo pipefail
@@ -23,4 +28,20 @@ if [ ! -f "$BUILD_DIR/le-audio-receiver/zephyr/zephyr.elf" ]; then
   exit 1
 fi
 
-exec west flash --build-dir "$BUILD_DIR" "$@"
+SERIAL=""
+if [ -s "scripts/probe-serial.local" ]; then
+  SERIAL="$(head -n1 scripts/probe-serial.local | tr -d '[:space:]')"
+  printf 'Probe %s (from scripts/probe-serial.local override)\n' "$SERIAL"
+elif SERIAL="$("$SCRIPT_DIR/fw-probes" --find nrf53)"; then
+  printf 'Probe %s (auto-detected: target identifies as nRF53)\n' "$SERIAL"
+else
+  SERIAL=""
+  printf 'No nRF53 probe identified — letting OpenOCD auto-detect\n' >&2
+fi
+
+if [ -n "$SERIAL" ]; then
+  exec west flash --build-dir "$BUILD_DIR" "$@" -- \
+    --cmd-pre-init="adapter serial $SERIAL"
+else
+  exec west flash --build-dir "$BUILD_DIR" "$@"
+fi

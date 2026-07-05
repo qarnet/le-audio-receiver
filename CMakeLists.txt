@@ -5,17 +5,9 @@ cmake_minimum_required(VERSION 3.20.0)
 # Expose project's boards/ dir to Zephyr for custom board discovery.
 list(APPEND BOARD_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 
-# Read probe serial from local (gitignored) file if present.
-set(_PROBE_SERIAL "")
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/probe-serial.local")
-  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/scripts/probe-serial.local" _probe_serial_raw)
-  string(STRIP "${_probe_serial_raw}" _PROBE_SERIAL)
-endif()
-if(_PROBE_SERIAL)
-  message(STATUS "Using CMSIS-DAP probe serial: ${_PROBE_SERIAL}")
-else()
-  message(STATUS "No probe-serial.local — OpenOCD will auto-detect CMSIS-DAP probe")
-endif()
+# Probe selection happens at flash time (fw-flash-5340 → fw-probes), not at
+# configure time — a serial baked into runners.yaml goes stale when probes
+# are replugged.
 
 # Net core hex path: sysbuild top-level merged_CPUNET.hex.
 # CMAKE_BINARY_DIR at this point is the app domain build dir
