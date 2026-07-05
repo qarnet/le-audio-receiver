@@ -7,7 +7,7 @@
 # the Phase 1 entry point. Expect build failures until Phase 1 lands.
 #
 # Build dir:  build/nrf54l15
-# Result:     build/nrf54l15/le_audio_receiver/zephyr/zephyr.elf
+# Result:     build/nrf54l15/le-audio-receiver/zephyr/zephyr.elf
 
 set -euo pipefail
 

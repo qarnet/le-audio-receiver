@@ -7,7 +7,7 @@
   - `cpunet`: network core, 256 KB flash, 64 KB RAM
 - **Module**: Ebyte E83-2G4M03S-TB (nRF5340 module, no external QSPI flash)
 - **Dev board base**: nRF5340DK footprint, custom UART0 pinout (CH340X USB-serial), no QSPI
-- **Debug probe**: Raspberry Pi Pico running CMSIS-DAP firmware, serial `E6635C08CB1F502B`
+- **Debug probe**: Raspberry Pi Pico running CMSIS-DAP firmware (probe serial configured via scripts/probe-serial.local, see AGENTS.md)
 
 ## Build system
 
@@ -27,10 +27,10 @@ flashed by the app domain runner instead of by a separate west domain flash.
 ## Flash workflow
 
 ```
-west flash
+fw-flash-5340
 ```
 
-Uses OpenOCD via CMSIS-DAP probe. Flashes both cores in one session.
+This helper runs `west flash --build-dir build/nrf5340`, which uses OpenOCD via CMSIS-DAP probe. Flashes both cores in one session.
 
 OpenOCD command constructed by west runner:
 
@@ -39,7 +39,7 @@ openocd
   -f interface/cmsis-dap.cfg
   -f target/nordic/nrf53.cfg
   -f scripts/flash_nrf5340.tcl
-  -c 'cmsis_dap_serial E6635C08CB1F502B'
+  -c 'cmsis_dap_serial <from scripts/probe-serial.local or auto-detect>'
   -c 'transport select swd'
   -c 'adapter speed 100'
   -c 'set NET_CORE_HEX {/path/to/build/merged_CPUNET.hex}'
@@ -88,17 +88,41 @@ macro(app_set_runner_args)
   if(NOT _runner_args_set)
     set_property(GLOBAL PROPERTY LE_AUDIO_RUNNER_ARGS_SET TRUE)
     get_filename_component(_net_hex "${CMAKE_BINARY_DIR}/../merged_CPUNET.hex" ABSOLUTE)
-    board_runner_args(openocd
-      "--config=interface/cmsis-dap.cfg"
-      "--config=target/nordic/nrf53.cfg"
-      "--config=${CMAKE_SOURCE_DIR}/scripts/flash_nrf5340.tcl"
-      "--cmd-pre-init=cmsis_dap_serial E6635C08CB1F502B"
-      "--cmd-pre-init=transport select swd"
-      "--cmd-pre-init=adapter speed 100"
-      "--cmd-pre-init=set NET_CORE_HEX {${_net_hex}}"
-      "--cmd-pre-load=check_approtect"
-      "--cmd-load=flash_west"
-    )
+
+    # Read probe serial from local (gitignored) file if present.
+    set(_probe_serial "")
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/probe-serial.local")
+      file(READ "${CMAKE_CURRENT_SOURCE_DIR}/scripts/probe-serial.local" _probe_serial_raw)
+      string(STRIP "${_probe_serial_raw}" _probe_serial)
+    endif()
+
+    if(_probe_serial)
+      message(STATUS "Using CMSIS-DAP probe serial: ${_probe_serial}")
+      board_runner_args(openocd
+        "--config=interface/cmsis-dap.cfg"
+        "--config=target/nordic/nrf53.cfg"
+        "--config=${CMAKE_SOURCE_DIR}/scripts/flash_nrf5340.tcl"
+        "--cmd-pre-init=cmsis_dap_serial ${_probe_serial}"
+        "--cmd-pre-init=transport select swd"
+        "--cmd-pre-init=adapter speed 100"
+        "--cmd-pre-init=set NET_CORE_HEX {${_net_hex}}"
+        "--cmd-pre-load=check_approtect"
+        "--cmd-load=flash_west"
+      )
+    else()
+      message(STATUS "No probe-serial.local — OpenOCD will auto-detect CMSIS-DAP probe")
+      board_runner_args(openocd
+        "--config=interface/cmsis-dap.cfg"
+        "--config=target/nordic/nrf53.cfg"
+        "--config=${CMAKE_SOURCE_DIR}/scripts/flash_nrf5340.tcl"
+        "--cmd-pre-init=transport select swd"
+        "--cmd-pre-init=adapter speed 100"
+        "--cmd-pre-init=set NET_CORE_HEX {${_net_hex}}"
+        "--cmd-pre-load=check_approtect"
+        "--cmd-load=flash_west"
+      )
+    endif()
+
     include(${ZEPHYR_BASE}/boards/common/openocd.board.cmake)
   endif()
 endmacro()
@@ -111,8 +135,8 @@ endmacro()
 The macro is called once per runner finalized (nrfutil, jlink, nrfjprog) — three times total.
 The global property guard `LE_AUDIO_RUNNER_ARGS_SET` ensures the body executes only once.
 
-`CMAKE_BINARY_DIR` inside the macro resolves to `build/le-audio-receiver/`, so
-`../merged_CPUNET.hex` = `build/merged_CPUNET.hex` (sysbuild top-level net core hex).
+`CMAKE_BINARY_DIR` inside the macro resolves to `build/nrf5340/le-audio-receiver/`, so
+`../merged_CPUNET.hex` = `build/nrf5340/merged_CPUNET.hex` (sysbuild top-level net core hex).
 The TCL curly braces around the path (`{${_net_hex}}`) prevent OpenOCD from splitting on
 spaces if the path contains them.
 

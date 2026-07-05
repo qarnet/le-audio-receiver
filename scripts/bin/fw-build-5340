@@ -4,7 +4,7 @@
 # Build the nRF5340 firmware.
 #
 # Build dir:  build/nrf5340
-# Result:     build/nrf5340/le_audio_receiver/zephyr/zephyr.elf
+# Result:     build/nrf5340/le-audio-receiver/zephyr/zephyr.elf
 
 set -euo pipefail
 
