@@ -80,29 +80,37 @@ Consequences for work in this repo today:
 
 ## Build
 
-Build **from the NCS root** (`~/ncs/v3.3.0`). The app is a freestanding source
-directory there. `ZEPHYR_BASE` and sample paths must resolve.
+Build **from the repo root**. Enter the dev shell first, then run the build
+helper:
 
 ```bash
-cd ~/ncs/v3.3.0
-nrfutil sdk-manager toolchain launch --ncs-version v3.3.0 -- \
-  bash -c "cd ~/ncs/v3.3.0 && west build -b nrf5340dk/nrf5340/cpuapp --sysbuild --pristine"
+cd <repo>
+direnv allow         # or: nix develop
+fw-build-5340
 ```
 
-Use `--pristine` after any `prj.conf`, overlay, or `sysbuild.cmake` change.
-The build tree is at `~/ncs/v3.3.0/build/` (not in the repo).
+The build runs `west build -b nrf5340dk/nrf5340/cpuapp --sysbuild --pristine`
+into `build/nrf5340/`. Use `--pristine` after any `prj.conf`, overlay, or
+`sysbuild.cmake` change.  Pass extra cmake args through:
+
+```bash
+fw-build-5340 -- -DCONFIG_FOO=y
+```
+
+The nRF54L15 target has a stub helper (`fw-build-54l15`) that is known-broken
+(Phase 1 entry point).
 
 ## Flash
 
 Both app core and hci_ipc network core must be flashed:
 
 ```bash
-cd ~/ncs/v3.3.0
-nrfutil sdk-manager toolchain launch --ncs-version v3.3.0 -- \
-  bash -c "cd ~/ncs/v3.3.0 && west flash --build-dir build"
+fw-flash-5340
 ```
 
-This flashes `build/merged.hex` (app) then `build/merged_CPUNET.hex` (net).
+The OpenOCD runner config in `CMakeLists.txt` chains the dual-core flash TCL
+(`scripts/flash_nrf5340.tcl`). The runner reads the probe serial from
+`scripts/probe-serial.local` (see below).
 
 ## Serial
 
@@ -119,6 +127,19 @@ Expected after boot: `BLE ready`, `settings_load() OK`,
 HFCLKAUDIO clock drift vs. the BLE ISO clock — recovery is automatic
 (`TRIGGER_PREPARE` + re-arm). Increase pre-fill depth in `audio_i2s.c`
 to reduce frequency.
+
+### Probe serial
+
+The CMSIS-DAP probe serial is read from `scripts/probe-serial.local` (gitignored,
+not committed). Copy the example and put your probe serial in it:
+
+```bash
+cp scripts/probe-serial.local.example scripts/probe-serial.local
+# Edit: single line, just the serial (e.g. E6635C08CB1F502B)
+```
+
+If the file is absent, OpenOCD auto-detects the probe (works for single-probe
+setups).
 
 ### Capturing dual-core logs during testing
 
