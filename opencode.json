@@ -10,5 +10,16 @@
       "/dev/**": "allow"
     }
   },
-  "lsp": {}
+  "lsp": {},
+  "mcp": {
+    "serial-mcp": {
+      "enabled": true
+    },
+    "nordic-semiconductor-docs": {
+      "enabled": true
+    },
+    "zephyr-docs": {
+      "enabled": true
+    }
+  }
 }
