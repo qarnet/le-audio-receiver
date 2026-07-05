@@ -105,6 +105,9 @@
               # Dynamically loaded via nrfutil. All toolchain/SDK paths are
               # resolved at runtime — no hardcoded hashes.
               if command -v nrfutil >/dev/null 2>&1; then
+                # Clear inherited NRFUTIL_HOME from parent shells so the
+                # nrfutil-core binary uses its own default home (~/.nrfutil).
+                unset NRFUTIL_HOME
                 eval "$(nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh)"
               else
                 printf 'nrfutil not found — NCS toolchain not loaded.\n' >&2
