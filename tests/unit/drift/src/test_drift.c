@@ -63,9 +63,7 @@ ZTEST(drift, test_freq_term_negative_err)
 {
 	/* Frequency term only fires when elapsed >= 100 ms.
 	 * When elapsed < 100 ms, frequency update is skipped —
-	 * only phase term output can appear.
-	 * Verify that a partially-filled window produces 0
-	 * frequency contribution. */
+	 * only phase term output (0 at setpoint) appears. */
 	audio_drift_controller_update(0U, SETPOINT);
 	uint32_t start = 3000000U;
 
@@ -76,8 +74,10 @@ ZTEST(drift, test_freq_term_negative_err)
 
 	zassert_equal(ppm, 0, "elapsed < period → freq skipped, output=0 (got %d)", ppm);
 
-	/* After a full window: elapsed = 100000 → err_us = 0 → output = 0 */
-	ppm = audio_drift_controller_update(start + PERIOD_US + 100000 - 10, SETPOINT);
+	/* After exactly 100 ms from start: elapsed = 100000 → err_us = 0.
+	 * Note: meas_start was never updated by the skipped call,
+	 * so this is the first frequency update. */
+	ppm = audio_drift_controller_update(start + PERIOD_US, SETPOINT);
 	zassert_equal(ppm, 0, "perfect timing → output=0 (got %d)", ppm);
 }
 
