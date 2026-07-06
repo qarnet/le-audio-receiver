@@ -4,13 +4,12 @@
  */
 
 #include <zephyr/ztest.h>
+#include <string.h>
 #include "audio_drift.h"
 
-/* Period constants (must match audio_drift.c) */
-#define PERIOD_US    100000U
-#define CENTER       AUDIO_DRIFT_APLL_CENTER
-#define FREQ_MIN     AUDIO_DRIFT_APLL_MIN
-#define FREQ_MAX     AUDIO_DRIFT_APLL_MAX
+/* Controller constants (must match audio_drift.c) */
+#define PERIOD_US 100000U
+#define SETPOINT  6
 
 static void reset_before_each(void *unused)
 {
@@ -23,158 +22,206 @@ ZTEST_SUITE(drift, NULL, NULL, reset_before_each, NULL, NULL);
 ZTEST(drift, test_zero_ts_ignored)
 {
 	/* sdu_ref_us == 0 must be a no-op; state stays INIT */
-	uint16_t r = audio_drift_update(0);
+	int32_t ppm = audio_drift_controller_update(0, SETPOINT);
 
-	zassert_equal(r, 0, "zero ts must return 0");
-	/* A subsequent valid ts should still enter CALIB (not skip to LOCKED) */
-	r = audio_drift_update(1000);
-	zassert_equal(r, 0, "first valid ts: enter CALIB, no freq change yet");
+	zassert_equal(ppm, 0, "zero ts must return 0");
+	zassert_equal(audio_drift_get_ppm(), 0, "output ppm must be 0");
+	/* State should still be INIT after zero ts */
+	zassert_true(strcmp(audio_drift_state_str(), "INIT") == 0,
+		     "state should stay INIT on zero ts");
+
+	/* First valid ts enters ACTIVE, returns 0 */
+	ppm = audio_drift_controller_update(1000, SETPOINT);
+	zassert_equal(ppm, 0, "first valid ts returns 0");
+	zassert_true(strcmp(audio_drift_state_str(), "ACTIVE") == 0,
+		     "state should be ACTIVE after first valid ts");
 }
 
-ZTEST(drift, test_init_to_calib_on_first_ts)
+ZTEST(drift, test_init_to_active_on_first_ts)
 {
-	uint16_t r = audio_drift_update(1000000U);
+	int32_t ppm = audio_drift_controller_update(1000000U, SETPOINT);
 
-	zassert_equal(r, 0, "first ts starts CALIB, no freq update");
-	/* Before 100 ms elapses, still no update */
-	r = audio_drift_update(1000000U + PERIOD_US - 1);
-	zassert_equal(r, 0, "< 100 ms elapsed: no update");
+	zassert_equal(ppm, 0, "first ts enters ACTIVE, no freq update");
+	zassert_true(strcmp(audio_drift_state_str(), "ACTIVE") == 0,
+		     "state should be ACTIVE after first ts");
 }
 
-ZTEST(drift, test_calib_no_adjust_before_100ms)
+ZTEST(drift, test_freq_term_positive_err)
 {
-	audio_drift_update(0U);          /* ignored */
-	audio_drift_update(500000U);     /* INIT → CALIB, start = 500000 */
-	uint16_t r = audio_drift_update(500000U + PERIOD_US - 1);
-
-	zassert_equal(r, 0, "not enough elapsed");
-}
-
-ZTEST(drift, test_calib_perfect_timing_returns_center)
-{
-	/* err == 0 → adj == 0 → center freq returned */
-	audio_drift_update(0U);
-	audio_drift_update(1000000U);
-	uint16_t r = audio_drift_update(1000000U + PERIOD_US);
-
-	zassert_equal(r, CENTER, "perfect timing → center freq");
-}
-
-ZTEST(drift, test_calib_positive_err_increases_freq)
-{
-	/* elapsed long → err negative → adj positive → freq above center */
-	audio_drift_update(0U);
+	/* elapsed > PERIOD → clock slow → freq_err positive → ppm positive */
+	audio_drift_controller_update(0U, SETPOINT);
 	uint32_t start = 2000000U;
 
-	audio_drift_update(start);
-	/* elapsed = 100100 → err = -100 us → adj ≈ +302 steps */
-	uint16_t r = audio_drift_update(start + PERIOD_US + 100);
+	audio_drift_controller_update(start, SETPOINT);
+	/* elapsed = 100010 → err_us = +10 → freq_err_ppm = +100 */
+	int32_t ppm = audio_drift_controller_update(start + PERIOD_US + 10, SETPOINT);
 
-	zassert_true(r > CENTER, "positive err → freq above center (got 0x%04X)", r);
-	zassert_true(r <= FREQ_MAX, "freq must not exceed max");
+	zassert_true(ppm > 0, "elapsed > period → ppm positive (speed up), got %d", ppm);
 }
 
-ZTEST(drift, test_calib_elapsed_long_increases_freq)
+ZTEST(drift, test_freq_term_negative_err)
 {
-	/* elapsed long → err negative → freq increases above center */
-	audio_drift_update(0U);
+	/* elapsed < PERIOD → clock fast → freq_err negative → ppm negative */
+	audio_drift_controller_update(0U, SETPOINT);
 	uint32_t start = 3000000U;
 
-	audio_drift_update(start);
-	/* elapsed = 100100 → err = -100 us → adj ≈ +302 → freq > CENTER */
-	uint16_t r = audio_drift_update(start + PERIOD_US + 100);
+	audio_drift_controller_update(start, SETPOINT);
+	/* elapsed = 99990 → err_us = -10 → freq_err_ppm = -100 */
+	int32_t ppm = audio_drift_controller_update(start + PERIOD_US - 10, SETPOINT);
 
-	zassert_true(r > CENTER, "elapsed long → freq above center (got 0x%04X)", r);
-	zassert_true(r >= FREQ_MIN, "freq must not go below min");
+	zassert_true(ppm < 0, "elapsed < period → ppm negative (slow down), got %d", ppm);
 }
 
-ZTEST(drift, test_calib_to_locked_when_err_small)
+ZTEST(drift, test_phase_term_buffer_draining)
 {
-	/* err within ±16 → should lock; next period should see halved correction */
-	audio_drift_update(0U);
-	uint32_t start = 4000000U;
+	/* slab_free < setpoint → buffer draining (clock fast) → ppm negative */
+	audio_drift_controller_update(0U, SETPOINT);
+	uint32_t t = 4000000U;
 
-	audio_drift_update(start);
-	/* err = -10 us (|err| ≤16) → should enter LOCKED */
-	uint16_t r1 = audio_drift_update(start + PERIOD_US + 10);
+	audio_drift_controller_update(t, SETPOINT);
+	/* Supply SDUs but keep buffer below setpoint */
+	int32_t ppm = audio_drift_controller_update(t + PERIOD_US, 4);
 
-	zassert_not_equal(r1, 0, "should update freq on lock transition");
-
-	/* Now in LOCKED; next period with err=0 → returns center freq */
-	uint32_t start2 = start + PERIOD_US + 10;
-
-	audio_drift_update(start2 + PERIOD_US / 2); /* not enough elapsed */
-	uint16_t r2 = audio_drift_update(start2 + PERIOD_US);
-
-	zassert_not_equal(r2, 0, "locked state should still update each period");
+	zassert_true(ppm < 0, "buffer draining → ppm negative, got %d", ppm);
 }
 
-ZTEST(drift, test_locked_half_correction)
+ZTEST(drift, test_phase_term_buffer_filling)
 {
-	/* Enter locked with err=0, then apply 200 us error.
-	 * Locked uses err/2 = 100 us for adj, CALIB would use 200 us.
-	 * We verify the locked correction is smaller. */
-	audio_drift_update(0U);
+	/* slab_free > setpoint → buffer filling (clock slow) → ppm positive */
+	audio_drift_controller_update(0U, SETPOINT);
 	uint32_t t = 5000000U;
 
-	audio_drift_update(t);
-	/* Lock with err=0 */
-	audio_drift_update(t + PERIOD_US);   /* → LOCKED, freq=CENTER */
-	t += PERIOD_US;
+	audio_drift_controller_update(t, SETPOINT);
+	int32_t ppm = audio_drift_controller_update(t + PERIOD_US, 8);
 
-	/* In LOCKED: err=-200 us → adj uses -100 us */
-	uint16_t freq_locked = audio_drift_update(t + PERIOD_US + 200);
-
-	/* err = -200, locked uses -100 → adj ≈ +302; calib would use -200 → adj ≈ +604 */
-	int32_t diff_locked = (int32_t)freq_locked - (int32_t)CENTER;
-	/* locked correction ≈ 302 steps, calib ≈ 604 steps */
-	zassert_true(diff_locked > 0, "elapsed long → freq above center in locked");
-	zassert_true(diff_locked < 500, "locked uses half correction, not full");
+	zassert_true(ppm > 0, "buffer filling → ppm positive, got %d", ppm);
 }
 
-ZTEST(drift, test_locked_to_calib_on_unlock)
+ZTEST(drift, test_integrator_clamp)
 {
-	/* err > 32 in LOCKED → drops back to CALIB, resets center */
-	audio_drift_update(0U);
+	/* Sustained large error → integral clamped (output stays bounded) */
+	audio_drift_controller_update(0U, SETPOINT);
 	uint32_t t = 6000000U;
 
-	audio_drift_update(t);
-	audio_drift_update(t + PERIOD_US); /* → LOCKED */
-	t += PERIOD_US;
+	audio_drift_controller_update(t, SETPOINT);
 
-	/* err = +50 us (> 32) → should unlock */
-	audio_drift_update(t + PERIOD_US - 50);
-	t += PERIOD_US - 50;
+	/* Feed 25 windows of moderate positive error (elapsed = 100050 µs each).
+	 * err_us = +50, freq_err_ppm = +500 per window.
+	 * After many windows the integral saturates, but output stays ≤ +500. */
+	for (int i = 0; i < 25; i++) {
+		t += PERIOD_US + 50;
+		int32_t ppm = audio_drift_controller_update(t, SETPOINT);
 
-	/* Next call at exactly PERIOD after that → should be in CALIB again
-	 * and produce a CENTER-relative correction */
-	uint16_t r = audio_drift_update(t + PERIOD_US);
+		zassert_true(ppm >= -500 && ppm <= 500,
+			     "output must stay in [-500, 500], got %d at window %d", ppm, i);
+	}
 
-	zassert_not_equal(r, 0, "calib after unlock should produce update");
+	/* Output should have reached a positive steady state */
+	int32_t final_ppm = audio_drift_get_ppm();
+
+	zassert_true(final_ppm > 0, "sustained positive error → pos ppm, got %d", final_ppm);
 }
 
-ZTEST(drift, test_gap_resets_window)
+ZTEST(drift, test_output_clamp)
 {
-	/* elapsed > 3*PERIOD → window restart, returns 0 */
-	audio_drift_update(0U);
-	audio_drift_update(7000000U);
-	/* Jump 400 ms — way beyond 3x period */
-	uint16_t r = audio_drift_update(7000000U + 4 * PERIOD_US);
+	/* Large error → output clamped at ±500 ppm */
+	audio_drift_controller_update(0U, SETPOINT);
+	uint32_t t = 7000000U;
 
-	zassert_equal(r, 0, "gap > 3*period must restart window, return 0");
+	audio_drift_controller_update(t, SETPOINT);
+
+	/* Huge positive: elapsed = 200000 → err_us = +100000 → freq_err = +1000000 ppm */
+	int32_t ppm = audio_drift_controller_update(t + PERIOD_US + 100000, SETPOINT);
+
+	zassert_equal(ppm, 500, "large positive error → output clamped at +500, got %d", ppm);
+
+	/* Huge negative: elapsed = 50000 → err_us = -50000 → freq_err = -500000 ppm */
+	audio_drift_reset();
+	audio_drift_controller_update(0U, SETPOINT);
+	uint32_t t2 = 8000000U;
+
+	audio_drift_controller_update(t2, SETPOINT);
+	ppm = audio_drift_controller_update(t2 + 50000, SETPOINT);
+
+	zassert_equal(ppm, -500, "large negative error → output clamped at -500, got %d", ppm);
+}
+
+ZTEST(drift, test_convergence)
+{
+	/* Feed consistent +5 µs freq error per window (freq_err_ppm = +50).
+	 * The output should be positive and stabilize within [0, 500]. */
+	audio_drift_controller_update(0U, SETPOINT);
+	uint32_t t = 9000000U;
+
+	audio_drift_controller_update(t, SETPOINT);
+
+	int32_t prev_ppm = 0;
+
+	for (int i = 0; i < 10; i++) {
+		t += PERIOD_US + 5;
+		int32_t ppm = audio_drift_controller_update(t, SETPOINT);
+
+		/* Output should be positive (clock slow, need to speed up) */
+		zassert_true(ppm > 0,
+			     "positive freq error → ppm must be positive, got %d at window %d", ppm,
+			     i);
+
+		/* Output should be monotonically increasing as integral builds */
+		zassert_true(ppm >= prev_ppm,
+			     "output should not decrease on consistent error: %d → %d", prev_ppm,
+			     ppm);
+		prev_ppm = ppm;
+	}
+
+	/* Final output must be at least 25 (proportional contribution) */
+	zassert_true(audio_drift_get_ppm() >= 25,
+		     "consistent error → output should reach at least 25 ppm, got %d",
+		     audio_drift_get_ppm());
+}
+
+ZTEST(drift, test_gap_resets)
+{
+	/* elapsed > 3*PERIOD → window reset, freq_err_ppm = 0.
+	 * Phase term continues to work (no frequency contribution). */
+	audio_drift_controller_update(0U, SETPOINT);
+	uint32_t t = 10000000U;
+
+	audio_drift_controller_update(t, SETPOINT);
+
+	/* Build some frequency integral first */
+	audio_drift_controller_update(t + PERIOD_US + 50, SETPOINT); /* positive freq err */
+	int32_t with_freq = audio_drift_get_ppm();
+
+	zassert_true(with_freq > 0, "should have positive output from freq term");
+
+	/* Now a gap: 400 ms jump (>> 3*PERIOD). Window resets, freq_err_ppm = 0.
+	 * The freq integral is NOT reset, so some output remains, but no new
+	 * frequency correction is computed for this SDU. */
+	t += PERIOD_US + 50;
+	t += 4 * PERIOD_US; /* big gap */
+	int32_t ppm_after_gap = audio_drift_controller_update(t, SETPOINT);
+
+	/* After gap: freq term contributes 0 (window reset), phase term may add
+	 * something. The freq integral persists from before. So output should
+	 * still be positive (freq integral + small phase contribution). */
+	zassert_true(ppm_after_gap >= 0,
+		     "ppm after gap should be non-negative (freq integral persists), got %d",
+		     ppm_after_gap);
 }
 
 ZTEST(drift, test_uint32_wraparound)
 {
-	/* Timestamps wrap at 0xFFFFFFFF; subtraction still correct with uint32 math */
+	/* Timestamps wrap at 0xFFFFFFFF; subtraction still correct with uint32 math. */
 	uint32_t start = 0xFFFF0000U;
 
-	audio_drift_update(0U);
-	audio_drift_update(start);
-	/* wrap: start + PERIOD overflows into low uint32 */
-	uint32_t after = start + PERIOD_US; /* wraps naturally in uint32 */
-	uint16_t r = audio_drift_update(after);
+	audio_drift_controller_update(0U, SETPOINT);
+	audio_drift_controller_update(start, SETPOINT);
 
-	/* err=0 → should return CENTER */
-	zassert_equal(r, CENTER, "uint32 wraparound: err=0 → center (got 0x%04X)", r);
+	/* wrap: start + PERIOD overflows naturally in uint32 */
+	uint32_t after = start + PERIOD_US;
+
+	int32_t ppm = audio_drift_controller_update(after, SETPOINT);
+
+	/* err_us = 0 → freq_err_ppm = 0. Phase term: free=SETPOINT → 0. */
+	zassert_equal(ppm, 0, "uint32 wraparound with err=0 → 0 ppm (got %d)", ppm);
 }
