@@ -29,6 +29,7 @@ target_sources(app PRIVATE
 )
 
 zephyr_sources_ifdef(CONFIG_AUDIO_CLOCK_ACTUATOR_APLL src/audio_clock_actuator_apll.c)
+zephyr_sources_ifdef(CONFIG_AUDIO_CLOCK_ACTUATOR_NONE src/audio_clock_actuator_none.c)
 zephyr_sources_ifdef(CONFIG_SHELL src/audio_shell.c)
 
 zephyr_library_include_directories(${ZEPHYR_BASE}/samples/bluetooth)
