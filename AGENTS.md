@@ -58,16 +58,14 @@ Nordic samples are the best learning resource:
 
 `docs/design.md` is the accepted design doc and phased plan (Phases 0–6) for
 supporting both nRF5340 and nRF54L15. Read it before structural changes.
-Current status: **Phases 0–1 complete** — the build workflow (Phase 0) and
-the custom board foundation (Phase 1) have landed. nRF54L15 now compiles;
-audio bring-up is Phase 4. The gotchas below that describe runtime behavior
+Current status: **Phases 0–2 complete, pending review** — the build<b>
+workflow (Phase 0), custom board foundation (Phase 1), and app
+restructure (Phase 2) have landed. PACS now advertises only 48 kHz
+(F4 fix). nRF54L15 compiles; audio bring-up is Phase 4. The gotchas below that describe runtime behavior
 (SW Split LL, settings_load, pairing, I2S DMA, etc.) remain valid.
 
 Consequences for work in this repo today:
 
-- **Known bug**: PACS advertises 16/24/48 kHz but the pipeline is hardcoded
-  to 48 kHz (design.md F4). Resolution is decided (restrict to 48 kHz,
-  Phase 2) — do not patch differently.
 - `docs/nrf54l15-drift-compensation.md` is superseded — reference only,
   never update it.
 - Tooling reference: `~/repos/serial-mcp` holds the direnv + nrfutil
@@ -301,7 +299,7 @@ Default `CONFIG_BT_SMP_ENFORCE_MITM=y` forces authenticated pairing.
 Without a passkey UI the phone shows "incorrect PIN". Disable MITM
 (`CONFIG_BT_SMP_ENFORCE_MITM=n`) and add `pairing_accept` /
 `pairing_complete` / `pairing_failed` callbacks returning
-`BT_SECURITY_ERR_SUCCESS`. See `main.c` lines ~583–607.
+`BT_SECURITY_ERR_SUCCESS`. See `src/bt_bap.c` pairing callbacks.
 
 ### The `sdk-nrf` west project must be named `nrf`
 
@@ -318,7 +316,8 @@ Without it, `west flash` fails with "Cannot connect to the probe".
 The API fills `*chan_allocation` via pointer and returns **0 on success**,
 negative errno on failure. Checking `if (ret > 0)` silently falls through
 to the mono default for every phone that sends a valid channel allocation
-LTV — making all stereo ASEs appear mono. Use `if (ret == 0)`.
+LTV — making all stereo ASEs appear mono. Use `if (ret == 0)`. See
+`lc3_config` in `src/bt_bap.c`.
 
 ### Stereo single-ASE (Mode B) needs two LC3 decoders
 
@@ -330,6 +329,8 @@ odd (R) positions stay zero → right channel silent. Two independent
 stride 2, R into `stereo_out[1]` stride 2.
 
 Per-channel octets = `(sdu_len / frames_per_sdu) / chan_count`.
+
+This logic lives in `audio_decode_sdu` (`src/audio_decode.c`).
 
 ### I2S double-write of same slab block causes DMA corruption
 
@@ -347,12 +348,12 @@ After `i2s_nrfx: Next buffers not supplied on time`, subsequent
 re-arm: set `started = false` so the next `audio_i2s_push` pre-fills
 and re-triggers.
 
-### `audio_i2s_stop` must not clear `configured`
+### `audio_sink_stop` must not clear `configured`
 
-After disconnect, `audio_i2s_stop` drops the DMA (`TRIGGER_DROP`) and
+After disconnect, `audio_sink_stop` drops the DMA (`TRIGGER_DROP`) and
 resets `started`. Clearing `configured` causes every subsequent
-`audio_i2s_push` on reconnect to return `-EIO`. Keep `configured = true`
-so reconnect works without re-calling `audio_i2s_init`.
+`audio_sink_push` on reconnect to return `-EIO`. Keep `configured = true`
+so reconnect works without re-calling `audio_sink_init`.
 
 ### CJMCU-1334 (UDA1334A) wiring
 
@@ -372,6 +373,8 @@ headphone L/R, AGND to sleeve.
 ## Stack
 
 - App: BAP Unicast Server sink-only, 2 sink ASEs, LC3 decode → I2S
+- Audio: `audio_sink.h` interface → `audio_i2s.c` (slab/DMA backend)
+- Decode: `audio_decode.c` (LC3 decode + channel routing, unit-testable)
 - Net: `hci_ipc` with `nrf5340_cpunet_iso_peripheral-bt_ll_sw_split.conf`
 - Link Layer: BT_LL_SW_SPLIT (Zephyr open-source controller, ISO required)
 - DAC: CJMCU-1334 (UDA1334A), no MCK, `CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y`
@@ -380,8 +383,11 @@ headphone L/R, AGND to sleeve.
 
 | File | Purpose |
 |------|---------|
-| `src/main.c` | BAP server, ASCS callbacks, LC3 decode, I2S push, pairing |
-| `src/audio_i2s.c` | I2S TX driver (slab + DMA, 48 kHz stereo) |
+| `src/main.c` | Lifecycle wiring + watchdog + advertising restart loop |
+| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising |
+| `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
+| `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop, sdu_ref) |
+| `src/audio_i2s.c` | I2S TX driver (slab + DMA, 48 kHz stereo) — implements audio_sink.h |
 | `boards/ebyte/e83_nrf5340/` | Custom board definition for Ebyte E83-2G4M03S: I2S0 pins, ACLK 12.288 MHz, QSPI disabled, i2s-audio alias, OpenOCD flash runner |
 | `prj.conf` | App Kconfig (ACL/ISO buffers, SMP, 2 ASEs, liblc3, FPU, ZMS) |
 | `sysbuild.cmake` | Applies SW Split DT overlay + Kconfig overlay to hci_ipc |
