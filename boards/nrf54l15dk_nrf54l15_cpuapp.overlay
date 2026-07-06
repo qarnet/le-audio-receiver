@@ -1,6 +1,14 @@
 /*
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Seeed Xiao nRF54L15 overrides for the stock nrf54l15dk board target.
+ * The Xiao's onboard SAMD11 CMSIS-DAP bridges UART20 (P1.9 TX / P1.8 RX)
+ * to the USB CDC serial port. The stock DK uses P1.4/P1.5, so we remap
+ * uart20 here to get console output over the Xiao's USB port.
+ *
+ * I2S20 pins: SCK=P1.11 (D5), LRCK=P1.12, SDOUT=P1.10 (D4).
+ * P1.8 is avoided — it is the UART RX line to the SAMD11 USB bridge.
  */
 
 / {
@@ -10,13 +18,37 @@
 };
 
 &pinctrl {
+	uart20_default: uart20_default {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 1, 9)>;
+		};
+		group2 {
+			psels = <NRF_PSEL(UART_RX, 1, 8)>;
+			bias-pull-up;
+		};
+	};
+
+	uart20_sleep: uart20_sleep {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 1, 9)>,
+				<NRF_PSEL(UART_RX, 1, 8)>;
+			low-power-enable;
+		};
+	};
+
 	i2s20_default: i2s20_default {
 		group1 {
 			psels = <NRF_PSEL(I2S_SCK_M,  1, 11)>,
 				<NRF_PSEL(I2S_LRCK_M, 1, 12)>,
-				<NRF_PSEL(I2S_SDOUT,  1,  8)>;
+				<NRF_PSEL(I2S_SDOUT,  1, 10)>;
 		};
 	};
+};
+
+&uart20 {
+	pinctrl-0 = <&uart20_default>;
+	pinctrl-1 = <&uart20_sleep>;
+	pinctrl-names = "default", "sleep";
 };
 
 &i2s20 {
