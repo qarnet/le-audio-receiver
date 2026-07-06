@@ -20,6 +20,8 @@ project(le_audio_receiver)
 
 target_sources(app PRIVATE
   src/main.c
+  src/bt_bap.c
+  src/audio_decode.c
   src/audio_i2s.c
   src/audio_drift.c
   src/audio_stats.c
