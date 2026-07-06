@@ -382,11 +382,11 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 
 	if (valid) {
 		as->recv_cnt++;
-		if (IS_ENABLED(CONFIG_INFO_REPORTING_INTERVAL) &&
-		    CONFIG_INFO_REPORTING_INTERVAL > 0 &&
-		    (as->recv_cnt % CONFIG_INFO_REPORTING_INTERVAL) == 0U) {
+#if defined(CONFIG_INFO_REPORTING_INTERVAL) && CONFIG_INFO_REPORTING_INTERVAL > 0
+		if ((as->recv_cnt % CONFIG_INFO_REPORTING_INTERVAL) == 0U) {
 			LOG_INF("Audio stream[%zu]: %zu SDU", idx, as->recv_cnt);
 		}
+#endif
 	} else {
 		LOG_DBG("Bad packet stream[%zu]: 0x%02X", idx, info->flags);
 	}
