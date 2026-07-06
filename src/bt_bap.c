@@ -54,12 +54,11 @@ LOG_MODULE_REGISTER(bt_bap, LOG_LEVEL_INF);
 	 BT_AUDIO_CONTEXT_TYPE_INSTRUCTIONAL)
 
 /*
- * Advertise support for 16/24/48 kHz, 7.5 and 10 ms frames, 1 or 2 channels.
- * Octet range 20–120 covers all standard LC3 configurations for these rates.
+ * Advertise support for 48 kHz only, 7.5 and 10 ms frames, 1 or 2 channels.
+ * Octet range 20–120 covers all standard LC3 configurations for this rate.
  */
 static const struct bt_audio_codec_cap lc3_codec_cap = BT_AUDIO_CODEC_CAP_LC3(
-	BT_AUDIO_CODEC_CAP_FREQ_16KHZ | BT_AUDIO_CODEC_CAP_FREQ_24KHZ |
-		BT_AUDIO_CODEC_CAP_FREQ_48KHZ,
+	BT_AUDIO_CODEC_CAP_FREQ_48KHZ,
 	BT_AUDIO_CODEC_CAP_DURATION_7_5 | BT_AUDIO_CODEC_CAP_DURATION_10,
 	BT_AUDIO_CODEC_CAP_CHAN_COUNT_SUPPORT(1) | BT_AUDIO_CODEC_CAP_CHAN_COUNT_SUPPORT(2), 20u,
 	120u, 1u, AVAILABLE_SINK_CONTEXT);
