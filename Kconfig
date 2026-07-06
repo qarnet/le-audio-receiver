@@ -15,4 +15,21 @@ config BT_AUDIO_VOL_DEFAULT
 	  Initial volume applied by the VCP Volume Renderer at startup.
 	  195 is approximately 76% of full scale.
 
+choice AUDIO_CLOCK_ACTUATOR
+	prompt "Audio clock actuator"
+	default AUDIO_CLOCK_ACTUATOR_APLL
+
+config AUDIO_CLOCK_ACTUATOR_APLL
+	bool "APLL (nRF5340 HFCLKAUDIO)"
+	help
+	  Use the nRF5340 HFCLKAUDIO APLL for clock steering.
+	  ppm → APLL register trim.
+
+config AUDIO_CLOCK_ACTUATOR_NONE
+	bool "None (no actuator)"
+	help
+	  No clock actuator. Controller runs but output is discarded.
+	  For testing on platforms without a clock steering mechanism.
+endchoice
+
 source "Kconfig.zephyr"
