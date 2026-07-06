@@ -5,6 +5,7 @@
 
 #include "audio_sink.h"
 #include "audio_drift.h"
+#include "audio_clock_actuator.h"
 #include "audio_stats.h"
 
 #include <string.h>
@@ -14,10 +15,6 @@
 #include <zephyr/drivers/i2s.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
-#include <hal/nrf_clock.h>
-#if NRF_CLOCK_HAS_HFCLKAUDIO
-#include <nrfx_clock_hfclkaudio.h>
-#endif
 
 LOG_MODULE_REGISTER(audio_i2s, LOG_LEVEL_INF);
 
@@ -48,24 +45,19 @@ static int16_t saved_frame[BLOCK_SIZE / sizeof(int16_t)];
 
 void audio_sink_sdu_ref_update(uint32_t sdu_ref_us)
 {
-	uint16_t new_freq = audio_drift_update(sdu_ref_us);
+	int slab_free = k_mem_slab_num_free_get(&i2s_slab);
+	int32_t ppm = audio_drift_controller_update(sdu_ref_us, slab_free);
 
-#if NRF_CLOCK_HAS_HFCLKAUDIO
-	if (new_freq != 0) {
-		nrfx_clock_hfclkaudio_config_set(new_freq);
-		LOG_DBG("APLL → 0x%04X", new_freq);
+	if (ppm != 0) {
+		audio_clock_actuator_apply_ppm(ppm);
+		LOG_DBG("Drift → %d ppm (free=%d)", ppm, slab_free);
 	}
-#else
-	ARG_UNUSED(new_freq);
-#endif
 }
 
 static void drift_reset(void)
 {
 	audio_drift_reset();
-#if NRF_CLOCK_HAS_HFCLKAUDIO
-	nrfx_clock_hfclkaudio_config_set(AUDIO_DRIFT_APLL_CENTER);
-#endif
+	audio_clock_actuator_reset();
 }
 
 static int i2s_do_configure(void)
@@ -100,6 +92,7 @@ int audio_sink_init(void)
 	}
 
 	configured = true;
+	audio_clock_actuator_init();
 	LOG_INF("I2S ready (%d kHz, %d-bit, stereo, %d blocks)", SAMPLE_RATE / 1000, BIT_WIDTH,
 		BLOCK_COUNT);
 	return 0;

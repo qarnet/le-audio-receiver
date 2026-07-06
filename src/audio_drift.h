@@ -11,29 +11,29 @@
 /*
  * APLL register constants for nRF5340 HFCLKAUDIO (12.288 MHz band).
  * One step ≈ 3.3 ppm. Range spans ≈ ±600 ppm around center.
+ * Used by the APLL actuator; kept here for shared definition.
  */
 #define AUDIO_DRIFT_APLL_CENTER 0x9BA6U
 #define AUDIO_DRIFT_APLL_MIN    0x8FD8U
 #define AUDIO_DRIFT_APLL_MAX    0xA774U
 
 /**
- * @brief Feed ISO SDU reference timestamp; compute APLL correction.
+ * PI controller update. Called per SDU with ISO timestamp and buffer fill.
+ * Returns ppm correction (positive = speed up local clock).
  *
- * Implements INIT → CALIB → LOCKED state machine over 100 ms measurement
- * windows. Hardware-independent: no nrfx calls; caller applies the result.
- *
- * @param sdu_ref_us  ISO timestamp in microseconds (info->ts from ISO RX).
- * @return            New APLL register value to apply, 0 if no update needed.
+ * @param sdu_ref_us      ISO timestamp in microseconds (info->ts from ISO RX).
+ * @param slab_free_count  Number of free blocks in the I2S DMA slab.
+ * @return                 PPM correction to apply, 0 if no data yet.
  */
-uint16_t audio_drift_update(uint32_t sdu_ref_us);
+int32_t audio_drift_controller_update(uint32_t sdu_ref_us, int slab_free_count);
 
-/**
- * @brief Reset state machine to INIT. Call on full disconnect.
- *        After this call apply AUDIO_DRIFT_APLL_CENTER to hardware.
- */
+/** Reset controller to initial state. */
 void audio_drift_reset(void);
 
-/** @brief Current state as a short string: "INIT", "CALIB", or "LOCKED". */
+/** Current state string for shell diagnostics. */
 const char *audio_drift_state_str(void);
+
+/** Current ppm output for shell diagnostics. */
+int32_t audio_drift_get_ppm(void);
 
 #endif /* AUDIO_DRIFT_H */

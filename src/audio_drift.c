@@ -5,115 +5,131 @@
 
 #include "audio_drift.h"
 
-#include <stdlib.h>
 #include <zephyr/sys/util.h>
 
-#define DRIFT_MEAS_PERIOD_US    100000U
-#define DRIFT_ERR_THRESH_LOCK   16
-#define DRIFT_ERR_THRESH_UNLOCK 32
-#define APLL_FREQ_ADJ(err_us)   (-((int32_t)(err_us) * 1000) / 331)
+/* Gains — conservative defaults, tunable via Kconfig later */
+#define KP_F 0.5f
+#define KI_F 0.1f
+#define KP_P 0.3f
+#define KI_P 0.05f
+
+#define PHASE_SCALE    50 /* ppm per block of phase error */
+#define PHASE_SETPOINT 6  /* target slab free count (pre-fill depth) */
+
+#define MEAS_PERIOD_US 100000U
+#define MAX_WINDOW_US  (3U * MEAS_PERIOD_US)
+
+/* Clamps */
+#define INTEGRAL_CLAMP 1000 /* ±1000 ppm each integrator */
+#define OUTPUT_CLAMP   500  /* ±500 ppm total output */
 
 enum drift_state {
 	DRIFT_INIT,
-	DRIFT_CALIB,
-	DRIFT_LOCKED,
+	DRIFT_ACTIVE,
 };
 
-static struct {
-	enum drift_state state;
+struct drift_controller {
+	/* Frequency term (computed per 100 ms window) */
 	uint32_t meas_start_us;
-	uint16_t center_freq;
-} drift = {
-	.state = DRIFT_INIT,
-	.center_freq = AUDIO_DRIFT_APLL_CENTER,
+	int32_t freq_err_ppm;
+
+	/* Phase term (computed per SDU) */
+	int32_t phase_err_ppm;
+
+	/* PI integrators */
+	float freq_integral;
+	float phase_integral;
+
+	/* Output */
+	int32_t output_ppm;
+
+	/* State */
+	enum drift_state state;
 };
 
-uint16_t audio_drift_update(uint32_t sdu_ref_us)
+static struct drift_controller ctrl;
+
+int32_t audio_drift_controller_update(uint32_t sdu_ref_us, int slab_free_count)
 {
 	if (sdu_ref_us == 0) {
+		return ctrl.output_ppm;
+	}
+
+	/* First valid timestamp — enter ACTIVE, set baseline */
+	if (ctrl.state == DRIFT_INIT) {
+		ctrl.meas_start_us = sdu_ref_us;
+		ctrl.state = DRIFT_ACTIVE;
 		return 0;
 	}
 
-	switch (drift.state) {
-	case DRIFT_INIT:
-		drift.meas_start_us = sdu_ref_us;
-		drift.state = DRIFT_CALIB;
-		return 0;
+	/* --- Phase term (every SDU) --- */
+	int phase_err = slab_free_count - PHASE_SETPOINT;
 
-	case DRIFT_CALIB: {
-		uint32_t elapsed = sdu_ref_us - drift.meas_start_us;
+	ctrl.phase_err_ppm = phase_err * PHASE_SCALE;
 
-		if (elapsed < DRIFT_MEAS_PERIOD_US) {
-			return 0;
-		}
-		if (elapsed > 3 * DRIFT_MEAS_PERIOD_US) {
-			drift.meas_start_us = sdu_ref_us;
-			return 0;
-		}
+	ctrl.phase_integral += KI_P * ctrl.phase_err_ppm;
+	ctrl.phase_integral =
+		CLAMP(ctrl.phase_integral, (float)-INTEGRAL_CLAMP, (float)INTEGRAL_CLAMP);
 
-		int32_t err_us = (int32_t)DRIFT_MEAS_PERIOD_US - (int32_t)elapsed;
-		int32_t adj = APLL_FREQ_ADJ(err_us);
+	float phase_output = KP_P * ctrl.phase_err_ppm + ctrl.phase_integral;
 
-		drift.center_freq = (uint16_t)CLAMP((int32_t)AUDIO_DRIFT_APLL_CENTER + adj,
-						    (int32_t)AUDIO_DRIFT_APLL_MIN,
-						    (int32_t)AUDIO_DRIFT_APLL_MAX);
-		drift.meas_start_us = sdu_ref_us;
+	/* --- Frequency term (every 100 ms window) --- */
+	uint32_t elapsed = sdu_ref_us - ctrl.meas_start_us;
+	float freq_output = 0.0f;
 
-		if (abs(err_us) <= DRIFT_ERR_THRESH_LOCK) {
-			drift.state = DRIFT_LOCKED;
-		}
+	if (elapsed >= MEAS_PERIOD_US && elapsed <= MAX_WINDOW_US) {
+		/* err_us > 0 → local clock slow (elapsed > nominal)
+		 * err_us < 0 → local clock fast
+		 * freq_err_ppm = err_us * 10  (1 µs = 10 ppm in a 100 ms window)
+		 */
+		int32_t err_us = (int32_t)(elapsed - MEAS_PERIOD_US);
 
-		return drift.center_freq;
+		ctrl.freq_err_ppm = err_us * 10;
+
+		ctrl.freq_integral += KI_F * ctrl.freq_err_ppm;
+		ctrl.freq_integral =
+			CLAMP(ctrl.freq_integral, (float)-INTEGRAL_CLAMP, (float)INTEGRAL_CLAMP);
+
+		freq_output = KP_F * ctrl.freq_err_ppm + ctrl.freq_integral;
+
+		ctrl.meas_start_us = sdu_ref_us;
+	} else if (elapsed > MAX_WINDOW_US) {
+		/* Large gap — reset window */
+		ctrl.freq_err_ppm = 0;
+		ctrl.meas_start_us = sdu_ref_us;
 	}
 
-	case DRIFT_LOCKED: {
-		uint32_t elapsed = sdu_ref_us - drift.meas_start_us;
+	/* --- Combined output --- */
+	int32_t total = (int32_t)(freq_output + phase_output);
 
-		if (elapsed < DRIFT_MEAS_PERIOD_US) {
-			return 0;
-		}
-		if (elapsed > 3 * DRIFT_MEAS_PERIOD_US) {
-			drift.state = DRIFT_CALIB;
-			drift.meas_start_us = sdu_ref_us;
-			return 0;
-		}
+	ctrl.output_ppm = CLAMP(total, -OUTPUT_CLAMP, OUTPUT_CLAMP);
 
-		int32_t err_us = (int32_t)DRIFT_MEAS_PERIOD_US - (int32_t)elapsed;
-		int32_t adj = APLL_FREQ_ADJ(err_us / 2);
-
-		uint16_t new_freq = (uint16_t)CLAMP((int32_t)drift.center_freq + adj,
-						    (int32_t)AUDIO_DRIFT_APLL_MIN,
-						    (int32_t)AUDIO_DRIFT_APLL_MAX);
-		drift.meas_start_us = sdu_ref_us;
-
-		if (abs(err_us) > DRIFT_ERR_THRESH_UNLOCK) {
-			drift.state = DRIFT_CALIB;
-			drift.center_freq = AUDIO_DRIFT_APLL_CENTER;
-		}
-
-		return new_freq;
-	}
-	}
-
-	return 0;
+	return ctrl.output_ppm;
 }
 
 void audio_drift_reset(void)
 {
-	drift.state = DRIFT_INIT;
-	drift.center_freq = AUDIO_DRIFT_APLL_CENTER;
-	drift.meas_start_us = 0;
+	ctrl.state = DRIFT_INIT;
+	ctrl.meas_start_us = 0;
+	ctrl.freq_err_ppm = 0;
+	ctrl.phase_err_ppm = 0;
+	ctrl.freq_integral = 0.0f;
+	ctrl.phase_integral = 0.0f;
+	ctrl.output_ppm = 0;
+}
+
+int32_t audio_drift_get_ppm(void)
+{
+	return ctrl.output_ppm;
 }
 
 const char *audio_drift_state_str(void)
 {
-	switch (drift.state) {
+	switch (ctrl.state) {
 	case DRIFT_INIT:
 		return "INIT";
-	case DRIFT_CALIB:
-		return "CALIB";
-	case DRIFT_LOCKED:
-		return "LOCKED";
+	case DRIFT_ACTIVE:
+		return "ACTIVE";
 	default:
 		return "?";
 	}
