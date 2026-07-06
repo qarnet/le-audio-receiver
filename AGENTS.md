@@ -58,11 +58,10 @@ Nordic samples are the best learning resource:
 
 `docs/design.md` is the accepted design doc and phased plan (Phases 0–6) for
 supporting both nRF5340 and nRF54L15. Read it before structural changes.
-Current status: **Phases 0–2 complete, pending review** — the build<b>
-workflow (Phase 0), custom board foundation (Phase 1), and app
-restructure (Phase 2) have landed. PACS now advertises only 48 kHz
-(F4 fix). nRF54L15 compiles; audio bring-up is Phase 4. The gotchas below that describe runtime behavior
-(SW Split LL, settings_load, pairing, I2S DMA, etc.) remain valid.
+Current status: **Phase 3 in progress** — the PI clock recovery controller
+(dual-term, ppm output) and actuator interface are landed. APLL steering is
+the first actuator; Phase 4 adds nRF54L15 sample_adjust. The gotchas below
+remain valid.
 
 Consequences for work in this repo today:
 
@@ -126,10 +125,10 @@ stty -F /dev/ttyUSB0 115200 raw -echo && cat /dev/ttyUSB0
 
 Expected after boot: `BLE ready`, `settings_load() OK`,
 `Advertising as "LE Audio Receiver"`. During streaming,
-`i2s_nrfx: Next buffers not supplied on time` occurs periodically due to
-HFCLKAUDIO clock drift vs. the BLE ISO clock — recovery is automatic
-(`TRIGGER_PREPARE` + re-arm). Increase pre-fill depth in `audio_i2s.c`
-to reduce frequency.
+`i2s_nrfx: Next buffers not supplied on time` should no longer occur
+in steady-state once the PI clock recovery controller converges
+(Phase 3). Recovery is automatic (`TRIGGER_PREPARE` + re-arm) if
+transient underruns happen.
 
 ### Probe identification — NEVER assume the probe↔board mapping
 
@@ -355,6 +354,14 @@ resets `started`. Clearing `configured` causes every subsequent
 `audio_sink_push` on reconnect to return `-EIO`. Keep `configured = true`
 so reconnect works without re-calling `audio_sink_init`.
 
+### Clock recovery actuator must match platform
+
+The `AUDIO_CLOCK_ACTUATOR` Kconfig choice selects the actuator. Default
+is `APLL` (nRF5340). The nRF54L15 board conf sets `NONE` — do NOT set
+`APLL` on nRF54L15 (no HFCLKAUDIO), and do NOT set `NONE` on nRF5340
+(the controller output needs the APLL). Phase 4 adds `SAMPLE_ADJUST`
+for nRF54L15.
+
 ### CJMCU-1334 (UDA1334A) wiring
 
 | nRF5340 pin | CJMCU-1334 pin |
@@ -374,6 +381,7 @@ headphone L/R, AGND to sleeve.
 
 - App: BAP Unicast Server sink-only, 2 sink ASEs, LC3 decode → I2S
 - Audio: `audio_sink.h` interface → `audio_i2s.c` (slab/DMA backend)
+- Clock recovery: `audio_drift.c` (PI controller, ppm output) → actuator interface (`audio_clock_actuator.h`) → `audio_clock_actuator_apll.c` (nRF5340 APLL)
 - Decode: `audio_decode.c` (LC3 decode + channel routing, unit-testable)
 - Net: `hci_ipc` with `nrf5340_cpunet_iso_peripheral-bt_ll_sw_split.conf`
 - Link Layer: BT_LL_SW_SPLIT (Zephyr open-source controller, ISO required)
@@ -388,6 +396,10 @@ headphone L/R, AGND to sleeve.
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
 | `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop, sdu_ref) |
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA, 48 kHz stereo) — implements audio_sink.h |
+| `src/audio_drift.c` | PI clock recovery controller (dual-term, ppm output) |
+| `src/audio_drift.h` | Controller API + APLL register constants |
+| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset) |
+| `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator (ppm → register trim) |
 | `boards/ebyte/e83_nrf5340/` | Custom board definition for Ebyte E83-2G4M03S: I2S0 pins, ACLK 12.288 MHz, QSPI disabled, i2s-audio alias, OpenOCD flash runner |
 | `prj.conf` | App Kconfig (ACL/ISO buffers, SMP, 2 ASEs, liblc3, FPU, ZMS) |
 | `sysbuild.cmake` | Applies SW Split DT overlay + Kconfig overlay to hci_ipc |
