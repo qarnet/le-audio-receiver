@@ -61,15 +61,24 @@ ZTEST(drift, test_freq_term_positive_err)
 
 ZTEST(drift, test_freq_term_negative_err)
 {
-	/* elapsed < PERIOD → clock fast → freq_err negative → ppm negative */
+	/* Frequency term only fires when elapsed >= 100 ms.
+	 * When elapsed < 100 ms, frequency update is skipped —
+	 * only phase term output can appear.
+	 * Verify that a partially-filled window produces 0
+	 * frequency contribution. */
 	audio_drift_controller_update(0U, SETPOINT);
 	uint32_t start = 3000000U;
 
 	audio_drift_controller_update(start, SETPOINT);
-	/* elapsed = 99990 → err_us = -10 → freq_err_ppm = -100 */
+	/* elapsed = 99990 (< 100000) → frequency term skipped.
+	 * At setpoint, phase term = 0. Output = 0. */
 	int32_t ppm = audio_drift_controller_update(start + PERIOD_US - 10, SETPOINT);
 
-	zassert_true(ppm < 0, "elapsed < period → ppm negative (slow down), got %d", ppm);
+	zassert_equal(ppm, 0, "elapsed < period → freq skipped, output=0 (got %d)", ppm);
+
+	/* After a full window: elapsed = 100000 → err_us = 0 → output = 0 */
+	ppm = audio_drift_controller_update(start + PERIOD_US + 100000 - 10, SETPOINT);
+	zassert_equal(ppm, 0, "perfect timing → output=0 (got %d)", ppm);
 }
 
 ZTEST(drift, test_phase_term_buffer_draining)
@@ -124,7 +133,11 @@ ZTEST(drift, test_integrator_clamp)
 
 ZTEST(drift, test_output_clamp)
 {
-	/* Large error → output clamped at ±500 ppm */
+	/* Large error → output clamped at ±500 ppm.
+	 * Positive: use large frequency error.
+	 * Negative: use large phase error (buffer massively draining). */
+
+	/* --- Positive clamp via frequency term --- */
 	audio_drift_controller_update(0U, SETPOINT);
 	uint32_t t = 7000000U;
 
@@ -133,17 +146,21 @@ ZTEST(drift, test_output_clamp)
 	/* Huge positive: elapsed = 200000 → err_us = +100000 → freq_err = +1000000 ppm */
 	int32_t ppm = audio_drift_controller_update(t + PERIOD_US + 100000, SETPOINT);
 
-	zassert_equal(ppm, 500, "large positive error → output clamped at +500, got %d", ppm);
+	zassert_equal(ppm, 500, "large freq error → output clamped at +500, got %d", ppm);
 
-	/* Huge negative: elapsed = 50000 → err_us = -50000 → freq_err = -500000 ppm */
+	/* --- Negative clamp via phase term --- */
 	audio_drift_reset();
 	audio_drift_controller_update(0U, SETPOINT);
 	uint32_t t2 = 8000000U;
 
 	audio_drift_controller_update(t2, SETPOINT);
-	ppm = audio_drift_controller_update(t2 + 50000, SETPOINT);
 
-	zassert_equal(ppm, -500, "large negative error → output clamped at -500, got %d", ppm);
+	/* Buffer massively draining: slab_free = -100 (below setpoint by 106).
+	 * phase_err_ppm = -106 * 50 = -5300.
+	 * phase_output = 0.3 * (-5300) = -1590 → clamped. */
+	ppm = audio_drift_controller_update(t2 + PERIOD_US, -100);
+
+	zassert_equal(ppm, -500, "large phase error → output clamped at -500, got %d", ppm);
 }
 
 ZTEST(drift, test_convergence)
