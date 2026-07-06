@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "audio_i2s.h"
+#include "audio_sink.h"
 #include "audio_drift.h"
 #include "audio_stats.h"
 
@@ -46,7 +46,7 @@ static bool configured;
 static bool started;
 static int16_t saved_frame[BLOCK_SIZE / sizeof(int16_t)];
 
-void audio_i2s_sdu_ref_update(uint32_t sdu_ref_us)
+void audio_sink_sdu_ref_update(uint32_t sdu_ref_us)
 {
 	uint16_t new_freq = audio_drift_update(sdu_ref_us);
 
@@ -84,7 +84,7 @@ static int i2s_do_configure(void)
 	return i2s_configure(i2s_dev, I2S_DIR_TX, &cfg);
 }
 
-int audio_i2s_init(void)
+int audio_sink_init(void)
 {
 	i2s_dev = DEVICE_DT_GET(I2S_NODE);
 	if (!device_is_ready(i2s_dev)) {
@@ -105,7 +105,7 @@ int audio_i2s_init(void)
 	return 0;
 }
 
-int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
+int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 {
 	if (!configured) {
 		return -EIO;
@@ -188,7 +188,7 @@ int audio_i2s_push(const int16_t *stereo_data, size_t sample_count)
 	return 0;
 }
 
-void audio_i2s_stop(void)
+void audio_sink_stop(void)
 {
 	if (!started) {
 		return;

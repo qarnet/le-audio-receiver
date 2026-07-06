@@ -41,7 +41,7 @@
 #include <zephyr/sys_clock.h>
 #include <zephyr/types.h>
 
-#include "audio_i2s.h"
+#include "audio_sink.h"
 #include "audio_stats.h"
 #include "audio_volume.h"
 
@@ -445,7 +445,7 @@ static void push_stereo(void)
 			stereo_out[2 * i + 1] = r_buf[i];
 		}
 		audio_volume_apply(stereo_out, n * 2);
-		audio_i2s_push(stereo_out, n * 2);
+		audio_sink_push(stereo_out, n * 2);
 		l_received = false;
 		r_received = false;
 	}
@@ -463,7 +463,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	static size_t diagnostic_cnt;
 
 	/* Feed ISO timestamp to APLL drift compensation regardless of packet validity */
-	audio_i2s_sdu_ref_update(info->ts);
+	audio_sink_sdu_ref_update(info->ts);
 
 	if (diagnostic_cnt < 5) {
 		LOG_DBG("stream_recv[%zu]: valid=%d buf_len=%u f_per_sdu=%d spc=%d cc=%d "
@@ -517,7 +517,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 			}
 		}
 		audio_volume_apply(stereo_out, spc * 2);
-		audio_i2s_push(stereo_out, spc * 2);
+		audio_sink_push(stereo_out, spc * 2);
 	} else {
 		for (int i = 0; i < f_per_sdu; i++) {
 			const int err = lc3_decode(
@@ -551,7 +551,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 				}
 			}
 			audio_volume_apply(stereo_out, spc * 2);
-			audio_i2s_push(stereo_out, spc * 2);
+			audio_sink_push(stereo_out, spc * 2);
 			l_received = false;
 			r_received = false;
 		} else {
@@ -565,7 +565,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_info *info,
 			struct net_buf *buf)
 {
-	audio_i2s_sdu_ref_update(info->ts);
+	audio_sink_sdu_ref_update(info->ts);
 	if (info->flags & BT_ISO_FLAGS_VALID) {
 		sinks[sink_idx(stream)].recv_cnt++;
 	}
@@ -636,7 +636,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	bt_addr_le_to_str(bt_conn_get_dst(conn), a, sizeof(a));
 	LOG_INF("Disconnected: %s reason 0x%02x", a, reason);
 
-	audio_i2s_stop();
+	audio_sink_stop();
 	audio_stats_reset();
 
 #if defined(CONFIG_LIBLC3)
@@ -791,7 +791,7 @@ int main(void)
 		sys_reboot(SYS_REBOOT_COLD);
 	}
 
-	err = audio_i2s_init();
+	err = audio_sink_init();
 	if (err) {
 		LOG_ERR("I2S init failed: %d", err);
 		sys_reboot(SYS_REBOOT_COLD);

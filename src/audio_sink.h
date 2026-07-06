@@ -3,27 +3,27 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef AUDIO_I2S_H
-#define AUDIO_I2S_H
+#ifndef AUDIO_SINK_H
+#define AUDIO_SINK_H
 
 #include <stdint.h>
 #include <stddef.h>
 
 /**
- * @brief Initialize I2S output for PCM5102A.
+ * @brief Initialize the audio sink backend.
  *
- * Configures the nRF5340 I2S0 as master (48kHz, 16-bit, stereo, standard
- * I2S format) and starts continuous DMA-driven output.  Initial buffers
- * are primed with silence.
+ * Configures the hardware output path (I2S, etc.) for 48 kHz, 16-bit,
+ * stereo operation and starts continuous DMA-driven output. Initial
+ * buffers are primed with silence.
  *
  * @retval 0 on success
- * @retval -ENODEV if I2S device not ready
+ * @retval -ENODEV if output device not ready
  * @retval negative errno on other failures
  */
-int audio_i2s_init(void);
+int audio_sink_init(void);
 
 /**
- * @brief Push stereo interleaved PCM data to I2S output.
+ * @brief Push stereo interleaved PCM data to the audio sink.
  *
  * Data format: [L0, R0, L1, R1, ...] int16_t interleaved.
  * Expects exactly @p sample_count stereo samples (i.e. 2×n int16_t values).
@@ -34,26 +34,26 @@ int audio_i2s_init(void);
  * @param sample_count Total int16_t values in buffer (must be even).
  *
  * @retval 0 on success
- * @retval -EIO if I2S not initialized
+ * @retval -EIO if sink not initialized
  * @retval -ENOMEM if no free DMA slot (underrun; drop frame, PLC fills gap)
  */
-int audio_i2s_push(const int16_t *stereo_data, size_t sample_count);
+int audio_sink_push(const int16_t *stereo_data, size_t sample_count);
 
 /**
- * @brief Stop I2S output (DROP trigger, frees in-flight buffers).
+ * @brief Stop audio sink output (DROP trigger, frees in-flight buffers).
  */
-void audio_i2s_stop(void);
+void audio_sink_stop(void);
 
 /**
  * @brief Feed ISO SDU reference timestamp for APLL drift compensation.
  *
  * Must be called on every ISO RX event (valid or PLC) with the controller-
  * provided anchor timestamp. Drives a state machine (INIT→CALIB→LOCKED) that
- * adjusts HFCLKAUDIO to track the BLE controller clock. No-op on hardware
- * without HFCLKAUDIO.
+ * adjusts the audio clock to track the BLE controller clock. No-op on hardware
+ * without adjustable audio clock.
  *
  * @param sdu_ref_us  ISO SDU reference timestamp in microseconds (info->ts).
  */
-void audio_i2s_sdu_ref_update(uint32_t sdu_ref_us);
+void audio_sink_sdu_ref_update(uint32_t sdu_ref_us);
 
-#endif /* AUDIO_I2S_H */
+#endif /* AUDIO_SINK_H */

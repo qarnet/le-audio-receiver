@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "audio_i2s.h"
+#include "audio_sink.h"
 
 #include <stdatomic.h>
 #include <bs_tracing.h>
@@ -13,22 +13,22 @@
 
 static atomic_int frame_count;
 
-int audio_i2s_init(void)
+int audio_sink_init(void)
 {
 	return 0;
 }
 
-void audio_i2s_stop(void)
+void audio_sink_stop(void)
 {
 	atomic_store(&frame_count, 0);
 }
 
-void audio_i2s_sdu_ref_update(uint32_t sdu_ref_us)
+void audio_sink_sdu_ref_update(uint32_t sdu_ref_us)
 {
 	(void)sdu_ref_us;
 }
 
-int audio_i2s_push(const int16_t *data, size_t sample_count)
+int audio_sink_push(const int16_t *data, size_t sample_count)
 {
 	(void)data;
 	(void)sample_count;

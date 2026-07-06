@@ -6,7 +6,7 @@
 #include "audio_stats.h"
 #include "audio_drift.h"
 #include "audio_volume.h"
-#include "audio_i2s.h"
+#include "audio_sink.h"
 
 #include <zephyr/shell/shell.h>
 
@@ -38,7 +38,7 @@ static int cmd_reset_stats(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_stop(const struct shell *sh, size_t argc, char **argv)
 {
-	audio_i2s_stop();
+	audio_sink_stop();
 	shell_print(sh, "I2S stopped; drift reset.");
 	return 0;
 }
