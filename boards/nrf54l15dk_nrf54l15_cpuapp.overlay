@@ -68,3 +68,15 @@
 &pdm20 {
 	status = "disabled";
 };
+
+/* Xiao has no external SPI NOR flash. Disable the stock-DK &mx25r64 and
+ * its parent &spi00 (no other users) to silence the boot error:
+ *   <err> spi_nor: Device id 00 00 00 does not match config c2 28 17
+ */
+&mx25r64 {
+	status = "disabled";
+};
+
+&spi00 {
+	status = "disabled";
+};

@@ -30,7 +30,6 @@ except Exception:
 
 # ── Constants ───────────────────────────────────────────────────────────────
 
-HCI0_PATH = "/org/bluez/hci0"
 ENDPOINT_PATH = "/bap_central/endpoint0"
 AGENT_PATH = "/bap_central/agent"
 
@@ -658,7 +657,14 @@ def main():
         default=1000.0,
         help="Sine frequency in Hz (default: 1000)",
     )
+    parser.add_argument(
+        "--adapter",
+        type=str,
+        default="hci0",
+        help="BlueZ adapter to use (default: hci0)",
+    )
     args = parser.parse_args()
+    hci_path = "/org/bluez/" + args.adapter
 
     # Late-import D-Bus bindings so --help works without dbus-python.
     _dbus, _dbus_service, _GLib = _import_dbus()
@@ -681,7 +687,7 @@ def main():
     print("[main] Agent registered at {}".format(AGENT_PATH))
 
     # ── 2. Register BAP source endpoint ──────────────────────────────────
-    media = _dbus.Interface(bus.get_object("org.bluez", HCI0_PATH), "org.bluez.Media1")
+    media = _dbus.Interface(bus.get_object("org.bluez", hci_path), "org.bluez.Media1")
     endpoint = BAPSourceEndpoint(bus, ENDPOINT_PATH, stereo=args.stereo)
     props = _dbus.Dictionary(
         {
@@ -698,71 +704,127 @@ def main():
 
     # ── 3. Power on adapter ──────────────────────────────────────────────
     adapter_props = _dbus.Interface(
-        bus.get_object("org.bluez", HCI0_PATH), "org.freedesktop.DBus.Properties"
+        bus.get_object("org.bluez", hci_path), "org.freedesktop.DBus.Properties"
     )
     adapter_props.Set("org.bluez.Adapter1", "Powered", _dbus.Boolean(True))
     print("[main] Adapter powered on")
 
-    # ── 4. Start discovery, wait for target device ───────────────────────
+    # ── 4. Locate target device (existing or via discovery) ──────────────
     adapter = _dbus.Interface(
-        bus.get_object("org.bluez", HCI0_PATH), "org.bluez.Adapter1"
+        bus.get_object("org.bluez", hci_path), "org.bluez.Adapter1"
     )
 
-    target_device_path = [None]
-    device_found = [False]
-
-    def on_interfaces_added(path, interfaces):
-        if device_found[0]:
-            return
-        if "org.bluez.Device1" not in interfaces:
-            return
-        dev_iface = interfaces["org.bluez.Device1"]
-        name = str(dev_iface.get("Name", ""))
-        addr = str(dev_iface.get("Address", ""))
-        rssi = dev_iface.get("RSSI", "?")
+    # 4a. First, enumerate existing devices (cached/paired/connected).
+    dev_path = None
+    already_connected = False
+    om = _dbus.Interface(
+        bus.get_object("org.bluez", "/"),
+        "org.freedesktop.DBus.ObjectManager",
+    )
+    managed = om.GetManagedObjects()
+    for path, ifaces in managed.items():
+        if "org.bluez.Device1" not in ifaces:
+            continue
+        dev = ifaces["org.bluez.Device1"]
+        name = str(dev.get("Name", ""))
+        addr = str(dev.get("Address", ""))
+        # Only look at devices on our adapter (hci0)
+        if not path.startswith(hci_path + "/"):
+            continue
         print(
-            "[discovery] Device: {} name={!r} addr={} RSSI={}".format(
-                path, name, addr, rssi
+            "[enum] Existing device: {} name={!r} addr={} "
+            "paired={} connected={}".format(
+                path,
+                name,
+                addr,
+                dev.get("Paired", False),
+                dev.get("Connected", False),
             )
         )
         if "LE Audio Receiver" in name:
-            target_device_path[0] = path
-            device_found[0] = True
-            print("[discovery] >>> Target found: {}".format(path))
+            dev_path = path
+            already_connected = bool(dev.get("Connected", False))
+            print(
+                "[enum] >>> Using existing target: {} (connected={})".format(
+                    path, already_connected
+                )
+            )
+            break
 
-    bus.add_signal_receiver(
-        on_interfaces_added,
-        dbus_interface="org.freedesktop.DBus.ObjectManager",
-        signal_name="InterfacesAdded",
+    # 4b. If not in existing devices, start discovery.
+    if dev_path is None:
+        target_device_path = [None]
+        device_found = [False]
+
+        def on_interfaces_added(path, interfaces):
+            if device_found[0]:
+                return
+            if "org.bluez.Device1" not in interfaces:
+                return
+            dev_iface = interfaces["org.bluez.Device1"]
+            name = str(dev_iface.get("Name", ""))
+            addr = str(dev_iface.get("Address", ""))
+            rssi = dev_iface.get("RSSI", "?")
+            print(
+                "[discovery] Device: {} name={!r} addr={} RSSI={}".format(
+                    path, name, addr, rssi
+                )
+            )
+            if "LE Audio Receiver" in name:
+                target_device_path[0] = path
+                device_found[0] = True
+                print("[discovery] >>> Target found: {}".format(path))
+
+        bus.add_signal_receiver(
+            on_interfaces_added,
+            dbus_interface="org.freedesktop.DBus.ObjectManager",
+            signal_name="InterfacesAdded",
+        )
+
+        adapter.StartDiscovery()
+        print("[main] Discovery started, waiting for 'LE Audio Receiver'...")
+        print("[main]    (or press Ctrl-C to abort)")
+
+        # Wait up to 30 s for discovery.
+        deadline = time.monotonic() + 30
+        try:
+            while not device_found[0] and time.monotonic() < deadline:
+                _GLib.MainContext.default().iteration(False)
+                time.sleep(0.05)
+        except KeyboardInterrupt:
+            print("\n[main] Interrupted")
+            adapter.StopDiscovery()
+            sys.exit(1)
+
+        if not device_found[0]:
+            print("[error] LE Audio Receiver not found within 30 s")
+            adapter.StopDiscovery()
+            sys.exit(1)
+
+        adapter.StopDiscovery()
+        dev_path = target_device_path[0]
+        already_connected = False
+
+    print(
+        "[main] Target device: {} (already_connected={})".format(
+            dev_path, already_connected
+        )
     )
 
-    adapter.StartDiscovery()
-    print("[main] Discovery started, waiting for 'LE Audio Receiver'...")
-    print("[main]    (or press Ctrl-C to abort)")
-
-    # Wait up to 30 s for discovery.
-    deadline = time.monotonic() + 30
-    try:
-        while not device_found[0] and time.monotonic() < deadline:
-            _GLib.MainContext.default().iteration(False)
-            time.sleep(0.05)
-    except KeyboardInterrupt:
-        print("\n[main] Interrupted")
-        adapter.StopDiscovery()
-        sys.exit(1)
-
-    if not device_found[0]:
-        print("[error] LE Audio Receiver not found within 30 s")
-        adapter.StopDiscovery()
-        sys.exit(1)
-
-    adapter.StopDiscovery()
-    dev_path = target_device_path[0]
-    print("[main] Discovery stopped. Target: {}".format(dev_path))
-
-    # ── 5. Pair ──────────────────────────────────────────────────────────
-    print("[main] Pairing with {}...".format(dev_path))
+    # ── 5. Pair + Connect (always fresh) ─────────────────────────────────
     device = _dbus.Interface(bus.get_object("org.bluez", dev_path), "org.bluez.Device1")
+
+    # If BlueZ thinks the device is already connected, disconnect first so we
+    # get a clean GATT service discovery cycle. BlueZ caches Device1 objects
+    # across disconnects, and a stale "connected" flag skips GATT discovery.
+    if already_connected:
+        print("[main] Disconnecting stale cached connection, reconnecting fresh...")
+        try:
+            device.Disconnect()
+            time.sleep(1.5)  # let receiver settle and restart advertising
+        except _dbus.exceptions.DBusException as e:
+            print("[main]   Disconnect ignored: {}".format(e))
+
     try:
         device.Pair(timeout=60000)
         print("[main] Paired")
@@ -770,6 +832,8 @@ def main():
         err_name = e.get_dbus_name()
         if err_name and "AlreadyExists" in err_name:
             print("[main] Already paired")
+        elif err_name and "org.bluez.Error.AlreadyExists" in str(e):
+            print("[main] Already paired (ignored)")
         else:
             print("[error] Pairing failed: {}".format(e))
             raise
