@@ -1,6 +1,10 @@
 # LE Audio Receiver — Design Document
 
-Status: **accepted plan** (2026-07-05)
+Status: **revised 2026-07-25** (plan rewritten after Phase 4 code landed and
+the nRF54L15 first-stream bring-up revealed gaps in the original Phase 4
+definition). Earlier history: accepted 2026-07-05, superseded
+`nrf54l15-drift-compensation.md` (absorbed in Part II §Clock recovery and
+Appendix A).
 
 This is the consolidated design doc for evolving the project from a single-target
 nRF5340 experiment into a structured codebase supporting both **nRF5340** and
@@ -28,6 +32,11 @@ documents are written per phase when work on it starts.
 - **Drift compensation on nRF5340**: `src/audio_drift.c` trims the HFCLKAUDIO
   APLL from ISO timestamps. Hardware-independent module with a ztest unit
   suite (`tests/unit/drift`) and a bsim scaffold (`tests/bsim`).
+- **nRF54L15 (Seeed Xiao)**: builds, flashes (OpenOCD + Xiao CMSIS-DAP),
+  boots, advertises, pairs with BlueZ (BT540/hci0), exposes PACS (0x1844) +
+  ASCS (0x1850) over GATT. I2S20 on D0/D1/D2 (P1.4/P1.5/P1.6) initializes
+  (`I2S ready` log). SAMPLE_ADJUST actuator wired. **Audio has not streamed
+  yet** — see Phase 4.
 - Clean small modules: `audio_stats`, `audio_volume`, `audio_shell`.
 
 ## Findings
@@ -106,22 +115,22 @@ the APLL register. Weaknesses:
   modules use Zephyr tab style.
 - GitHub Actions CI was disabled (`9a21370`).
 
-## Tooling reference: serial-mcp
+## Tooling reference: nix-nrf-dev
 
-`~/repos/serial-mcp` holds the most current direnv + nrfutil workflow. To
-adopt (Phase 0):
+`flake.nix` consumes [`nix-nrf-dev`](https://github.com/qarnet/nix-nrf-dev)
+via `mkNrfShell { ncsVersion = "v3.3.0"; }`. The flake provides the NCS
+toolchain (loaded scoped inside `west` only — the shell itself stays clean
+so `nix`, agents, editors, and the python used by test scripts all work),
+`openocd` (master build, the only flash backend), `nrf-probes`, and
+multilib GCC for `native_sim`. Build/flash helpers (`fw-build-5340`,
+`fw-build-54l15`, `fw-flash-5340`, `fw-flash-54l15`) live in
+`scripts/bin/` and are on PATH from the dev shell.
 
-| serial-mcp mechanism | Replaces here |
-|---|---|
-| `eval "$(nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh)"` in shellHook | Hardcoded toolchain path, `westWrapped`, `activate.sh`/`env_ncs.sh`/`build.sh` |
-| Self-contained `nrfutil-core` derivation (upstream binary + autoPatchelfHook) | nixpkgs `nrfutil` (drags in SEGGER J-Link, unused since OpenOCD switch) |
-| `ZEPHYR_BASE` derivation with fallback strategies | Hardcoded `ZEPHYR_BASE` |
-| Helper scripts on `PATH` (`fw-build-native` style) | Ad-hoc shell scripts / retyped commands |
-| `compile_commands.json` export wired to `.clangd` | `.clangd` pointing at a compile DB nothing guarantees exists |
-| `flake-utils.eachDefaultSystem`, no `$HOME`-absolute paths | x86_64-only flake tied to this machine |
-
-Kept from this repo regardless: the `openocd-master` derivation + wrapper
-(needed for nRF53 dual-core flash).
+**Extension policy:** add non-toolchain runtime deps (python modules for
+test scripts, etc.) via `mkNrfShell { packages = [ ... ]; }` — the
+`packages` argument is a standard `mkDerivation` extension. Do NOT eval the
+Nordic sdk-manager env into the shell globally; it exports `PYTHONHOME`,
+`PYTHONPATH`, `LD_LIBRARY_PATH` that break non-toolchain tools.
 
 ---
 
@@ -220,23 +229,27 @@ overlay patching of the stock DK board. Migration table already exists in
 The nRF54L15 DK is used as-is (stock board + small overlay) until custom
 hardware exists for it.
 
-## Assumptions (decided 2026-07-05)
+## Assumptions (decided 2026-07-05, reaffirmed 2026-07-25)
 
 1. **48 kHz only for now** — PACS capability shrinks to 48 kHz (fixes F4);
    multi-rate returns as a backlog item.
 2. **nRF5340 is the reference target** — every phase keeps it working; the
    nRF54L15 catches up phase by phase.
-3. **Freestanding app** against `~/ncs/v3.3.0` with toolchain env loaded the
-   serial-mcp way; the unused `west.yml` is removed (or fixed if a workspace
-   is ever wanted — not now).
+3. **Freestanding app** against `~/ncs/v3.3.0` with toolchain env loaded via
+   `nix-nrf-dev`'s `mkNrfShell` (scoped inside `west`); the unused `west.yml`
+   is removed (or fixed if a workspace is ever wanted — not now).
 4. **Testing is local-first** (ztest + bsim); CI revival is backlog.
+5. **No ignored warnings** — every build/boot/flashing warning is fixed at
+   the source or explicitly suppressed with a recorded reason. See
+   `AGENTS.md` "Policy — never ignore warnings".
 
 ---
 
 # Part III — Phases
 
 Phases are sequential unless marked conditional. Each phase ends with the
-nRF5340 target building, flashing, and streaming.
+nRF5340 target building, flashing, and streaming, and (where applicable)
+the nRF54L15 target building.
 
 ## Phase 0 — Tooling & hygiene
 
@@ -294,25 +307,110 @@ streaming on nRF5340 (observable via `audio status` shell counters).
 
 ## Phase 4 — nRF54L15 audio bring-up
 
-- GRTC + DPPI drift measurement (RADIO RX + I2S FRAMESTART capture).
-- `SAMPLE_ADJUST` actuator (single-sample insert/drop) on cpuapp, driven by
-  the Phase 3 controller.
-- nRF54L15 DK board conf: SDC-on-cpuapp buffer counts (existing
-  `boards/nrf54l15dk_nrf54l15_cpuapp.conf` as starting point).
+This phase is **not done** as of the 2026-07-25 rewrite. Code landed (I2S20
+pinctrl fix, SAMPLE_ADJUST actuator, SDC-on-cpuapp buffer counts), boot +
+PACS/ASCS + BlueZ bonding verified, but no audio has streamed and the
+hardware drift measurement is not implemented. The phase is re-scoped into
+ordered sub-steps so the make-or-break runtime verification is explicit and
+the GRTC work is not deferred to a later phase.
 
-**Exit criterion**: stable, indefinitely-running audio stream on the
-nRF54L15 DK; glitch magnitude ≤ 1 sample (~21 µs) per correction event.
+### Phase 4a — Stream verification (audio flows end-to-end)
+
+Trigger a BAP unicast source stream from Linux (BlueZ on hci0 = BT540;
+fallback hci1 = nRF5340 USB HCI if hci0 ISO/CIS is flaky) into the nRF54L15
+receiver. This is the first time audio has ever flowed on the nRF54L15
+target. Goal: prove the data path, not quality.
+
+- Run `scripts/bap_central.py` (BlueZ BAP source endpoint, LC3 sine) against
+  the receiver. Pre-req: python deps installed via `mkNrfShell { packages
+  = [ python3Packages.dbus-python python3Packages.pygobject3 ]; }` (Phase 0
+  extension; do not pollute the toolchain's scoped python).
+- Capture serial (`serial-mcp` on `/dev/ttyACM0`) + logic analyzer
+  (sigrok-cli fx2lafw on D0/D1/D2 + 3V3) in parallel during the run.
+- Success criteria (all observable):
+  - Serial log shows `stream_recv` SDUs arriving, no `LC3 decoder not ready`.
+  - Logic analyzer shows D0 (BCK) ≈ 3.072 MHz, D1 (LRCK) = 48 kHz, D2 (DIN)
+    toggling. D3 (3V3) stable high.
+  - No `i2s_nrfx: Next buffers not supplied on time` in steady state.
+  - `audio status` shell counters: recv_cnt climbing, underrun_count not
+    climbing in steady state.
+
+### Phase 4b — GRTC + DPPI drift measurement
+
+**Mandatory, not deferred.** Replace the ISO-`info->ts` drift measurement
+on nRF54L15 with hardware timestamping. Doing this before 4c is important:
+the fallback (ISO timestamps, 1 µs quantization → 10 ppm per 100 ms window)
+is noisy enough to cause spurious sample_adjust events, and chasing
+artifacts that only exist because of a noisy measurement wastes time.
+
+- Allocate two GRTC capture/compare channels (nrfx_grtc, see
+  `nrfx_grtc.h`; GRTC node exists in `nrf54l_05_10_15.dtsi`).
+- DPPI-route RADIO RX event → GRTC capture channel A (the "central clock"
+  reference).
+- DPPI-route I2S `FRAMESTART` event (nrfx_i2s, `NRF_I2S_HAS_FRAMESTART` is
+  defined for this chip) → GRTC capture channel B (the "local I2S clock").
+- Controller input becomes the delta-of-deltas of (B − A) over N seconds →
+  ppm at ~7.8 ns resolution, zero CPU cost during measurement (no ISR work
+  per SDU). This replaces the frequency term in `audio_drift`; the phase
+  term (I2S buffer fill) is unchanged.
+- Keep ISO-`info->ts` as a fallback if GRTC allocation fails at runtime;
+  log which path is active. **Do not** leave both feeding the controller.
+
+### Phase 4c — Stability + artifact verification
+
+With GRTC driving the controller and SAMPLE_ADJUST consuming its output,
+verify the Phase 4 exit criteria:
+
+- Stable, indefinitely-running stream (run for ≥ 10 minutes, no disconnect,
+  no slab exhaustion, no underrun storms).
+- Glitch magnitude ≤ 1 sample (~21 µs) per correction event — measure via
+  the logic analyzer (a single-sample insert/drop is a 1-sample-period step
+  in BCK/LRCK timing or a discontinuity in DIN).
+- sample_adjust events are **rare** in steady state (log a counter; if it
+  fires every block, the controller is not converging — diagnose).
+- Listening test: confirm the single-sample insert/drop artifact is
+  inaudible at the 48 kHz/16-bit LC3 floor. If audible → Phase 5 (linear
+  ASRC) is needed; record the evidence.
+
+### Phase 4 risks (tracked, not deferred)
+
+- **R-4.1 CPU budget on single core**: SDC radio ISR + BT host ISO RX +
+  LC3 decode (×2 for Mode B) + I2S DMA refill + sample_adjust memmove, all
+  on the 128 MHz cpuapp. nRF5340 splits this across two cores. If the
+  budget blows, ISO RX packet loss (audio gaps) or I2S underruns result.
+  Mitigation: measure recv_cnt vs. expected SDU rate during 4a; if drops
+  scale with LC3 complexity, escalate to Phase 6 (FLPR offload) earlier.
+- **R-4.2 Realtek hci0 ISO/CIS quirks**: hci0 (BT540/RTL8761BU) connects
+  and bonds, but Realtek LE Audio streaming is known flaky on mainline
+  kernels. If 4a fails to acquire MediaTransport or stream on hci0,
+  fall back to hci1 (nRF5340 USB HCI) — may need `btmgmt -i hci1 privacy on`
+  for a non-zero BD address (the all-zeros public BD blocks some BlueZ
+  paths). Do not chase receiver bugs until the central is proven.
+- **R-4.3 nRF5340DK fallback as truth source**: if nRF54L15 streaming
+  fails on both centrals, flash the nRF5340DK receiver via the J-Link
+  (udev-fixed, OpenOCD working) and stream to it — it is the known-good
+  target. If it also fails, the bug is in the central/test setup, not the
+  nRF54L15 firmware.
+
+**Exit criterion (whole phase)**: 4a + 4b + 4c all green. Stable
+indefinitely-running audio stream on the nRF54L15; glitch magnitude ≤ 1
+sample per correction event; GRTC drift measurement active (not the ISO-ts
+fallback); sample_adjust events rare in steady state.
 
 ## Phase 5 — ASRC quality upgrade *(conditional)*
 
-Gate: only if Phase 4 insert/drop is audibly imperfect in listening tests.
+Gate: only if Phase 4c listening test finds the single-sample insert/drop
+artifact audible. If inaudible, skip — the design's "resampling error sits
+below the codec noise floor" argument (Appendix A, option C) holds and
+Phase 6 is not needed for quality, only for CPU budget.
 
 - Fixed-point linear-interpolation ASRC on cpuapp; same controller, ratio
-  actuator. Measure cpuapp headroom before/after.
+  actuator. Measure cpuapp headroom before/after (feeds R-4.1 decision).
 
 ## Phase 6 — FLPR offload *(conditional)*
 
-Gate: only if Phase 5 (or Phase 4 + LC3) leaves insufficient cpuapp headroom.
+Gate: only if Phase 5 (or Phase 4 + LC3) leaves insufficient cpuapp headroom
+(R-4.1 realized).
 
 - Move ASRC to FLPR: shared-SRAM ring buffers, VEVIF/icmsg signaling,
   FLPR reads GRTC directly for drift; fixed-point only (no FPU).
@@ -330,6 +428,8 @@ Gate: only if Phase 5 (or Phase 4 + LC3) leaves insufficient cpuapp headroom.
   I²C write, controller unchanged.
 - CI revival (build matrix for both boards + unit tests + bsim).
 - bsim test expansion (ISO streaming scenarios).
+- GRTC-based drift measurement on nRF5340 (no GRTC there — equivalent is
+  TIMER capture via DPPI; only if ISO-ts proves too noisy in practice).
 
 ---
 
@@ -347,3 +447,48 @@ re-litigated.
 | E. Single-sample insert/drop | **Adopted** (Phase 4) | Degenerate ASRC; ~10⁴× smaller artifact than the 10 ms packet repeat; no hardware change. |
 | F. External fractional-N oscillator (CS2200 class) | **Deferred to backlog** | Not discarded — becomes just another actuator behind the same interface (ppm → I²C). Requires PCB; industry standard for network-audio clock recovery (<1 ppb resolution). |
 | G. Crossfade smoothing | **Deferred to backlog** | Not an alternative; cheap mitigation for the emergency fallback path regardless of actuator choice. |
+
+---
+
+# Appendix B — Phase 4 status (2026-07-25)
+
+Snapshot at the time of the plan rewrite. Not part of the forward-looking
+plan; records what is and isn't done so the next session doesn't re-verify
+from scratch.
+
+**Done:**
+- nRF54L15 builds (`fw-build-54l15` green), flashes (`fw-flash-54l15`),
+  boots (`BLE ready`, `settings_load() OK`, `Advertising as "LE Audio
+  Receiver"`, `I2S ready (48 kHz, 16-bit, stereo, 12 blocks)`).
+- I2S20 pinctrl fixed: D0/D1/D2 (P1.4/P1.5/P1.6), `&pdm20` disabled. The
+  earlier P1.10/P1.11/P1.12 assignment silently collided with pwm20/pdm20
+  (Zephyr does not detect pinctrl overlaps — see AGENTS.md).
+- BlueZ on hci0 (BT540) connects + bonds to the receiver; PACS (0x1844) +
+  ASCS (0x1850) visible on D-Bus. `bap_central.py` targets hci0.
+- SAMPLE_ADJUST actuator wired: `audio_sink_sdu_ref_update` → controller →
+  `audio_clock_actuator_apply_ppm` → accumulator →
+  `consume_sample_adjustment` → insert/drop in `audio_sink_push`.
+- ISO TX buffer warning silenced at source
+  (`BT_CTLR_SDC_ISO_TX_HCI_BUFFER_COUNT=1` matches `BT_ISO_TX_BUF_COUNT=1`,
+  sink-only).
+- `I2S_NRFX_ALLOW_MCK_BYPASS` moved to the nRF5340 board conf (no longer
+  warns on nRF54L15).
+- J-Link udev rule added via `nixos-config-flake/data/usb-device-extras.json`
+  (VID 1366 PID 1061); nRF5340DK fallback flash path works.
+- Logic analyzer (fx2lafw) + serial-mcp verified capturing.
+
+**Not done (the Phase 4 work):**
+- 4a: no audio has streamed. `bap_central.py` deps not in the dev shell yet
+  (`dbus-python` + `pygobject3` via `mkNrfShell { packages = [...] }`).
+- 4b: GRTC + DPPI drift measurement not implemented. `audio_drift.c` still
+  uses ISO `info->ts` (the fallback path).
+- 4c: no stability/artifact verification yet (depends on 4a + 4b).
+
+**Tooling decisions made permanent this session:**
+- `nix-nrf-dev` is the toolchain flake (was already true; now documented in
+  Part I and the Assumptions).
+- AGENTS.md gained the "never ignore warnings" policy + the pinctrl-overlap
+  gotcha + the board-conf-vs-prj.conf gotcha + the matched ISO TX buffer
+  counts note.
+- `README.md` + `SESSION_USB_TABLE.md` added (human-facing + session
+  bring-up snapshot).
