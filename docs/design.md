@@ -457,6 +457,12 @@ plan; records what is and isn't done so the next session doesn't re-verify
 from scratch.
 
 **Done:**
+- Phase 4a test dependencies are part of the project dev shell:
+  `mkNrfShell { packages = [ python3Packages.dbus-python
+  python3Packages.pygobject3 ]; }`. Verified from a fresh `nix develop`:
+  D-Bus/GLib imports work, `bap_central.py --help` loads liblc3, both firmware
+  targets build, and `west`, `openocd`, `nrf-probes`, sigrok-cli, ZEPHYR_BASE,
+  and all four `fw-*` helpers remain available.
 - nRF54L15 builds (`fw-build-54l15` green), flashes (`fw-flash-54l15`),
   boots (`BLE ready`, `settings_load() OK`, `Advertising as "LE Audio
   Receiver"`, `I2S ready (48 kHz, 16-bit, stereo, 12 blocks)`).
@@ -478,8 +484,8 @@ from scratch.
 - Logic analyzer (fx2lafw) + serial-mcp verified capturing.
 
 **Not done (the Phase 4 work):**
-- 4a: no audio has streamed. `bap_central.py` deps not in the dev shell yet
-  (`dbus-python` + `pygobject3` via `mkNrfShell { packages = [...] }`).
+- 4a: no audio has streamed yet. Tooling and dependencies are ready;
+  next action is running `bap_central.py` with serial + logic capture active.
 - 4b: GRTC + DPPI drift measurement not implemented. `audio_drift.c` still
   uses ISO `info->ts` (the fallback path).
 - 4c: no stability/artifact verification yet (depends on 4a + 4b).
