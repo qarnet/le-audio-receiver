@@ -52,16 +52,17 @@ Nordic samples are the best learning resource:
 
 ---
 
-# AGENTS.md — LE Audio Receiver (nRF5340 + UDA1334A)
+# AGENTS.md — LE Audio Receiver (nRF5340 + nRF54L15)
 
 ## Plan of record
 
 `docs/design.md` is the accepted design doc and phased plan (Phases 0–6) for
 supporting both nRF5340 and nRF54L15. Read it before structural changes.
-Current status: **Phase 3 in progress** — the PI clock recovery controller
-(dual-term, ppm output) and actuator interface are landed. APLL steering is
-the first actuator; Phase 4 adds nRF54L15 sample_adjust. The gotchas below
-remain valid.
+Current status: **Phase 4 landed** — PI clock recovery controller (dual-term,
+ppm output) + actuator interface with two actuators: APLL (nRF5340) and
+SAMPLE_ADJUST (nRF54L15, sample insert/drop). The nRF54L15 target now builds,
+flashes, and boots with I2S + BT working. Phase 5 (ASRC on cpuapp) and
+Phase 6 (FLPR offload) remain.
 
 Consequences for work in this repo today:
 
@@ -98,8 +99,10 @@ RRAM needs no flash driver — with RRAMC write-enable (`mww 0x5004b500
 suffice. **FLPR firmware flashes the same way**: the FLPR code partition
 is a RRAM slice at `0x165000` in the app core address space (verified by
 write/read-back with both OpenOCD and probe-rs) — relevant for Phase 6
-FLPR offload. The build targets `nrf54l15dk` pins, so the Xiao's console
-is silent until the custom Xiao board port lands.
+FLPR offload. The build targets the stock `nrf54l15dk` board + a small
+overlay (`boards/nrf54l15dk_nrf54l15_cpuapp.overlay`) that remaps UART20
+to the Xiao SAMD11 USB CDC bridge (P1.9 TX / P1.8 RX) and I2S20 to Xiao
+D0/D1/D2 (P1.4/P1.5/P1.6). Console works over `/dev/ttyACM0` @ 115200.
 
 ## Flash
 
@@ -123,7 +126,10 @@ The picoprobe's own CDC ports (`/dev/ttyACM*`) are NOT the nRF5340 console.
 stty -F /dev/ttyUSB0 115200 raw -echo && cat /dev/ttyUSB0
 ```
 
-Expected after boot: `BLE ready`, `settings_load() OK`,
+nRF54L15 (Xiao) console: **`/dev/ttyACM0`** @ 115200 8N1 (SAMD11 USB CDC
+bridge of UART20). Use serial-mcp or `scripts/read_acm.py ttyACM0`.
+
+Expected after boot on either target: `BLE ready`, `settings_load() OK`,
 `Advertising as "LE Audio Receiver"`. During streaming,
 `i2s_nrfx: Next buffers not supplied on time` should no longer occur
 in steady-state once the PI clock recovery controller converges
@@ -356,36 +362,58 @@ so reconnect works without re-calling `audio_sink_init`.
 
 ### Clock recovery actuator must match platform
 
-The `AUDIO_CLOCK_ACTUATOR` Kconfig choice selects the actuator. Default
-is `APLL` (nRF5340). The nRF54L15 board conf sets `NONE` — do NOT set
-`APLL` on nRF54L15 (no HFCLKAUDIO), and do NOT set `NONE` on nRF5340
-(the controller output needs the APLL). Phase 4 adds `SAMPLE_ADJUST`
-for nRF54L15.
+The `AUDIO_CLOCK_ACTUATOR` Kconfig choice selects the actuator. Three options:
+- `APLL` (default, nRF5340) — `audio_clock_actuator_apll.c`, trims HFCLKAUDIO APLL.
+- `SAMPLE_ADJUST` (nRF54L15) — `audio_clock_actuator_sample_adjust.c`, inserts/drops
+  single PCM samples in the I2S block (degenerate ASRC). The nRF54L15 board conf
+  sets this. No HFCLKAUDIO on nRF54L15 → APLL is not an option there.
+- `NONE` — `audio_clock_actuator_none.c`, controller runs but output is discarded
+  (testing only). Do NOT set on nRF5340 (controller output needs the APLL) and
+  do NOT set on nRF54L15 in production (use SAMPLE_ADJUST).
+
+`audio_clock_actuator_consume_sample_adjustment()` returns ±1/0; APLL and NONE
+always return 0 (data-path adjustment is a no-op for clock-steering actuators).
+
+### Zephyr does NOT detect devicetree pinctrl overlaps
+
+Two peripherals claiming the same pin in their `pinctrl-N` default groups produce
+**no compile error and no runtime warning**. The last peripheral to init a
+contested pin wins the PSEL; the loser silently corrupts. Verify pin assignments
+against all enabled peripherals by decoding the resolved `zephyr.dts` (psel
+encoding: `NRF_PSEL(fun, port, pin)` = `(fun << 24) | ((port*32+pin) & 0x1ff)`;
+see `nrf-pinctrl.h`). This is how the nRF54L15 I2S20 pin conflict (P1.10/P1.11/P1.12
+vs pwm20/pdm20) went unnoticed — fixed by moving I2S20 to D0/D1/D2 (P1.4/P1.5/P1.6)
+and disabling `&pdm20`.
 
 ### CJMCU-1334 (UDA1334A) wiring
 
-| nRF5340 pin | CJMCU-1334 pin |
-|-------------|----------------|
-| P1.15 BCK   | BCLK           |
-| P1.13 DIN   | DIN            |
-| P1.12 LRCK  | WSEL           |
-| 3.3 V       | VIN            |
-| GND         | GND + AGND     |
+| Board | BCK | DIN | LRCK | VIN | GND |
+|-------|-----|-----|------|-----|-----|
+| nRF5340 (Ebyte E83) | P1.15 | P1.13 | P1.12 | 3.3 V | GND + AGND |
+| nRF54L15 (Seeed Xiao) | D0 (P1.4) | D2 (P1.6) | D1 (P1.5) | 3V3 | GND + AGND |
 
-Config pins: **SF0 → GND**, **SF1 → GND** (I2S format), **MUTE → GND or
-float** (LOW = unmuted — opposite of most mute pins), SCLK/PLL leave
-unconnected (internal PLL locks to BCLK). Audio out: Lout / Rout to
-headphone L/R, AGND to sleeve.
+Config pins (SF0/SF1/MUTE): on the Adafruit UDA1334A breakout these are
+**pre-pulled to GND by on-PCB resistors** (R10/R2/R9 — verified against the
+Adafruit PCB schematic), so leaving them floating = I2S format + unmuted. On
+a bare clone without the pulldowns, wire all three to GND explicitly. MUTE
+is LOW = unmuted (inverted vs most mute pins). SCLK/PLL leave unconnected
+(internal PLL locks to BCLK). Audio out: Lout / Rout to headphone L/R,
+AGND to sleeve.
+
+Either UDA1334A (CJMCU-1334) or PCM5102A works — same 3-wire no-MCK topology.
+PCM5102A's spec lead (112 dB / 32-bit / 384 kHz vs 100 dB / 16-bit) is
+inaudible at the 48 kHz/16-bit LC3 floor. PCM5102A cheap breakouts need the
+SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 
 ## Stack
 
 - App: BAP Unicast Server sink-only, 2 sink ASEs, LC3 decode → I2S
 - Audio: `audio_sink.h` interface → `audio_i2s.c` (slab/DMA backend)
-- Clock recovery: `audio_drift.c` (PI controller, ppm output) → actuator interface (`audio_clock_actuator.h`) → `audio_clock_actuator_apll.c` (nRF5340 APLL)
+- Clock recovery: `audio_drift.c` (PI controller, ppm output) → actuator interface (`audio_clock_actuator.h`) → `audio_clock_actuator_apll.c` (nRF5340 APLL) or `audio_clock_actuator_sample_adjust.c` (nRF54L15 sample insert/drop)
 - Decode: `audio_decode.c` (LC3 decode + channel routing, unit-testable)
-- Net: `hci_ipc` with `nrf5340_cpunet_iso_peripheral-bt_ll_sw_split.conf`
-- Link Layer: BT_LL_SW_SPLIT (Zephyr open-source controller, ISO required)
-- DAC: CJMCU-1334 (UDA1334A), no MCK, `CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y`
+- Net (nRF5340): `hci_ipc` with `nrf5340_cpunet_iso_peripheral-bt_ll_sw_split.conf`
+- Link Layer: nRF5340 = BT_LL_SW_SPLIT (Zephyr open-source controller, ISO required); nRF54L15 = SDC (SoftDevice Controller, single-core)
+- DAC: CJMCU-1334 (UDA1334A) or PCM5102A, no MCK, `CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y`
 
 ## Key Files
 
@@ -398,9 +426,14 @@ headphone L/R, AGND to sleeve.
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA, 48 kHz stereo) — implements audio_sink.h |
 | `src/audio_drift.c` | PI clock recovery controller (dual-term, ppm output) |
 | `src/audio_drift.h` | Controller API + APLL register constants |
-| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset) |
+| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset, consume_sample_adjustment) |
 | `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator (ppm → register trim) |
+| `src/audio_clock_actuator_sample_adjust.c` | nRF54L15 sample insert/drop actuator (ppm → ±1 sample) |
+| `src/audio_clock_actuator_none.c` | No-op actuator (testing only) |
 | `boards/ebyte/e83_nrf5340/` | Custom board definition for Ebyte E83-2G4M03S: I2S0 pins, ACLK 12.288 MHz, QSPI disabled, i2s-audio alias, OpenOCD flash runner |
+| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2, pdm20 disabled |
 | `prj.conf` | App Kconfig (ACL/ISO buffers, SMP, 2 ASEs, liblc3, FPU, ZMS) |
 | `sysbuild.cmake` | Applies SW Split DT overlay + Kconfig overlay to hci_ipc |
 | `Kconfig.sysbuild` | `NRF_DEFAULT_BLUETOOTH=y` conditional on nRF5340, gates netcore |
+| `scripts/bap_central.py` | BAP central test driver (Linux → receiver, LC3 sine stream) |
+| `README.md` | Human-facing project overview, BOM, I2S wiring for both boards |
