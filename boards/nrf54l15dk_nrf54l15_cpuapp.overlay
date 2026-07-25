@@ -7,8 +7,16 @@
  * to the USB CDC serial port. The stock DK uses P1.4/P1.5, so we remap
  * uart20 here to get console output over the Xiao's USB port.
  *
- * I2S20 pins: SCK=P1.11 (D5), LRCK=P1.12, SDOUT=P1.10 (D4).
- * P1.8 is avoided — it is the UART RX line to the SAMD11 USB bridge.
+ * I2S20 pins: SCK=P1.4 (D0), LRCK=P1.5 (D1), SDOUT=P1.6 (D2).
+ * These are the only three free Xiao header pins on GPIO port 1.
+ * The previous assignment (P1.10/P1.11/P1.12) collided silently with
+ * pwm20 (P1.10, enabled on the stock nrf54l15dk) and pdm20 (P1.12,
+ * enabled via dmic_dev). Zephyr does not detect pinctrl overlaps —
+ * last peripheral to init a contested pin wins, the loser silently
+ * corrupts. P1.8/P1.9 are the UART20 lines to the SAMD11 USB bridge
+ * and must stay untouched.
+ *
+ * PDM20 (onboard mic) is disabled — this is a sink-only receiver.
  */
 
 / {
@@ -38,9 +46,9 @@
 
 	i2s20_default: i2s20_default {
 		group1 {
-			psels = <NRF_PSEL(I2S_SCK_M,  1, 11)>,
-				<NRF_PSEL(I2S_LRCK_M, 1, 12)>,
-				<NRF_PSEL(I2S_SDOUT,  1, 10)>;
+			psels = <NRF_PSEL(I2S_SCK_M,  1, 4)>,
+				<NRF_PSEL(I2S_LRCK_M, 1, 5)>,
+				<NRF_PSEL(I2S_SDOUT,  1, 6)>;
 		};
 	};
 };
@@ -55,4 +63,8 @@
 	status = "okay";
 	pinctrl-0 = <&i2s20_default>;
 	pinctrl-names = "default";
+};
+
+&pdm20 {
+	status = "disabled";
 };
