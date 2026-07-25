@@ -851,9 +851,13 @@ def main():
     acquire_errors = []  # (path, error) for failures
     acquire_done = [False]
 
-    def _on_acquire_ok(result, tp, channel_alloc):
-        """Callback: Acquire reply received."""
-        fd_ufd, read_mtu, write_mtu = result
+    def _on_acquire_ok(fd_ufd, read_mtu, write_mtu, tp, channel_alloc):
+        """Callback: Acquire reply received.
+
+        dbus-python passes each D-Bus OUT arg as a positional argument,
+        so MediaTransport1.Acquire() returns (UnixFd, uint16, uint16)
+        → callback receives 3 args: (fd_ufd, read_mtu, write_mtu).
+        """
         if hasattr(fd_ufd, "take"):
             iso_fd = fd_ufd.take()
         else:
@@ -882,15 +886,13 @@ def main():
 
     def _on_acquire_err(error, tp):
         """Callback: Acquire error."""
-        import traceback
-
+        err_name = getattr(error, "get_dbus_name", lambda: str(error))()
+        err_msg = str(error)
         print(
-            "[error] Acquire({}) failed: {}".format(tp, error),
+            "[error] Acquire({}) failed: {} - {}".format(tp, err_name, err_msg),
             file=sys.stderr,
             flush=True,
         )
-        traceback.print_exc(file=sys.stderr)
-        sys.stderr.flush()
         acquire_errors.append((tp, error))
         if len(acquired) + len(acquire_errors) >= n_pending:
             acquire_done[0] = True
@@ -901,8 +903,8 @@ def main():
         transport_iface = _dbus.Interface(transport_obj, "org.bluez.MediaTransport1")
         print("[main]   async Acquire({}) ...".format(tp), flush=True)
         transport_iface.Acquire(
-            reply_handler=lambda r, tp=tp, ca=pt["channel_alloc"]: _on_acquire_ok(
-                r, tp, ca
+            reply_handler=lambda fd, rm, wm, tp=tp, ca=pt["channel_alloc"]: (
+                _on_acquire_ok(fd, rm, wm, tp, ca)
             ),
             error_handler=lambda e, tp=tp: _on_acquire_err(e, tp),
             timeout=30000,
@@ -921,17 +923,43 @@ def main():
             ),
             file=sys.stderr,
         )
+        # Close any already-acquired fds before exit.
+        for rec in acquired:
+            try:
+                os.close(rec["fd"])
+            except OSError:
+                pass
         for e in acquire_errors:
             print("[error]   {}: {}".format(e[0], e[1]), file=sys.stderr)
         sys.exit(1)
 
-    if acquire_errors:
+    if acquire_errors or len(acquired) != n_pending:
+        # All-or-nothing: if any required Acquire failed, do not stream a
+        # partial Mode A setup. Close every acquired fd and exit.
         print(
-            "[error] {} Acquire failure(s):".format(len(acquire_errors)),
+            "[error] All-or-nothing: {}/{} Acquire(s) failed, closing"
+            " all acquired fds".format(n_pending - len(acquired), n_pending),
             file=sys.stderr,
         )
         for tp, e in acquire_errors:
             print("[error]   {}: {}".format(tp, e), file=sys.stderr)
+        for rec in acquired:
+            try:
+                os.close(rec["fd"])
+            except OSError:
+                pass
+            try:
+                transport_obj = bus.get_object("org.bluez", rec["path"])
+                transport_iface = _dbus.Interface(
+                    transport_obj, "org.bluez.MediaTransport1"
+                )
+                transport_iface.Release()
+            except Exception as rel_e:
+                print(
+                    "[error] Release({}) failed: {}".format(rec["path"], rel_e),
+                    file=sys.stderr,
+                )
+        sys.exit(1)
 
     if not acquired:
         print("[error] No transports acquired", file=sys.stderr)
