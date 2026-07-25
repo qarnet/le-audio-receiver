@@ -10,5 +10,22 @@
       "/dev/**": "allow"
     }
   },
-  "lsp": {}
+  "lsp": true,
+  "mcp": {
+    "brave-search": {
+      "enabled": true
+    },
+    "serial-mcp": {
+      "enabled": true
+    },
+    "codebase-memory-mcp": {
+      "enabled": true
+    },
+    "nordic-semiconductor-docs": {
+      "enabled": true
+    },
+    "zephyr-docs": {
+      "enabled": true
+    }
+  }
 }
