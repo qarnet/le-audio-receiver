@@ -54,6 +54,18 @@ Nordic samples are the best learning resource:
 
 # AGENTS.md — LE Audio Receiver (nRF5340 + nRF54L15)
 
+## Policy — never ignore warnings
+
+Always attempt to fix build/boot warnings. Ignoring them lets real bugs hide
+in the noise — a warning that is "expected" today becomes the one you miss
+when it turns into a real failure. If a warning is genuinely unfixable in this
+build configuration, suppress it explicitly (Kconfig `default n` with a
+comment, or a targeted `#pragma`) — never just leave it printing.
+
+This applies to: compiler warnings, Kconfig "assigned value but got" warnings,
+boot-time `LOG_WRN` lines, and openocd/flashing warnings. Fix the source, or
+suppress with a recorded reason. Do not normalize noise.
+
 ## Plan of record
 
 `docs/design.md` is the accepted design doc and phased plan (Phases 0–6) for
@@ -291,12 +303,28 @@ ZMS needs `CONFIG_FLASH=y`, `CONFIG_FLASH_PAGE_LAYOUT=y`, and
 `CONFIG_FLASH_MAP=y`. Without all three, `SETTINGS_ZMS` silently falls
 to `SETTINGS_NONE` (no storage, no bond persistence across reboots).
 
+### Board-specific Kconfig belongs in board conf, not prj.conf
+
+`prj.conf` applies to ALL targets. A symbol that only one board needs
+(e.g. `CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y`, meaningful only where
+HFCLKAUDIO exists — nRF5340) causes a Kconfig "assigned value but got"
+warning on the other board if left in `prj.conf`. Move board-specific
+symbols to `boards/<board_target>.conf` (app-level, auto-discovered
+from the repo `boards/` dir — NOT inside the board def dir). Example:
+`boards/ebyte_e83_nrf5340_nrf5340_cpuapp.conf` for the nRF5340 target.
+
 ### ACL/ISO TX buffer counts must match the controller
 
-The SW Split controller reports 7 ACL and 6 ISO TX buffers. If the
+The SW Split controller (nRF5340) reports 7 ACL and 6 ISO TX buffers. If the
 app core `CONFIG_BT_BUF_ACL_TX_COUNT` / `CONFIG_BT_ISO_TX_BUF_COUNT`
 don't match, the host emits `bt_hci_core` mismatch warnings that can
 cause connection throttling. See `prj.conf` for the matched values.
+
+On nRF54L15 the SDC controller defaults `BT_CTLR_SDC_ISO_TX_HCI_BUFFER_COUNT=3`.
+For sink-only, the board conf sets both `CONFIG_BT_CTLR_SDC_ISO_TX_HCI_BUFFER_COUNT=1`
+and `CONFIG_BT_ISO_TX_BUF_COUNT=1` so they match — the host's
+`Num of Controller's ISO packets != ISO bt_conn_tx contexts` warning is
+silenced at the source, not tolerated.
 
 ### Phones require Just Works pairing
 
