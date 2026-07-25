@@ -56,3 +56,8 @@ int audio_clock_actuator_reset(void)
 	return 0;
 #endif
 }
+
+int audio_clock_actuator_consume_sample_adjustment(void)
+{
+	return 0;
+}

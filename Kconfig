@@ -30,6 +30,13 @@ config AUDIO_CLOCK_ACTUATOR_NONE
 	help
 	  No clock actuator. Controller runs but output is discarded.
 	  For testing on platforms without a clock steering mechanism.
+
+config AUDIO_CLOCK_ACTUATOR_SAMPLE_ADJUST
+	bool "Sample insert/drop (nRF54L15)"
+	help
+	  Compensate clock drift by inserting or dropping single PCM samples
+	  in the I2S output block. Degenerate ASRC (nearest-neighbor). For
+	  platforms without a steerable audio clock (nRF54L15).
 endchoice
 
 source "Kconfig.zephyr"

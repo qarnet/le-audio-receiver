@@ -122,6 +122,29 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	memset(block, 0, BLOCK_SIZE);
 	memcpy(block, stereo_data, bytes);
 
+	/*
+	 * Apply sample-level adjustment (insert/drop) to this block.
+	 * Positive = drop one stereo sample (clock too slow → speed up playback).
+	 * Negative = insert one stereo sample (clock too fast → slow down playback).
+	 * Zero = no adjustment.
+	 */
+	int adj = audio_clock_actuator_consume_sample_adjustment();
+
+	if (adj != 0) {
+		int16_t *samples = (int16_t *)block;
+
+		if (adj == +1) {
+			/* Drop: shift left by one stereo sample, repeat last sample in tail. */
+			memmove(samples, samples + 2, BLOCK_SIZE - 4);
+			memcpy(samples + (BLOCK_SIZE / sizeof(int16_t)) - 2,
+			       samples + (BLOCK_SIZE / sizeof(int16_t)) - 4, 4);
+		} else { /* adj == -1 */
+			/* Insert: shift right by one stereo sample, duplicate first sample. */
+			memmove(samples + 2, samples, BLOCK_SIZE - 4);
+			memcpy(samples, samples + 2, 4);
+		}
+	}
+
 	if (!started) {
 		/* Pre-fill 6 silent blocks (~60 ms) to absorb jitter */
 		for (int pre = 0; pre < 6; pre++) {
