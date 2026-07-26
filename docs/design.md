@@ -173,9 +173,12 @@ The core insight: the "software PLL" separates into a platform-independent
 - **Phase term**: I2S buffer-fill deviation from a setpoint, computed once
   per rendered audio block in `audio_sink_push()`.  Phase error = `PHASE_SETPOINT
   - slab_free_count` (positive when slab is filling, negative when draining).
-- Pure integer PI loop (no floating point).  Gains in milli-units.  Anti-windup
-  on phase integrator at output clamp.  Combined output = filtered feedforward +
-  phase PI.
+- Pure integer PI loop (no floating point).  Gains in milli-units.
+  Directional anti-windup on phase integrator: at a saturation rail,
+  same-direction increments are blocked but opposite-direction increments
+  are allowed to unwind toward range.  Controllers are thread-safe
+  (k_spinlock serialises workqueue / audio-path / reset).  Combined
+  output = filtered feedforward + phase PI.
 - Output in **ppm** (not APLL register units).
 
 **Actuators** behind one interface, selected per platform via Kconfig choice
@@ -371,7 +374,7 @@ Each gate blocks the next. Do not skip ahead.
     Peer-drift still needs Phase 4b GRTC. Phase 5 quality ASRC stays
     conditional on listening result.
 
-### Phase 4b — Supported ISO timestamp presentation scheduling — **COMPLETE (4b.2, 2026-07-26)**
+### Phase 4b — Supported ISO timestamp presentation scheduling — **4b.1 PASS, 4b.2 SOFTWARE COMPLETE (review fixes 2026-07-26), HARDWARE PENDING**
 
 **Mandatory, not deferred.** With the fixed PCLK32M rate mismatch resolved
 by 4a.2, residual peer-drift between BLE controller clock and I2S clock still
@@ -421,10 +424,12 @@ ISO-time-sync pattern, documented at:
    optional ACL timing-event diagnostic only. It is not a CIS RX/SDU timestamp
    and is not an input to the PI controller.
 
-7. **Phase 4b remains mandatory before 4c**. The wording that treated ISO
-   timestamps as a fallback, or that claimed both ISO and hardware paths
-   must not coexist, is withdrawn — the ISO timestamp is a required input to
-   the supported hardware schedule (step 2).
+7. **Phase 4b.1 hardware PASS recorded** in `docs/development/phase4b1-results.md`:
+   3,000 stereo frames / 30 s, PCLK TIMER20 measurement +1,665..+1,884 ppm
+   vs GRTC, two-ASE gate correct, clean teardown, no warnings. Phase 4b.2
+   software is complete (directional anti-windup, spinlock thread-safety,
+   bounded actuator evidence); hardware streaming with the PI controller in
+   closed loop is pending.
 
 ### Phase 4c — Stability + artifact verification
 

@@ -18,24 +18,32 @@ D1/P1.5 (LRCK), D2/P1.6 (SDOUT) proven.
 low, D1/LRCK was held high (no toggling). With digital wires removed, D1
 toggles. The old breakout/wiring assembly is incompatible or defective.
 
-**Phase 4b.2 — PCLK feedforward + phase PI: COMPLETE** (2026-07-26).
+**Phase 4b.2 — PCLK feedforward + phase PI: SOFTWARE COMPLETE, HARDWARE PENDING**
+(impl `e066ab6`, review fixes applied 2026-07-26).
 Refactored `audio_drift.c` to explicit PCLK frequency feedforward
 (`audio_drift_frequency_error_update()`) and per-block buffer-phase PI
 (`audio_drift_controller_update(slab_free)`).  Pure integer, no floating
-point.  Corrected sign (phase error = setpoint - slab_free).  Added
-anti-windup, configurable output clamp and phase integral clamp via
-Kconfig.  nRF54L15 board sets output clamp=2000, phase integral=150.
-nRF5340 keeps defaults (500/500).  Removed timestamp-based frequency
-estimation and `audio_sink_sdu_ref_update()`.  ISO timestamps now go
-ONLY to `audio_timing_sdu_ref_update()` for GRTC scheduling.  nRF54
-timing feeds every 1 s PCLK measurement (not just diagnostics) to
-`audio_drift_frequency_error_update()` via the work handler (ISR-safe).
+point.  Corrected sign (phase error = setpoint - slab_free).  Directional
+anti-windup: at saturation rail, same-direction phase increments are
+blocked; opposite-direction increments are always allowed so the
+integrator can unwind toward range.  Thread-safe: k_spinlock serialises
+workqueue/audio-path/reset calls.  Configurable output clamp and phase
+integral clamp via Kconfig.  nRF54L15 board sets output clamp=2000,
+phase integral=150.  nRF5340 keeps defaults (500/500).  Removed
+timestamp-based frequency estimation and `audio_sink_sdu_ref_update()`.
+ISO timestamps now go ONLY to `audio_timing_sdu_ref_update()` for GRTC
+scheduling.  nRF54 timing feeds every 1 s PCLK measurement (not just
+diagnostics) to `audio_drift_frequency_error_update()` via the work
+handler (ISR-safe).  Bounded runtime actuator evidence: in `audio_i2s.c`,
+counts insert/drop adjustments; logs first and every 500th adjustment.
+See `docs/development/phase4b1-results.md` for Phase 4b.1 hardware PASS
+evidence (3,000 frames / 30 s, +1,665..+1,884 ppm).
 
 | Test | Result |
 |------|--------|
 | fw-build-5340 | PASS, zero warnings |
 | fw-build-54l15 | PASS, zero warnings |
-| drift unit tests | 17/17 PASS |
+| drift unit tests | 18/18 PASS (incl. directional anti-windup) |
 | actuator unit tests | 7/7 PASS (incl. sign-chain verification) |
 | timing unit tests | all PASS |
 | lifecycle unit tests | all PASS |
@@ -107,27 +115,19 @@ receiver pipeline with a new DAC needs end-to-end retest.
 
 ### Next actions (ordered)
 
-1. ~~**Phase 4b.1** — GRTC-referenced timing foundation~~ → **Phase 4b.2 COMPLETE**
-2. **Phase 4c** — Stability + artifact verification:
-   validate `BT_ISO_FLAGS_TS`, consume `info->ts` as controller-clock reference,
-   schedule future GRTC presentation compare (Nordic ISO-time-sync pattern),
-   measure PCLK-derived TIMER20 ticks against GRTC time, and log diagnostics at
-   1 s intervals.  **Original design counted I2S20 FRAMESTART edges — HW validation
-   on 2026-07-26 showed FRAMESTART fires at DMA buffer boundaries (~100 Hz), not
-   LRCK edges (~47,619 Hz) → cannot measure sample-clock frequency.  Revised to
-   free-running TIMER mode, prescaler 0, nominal frequency from
-   `NRF_TIMER_BASE_FREQUENCY_GET` (16 MHz on TIMER20).**  Phase 4b.2 will feed
-   measured ppm into the PI controller.  No direct RADIO access — SDC/MPSL
-   owns RADIO.  See `docs/design.md` §Phase 4b.
-2. **Phase 4b.2** — Feed GRTC-referenced PCLK timer measurement into
-   audio_drift_controller_update(), replacing the ISO-timestamp-based PI path
-   on nRF54L15. (Pending Phase 4b.1 hardware re-run.)
-2. **Phase 5** — ASRC quality improvement (nearest-neighbor conversion removes
-   ~381 frames/s at nominal mismatch; artifact audibility unmeasured; conditional
-   on Phase 4c listening result).
-3. **User listening test** — play audio through DAC; report audible quality
-   with rate conversion (nearest-neighbor artifact audibility unmeasured).
-4. Re-run with fx2lafw logic analyzer when hardware available.
+ 1. ~~**Phase 4b.1** — GRTC-referenced timing foundation~~ → **PASS**
+    (3,000 frames / 30 s, +1,665..+1,884 ppm, `docs/development/phase4b1-results.md`)
+ 2. ~~**Phase 4b.2** — PCLK feedforward + phase PI~~ → **SOFTWARE COMPLETE**
+    (directional anti-windup, spinlock thread-safety, bounded actuator evidence)
+ 3. **Phase 4c** — Hardware streaming verification with closed-loop PI controller:
+    run on nRF54L15 with GRTC feedforward + SAMPLE_ADJUST; verify stable stream
+    (≥10 min), rare adjustment events, no slab exhaustion/underrun storms.
+ 4. **Phase 5** — ASRC quality improvement (nearest-neighbor conversion removes
+    ~381 frames/s at nominal mismatch; artifact audibility unmeasured; conditional
+    on Phase 4c listening result).
+ 5. **User listening test** — play audio through DAC; report audible quality
+    with rate conversion (nearest-neighbor artifact audibility unmeasured).
+ 6. Re-run with fx2lafw logic analyzer when hardware available.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 

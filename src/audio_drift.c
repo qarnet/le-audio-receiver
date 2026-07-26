@@ -21,30 +21,42 @@
  *
  * Phase:
  *   Phase error = PHASE_SETPOINT - slab_free_count.
- *   Low slab_free (draining) → positive correction (speed up).
- *   High slab_free (filling)  → negative correction (slow down).
+ *   High slab_free (queue draining, many free slots)
+ *     → negative correction (slow consumption down).
+ *   Low slab_free (queue filling, few free slots)
+ *     → positive correction (speed consumption up).
  *   PI gains in milli-units (1/1000) for integer-only calculation.
  *
  * Combined output:
  *   output = filtered_frequency_correction + phase_PI
  *   Clamped to CONFIG_AUDIO_DRIFT_OUTPUT_CLAMP.
  *
- * Anti-windup:
- *   When the combined output is saturated, the phase integrator is
- *   not advanced further in the saturated direction.
- *   Phase integrator is separately clamped to
- *   CONFIG_AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP.
+ * Anti-windup (directional):
+ *   When the output is at a saturation rail, the phase integrator is
+ *   blocked only if the increment would push farther into saturation
+ *   (same-direction).  Opposite-direction increments are always allowed,
+ *   so the integrator can unwind toward range even if a single step does
+ *   not immediately exit the clamp.  Phase integrator is separately
+ *   clamped to CONFIG_AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP.
+ *
+ * Thread safety:
+ *   audio_drift_frequency_error_update() runs from system workqueue,
+ *   audio_drift_controller_update() runs from Bluetooth/audio path,
+ *   and audio_drift_reset() can be called from the disconnect path.
+ *   A k_spinlock serialises all public API calls.  Every function is
+ *   bounded and nonblocking.
  */
 
 #include "audio_drift.h"
 
 #include <zephyr/autoconf.h>
+#include <zephyr/spinlock.h>
 #include <zephyr/sys/util.h>
 
 /* ── Tuning constants ───────────────────────────────────────────── */
 
 #define PHASE_SETPOINT 6  /* target slab free count (pre-fill depth) */
-#define PHASE_SCALE    50 /* ppm per block of phase error */
+#define PHASE_SCALE    50 /* ppm per block of phase error            */
 
 /* Phase PI gains in milli-units (1/1000).
  * KP_MILLI = 300  → 0.300 (30 % proportional)
@@ -84,6 +96,7 @@ struct drift_controller {
 };
 
 static struct drift_controller ctrl;
+static struct k_spinlock ctrl_lock;
 
 /* Clamp values — resolved at compile time from Kconfig */
 #define OUTPUT_CLAMP         CONFIG_AUDIO_DRIFT_OUTPUT_CLAMP
@@ -93,12 +106,15 @@ static struct drift_controller ctrl;
 
 void audio_drift_frequency_error_update(int32_t local_clock_error_ppm)
 {
+	k_spinlock_key_t key = k_spin_lock(&ctrl_lock);
+
 	/* First measurement: initialize filter to measured value
 	 * to jump-start tracking (no ramp from zero).
 	 */
 	if (!ctrl.freq_once_received) {
 		ctrl.freq_filtered = local_clock_error_ppm;
 		ctrl.freq_once_received = true;
+		k_spin_unlock(&ctrl_lock, key);
 		return;
 	}
 
@@ -107,10 +123,14 @@ void audio_drift_frequency_error_update(int32_t local_clock_error_ppm)
 	 * overflow for moderate ppm values.
 	 */
 	ctrl.freq_filtered += (local_clock_error_ppm - ctrl.freq_filtered) >> FREQ_FILTER_SHIFT;
+
+	k_spin_unlock(&ctrl_lock, key);
 }
 
 int32_t audio_drift_controller_update(int slab_free_count)
 {
+	k_spinlock_key_t key = k_spin_lock(&ctrl_lock);
+
 	int32_t freq_correction = 0;
 	int32_t phase_output = 0;
 
@@ -118,6 +138,7 @@ int32_t audio_drift_controller_update(int slab_free_count)
 	if (ctrl.state == DRIFT_INIT) {
 		ctrl.state = DRIFT_ACTIVE;
 		ctrl.output_ppm = 0;
+		k_spin_unlock(&ctrl_lock, key);
 		return 0;
 	}
 
@@ -130,8 +151,8 @@ int32_t audio_drift_controller_update(int slab_free_count)
 
 	/* ── Phase PI ───────────────────────────────────────────────
 	 * phase_err = PHASE_SETPOINT - slab_free_count
-	 *   low slab_free (draining) → positive phase_err → speed up
-	 *   high slab_free (filling) → negative phase_err → slow down
+	 *   High slab_free (queue draining, many free) → negative err → slow down
+	 *   Low slab_free (queue filling, few free)   → positive err → speed up
 	 */
 	int phase_err = PHASE_SETPOINT - slab_free_count;
 
@@ -144,19 +165,29 @@ int32_t audio_drift_controller_update(int slab_free_count)
 	/* Integral accumulation (ppm per block) */
 	int32_t phase_inc = (int32_t)(((int64_t)phase_err_ppm * KI_MILLI) / 1000);
 
-	/* Combined (tentative) output for anti-windup check */
-	int32_t tentative = freq_correction + phase_pp + ctrl.phase_integral + phase_inc;
-	int32_t clamped_tentative = CLAMP(tentative, -OUTPUT_CLAMP, OUTPUT_CLAMP);
-
-	/* Anti-windup:
-	 * If the combined output is already at clamp AND the integral
-	 * increment would push it farther past the clamp, don't
-	 * accumulate the integral.  Otherwise, add the increment.
+	/*
+	 * Directional anti-windup:
+	 *   - At positive clamp (output_ppm >= +OUTPUT_CLAMP):
+	 *       block only if phase_inc > 0 (pushes farther positive).
+	 *       Allow negative phase_inc to unwind.
+	 *   - At negative clamp (output_ppm <= -OUTPUT_CLAMP):
+	 *       block only if phase_inc < 0 (pushes farther negative).
+	 *       Allow positive phase_inc to unwind.
+	 *
+	 * Use the previous block's output for the saturation test
+	 * (not a tentative of this block) so the decision is stable
+	 * and the integrator can unwind even when feedforward alone
+	 * keeps output at the rail.
 	 */
-	bool at_pos_clamp = (clamped_tentative == OUTPUT_CLAMP && tentative >= OUTPUT_CLAMP);
-	bool at_neg_clamp = (clamped_tentative == -OUTPUT_CLAMP && tentative <= -OUTPUT_CLAMP);
+	bool block_integral = false;
 
-	if (!at_pos_clamp && !at_neg_clamp) {
+	if (ctrl.output_ppm >= OUTPUT_CLAMP && phase_inc > 0) {
+		block_integral = true;
+	} else if (ctrl.output_ppm <= -OUTPUT_CLAMP && phase_inc < 0) {
+		block_integral = true;
+	}
+
+	if (!block_integral) {
 		ctrl.phase_integral += phase_inc;
 		/* Clamp phase integral authority separately */
 		ctrl.phase_integral =
@@ -171,31 +202,49 @@ int32_t audio_drift_controller_update(int slab_free_count)
 
 	ctrl.output_ppm = CLAMP(total, -OUTPUT_CLAMP, OUTPUT_CLAMP);
 
+	k_spin_unlock(&ctrl_lock, key);
 	return ctrl.output_ppm;
 }
 
 void audio_drift_reset(void)
 {
+	k_spinlock_key_t key = k_spin_lock(&ctrl_lock);
+
 	ctrl.state = DRIFT_INIT;
 	ctrl.freq_filtered = 0;
 	ctrl.freq_once_received = false;
 	ctrl.phase_integral = 0;
 	ctrl.output_ppm = 0;
+
+	k_spin_unlock(&ctrl_lock, key);
 }
 
 int32_t audio_drift_get_ppm(void)
 {
-	return ctrl.output_ppm;
+	k_spinlock_key_t key = k_spin_lock(&ctrl_lock);
+	int32_t ppm = ctrl.output_ppm;
+
+	k_spin_unlock(&ctrl_lock, key);
+	return ppm;
 }
 
 const char *audio_drift_state_str(void)
 {
+	k_spinlock_key_t key = k_spin_lock(&ctrl_lock);
+	const char *str;
+
 	switch (ctrl.state) {
 	case DRIFT_INIT:
-		return "INIT";
+		str = "INIT";
+		break;
 	case DRIFT_ACTIVE:
-		return "ACTIVE";
+		str = "ACTIVE";
+		break;
 	default:
-		return "?";
+		str = "?";
+		break;
 	}
+
+	k_spin_unlock(&ctrl_lock, key);
+	return str;
 }

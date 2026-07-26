@@ -151,100 +151,88 @@ ZTEST(drift, test_output_clamp_negative)
 	zassert_equal(ppm, -500, "output clamped at -500, got %d", ppm);
 }
 
-/* ── 9. anti-windup ─────────────────────────────────────────────── */
+/* ── 9. anti-windup (directional) ────────────────────────────────── */
 
-ZTEST(drift, test_anti_windup_blocks_integral_at_saturation)
+ZTEST(drift, test_anti_windup_blocks_same_direction_at_pos_clamp)
 {
 	/* Saturate at +500 with large negative local error.
-	 * Feed phase in same direction (filling, positive).
-	 * Anti-windup should block integral → output stays at +500.
-	 * Then feed phase in OPPOSITE direction (draining, negative).
-	 * Tentative should move away from clamp → integral builds → output drops.
+	 * Feed same-direction (filling, positive phase_inc) →
+	 * integral blocked because at +clamp and phase_inc > 0.
+	 */
+	audio_drift_frequency_error_update(-1000); /* freq correction +1000 → clamped +500 */
+	audio_drift_controller_update(SETPOINT);
+
+	audio_drift_controller_update(4); /* filling → positive phase_inc */
+	int32_t ppm = audio_drift_get_ppm();
+	zassert_equal(ppm, 500, "same-direction at +clamp stays 500 (got %d)", ppm);
+}
+
+ZTEST(drift, test_anti_windup_allows_opposite_direction_unwind_at_pos_clamp)
+{
+	/* Saturate at +500.  Feed opposite-direction (draining,
+	 * negative phase_inc).  Integrator should unwind — the
+	 * output may stay at +500 (feedforward alone saturates),
+	 * but phase_integral becomes negative so unwinding is
+	 * observable after feedforward drops.
 	 */
 	audio_drift_frequency_error_update(-1000); /* freq correction clamped +500 */
 	audio_drift_controller_update(SETPOINT);
-	/* Same-direction: filling (phase positive) pushes further toward +500 */
-	audio_drift_controller_update(4);
-	int32_t ppm = audio_drift_get_ppm();
-	zassert_equal(ppm, 500, "same-direction phase while saturated → stays 500 (got %d)", ppm);
 
-	/* Opposite-direction: draining (phase negative) moves away from +clamp.
-	 * Tentative = +1000(freq) + neg(phase) < 1000 → still clamp at 500?
-	 * No: tentative = freq_correction + phase. phase negative → tentative <
-	 * freq_correction alone. With freq=+1000 (clamped internally) and
-	 * phase negative, clamped_tentative may still be 500 because tentative >
-	 * 500. Let's verify that ANTI-WINDUP does not block the opposite-direction
-	 * integral.
+	/* Push opposite-direction many times — integral unwinds even though
+	 * feedforward alone keeps output at +500.
 	 */
-	audio_drift_controller_update(8);
-	ppm = audio_drift_get_ppm();
-	/* With OUTPUT_CLAMP=500 and freq=+1000, a single negative phase
-	 * block (free=8 → phase_pp≈-60, phase_inc≈-10) gives tentative≈+930,
-	 * clamped_tentative=500, at_pos_clamp=true → integral blocked.
-	 * So opposite-direction also gets blocked when freq alone saturates.
-	 *
-	 * This is the correct behaviour: output is at clamp, and any change
-	 * that can't move output below clamp doesn't need integral action.
-	 * Once freq error drops below clamp range, phase integrator can build.
-	 */
-	zassert_equal(ppm, 500, "opposite-direction while still saturated → stays 500 (got %d)",
-		      ppm);
-}
-
-ZTEST(drift, test_anti_windup_allows_integral_after_exit_saturation)
-{
-	/* After saturation, feed a frequency within clamp range
-	 * so output drops below clamp. Then phase integral should
-	 * build normally (proving it wasn't wound during saturation).
-	 */
-	audio_drift_frequency_error_update(-1000); /* saturates at +500 */
-	audio_drift_controller_update(SETPOINT);
-	/* Push filling phase while saturated → anti-windup blocks */
-	for (int i = 0; i < 10; i++) {
-		audio_drift_controller_update(4);
+	for (int i = 0; i < 20; i++) {
+		audio_drift_controller_update(8); /* draining → negative phase_inc */
 	}
-	zassert_equal(audio_drift_get_ppm(), 500, "still saturated at +500");
+	zassert_equal(audio_drift_get_ppm(), 500, "output still +500 (feedforward saturates)");
 
-	/* Now remove frequency error → output exits saturation.
-	 * Feed draining phase → integral should build now.
-	 * First call after frequency reset stays at 0 (filtered unchanged
-	 * from -1000 until enough EMA steps). Use many EMA steps.
+	/* Now reduce frequency error toward zero.  Because the integral
+	 * unwound (is negative), output should drop below clamp faster
+	 * than if the integral had been blocked.
 	 */
 	for (int i = 0; i < 20; i++) {
 		audio_drift_frequency_error_update(0);
-		audio_drift_controller_update(8); /* draining → negative phase */
+		audio_drift_controller_update(8); /* draining */
 	}
 	int32_t ppm = audio_drift_get_ppm();
-	/* Filtered freq is converging toward 0, phase integral building negative.
-	 * Output should be below +500 (freq decreasing + negative phase integral).
-	 */
-	zassert_true(ppm < 500, "after freq reduction, output falls below clamp (got %d)", ppm);
+	/* With the unwound integral, output must be below +500. */
+	zassert_true(ppm < 500, "after freq reduction, unwound integral → ppm < 500 (got %d)", ppm);
 }
 
-ZTEST(drift, test_anti_windup_negative_saturation)
+ZTEST(drift, test_anti_windup_blocks_same_direction_at_neg_clamp)
 {
-	/* Same as positive saturation, but at -500 clamp. */
-	audio_drift_frequency_error_update(1000); /* saturates at -500 */
-	audio_drift_controller_update(SETPOINT);
-	/* Same-direction: draining (phase negative) pushes further toward -500 */
-	audio_drift_controller_update(8);
-	zassert_equal(audio_drift_get_ppm(), -500,
-		      "same-direction while saturated at -500 (got %d)", audio_drift_get_ppm());
-
-	/* Push filling phase while saturated → integral blocked.
-	 * Then reduce freq error and push filling phase → integral should build.
+	/* Saturate at -500.  Feed same-direction (draining,
+	 * negative phase_inc) → integral blocked.
 	 */
-	for (int i = 0; i < 10; i++) {
-		audio_drift_controller_update(4); /* filling → positive phase */
+	audio_drift_frequency_error_update(1000); /* freq correction -1000 → clamped -500 */
+	audio_drift_controller_update(SETPOINT);
+
+	audio_drift_controller_update(8); /* draining → negative phase_inc */
+	int32_t ppm = audio_drift_get_ppm();
+	zassert_equal(ppm, -500, "same-direction at -clamp stays -500 (got %d)", ppm);
+}
+
+ZTEST(drift, test_anti_windup_allows_opposite_direction_unwind_at_neg_clamp)
+{
+	/* Saturate at -500.  Feed opposite-direction (filling,
+	 * positive phase_inc).  Integral unwinds; output may stay
+	 * at -500 until feedforward drops.
+	 */
+	audio_drift_frequency_error_update(1000);
+	audio_drift_controller_update(SETPOINT);
+
+	for (int i = 0; i < 20; i++) {
+		audio_drift_controller_update(4); /* filling → positive phase_inc */
 	}
-	zassert_equal(audio_drift_get_ppm(), -500, "still saturated at -500");
+	zassert_equal(audio_drift_get_ppm(), -500, "output still -500 (feedforward saturates)");
 
 	for (int i = 0; i < 20; i++) {
 		audio_drift_frequency_error_update(0);
 		audio_drift_controller_update(4);
 	}
 	int32_t ppm = audio_drift_get_ppm();
-	zassert_true(ppm > -500, "after freq reduction, output rises above clamp (got %d)", ppm);
+	zassert_true(ppm > -500, "after freq reduction, unwound integral → ppm > -500 (got %d)",
+		     ppm);
 }
 
 /* ── 10. zero feedforward (nRF5340 phase-only) ──────────────────── */

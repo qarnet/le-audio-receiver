@@ -40,18 +40,28 @@ void audio_drift_frequency_error_update(int32_t local_clock_error_ppm);
  * buffer-phase PI term.
  *
  * Phase error = PHASE_SETPOINT - slab_free_count:
- *   - slab_free < setpoint (draining) → positive correction (speed up);
- *   - slab_free > setpoint (filling)   → negative correction (slow down).
+ *   - High slab_free (queue draining, many free slots)
+ *       → negative correction (slow consumption down).
+ *   - Low slab_free (queue filling, few free slots)
+ *       → positive correction (speed consumption up).
  *
  * Positive ppm = consume source faster / drop one frame eventually.
  * Negative ppm = consume source slower / insert one frame eventually.
+ *
+ * The phase integrator uses directional anti-windup: at a saturation
+ * rail, same-direction increments are blocked but opposite-direction
+ * increments are allowed to unwind toward range.
+ *
+ * Thread-safe: serialises with audio_drift_frequency_error_update()
+ * and audio_drift_reset() via internal spinlock.
  *
  * @param slab_free_count  Number of free blocks in the I2S DMA slab.
  * @return                 PPM correction to apply, 0 before first SDU.
  */
 int32_t audio_drift_controller_update(int slab_free_count);
 
-/** Reset controller, filter, and PI state to initial conditions. */
+/** Reset controller, filter, and PI state to initial conditions.
+ *  Thread-safe against concurrent update/reset. */
 void audio_drift_reset(void);
 
 /** Current state string for shell diagnostics. */

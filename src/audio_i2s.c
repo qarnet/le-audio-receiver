@@ -61,10 +61,19 @@ static size_t saved_frame_len; /* bytes */
  */
 static struct audio_rate_converter rate_ctx;
 
+/*
+ * Sample-adjustment counters for runtime actuator evidence
+ * (Phase 4b.2 review fix 4).  Reset per stream in drift_reset().
+ */
+static uint32_t insert_count;
+static uint32_t drop_count;
+
 static void drift_reset(void)
 {
 	audio_drift_reset();
 	audio_clock_actuator_reset();
+	insert_count = 0;
+	drop_count = 0;
 }
 
 static int i2s_do_configure(void)
@@ -161,6 +170,29 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 		}
 	}
 	adj = audio_clock_actuator_consume_sample_adjustment();
+
+	/*
+	 * Count adjustments for bounded runtime evidence.
+	 * Log first and every 500th (at ~5 s cadence at
+	 * measured offset); prove +PCLK error produces inserts.
+	 */
+	if (adj == -1) {
+		insert_count++;
+	} else if (adj == +1) {
+		drop_count++;
+	}
+
+	if (adj != 0) {
+		uint32_t total = insert_count + drop_count;
+
+		if (total == 1) {
+			LOG_INF("First sample adjustment: %s (ins=%u drops=%u)",
+				adj == 1 ? "drop" : "insert", insert_count, drop_count);
+		} else if (total % 500 == 0) {
+			LOG_INF("Sample adjustments: ins=%u drops=%u (total=%u)", insert_count,
+				drop_count, total);
+		}
+	}
 
 	/*
 	 * Step 2: apply sample-adjust to output frame count.
