@@ -28,6 +28,7 @@ target_sources(app PRIVATE
   src/audio_stats.c
   src/audio_volume.c
   src/audio_timing_math.c
+  src/stream_lifecycle.c
 )
 
 zephyr_sources_ifdef(CONFIG_AUDIO_CLOCK_ACTUATOR_APLL src/audio_clock_actuator_apll.c)

@@ -39,6 +39,7 @@
 #include "audio_decode.h"
 #include "audio_stats.h"
 #include "audio_volume.h"
+#include "stream_lifecycle.h"
 
 #if defined(CONFIG_LIBLC3)
 #include "lc3.h"
@@ -216,6 +217,16 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 	sinks[idx].recv_cnt = 0;
 	num_sink_ase++;
 
+	/*
+	 * Record configuration in lifecycle gate so the started
+	 * callback knows whether this is Mode A (two mono ASEs)
+	 * or Mode B / mono (single ASE).
+	 */
+	{
+		int ch = sinks[idx].decode.chan_count;
+		stream_lifecycle_sink_configured(idx, ch);
+	}
+
 	enum bt_audio_location chan_alloc;
 	int cc = bt_audio_codec_cfg_get_chan_allocation(codec_cfg, &chan_alloc, false);
 
@@ -319,6 +330,16 @@ static int lc3_disable(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp
 static int lc3_stop(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
 {
 	LOG_INF("Stop: stream %p", stream);
+
+	/* Close audio path gate on stop (idempotent).  The disabled
+	 * callback may fire later and close it again harmlessly.
+	 */
+	if (stream_lifecycle_audio_path_close()) {
+#if defined(CONFIG_LIBLC3)
+		l_received = false;
+		r_received = false;
+#endif
+	}
 	return 0;
 }
 
@@ -331,6 +352,16 @@ static int lc3_release(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp
 	sinks[idx].decode.decoder = NULL;
 	sinks[idx].decode.decoder_r = NULL;
 #endif
+	/* Close audio path gate on release.  Idempotent — safe if
+	 * already closed by an earlier disable/stop callback.
+	 */
+	if (stream_lifecycle_audio_path_close()) {
+#if defined(CONFIG_LIBLC3)
+		l_received = false;
+		r_received = false;
+#endif
+	}
+
 	memset(&sinks[idx], 0, sizeof(sinks[idx]));
 	if (num_sink_ase > 0) {
 		num_sink_ase--;
@@ -383,25 +414,23 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	static size_t diagnostic_cnt;
 
 	/* Feed ISO timestamp to APLL drift compensation only when
-	 * the SDU is valid and carries a timestamp.
+	 * the SDU is valid and carries a timestamp.  Gated behind
+	 * audio-path-open: after teardown, the PI controller state
+	 * is reset by audio_sink_stop() and further updates are
+	 * not needed.
 	 */
-	if (valid && has_ts) {
+	if (valid && has_ts && stream_lifecycle_audio_path_is_open()) {
 		audio_sink_sdu_ref_update(info->ts);
 	}
 
 	/* Phase 4b.1: feed validated timestamp + presentation delay to
 	 * hardware timing measurement (nRF54L15 GRTC path).  Only stream 0
-	 * is used as the timing reference.
+	 * is used as the timing reference.  Gated behind audio-path-open
+	 * to prevent late callbacks from re-arming hardware timers after
+	 * teardown.
 	 */
-	if (idx == 0 && valid) {
-		static size_t ts_absent_cnt;
-		if (has_ts) {
-			audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
-		} else if (ts_absent_cnt < 5) {
-			LOG_WRN("stream[0] SDU missing TS flag (cnt=%zu)", ++ts_absent_cnt);
-		} else {
-			ts_absent_cnt++;
-		}
+	if (idx == 0 && valid && has_ts && stream_lifecycle_audio_path_is_open()) {
+		audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
 	}
 
 	if (diagnostic_cnt < 5) {
@@ -433,6 +462,21 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 #endif
 	} else {
 		LOG_DBG("Bad packet stream[%zu]: 0x%02X", idx, info->flags);
+	}
+
+	/* ── Audio-path gate ─────────────────────────────────────────
+	 * After a stream disables/stops/releases, the gate is closed.
+	 * Late callbacks on the remaining ASE must NOT decode,
+	 * interleave, push, or update audio timing/drift — any of
+	 * these can restart I2S DMA.
+	 */
+	if (!stream_lifecycle_audio_path_is_open()) {
+		static size_t gate_blocked;
+		if (gate_blocked < 3 && valid) {
+			LOG_INF("stream_recv[%zu]: gate closed, skipping decode", idx);
+			gate_blocked++;
+		}
+		return;
 	}
 
 	if (!as->decode.decoder) {
@@ -495,7 +539,8 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	const bool valid = (info->flags & BT_ISO_FLAGS_VALID) != 0;
 	const bool has_ts = (info->flags & BT_ISO_FLAGS_TS) != 0;
 
-	if (valid && has_ts) {
+	/* Gate drift + timing updates behind audio-path-open. */
+	if (valid && has_ts && stream_lifecycle_audio_path_is_open()) {
 		audio_sink_sdu_ref_update(info->ts);
 	}
 
@@ -504,7 +549,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 
 		/* Phase 4b.1: timing measurement for stream 0 */
 		size_t idx = sink_idx(stream);
-		if (idx == 0 && has_ts) {
+		if (idx == 0 && has_ts && stream_lifecycle_audio_path_is_open()) {
 			audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
 		}
 	}
@@ -516,17 +561,36 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 
 static void stream_stopped(struct bt_bap_stream *s, uint8_t reason)
 {
-	LOG_INF("Stream[%zu] stopped: reason 0x%02X", sink_idx(s), reason);
+	size_t idx = sink_idx(s);
+
+	LOG_INF("Stream[%zu] stopped: reason 0x%02X", idx, reason);
+
+	/* Close audio path gate on stop (idempotent).  The disabled
+	 * callback may fire later and close it again harmlessly.
+	 */
+	if (stream_lifecycle_audio_path_close()) {
+#if defined(CONFIG_LIBLC3)
+		l_received = false;
+		r_received = false;
+#endif
+	}
 }
 
 static void stream_started(struct bt_bap_stream *s)
 {
+	size_t idx = sink_idx(s);
 	struct bt_iso_info info;
 
 	bt_iso_chan_get_info(s->iso, &info);
-	LOG_INF("Stream[%zu] started: CIG %u CIS %u", sink_idx(s), info.unicast.cig_id,
+	LOG_INF("Stream[%zu] started: CIG %u CIS %u", idx, info.unicast.cig_id,
 		info.unicast.cis_id);
-	sinks[sink_idx(s)].recv_cnt = 0U;
+	sinks[idx].recv_cnt = 0U;
+
+	/* Lifecycle gate: open audio path when all required ASEs are started. */
+	bool gate_opened = stream_lifecycle_sink_started(idx);
+	if (gate_opened) {
+		LOG_INF("Audio path gate OPEN (stream[%zu] completed the set)", idx);
+	}
 }
 
 static void stream_enabled_cb(struct bt_bap_stream *s)
@@ -544,15 +608,29 @@ static void stream_disabled_cb(struct bt_bap_stream *s)
 
 	LOG_INF("Stream[%zu] disabled", idx);
 
-	/* Stop audio sink on first disabled stream.  Mode A cannot
-	 * produce stereo after either ASE disables, and waiting for
-	 * ACL disconnect leaves I2S draining without buffers.
-	 * audio_sink_stop() is idempotent — later disable or
-	 * disconnect may call it again harmlessly.
+	/*
+	 * Close the audio-path gate BEFORE stopping the sink.
+	 * Must be first so late callbacks on the other ASE cannot
+	 * decode, interleave, push, or restart I2S after the gate
+	 * closes.  Clear channel-pair state (l_received/r_received)
+	 * on the same transition so stale halves cannot pair.
+	 */
+	bool was_open = stream_lifecycle_audio_path_close();
+	if (was_open) {
+		LOG_INF("Audio path gate CLOSED (first disable)");
+#if defined(CONFIG_LIBLC3)
+		l_received = false;
+		r_received = false;
+#endif
+	}
+
+	/*
+	 * audio_sink_stop() is idempotent and already calls
+	 * audio_timing_reset() internally.  Do NOT duplicate the
+	 * audio_timing_reset() call — it is redundant here.
 	 */
 	audio_sink_stop();
 	audio_stats_reset();
-	audio_timing_reset();
 }
 
 static struct bt_bap_stream_ops stream_ops = {
@@ -593,14 +671,26 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	bt_addr_le_to_str(bt_conn_get_dst(conn), a, sizeof(a));
 	LOG_INF("Disconnected: %s reason 0x%02x", a, reason);
 
-	audio_sink_stop();
-	audio_stats_reset();
+	/*
+	 * Reset lifecycle gate so reconnect works without re-running
+	 * audio_sink_init().  Close gate first (idempotent), then
+	 * clear all state including the per-sink started flags.
+	 */
+	stream_lifecycle_audio_path_close();
+	stream_lifecycle_reset();
 
 #if defined(CONFIG_LIBLC3)
+	l_received = false;
+	r_received = false;
+
 	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
 		audio_decode_reset(&sinks[i].decode);
 	}
 #endif
+
+	audio_sink_stop();
+	audio_stats_reset();
+
 	num_sink_ase = 0;
 
 	bt_conn_unref(default_conn);
