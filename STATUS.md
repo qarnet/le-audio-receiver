@@ -38,11 +38,16 @@ counts insert/drop adjustments; logs first and every 500th adjustment.
 Closed-loop streaming verified: 4,500 frames / 45 s at 100 fps, PCLK
 diagnostics +1,500..+1,757 ppm, channel-pair gate correct (drops-only
 before first PCLK measurement), inserts dominate (186:1 ratio), clean
-teardown.  Phase 4c (10-minute stability + listening test) remains next.
+teardown.  Phase 4c (10-minute stability + listening test): **Technical
+PASS** (60,000 frames / 600.00 s, zero disconnect, zero
+slab-full/underrun/warning/error/fault, clean teardown).  Audible quality
+pending user observation; Phase 5 conditional on listening result.
 See `docs/development/phase4b1-results.md` for Phase 4b.1 hardware PASS
-evidence (3,000 frames / 30 s, +1,665..+1,884 ppm) and
+evidence (3,000 frames / 30 s, +1,665..+1,884 ppm),
 `docs/development/phase4b2-results.md` for Phase 4b.2 hardware PASS
-evidence.
+evidence, and
+`docs/development/phase4c-technical-results.md` for Phase 4c technical
+PASS evidence.
 
 | Test | Result |
 |------|--------|
@@ -59,8 +64,9 @@ I2S DMA started cleanly, push_ret=0 consistently. Root cause was fixed
 PCLK32M hardware-rate mismatch (~47,619 Hz LRCK vs 48,000 Hz decoder output)
 plus fixed 480-frame writes — not PI controller gain. Fix: bounded
 nearest-neighbor rate converter maps 480 input → 476/477 output frames per
-block. See `docs/development/phase4a2-rate-conversion-results.md`. Residual
-peer-drift still needs Phase 4b GRTC; audio quality pending ASRC (Phase 5).
+block. See `docs/development/phase4a2-rate-conversion-results.md`. Phase 4b
+GRTC + PCLK feedforward + SAMPLE_ADJUST now operational. Audio quality
+pending user listening test; Phase 5 (ASRC) conditional on result.
 
 ## Hardware in use
 
@@ -103,8 +109,7 @@ peer-drift still needs Phase 4b GRTC; audio quality pending ASRC (Phase 5).
 
 ### I2S20 hardware evidence
 
-Standalone I2S20 works. The old DAC breakout caused LRCK anomaly. The main
-receiver pipeline with a new DAC needs end-to-end retest.
+Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
 
 | Test | Result |
 |------|--------|
@@ -115,7 +120,7 @@ receiver pipeline with a new DAC needs end-to-end retest.
 | Old DAC digital wires removed | D1/LRCK toggles. GPIO toggling confirmed. |
 | Main receiver with old DAC | Slab-full / EIO — old DAC assembly held I2S lines (proven physical blocker/contributor). Firmware queue/producer behavior not yet ruled out; new-DAC retest with unchanged receiver firmware required before final root-cause attribution. |
 | Raw logic-analyzer capture | File exists. Frequency/data analysis pending. |
-| New DAC audible result | **Pending** — passed 35-second autonomous technical stream (zero slab-full, zero underrun) after rate conversion; audible outcome pending physical observation. |
+| New DAC Phase 4c results | **Technical PASS** — 60,000 frames / 600.00 s (10 minutes), zero disconnect during stream, zero slab-full/underrun/warning/error/fault, clean teardown. Audible quality pending user observation. See `docs/development/phase4c-technical-results.md`. |
 | Phase 4a.2 rate conversion | **PASS** — 35 s stream, 0 slab-full, 0 underrun. Fixed-rate converter matches PCLK32M drain. See `docs/development/phase4a2-rate-conversion-results.md`. |
 
 ### Next actions (ordered)
@@ -125,14 +130,15 @@ receiver pipeline with a new DAC needs end-to-end retest.
  2. ~~**Phase 4b.2** — PCLK feedforward + phase PI~~ → **PASS**
     (4,500 frames / 45 s, closed-loop insert/drop at 186:1 ratio, clean teardown,
     `docs/development/phase4b2-results.md`)
- 3. **Phase 4c** — Hardware streaming verification with closed-loop PI controller:
-    run on nRF54L15 with GRTC feedforward + SAMPLE_ADJUST; verify stable stream
-    (≥10 min), rare adjustment events, no slab exhaustion/underrun storms.
- 4. **Phase 5** — ASRC quality improvement (nearest-neighbor conversion removes
-    ~381 frames/s at nominal mismatch; artifact audibility unmeasured; conditional
-    on Phase 4c listening result).
- 5. **User listening test** — play audio through DAC; report audible quality
-    with rate conversion (nearest-neighbor artifact audibility unmeasured).
+ 3. ~~**Phase 4c** — Hardware streaming verification~~ → **Technical PASS**
+    (60,000 frames / 600.00 s, zero disconnect, zero slab-full/underrun/
+    warning/error/fault, clean teardown,
+    `docs/development/phase4c-technical-results.md`).
+    Audible quality pending user observation.
+ 4. **User listening test** — play 1 kHz tone through DAC; report whether tone
+    was audible and whether artifacts, ticking, gaps, distortion, or channel
+    imbalance were heard. Phase 5 conditional on this listening result.
+ 5. **Phase 5** — ASRC quality improvement (conditional on listening result).
  6. Re-run with fx2lafw logic analyzer when hardware available.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
