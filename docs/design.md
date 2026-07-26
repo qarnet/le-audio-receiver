@@ -360,28 +360,49 @@ Each gate blocks the next. Do not skip ahead.
   - Residual: nearest-neighbor artifacts (~0.6 s repeat/drop cadence) —
     Phase 5 ASRC for quality. Peer-drift still needs Phase 4b GRTC.
 
-### Phase 4b — GRTC + DPPI drift measurement
+### Phase 4b — Supported ISO timestamp presentation scheduling
 
 **Mandatory, not deferred.** With the fixed PCLK32M rate mismatch resolved
 by 4a.2, residual peer-drift between BLE controller clock and I2S clock still
-needs correction. Replace the ISO-`info->ts` drift measurement on nRF54L15
-with hardware timestamping. Doing this before 4c is important:
-the fallback (ISO timestamps, 1 µs quantization → 10 ppm per 100 ms window)
-is noisy enough to cause spurious sample_adjust events, and chasing
-artifacts that only exist because of a noisy measurement wastes time.
+needs correction. The original plan to capture direct RADIO RX events via DPPI
+is unsupported — MPSL/SDC owns RADIO and forbids any direct RADIO register,
+event, IRQ, or DPPI access. Phase 4b is rewritten to use the Nordic
+ISO-time-sync pattern, documented at:
 
-- Allocate two GRTC capture/compare channels (nrfx_grtc, see
-  `nrfx_grtc.h`; GRTC node exists in `nrf54l_05_10_15.dtsi`).
-- DPPI-route RADIO RX event → GRTC capture channel A (the "central clock"
-  reference).
-- DPPI-route I2S `FRAMESTART` event (nrfx_i2s, `NRF_I2S_HAS_FRAMESTART` is
-  defined for this chip) → GRTC capture channel B (the "local I2S clock").
-- Controller input becomes the delta-of-deltas of (B − A) over N seconds →
-  ppm at ~7.8 ns resolution, zero CPU cost during measurement (no ISR work
-  per SDU). This replaces the frequency term in `audio_drift`; the phase
-  term (I2S buffer fill) is unchanged.
-- Keep ISO-`info->ts` as a fallback if GRTC allocation fails at runtime;
-  log which path is active. **Do not** leave both feeding the controller.
+`nrf/samples/bluetooth/iso_time_sync/`
+
+1. **ISO SDU reference time**: Validate `BT_ISO_FLAGS_TS` before consuming
+   `info->ts`. On nRF54 Series the ISO timestamp is controller-clock time;
+   treat it as the ISO SDU reference time — do not use callback arrival as
+   an RX timestamp.
+
+2. **Future GRTC presentation trigger**: Use the Nordic ISO-time-sync pattern:
+   schedule a GRTC compare/action at `info->ts + presentation_delay`.
+   GRTC + DPPI executes the final reference action independent of callback
+   wake latency. This is the supported, documented path (see Nordic ISO
+   time-sync sample and nRF Audio synchronization module as conceptual
+   references — the dual-core architecture of those samples is not directly
+   portable to this single-core application).
+
+3. **I2S FRAMESTART capture**: Route I2S20 `FRAMESTART` through DPPI to GRTC
+   capture. This captures exact local LRCK frame timing on a GRTC channel.
+
+4. **Drift estimate**: Derive the drift estimate from the controller-timeline
+   presentation reference (step 2) and the I2S frame capture (step 3).
+   The I2S buffer fill remains as the phase term (unchanged).
+
+5. **No direct RADIO access**: Direct RADIO RX `ADDRESS`/`END` captures are
+   forbidden with SDC/MPSL. There is no fallback direct-RADIO implementation
+   — the ISO-timestamp path (step 1) is the only supported input.
+
+6. **SDC Event Start Task**: `sdc_hci_cmd_vs_set_event_start_task()` is an
+   optional ACL timing-event diagnostic only. It is not a CIS RX/SDU timestamp
+   and is not an input to the PI controller.
+
+7. **Phase 4b remains mandatory before 4c**. The wording that treated ISO
+   timestamps as a fallback, or that claimed both ISO and hardware paths
+   must not coexist, is withdrawn — the ISO timestamp is a required input to
+   the supported hardware schedule (step 2).
 
 ### Phase 4c — Stability + artifact verification
 

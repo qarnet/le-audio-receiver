@@ -89,13 +89,16 @@ nRF54L15 flashed via OpenOCD (CMSIS-DAP `8EE9B3FF`), verified 447,408 bytes.
 
 ## Residual requirements
 
-- **Phase 4b GRTC/DPPI** — required for peer-drift correction. The rate
-  converter handles the fixed PCLK32M hardware-rate mismatch. Residual drift
-  between the BLE controller clock and the PCLK32M-derived I2S clock still
-  needs GRTC-based measurement + PID correction.
-- **Phase 5 ASRC quality** — the nearest-neighbor conversion introduces
-  audible artifacts (sample repeats/drops every ~0.6 s). A proper ASRC
-  (linear/cubic interpolation) is needed for production quality.
+- **Phase 4b** — required for peer-drift correction. The rate converter
+  handles the fixed PCLK32M hardware-rate mismatch. Residual drift between
+  the BLE controller clock and the PCLK32M-derived I2S clock still needs
+  the supported ISO-timestamp/GRTC presentation-reference path (see
+  `docs/design.md` §Phase 4b).
+- **Phase 5 ASRC quality** — the nearest-neighbor conversion removes
+  ~381 output frames/s at nominal 47,619-vs-48,000 mismatch — artifact
+  audibility remains unmeasured and Phase 5 quality work remains
+  conditional. A proper ASRC (linear/cubic interpolation) would be needed
+  for production quality.
 - **User listening** — not yet performed. DAC wired and functional; audible
   confirmation pending.
 - **fx2lafw logic analyzer** — not available. No frequency-domain measurement

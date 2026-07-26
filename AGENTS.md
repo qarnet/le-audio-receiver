@@ -414,6 +414,18 @@ The `AUDIO_CLOCK_ACTUATOR` Kconfig choice selects the actuator. Three options:
 `audio_clock_actuator_consume_sample_adjustment()` returns ±1/0; APLL and NONE
 always return 0 (data-path adjustment is a no-op for clock-steering actuators).
 
+### SDC/MPSL owns RADIO — never access RADIO directly
+
+On nRF54L15 (SDC on cpuapp), MPSL owns the RADIO peripheral. Never configure
+or read RADIO registers, RADIO events, RADIO IRQ, or RADIO DPPI publication
+subscriber. Any direct RADIO access will conflict with the SoftDevice
+Controller runtime. For drift measurement on nRF54L15, use ISO `info->ts` with
+`BT_ISO_FLAGS_TS` (controller-clock ISO SDU reference), GRTC future
+compare/action (Nordic ISO-time-sync pattern; sample at
+`nrf/samples/bluetooth/iso_time_sync/`), and I2S FRAMESTART capture via DPPI
+to GRTC. `sdc_hci_cmd_vs_set_event_start_task()` is an ACL-event diagnostic,
+not a CIS RX timestamp.
+
 ### Zephyr does NOT detect devicetree pinctrl overlaps
 
 Two peripherals claiming the same pin in their `pinctrl-N` default groups produce

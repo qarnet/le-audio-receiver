@@ -85,8 +85,12 @@ receiver pipeline with a new DAC needs end-to-end retest.
 
 ### Next actions (ordered)
 
-1. **Phase 4b** — GRTC/DPPI drift measurement for peer-drift correction (PCLK32M
-   clock still drifts relative to BLE controller clock).
+1. **Phase 4b** — Supported ISO timestamp presentation scheduling: validate
+   `BT_ISO_FLAGS_TS`, consume `info->ts` as controller-clock reference, schedule
+   future GRTC presentation trigger (Nordic ISO-time-sync pattern; sample:
+   `nrf/samples/bluetooth/iso_time_sync/`), capture I2S FRAMESTART via DPPI→GRTC
+   for local LRCK timing. No direct RADIO access — SDC/MPSL owns RADIO. See
+   `docs/design.md` §Phase 4b.
 2. **Phase 5** — ASRC quality improvement (nearest-neighbor produces audible
    artifacts at ~0.6 s repeat/drop cadence).
 3. **User listening test** — play audio through DAC, report audible quality
