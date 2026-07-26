@@ -76,38 +76,83 @@ Decode:
 
 Identical to Snapshot 2 — P1.5 HIGH (within 2s-high phase of toggle).
 
+## Logic analyzer capture (2026-07-26 follow-up)
+
+Capture command:
+
+```
+sigrok-cli -d fx2lafw --config samplerate=100k -C D0,D1,D2,D3 \
+  --time 12000 -o /tmp/phase4-d1-capture.csv -O csv
+```
+
+| Parameter         | Value                                            |
+|-------------------|--------------------------------------------------|
+| Driver            | fx2lafw (Saleae Logic clone, 8 channels)         |
+| Channels          | D0 (P1.04), D1 (P1.05), D2 (P1.06), D3 (3V3)    |
+| Sample rate       | 100 kHz                                          |
+| Duration          | 12 seconds (1,200,000 samples)                   |
+| Output            | `/tmp/phase4-d1-capture.csv` (9.6 MB CSV)        |
+
+### Raw channel counts
+
+| Channel | Value | Sample count | Meaning          |
+|---------|-------|-------------|------------------|
+| D0      | 0     | 1,200,000   | LOW (as expected)|
+| D1      | 1     | 1,200,000   | **stuck HIGH**   |
+| D2      | 0     | 1,200,000   | LOW (as expected)|
+| D3      | 1     | 1,200,000   | HIGH (3V3 rail)  |
+
+D0 and D2 read LOW throughout — confirming analyzer channels and
+probe wiring are functional for those pins. D3 reads HIGH (3V3 rail).
+D1 reads HIGH for all 1,200,000 samples: no edges, no low periods.
+
+Over 12 seconds the test app should toggle D1 six times (three low→high
+transitions). No transition is visible in the capture.
+
 ## Correlation table
 
 | P1.OUT bit5 | P1.IN bit5 | Analyzer CH1 | Meaning                               |
 |-------------|-----------|-------------|---------------------------------------|
-| toggles     | toggles   | ?           | register evidence confirms toggling   |
+| toggles     | toggles   | fixed HIGH  | register evidence confirms toggling; analyzer does not see toggle |
 
 P1.OUT bit5 toggles between low (snapshot 1) and high (snapshots 2,3).
 P1.IN bit5 tracks P1.OUT bit5 exactly — input buffer reads back driven
 output value. DIR and PIN_CNF[5] are stable and correct (output,
 push-pull, standard drive, input buffer connected).
 
-Analyzer CH1 data not available in this session (remote execution).
-User must supply analyzer capture to complete the third column.
-
 ## Conclusion
 
-**Firmware is correctly driving P1.5 with the specified 2s toggle pattern.**
-The register state shows:
+**Register evidence confirms firmware drives P1.5 with the specified
+2s toggle pattern.** The register state shows:
 
 1. P1.5 configured as push-pull output (DIR bit5=1, PIN_CNF[5].DIR=1,
    PIN_CNF[5].DRIVE=S0S1).
 2. P1.OUT bit5 toggles between 0 and 1.
-3. P1.IN bit5 mirrors P1.OUT bit5 — no physical contention or
-   electrical conflict on the pin (input buffer reads back what the
-   output driver puts out).
+3. P1.IN bit5 mirrors P1.OUT bit5 — the input buffer reads back the
+   driven output value, confirming internal GPIO configuration and
+   sampled level are consistent.
 
-If the analyzer CH1 (physical D1/P1.05) still reads fixed high while
-the registers toggle, the cause is an **analyzer probe or channel
-issue** (row 2 of the interpretation table). If analyzer CH1 toggles,
-the earlier observed D1-high was a prior probe/setup issue (row 1).
+**Limit of register evidence:** OUT/IN agreement proves the GPIO output
+driver and input buffer are functioning internally. It does not
+independently verify the external pin voltage or exclude all possible
+sources of external electrical contention or physical bond-wire/pad
+fault.
 
-The firmware, GPIO configuration, and pin itself are not at fault.
+**Analyzer capture evidence:** Across 12 seconds at 100 kHz, CH1/D1
+reads fixed HIGH. CH0/D0 and CH2/D2 read correctly (LOW as expected),
+confirming the analyzer, probe wires, and connections for those channels
+are functional.
+
+The analyzer measurement path on D1 (probe wire, clip, solder joint,
+or logic-analyzer channel input) requires physical inspection and
+repair before a valid D1 waveform can be captured. The register
+evidence from 27c5648 shows internal GPIO toggling; the analyzer
+failure to observe the toggle is consistent with row 2 of the
+interpretation table (analyzer probe/channel fault).
+
+Phase 4 D1 is **blocked** on repair of the D1 analyzer measurement path.
+Once repaired, re-capture CH1 while the test app runs to confirm D1
+physically toggles 2s low / 2s high.
 
 ## Raw artifact paths
 
@@ -117,13 +162,14 @@ The firmware, GPIO configuration, and pin itself are not at fault.
 
 ## Restore
 
-Main receiver firmware restored: `fw-build-54l15` + `fw-flash-54l15`.
-447124 bytes written and verified. Both nRF5340 and nRF54L15 targets
-build clean (0 errors, 0 new warnings).
+Test app flashed from `build/test-nrf54l15-d1-register-state/merged.hex`
+(33648 bytes written + verified). After capture, main receiver firmware
+restored via `fw-flash-54l15`: 447124 bytes written and verified.
+Unstaged receiver diagnostics preserved (no rebuild — existing
+`build/nrf54l15/merged.hex` used).
 
 ## Next decision
 
-User provides analyzer CH1 capture for column 3 of correlation table.
-If CH1 toggles → pass (prior probe issue, resolved). If CH1 fixed high
-→ analyzer probe/channel fault on D1 — check physical connection,
-probe wire, and contact at D2 pad on Xiao board.
+Phase 4 D1 blocked. Physical repair of D1 analyzer measurement path
+required, then re-capture CH1 against test app to confirm D1 toggles
+2s low / 2s high.
