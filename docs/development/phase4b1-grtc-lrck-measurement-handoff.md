@@ -1,6 +1,9 @@
 # Phase 4b.1 — GRTC-Referenced LRCK Measurement Foundation
 
-**Status: implemented** (commit `f71fe17`)
+**Status: implemented** (commit `f71fe17`).
+Arithmetic order corrected in second review fix (commit pending):
+presentation delay is now added in 32-bit before 64-bit GRTC expansion,
+matching the Nordic iso_time_sync → timed_led_toggle pattern.
 
 ## Goal
 

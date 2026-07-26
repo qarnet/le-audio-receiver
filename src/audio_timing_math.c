@@ -20,6 +20,18 @@ uint64_t audio_timing_iso_ts_to_grtc64(uint32_t ts_us, uint64_t now_us)
 	return full;
 }
 
+uint64_t audio_timing_anchor_to_grtc64(uint32_t sdu_ts_us, uint32_t pd_us, uint64_t now_us)
+{
+	/* Compute 32-bit target first: preserves ISO-time wrap
+	 * semantics.  Expanding the raw SDU timestamp before adding
+	 * pd_us can place the anchor ~71.6 minutes ahead when the
+	 * raw timestamp has already rolled behind current GRTC time.
+	 */
+	uint32_t target_us = sdu_ts_us + pd_us;
+
+	return audio_timing_iso_ts_to_grtc64(target_us, now_us);
+}
+
 uint32_t audio_timing_counter_delta_u32(uint32_t current, uint32_t previous)
 {
 	return current - previous; /* unsigned arithmetic handles wrap */

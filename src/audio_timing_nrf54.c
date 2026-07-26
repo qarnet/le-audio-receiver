@@ -65,6 +65,7 @@ struct timing_state {
 	uint64_t anchor_us;       /* GRTC anchor time (= ts + pd, converted) */
 	uint32_t last_cap;        /* previous TIMER20 capture value */
 	uint64_t last_compare_us; /* GRTC time of last compare (cc_value) */
+	uint32_t diag_seq;        /* diagnostic sequence (reset per session) */
 };
 
 static struct timing_state ts;
@@ -82,16 +83,22 @@ static atomic_t generation;
 /* Work item for deferred logging (ISR must not log) */
 static struct k_work diag_work;
 
-/* Saved diagnostics for the work handler */
+/* Saved diagnostics for the work handler.
+ * Published under diag_lock; consumed by work handler under the
+ * same lock to prevent races with ISR and reset.
+ */
 struct diag_payload {
 	uint32_t frame_delta;
 	uint32_t elapsed_us;
 	uint32_t sample_rate_hz;
 	uint32_t seq;     /* diagnostic sequence number */
 	atomic_val_t gen; /* generation at capture time */
+	bool is_error;    /* true → schedule_err is valid */
+	int schedule_err; /* error code when is_error */
 };
 
 static struct diag_payload pending_diag;
+static struct k_spinlock diag_lock;
 
 /* ── Work handler (deferred from ISR) ─────────────────────────────── */
 
@@ -99,25 +106,49 @@ static void diag_work_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
 
+	/* Snapshot the payload under lock so ISR/reset cannot
+	 * mutate it while we inspect it.  Only the snapshot is
+	 * validated against the current session generation.
+	 */
+	struct diag_payload diag;
+	k_spinlock_key_t key = k_spin_lock(&diag_lock);
+
+	diag = pending_diag;
+	k_spin_unlock(&diag_lock, key);
+
 	/* Reject stale payload from a previous session */
-	if (pending_diag.gen != atomic_get(&generation)) {
+	if (diag.gen != atomic_get(&generation)) {
 		return;
 	}
 
-	if (pending_diag.elapsed_us == 0) {
+	/* Error payload: schedule failure deferred from ISR */
+	if (diag.is_error) {
+		LOG_ERR("GRTC compare schedule failed: %d (seq %" PRIu32 ")", diag.schedule_err,
+			diag.seq);
+		return;
+	}
+
+	/* Not an error but no measurement data (initial skip, or
+	 * cleared by reset / overwritten).
+	 */
+	if (diag.elapsed_us == 0) {
+		return;
+	}
+
+	/* Measurement is no longer active — discard */
+	if (!atomic_get(&active)) {
 		return;
 	}
 
 	/* Nominal frames in this interval */
 	uint32_t nominal =
-		(uint32_t)(((uint64_t)pending_diag.elapsed_us * pending_diag.sample_rate_hz) /
-			   1000000ULL);
+		(uint32_t)(((uint64_t)diag.elapsed_us * diag.sample_rate_hz) / 1000000ULL);
 
-	int32_t ppm = audio_timing_compute_ppm(pending_diag.frame_delta, nominal);
+	int32_t ppm = audio_timing_compute_ppm(diag.frame_delta, nominal);
 
 	LOG_INF("LRCK diag[%" PRIu32 "]: %" PRIu32 " frames in %" PRIu32 " us (nom %" PRIu32
 		") → %" PRId32 " ppm",
-		pending_diag.seq, pending_diag.frame_delta, pending_diag.elapsed_us, nominal, ppm);
+		diag.seq, diag.frame_delta, diag.elapsed_us, nominal, ppm);
 }
 
 /* ── GRTC compare callback (ISR context) ──────────────────────────── */
@@ -157,11 +188,18 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 	if (ret < 0) {
 		/* Schedule failure: stop active measurement and
 		 * defer a single error log via the work handler.
+		 * Do NOT log from ISR context.
 		 */
 		atomic_set(&active, false);
-		pending_diag.elapsed_us = 0; /* signal error path */
+
+		k_spinlock_key_t key = k_spin_lock(&diag_lock);
+		pending_diag.is_error = true;
+		pending_diag.schedule_err = ret;
+		pending_diag.seq = ts.diag_seq;
+		pending_diag.gen = atomic_get(&generation);
+		k_spin_unlock(&diag_lock, key);
+
 		k_work_submit(&diag_work);
-		LOG_ERR("GRTC compare schedule failed: %d", ret);
 		return;
 	}
 
@@ -170,21 +208,24 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 		uint32_t frame_delta = audio_timing_counter_delta_u32(cap, ts.last_cap);
 		uint32_t elapsed_us = (uint32_t)(cc_value - ts.last_compare_us);
 
-		/* Carry sequence number and generation in payload so
-		 * work handler can reject stale data from old sessions.
+		/* Diagnostic sequence is owned by ISR and reset;
+		 * carried in the payload so the work handler never
+		 * reads mutable sequence from global state.
 		 */
-		static uint32_t diag_seq;
-
-		diag_seq++;
+		ts.diag_seq++;
 
 		/* Log first measurement, then every DIAG_PERIOD_S */
-		if (diag_seq == DIAG_FIRST_SEQ || (diag_seq % DIAG_PERIOD_S) == 0) {
+		if (ts.diag_seq == DIAG_FIRST_SEQ || (ts.diag_seq % DIAG_PERIOD_S) == 0) {
+			k_spinlock_key_t key = k_spin_lock(&diag_lock);
+			pending_diag.is_error = false;
 			pending_diag.frame_delta = frame_delta;
 			pending_diag.elapsed_us = elapsed_us;
 			pending_diag.sample_rate_hz =
 				(uint32_t)CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ;
-			pending_diag.seq = diag_seq;
+			pending_diag.seq = ts.diag_seq;
 			pending_diag.gen = atomic_get(&generation);
+			k_spin_unlock(&diag_lock, key);
+
 			k_work_submit(&diag_work);
 		}
 	}
@@ -279,9 +320,14 @@ void audio_timing_sdu_ref_update(uint32_t sdu_ts_us, uint32_t pd_us)
 		return;
 	}
 
-	/* First valid SDU with TS: anchor and schedule first compare */
+	/* First valid SDU with TS: compute presentation anchor and
+	 * schedule first compare.  The presentation delay is added
+	 * before 64-bit expansion per Nordic iso_time_sync pattern
+	 * (iso_rx.c → timed_led_toggle.c) so that a raw SDU timestamp
+	 * behind the current GRTC is not expanded ~71.6 minutes ahead.
+	 */
 	uint64_t now = nrfx_grtc_syscounter_get();
-	uint64_t anchor = audio_timing_iso_ts_to_grtc64(sdu_ts_us, now) + pd_us;
+	uint64_t anchor = audio_timing_anchor_to_grtc64(sdu_ts_us, pd_us, now);
 
 	/* First compare = anchor (presentation time) + 1 second */
 	uint64_t first_cmp = anchor + 1000000ULL;
@@ -308,6 +354,7 @@ void audio_timing_sdu_ref_update(uint32_t sdu_ts_us, uint32_t pd_us)
 	ts.anchor_us = anchor;
 	ts.anchor_set = true;
 	ts.last_compare_us = 0; /* force first delta skip */
+	ts.diag_seq = 0;        /* start fresh diagnostic sequence */
 
 	LOG_INF("Timing anchor: ts=%" PRIu32 " pd=%" PRIu32 " anchor_grtc=%" PRIu64
 		" first_cmp=%" PRIu64,
@@ -320,15 +367,19 @@ void audio_timing_reset(void)
 		return;
 	}
 
-	/* Mark inactive BEFORE disabling hardware so the ISR
-	 * and work handler can reject in-flight events.
+	/* Invalidate payload, mark inactive, and bump generation
+	 * under the spinlock so any concurrent ISR sees a consistent
+	 * state and any already-queued work payload is rejected.
 	 */
-	atomic_set(&active, false);
+	k_spinlock_key_t key = k_spin_lock(&diag_lock);
 
-	/* Bump generation so any already-queued work payload
-	 * from this session is rejected by diag_work_handler.
-	 */
+	atomic_set(&active, false);
 	atomic_inc(&generation);
+	pending_diag.is_error = false;
+	pending_diag.elapsed_us = 0;
+	ts.diag_seq = 0;
+
+	k_spin_unlock(&diag_lock, key);
 
 	/* Cancel any pending GRTC compare — disable the CC channel */
 	nrfx_grtc_syscounter_cc_disable(grtc_channel);
