@@ -19,6 +19,7 @@ import ctypes.util
 import math
 import os
 import struct
+import subprocess
 import sys
 import time
 
@@ -32,6 +33,12 @@ except Exception:
 
 ENDPOINT_PATH = "/bap_central/endpoint0"
 AGENT_PATH = "/bap_central/agent"
+
+# Raw-HCI direct-connect helper (kernel accept-list scan path is broken on
+# the nRF5340 hci_usb controller; see scripts/hci_raw_connect.py).
+RAW_CONNECT_HELPER = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "hci_raw_connect.py"
+)
 
 PAC_SOURCE_UUID = "00002bcb-0000-1000-8000-00805f9b34fb"
 LC3_CODEC = 0x06
@@ -641,7 +648,7 @@ def main():
     agent_mgr = _dbus.Interface(
         bus.get_object("org.bluez", "/org/bluez"), "org.bluez.AgentManager1"
     )
-    agent_mgr.RegisterAgent(AGENT_PATH, "DisplayYesNo")
+    agent_mgr.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
     agent_mgr.RequestDefaultAgent(AGENT_PATH)
     print("[main] Agent registered at {}".format(AGENT_PATH))
 
@@ -770,7 +777,8 @@ def main():
         )
     )
 
-    # ── 5. Pair + Connect (always fresh) ─────────────────────────────────
+    # ── 5. Raw-HCI connect (kernel accept-list scan path is broken on
+    # this hci_usb controller) then Pair over the existing ACL link ──────
     device = _dbus.Interface(bus.get_object("org.bluez", dev_path), "org.bluez.Device1")
 
     # If BlueZ thinks the device is already connected, disconnect first so we
@@ -783,28 +791,78 @@ def main():
             time.sleep(1.5)  # let receiver settle and restart advertising
         except _dbus.exceptions.DBusException as e:
             print("[main]   Disconnect ignored: {}".format(e))
+        already_connected = False
 
-    try:
-        device.Pair(timeout=60000)
-        print("[main] Paired")
-    except _dbus.exceptions.DBusException as e:
-        err_name = e.get_dbus_name()
-        if err_name and "AlreadyExists" in err_name:
-            print("[main] Already paired")
-        elif err_name and "org.bluez.Error.AlreadyExists" in str(e):
-            print("[main] Already paired (ignored)")
-        else:
-            print("[error] Pairing failed: {}".format(e))
-            raise
+    if not already_connected:
+        # Bring the ACL link up with a direct LE Extended Create Connection.
+        # The helper holds the raw HCI socket open (kernel reaps the
+        # connection when the socket closes).
+        addr = dev_path.split("_", 1)[1].replace("_", ":")
+        print("[main] Bringing ACL link up via raw HCI (direct connect)...")
+        hold_secs = args.duration + 120
+        proc = subprocess.Popen(
+            ["sudo", "-n", "python3", RAW_CONNECT_HELPER, addr, str(hold_secs)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        # Wait for the Device1 Connected property (up to 10 s).
+        dev_props0 = _dbus.Interface(
+            bus.get_object("org.bluez", dev_path), "org.freedesktop.DBus.Properties"
+        )
+        conn_deadline = time.monotonic() + 10
+        connected = False
+        while time.monotonic() < conn_deadline:
+            try:
+                if bool(dev_props0.Get("org.bluez.Device1", "Connected")):
+                    connected = True
+                    break
+            except _dbus.exceptions.DBusException:
+                pass
+            _GLib.MainContext.default().iteration(False)
+            time.sleep(0.1)
+        if not connected:
+            print("[error] Raw HCI connect failed (link not up in 10 s)")
+            proc.terminate()
+            sys.exit(1)
+        print("[main] ACL link up")
 
-    # ── 6. Trust + Connect ───────────────────────────────────────────────
+    # NOTE: no explicit Device1.Pair() call.
+    #
+    # On this hci_usb controller the ACL link is created via raw HCI
+    # (kernel accept-list scan path is broken). Kernel mgmt "Pair Device"
+    # on an already-connected link completes instantly, which makes BlueZ
+    # clear its bonding state before the SMP User Confirmation arrives —
+    # BlueZ then auto-rejects the confirmation and pairing fails.
+    #
+    # Instead, rely on BlueZ auto-security: GATT access to the encrypted
+    # PACS characteristics makes the kernel run SMP directly (no mgmt
+    # Pair), and the JustWorks agent authorizes it. The connection is
+    # encrypted after that, which is all PACS/ASCS need.
+    print("[main] Skipping explicit Pair; using BlueZ auto-security via GATT")
+
+    # ── 6. Trust + wait for services ─────────────────────────────────────
     dev_props = _dbus.Interface(
         bus.get_object("org.bluez", dev_path), "org.freedesktop.DBus.Properties"
     )
     dev_props.Set("org.bluez.Device1", "Trusted", _dbus.Boolean(True))
-    print("[main] Trusted, connecting...")
-    device.Connect()
-    print("[main] Connected")
+    print("[main] Trusted, waiting for GATT service resolution...")
+
+    sr_deadline = time.monotonic() + 30
+    services_resolved = False
+    while time.monotonic() < sr_deadline:
+        try:
+            if bool(dev_props.Get("org.bluez.Device1", "ServicesResolved")):
+                services_resolved = True
+                break
+        except _dbus.exceptions.DBusException:
+            pass
+        _GLib.MainContext.default().iteration(False)
+        time.sleep(0.1)
+
+    if services_resolved:
+        print("[main] ServicesResolved (link encrypted)")
+    else:
+        print("[warn] ServicesResolved not set in 30 s, continuing anyway")
 
     # ── 7. Wait for SetConfiguration callback(s) ─────────────────────────
     print("[main] Waiting for SetConfiguration (auto-config by BlueZ)...")
