@@ -184,7 +184,7 @@ closed.
   is one-shot calibration, not runtime trim; HFPLL fixed at boot. The clock
   driving I2S **cannot** be steered → resampling-family actuators only
   (short of a PCB change).
-- FLPR: RISC-V VPR @ 128 MHz, **no FPU** (fixed-point ASRC mandatory),
+- FLPR: RISC-V VPR, **no FPU** (fixed-point ASRC mandatory),
   cannot access I2S20 (cpuapp domain) but can access GRTC; IPC via shared
   SRAM + VEVIF/icmsg; NCS v3.3.0 FLPR/HPF support is still young →
   prototype ASRC on cpuapp first.
