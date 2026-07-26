@@ -119,8 +119,8 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
 | Old DAC digital wires connected, MUTE low | D1/LRCK held high — no toggling. Breakout/wiring incompatible or defective. |
 | Old DAC digital wires removed | D1/LRCK toggles. GPIO toggling confirmed. |
 | Main receiver with old DAC | Slab-full / EIO — old DAC assembly held I2S lines (proven physical blocker/contributor). Firmware queue/producer behavior not yet ruled out; new-DAC retest with unchanged receiver firmware required before final root-cause attribution. |
-| Raw logic-analyzer capture | File exists. Frequency/data analysis pending. |
-| New DAC Phase 4c results | **Technical PASS** — 60,000 frames / 600.00 s (10 minutes), zero disconnect during stream, zero slab-full/underrun/warning/error/fault, clean teardown. Audible quality pending user observation. See `docs/development/phase4c-technical-results.md`. |
+| External I2S analyzer | **PASS** — 24 MHz fx2lafw capture at DAC pins: BCK 1,525,637.347 Hz, LRCK 47,676.613 Hz, ratio 31.999701, SDOUT active. See `docs/development/phase4c-i2s-analyzer-results.md`. |
+| New DAC Phase 4c results | **Technical PASS** — 60,000 frames / 600.00 s (10 minutes), zero disconnect during stream, zero slab-full/underrun/warning/error/fault, clean teardown. Physical audibility unavailable by user and not blocking measurable work. See `docs/development/phase4c-technical-results.md`. |
 | Phase 4a.2 rate conversion | **PASS** — 35 s stream, 0 slab-full, 0 underrun. Fixed-rate converter matches PCLK32M drain. See `docs/development/phase4a2-rate-conversion-results.md`. |
 
 ### Next actions (ordered)
@@ -134,12 +134,11 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
     (60,000 frames / 600.00 s, zero disconnect, zero slab-full/underrun/
     warning/error/fault, clean teardown,
     `docs/development/phase4c-technical-results.md`).
-    Audible quality pending user observation.
- 4. **User listening test** — play 1 kHz tone through DAC; report whether tone
-    was audible and whether artifacts, ticking, gaps, distortion, or channel
-    imbalance were heard. Phase 5 conditional on this listening result.
- 5. **Phase 5** — ASRC quality improvement (conditional on listening result).
- 6. Re-run with fx2lafw logic analyzer when hardware available.
+     External I2S analyzer also PASS (`docs/development/phase4c-i2s-analyzer-results.md`).
+     Physical audibility is unavailable by user, not failed.
+  4. **Phase 5** — ASRC quality improvement remains conditional/deferred until
+     a measurable digital-quality criterion or physical listening evidence
+     demonstrates need.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 
