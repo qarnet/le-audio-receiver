@@ -1,0 +1,54 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Standalone I2S20 master-output test on Seeed Xiao nRF54L15.
+ *
+ * D0=SCK(P1.4), D1=LRCK(P1.5), D2=SDOUT(P1.6), D3=MCK(P1.7).
+ * MCK is connected to D3 even though the DAC does not use it —
+ * the nRF54L15 I2S peripheral requires a real MCK PSEL for the
+ * MCK generator to derive SCK/LRCK in master mode.
+ *
+ * Clock source: PCLK32M_HFXO (default, clean test — not the
+ * main-app diagnostic PCLK32M/HFINT selection).
+ *
+ * Disabled peripherals that conflict or are not needed:
+ *   - pdm20 (onboard mic, P1.12/P1.13 — not I2S pins but not used)
+ *   - spi22 (conflicts with uart20 on P1.8/P1.9)
+ */
+
+/ {
+	aliases {
+		i2s-audio = &i2s20;
+	};
+};
+
+&pinctrl {
+	i2s20_default: i2s20_default {
+		group1 {
+			/* SCK=P1.4, LRCK=P1.5, SDOUT=P1.6, MCK=P1.7 */
+			psels = <NRF_PSEL(I2S_SCK_M,  1, 4)>,
+				<NRF_PSEL(I2S_LRCK_M, 1, 5)>,
+				<NRF_PSEL(I2S_SDOUT,  1, 6)>,
+				<NRF_PSEL(I2S_MCK,    1, 7)>;
+		};
+	};
+};
+
+&i2s20 {
+	status = "okay";
+	/* PCLK32M_HFXO requires the onoff clock manager (HFXO driver)
+	 * which is not available in this minimal test firmware without
+	 * MPSL/SDC/HFXO init.  Fall back to PCLK32M (HFINT, ~±250 ppm)
+	 * which starts directly without a clock-manager round-trip. */
+	clock-source = "PCLK32M";
+	pinctrl-0 = <&i2s20_default>;
+	pinctrl-names = "default";
+};
+
+&pdm20 {
+	status = "disabled";
+};
+
+&spi22 {
+	status = "disabled";
+};
