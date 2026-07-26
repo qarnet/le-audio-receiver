@@ -5,6 +5,7 @@
 
 #include "audio_decode.h"
 #include "audio_stats.h"
+#include "audio_perf.h"
 
 #include <string.h>
 #include <errno.h>
@@ -69,8 +70,10 @@ int audio_decode_sdu(struct audio_decode_ctx *ctx, const uint8_t *frame_data, si
 				ptr += octets_per_channel;
 			}
 
+			uint32_t t0 = audio_perf_cycle_start();
 			int err = lc3_decode(ctx->decoder, l_data, octets_per_channel,
 					     LC3_PCM_FORMAT_S16, stereo_out, 2);
+			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_LC3_DECODE);
 
 			if (err == 1) {
 				audio_stats_frame_plc();
@@ -80,8 +83,10 @@ int audio_decode_sdu(struct audio_decode_ctx *ctx, const uint8_t *frame_data, si
 				audio_stats_frame_decoded();
 			}
 
+			t0 = audio_perf_cycle_start();
 			err = lc3_decode(ctx->decoder_r, r_data, octets_per_channel,
 					 LC3_PCM_FORMAT_S16, stereo_out + 1, 2);
+			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_LC3_DECODE);
 			if (err < 0) {
 				audio_stats_decode_error();
 			}
@@ -99,8 +104,10 @@ int audio_decode_sdu(struct audio_decode_ctx *ctx, const uint8_t *frame_data, si
 				ptr += octets_per_frame;
 			}
 
+			uint32_t t0 = audio_perf_cycle_start();
 			int err = lc3_decode(ctx->decoder, data, octets_per_frame,
 					     LC3_PCM_FORMAT_S16, stereo_out, 1);
+			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_LC3_DECODE);
 
 			if (err == 1) {
 				audio_stats_frame_plc();

@@ -71,4 +71,22 @@ config AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
 	  Recommended 150–200 ppm on nRF54L15 so phase authority does not
 	  consume all headroom around the measured ~1,775 ppm PCLK offset.
 
+config AUDIO_PERF_MEASUREMENT
+	bool "Audio performance instrumentation"
+	default n
+	help
+	  Low-overhead cycle and queue measurement for LC3 decode, volume,
+	  sink push, and ISO receive paths.  Adds ~50–100 cycles per measured
+	  region; compiled to no-ops when disabled.  Exposed through
+	  "audio perf" shell command.
+
+config AUDIO_PERF_DEADLINE_CYCLES
+	int "Per-path deadline threshold in CPU cycles"
+	default 1280000
+	depends on AUDIO_PERF_MEASUREMENT
+	help
+	  Deadline in CPU cycles (~10 ms at the given core frequency).
+	  Default 1,280,000 = 10 ms at 128 MHz (nRF54L15).
+	  Set to 640,000 for 64 MHz nRF5340.
+
 source "Kconfig.zephyr"

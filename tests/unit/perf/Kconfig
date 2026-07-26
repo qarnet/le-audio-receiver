@@ -1,0 +1,9 @@
+source "Kconfig.zephyr"
+
+config AUDIO_PERF_MEASUREMENT
+	bool "Audio performance instrumentation"
+	default y
+
+config AUDIO_PERF_DEADLINE_CYCLES
+	int "Per-path deadline threshold in CPU cycles"
+	default 10000

@@ -9,6 +9,7 @@
 #include "audio_clock_actuator.h"
 #include "audio_rate_convert.h"
 #include "audio_stats.h"
+#include "audio_perf.h"
 
 #include <string.h>
 
@@ -142,6 +143,11 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 		return -EIO;
 	}
 
+	/* Phase 5.0: cycle measurement for steady-state pushes only.
+	 * Pre-fill path returns early and is excluded from measurement.
+	 */
+	uint32_t t0 = started ? audio_perf_cycle_start() : 0;
+
 	/*
 	 * Step 0: rate conversion — compute output frame count for
 	 * this input block independent of slab or controller state.
@@ -160,8 +166,9 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	 * frequency feedforward may not have a measurement.
 	 */
 	int adj = 0;
+	int slab_free = 0;
 	if (started) {
-		int slab_free = k_mem_slab_num_free_get(&i2s_slab);
+		slab_free = k_mem_slab_num_free_get(&i2s_slab);
 		int32_t ppm = audio_drift_controller_update(slab_free);
 
 		if (ppm != 0) {
@@ -214,6 +221,13 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	size_t out_bytes = output_frames * CHANNELS * (BIT_WIDTH / 8);
 
 	/*
+	 * Phase 5.0: sample queue metrics once per steady-state push.
+	 */
+	if (started) {
+		audio_perf_queue_sample(slab_free, output_frames);
+	}
+
+	/*
 	 * Step 3: allocate slab block and apply nearest-neighbor
 	 * stereo resampling.
 	 */
@@ -223,6 +237,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	if (ret < 0) {
 		LOG_WRN("I2S slab full — dropping frame");
 		audio_stats_i2s_underrun();
+		audio_perf_push_failure();
 		return -ENOMEM;
 	}
 
@@ -285,6 +300,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 			audio_stats_stream_reset();
 			started = false;
 		}
+		audio_perf_push_failure();
 		return ret;
 	}
 
@@ -300,8 +316,10 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 				k_mem_slab_free(&i2s_slab, dup);
 			}
 		}
+		audio_perf_repeat_fallback();
 	}
 
+	audio_perf_cycle_end(t0, AUDIO_PERF_PATH_SINK_PUSH);
 	return 0;
 }
 

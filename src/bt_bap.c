@@ -38,6 +38,7 @@
 #include "audio_timing.h"
 #include "audio_decode.h"
 #include "audio_stats.h"
+#include "audio_perf.h"
 #include "audio_volume.h"
 #include "stream_lifecycle.h"
 
@@ -389,7 +390,9 @@ static void push_stereo(void)
 
 		audio_decode_interleave(l_buf, r_buf, stereo_out, n);
 		audio_volume_apply(stereo_out, n * 2);
-		audio_sink_push(stereo_out, n * 2);
+		if (audio_sink_push(stereo_out, n * 2) < 0) {
+			audio_perf_push_failure();
+		}
 		l_received = false;
 		r_received = false;
 	}
@@ -398,6 +401,8 @@ static void push_stereo(void)
 static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_info *info,
 			struct net_buf *buf)
 {
+	uint32_t t0 = audio_perf_cycle_start();
+
 	size_t idx = sink_idx(stream);
 	struct bt_sink *as = &sinks[idx];
 	const bool valid = (info->flags & BT_ISO_FLAGS_VALID) != 0;
@@ -442,11 +447,13 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 			LOG_INF("stream_recv[%zu]: gate closed, skipping decode", idx);
 			gate_blocked++;
 		}
+		audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
 		return;
 	}
 
 	if (!as->decode.decoder) {
 		LOG_WRN("LC3 decoder not ready for stream[%zu]", idx);
+		audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
 		return;
 	}
 
@@ -458,7 +465,9 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		audio_decode_sdu(&as->decode, valid ? buf->data : NULL, buf->len, valid,
 				 stereo_out);
 		audio_volume_apply(stereo_out, spc * 2);
-		audio_sink_push(stereo_out, spc * 2);
+		if (audio_sink_push(stereo_out, spc * 2) < 0) {
+			audio_perf_push_failure();
+		}
 	} else if (num_sink_ase >= 2) {
 		/* Mode A: 2 mono ASEs — decode to separate L/R buffers,
 		 * then interleave when both have arrived.
@@ -493,8 +502,12 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		audio_decode_sdu(&as->decode, valid ? buf->data : NULL, buf->len, valid,
 				 stereo_out);
 		audio_volume_apply(stereo_out, spc * 2);
-		audio_sink_push(stereo_out, spc * 2);
+		if (audio_sink_push(stereo_out, spc * 2) < 0) {
+			audio_perf_push_failure();
+		}
 	}
+
+	audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
 }
 
 #else /* !LIBLC3 — pass-thru path, mostly for compile check */
@@ -592,6 +605,7 @@ static void stream_disabled_cb(struct bt_bap_stream *s)
 	 */
 	audio_sink_stop();
 	audio_stats_reset();
+	audio_perf_reset();
 }
 
 static struct bt_bap_stream_ops stream_ops = {
@@ -651,6 +665,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
 	audio_sink_stop();
 	audio_stats_reset();
+	audio_perf_reset();
 
 	num_sink_ase = 0;
 

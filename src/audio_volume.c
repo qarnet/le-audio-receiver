@@ -4,6 +4,7 @@
  */
 
 #include "audio_volume.h"
+#include "audio_perf.h"
 
 #include <string.h>
 
@@ -83,18 +84,24 @@ bool audio_volume_is_muted(void)
 
 void audio_volume_apply(int16_t *buf, size_t samples)
 {
+	uint32_t t0 = audio_perf_cycle_start();
+
 	uint32_t state = (uint32_t)atomic_get(&vol_state);
 	uint8_t vol = VOL_UNPACK_VOL(state);
 	uint8_t muted = VOL_UNPACK_MUTE(state);
 
 	if (muted || vol == 0) {
 		memset(buf, 0, samples * sizeof(int16_t));
+		audio_perf_cycle_end(t0, AUDIO_PERF_PATH_VOLUME);
 		return;
 	}
 	if (vol == 255) {
+		audio_perf_cycle_end(t0, AUDIO_PERF_PATH_VOLUME);
 		return;
 	}
 	for (size_t i = 0; i < samples; i++) {
 		buf[i] = (int16_t)(((int32_t)buf[i] * vol) / 255);
 	}
+
+	audio_perf_cycle_end(t0, AUDIO_PERF_PATH_VOLUME);
 }

@@ -5,11 +5,19 @@
 
 #include "audio_stats.h"
 #include "audio_drift.h"
+#include "audio_perf.h"
 #include "audio_volume.h"
 #include "audio_sink.h"
 
 #include <inttypes.h>
 #include <zephyr/shell/shell.h>
+
+static const char *perf_path_names[AUDIO_PERF_NUM_PATHS] = {
+	[AUDIO_PERF_PATH_ISO_RECV] = "iso_recv",
+	[AUDIO_PERF_PATH_LC3_DECODE] = "lc3_decode",
+	[AUDIO_PERF_PATH_VOLUME] = "volume",
+	[AUDIO_PERF_PATH_SINK_PUSH] = "sink_push",
+};
 
 static int cmd_status(const struct shell *sh, size_t argc, char **argv)
 {
@@ -45,9 +53,46 @@ static int cmd_stop(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
+static int cmd_perf(const struct shell *sh, size_t argc, char **argv)
+{
+	struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS];
+	struct audio_perf_queue_snapshot queue;
+
+	audio_perf_snapshot(paths, &queue);
+
+	shell_print(sh, "--- Performance ---");
+	shell_print(sh, "  Path          Count     Total cyc     Max cyc  Deadline ovr");
+	for (int i = 0; i < AUDIO_PERF_NUM_PATHS; i++) {
+		uint32_t avg =
+			paths[i].count ? (uint32_t)(paths[i].total_cycles / paths[i].count) : 0;
+		shell_print(sh, "  %-12s  %6u  %12u  %9u  %12u", perf_path_names[i], paths[i].count,
+			    avg, paths[i].max_cycles, paths[i].deadline_overruns);
+	}
+
+	shell_print(sh, "  Queue:");
+	shell_print(sh, "    Slab free     : %u / %u (min/max)", queue.slab_min_free,
+		    queue.slab_max_free);
+	shell_print(sh, "    Output frames : %u / %u (min/max)", queue.output_frames_min,
+		    queue.output_frames_max);
+	shell_print(sh, "    Output blocks : %u", queue.output_blocks);
+	shell_print(sh, "    Push failures : %u", queue.push_failures);
+	shell_print(sh, "    Repeat fb     : %u", queue.repeat_fallback_count);
+
+	return 0;
+}
+
+static int cmd_perf_reset(const struct shell *sh, size_t argc, char **argv)
+{
+	audio_perf_reset();
+	shell_print(sh, "Perf counters cleared.");
+	return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	audio_cmds, SHELL_CMD_ARG(status, NULL, "Print audio stats and state.", cmd_status, 1, 0),
 	SHELL_CMD_ARG(reset - stats, NULL, "Clear all counters.", cmd_reset_stats, 1, 0),
+	SHELL_CMD_ARG(perf, NULL, "Print performance instrumentation.", cmd_perf, 1, 0),
+	SHELL_CMD_ARG(perf - reset, NULL, "Clear performance counters.", cmd_perf_reset, 1, 0),
 	SHELL_CMD_ARG(stop, NULL, "Stop I2S and reset drift.", cmd_stop, 1, 0),
 	SHELL_SUBCMD_SET_END);
 
