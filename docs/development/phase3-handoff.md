@@ -402,7 +402,7 @@ net for transient disruptions (connection events, ISO gaps).
 - **`settings_load()` ordering** — unchanged (not touched).
 - **`audio_i2s_stop` must not clear `configured`** — unchanged.
 - **I2S double-write gotcha** — unchanged (slab logic untouched).
-- **No phone testing** — use BlueZ + USB BT adapter for future tests.
+- **No source testing** — use BlueZ + nRF5340DK hci_uart central for future tests.
 
 ## Commit structure
 

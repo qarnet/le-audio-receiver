@@ -23,7 +23,7 @@ Execute "./${RECV_BIN}" \
   -v="${VERBOSITY_LEVEL}" -s="${SIMULATION_ID}" -d=0 \
   -testid=le_audio_receiver -D=2
 
-# Device 1: Zephyr unicast_client (simulated phone)
+# Device 1: Zephyr unicast_client (simulated source)
 Execute "./${CLIENT_BIN}" \
   -v="${VERBOSITY_LEVEL}" -s="${SIMULATION_ID}" -d=1 \
   -testid=unicast_client -RealEncryption=1 -D=2

@@ -33,7 +33,7 @@ documents, or `AGENTS.md`.
 1. Update date/status in heading from 2026-07-25 to 2026-07-26.
 2. Update “What works today” nRF54L15 bullet:
    - BLE/CIS transport works through nRF5340DK `hci_uart` central, not stale
-     BT540-only wording;
+     nRF5340DK `hci_uart` is the proven central;
    - GPIO and standalone I2S20 hardware prove D0/P1.4, D1/P1.5, D2/P1.6;
    - 20-second standalone DMA run is verified;
    - main receiver end-to-end audio is still not accepted;

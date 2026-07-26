@@ -331,9 +331,11 @@ The CTRL-AP PDF may contain the APSEL mapping that explains why AP #2/#3 return
    `BLE ready`, `settings_load() OK`, `Advertising as "LE Audio Receiver"`.
    The Xiao has no expected output yet (Phase 4 territory).
 
-## No-phone constraint
+## Autonomous-only test constraint
 
-The user confirmed: **no phone is available for BLE LE Audio testing**. The
-computer itself + a USB Bluetooth adapter are available for future BlueZ-based
-testing. **Do not suggest phone pairing/streaming tests.** Scrub any phone-test
-mentions from plans going forward.
+All agents run the LE Audio stream autonomously via the nRF5340DK `hci_uart`
+central attached to Linux as `hci0` (over `/dev/ttyACM2` at 1 000 000 baud H4
+with flow control). Use `scripts/bap_central.py`. No handset, smartphone, or
+human-operated central is allowed in any test procedure. The only allowed user
+input is a true physical observation an agent cannot make (e.g. whether sound is
+audible).

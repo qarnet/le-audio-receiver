@@ -1,7 +1,7 @@
 # LE Audio Receiver
 
 Bluetooth LE Audio BAP Unicast Server — a sink-only receiver that decodes LC3
-audio from a phone and plays it out over I2S to an external DAC. Built on the
+audio from a BAP unicast source and plays it out over I2S to an external DAC. Built on the
 nRF Connect SDK (Zephyr) for the **nRF5340** (Ebyte E83-2G4M03S module), with a
 secondary **nRF54L15** (Seeed Xiao) target in progress.
 
@@ -181,9 +181,9 @@ Use `--pristine` (the helpers already do) after any `prj.conf`, overlay, or
 ## Pairing
 
 Just Works — MITM enforcement is disabled (`CONFIG_BT_SMP_ENFORCE_MITM=n`) so
-phones that require a passkey UI can still pair. If a phone was previously
-bonded and now fails to pair after a firmware change, delete the device on the
-phone and re-scan, or mass-erase the chip (`nrf53_recover` via `openocd-master`)
+centrals that require a passkey UI can still pair. If a central was previously
+bonded and now fails to pair after a firmware change, delete the bond on the
+central and re-scan, or mass-erase the chip (`nrf53_recover` via `openocd-master`)
 before reflashing — `west flash` does not erase the settings partition.
 
 ---

@@ -60,7 +60,7 @@ appears unprogrammed, or the SW split controller does not implement
 ### Stream test — both attempts
 
 **Attempt #1** (hci0 interrupt): After OpenOCD reset, Xiao auto-reconnected to
-hci0 (Realtek) from stored bond. Powered off hci0, Xiao disconnected
+hci0 from stored bond. Powered off hci0, Xiao disconnected
 (`reason 0x15`), re-advertised. bap_central.py found target, started pairing —
 same accept-list timeout as attempt #2.
 
@@ -182,8 +182,7 @@ not compiler warnings from our code.
 1. **No working CIS-capable central.** Both tested controllers (RTL8761BU and
    nRF5340 DK SW split) fail at different points: RTL8761BU fails at CIS
    establishment; SW split fails at connection initiation during accept-list
-   scan. A third CIS-capable central (e.g., a phone running BAP source, a
-   different USB dongle with working CIS, or a Zephyr-native central on a
+   scan. A third CIS-capable central (e.g., a Zephyr-native central on a
    Nordic DK running the host stack in-process) is required.
 
 2. **SW split central-only config may be incomplete.** The central-only
@@ -200,13 +199,13 @@ not compiler warnings from our code.
    hardware timestamp capture, not streaming. Phase 4b can proceed in parallel.
 
 2. **Alternative central options for Phase 4a**:
-   - A phone (Android/iOS) running a BAP source app that can establish CIS
-   - A different USB Bluetooth dongle with proven CIS central support
    - A Nordic DK running a Zephyr native BAP source application (BT host on
      cpuapp, SW split controller on cpunet, no Linux host in the loop)
    - Debug SW split controller accept-list filtered scan behavior in an isolated
      test: does the controller properly generate `Le Enhanced Connection Complete`
      events when the advertiser is in the accept list?
+   - The nRF5340DK `hci_uart` central is now the proven working transport
+     (see `STATUS.md`).
 
 3. **Phase 4a on nRF5340 Ebyte E83 first**: Per recommendation 2 from previous
    results, prove the end-to-end path on the nRF5340 target before returning to

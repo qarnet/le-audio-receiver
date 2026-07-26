@@ -30,8 +30,8 @@ Phase 4b work and is explicitly out of scope here.
 - Logic analyzer: `0925:3881`, sigrok `fx2lafw`, 24 MHz works.
 - Logic channels this session: CH0=D0/BCK, CH1=D1/LRCK, CH2=D2/DIN,
   CH3=3V3, CH4–CH7 unconnected.
-- Primary BlueZ controller: hci0 = ASUS BT540 / Realtek RTL8761BU,
-  address `A0:AD:9F:7B:C7:95`.
+- Primary BlueZ controller: hci0 = nRF5340DK hci_uart (`/dev/ttyACM2`,
+  1 000 000 baud, H4).
 - Receiver was already visible under BlueZ as
   `/org/bluez/hci0/dev_DB_A6_0C_05_A2_AA`, exposing PACS `0x1844` and ASCS
   `0x1850`.

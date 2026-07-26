@@ -84,6 +84,18 @@ Consequences for work in this repo today:
   workflow that Phase 0 ports here.
 - Every change must keep the nRF5340 target building, flashing, streaming.
 
+## Central-only test rule
+
+All agents run the LE Audio stream autonomously via the nRF5340DK `hci_uart`
+central attached to Linux as `hci0` (over `/dev/ttyACM2` at 1 000 000 baud H4
+with flow control). Use `scripts/bap_central.py` to connect to the receiver
+and stream LC3 audio. No handset, smartphone, or human-operated central is
+allowed in any test procedure.
+
+The only allowed user input is a true physical observation that an agent
+cannot make: whether sound is audible from connected speakers/headphones
+after the agent has completed its test run.
+
 ## Build
 
 Build **from the repo root**. Enter the dev shell first, then run the build
@@ -275,14 +287,14 @@ worth the complexity.
 
 ### Stale bonds cause pairing failures that block PACS/ASCS reads
 
-If a phone was previously bonded and the bond info is reloaded from the
-settings partition on boot (`settings_load()`), but the phone still tries
+If a central was previously bonded and the bond info is reloaded from the
+settings partition on boot (`settings_load()`), but the central still tries
 to pair fresh or the firmware version changed security params, pairing
-will fail.  The phone then disconnects before it can read the encrypted
+will fail.  The central then disconnects before it can read the encrypted
 PACS/ASCS services.
 
-**Fix:** Either do a full chip erase (`nrfutil device recover`) before
-flashing, or update the phone (delete device in Bluetooth settings → re-scan).
+**Fix:** Either do a full chip erase (`nrf53_recover` via openocd-master) before
+flashing, or delete the bond on the central (e.g. `bluetoothctl remove`).
 
 ### printk and LOG output race on the same UART
 
@@ -326,10 +338,10 @@ and `CONFIG_BT_ISO_TX_BUF_COUNT=1` so they match — the host's
 `Num of Controller's ISO packets != ISO bt_conn_tx contexts` warning is
 silenced at the source, not tolerated.
 
-### Phones require Just Works pairing
+### Centrals require Just Works pairing
 
 Default `CONFIG_BT_SMP_ENFORCE_MITM=y` forces authenticated pairing.
-Without a passkey UI the phone shows "incorrect PIN". Disable MITM
+Without a passkey UI the central shows "incorrect PIN". Disable MITM
 (`CONFIG_BT_SMP_ENFORCE_MITM=n`) and add `pairing_accept` /
 `pairing_complete` / `pairing_failed` callbacks returning
 `BT_SECURITY_ERR_SUCCESS`. See `src/bt_bap.c` pairing callbacks.
@@ -348,13 +360,13 @@ Without it, `west flash` fails with "Cannot connect to the probe".
 
 The API fills `*chan_allocation` via pointer and returns **0 on success**,
 negative errno on failure. Checking `if (ret > 0)` silently falls through
-to the mono default for every phone that sends a valid channel allocation
+to the mono default for every source that sends a valid channel allocation
 LTV — making all stereo ASEs appear mono. Use `if (ret == 0)`. See
 `lc3_config` in `src/bt_bap.c`.
 
 ### Stereo single-ASE (Mode B) needs two LC3 decoders
 
-A phone may send one ASE with `chan_count=2` (stereo) rather than two
+A BAP source may send one ASE with `chan_count=2` (stereo) rather than two
 mono ASEs. In that case, the SDU is `[L_frame][R_frame]` concatenated.
 One `lc3_decode` call with stride=2 only fills even (L) positions;
 odd (R) positions stay zero → right channel silent. Two independent

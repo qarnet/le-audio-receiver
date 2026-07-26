@@ -29,7 +29,7 @@ testable (no Zephyr BT dependencies in the routing logic).
 2. **PACS 48 kHz fix**: change `lc3_codec_cap` in `bt_bap.c` to advertise
    only `BT_AUDIO_CODEC_CAP_FREQ_48KHZ` (drop 16K and 24K). Keep 7.5/10 ms
    frame durations, 1-2 channel support, octet range 20-120. This fixes F4
-   so phones can no longer configure a non-48 kHz stream that the I2S can't
+   so sources can no longer configure a non-48 kHz stream that the I2S can't
    play correctly.
 
 3. **Audio-sink interface shape**: the existing `audio_i2s.h` API IS the
@@ -430,8 +430,8 @@ comfort-noise frame — test that it doesn't crash and produces output.
      `/dev/ttyUSB0`. Expect: `BLE ready`, `settings_load() OK`,
      `I2S ready (48 kHz, 16-bit, stereo, 12 blocks)`,
      `Advertising as "LE Audio Receiver"`.
-   - The PACS capability change means a phone/scanner will see only 48 kHz
-     — this is intentional (F4 fix). No phone test needed (no phone
+   - The PACS capability change means a source/scanner will see only 48 kHz
+     — this is intentional (F4 fix). No source test needed (no BAP source
      available).
 
 7. **PACS 48 kHz in the built config**:
@@ -461,8 +461,8 @@ comfort-noise frame — test that it doesn't crash and produces output.
 - **I2S double-write gotcha** — `audio_i2s.c`'s slab logic is unchanged.
 - **`audio_i2s_stop` must not clear `configured`** — unchanged (just renamed).
 - **`CONFIG_LOG_PRINTK=y`** — unchanged.
-- **No phone testing** — the user has no phone. Use BlueZ + USB BT adapter
-  for future testing. Do not write phone-test instructions.
+- **No source testing** — the user has no BAP source. Use BlueZ + nRF5340DK
+  hci_uart central for future testing. Do not write source-test instructions.
 
 ## Commit structure
 

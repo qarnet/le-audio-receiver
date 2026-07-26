@@ -28,9 +28,8 @@ USB HCI central with CIS + non-zero BD, then runs the Phase 4a stream test
     DPIDR `0x6ba02477`).
   - nRF USB BLE HCI (`2fe3:000b`) — currently `hci1` with BD `00:00:00:00:00:00`.
     This is what gets replaced by the reflash.
-- **hci0 = Realtek RTL8761BU** (`0b05:1bef`, host BT540). CIS-defective per
-  commit `b68faae` (controller-level `0x3e` on both CIS handles). Out of scope.
-  Leave powered on; do not use as central.
+- **hci0 = nRF5340DK hci_uart** (`/dev/ttyACM2`, 1 000 000 baud, H4).
+  CIS-proven (3000 ISO TX packets/15 s, STATUS.md).
 - **E83 module is NOT in this session.** Do not look for or touch the Ebyte E83.
   The receiver is the Xiao only.
 
@@ -194,7 +193,7 @@ Pre-conditions:
   If unsure of image, reflash: `fw-flash-54l15` from the le-audio-receiver
   dev shell. Start serial-mcp on `/dev/ttyACM0` BEFORE reset/flash.
 - hci1 BD non-zero, CIS settings present.
-- hci0 (Realtek) powered on but unused this run.
+- hci0 (nRF5340DK hci_uart) attached via btattach.
 
 ### Steps
 
@@ -277,7 +276,7 @@ These exist because a prior executor session recursed. Obey literally.
 Rewrite `docs/development/phase4a-results.md`:
 - Replace the "BLOCKED — no working CIS-capable central" status with the
   DK-central outcome (PASS or BLOCKED with new evidence).
-- Keep the hci0 CIS-failure evidence (still valid, still a Realtek limitation).
+- Keep the hci0 CIS-failure evidence (still valid, documented in STATUS.md).
 - Add a section "nRF5340 DK as hci1 central" with: FICR-derived BD shown by
   `btmgmt -i hci1 info`, CIS settings, btmon `LE CIS Established` events (or
   the exact failure if CIS still fails), receiver serial, LA measurements,

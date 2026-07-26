@@ -76,7 +76,7 @@ commit `cd87bf2`) but the target cannot build:
 ### F4 — Multi-rate audio bug
 
 The PACS capability advertises **16/24/48 kHz**, but `audio_i2s.c` is
-hardcoded to 48 kHz with fixed 480-sample blocks. A phone configuring a
+hardcoded to 48 kHz with fixed 480-sample blocks. A source configuring a
 16/24 kHz stream gets LC3 frames with fewer samples, played at 48 kHz with
 zero-padding per block → wrong pitch plus gaps. Either the I2S must be
 reconfigured from the ASE codec config, or the capability must advertise
@@ -400,12 +400,10 @@ verify the Phase 4 exit criteria:
   budget blows, ISO RX packet loss (audio gaps) or I2S underruns result.
   Mitigation: measure recv_cnt vs. expected SDU rate during 4a; if drops
   scale with LC3 complexity, escalate to Phase 6 (FLPR offload) earlier.
-- **R-4.2 Realtek hci0 ISO/CIS quirks**: hci0 (BT540/RTL8761BU) connects
-  and bonds, but Realtek LE Audio streaming is known flaky on mainline
-  kernels. If 4a fails to acquire MediaTransport or stream on hci0,
-  fall back to hci1 (nRF5340 USB HCI) — may need `btmgmt -i hci1 privacy on`
-  for a non-zero BD address (the all-zeros public BD blocks some BlueZ
-  paths). Do not chase receiver bugs until the central is proven.
+- **R-4.2 Central ISO/CIS quirks**: the nRF5340DK `hci_uart` central
+  is the proven transport (ISO verified at 3000 packets/15 s). Any
+  other central (USB dongle, built-in adapter) must be independently
+  verified for ISO/CIS support before debugging receiver issues.
 - **R-4.3 nRF5340DK fallback as truth source**: if nRF54L15 streaming
   fails on both centrals, flash the nRF5340DK receiver via the J-Link
   (udev-fixed, OpenOCD working) and stream to it — it is the known-good

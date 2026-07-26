@@ -9,7 +9,7 @@ ASE Config/QoS/Enable, but no stream started. Review found the test driver
 blocks inside BlueZ's `MediaEndpoint1.SetConfiguration()` callback while
 calling `MediaTransport1.Acquire()`. That ordering can prevent BlueZ from
 completing the BAP configuration callback and creating the CIS, producing the
-same `Acquire(): Input/output error` that the results attributed to Realtek.
+same `Acquire(): Input/output error` that the results attributed to the central.
 
 The controller-failure conclusion is therefore unsupported until the driver is
 fixed and hci0 is retested.
