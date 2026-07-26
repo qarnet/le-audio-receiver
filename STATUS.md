@@ -1,7 +1,7 @@
-# STATUS — le-audio-receiver — 2026-07-26
+# STATUS — le-audio-receiver — 2026-07-27
 
-> Single source of truth for current project state. USB/probe map in
-> `SESSION_USB_TABLE.md` (re-verify with `nrf-probes`).
+> Probe identities are resolved at runtime via `nrf-probes`. Never assume a
+> serial↔board mapping from docs — run `nrf-probes`.
 
 ## Bottom line
 
@@ -99,18 +99,18 @@ All printed diagnostics are Kconfig/CMake configuration messages.
 
 ## Hardware in use
 
+Probe identities resolved at runtime via `nrf-probes` — no static serials in docs.
+
 | Role | Board | Console | Notes |
 |------|-------|---------|-------|
-| LE Audio central (USB BT dongle replacement) | nRF5340DK (J-Link `001050023938`) | none | runs `hci_uart`, attached to PC over J-Link VCOM |
-| LE Audio receiver | nRF54L15 (Seeed Xiao, CMSIS-DAP `8EE9B3FF`) | `/dev/ttyACM0` @ 115200 (serial-mcp) | runs this repo's firmware |
+| LE Audio central | nRF5340DK | none | runs `hci_uart`, attached to PC over J-Link VCOM |
+| LE Audio receiver | nRF54L15 (Seeed Xiao) | `/dev/ttyACM0` @ 115200 (serial-mcp) | runs this repo's firmware |
 | Logic analyzer | fx2lafw | — | D0=SCK (P1.4), D1=LRCK (P1.5), D2=SDOUT (P1.6) |
 
 - PC-side BT controller: `hci0` = nRF5340DK `hci_uart` on
   **`/dev/ttyACM2`** (J-Link VCOM, USB iface 02 — not ttyACM1/iface-00)
-  @ 1 000 000 baud, H4, HW flow control.
-- Receiver advertises as "LE Audio Receiver", static addr
-  `DB:A6:0C:05:A2:AA`. BlueZ assigns the central a static random
-  `E3:C4:1A:96:D7:D2`.
+  @ 1 000 000 baud, H4, HW flow control.
+- Receiver advertises as "LE Audio Receiver".
 
 ## What works (verified)
 
@@ -153,20 +153,12 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
 
 ### Next actions (ordered)
 
- 1. ~~**Phase 4b.1** — GRTC-referenced timing foundation~~ → **PASS**
-    (3,000 frames / 30 s, +1,665..+1,884 ppm, `docs/development/phase4b1-results.md`)
- 2. ~~**Phase 4b.2** — PCLK feedforward + phase PI~~ → **PASS**
-    (4,500 frames / 45 s, closed-loop insert/drop at 186:1 ratio, clean teardown,
-    `docs/development/phase4b2-results.md`)
- 3. ~~**Phase 4c** — Hardware streaming verification~~ → **Technical PASS**
-    (60,000 frames / 600.00 s, zero disconnect, zero slab-full/underrun/
-    warning/error/fault, clean teardown,
-    `docs/development/phase4c-technical-results.md`).
-     External I2S analyzer also PASS (`docs/development/phase4c-i2s-analyzer-results.md`).
-     Physical audibility is unavailable by user, not failed.
-  4. **Phase 5** — ASRC quality improvement remains conditional/deferred until
-     a measurable digital-quality criterion or physical listening evidence
-     demonstrates need.
+ 1. ~~**Phase 4b.1** — GRTC-referenced timing foundation~~ → PASS
+ 2. ~~**Phase 4b.2** — PCLK feedforward + phase PI~~ → PASS
+ 3. ~~**Phase 4c** — Hardware streaming verification~~ → Technical PASS
+ 4. **Phase 5** — ASRC quality improvement remains conditional/deferred until
+    a measurable digital-quality criterion or physical listening evidence
+    demonstrates need.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 
@@ -299,25 +291,17 @@ So BlueZ Pair/Connect hung; the raw-HCI direct-connect helper
 directly and holds the socket open (kernel reaps raw-socket connections
 on close).
 
-## Repo changes this session (all committed unless noted)
+## Key implementation details (permanent reference)
 
-| File | Change | Committed? |
-|------|--------|-----------|
-| `src/audio_i2s.c` | `audio_sink_stop()` PREPARE-before-DROP panic fix | Yes |
-| `scripts/bap_central.py` | NINO agent; raw-HCI connect step; no explicit `Pair()` (auto-security via GATT); stale-conn fallthrough; graceful ACL disconnect + helper teardown in cleanup | Yes |
-| `scripts/hci_raw_connect.py` | **New.** Raw-HCI direct LE Extended Create Connection; holds socket open | Yes |
-| `dongle/hci_uart/app.conf` | **New.** App-core conf fragment pinning ISO central + buffer counts + ext adv | Yes |
-| `dongle/hci_uart/netcore.conf` | **New.** Net-core (hci_ipc/SDC) conf: ISO central, 2 conns / 2 CISes, ext adv, no Coded PHY, no privacy | Yes |
-| `dongle/README.md` | **New.** Why hci_uart, build/flash/attach instructions | Yes |
-| `scripts/bin/fw-build-dongle` | **New.** Builds the upstream hci_uart sample with the repo conf fragments | Yes |
-| `scripts/bin/fw-flash-dongle` | **New.** Flashes both cores via the DK's onboard J-Link (OpenOCD) | Yes |
-| `scripts/bin/fw-reset-dongle` | **New.** Resets the DK to clear zombie SDC connection slots | Yes |
-| `STATUS.md` | **New.** This file | Yes |
-| `docs/development/phase4a1-new-dac-main-pipeline-results.md` | **New.** Phase 4a.1 retest results | No |
-| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | `clock-source = "PCLK32M"` + MCK pin on P1.7 (diagnostic, didn't fix I2S) | **No — diagnostic** |
-| `src/bt_bap.c` | Temporary `LOG_INF` tally logging in `stream_recv` / `push_stereo` (I2S debug) | **No — diagnostic** |
-
-The dongle firmware config is in the repo — no more `/tmp` fragments.
+| Component | File(s) | Note |
+|-----------|---------|------|
+| Audio pipeline | `audio_sink.h`, `audio_i2s.c`, `audio_decode.c` | Sink interface → I2S DMA (slab allocator), LC3 decode + channel routing |
+| Clock recovery | `audio_drift.c`, `audio_drift.h` | PI controller: PCLK feedforward + phase term, ppm output |
+| Actuators | `audio_clock_actuator_apll.c`, `audio_clock_actuator_sample_adjust.c` | APLL (nRF5340) or sample insert/drop (nRF54L15) |
+| Rate conversion | `audio_rate_convert.c` | Nearest-neighbor, 480→476/477 frames/block for PCLK32M mismatch |
+| Timing (nRF54L15) | `audio_timing_nrf54.c` | TIMER20-vs-GRTC PCLK freq measurement, 1 s intervals |
+| Central driver | `scripts/bap_central.py`, `scripts/hci_raw_connect.py` | Raw-HCI direct connect, NINO agent, auto-security via GATT |
+| Dongle firmware | `dongle/hci_uart/{app,netcore}.conf`, `scripts/bin/fw-build-dongle`, `scripts/bin/fw-flash-dongle` | nRF5340DK hci_uart central, ISO capable |
 
 ## Gotchas to remember
 

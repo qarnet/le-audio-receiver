@@ -56,15 +56,21 @@ Nordic samples are the best learning resource:
 
 ## Policy — never ignore warnings
 
-Always attempt to fix build/boot warnings. Ignoring them lets real bugs hide
-in the noise — a warning that is "expected" today becomes the one you miss
-when it turns into a real failure. If a warning is genuinely unfixable in this
-build configuration, suppress it explicitly (Kconfig `default n` with a
-comment, or a targeted `#pragma`) — never just leave it printing.
+Compiler warnings and Kconfig "assigned value but got" warnings are hard errors:
+fix the source or suppress with a recorded reason. Boot-time `LOG_WRN` and
+openocd/flashing warnings are treated the same — don't normalize noise.
 
-This applies to: compiler warnings, Kconfig "assigned value but got" warnings,
-boot-time `LOG_WRN` lines, and openocd/flashing warnings. Fix the source, or
-suppress with a recorded reason. Do not normalize noise.
+NCS v3.3.0 emits diagnostics that are NOT actionable at repo level:
+deprecation notices (`PARTITION_MANAGER`, sysbuild), informational config
+messages (`__ASSERT()`), experimental-symbol notices required for ISO on
+nRF5340 (BT_LL_SW_SPLIT, PERIPHERAL_ISO), upstream Kconfig gaps (SW Split
+`CONN_ISO_LOW_LATENCY_POLICY` choice has no NONE fallback), and CMake
+"No SOURCES given" where a subsystem is enabled but no driver exists for
+a particular board (e.g. watchdog on nRF54L15 — wdt30/wdt31 are disabled
+in DT when SDC is active, so `CONFIG_WATCHDOG=y` from prj.conf creates an
+empty library; not fixable without an unsupported DT node or losing
+watchdog on nRF5340). These are documented in `STATUS.md` "Build warning
+diagnostics", not tolerated as warnings.
 
 ## Plan of record
 
@@ -79,10 +85,6 @@ cpuapp) and Phase 6 (FLPR offload) remain conditional/deferred.
 
 Consequences for work in this repo today:
 
-- `docs/nrf54l15-drift-compensation.md` is superseded — reference only,
-  never update it.
-- Tooling reference: `~/repos/serial-mcp` holds the direnv + nrfutil
-  workflow that Phase 0 ports here.
 - Every change must keep the nRF5340 target building, flashing, streaming.
 
 ## Central-only test rule
@@ -109,8 +111,11 @@ fw-build-5340
 ```
 
 The build runs `west build -b ebyte_e83_nrf5340/nrf5340/cpuapp --sysbuild --pristine`
-into `build/nrf5340/`. Use `--pristine` after any `prj.conf`, overlay, or
-`sysbuild.cmake` change.  Pass extra cmake args through:
+into `build/nrf5340/`. Sysbuild produces images under `build/nrf5340/le-audio-receiver/`
+(app) and `build/nrf5340/hci_ipc/` (net core); top-level merged hexes are
+`build/nrf5340/merged.hex` and `build/nrf5340/merged_CPUNET.hex`. Use
+`--pristine` after any `prj.conf`, overlay, or `sysbuild.cmake` change.
+Pass extra cmake args through:
 
 ```bash
 fw-build-5340 -- -DCONFIG_FOO=y
@@ -519,7 +524,7 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 | `src/audio_clock_actuator_sample_adjust.c` | nRF54L15 sample insert/drop actuator (ppm → ±1 sample) |
 | `src/audio_clock_actuator_none.c` | No-op actuator (testing only) |
 | `boards/ebyte/e83_nrf5340/` | Custom board definition for Ebyte E83-2G4M03S: I2S0 pins, ACLK 12.288 MHz, QSPI disabled, i2s-audio alias, OpenOCD flash runner |
-| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2, pdm20 disabled |
+| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2 (MCK on D3/P1.7 — peripheral-needed routing, DAC does not consume it; 3-wire no-MCK at the DAC), pdm20 disabled, TIMER20 reserved |
 | `prj.conf` | App Kconfig (ACL/ISO buffers, SMP, 2 ASEs, liblc3, FPU, ZMS) |
 | `sysbuild.cmake` | Applies SW Split DT overlay + Kconfig overlay to hci_ipc |
 | `Kconfig.sysbuild` | `NRF_DEFAULT_BLUETOOTH=y` conditional on nRF5340, gates netcore |

@@ -77,7 +77,8 @@ Verified against `boards/ebyte/e83_nrf5340/ebyte_e83_nrf5340_nrf5340_cpuapp.dts`
 | GND | — | — | **GND** + **AGND** (tie both) |
 
 No MCK — UDA1334A internal PLL locks to BCLK. Corresponds to
-`CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y` in `prj.conf`.
+`CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y` in
+`boards/ebyte_e83_nrf5340_nrf5340_cpuapp.conf` (board-specific; nRF5340 only).
 
 ## I2S wiring — nRF54L15 (Seeed Xiao)
 
@@ -93,6 +94,12 @@ not detect pinctrl overlaps, it silently corrupts the loser).
 | **D2** | P1.6 | SDOUT (DIN)  | **DIN**  |
 | 3V3 | — | — | **VIN** |
 | GND | — | — | **GND** + **AGND** (tie both) |
+
+**MCK note (nRF54L15):** the I2S20 peripheral needs an MCK PSEL routed even
+though the DAC doesn't consume it (3-wire no-MCK topology). The overlay routes
+MCK to **D3 (P1.7)** so the MCK generator can derive SCK/LRCK. D3 is occupied
+by a peripheral-driven MCK — do not use it for other signals. The DAC side
+stays 3-wire: BCK, LRCK, SDOUT only.
 
 ### CJMCU-1334 / UDA1334A config pins
 

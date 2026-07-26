@@ -107,7 +107,9 @@ int main(void)
 	}
 	LOG_INF("settings_load() OK");
 
-	/* CAS (Common Audio Service) registered automatically via CONFIG_BT_CAP_ACCEPTOR */
+	/* CAS (Common Audio Service) is NOT registered — CONFIG_BT_CAP_ACCEPTOR=n
+	 * avoids the CAP context check on ASE Enable. Available contexts are
+	 * managed through bt_pacs_set_available_contexts() directly. */
 
 	err = audio_volume_init();
 	if (err) {

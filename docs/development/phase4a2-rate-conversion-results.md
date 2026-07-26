@@ -1,7 +1,6 @@
 # Phase 4a.2 — Rate Conversion Results
 
 Date: 2026-07-26
-Handoff: `docs/development/phase4a2-rate-conversion-handoff.md`
 
 ## Result: PASS
 

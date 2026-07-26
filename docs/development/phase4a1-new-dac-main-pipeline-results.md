@@ -4,7 +4,7 @@ Date: 2026-07-26
 
 ## Outcome: TECHNICAL FAILURE — PENDING USER LISTENING
 
-Receiver streams but fails the handoff's steady-state error criteria (I2S slab
+Receiver streams but fails the steady-state error criteria (I2S slab
 full + DMA underrun). Audible output not yet confirmed.
 
 ## Pre-flight inventory
@@ -13,7 +13,6 @@ full + DMA underrun). Audible output not yet confirmed.
 git status --short
  M boards/nrf54l15dk_nrf54l15_cpuapp.overlay    (unstaged diagnostic)
  M src/bt_bap.c                                   (unstaged diagnostic)
-?? docs/development/phase4a1-new-dac-main-pipeline-handoff.md
 ```
 
 - nRF54L15 probe: Seeed Studio XIAO nrf54 CMSIS-DAP, serial `8EE9B3FF`,
@@ -135,15 +134,15 @@ Clean reconnect — no panic, no zombie state.
 
 ## Decision: TECHNICAL FAILURE
 
-Per handoff decision rules, PASS requires:
+Per acceptance criteria, PASS requires:
 
 > no steady-state slab-full/EIO/`Next buffers not supplied on time`
 
 **14 slab-full events during steady-state streaming** and **1 DMA underrun
 at stream stop** disqualify. The receiver firmware unchanged from the
-pre-handoff state fails the technical criteria even with the new DAC.
+pre-stream state fails the technical criteria even with the new DAC.
 
-Per handoff technical-failure path:
+Per technical-failure path:
 1. First-error time: slab-full at 20.07s (7.2s into 30s stream)
 2. Standalone I2S test comparison: the standalone tone test (STATUS.md)
    fed 2,016 blocks with zero EIO/underrun. Main receiver with BLE
@@ -156,7 +155,7 @@ Per handoff technical-failure path:
    single-sample-per-10ms-block limit, prevents full compensation.
 4. No narrow fix attempted — tuning the PI controller gains or output
    clamp is not narrow (affects both platforms, requires empirical tuning,
-   invokes system behavior the handoff explicitly excludes: GRTC/ASRC
+   invokes system behavior that requires GRTC/ASRC
    tuning).
 
 ## Artifacts

@@ -29,8 +29,7 @@ packets pass through as ordinary H:4 type-0x05 frames. The IPC layer
 ISO-capable, so once the USB wall is removed the whole pipeline works.
 
 Verified: 2× CIS stereo, 3000 ISO Data TX over 15 s, matching Number of
-Completed Packets, zero stalls. See `STATUS.md` and
-`SESSION_DEBUG_2026-07-25.md`.
+Completed Packets, zero stalls. See `STATUS.md`.
 
 ## Files
 

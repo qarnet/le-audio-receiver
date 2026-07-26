@@ -101,7 +101,7 @@ RXTXD.MAXCNT     0x500DD550 = 0x00000780  → 1920 bytes
 ```
 
 ENABLE=1 + STOPPED=0 proves the I2S was actively transferring during
-snapshot. PSEL values match handoff contract (D0/D1/D2/D3). MAXCNT
+snapshot. PSEL values match expected pin map (D0/D1/D2/D3). MAXCNT
 matches configured block size.
 
 ### Logic analyzer capture

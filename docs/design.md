@@ -1,16 +1,10 @@
 # LE Audio Receiver — Design Document
 
-Status: **revised 2026-07-26** (Phase 4b.2 hardware PASS — PCLK feedforward + phase PI closed-loop verified on nRF54L15; Phase 4c technical stability gate PASS — 10-minute uninterrupted stream, zero faults; external digital I2S gate PASS at DAC pins verified by fx2lafw analyzer; physical audibility UNAVAILABLE by user — not failed, not blocking further measurable work). Earlier history: accepted 2026-07-05, superseded
-`nrf54l15-drift-compensation.md` (absorbed in Part II §Clock recovery and
-Appendix A).
+Status: **revised 2026-07-27** (Phase 4 closed — PI clock recovery + dual actuators, technical stability gate PASS). Earlier history: accepted 2026-07-05.
 
-This is the consolidated design doc for evolving the project from a single-target
-nRF5340 experiment into a structured codebase supporting both **nRF5340** and
-**nRF54L15**. It records the current state, the findings from the 2026-07 repo
-review, the target architecture, and a phased plan.
-
-It **supersedes** `nrf54l15-drift-compensation.md` — that document's analysis is
-absorbed here (Part II §Clock recovery and Appendix A).
+This is the consolidated design doc for the firmware supporting both **nRF5340**
+and **nRF54L15**. It records current state, findings (historical), target
+architecture, and phased plan.
 
 Each phase below is intentionally concrete-but-not-exhaustive: detailed handoff
 documents are written per phase when work on it starts.
@@ -25,7 +19,7 @@ documents are written per phase when work on it starts.
   2 sink ASEs, LC3 decode (mono / stereo Mode A / stereo Mode B), VCP volume,
   CAS, shell diagnostics, watchdog. Audio out via I2S to UDA1334A DAC.
 - **Dual-core flash** via OpenOCD + CMSIS-DAP (Pico probe), single-session
-  `west flash` for both cores (`scripts/flash_nrf5340.tcl`,
+  `west flash` for both cores (`boards/ebyte/e83_nrf5340/support/flash_nrf5340.tcl`,
   documented in `docs/flashing.md`).
 - **Drift compensation on nRF5340**: `src/audio_drift.c` trims the HFCLKAUDIO
   APLL from ISO timestamps. Hardware-independent module with a ztest unit
@@ -41,81 +35,51 @@ documents are written per phase when work on it starts.
   — see Phase 4 for completed sub-gates and evidence.
 - Clean small modules: `audio_stats`, `audio_volume`, `audio_shell`.
 
-## Findings
+## Findings (historical — all resolved in Phases 0–4)
 
-### F1 — nRF54L15 build is broken (three causes)
+### F1 — nRF54L15 build was broken (three causes) — RESOLVED Phase 1
 
 Board files exist (`boards/nrf54l15dk_nrf54l15_cpuapp.{conf,overlay}`,
-commit `cd87bf2`) but the target cannot build:
+commit `cd87bf2`). All three causes fixed:
 
-1. `CMakeLists.txt:7` appends `boards/nrf5340dk_nrf5340_cpuapp.overlay` to
-   `DTC_OVERLAY_FILE` **unconditionally**. That overlay references `&uart0`,
-   `&i2s0`, `&qspi` — none exist on nRF54L15 → devicetree compile error.
-2. `src/audio_i2s.c:24` hardcodes `DT_NODELABEL(i2s0)`. Both board overlays
-   define an `i2s-audio` alias, but the code never uses it (regressed in
-   `1dc661b`). On nRF54L15 the node is `i2s20` → compile error.
-3. `sysbuild.conf` sets `SB_CONFIG_NETCORE_HCI_IPC=y` unconditionally; the
-   nRF54L15 is single-core (no netcore). Warning today, wrong shape either way.
+1. `CMakeLists.txt:7` no longer appends overlays unconditionally.
+2. `src/audio_i2s.c` uses `DT_ALIAS(i2s_audio)`.
+3. `sysbuild.cmake` gates `SB_CONFIG_NETCORE_HCI_IPC` on nRF5340 only.
 
-### F2 — Dead code
+### F2 — Dead code — RESOLVED Phase 0
 
-- `src/net_core_bootloader.c` + `src/net_core_fw.h`: referenced by nothing in
-  `CMakeLists.txt`. Leftover from a pre-OpenOCD flashing experiment.
-- `src/stream_tx.c` + `src/stream_tx.h`: gated behind `CONFIG_BT_AUDIO_TX`,
-  a Zephyr *sample-internal* Kconfig never set in this project; includes
-  `stream_lc3.h`, which does not exist in the repo. Cannot compile even if
-  enabled.
+- `src/net_core_bootloader.c` + `src/net_core_fw.h`: deleted.
+- `src/stream_tx.c` + `src/stream_tx.h`: deleted.
 
-### F3 — Machine-specific configuration committed to the repo
+### F3 — Machine-specific configuration committed to the repo — RESOLVED Phase 0
 
-- CMSIS-DAP probe serial `E6635C08CB1F502B` in `CMakeLists.txt`.
-- Absolute toolchain path `/home/thomas-workstation/ncs/toolchains/911f4c5c26`
-  and NCS path in `flake.nix`.
+Probe serial removed from `CMakeLists.txt`; resolved at flash time via
+`nrf-probes`. Hardcoded paths removed from `flake.nix`.
 
-### F4 — Multi-rate audio bug
+### F4 — Multi-rate audio bug — RESOLVED Phase 2
 
-The PACS capability advertises **16/24/48 kHz**, but `audio_i2s.c` is
-hardcoded to 48 kHz with fixed 480-sample blocks. A source configuring a
-16/24 kHz stream gets LC3 frames with fewer samples, played at 48 kHz with
-zero-padding per block → wrong pitch plus gaps. Either the I2S must be
-reconfigured from the ASE codec config, or the capability must advertise
-only 48 kHz until it is. (Plan: restrict to 48 kHz now — see Assumptions.)
+PACS capability now advertises **48 kHz only**. Multi-rate support is backlog.
 
-### F5 — Three coexisting build workflows
+### F5 — Three coexisting build workflows — RESOLVED Phase 0
 
-1. `AGENTS.md`: build from `~/ncs/v3.3.0` via
-   `nrfutil sdk-manager toolchain launch`.
-2. `activate.sh` → generated `env_ncs.sh` → `build.sh`.
-3. `flake.nix`: hand-rolled `west` Python wrapper against hardcoded
-   toolchain paths.
+Single workflow: `nix-nrf-dev` flake → `mkNrfShell`. All helpers in
+`scripts/bin/`. `activate.sh`, `build.sh`, `west.yml` deleted.
 
-Additionally `west.yml` (workspace manifest) exists but none of the three
-workflows uses it.
+### F6 — Clock recovery was an FLL, not a PLL — RESOLVED Phases 3–4
 
-### F6 — Clock recovery on nRF5340 is an FLL, not a PLL
+`audio_drift.c` now implements a dual-term ppm-based PI controller:
+frequency term from PCLK-vs-GRTC measurement (nRF54L15) or ISO timestamps
+(nRF5340), plus phase term from I2S buffer fill. Output in ppm, routed to
+platform-specific actuators (APLL or SAMPLE_ADJUST). The packet-repeat
+fallback no longer fires in steady state. See Part II §Clock recovery and
+`AGENTS.md` "Drift controller" for current production architecture.
 
-`audio_drift.c` measures the central's ISO interval against the local clock
-via `info->ts` deltas over 100 ms windows and feed-forwards a ppm trim into
-the APLL register. Weaknesses:
+### F7 — Misc — RESOLVED
 
-- **No phase feedback**: nothing observes whether the I2S consumer is actually
-  ahead or behind. Residual error (APLL step ≈ 3.3 ppm; 1 µs timestamp
-  quantization = 10 ppm per 100 ms window) accumulates as buffer-fill drift
-  until the packet-repeat fallback in `audio_i2s.c` fires. `AGENTS.md`
-  documents periodic `Next buffers not supplied on time` as *expected* —
-  i.e. the loop does not fully converge by design.
-- Lock threshold 16 µs / 100 ms ≈ **160 ppm** — far looser than real crystal
-  offsets (±20–50 ppm), so `LOCKED` carries little meaning.
-- Output is in APLL register units, coupling the (otherwise platform-neutral)
-  controller to nRF5340 hardware.
-
-### F7 — Misc
-
-- `main.c` is ~826 lines mixing BT setup, pairing, ASCS callbacks, LC3
-  decode, channel routing, watchdog, and the advertising loop.
-- Code style is split: `main.c` uses 2-space clang-format style; the other
-  modules use Zephyr tab style.
-- GitHub Actions CI was disabled (`9a21370`).
+- `main.c` restructured (Phase 2): BT setup, ASCS callbacks, LC3 decode,
+  channel routing, watchdog, and advertising loop split into separate modules.
+- Code style unified to Zephyr convention.
+- GitHub Actions CI remains disabled (backlog).
 
 ## Tooling reference: nix-nrf-dev
 
@@ -199,19 +163,22 @@ phases.
 The packet-repeat fallback in `audio_i2s.c` remains as an emergency path
 only; a converged loop must not trigger it in steady state.
 
-### Drift measurement
+### Drift measurement (production)
 
-- **Today (both platforms)**: ISO `info->ts` deltas. 1 µs quantization →
-  10 ppm per 100 ms window; usable with longer windows / averaging.
-- **Target (nRF54L15)**: GRTC + DPPI hardware timestamping — RADIO RX event
-  and I2S `FRAMESTART` both captured on GRTC channels (~7.8 ns resolution),
-  delta-of-deltas over N seconds gives exact ppm at zero CPU cost during
-  measurement. Far better SNR than either ISO timestamps or the old
-  queue-depth heuristic.
-- **nRF5340 equivalent**: no GRTC on nRF53; the same idea maps to
-  TIMER capture via DPPI if the ISO-timestamp signal proves too noisy.
+- **nRF54L15**: TIMER20 in TIMER mode (PCLK-derived free-running ticks).
+  GRTC compare at 1-second intervals triggers TIMER20 `TASKS_CAPTURE` via
+  GPPI, hardware-snapshotted. The GRTC ISR reads the captured count, computes
+  unsigned delta and elapsed GRTC microseconds, derives integer ppm.
+  `audio_drift_frequency_error_update()` feeds this into the PI controller.
+- **nRF5340**: ISO `info->ts` deltas (no GRTC/TIMER20 on this platform).
+  Feedforward term stays zero; phase-only PI using I2S buffer fill.
 
-### nRF54L15-specific constraints (absorbed from the superseded doc)
+**Historical (invalidated):** I2S20 FRAMESTART was considered as a sample-clock
+counter but FRAMESTART fires at DMA buffer boundaries (~100 Hz), not LRCK edges.
+Direct RADIO RX capture is forbidden (MPSL/SDC owns RADIO). Both paths are
+closed.
+
+### nRF54L15-specific constraints
 
 - No HFCLKAUDIO APLL (`NRF_CLOCK_HAS_HFCLKAUDIO == 0`); HFXO `TASKS_XOTUNE`
   is one-shot calibration, not runtime trim; HFPLL fixed at boot. The clock
@@ -530,8 +497,7 @@ Gate: only if Phase 5 (or Phase 4 + LC3) leaves insufficient cpuapp headroom
 
 # Appendix A — Options considered and rejected/deferred (nRF54L15)
 
-Absorbed from `nrf54l15-drift-compensation.md`; recorded so they are not
-re-litigated.
+Recorded here so they are not re-litigated.
 
 | Option | Disposition | Reason |
 |---|---|---|

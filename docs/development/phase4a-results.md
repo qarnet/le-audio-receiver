@@ -164,7 +164,6 @@ target's advertisements.
 | File | Change |
 |------|--------|
 | `docs/development/phase4a-results.md` | Rewrite with DK central outcome, acceptance criteria, root cause |
-| `docs/development/phase4a-central-handoff.md` | Handoff document (this test cycle) |
 
 ## Build warnings (recorded, not fixed)
 
