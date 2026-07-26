@@ -246,10 +246,10 @@ datasheet expectation: the DAC's MUTE state alters the voltage seen
 at D1/LRCK/WSEL via the logic analyzer.
 
 This is consistent with either:
-1. A board-level electrical interaction between MUTE and DIN on the
+1. A board-level electrical interaction between MUTE and LRCK/WSEL on the
    CJMCU-1334 breakout (shared pull-up, leakage path, or pcb trace
    coupling), or
-2. A damaged unit where MUTE inadvertently drives DIN.
+2. A damaged unit where MUTE inadvertently drives LRCK/WSEL.
 
 With MUTE high, D1 toggles correctly — D1 is **not blocked** on
 analyzer measurement-path repair. Phase 4 D1 is **unblocked** when
