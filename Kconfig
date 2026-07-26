@@ -76,9 +76,8 @@ config AUDIO_PERF_MEASUREMENT
 	default n
 	help
 	  Low-overhead cycle and queue measurement for LC3 decode, volume,
-	  sink push, and ISO receive paths.  Adds ~50–100 cycles per measured
-	  region; compiles to static inline no-ops when disabled.  Exposed
-	  through "audio perf" shell command.
+	  sink push, and ISO receive paths.  Compiles to static inline
+	  no-ops when disabled.  Exposed through "audio perf" shell command.
 
 config AUDIO_PERF_DEADLINE_US
 	int "Per-path deadline threshold in microseconds"

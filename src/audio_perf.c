@@ -81,6 +81,7 @@ void audio_perf_cycle_end(uint32_t start, enum audio_perf_path path)
 	k_spin_unlock(&perf.lock, key);
 }
 
+#if defined(CONFIG_ZTEST)
 void audio_perf_test_inject_cycles(enum audio_perf_path path, uint32_t elapsed)
 {
 	if (path >= AUDIO_PERF_NUM_PATHS) {
@@ -102,6 +103,7 @@ void audio_perf_test_inject_cycles(enum audio_perf_path path, uint32_t elapsed)
 
 	k_spin_unlock(&perf.lock, key);
 }
+#endif /* CONFIG_ZTEST */
 
 void audio_perf_queue_sample(int slab_free, size_t output_frames)
 {

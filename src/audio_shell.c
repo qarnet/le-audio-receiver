@@ -75,11 +75,16 @@ static int cmd_perf(const struct shell *sh, size_t argc, char **argv)
 		uint32_t avg_us = k_cyc_to_us_ceil32(avg_cyc);
 		uint32_t max_us = k_cyc_to_us_ceil32(max_cyc);
 
-		/* Deadline percentage: (max_cyc * 100) / deadline_cyc.
-		 * Use CEIL division to handle partial deadlines.
+		/* Deadline percentage: use uint64_t to avoid overflow in
+		 * max_cyc * 100.  Clamp at 999% so a single outlier does not
+		 * break the column layout.
 		 */
-		uint32_t deadline_pct =
-			deadline_cyc ? (max_cyc * 100U + deadline_cyc - 1U) / deadline_cyc : 0;
+		uint32_t deadline_pct = 0;
+		if (deadline_cyc && max_cyc) {
+			uint64_t pct = (uint64_t)max_cyc * 100ULL;
+			pct = (pct + deadline_cyc - 1U) / deadline_cyc; /* CEIL */
+			deadline_pct = pct > 999U ? 999U : (uint32_t)pct;
+		}
 
 		shell_print(sh, "  %-12s  %6u  %8u  %7u  %8u  %7u  %7u%%", perf_path_names[i],
 			    count, avg_cyc, avg_us, max_cyc, max_us, deadline_pct);

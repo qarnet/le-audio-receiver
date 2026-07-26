@@ -62,12 +62,14 @@ void audio_perf_snapshot(struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PA
 			 struct audio_perf_queue_snapshot *queue);
 void audio_perf_reset(void);
 
+#if defined(CONFIG_ZTEST)
 /**
  * Deterministic test injection: record elapsed cycles for @p path
- * without reading the hardware cycle counter.  Only call from unit
- * tests; never used in production data-path code.
+ * without reading the hardware cycle counter.  Only available in
+ * test builds (CONFIG_ZTEST).  Never present in production firmware.
  */
 void audio_perf_test_inject_cycles(enum audio_perf_path path, uint32_t elapsed);
+#endif /* CONFIG_ZTEST */
 
 #else /* !CONFIG_AUDIO_PERF_MEASUREMENT */
 
@@ -115,11 +117,13 @@ static inline void audio_perf_snapshot(struct audio_perf_path_snapshot paths[AUD
 static inline void audio_perf_reset(void)
 {
 }
+#if defined(CONFIG_ZTEST)
 static inline void audio_perf_test_inject_cycles(enum audio_perf_path path, uint32_t elapsed)
 {
 	(void)path;
 	(void)elapsed;
 }
+#endif /* CONFIG_ZTEST */
 
 #endif /* CONFIG_AUDIO_PERF_MEASUREMENT */
 

@@ -138,12 +138,14 @@ int audio_sink_init(void)
 }
 
 /*
- * Helper: record cycle measurement for a steady-state push that failed.
- * Only called when started==true and t0 was captured.
+ * Finalize performance measurement for one audio_sink_push call.
+ * Called exactly once at every exit point after cycle_start.
+ * @p measuring is the snapshot of @c started at entry; when false,
+ * this call was a pre-fill push and no cycle data is recorded.
  */
-static void perf_end_failed_push(uint32_t t0)
+static void perf_finalize_push(bool measuring, uint32_t t0)
 {
-	if (t0 != 0) {
+	if (measuring) {
 		audio_perf_cycle_end(t0, AUDIO_PERF_PATH_SINK_PUSH);
 	}
 }
@@ -156,10 +158,14 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 		return -EIO;
 	}
 
-	/* Phase 5.0: cycle measurement for steady-state pushes only.
-	 * Pre-fill path returns early and is excluded from measurement.
+	/* Phase 5.0: only measure steady-state pushes.  Pre-fill is excluded
+	 * by snapshotting 'started' into a local bool before the pre-fill
+	 * branch even executes.  The bool (not t0==0 sentinel) gates every
+	 * call to perf_finalize_push because zero is a valid cycle counter
+	 * value.
 	 */
-	uint32_t t0 = started ? audio_perf_cycle_start() : 0;
+	bool measuring = started;
+	uint32_t t0 = measuring ? audio_perf_cycle_start() : 0;
 
 	/*
 	 * Step 0: rate conversion — compute output frame count for
@@ -251,7 +257,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	if (ret < 0) {
 		LOG_WRN("I2S slab full — dropping frame");
 		audio_stats_i2s_underrun();
-		perf_end_failed_push(t0);
+		perf_finalize_push(measuring, t0);
 		return -ENOMEM;
 	}
 
@@ -314,7 +320,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 			audio_stats_stream_reset();
 			started = false;
 		}
-		perf_end_failed_push(t0);
+		perf_finalize_push(measuring, t0);
 		return ret;
 	}
 
@@ -333,7 +339,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 		audio_perf_repeat_fallback();
 	}
 
-	audio_perf_cycle_end(t0, AUDIO_PERF_PATH_SINK_PUSH);
+	perf_finalize_push(measuring, t0);
 	return 0;
 }
 
