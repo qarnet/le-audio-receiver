@@ -8,7 +8,8 @@ Date: 2026-07-26
 
 Two capture attempts run. D0 and D2 work correctly. D1 (P1.5) is stuck HIGH
 across both captures — zero transitions. Pinctrl clean, GPIO API returns
-success on all operations. Hardware fault on P1.5, not a firmware bug.
+success on all operations. P1.5 electrical state is unresolved; analyzer D1
+remained high despite successful firmware GPIO writes.
 
 ---
 
@@ -175,40 +176,45 @@ builds clean (`fw-build-5340`, 361,068 bytes flash).
 
 ---
 
-## Analysis
+## Proven facts
 
-D0 and D2 both produce the correct four-state waveform. All `gpio_pin_configure()`
-and `gpio_pin_set()` calls return 0 (confirmed by error-checking code). The
-resolved devicetree has zero PSEL claims on P1.4/P1.5/P1.6. GPIO API works.
+1. Test app GPIO calls return zero — all `gpio_pin_configure()` and
+   `gpio_pin_set()` calls succeed (error-checking code in `set_all_pins()`).
+2. Resolved DT shows no PSEL claimant for P1.4, P1.5, or P1.6 — pinctrl
+   ownership is clean.
+3. Analyzer sees correct D0 (P1.4) and D2 (P1.6) waveforms matching the
+   four-state pattern, and stable 3V3 on D3.
+4. Analyzer D1 (P1.5) remained HIGH across all 3,000,000 samples — zero
+   edges in 3 seconds.
 
-D1/P1.5 is stuck HIGH — zero transitions in 3 seconds. The firmware writes D1
-LOW at every state except B (100 ms HIGH per 400 ms cycle). The electrical
-signal on the pin does not follow the register writes.
+## Unresolved
 
-No DT evidence of pinctrl conflict. No claimed external pull without direct
-evidence. Observed behavior is Pin 5 of GPIO port 1 on this specific Xiao board
-being held HIGH by an unknown electrical path. Possible root causes (not yet
-disambiguated):
+D1 is electrically HIGH for the entire capture despite firmware writes toggling
+P1.5 LOW for 300 ms of every 400 ms cycle. The assertion signals a discrepancy
+between firmware register state and observed electrical state, but its root
+cause is not isolated. Unknowns include:
 
-- Short to 3V3 or VDD on the Xiao PCB
-- Damaged GPIO pad (pin 5 of port 1) on the nRF54L15 die
-- PCB trace coupling P1.5 to a permanently-driven rail
+- Analyzer D1 probe placement and contact
+- DAC or jumper wire loading on P1.5
+- Xiao PCB trace behavior
+- External short or pull on P1.5
+- SoC pad condition (pin 5 of GPIO port 1)
 
-Recommended hardware debugging:
+## Next action — physical isolation only
 
-1. Remove the UDA1334A DAC and all jumper wires from the Xiao.
-2. Measure P1.5 voltage with a multimeter (powered, no firmware driving it).
-3. Measure P1.5 voltage while running the four-state GPIO pattern test.
-4. Compare against P1.4 and P1.6 on the same Xiao board.
-5. If P1.5 remains HIGH regardless of GPIO output register, the pin is damaged
-   or shorted. Try a different Xiao board.
+1. Disconnect the UDA1334A DAC and all nonessential wires from the Xiao.
+2. Re-seat the D1 analyzer probe and verify ground reference.
+3. Measure P1.5 voltage with a multimeter while the GPIO pattern test
+   alternates output states.
+4. Compare P1.5 voltage with P1.4 and P1.6 under identical test conditions.
+5. Only after these steps, consider board replacement or nRF54L15 errata
+   lookup for GPIO port 1 pin 5 limitations.
 
 ---
 
 ## Next step
 
-Phase remains **BLOCKED**. D0 and D2 GPIO are fully verified. P1.5/D1 has a
-hardware fault on this specific Xiao board — not a firmware, DT, or GPIO API
-issue. Next action: hardware diagnosis of P1.5 with multimeter. If confirmed
-damaged, replace Xiao board. If board is fine, investigate nRF54L15 Errata
-for GPIO port 1 pin 5 limitations.
+Phase remains **BLOCKED**. D0 and D2 GPIO are fully verified. P1.5 electrical
+state is unresolved — analyzer D1 remained high despite successful firmware
+GPIO writes. Proceed with physical isolation steps above before drawing any
+conclusion about board or silicon.
