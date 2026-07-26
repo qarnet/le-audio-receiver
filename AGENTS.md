@@ -81,7 +81,9 @@ ppm output) + actuator interface with two actuators: APLL (nRF5340) and
 SAMPLE_ADJUST (nRF54L15, sample insert/drop). The nRF54L15 target now builds,
 flashes, boots, and streams audio with I2S + BT working (technical stability
 gate PASS: 10-minute 60,000-frame stream, zero faults). Phase 5 (ASRC on
-cpuapp) and Phase 6 (FLPR offload) remain conditional/deferred.
+cpuapp) and Phase 6 (FLPR offload) are now intended implementation work —
+see `docs/design.md` for full staged plans. A BabbleSim cross-cutting
+verification track runs in parallel; not a release blocker.
 
 Consequences for work in this repo today:
 

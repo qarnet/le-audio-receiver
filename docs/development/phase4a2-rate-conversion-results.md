@@ -95,14 +95,19 @@ nRF54L15 flashed via OpenOCD (CMSIS-DAP `8EE9B3FF`), verified 447,408 bytes.
   `docs/design.md` §Phase 4b).
 - **Phase 5 ASRC quality** — the nearest-neighbor conversion removes
   ~381 output frames/s at nominal 47,619-vs-48,000 mismatch — artifact
-  audibility remains unmeasured and Phase 5 quality work remains
-  conditional. A proper ASRC (linear/cubic interpolation) would be needed
+  audibility remains unmeasured. Phase 5 quality work is now planned
+  implementation work *(superseded 2026-07-27 per `docs/design.md`)*.
+  A proper ASRC (linear/cubic interpolation) would be needed
   for production quality.
 - **User listening** — not yet performed. DAC wired and functional; audible
   confirmation pending.
 - **fx2lafw logic analyzer** — not available. No frequency-domain measurement
   of LRCK/RX rate. LRCK measured empirically at ~47,619 Hz from standalone
   GPIO pattern test.
+
+*(Supersession 2026-07-27: Phase 5 ASRC is now planned implementation work
+per `docs/design.md` revision — no longer conditional on listening evidence.
+The engineering risk of ~86 discontinuous samples/s is sufficient rationale.)*
 
 ## Math
 

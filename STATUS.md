@@ -42,8 +42,8 @@ teardown.  Phase 4c (10-minute stability + listening test): **Technical
 PASS** (60,000 frames / 600.00 s, zero disconnect, zero
 slab-full/underrun/warning/error/fault, clean teardown).  Physical
 audibility UNAVAILABLE (user did not provide listening report) — not failed,
-not blocking further measurable work.  Phase 5 conditional on listening
-evidence or another measurable quality criterion.
+not blocking further measurable work. Phase 5 ASRC is planned implementation
+work — see `docs/design.md` Phase 5.
 See `docs/development/phase4b1-results.md` for Phase 4b.1 hardware PASS
 evidence (3,000 frames / 30 s, +1,665..+1,884 ppm),
 `docs/development/phase4b2-results.md` for Phase 4b.2 hardware PASS
@@ -69,7 +69,7 @@ nearest-neighbor rate converter maps 480 input → 476/477 output frames per
 block. See `docs/development/phase4a2-rate-conversion-results.md`. Phase 4b
 GRTC + PCLK feedforward + SAMPLE_ADJUST now operational (see Phase 4b.1/4b.2
 results above). Physical audibility UNAVAILABLE (user did not provide
-listening report); Phase 5 (ASRC) conditional on listening evidence.
+listening report); Phase 5 ASRC is planned implementation work.
 
 ### Build warning diagnostics (2026-07-27)
 
@@ -156,9 +156,16 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
  1. ~~**Phase 4b.1** — GRTC-referenced timing foundation~~ → PASS
  2. ~~**Phase 4b.2** — PCLK feedforward + phase PI~~ → PASS
  3. ~~**Phase 4c** — Hardware streaming verification~~ → Technical PASS
- 4. **Phase 5** — ASRC quality improvement remains conditional/deferred until
-    a measurable digital-quality criterion or physical listening evidence
-    demonstrates need.
+ 4. **Phase 5** — ASRC quality upgrade (intended implementation work).
+    Instrumentation baseline first, then stateful cross-block fixed-point
+    linear-interpolation ASRC on cpuapp. See `docs/design.md` Phase 5.
+ 5. **Phase 6** — FLPR offload (intended implementation work). Move accepted
+    ASRC from cpuapp to FLPR. Staged: handshake/rings → identity loopback →
+    ASRC port → reset/fault/fallback → optimize. See `docs/design.md` Phase 6.
+ 6. **BabbleSim** — cross-cutting verification track (research + implementation).
+    Provision environment, fix sysbuild/harness, build smallest-useful
+    nRF5340bsim dual-core scenario. Runs in parallel with Phase 5. See
+    `docs/design.md` BabbleSim section.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 

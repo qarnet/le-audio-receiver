@@ -43,6 +43,7 @@ Status: technical PASS — audibility pending
 - Sample adjustments are frequent (~86/s) at ~+1,800 ppm PCLK offset —
   expected for SAMPLE_ADJUST actuator with HFINT/PCLK mismatch. This does
   not indicate controller non-convergence.
-- Audible artifact character and acceptability remain unmeasured. Whether
-  Phase 5 (linear ASRC) is needed depends solely on this physical listening
-  test.
+- Audible artifact character and acceptability remain unmeasured.
+  *(Supersession 2026-07-27: Phase 5 ASRC is now planned implementation work
+  per `docs/design.md` revision — engineering risk of ~86 discontinuous
+  inserts/s is sufficient rationale, not dependent on listening test.)*

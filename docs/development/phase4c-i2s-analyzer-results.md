@@ -45,6 +45,9 @@ Status: digital PASS — audibility UNAVAILABLE
   committed.
 - Physical audibility marked UNAVAILABLE by user, not failed and not blocking
   further measurable work. Analog output quality is not claimed.
-- Phase 5 quality ASRC cannot be justified by listening evidence; left
-  conditional/deferred unless another measurable quality criterion is chosen.
+- ~~Phase 5 quality ASRC cannot be justified by listening evidence; left
+  conditional/deferred unless another measurable quality criterion is chosen.~~
+  *(Superseded 2026-07-27: Phase 5 is now planned implementation work
+  per `docs/design.md` revision — engineering risk of ~86 discontinuous
+  inserts/s is sufficient rationale.)*
   No decoder waveform evidence beyond edge/activity metrics was collected.

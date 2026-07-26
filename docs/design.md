@@ -1,6 +1,6 @@
 # LE Audio Receiver — Design Document
 
-Status: **revised 2026-07-27** (Phase 4 closed — PI clock recovery + dual actuators, technical stability gate PASS). Earlier history: accepted 2026-07-05.
+Status: **revised 2026-07-27** (Phase 4 closed — PI clock recovery + dual actuators, technical stability gate PASS; Phase 5 ASRC + Phase 6 FLPR offload now planned as intended implementation work). Earlier history: accepted 2026-07-05.
 
 This is the consolidated design doc for the firmware supporting both **nRF5340**
 and **nRF54L15**. It records current state, findings (historical), target
@@ -228,7 +228,8 @@ hardware exists for it.
 
 # Part III — Phases
 
-Phases are sequential unless marked conditional. Each phase ends with the
+Phases 0–4 are sequential (completed). Phase 5 and Phase 6 are sequential
+with each other; BabbleSim runs in parallel. Each phase ends with the
 nRF5340 target building, flashing, and streaming, and (where applicable)
 the nRF54L15 target building.
 
@@ -344,8 +345,8 @@ for current closed status.
   - Residual: nearest-neighbor conversion removes about 381 frames/s at
     nominal mismatch. Artifact audibility and character are unmeasured.
     Peer-drift correction addressed by Phase 4b (GRTC feedforward + phase
-    PI, now complete). Phase 5 quality ASRC stays conditional on listening
-    evidence.
+    PI, now complete). Phase 5 quality ASRC is planned implementation
+    work — see Phase 5 section.
 
 ### Phase 4b — Supported ISO timestamp presentation scheduling — **4b.1 PASS, 4b.2 HARDWARE PASS (2026-07-26)**
 
@@ -426,9 +427,7 @@ the technical stability gates have been verified. See
   See `docs/development/phase4c-i2s-analyzer-results.md`.
 - **Audible quality**: UNAVAILABLE — user did not provide listening report.
   This is not a failure and does not block further measurable work. Analog
-  output quality is not claimed. Phase 5 quality ASRC cannot be justified
-  by listening evidence; left conditional/deferred unless another measurable
-  quality criterion is chosen.
+  output quality is not claimed.
 
 ### Phase 4 risks (tracked, not deferred)
 
@@ -437,7 +436,8 @@ the technical stability gates have been verified. See
   on the 128 MHz cpuapp. nRF5340 splits this across two cores. If the
   budget blows, ISO RX packet loss (audio gaps) or I2S underruns result.
   Mitigation: measure recv_cnt vs. expected SDU rate during 4a; if drops
-  scale with LC3 complexity, escalate to Phase 6 (FLPR offload) earlier.
+  scale with LC3 complexity, advance Phase 6 (FLPR offload) from the already-planned
+  schedule. Phase 5.0 instrumentation gives CPU budget numbers.
 - **R-4.2 Central ISO/CIS quirks**: the nRF5340DK `hci_uart` central
   is the proven transport (ISO verified at 3000 packets/15 s). Any
   other central (USB dongle, built-in adapter) must be independently
@@ -453,31 +453,270 @@ indefinitely-running audio stream on the nRF54L15 (verified: 10 minutes,
 zero faults); external digital I2S gate PASS at DAC pins (verified:
 fx2lafw, 30 s stream, BCK/LRCK ratio 31.999701); GRTC drift measurement
 active. Physical audibility marked UNAVAILABLE by user — not failed, not
-blocking further measurable work. Phase 5 gated on a measurable quality
-criterion (listening evidence unavailable; default to deferred unless
-another criterion is chosen).
+blocking further measurable work.
 
-## Phase 5 — ASRC quality upgrade *(conditional / deferred)*
+## Phase 5 — ASRC quality upgrade **(intended implementation work)**
 
-Gate: listening evidence unavailable (user did not provide audibility
-report for Phase 4c). No measurable quality criterion has been chosen
-to justify Phase 5. Left conditional/deferred until either physical
-listening test reveals audible artifacts from ~86/s sample inserts at
-~+1,800 ppm PCLK offset, or another measurable quality criterion is
-specified.
+Phase 4 proves stability — 10-minute stream, zero faults, controller
+converged. But at measured PCLK offsets (+1,523..+2,058 ppm),
+SAMPLE_ADJUST produced ~86 inserts/s (51500 insertions/13 drops over
+10 min). Each sample insert/drop is a temporal discontinuity in the PCM
+stream. Even without listening evidence, frequent discontinuous insertion
+at this rate is sufficient engineering risk to require a continuous ASRC:
+the measured insert rate means a discontinuity roughly every 5.6 ms.
 
-- Fixed-point linear-interpolation ASRC on cpuapp; same controller, ratio
-  actuator. Measure cpuapp headroom before/after (feeds R-4.1 decision).
+Phase 5 adds a stateful cross-block fixed-point linear-interpolation ASRC
+on cpuapp. The same PI controller feeds the resampler ratio; the resampler
+choice is separated from actuator choice. APLL nRF5340 behavior stays
+unchanged. SAMPLE_ADJUST remains selectable during Phase 5 for A/B comparison
+and rollback; it is removed only after ASRC acceptance.
 
-## Phase 6 — FLPR offload *(conditional)*
+### 5.0 — Instrumentation baseline
 
-Gate: only if Phase 5 (or Phase 4 + LC3) leaves insufficient cpuapp headroom
-(R-4.1 realized).
+Before adding ASRC code, instrument the existing data path to capture the
+SAMPLE_ADJUST baseline: callback-deadline headroom for Mode A and Mode B,
+ASRC/data-path CPU budget, slab-range statistics (min/max/mean free count),
+repeat/underrun/push-failure counters over 10-minute runs. This baseline
+informs acceptance decisions and feeds the R-4.1 CPU-budget question with
+measured numbers, not estimates.
 
-- Move ASRC to FLPR: shared-SRAM ring buffers, VEVIF/icmsg signaling,
-  FLPR reads GRTC directly for drift; fixed-point only (no FPU).
-- Accept +1 frame (~10 ms) latency for the extra buffer hop.
-- Risk to re-assess at gate time: NCS FLPR/HPF framework maturity.
+### 5.1 — Resampler semantics (controller-preserving)
+
+The source-step semantics preserve the existing controller output sign
+convention:
+
+- `source_step = input_rate / physical_output_rate * (1 + correction_ppm / 1e6)`
+- positive ppm → source_step > 1.0 → consume source faster → equivalent
+  to sample drop over time.
+- negative ppm → source_step < 1.0 → consume source slower → equivalent
+  to sample insert over time.
+
+Controller output goes directly into the ratio calculation; no sign flip
+or ambiguous "speed up / slow down" wording. The ratio is exposed as a
+Q32.32 fixed-point `source_step` (or equivalently justified fixed-point
+format chosen during phase design).
+
+### 5.2 — ASRC implementation
+
+- Stateful cross-block stereo s16 linear interpolation.
+- Continuous phase accumulator and sample history (one previous sample per
+  channel) carried across block boundaries — no per-block reset.
+- No heap allocation; stack/static only. Bounded output capacity: output
+  never exceeds `input_samples * max_source_step + 2` samples per channel.
+- Reset state on stream stop/disconnect. Silence prefill (I2S preamble
+  blocks) must not consume source phase — the resampler only advances
+  phase against real decoded audio.
+- Honor actual `sample_count` from the rate converter; variable write
+  lengths (476/477 frames) are already the norm.
+- Account for current 481-frame slab capacity (`I2S_NRFX_TX_BLOCK_COUNT=12`
+  → 2×480 stereo = 960 samples per block; the slab allocator guarantees
+  room).
+
+### 5.3 — Testing
+
+- **Unit tests** (ztest, native_sim): long-run frame totals, sign chain
+  (positive ppm → fewer output samples over time), block-boundary
+  phase continuity, chunking invariance (same output regardless of input
+  block sizes), stereo isolation (L and R independent), constant/ramp/
+  full-scale input patterns, output capacity/canary checks, abrupt ppm
+  changes, deterministic 60,000-block run, host-reference digital-quality
+  comparison against Python float64 reference.
+- **Hardware tests**: Mode A + Mode B 10-minute autonomous central streams
+  on nRF54L15; zero faults/underruns/repeats/capacity failures; measured
+  callback deadline margin with ASRC active; external I2S activity and
+  BCK/LRCK ratio; objective digital PCM comparison loopback if a
+  trustworthy digital capture path can be set up.
+- **Regression**: nRF5340 builds and streams unchanged (APLL actuator,
+  identity resampler or bypass).
+
+### 5.4 — Acceptance
+
+Both targets build. All unit tests pass. nRF5340 regression zero. nRF54L15
+Mode A + Mode B 10-minute streams with zero faults. Measured callback
+deadline margin. Audibility is optional observation only — never a gate.
+SAMPLE_ADJUST removed from Kconfig choice after acceptance.
+
+### 5.5 — Likely files
+
+Based on current repo truth, likely new/modified files (exact API is a
+phase-design output, not frozen here):
+
+- `src/audio_asrc.{c,h}` — resampler module (state, step, stereo s16 linear
+  interp).
+- `src/audio_clock_actuator.h` — new `AUDIO_CLOCK_ACTUATOR_ASRC` choice entry.
+- `Kconfig` — new choice option, optional `ASRC_SOURCE_STEP_BITS` config.
+- `src/audio_i2s.c` — actuator-agnostic consume path (already
+  `consume_sample_adjustment()`), extended for ASRC.
+- `tests/unit/asrc/` — new test suite.
+
+## Phase 6 — FLPR offload **(intended implementation work)**
+
+Phase 6 moves the accepted fixed-point ASRC from cpuapp to the nRF54L15
+FLPR (RISC-V VPR @ 128 MHz). Goal is implementation, not merely gated on
+CPU pressure. Measurements from Phase 5 instrumentation inform the
+offload decision but do not gate it — the offload is intended regardless.
+
+Uses the generic Zephyr FLPR image first with SRAM execution
+(`nrf54l15dk/nrf54l15/cpuflpr`). HPF (High-Performance Flash execution)
+stays optional optimization because experimental in NCS v3.3.0 and no
+official ASRC framework exists for it. Stages build incrementally.
+
+### Stage 0 — Boot, handshake, memory map
+
+- Build a separate Zephyr/sysbuild FLPR image alongside cpuapp.
+- Establish cpuapp↔FLPR boot handshake: cpuapp starts FLPR via VEVIF
+  or reset release, FLPR signals ready.
+- Memory map: reserve shared SRAM region (`RAM_00` for DMA/ISR-critical
+  data stays on cpuapp side; shared/FLPR placement measured).
+- Extend current OpenOCD flash helper to program the FLPR image at the
+  correct RRAM offset (`0x165000` in cpuapp address space — verified
+  by write/read-back).
+- Verify: both images load, FLPR boots and signals ready, cpuapp logs
+  handshake.
+
+### Stage 1 — Shared SPSC PCM rings + ICMsg/VEVIF control
+
+- Allocate two single-producer-single-consumer ring buffers in shared SRAM:
+  one cpuapp→FLPR (decoded PCM blocks + per-block metadata: correction_ppm,
+  sample_count, stereo flag, sequence number), one FLPR→cpuapp (resampled
+  PCM blocks + metadata).
+- Control channel over ICMsg/VEVIF (no per-block copied payload on the
+  control path — only commands, acks, error codes).
+- SPSC ownership: cpuapp writes input ring, FLPR reads input ring; FLPR
+  writes output ring, cpuapp reads output ring. No locks — barriers and
+  cache handling per ARMv8-M / RISC-V coherence rules.
+- MPSL-owned RADIO and reserved peripherals untouched.
+- VEVIF channels based on official IPC sample (`nrf/samples/ipc/`).
+- Verify: ordered message stress test, bit-exact ring wrap test, forced
+  stall/recovery.
+
+### Stage 2 — Identity loopback
+
+- FLPR receives a PCM block, copies it unchanged to the output ring,
+  signals done.
+- cpuapp consumes output ring instead of direct I2S slab push.
+- Prove end-to-end: Mode A 10-minute stream, zero faults, no timing
+  regression vs pre-offload.
+- nRF5340 builds unchanged (no FLPR on nRF53).
+
+### Stage 3 — Move accepted fixed-point ASRC
+
+- Port the Phase 5 cpuapp ASRC to FLPR as fixed-point only.
+  **RV32E e/m/c constraints**: no FPU, no A (atomic) extension —
+  use load/store with barriers for SPSC, `__mulsi3`/`__divsi3` from
+  libgcc for Q32.32 multiply. No heap — stack/static only.
+- FLPR receives correction_ppm per block from cpuapp (cpuapp still owns
+  the PI controller and ISO timestamp interpretation — only the
+  heavy arithmetic moves).
+- FLPR does NOT read GRTC for control initially; GRTC used for profiling
+  and deadline measurement only in this stage.
+
+### Stage 4 — Reset, fault, fallback
+
+- FLPR watchdog or heartbeat timeout → cpuapp detects stall → resets FLPR
+  → falls back to cpuapp identity path → re-arms handshake → resumes ASRC
+  offload. Graceful degradation, no stream loss beyond a brief glitch.
+- Verify: FLPR forced reset during streaming, recovery within one block
+  period, nRF5340 unaffected.
+
+### Stage 5 — Optimize and compare
+
+- From Stage 3 measurements: compare ICBMsg vs raw VEVIF signaling latency.
+- Evaluate HPF (execution from flash) only if measured SRAM contention or
+  deadline pressure justifies it — HPF is experimental, not assumed.
+- Tune ring sizes, block scheduling, and deadline margins from real
+  Mode A/B data.
+
+### Gate criteria per stage
+
+| Stage | Gate |
+|---|---|
+| 0 | FLPR image boots, handshake OK, memory map verified |
+| 1 | Ordered message stress, bit-exact ring wrap, forced stalls |
+| 2 | Identity 10-minute Mode A run, nRF5340 unaffected |
+| 3 | Host-reference ASRC quality, Mode A/B 10-minute runs |
+| 4 | Forced FLPR reset/recovery, fallback path, nRF5340 unaffected |
+| 5 | Memory/cycle/deadline evidence, architecture and tuning choices documented |
+
+### Constraints
+
+- **RV32E e/m/c no FPU/no A extension**: fixed-point mandatory, no hardware
+  atomics — barriers + ordered stores for SPSC.
+- **RAM_00 for DMA/ISR-critical paths**: I2S DMA slabs stay on cpuapp in
+  RAM_00. Shared SRAM for rings uses a measured, profiled region.
+- **MPSL RADIO and reserved resources**: never touched by FLPR code.
+- **VEVIF channels**: based on official `nrf/samples/ipc/` sample.
+- **Separate cpuapp/cpuflpr image packaging**: sysbuild multi-image
+  configuration; OpenOCD flash helper extended.
+- **nRF5340 unchanged**: builds, flashes, streams with no FLPR path.
+
+### Phase 6 goal
+
+Implemented offload — not a conditional optimization. Measurements from
+Phases 5/6 choose architecture and tuning; implementation only stops for
+proven hardware or SDK impossibility that needs an explicit redesign
+(e.g. an NCS v3.3.0 FLPR limitation that cannot be worked around).
+
+## BabbleSim — cross-cutting verification track
+
+BabbleSim is a planned research-then-implementation track that runs in
+parallel with Phases 5–6. It is not a release blocker until the
+environment is provisioned and the test scenario is valid. It complements,
+never substitutes, native unit tests and real-hardware central-driven tests.
+
+### Current state (NCS v3.3.0)
+
+- `nrf5340bsim/nrf5340/cpuapp` and `nrf5340bsim/nrf5340/cpunet`: supported;
+  BAP/CIS/ISO via SW Split.
+- `nrf54l15bsim/nrf54l15/cpuapp`: supported.
+- `nrf54l15bsim/nrf54l15/cpuflpr`: **explicitly unsupported** (CMake
+  `FATAL_ERROR` in `boards/native/nrf_bsim/CMakeLists.txt`).
+- I2S is removed/unmodeled in bsim (no sample clock, no DMA, no audio
+  path). SDC/MPSL, real PCLK/GRTC drift fidelity, APLL register modelling,
+  FLPR offload, CPU budget, DAC and audio quality cannot be validated.
+
+### Research and setup task
+
+- Provision BabbleSim separately; only with explicit user approval.
+  Do not embed install commands in AGENTS.md as automatic actions.
+- Environment variables: `BSIM_OUT_PATH`, `BSIM_COMPONENTS_PATH`.
+- Current Twister/FORTIFY environment issue must be resolved before
+  automated runs work (noted 2026-07-26; not a code bug — host toolchain
+  interaction).
+- Official group-filter/update/build requirements from the BabbleSim
+  documentation.
+
+### Current scaffold audit (`tests/bsim/`)
+
+- `CMakeLists.txt`: builds receiver sources against `nrf5340bsim`; stub
+  audio sink (`audio_sink_stub.c`) counts pushes, not real LC3; no
+  dual-core sysbuild controller.
+- `test_scripts/le_audio_receiver.sh`: launches receiver + upstream
+  Zephyr `unicast_client` via `sh_common.source`. Upstream client sends
+  mock bytes, not valid LC3 — useless for decode/ASRC validation.
+- `testcase.yaml`: `build_only: false` but scenario is incomplete.
+
+### Smallest useful scenario (planned)
+
+1. Fix sysbuild: nRF5340bsim receiver + custom BAP client + SW Split
+   cpunet in a single BabbleSim simulation.
+2. Advertising → pairing → PACS/ASCS → one ASE → CIS start → valid LC3
+   fixture (pre-encoded, constant quality, known PCM output).
+3. Sequence-number and timestamp validation, zero decode errors, PCM hash
+   and sample-value bounds.
+4. Lifecycle: stop, disconnect, no late push.
+5. Later: Mode A / Mode B / reconnect / error injection.
+
+### Exit criteria for acceptance into regular gate
+
+- Environment provisioned, script verified.
+- Dual-core sysbuild simulation runs reliably (Twister or manual).
+- Smallest-useful scenario passes repeatably.
+- Results documented as complement to, not replacement for, hardware tests.
+
+BabbleSim cannot validate ASRC quality, I2S behaviour, SDC realism, FLPR
+offload, or hardware stability — those remain hardware-only gates. It is
+a fast feedback loop for BAP protocol, LC3 pipeline, and controller logic.
 
 ## Backlog (unscheduled)
 
@@ -489,7 +728,8 @@ Gate: only if Phase 5 (or Phase 4 + LC3) leaves insufficient cpuapp headroom
   production-hardware path if a custom PCB happens; I2S slave mode, ppm →
   I²C write, controller unchanged.
 - CI revival (build matrix for both boards + unit tests + bsim).
-- bsim test expansion (ISO streaming scenarios).
+- bsim test scenario expansion (see BabbleSim track above — smallest-useful
+  scenario is planned; beyond that, Mode A/B, reconnect, error injection).
 - GRTC-based drift measurement on nRF5340 (no GRTC there — equivalent is
   TIMER capture via DPPI; only if ISO-ts proves too noisy in practice).
 
@@ -501,8 +741,8 @@ Recorded here so they are not re-litigated.
 
 | Option | Disposition | Reason |
 |---|---|---|
-| A. ASRC on cpuapp | **Adopted, conditional/deferred** (Phase 5) | 5–15 % cpuapp load at 48 kHz stereo; linear interp cheap; gated on measurable quality criterion or listening evidence |
-| B. ASRC on FLPR | **Adopted, gated** (Phase 6) | Zero cpuapp impact; costs IPC + fixed-point port + ~10 ms latency |
+| A. ASRC on cpuapp | **Adopted** (Phase 5 — intended implementation) | Linear interpolation at 48 kHz stereo; continuous-phase cross-block; measured CPU budget from Phase 5.0 instrumentation replaces estimates |
+| B. ASRC on FLPR | **Adopted** (Phase 6 — intended implementation) | Zero cpuapp ASRC load; costs IPC + fixed-point port + ~10 ms latency; RV32E no-FPU required |
 | C. FLPR bit-banged BCLK/LRCK (I2S slave) | **Rejected** | Any FLPR stall (cache miss, IPC, VEVIF) becomes clock jitter → audible; burns the FLPR entirely; needs physical jumper wires. Only unique benefit was bit-perfect output — for 16-bit LC3-decoded audio, resampling error sits below the codec noise floor, so the benefit is inaudible here. |
 | D. PWM-generated I2S clock (slave) | **Rejected** | Same bit-perfect argument as C; limited frequency resolution (~PCLK/N steps); needs physical wires + DPPI choreography to keep LRCK = BCLK/64. |
 | E. Single-sample insert/drop | **Adopted** (Phase 4) | Degenerate ASRC; ~10⁴× smaller artifact than the 10 ms packet repeat; no hardware change. |
@@ -559,6 +799,6 @@ Current evidence, not forward-looking plan. Separated by verification state.
   `docs/development/phase4c-i2s-analyzer-results.md`.
 - Physical audibility of ~86/s sample inserts at ~+1,800 ppm PCLK offset
   marked UNAVAILABLE by user — not failed, not blocking.
-- Phase 5 (linear ASRC) decision deferred; no listening evidence to
-  justify it. Requires either a physical listening test or another
-  measurable quality criterion.
+- Phase 5 (linear ASRC) is planned implementation work — engineering
+  risk from ~86 discontinuous sample inserts/s at ~+1,800 ppm PCLK offset
+  is sufficient rationale without physical listening evidence.
