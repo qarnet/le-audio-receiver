@@ -168,6 +168,104 @@ restored via `fw-flash-54l15`: 447124 bytes written and verified.
 Unstaged receiver diagnostics preserved (no rebuild — existing
 `build/nrf54l15/merged.hex` used).
 
+## DAC MUTE isolation check (2026-07-26 17:15)
+
+Test condition: DAC (CJMCU-1334 / UDA1334A) remains connected to
+P1.04 (BCK), P1.05 (DIN), P1.06 (LRCK). User set DAC MUTE pin HIGH
+(analog output muted). No other wiring changed.
+
+Per UDA1334A datasheet, MUTE high mutes analog audio output. It does
+not drive, disconnect, or otherwise control BCLK/LRCK/DIN digital
+input pins. Therefore no D1 change is expected unless board wiring
+or DAC behavior differs from documented topology.
+
+Test firmware: same `build/test-nrf54l15-d1-register-state/merged.hex`
+(committed). No source change.
+
+### Flash
+
+```
+Probe 8EE9B3FF (auto-detected: target identifies as nRF54L15)
+
+openocd -c "adapter serial 8EE9B3FF" \
+  -f ~/ncs/v3.3.0/zephyr/boards/seeed/xiao_nrf54l15/support/openocd.cfg \
+  -c "init" -c "reset halt" \
+  -c "nrf54l-load build/test-nrf54l15-d1-register-state/merged.hex" \
+  -c "verify_image build/test-nrf54l15-d1-register-state/merged.hex" \
+  -c "reset run" -c "shutdown"
+
+30396 bytes written at address 0x00000000
+3252 bytes written at address 0x000076c0
+downloaded 33648 bytes in 0.469762s (69.949 KiB/s)
+verified 33648 bytes in 0.070238s (467.829 KiB/s)
+```
+
+### Capture
+
+```
+sigrok-cli -d fx2lafw --config samplerate=100k -C D0,D1,D2,D3 \
+  --time 12000 -o /tmp/phase4-d1-mute-high-capture.csv -O csv
+```
+
+### Result
+
+Raw channel counts (1,200,000 samples, 12s at 100 kHz):
+
+| Channel | Value | Sample count  | Meaning                      |
+|---------|-------|--------------|-------------------------------|
+| D0      | 0     | 1,199,999    | LOW (as expected)             |
+| D1      | 0     | 599,880      | LOW — **toggling**            |
+| D1      | 1     | 600,119      | HIGH — **toggling**           |
+| D2      | 0     | 1,199,999    | LOW (as expected)             |
+| D3      | 1     | 1,199,999    | HIGH (3V3 rail)               |
+
+D1 toggles approximately 50/50 — consistent with 2s low / 2s high
+pattern. D0 and D2 read LOW throughout. D3 reads HIGH (3V3 rail).
+
+This is a **change from the prior capture** (MUTE low, section above):
+in that capture D1 was stuck HIGH for all 1,200,000 samples. With MUTE
+high, D1 correctly toggles as the register evidence predicted.
+
+The analyzer is therefore functional on all four channels. D0 and D2
+were working in both captures. D1 was the only anomalous channel, and
+its behavior flips between MUTE-low (stuck HIGH) and MUTE-high (toggling).
+
+### Conclusion
+
+**DAC MUTE level changes D1 (P1.05 / DIN) electrical behavior.**
+
+With DAC MUTE low (prior capture): D1 stuck HIGH at analyzer —
+register toggling not visible externally.
+
+With DAC MUTE high (this capture): D1 toggles correctly, matching
+register evidence.
+
+The UDA1334A datasheet states MUTE controls analog output only; it
+should not affect digital input pins. Observed behavior contradicts
+datasheet expectation: the DAC's MUTE state alters the voltage seen
+at D1/DIN via the logic analyzer.
+
+This is consistent with either:
+1. A board-level electrical interaction between MUTE and DIN on the
+   CJMCU-1334 breakout (shared pull-up, leakage path, or pcb trace
+   coupling), or
+2. A damaged unit where MUTE inadvertently drives DIN.
+
+With MUTE high, D1 toggles correctly — D1 is **not blocked** on
+analyzer measurement-path repair. Phase 4 D1 is **unblocked** when
+DAC MUTE is held high. Next step: isolate DAC digital wires (BCK,
+DIN, LRCK) and re-capture D1 without DAC attached, to determine
+whether D1 still toggles independently of DAC state.
+
+Artifact: `/tmp/phase4-d1-mute-high-capture.csv` (9.2 MB, 1,200,001 lines)
+
+### Restore
+
+Main receiver firmware restored via `fw-flash-54l15`: 447,124 bytes
+written and verified (existing `build/nrf54l15/merged.hex`, no rebuild).
+Unstaged receiver diagnostics preserved (`boards/nrf54l15dk_nrf54l15_cpuapp.overlay`,
+`src/bt_bap.c` — not touched).
+
 ## Next decision
 
 Phase 4 D1 blocked. Physical repair of D1 analyzer measurement path
