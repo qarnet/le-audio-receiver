@@ -49,6 +49,10 @@ The receiver is flashed with a clean build (no SMP debug logging).
   `Done: 1500 frames in 15.00 s (100.0 fps)`.
 - Receiver-side recovery from the post-stream disconnect panic
   (`audio_sink_stop`: PREPARE before DROP in `src/audio_i2s.c`).
+- **Clean ACL teardown** in `bap_central.py` (BlueZ Disconnect +
+  raw-HCI helper termination) — three consecutive runs with no DK
+  reset between them, no zombie-slot exhaustion. `fw-reset-dongle`
+  helper exists for recovery from a crashed run that bypassed cleanup.
 
 ## What does NOT work / open
 
@@ -64,11 +68,17 @@ The receiver is flashed with a clean build (no SMP debug logging).
 - **btattach not persistent**: runs as a background process from the
   session. Needs a udev rule / systemd unit so it survives reboot and
   re-enumeration.
-- **Dongle netcore zombie connection slots**: repeated raw-HCI connects
-  without clean disconnects can exhaust the SDC's 2 connection slots
-  (`Connection Rejected due to Limited Resources (0x0d)`). Fix is to
-  reset the DK (openocd `reset run` on J-Link `001050023938`) and restart
-  btattach. A cleaner disconnect path in `bap_central.py` would help.
+- **LSP `gnu/stubs-32.h` not found warning**: the C/C++ language server
+  (clangd/editor) reports `gnu/stubs-32.h` missing when parsing
+  `src/*.c` and NCS headers — glibc on this system is 64-bit-only and
+  the LSP falls back to the host sysroot instead of the NCS
+  toolchain's. It is **IDE noise only**; the firmware build
+  (`fw-build-*`) is unaffected (it uses the NCS toolchain's own
+  sysroot). Fix later by pointing the LSP/compiler-commands at the NCS
+  toolchain sysroot (e.g. `clangd` config with `--sysroot=` from
+  `nix-nrf-dev`, or generate `compile_commands.json` from the Zephyr
+  build and let clangd use it). Low priority — does not block builds
+  or flashing.
 
 ## Reproduce
 
