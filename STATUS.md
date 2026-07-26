@@ -18,10 +18,13 @@ D1/P1.5 (LRCK), D2/P1.6 (SDOUT) proven.
 low, D1/LRCK was held high (no toggling). With digital wires removed, D1
 toggles. The old breakout/wiring assembly is incompatible or defective.
 
-**Main receiver with new DAC needs end-to-end retest** — new DAC connected to
-the Xiao; audible output not yet confirmed. Main receiver firmware has not
-been streamed against with the new DAC. Required: external analyzer
-measurement + user listening report.
+**Main receiver with new DAC: TECHNICAL FAILURE — PENDING USER LISTENING** —
+Phase 4a.1 retest complete (`docs/development/phase4a1-new-dac-main-pipeline-results.md`).
+30-second Mode A stereo stream: 5,621 valid ISO frames received, but 14× I2S
+slab-full drops (every ~1.57s) and 1× DMA underrun at stream stop. PI clock
+recovery controller insufficient to match ISO arrival rate to I2S48K
+consumption. Audio is synthesized but with frame drops; audible quality not
+yet confirmed. No logic analyzer data (no fx2lafw available).
 
 ## Hardware in use
 
@@ -77,17 +80,17 @@ receiver pipeline with a new DAC needs end-to-end retest.
 | Main receiver with old DAC | Slab-full / EIO — old DAC assembly held I2S lines (proven physical blocker/contributor). Firmware queue/producer behavior not yet ruled out; new-DAC retest with unchanged receiver firmware required before final root-cause attribution. |
 | Raw logic-analyzer capture | File exists. Frequency/data analysis pending. |
 | New DAC audible result | **Pending** — new DAC connected, not yet streamed against. |
+| Phase 4a.1 main receiver + new DAC | **Technical fail** — 14× slab-full drops (steady-state, every ~1.57s), 1× DMA underrun at stop. PI controller insufficient. PENDING USER LISTENING. See `docs/development/phase4a1-new-dac-main-pipeline-results.md`. |
 
 ### Next actions (ordered)
 
-1. Reflash standalone tone test when user ready to listen; analyze raw
-   logic-analyzer capture for frequency/data.
-2. Run main receiver with new DAC unchanged against nRF5340DK `hci_uart`
-   central. Capture serial + logic analyzer. Requires external analyzer
-   measurement + user listening report.
-3. If 4a.1 retest still fails with slab-full/EIO, compare application
-   queue behavior with standalone test — instrument, do not pre-decide fix.
-4. Phase 4b: GRTC/DPPI drift measurement.
+1. **User listening test** — play audio through DAC, report audible quality
+   despite slab drops.
+2. If audible acceptable: proceed to Phase 4b (GRTC/DPPI drift measurement).
+3. If audible unacceptable: tune PI controller (widen ±500 ppm output clamp
+   or adjust phase/frequency PI gains) — per-platform empirical tuning
+   required.
+4. Re-run phase4a.1 with fx2lafw logic analyzer when hardware available.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 
@@ -234,6 +237,7 @@ on close).
 | `scripts/bin/fw-flash-dongle` | **New.** Flashes both cores via the DK's onboard J-Link (OpenOCD) | Yes |
 | `scripts/bin/fw-reset-dongle` | **New.** Resets the DK to clear zombie SDC connection slots | Yes |
 | `STATUS.md` | **New.** This file | Yes |
+| `docs/development/phase4a1-new-dac-main-pipeline-results.md` | **New.** Phase 4a.1 retest results | No |
 | `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | `clock-source = "PCLK32M"` + MCK pin on P1.7 (diagnostic, didn't fix I2S) | **No — diagnostic** |
 | `src/bt_bap.c` | Temporary `LOG_INF` tally logging in `stream_recv` / `push_stereo` (I2S debug) | **No — diagnostic** |
 
