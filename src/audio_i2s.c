@@ -210,6 +210,15 @@ void audio_sink_stop(void)
 		return;
 	}
 
+	/* After a DMA underrun the driver is in I2S_STATE_ERROR with the
+	 * nrfx instance de-initialized (i2s_nrfx.c uninit on transfer end).
+	 * TRIGGER_DROP in that state calls nrfx_i2s_stop() on a dead
+	 * instance → NRFX_ASSERT → kernel panic on the *next* disconnect.
+	 * TRIGGER_PREPARE (allowed from ERROR) resets the driver to READY
+	 * without touching nrfx, so DROP becomes a pure queue purge.
+	 * PREPARE returns -EIO when the driver is not in ERROR — harmless.
+	 */
+	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_PREPARE);
 	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
 	started = false;
 	drift_reset();
