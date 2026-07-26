@@ -117,8 +117,8 @@ int audio_sink_init(void)
 
 	/* Initialize platform audio timing measurement.
 	 * On nRF54L15 this sets up GRTC + TIMER20 + GPPI for
-	 * hardware-timed LRCK frame counting.  Must fail loudly
-	 * if required hardware is unavailable.
+	 * hardware-snapshotted PCLK timer ticks against GRTC.
+	 * Must fail loudly if required hardware is unavailable.
 	 */
 	ret = audio_timing_init();
 	if (ret < 0) {
