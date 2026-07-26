@@ -171,7 +171,7 @@ Unstaged receiver diagnostics preserved (no rebuild — existing
 ## DAC MUTE isolation check (2026-07-26 17:15)
 
 Test condition: DAC (CJMCU-1334 / UDA1334A) remains connected to
-P1.04 (BCK), P1.05 (DIN), P1.06 (LRCK). User set DAC MUTE pin HIGH
+P1.04 (BCK), P1.05 (LRCK/WSEL), P1.06 (DIN). User set DAC MUTE pin HIGH
 (analog output muted). No other wiring changed.
 
 Per UDA1334A datasheet, MUTE high mutes analog audio output. It does
@@ -232,7 +232,7 @@ its behavior flips between MUTE-low (stuck HIGH) and MUTE-high (toggling).
 
 ### Conclusion
 
-**DAC MUTE level changes D1 (P1.05 / DIN) electrical behavior.**
+**DAC MUTE level changes D1 (P1.05 / LRCK/WSEL) electrical behavior.**
 
 With DAC MUTE low (prior capture): D1 stuck HIGH at analyzer —
 register toggling not visible externally.
@@ -243,7 +243,7 @@ register evidence.
 The UDA1334A datasheet states MUTE controls analog output only; it
 should not affect digital input pins. Observed behavior contradicts
 datasheet expectation: the DAC's MUTE state alters the voltage seen
-at D1/DIN via the logic analyzer.
+at D1/LRCK/WSEL via the logic analyzer.
 
 This is consistent with either:
 1. A board-level electrical interaction between MUTE and DIN on the
@@ -266,8 +266,77 @@ written and verified (existing `build/nrf54l15/merged.hex`, no rebuild).
 Unstaged receiver diagnostics preserved (`boards/nrf54l15dk_nrf54l15_cpuapp.overlay`,
 `src/bt_bap.c` — not touched).
 
+## DAC digital disconnect test (2026-07-26 17:26)
+
+Test condition: DAC signal wires (BCK, LRCK/WSEL, DIN) physically
+disconnected from MCU. MUTE set low (irrelevant while digital path
+absent). Analyzer remains connected: CH0=D0/P1.04, CH1=D1/P1.05,
+CH2=D2/P1.06, CH3=3V3, common ground.
+
+Test firmware: same `build/test-nrf54l15-d1-register-state/merged.hex`
+(committed). No source change.
+
+### Flash
+
+```
+Probe 8EE9B3FF (auto-detected: target identifies as nRF54L15)
+
+openocd -c "adapter serial 8EE9B3FF" \
+  -f ~/ncs/v3.3.0/zephyr/boards/seeed/xiao_nrf54l15/support/openocd.cfg \
+  -c "init" -c "reset halt" \
+  -c "nrf54l-load build/test-nrf54l15-d1-register-state/merged.hex" \
+  -c "verify_image build/test-nrf54l15-d1-register-state/merged.hex" \
+  -c "reset run" -c "shutdown"
+
+30396 bytes written at address 0x00000000
+3252 bytes written at address 0x000076c0
+downloaded 33648 bytes in 0.469591s (69.974 KiB/s)
+verified 33648 bytes in 0.069664s (471.684 KiB/s)
+```
+
+### Capture
+
+```
+sigrok-cli -d fx2lafw --config samplerate=100k -C D0,D1,D2,D3 \
+  --time 12000 -o /tmp/phase4-d1-dac-disconnected.csv -O csv
+```
+
+### Result
+
+Raw channel counts (1,200,000 samples, 12s at 100 kHz):
+
+| Channel | Value | Sample count  | Meaning                      |
+|---------|-------|--------------|-------------------------------|
+| D0      | 0     | 1,200,000    | LOW (as expected)             |
+| D1      | 0     | 599,881      | LOW — **toggling**            |
+| D1      | 1     | 600,119      | HIGH — **toggling**           |
+| D2      | 0     | 1,200,000    | LOW (as expected)             |
+| D3      | 1     | 1,200,000    | HIGH (3V3 rail)               |
+
+D1 toggles approximately 50/50 — consistent with 2s low / 2s high
+pattern. D0 and D2 read LOW throughout. D3 reads HIGH (3V3 rail).
+
+### Conclusion
+
+**DAC digital wiring caused prior D1 stuck-HIGH behavior.** With DAC
+signal wires disconnected, D1 toggles correctly, matching register
+evidence. The analyzer measurement path (probe wire, clip, channel
+input) is functional. The MUTE-high test (section above) corroborates:
+DAC/breakout interaction, not analyzer fault, is the root cause.
+
+### Restore
+
+Main receiver firmware restored via `fw-flash-54l15`: 447,124 bytes
+written and verified (existing `build/nrf54l15/merged.hex`, no rebuild).
+Unstaged receiver diagnostics preserved (`boards/nrf54l15dk_nrf54l15_cpuapp.overlay`,
+`src/bt_bap.c` — not touched).
+
+Artifact: `/tmp/phase4-d1-dac-disconnected.csv` (9.2 MB, 1,200,007 lines)
+
 ## Next decision
 
-Phase 4 D1 blocked. Physical repair of D1 analyzer measurement path
-required, then re-capture CH1 against test app to confirm D1 toggles
-2s low / 2s high.
+D1 toggles correctly when DAC digital path is absent. D1 unblocked.
+Root cause: DAC/breakout electrical interaction on D1/LRCK/WSEL line.
+Next: reconnect DAC digital wires and test with different DAC unit or
+board-level isolation to confirm whether the CJMCU-1334 breakout or
+this specific unit causes the contention.
