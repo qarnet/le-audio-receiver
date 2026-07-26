@@ -35,6 +35,7 @@
 #include <zephyr/types.h>
 
 #include "audio_sink.h"
+#include "audio_timing.h"
 #include "audio_decode.h"
 #include "audio_stats.h"
 #include "audio_volume.h"
@@ -73,6 +74,7 @@ static struct bt_conn *default_conn;
 struct bt_sink {
 	struct bt_bap_stream stream;
 	size_t recv_cnt;
+	uint32_t pd_us; /* negotiated presentation delay */
 	struct audio_decode_ctx decode;
 };
 
@@ -238,6 +240,10 @@ static int lc3_qos(struct bt_bap_stream *stream, const struct bt_bap_qos_cfg *qo
 {
 	LOG_INF("QoS: stream %p", stream);
 	print_qos(qos);
+
+	size_t idx = sink_idx(stream);
+	sinks[idx].pd_us = qos->pd;
+
 	return 0;
 }
 
@@ -378,6 +384,22 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	/* Feed ISO timestamp to APLL drift compensation regardless of packet validity */
 	audio_sink_sdu_ref_update(info->ts);
 
+	/* Phase 4b.1: feed validated timestamp + presentation delay to
+	 * hardware timing measurement (nRF54L15 GRTC path).  Only stream 0
+	 * is used as the timing reference.
+	 */
+	if (idx == 0 && valid) {
+		const bool has_ts = (info->flags & BT_ISO_FLAGS_TS) != 0;
+		static size_t ts_absent_cnt;
+		if (has_ts) {
+			audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
+		} else if (ts_absent_cnt < 5) {
+			LOG_WRN("stream[0] SDU missing TS flag (cnt=%zu)", ++ts_absent_cnt);
+		} else {
+			ts_absent_cnt++;
+		}
+	}
+
 	if (diagnostic_cnt < 5) {
 		LOG_INF("stream_recv[%zu]: valid=%d buf_len=%u f_per_sdu=%d spc=%d cc=%d "
 			"num_ase=%zu",
@@ -467,8 +489,15 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 			struct net_buf *buf)
 {
 	audio_sink_sdu_ref_update(info->ts);
+
 	if (info->flags & BT_ISO_FLAGS_VALID) {
 		sinks[sink_idx(stream)].recv_cnt++;
+
+		/* Phase 4b.1: timing measurement for stream 0 */
+		size_t idx = sink_idx(stream);
+		if (idx == 0 && (info->flags & BT_ISO_FLAGS_TS)) {
+			audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
+		}
 	}
 }
 

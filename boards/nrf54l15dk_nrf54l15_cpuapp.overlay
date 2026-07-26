@@ -95,6 +95,11 @@
 /* Xiao has no external SPI NOR flash. Disable the stock-DK &mx25r64 and
  * its parent &spi00 (no other users) to silence the boot error:
  *   <err> spi_nor: Device id 00 00 00 does not match config c2 28 17
+ *
+ * TIMER20 (0x400CA000) is reserved for nrfx direct use by audio_timing_nrf54.c
+ * (Phase 4b.1 LRCK edge counter). No DT node exists for it in the base
+ * nRF54L15 DTS, and no Zephyr driver binds to it. The nrfx API accesses
+ * NRF_TIMER20 via MDK registers — no overlay needed.
  */
 &mx25r64 {
 	status = "disabled";

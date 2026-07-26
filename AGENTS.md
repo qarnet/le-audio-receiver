@@ -422,8 +422,12 @@ subscriber. Any direct RADIO access will conflict with the SoftDevice
 Controller runtime. For drift measurement on nRF54L15, use ISO `info->ts` with
 `BT_ISO_FLAGS_TS` (controller-clock ISO SDU reference), GRTC future
 compare/action (Nordic ISO-time-sync pattern; sample at
-`nrf/samples/bluetooth/iso_time_sync/`), and I2S FRAMESTART capture via DPPI
-to GRTC. `sdc_hci_cmd_vs_set_event_start_task()` is an ACL-event diagnostic,
+`nrf/samples/bluetooth/iso_time_sync/`), and I2S20 FRAMESTART → GPPI →
+TIMER20 COUNTER (LRCK edge counter) with GRTC compare → GPPI → TIMER20
+CAPTURE (hardware-snapshotted frame count). Phase 4b.1 logs diagnostics;
+Phase 4b.2 feeds measured ppm into the PI controller. One captured FRAMESTART
+edge alone cannot measure frequency — a counter is needed.
+`sdc_hci_cmd_vs_set_event_start_task()` is an ACL-event diagnostic,
 not a CIS RX timestamp.
 
 ### Zephyr does NOT detect devicetree pinctrl overlaps

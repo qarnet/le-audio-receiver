@@ -85,12 +85,15 @@ receiver pipeline with a new DAC needs end-to-end retest.
 
 ### Next actions (ordered)
 
-1. **Phase 4b** — Supported ISO timestamp presentation scheduling: validate
-   `BT_ISO_FLAGS_TS`, consume `info->ts` as controller-clock reference, schedule
-   future GRTC presentation trigger (Nordic ISO-time-sync pattern; sample:
-   `nrf/samples/bluetooth/iso_time_sync/`), capture I2S FRAMESTART via DPPI→GRTC
-   for local LRCK timing. No direct RADIO access — SDC/MPSL owns RADIO. See
-   `docs/design.md` §Phase 4b.
+1. **Phase 4b.1** (landed) — GRTC-referenced LRCK measurement foundation:
+   validate `BT_ISO_FLAGS_TS`, consume `info->ts` as controller-clock reference,
+   schedule future GRTC presentation compare (Nordic ISO-time-sync pattern),
+   count LRCK edges via TIMER20 COUNTER + GPPI, and log diagnostics at 1 s
+   intervals. Phase 4b.2 will feed measured ppm into the PI controller.
+   No direct RADIO access — SDC/MPSL owns RADIO. See `docs/design.md` §Phase 4b.
+2. **Phase 4b.2** — Feed GRTC-referenced LRCK measurement into
+   audio_drift_controller_update(), replacing the ISO-timestamp-based PI path
+   on nRF54L15. (Pending Phase 4b.1 hardware validation.)
 2. **Phase 5** — ASRC quality improvement (nearest-neighbor conversion removes
    ~381 frames/s at nominal mismatch; artifact audibility unmeasured; conditional
    on Phase 4c listening result).

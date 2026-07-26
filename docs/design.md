@@ -386,12 +386,17 @@ ISO-time-sync pattern, documented at:
    references — the dual-core architecture of those samples is not directly
    portable to this single-core application).
 
-3. **I2S FRAMESTART capture**: Route I2S20 `FRAMESTART` through DPPI to GRTC
-   capture. This captures exact local LRCK frame timing on a GRTC channel.
+3. **I2S LRCK frame counter**: Route I2S20 `FRAMESTART` through GPPI to
+   TIMER20 `TASKS_COUNT` (32-bit COUNTER mode). This gives every LRCK edge
+   a hardware frame index. One captured FRAMESTART edge has no frame index
+   and cannot measure frequency — a counter is required.
 
-4. **Drift estimate**: Derive the drift estimate from the controller-timeline
-   presentation reference (step 2) and the I2S frame capture (step 3).
-   The I2S buffer fill remains as the phase term (unchanged).
+4. **Drift estimate**: GRTC compare at 1-second intervals triggers TIMER20
+   `TASKS_CAPTURE[0]` via GPPI, hardware-snapshooting the frame count.
+   The GRTC ISR reads the captured count, computes unsigned delta
+   and elapsed GRTC microseconds, and derives integer ppm relative to
+   `CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ`. Phase 4b.1 logs diagnostics
+   only — the output is not yet fed into the PI controller.
 
 5. **No direct RADIO access**: Direct RADIO RX `ADDRESS`/`END` captures are
    forbidden with SDC/MPSL. There is no fallback direct-RADIO implementation
