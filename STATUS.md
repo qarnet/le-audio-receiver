@@ -80,7 +80,7 @@ receiver pipeline with a new DAC needs end-to-end retest.
 | Old DAC digital wires removed | D1/LRCK toggles. GPIO toggling confirmed. |
 | Main receiver with old DAC | Slab-full / EIO — old DAC assembly held I2S lines (proven physical blocker/contributor). Firmware queue/producer behavior not yet ruled out; new-DAC retest with unchanged receiver firmware required before final root-cause attribution. |
 | Raw logic-analyzer capture | File exists. Frequency/data analysis pending. |
-| New DAC audible result | **Pending** — new DAC connected, not yet streamed against. |
+| New DAC audible result | **Pending** — passed 35-second autonomous technical stream (zero slab-full, zero underrun) after rate conversion; audible outcome pending physical observation. |
 | Phase 4a.2 rate conversion | **PASS** — 35 s stream, 0 slab-full, 0 underrun. Fixed-rate converter matches PCLK32M drain. See `docs/development/phase4a2-rate-conversion-results.md`. |
 
 ### Next actions (ordered)
@@ -91,10 +91,11 @@ receiver pipeline with a new DAC needs end-to-end retest.
    `nrf/samples/bluetooth/iso_time_sync/`), capture I2S FRAMESTART via DPPI→GRTC
    for local LRCK timing. No direct RADIO access — SDC/MPSL owns RADIO. See
    `docs/design.md` §Phase 4b.
-2. **Phase 5** — ASRC quality improvement (nearest-neighbor produces audible
-   artifacts at ~0.6 s repeat/drop cadence).
-3. **User listening test** — play audio through DAC, report audible quality
-   with rate conversion (known nearest-neighbor artifacts).
+2. **Phase 5** — ASRC quality improvement (nearest-neighbor conversion removes
+   ~381 frames/s at nominal mismatch; artifact audibility unmeasured; conditional
+   on Phase 4c listening result).
+3. **User listening test** — play audio through DAC; report audible quality
+   with rate conversion (nearest-neighbor artifact audibility unmeasured).
 4. Re-run with fx2lafw logic analyzer when hardware available.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)

@@ -357,8 +357,10 @@ Each gate blocks the next. Do not skip ahead.
   - Verified: 10/10 unit tests (native_sim), both builds clean, 35-second
     Mode A stream with zero slab-full drops, zero DMA underruns.
     See `docs/development/phase4a2-rate-conversion-results.md`.
-  - Residual: nearest-neighbor artifacts (~0.6 s repeat/drop cadence) —
-    Phase 5 ASRC for quality. Peer-drift still needs Phase 4b GRTC.
+  - Residual: nearest-neighbor conversion removes about 381 frames/s at
+    nominal mismatch. Artifact audibility and character are unmeasured.
+    Peer-drift still needs Phase 4b GRTC. Phase 5 quality ASRC stays
+    conditional on listening result.
 
 ### Phase 4b — Supported ISO timestamp presentation scheduling
 
