@@ -1,6 +1,6 @@
 # LE Audio Receiver — Design Document
 
-Status: **revised 2026-07-26** (Phase 4b.2 hardware PASS — PCLK feedforward + phase PI closed-loop verified on nRF54L15; Phase 4c technical stability gate PASS — 10-minute uninterrupted stream, zero faults; audibility pending). Earlier history: accepted 2026-07-05, superseded
+Status: **revised 2026-07-26** (Phase 4b.2 hardware PASS — PCLK feedforward + phase PI closed-loop verified on nRF54L15; Phase 4c technical stability gate PASS — 10-minute uninterrupted stream, zero faults; external digital I2S gate PASS at DAC pins verified by fx2lafw analyzer; physical audibility UNAVAILABLE by user — not failed, not blocking further measurable work). Earlier history: accepted 2026-07-05, superseded
 `nrf54l15-drift-compensation.md` (absorbed in Part II §Clock recovery and
 Appendix A).
 
@@ -444,9 +444,16 @@ the technical stability gates have been verified. See
 - Sample adjustments are **not** rare at this clock offset; HFINT/PCLK
   mismatch requires frequent inserts (~86/s), which is the expected behavior
   for the SAMPLE_ADJUST actuator.
-- **Audible quality**: PENDING user observation. Whether Phase 5 (linear
-  ASRC) is needed depends solely on whether the physical listening test
-  finds these frequent inserts audible at the 48 kHz/16-bit LC3 floor.
+- **External digital I2S gate**: PASS — fx2lafw logic analyzer capture at
+  DAC pins during active 30 s Mode A stream confirms valid I2S waveforms:
+  BCK 1,525,637 Hz, LRCK 47,677 Hz, BCK/LRCK ratio 31.999701 (expected 32),
+  SDOUT nonconstant activity (324,633 transitions, high duty 0.494).
+  See `docs/development/phase4c-i2s-analyzer-results.md`.
+- **Audible quality**: UNAVAILABLE — user did not provide listening report.
+  This is not a failure and does not block further measurable work. Analog
+  output quality is not claimed. Phase 5 quality ASRC cannot be justified
+  by listening evidence; left conditional/deferred unless another measurable
+  quality criterion is chosen.
 
 ### Phase 4 risks (tracked, not deferred)
 
@@ -468,16 +475,21 @@ the technical stability gates have been verified. See
 
 **Exit criterion (whole phase)**: 4a + 4b + 4c all green. Stable
 indefinitely-running audio stream on the nRF54L15 (verified: 10 minutes,
-zero faults); glitch magnitude ≤ 1 sample per correction event; GRTC drift
-measurement active; Phase 5 gated on audible artifact from listening test.
-Physical audibility is the sole remaining gate.
+zero faults); external digital I2S gate PASS at DAC pins (verified:
+fx2lafw, 30 s stream, BCK/LRCK ratio 31.999701); GRTC drift measurement
+active. Physical audibility marked UNAVAILABLE by user — not failed, not
+blocking further measurable work. Phase 5 gated on a measurable quality
+criterion (listening evidence unavailable; default to deferred unless
+another criterion is chosen).
 
-## Phase 5 — ASRC quality upgrade *(conditional)*
+## Phase 5 — ASRC quality upgrade *(conditional / deferred)*
 
-Gate: only if Phase 4c listening test finds the single-sample insert/drop
-artifact audible. If inaudible, skip — the design's "resampling error sits
-below the codec noise floor" argument (Appendix A, option C) holds and
-Phase 6 is not needed for quality, only for CPU budget.
+Gate: listening evidence unavailable (user did not provide audibility
+report for Phase 4c). No measurable quality criterion has been chosen
+to justify Phase 5. Left conditional/deferred until either physical
+listening test reveals audible artifacts from ~86/s sample inserts at
+~+1,800 ppm PCLK offset, or another measurable quality criterion is
+specified.
 
 - Fixed-point linear-interpolation ASRC on cpuapp; same controller, ratio
   actuator. Measure cpuapp headroom before/after (feeds R-4.1 decision).
@@ -555,19 +567,24 @@ Current evidence, not forward-looking plan. Separated by verification state.
 - Conclusion: old breakout/wiring assembly is incompatible or defective. Must
   not be treated as known-good.
 
-### Pending: main-pipeline / new-DAC retest
+### Completed: main-pipeline / new-DAC retest
 
-- New DAC connected to the Xiao. Audible output not yet confirmed.
-- Main receiver firmware with new DAC has not yet been streamed against.
-- Required: external analyzer measurement of I2S20 waveform +
-  user listening report. Expected BCK ≈ 1.536 MHz, BCK/LRCK ratio = 32.
-- If 4a.1 retest still produces slab-full/EIO, compare application queue
-  behavior with standalone test before changing source (4a.2).
+- External logic analyzer (fx2lafw) measured I2S20 waveform at DAC pins
+  during active 30 s Mode A stream. BCK 1,525,637 Hz, LRCK 47,677 Hz,
+  BCK/LRCK ratio 31.999701 (expected 32), SDOUT nonconstant activity.
+  Digital I2S gate PASS. See
+  `docs/development/phase4c-i2s-analyzer-results.md`.
+- Raw capture file at `/tmp/opencode/phase4c-i2s.sr` (not committed).
 
 ### Pending: audible quality
 
 - Technical stability gate PASS (Phase 4c): 10-minute uninterrupted stream,
   zero faults, controller converged. See `docs/development/phase4c-technical-results.md`.
+- External digital I2S gate PASS at DAC pins: fx2lafw analyzer confirmed
+  valid I2S waveforms (BCK/LRCK ratio 31.999701). See
+  `docs/development/phase4c-i2s-analyzer-results.md`.
 - Physical audibility of ~86/s sample inserts at ~+1,800 ppm PCLK offset
-  remains unmeasured (requires user listening test).
-- Phase 5 (linear ASRC) decision gated on this listening result only.
+  marked UNAVAILABLE by user — not failed, not blocking.
+- Phase 5 (linear ASRC) decision deferred; no listening evidence to
+  justify it. Requires either a physical listening test or another
+  measurable quality criterion.
