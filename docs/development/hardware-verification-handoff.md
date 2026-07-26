@@ -335,7 +335,7 @@ The CTRL-AP PDF may contain the APSEL mapping that explains why AP #2/#3 return
 
 All agents run the LE Audio stream autonomously via the nRF5340DK `hci_uart`
 central attached to Linux as `hci0` (over `/dev/ttyACM2` at 1 000 000 baud H4
-with flow control). Use `scripts/bap_central.py`. No handset, smartphone, or
-human-operated central is allowed in any test procedure. The only allowed user
+with flow control). Use `scripts/bap_central.py`. No human-operated central is
+allowed in any test procedure. The only allowed user
 input is a true physical observation an agent cannot make (e.g. whether sound is
 audible).

@@ -89,8 +89,8 @@ Consequences for work in this repo today:
 All agents run the LE Audio stream autonomously via the nRF5340DK `hci_uart`
 central attached to Linux as `hci0` (over `/dev/ttyACM2` at 1 000 000 baud H4
 with flow control). Use `scripts/bap_central.py` to connect to the receiver
-and stream LC3 audio. No handset, smartphone, or human-operated central is
-allowed in any test procedure.
+and stream LC3 audio. No human-operated central is allowed in any test
+procedure.
 
 The only allowed user input is a true physical observation that an agent
 cannot make: whether sound is audible from connected speakers/headphones
