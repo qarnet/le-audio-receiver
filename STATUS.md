@@ -74,7 +74,7 @@ receiver pipeline with a new DAC needs end-to-end retest.
 | Standalone I2S20 tone test | 20.001 s, 2,016 blocks fed, zero EIO/underrun. ENABLE=1, PSEL correct, FRAMESTART firing. |
 | Old DAC digital wires connected, MUTE low | D1/LRCK held high — no toggling. Breakout/wiring incompatible or defective. |
 | Old DAC digital wires removed | D1/LRCK toggles. GPIO toggling confirmed. |
-| Main receiver with old DAC | Slab-full / EIO — DAC held I2S lines; not a firmware bug. |
+| Main receiver with old DAC | Slab-full / EIO — old DAC assembly held I2S lines (proven physical blocker/contributor). Firmware queue/producer behavior not yet ruled out; new-DAC retest with unchanged receiver firmware required before final root-cause attribution. |
 | Raw logic-analyzer capture | File exists. Frequency/data analysis pending. |
 | New DAC audible result | **Pending** — new DAC connected, not yet streamed against. |
 

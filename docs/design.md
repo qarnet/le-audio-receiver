@@ -357,8 +357,6 @@ Each gate blocks the next. Do not skip ahead.
 
 ### Phase 4b — GRTC + DPPI drift measurement
 
-### Phase 4b — GRTC + DPPI drift measurement
-
 **Mandatory, not deferred.** Replace the ISO-`info->ts` drift measurement
 on nRF54L15 with hardware timestamping. Doing this before 4c is important:
 the fallback (ISO timestamps, 1 µs quantization → 10 ppm per 100 ms window)
