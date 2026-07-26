@@ -7,6 +7,13 @@
  *
  * The tested functions are compiled from src/audio_timing_math.c
  * directly, not replicated here.
+ *
+ * Timing measurement now uses PCLK-derived TIMER ticks (Phase 4b.1
+ * revised 2026-07-26).  Hardware validation showed I2S FRAMESTART
+ * fires at DMA buffer boundaries (~100 Hz), not LRCK edges
+ * (~47,619 Hz) — FRAMESTART cannot measure sample-clock frequency.
+ * The test examples now use 16,000,000 Hz timer-tick examples,
+ * matching the installed HAL fallback for TIMER20 on nRF54L15.
  */
 
 #include <zephyr/ztest.h>
@@ -175,30 +182,51 @@ ZTEST(timing, test_counter_delta_u32_full_wrap)
 	zassert_equal(d, 1, "0 - 0xFFFFFFFF = 1");
 }
 
-/* ── Test: integer ppm calculation ──────────────────────────────── */
-
-ZTEST(timing, test_ppm_exact_nominal)
+ZTEST(timing, test_counter_delta_u32_timer_wrap)
 {
-	/* 47619 frames in 1000000 us @ 47619 Hz → 0 ppm */
-	int32_t ppm = audio_timing_compute_ppm(47619, 47619);
-	zassert_equal(ppm, 0, "exact nominal → 0 ppm, got %d", ppm);
+	/* TIMER20 @ 16 MHz wraps every ~268 s.  After a full wrap,
+	 * the unsigned delta is still correct modulo 2^32.
+	 * cap=100, last=0xFFFFFF00 → delta=356.
+	 */
+	uint32_t d = audio_timing_counter_delta_u32(100, 0xFFFFFF00U);
+	zassert_equal(d, 356, "timer wrap 100 - 0xFFFFFF00 = 356");
 }
 
-ZTEST(timing, test_ppm_fast)
+/* ── Test: integer ppm calculation (timer-tick examples) ─────────── */
+
+ZTEST(timing, test_ppm_16m_exact)
 {
-	/* +1 count more than nominal → positive ppm */
-	/* 47620 measured, 47619 nominal → (1 * 1e6 / 47619) ≈ 21 ppm */
-	int32_t ppm = audio_timing_compute_ppm(47620, 47619);
-	zassert_true(ppm > 0, "fast clock → positive ppm, got %d", ppm);
-	zassert_equal(ppm, 21, "expected ~21 ppm, got %d", ppm);
+	/* 16,000,000 ticks in 1 s at 16 MHz → exactly 0 ppm */
+	int32_t ppm = audio_timing_compute_ppm(16000000, 16000000);
+	zassert_equal(ppm, 0, "exact 16M → 0 ppm, got %d", ppm);
 }
 
-ZTEST(timing, test_ppm_slow)
+ZTEST(timing, test_ppm_16m_fast_1ppm)
 {
-	/* -1 count less than nominal → negative ppm */
-	int32_t ppm = audio_timing_compute_ppm(47618, 47619);
-	zassert_true(ppm < 0, "slow clock → negative ppm, got %d", ppm);
-	zassert_equal(ppm, -21, "expected ~-21 ppm, got %d", ppm);
+	/* +16 ticks at 16 MHz nominal → 1 ppm (16 * 1e6 / 16e6 = 1) */
+	int32_t ppm = audio_timing_compute_ppm(16000016, 16000000);
+	zassert_equal(ppm, 1, "expected 1 ppm, got %d", ppm);
+}
+
+ZTEST(timing, test_ppm_16m_slow_1ppm)
+{
+	/* -16 ticks at 16 MHz nominal → -1 ppm */
+	int32_t ppm = audio_timing_compute_ppm(15999984, 16000000);
+	zassert_equal(ppm, -1, "expected -1 ppm, got %d", ppm);
+}
+
+ZTEST(timing, test_ppm_16m_offset_500)
+{
+	/* Large offset: +8000 ticks → 500 ppm exactly */
+	int32_t ppm = audio_timing_compute_ppm(16008000, 16000000);
+	zassert_equal(ppm, 500, "expected 500 ppm, got %d", ppm);
+}
+
+ZTEST(timing, test_ppm_16m_single_tick)
+{
+	/* +1 tick at 16 MHz: 1 * 1e6 / 16e6 = 0 (truncates to 0) */
+	int32_t ppm = audio_timing_compute_ppm(16000001, 16000000);
+	zassert_equal(ppm, 0, "single tick at 16M → 0 ppm (below 1 ppm resolution), got %d", ppm);
 }
 
 ZTEST(timing, test_ppm_zero_elapsed)
@@ -208,18 +236,24 @@ ZTEST(timing, test_ppm_zero_elapsed)
 	zassert_equal(ppm, 0, "zero nominal → 0 ppm");
 }
 
-ZTEST(timing, test_ppm_48k_nominal)
+ZTEST(timing, test_ppm_wrap_delta_small)
 {
-	/* 48000 frames, 48000 nominal → 0 ppm */
-	int32_t ppm = audio_timing_compute_ppm(48000, 48000);
-	zassert_equal(ppm, 0, "48k exact → 0 ppm");
-}
+	/* Timer wrapped near end of interval: cap < last, but
+	 * counter_delta_u32 computes correct unsigned delta first.
+	 * E.g. cap=0x00000010, last=0xFFFF0000 → delta=0x00010010 = 65552.
+	 * Nominal still 16M: diff=65552-16M = -15934448 → -995903 ppm
+	 * (catastrophic — caller should guard elapsed_us).
+	 * This test just verifies the math is correct at face value.
+	 */
+	uint32_t delta = audio_timing_counter_delta_u32(0x00000010, 0xFFFF0000);
+	zassert_equal(delta, 65552, "wrap delta 0x10 - 0xFFFF0000 = 65552");
 
-ZTEST(timing, test_ppm_48k_offset)
-{
-	/* +5 count at 48000 nominal → 5 * 1e6 / 48000 ≈ 104 ppm */
-	int32_t ppm = audio_timing_compute_ppm(48005, 48000);
-	zassert_equal(ppm, 104, "expected 104 ppm, got %d", ppm);
+	/* The ppm result is technically correct math even though
+	 * the scenario is unrealistic in normal operation.
+	 */
+	int32_t ppm = audio_timing_compute_ppm(delta, 16000000);
+	zassert_true(ppm < -900000, "wrap delta vs full nominal → extreme negative ppm, got %d",
+		     ppm);
 }
 
 /* ── Suite entry ────────────────────────────────────────────────── */

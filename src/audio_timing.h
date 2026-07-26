@@ -4,11 +4,17 @@
  *
  * Platform-neutral audio timing measurement API.
  *
- * On nRF54L15 this measures I2S LRCK frame-clock progress against
+ * On nRF54L15 this measures PCLK-derived TIMER20 ticks against
  * Bluetooth controller / GRTC time using hardware GPPI routing
- * (TIMER20 counter + GRTC compare → capture).  On nRF5340 the
- * implementation is a no-op — the nRF5340 uses ISO-timestamp-based
+ * (TIMER20 free-running timer + GRTC compare → capture).  On nRF5340
+ * the implementation is a no-op — the nRF5340 uses ISO-timestamp-based
  * PI drift compensation via audio_drift_controller_update().
+ *
+ * Historical: original design counted I2S20 FRAMESTART edges.
+ * HW validation on 2026-07-26 showed FRAMESTART fires at DMA
+ * buffer boundaries (~100 Hz), not LRCK edges (~47,619 Hz) —
+ * cannot measure sample-clock frequency.  Production path is
+ * PCLK-derived TIMER captured at GRTC presentation references.
  */
 
 #ifndef AUDIO_TIMING_H
@@ -20,7 +26,8 @@
  * @brief Initialize platform-specific audio timing measurement.
  *
  * On nRF54L15: allocates a GRTC channel, configures TIMER20 in 32-bit
- * COUNTER mode, and routes I2S20 FRAMESTART → TIMER20 COUNT via GPPI.
+ * TIMER mode (free-running, prescaler 0), and routes GRTC COMPARE →
+ * TIMER20 CAPTURE[0] via GPPI for hardware-snapshotted PCLK tick counts.
  *
  * Must be called after the I2S peripheral is configured but before
  * DMA output starts.

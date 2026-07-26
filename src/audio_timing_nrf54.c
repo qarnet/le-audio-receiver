@@ -2,16 +2,25 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * nRF54L15 audio timing measurement: hardware-timed I2S LRCK frame-clock
- * progress against Bluetooth controller / GRTC time.
+ * nRF54L15 audio timing measurement: hardware-timed PCLK clock progress
+ * against Bluetooth controller / GRTC time.
  *
- * Design (Phase 4b.1):
- *  1. I2S20 FRAMESTART → GPPI → TIMER20 COUNT (counts every LRCK edge).
+ * Design (Phase 4b.1, revised 2026-07-26):
+ *  1. TIMER20 runs in TIMER mode (free-running PCLK-derived ticks).
  *  2. GRTC compare at 1 s intervals → GPPI → TIMER20 CAPTURE[0]
- *     (hardware snapshots frame count; zero callback latency).
+ *     (hardware snapshots timer count; zero callback latency).
  *  3. GRTC ISR reads captured count, computes unsigned delta and
  *     elapsed GRTC microseconds, then logs bounded diagnostics via
- *     a work item.
+ *     a work item.  Reported ppm is local PCLK frequency error
+ *     relative to controller/GRTC time.
+ *
+ * Historical note: original design counted I2S20 FRAMESTART edges via
+ * GPPI → TIMER20 COUNT.  Hardware validation on 2026-07-26 showed
+ * FRAMESTART fires at DMA audio-buffer boundaries (~100 Hz in this
+ * configuration), not every physical LRCK edge (~47,619 Hz).
+ * Counting FRAMESTART cannot measure sample-clock frequency.
+ * The production path is PCLK-derived TIMER captured at GRTC
+ * presentation references.
  *
  * No direct RADIO access.  SDC/MPSL owns the RADIO peripheral.
  *
@@ -24,7 +33,6 @@
 #include "audio_timing_math.h"
 
 #include <nrfx_grtc.h>
-#include <nrfx_i2s.h>
 #include <helpers/nrfx_gppi.h>
 #include <hal/nrf_grtc.h>
 #include <hal/nrf_timer.h>
@@ -45,17 +53,14 @@ LOG_MODULE_REGISTER(audio_timing, LOG_LEVEL_INF);
 #define TIMER20_NODE DT_NODELABEL(timer20)
 #define TIMER20_BASE DT_REG_ADDR(TIMER20_NODE)
 
-/* I2S20 peripheral (nRF54L15 cpuapp) */
-#define I2S20_PERIPH NRF_I2S20
-
 /* ── Diagnostic pacing ────────────────────────────────────────────── */
 #define DIAG_PERIOD_S  5U /* log at most every 5 seconds */
 #define DIAG_FIRST_SEQ 1  /* always log first measurement */
 
 /* ── Static hardware resources ────────────────────────────────────── */
 static NRF_TIMER_Type *const timer_reg = (NRF_TIMER_Type *)TIMER20_BASE;
+static uint32_t timer_nominal_hz;           /* cached at init time */
 static uint8_t grtc_channel;                /* allocated GRTC CC channel */
-static nrfx_gppi_handle_t gppi_fs_to_count; /* FRAMESTART → COUNT */
 static nrfx_gppi_handle_t gppi_grtc_to_cap; /* GRTC COMPARE → CAPTURE */
 
 /* ── Timing state ─────────────────────────────────────────────────── */
@@ -88,13 +93,13 @@ static struct k_work diag_work;
  * same lock to prevent races with ISR and reset.
  */
 struct diag_payload {
-	uint32_t frame_delta;
-	uint32_t elapsed_us;
-	uint32_t sample_rate_hz;
-	uint32_t seq;     /* diagnostic sequence number */
-	atomic_val_t gen; /* generation at capture time */
-	bool is_error;    /* true → schedule_err is valid */
-	int schedule_err; /* error code when is_error */
+	uint32_t tick_delta; /* TIMER capture delta (PCLK ticks) */
+	uint32_t elapsed_us; /* GRTC elapsed microseconds */
+	uint32_t nominal_hz; /* TIMER nominal base frequency */
+	uint32_t seq;        /* diagnostic sequence number */
+	atomic_val_t gen;    /* generation at capture time */
+	bool is_error;       /* true → schedule_err is valid */
+	int schedule_err;    /* error code when is_error */
 };
 
 static struct diag_payload pending_diag;
@@ -140,15 +145,17 @@ static void diag_work_handler(struct k_work *work)
 		return;
 	}
 
-	/* Nominal frames in this interval */
-	uint32_t nominal =
-		(uint32_t)(((uint64_t)diag.elapsed_us * diag.sample_rate_hz) / 1000000ULL);
+	/* Nominal ticks expected in this interval at the timer's base
+	 * frequency: timer_nominal_hz * elapsed_us / 1,000,000.
+	 */
+	uint64_t nominal64 = ((uint64_t)diag.nominal_hz * diag.elapsed_us) / 1000000ULL;
+	uint32_t nominal = (nominal64 > UINT32_MAX) ? UINT32_MAX : (uint32_t)nominal64;
 
-	int32_t ppm = audio_timing_compute_ppm(diag.frame_delta, nominal);
+	int32_t ppm = audio_timing_compute_ppm(diag.tick_delta, nominal);
 
-	LOG_INF("LRCK diag[%" PRIu32 "]: %" PRIu32 " frames in %" PRIu32 " us (nom %" PRIu32
-		") → %" PRId32 " ppm",
-		diag.seq, diag.frame_delta, diag.elapsed_us, nominal, ppm);
+	LOG_INF("PCLK timer diag[%" PRIu32 "]: %" PRIu32 " ticks in %" PRIu32 " us (nom %" PRIu32
+		" @ %" PRIu32 " Hz) → %" PRId32 " ppm",
+		diag.seq, diag.tick_delta, diag.elapsed_us, nominal, diag.nominal_hz, ppm);
 }
 
 /* ── GRTC compare callback (ISR context) ──────────────────────────── */
@@ -205,7 +212,7 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 
 	/* Accumulate diagnostics */
 	if (ts.last_compare_us != 0) {
-		uint32_t frame_delta = audio_timing_counter_delta_u32(cap, ts.last_cap);
+		uint32_t tick_delta = audio_timing_counter_delta_u32(cap, ts.last_cap);
 		uint32_t elapsed_us = (uint32_t)(cc_value - ts.last_compare_us);
 
 		/* Diagnostic sequence is owned by ISR and reset;
@@ -218,10 +225,9 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 		if (ts.diag_seq == DIAG_FIRST_SEQ || (ts.diag_seq % DIAG_PERIOD_S) == 0) {
 			k_spinlock_key_t key = k_spin_lock(&diag_lock);
 			pending_diag.is_error = false;
-			pending_diag.frame_delta = frame_delta;
+			pending_diag.tick_delta = tick_delta;
 			pending_diag.elapsed_us = elapsed_us;
-			pending_diag.sample_rate_hz =
-				(uint32_t)CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ;
+			pending_diag.nominal_hz = timer_nominal_hz;
 			pending_diag.seq = ts.diag_seq;
 			pending_diag.gen = atomic_get(&generation);
 			k_spin_unlock(&diag_lock, key);
@@ -257,25 +263,24 @@ int audio_timing_init(void)
 	/* Register the callback that the compare absolute_set will use */
 	nrfx_grtc_channel_callback_set(grtc_channel, grtc_cc_handler, NULL);
 
-	/* --- TIMER20: 32-bit COUNTER mode (HAL, no nrfx_timer) --- */
-	nrf_timer_mode_set(timer_reg, NRF_TIMER_MODE_COUNTER);
+	/* --- TIMER20: 32-bit TIMER mode, prescaler 0, free-running ---
+	 * TIMER mode (not COUNTER) counts PCLK-derived ticks at
+	 * the peripheral's base frequency.  The nominal frequency
+	 * is determined by the HAL macro NRF_TIMER_BASE_FREQUENCY_GET.
+	 * On nRF54L15 cpuapp, TIMER20 falls back to the 16 MHz path.
+	 */
+	nrf_timer_mode_set(timer_reg, NRF_TIMER_MODE_TIMER);
 	nrf_timer_bit_width_set(timer_reg, NRF_TIMER_BIT_WIDTH_32);
+	nrf_timer_prescaler_set(timer_reg, 0);
 	nrf_timer_task_trigger(timer_reg, NRF_TIMER_TASK_CLEAR);
 	nrf_timer_task_trigger(timer_reg, NRF_TIMER_TASK_START);
 
-	/* --- GPPI: I2S20 FRAMESTART → TIMER20 COUNT --- */
-	uint32_t fs_evt = nrf_i2s_event_address_get(I2S20_PERIPH, NRF_I2S_EVENT_FRAMESTART);
-	uint32_t cnt_tsk = nrf_timer_task_address_get(timer_reg, NRF_TIMER_TASK_COUNT);
+	timer_nominal_hz = NRF_TIMER_BASE_FREQUENCY_GET(timer_reg);
 
-	ret = nrfx_gppi_conn_alloc(fs_evt, cnt_tsk, &gppi_fs_to_count);
-	if (ret < 0) {
-		LOG_ERR("GPPI FRAMESTART→COUNT alloc failed: %d", ret);
-		nrfx_grtc_channel_free(grtc_channel);
-		return ret;
-	}
-	nrfx_gppi_conn_enable(gppi_fs_to_count);
-
-	/* --- GPPI: GRTC COMPARE → TIMER20 CAPTURE[0] --- */
+	/* --- GPPI: GRTC COMPARE → TIMER20 CAPTURE[0] ---
+	 * Hardware snapshots the timer count at the GRTC compare
+	 * instant, eliminating ISR-latency jitter.
+	 */
 	uint32_t grtc_evt = nrf_grtc_event_address_get(
 		NRF_GRTC, nrf_grtc_sys_counter_compare_event_get(grtc_channel));
 	uint32_t cap_tsk = nrf_timer_task_address_get(
@@ -284,7 +289,6 @@ int audio_timing_init(void)
 	ret = nrfx_gppi_conn_alloc(grtc_evt, cap_tsk, &gppi_grtc_to_cap);
 	if (ret < 0) {
 		LOG_ERR("GPPI GRTC→CAPTURE alloc failed: %d", ret);
-		nrfx_gppi_conn_free(fs_evt, cnt_tsk, gppi_fs_to_count);
 		nrfx_grtc_channel_free(grtc_channel);
 		return ret;
 	}
@@ -299,7 +303,7 @@ int audio_timing_init(void)
 	ts.init_done = true;
 	ts.anchor_set = false;
 
-	LOG_INF("Audio timing: GRTC+TIMER20+GPPI ready");
+	LOG_INF("Audio timing: GRTC+TIMER20+GPPI ready (timer %" PRIu32 " Hz)", timer_nominal_hz);
 	return 0;
 }
 

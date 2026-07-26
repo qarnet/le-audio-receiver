@@ -85,15 +85,20 @@ receiver pipeline with a new DAC needs end-to-end retest.
 
 ### Next actions (ordered)
 
-1. **Phase 4b.1** (landed) — GRTC-referenced LRCK measurement foundation:
+1. **Phase 4b.1** (revised 2026-07-26) — GRTC-referenced timing foundation:
    validate `BT_ISO_FLAGS_TS`, consume `info->ts` as controller-clock reference,
    schedule future GRTC presentation compare (Nordic ISO-time-sync pattern),
-   count LRCK edges via TIMER20 COUNTER + GPPI, and log diagnostics at 1 s
-   intervals. Phase 4b.2 will feed measured ppm into the PI controller.
-   No direct RADIO access — SDC/MPSL owns RADIO. See `docs/design.md` §Phase 4b.
-2. **Phase 4b.2** — Feed GRTC-referenced LRCK measurement into
+   measure PCLK-derived TIMER20 ticks against GRTC time, and log diagnostics at
+   1 s intervals.  **Original design counted I2S20 FRAMESTART edges — HW validation
+   on 2026-07-26 showed FRAMESTART fires at DMA buffer boundaries (~100 Hz), not
+   LRCK edges (~47,619 Hz) → cannot measure sample-clock frequency.  Revised to
+   free-running TIMER mode, prescaler 0, nominal frequency from
+   `NRF_TIMER_BASE_FREQUENCY_GET` (16 MHz on TIMER20).**  Phase 4b.2 will feed
+   measured ppm into the PI controller.  No direct RADIO access — SDC/MPSL
+   owns RADIO.  See `docs/design.md` §Phase 4b.
+2. **Phase 4b.2** — Feed GRTC-referenced PCLK timer measurement into
    audio_drift_controller_update(), replacing the ISO-timestamp-based PI path
-   on nRF54L15. (Pending Phase 4b.1 hardware validation.)
+   on nRF54L15. (Pending Phase 4b.1 hardware re-run.)
 2. **Phase 5** — ASRC quality improvement (nearest-neighbor conversion removes
    ~381 frames/s at nominal mismatch; artifact audibility unmeasured; conditional
    on Phase 4c listening result).

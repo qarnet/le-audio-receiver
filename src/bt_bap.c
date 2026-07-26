@@ -538,11 +538,29 @@ static void stream_enabled_cb(struct bt_bap_stream *s)
 	}
 }
 
+static void stream_disabled_cb(struct bt_bap_stream *s)
+{
+	size_t idx = sink_idx(s);
+
+	LOG_INF("Stream[%zu] disabled", idx);
+
+	/* Stop audio sink on first disabled stream.  Mode A cannot
+	 * produce stereo after either ASE disables, and waiting for
+	 * ACL disconnect leaves I2S draining without buffers.
+	 * audio_sink_stop() is idempotent — later disable or
+	 * disconnect may call it again harmlessly.
+	 */
+	audio_sink_stop();
+	audio_stats_reset();
+	audio_timing_reset();
+}
+
 static struct bt_bap_stream_ops stream_ops = {
 	.recv = stream_recv,
 	.stopped = stream_stopped,
 	.started = stream_started,
 	.enabled = stream_enabled_cb,
+	.disabled = stream_disabled_cb,
 };
 
 /* ── Connection callbacks ────────────────────────────────────────── */
