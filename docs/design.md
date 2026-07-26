@@ -462,23 +462,32 @@ converged. But at measured PCLK offsets (+1,523..+2,058 ppm),
 SAMPLE_ADJUST produced ~86 inserts/s (51500 insertions/13 drops over
 10 min). Each sample insert/drop is a temporal discontinuity in the PCM
 stream. Even without listening evidence, frequent discontinuous insertion
-at this rate is sufficient engineering risk to require a continuous ASRC:
-the measured insert rate means a discontinuity roughly every 5.6 ms.
+at this rate is sufficient engineering risk to require a continuous ASRC
+(86 inserts/s → average interval ~12 ms between discontinuities; audibility
+is not claimed from this number).
 
 Phase 5 adds a stateful cross-block fixed-point linear-interpolation ASRC
-on cpuapp. The same PI controller feeds the resampler ratio; the resampler
-choice is separated from actuator choice. APLL nRF5340 behavior stays
-unchanged. SAMPLE_ADJUST remains selectable during Phase 5 for A/B comparison
-and rollback; it is removed only after ASRC acceptance.
+on cpuapp. The same PI controller feeds the resampler ratio. The ASRC is a
+data-path resampler, not a hardware actuator: it consumes the controller
+correction (ppm) through an explicit API separate from the actuator
+interface. APLL (nRF5340) remains the hardware clock-steering actuator
+unchanged. SAMPLE_ADJUST remains selectable during Phase 5 for A/B
+comparison and rollback; it is removed only after ASRC acceptance. The
+architectural contract is: controller → correction → [APLL hardware trim OR
+data-path resampler (SAMPLE_ADJUST today, ASRC after acceptance)]. Whether
+the ASRC adapter is implemented as an actuator-choice entry or wired
+directly into the data path is a phase-design decision, not frozen here.
 
 ### 5.0 — Instrumentation baseline
 
 Before adding ASRC code, instrument the existing data path to capture the
 SAMPLE_ADJUST baseline: callback-deadline headroom for Mode A and Mode B,
-ASRC/data-path CPU budget, slab-range statistics (min/max/mean free count),
-repeat/underrun/push-failure counters over 10-minute runs. This baseline
-informs acceptance decisions and feeds the R-4.1 CPU-budget question with
-measured numbers, not estimates.
+whole data-path CPU budget (SDC + BT host + LC3 decode + I2S DMA +
+SAMPLE_ADJUST memmove), slab-range statistics (min/max/mean free count),
+repeat/underrun/push-failure counters over 10-minute runs. This measures the
+current system with SAMPLE_ADJUST — ASRC-specific cycle counts are measured
+after implementation and compared against this baseline. The baseline also
+feeds the R-4.1 CPU-budget question with measured numbers, not estimates.
 
 ### 5.1 — Resampler semantics (controller-preserving)
 
@@ -501,16 +510,27 @@ format chosen during phase design).
 - Stateful cross-block stereo s16 linear interpolation.
 - Continuous phase accumulator and sample history (one previous sample per
   channel) carried across block boundaries — no per-block reset.
-- No heap allocation; stack/static only. Bounded output capacity: output
-  never exceeds `input_samples * max_source_step + 2` samples per channel.
+- No heap allocation; stack/static only. Bounded output capacity: worst-case
+  output frame count is determined by the configured minimum `source_step`
+  (most negative ppm correction → smallest step → most output frames), plus
+  interpolation history margin. Compile-time capacity proof against
+  `MAX_OUTPUT_FRAMES` (currently 481 stereo frames in `src/audio_i2s.c`,
+  sized for 48→47,619 Hz drain plus one SAMPLE_ADJUST insert headroom) and
+  runtime assertion are required for the configured ppm bounds. Frames and
+  interleaved samples are not conflated.
 - Reset state on stream stop/disconnect. Silence prefill (I2S preamble
   blocks) must not consume source phase — the resampler only advances
-  phase against real decoded audio.
-- Honor actual `sample_count` from the rate converter; variable write
-  lengths (476/477 frames) are already the norm.
-- Account for current 481-frame slab capacity (`I2S_NRFX_TX_BLOCK_COUNT=12`
-  → 2×480 stereo = 960 samples per block; the slab allocator guarantees
-  room).
+  phase against real decoded audio. Physical-rate frame scheduling and
+  silence prefill may use a separate remainder helper without involving
+  the ASRC source phase.
+- ASRC replaces the current fixed-rate converter (`src/audio_rate_convert.c`)
+  on the nRF54L15 path. It honors the actual decoded frame count
+  (`sample_count`) passed into `audio_sink_push()` — not an intermediate
+  rate-converter output. The nRF5340 path stays unchanged (identity).
+- Account for current slab allocation: `MAX_OUTPUT_FRAMES=481` stereo frames
+  per block (defined in `audio_i2s.c`); `CONFIG_I2S_NRFX_TX_BLOCK_COUNT=12`
+  determines the number of slab blocks in the pool. Both are relevant to
+  capacity planning.
 
 ### 5.3 — Testing
 
@@ -541,31 +561,39 @@ SAMPLE_ADJUST removed from Kconfig choice after acceptance.
 Based on current repo truth, likely new/modified files (exact API is a
 phase-design output, not frozen here):
 
-- `src/audio_asrc.{c,h}` — resampler module (state, step, stereo s16 linear
-  interp).
-- `src/audio_clock_actuator.h` — new `AUDIO_CLOCK_ACTUATOR_ASRC` choice entry.
-- `Kconfig` — new choice option, optional `ASRC_SOURCE_STEP_BITS` config.
-- `src/audio_i2s.c` — actuator-agnostic consume path (already
-  `consume_sample_adjustment()`), extended for ASRC.
+- `src/audio_asrc.{c,h}` — resampler module (state, phase accumulator,
+  stereo s16 linear interp, takes ppm correction through explicit API;
+  wiring into the data path is a phase-design decision — adapter entry
+  in the actuator choice or direct consumer in the audio pipeline).
+- `Kconfig` — new config for source-step fixed-point format, ppm bounds
+  for compile-time capacity proof.
+- `src/audio_i2s.c` — ASRC wired into the push path (replaces rate
+  converter on nRF54L15, identity on nRF5340); the existing
+  `consume_sample_adjustment()` path is already actuator-agnostic.
 - `tests/unit/asrc/` — new test suite.
 
 ## Phase 6 — FLPR offload **(intended implementation work)**
 
 Phase 6 moves the accepted fixed-point ASRC from cpuapp to the nRF54L15
-FLPR (RISC-V VPR @ 128 MHz). Goal is implementation, not merely gated on
+FLPR (RISC-V VPR). Goal is implementation, not merely gated on
 CPU pressure. Measurements from Phase 5 instrumentation inform the
 offload decision but do not gate it — the offload is intended regardless.
 
 Uses the generic Zephyr FLPR image first with SRAM execution
-(`nrf54l15dk/nrf54l15/cpuflpr`). HPF (High-Performance Flash execution)
+(`nrf54l15dk/nrf54l15/cpuflpr`). HPF (High-Performance Framework)
 stays optional optimization because experimental in NCS v3.3.0 and no
 official ASRC framework exists for it. Stages build incrementally.
 
 ### Stage 0 — Boot, handshake, memory map
 
-- Build a separate Zephyr/sysbuild FLPR image alongside cpuapp.
-- Establish cpuapp↔FLPR boot handshake: cpuapp starts FLPR via VEVIF
-  or reset release, FLPR signals ready.
+- Build a separate Zephyr/sysbuild FLPR image alongside cpuapp. Use the
+  Nordic VPR launcher pattern: cpuapp builds with `cpuflpr_vpr` source
+  memory (image stored in RRAM) and execution memory (reserved SRAM
+  region for FLPR runtime). The FLPR image is a sysbuild snippet
+  (`nordic-flpr`, per the `nrf/samples/ipc/ipc_service/` pattern).
+- Establish cpuapp↔FLPR boot handshake: cpuapp releases FLPR from reset
+  (VPR launcher), FLPR signals ready via VEVIF notification. VEVIF is
+  the IPC notification mechanism, not the boot-launch path.
 - Memory map: reserve shared SRAM region (`RAM_00` for DMA/ISR-critical
   data stays on cpuapp side; shared/FLPR placement measured).
 - Extend current OpenOCD flash helper to program the FLPR image at the
@@ -586,7 +614,7 @@ official ASRC framework exists for it. Stages build incrementally.
   writes output ring, cpuapp reads output ring. No locks — barriers and
   cache handling per ARMv8-M / RISC-V coherence rules.
 - MPSL-owned RADIO and reserved peripherals untouched.
-- VEVIF channels based on official IPC sample (`nrf/samples/ipc/`).
+- VEVIF channels based on official IPC sample (`nrf/samples/ipc/ipc_service/`).
 - Verify: ordered message stress test, bit-exact ring wrap test, forced
   stall/recovery.
 
@@ -603,8 +631,11 @@ official ASRC framework exists for it. Stages build incrementally.
 
 - Port the Phase 5 cpuapp ASRC to FLPR as fixed-point only.
   **RV32E e/m/c constraints**: no FPU, no A (atomic) extension —
-  use load/store with barriers for SPSC, `__mulsi3`/`__divsi3` from
-  libgcc for Q32.32 multiply. No heap — stack/static only.
+  use load/store with barriers for SPSC. Fixed-point arithmetic
+  (Q32.32 multiply, accumulate) must be verified on RV32E target;
+  generated code size and cycle count are measured from the compiled
+  binary, not estimated from libgcc symbols. No heap — stack/static
+  only.
 - FLPR receives correction_ppm per block from cpuapp (cpuapp still owns
   the PI controller and ISO timestamp interpretation — only the
   heavy arithmetic moves).
@@ -614,15 +645,19 @@ official ASRC framework exists for it. Stages build incrementally.
 ### Stage 4 — Reset, fault, fallback
 
 - FLPR watchdog or heartbeat timeout → cpuapp detects stall → resets FLPR
-  → falls back to cpuapp identity path → re-arms handshake → resumes ASRC
-  offload. Graceful degradation, no stream loss beyond a brief glitch.
-- Verify: FLPR forced reset during streaming, recovery within one block
-  period, nRF5340 unaffected.
+  → falls back to cpuapp ASRC path (the accepted Phase 5 ASRC retained on
+  cpuapp during Phase 6 — not identity, which would reintroduce the PCLK
+  rate mismatch). Re-arms handshake → resumes FLPR offload once FLPR is
+  healthy.
+- Fallback behaviour: bounded glitch (exact recovery latency TBD from
+  measurements; not assumed to be within one block period).
+- Verify: FLPR forced reset during streaming, fallback path engages, FLPR
+  recovery and re-offload, nRF5340 unaffected.
 
 ### Stage 5 — Optimize and compare
 
-- From Stage 3 measurements: compare ICBMsg vs raw VEVIF signaling latency.
-- Evaluate HPF (execution from flash) only if measured SRAM contention or
+- From Stage 3 measurements: compare ICBmsg vs raw VEVIF signaling latency.
+- Evaluate HPF (High-Performance Framework) only if measured SRAM contention or
   deadline pressure justifies it — HPF is experimental, not assumed.
 - Tune ring sizes, block scheduling, and deadline margins from real
   Mode A/B data.
@@ -645,7 +680,7 @@ official ASRC framework exists for it. Stages build incrementally.
 - **RAM_00 for DMA/ISR-critical paths**: I2S DMA slabs stay on cpuapp in
   RAM_00. Shared SRAM for rings uses a measured, profiled region.
 - **MPSL RADIO and reserved resources**: never touched by FLPR code.
-- **VEVIF channels**: based on official `nrf/samples/ipc/` sample.
+- **VEVIF channels**: based on official `nrf/samples/ipc/ipc_service/` sample.
 - **Separate cpuapp/cpuflpr image packaging**: sysbuild multi-image
   configuration; OpenOCD flash helper extended.
 - **nRF5340 unchanged**: builds, flashes, streams with no FLPR path.
