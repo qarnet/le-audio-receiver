@@ -164,10 +164,19 @@ The core insight: the "software PLL" separates into a platform-independent
 
 **Controller** (pure math, ztest-covered):
 
-- Frequency term: drift estimate from ISO timestamps (later: hardware
-  timestamping, below).
-- Phase term: I2S buffer-fill deviation from a setpoint.
-- PI loop → output in **ppm** (not APLL register units).
+- **Frequency term**: PCLK-vs-GRTC measurement from platform timing hardware
+  (nRF54L15: `audio_drift_frequency_error_update()` fed every 1 s from the
+  GRTC work handler; nRF5340: not implemented, stays zero).  Positive = local
+  PCLK/I2S faster than controller.  Filtered through an integer EMA (N=8,
+  ~0.35 Hz corner) to reject one-second jitter.  Feedforward correction =
+  `-filtered_measurement` (local fast → negative correction → insert eventually).
+- **Phase term**: I2S buffer-fill deviation from a setpoint, computed once
+  per rendered audio block in `audio_sink_push()`.  Phase error = `PHASE_SETPOINT
+  - slab_free_count` (positive when slab is filling, negative when draining).
+- Pure integer PI loop (no floating point).  Gains in milli-units.  Anti-windup
+  on phase integrator at output clamp.  Combined output = filtered feedforward +
+  phase PI.
+- Output in **ppm** (not APLL register units).
 
 **Actuators** behind one interface, selected per platform via Kconfig choice
 (working names):
@@ -362,7 +371,7 @@ Each gate blocks the next. Do not skip ahead.
     Peer-drift still needs Phase 4b GRTC. Phase 5 quality ASRC stays
     conditional on listening result.
 
-### Phase 4b — Supported ISO timestamp presentation scheduling
+### Phase 4b — Supported ISO timestamp presentation scheduling — **COMPLETE (4b.2, 2026-07-26)**
 
 **Mandatory, not deferred.** With the fixed PCLK32M rate mismatch resolved
 by 4a.2, residual peer-drift between BLE controller clock and I2S clock still

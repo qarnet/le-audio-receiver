@@ -50,4 +50,25 @@ config AUDIO_CLOCK_ACTUATOR_SAMPLE_ADJUST
 	  platforms without a steerable audio clock (nRF54L15).
 endchoice
 
+config AUDIO_DRIFT_OUTPUT_CLAMP
+	int "Controller output clamp (±ppm)"
+	default 500
+	range 1 3000
+	help
+	  Maximum absolute ppm output from the PI clock recovery controller.
+	  Default 500 ppm is correct for nRF5340 APLL (steps ≈3.3 ppm, range
+	  ≈±600 ppm around centre).  Set to 2000 on nRF54L15 where
+	  SAMPLE_ADJUST capacity is one sample per 480-frame block
+	  (~2,083 ppm).
+
+config AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
+	int "Phase integral clamp (±ppm)"
+	default 500
+	range 1 2000
+	help
+	  Maximum absolute ppm the phase integral term can contribute.
+	  Default 500 ppm preserves existing nRF5340 behaviour.
+	  Recommended 150–200 ppm on nRF54L15 so phase authority does not
+	  consume all headroom around the measured ~1,775 ppm PCLK offset.
+
 source "Kconfig.zephyr"

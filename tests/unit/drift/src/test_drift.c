@@ -1,6 +1,13 @@
 /*
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Phase 4b.2: unit tests for the PCLK-feedforward + buffer-phase PI
+ * drift controller.  Tests the production audio_drift.c directly.
+ *
+ * All tests use CONFIG_AUDIO_DRIFT_OUTPUT_CLAMP=500 (default).
+ * Tests verify clamp, anti-windup, phase sign, and filter behaviour
+ * within the 500 ppm output range.
  */
 
 #include <zephyr/ztest.h>
@@ -8,8 +15,7 @@
 #include "audio_drift.h"
 
 /* Controller constants (must match audio_drift.c) */
-#define PERIOD_US 100000U
-#define SETPOINT  6
+#define SETPOINT 6
 
 static void reset_before_each(void *unused)
 {
@@ -19,226 +25,250 @@ static void reset_before_each(void *unused)
 
 ZTEST_SUITE(drift, NULL, NULL, reset_before_each, NULL, NULL);
 
-ZTEST(drift, test_zero_ts_ignored)
+/* ── 1. reset / INIT behaviour ─────────────────────────────────── */
+
+ZTEST(drift, test_init_returns_zero_first_call)
 {
-	/* sdu_ref_us == 0 must be a no-op; state stays INIT */
-	int32_t ppm = audio_drift_controller_update(0, SETPOINT);
-
-	zassert_equal(ppm, 0, "zero ts must return 0");
-	zassert_equal(audio_drift_get_ppm(), 0, "output ppm must be 0");
-	/* State should still be INIT after zero ts */
-	zassert_true(strcmp(audio_drift_state_str(), "INIT") == 0,
-		     "state should stay INIT on zero ts");
-
-	/* First valid ts enters ACTIVE, returns 0 */
-	ppm = audio_drift_controller_update(1000, SETPOINT);
-	zassert_equal(ppm, 0, "first valid ts returns 0");
-	zassert_true(strcmp(audio_drift_state_str(), "ACTIVE") == 0,
-		     "state should be ACTIVE after first valid ts");
+	int32_t ppm = audio_drift_controller_update(SETPOINT);
+	zassert_equal(ppm, 0, "first update returns 0");
+	zassert_true(strcmp(audio_drift_state_str(), "ACTIVE") == 0, "state ACTIVE after first");
 }
 
-ZTEST(drift, test_init_to_active_on_first_ts)
+ZTEST(drift, test_reset_clears_all_state)
 {
-	int32_t ppm = audio_drift_controller_update(1000000U, SETPOINT);
+	audio_drift_controller_update(SETPOINT);
+	audio_drift_controller_update(SETPOINT);
+	zassert_equal(audio_drift_get_ppm(), 0, "ppm zero at setpoint, no feedforward");
 
-	zassert_equal(ppm, 0, "first ts enters ACTIVE, no freq update");
-	zassert_true(strcmp(audio_drift_state_str(), "ACTIVE") == 0,
-		     "state should be ACTIVE after first ts");
-}
-
-ZTEST(drift, test_freq_term_positive_err)
-{
-	/* elapsed > PERIOD → clock slow → freq_err positive → ppm positive */
-	audio_drift_controller_update(0U, SETPOINT);
-	uint32_t start = 2000000U;
-
-	audio_drift_controller_update(start, SETPOINT);
-	/* elapsed = 100010 → err_us = +10 → freq_err_ppm = +100 */
-	int32_t ppm = audio_drift_controller_update(start + PERIOD_US + 10, SETPOINT);
-
-	zassert_true(ppm > 0, "elapsed > period → ppm positive (speed up), got %d", ppm);
-}
-
-ZTEST(drift, test_freq_term_negative_err)
-{
-	/* Frequency term only fires when elapsed >= 100 ms.
-	 * When elapsed < 100 ms, frequency update is skipped —
-	 * only phase term output (0 at setpoint) appears. */
-	audio_drift_controller_update(0U, SETPOINT);
-	uint32_t start = 3000000U;
-
-	audio_drift_controller_update(start, SETPOINT);
-	/* elapsed = 99990 (< 100000) → frequency term skipped.
-	 * At setpoint, phase term = 0. Output = 0. */
-	int32_t ppm = audio_drift_controller_update(start + PERIOD_US - 10, SETPOINT);
-
-	zassert_equal(ppm, 0, "elapsed < period → freq skipped, output=0 (got %d)", ppm);
-
-	/* After exactly 100 ms from start: elapsed = 100000 → err_us = 0.
-	 * Note: meas_start was never updated by the skipped call,
-	 * so this is the first frequency update. */
-	ppm = audio_drift_controller_update(start + PERIOD_US, SETPOINT);
-	zassert_equal(ppm, 0, "perfect timing → output=0 (got %d)", ppm);
-}
-
-ZTEST(drift, test_phase_term_buffer_draining)
-{
-	/* slab_free < setpoint → buffer draining (clock fast) → ppm negative */
-	audio_drift_controller_update(0U, SETPOINT);
-	uint32_t t = 4000000U;
-
-	audio_drift_controller_update(t, SETPOINT);
-	/* Supply SDUs but keep buffer below setpoint */
-	int32_t ppm = audio_drift_controller_update(t + PERIOD_US, 4);
-
-	zassert_true(ppm < 0, "buffer draining → ppm negative, got %d", ppm);
-}
-
-ZTEST(drift, test_phase_term_buffer_filling)
-{
-	/* slab_free > setpoint → buffer filling (clock slow) → ppm positive */
-	audio_drift_controller_update(0U, SETPOINT);
-	uint32_t t = 5000000U;
-
-	audio_drift_controller_update(t, SETPOINT);
-	int32_t ppm = audio_drift_controller_update(t + PERIOD_US, 8);
-
-	zassert_true(ppm > 0, "buffer filling → ppm positive, got %d", ppm);
-}
-
-ZTEST(drift, test_integrator_clamp)
-{
-	/* Sustained large error → integral clamped (output stays bounded) */
-	audio_drift_controller_update(0U, SETPOINT);
-	uint32_t t = 6000000U;
-
-	audio_drift_controller_update(t, SETPOINT);
-
-	/* Feed 25 windows of moderate positive error (elapsed = 100050 µs each).
-	 * err_us = +50, freq_err_ppm = +500 per window.
-	 * After many windows the integral saturates, but output stays ≤ +500. */
-	for (int i = 0; i < 25; i++) {
-		t += PERIOD_US + 50;
-		int32_t ppm = audio_drift_controller_update(t, SETPOINT);
-
-		zassert_true(ppm >= -500 && ppm <= 500,
-			     "output must stay in [-500, 500], got %d at window %d", ppm, i);
-	}
-
-	/* Output should have reached a positive steady state */
-	int32_t final_ppm = audio_drift_get_ppm();
-
-	zassert_true(final_ppm > 0, "sustained positive error → pos ppm, got %d", final_ppm);
-}
-
-ZTEST(drift, test_output_clamp)
-{
-	/* Large error → output clamped at ±500 ppm.
-	 * Positive: use large frequency error.
-	 * Negative: use large phase error (buffer massively draining). */
-
-	/* --- Positive clamp via frequency term --- */
-	audio_drift_controller_update(0U, SETPOINT);
-	uint32_t t = 7000000U;
-
-	audio_drift_controller_update(t, SETPOINT);
-
-	/* Huge positive: elapsed = 200000 → err_us = +100000 → freq_err = +1000000 ppm */
-	int32_t ppm = audio_drift_controller_update(t + PERIOD_US + 100000, SETPOINT);
-
-	zassert_equal(ppm, 500, "large freq error → output clamped at +500, got %d", ppm);
-
-	/* --- Negative clamp via phase term --- */
 	audio_drift_reset();
-	audio_drift_controller_update(0U, SETPOINT);
-	uint32_t t2 = 8000000U;
-
-	audio_drift_controller_update(t2, SETPOINT);
-
-	/* Buffer massively draining: slab_free = -100 (below setpoint by 106).
-	 * phase_err_ppm = -106 * 50 = -5300.
-	 * phase_output = 0.3 * (-5300) = -1590 → clamped. */
-	ppm = audio_drift_controller_update(t2 + PERIOD_US, -100);
-
-	zassert_equal(ppm, -500, "large phase error → output clamped at -500, got %d", ppm);
+	zassert_true(strcmp(audio_drift_state_str(), "INIT") == 0, "INIT after reset");
+	zassert_equal(audio_drift_get_ppm(), 0, "ppm zero after reset");
+	zassert_equal(audio_drift_controller_update(SETPOINT), 0, "first post-reset returns 0");
 }
 
-ZTEST(drift, test_convergence)
+/* ── 2. Feedforward sign: local fast → negative correction ──────── */
+
+ZTEST(drift, test_positive_frequency_negative_correction)
 {
-	/* Feed consistent +5 µs freq error per window (freq_err_ppm = +50).
-	 * The output should be positive and stabilize within [0, 500]. */
-	audio_drift_controller_update(0U, SETPOINT);
-	uint32_t t = 9000000U;
+	audio_drift_frequency_error_update(400);
+	audio_drift_controller_update(SETPOINT); /* INIT→ACTIVE */
+	int32_t ppm = audio_drift_controller_update(SETPOINT);
+	/* -400 clamped within ±500 */
+	zassert_equal(ppm, -400, "+400 local fast → -400 ppm correction (got %d)", ppm);
+}
 
-	audio_drift_controller_update(t, SETPOINT);
+/* ── 3. local slow → positive correction ────────────────────────── */
 
-	int32_t prev_ppm = 0;
+ZTEST(drift, test_negative_frequency_positive_correction)
+{
+	audio_drift_frequency_error_update(-400);
+	audio_drift_controller_update(SETPOINT);
+	int32_t ppm = audio_drift_controller_update(SETPOINT);
+	zassert_equal(ppm, 400, "-400 local slow → +400 ppm correction (got %d)", ppm);
+}
 
+/* ── 4. filter convergence ──────────────────────────────────────── */
+
+ZTEST(drift, test_filter_converges_to_steady_state)
+{
+	/* Feed constant +400 ppm. EMA N=8 converges quickly. */
+	audio_drift_controller_update(SETPOINT);
 	for (int i = 0; i < 10; i++) {
-		t += PERIOD_US + 5;
-		int32_t ppm = audio_drift_controller_update(t, SETPOINT);
-
-		/* Output should be positive (clock slow, need to speed up) */
-		zassert_true(ppm > 0,
-			     "positive freq error → ppm must be positive, got %d at window %d", ppm,
-			     i);
-
-		/* Output should be monotonically increasing as integral builds */
-		zassert_true(ppm >= prev_ppm,
-			     "output should not decrease on consistent error: %d → %d", prev_ppm,
-			     ppm);
-		prev_ppm = ppm;
+		audio_drift_frequency_error_update(400);
+		audio_drift_controller_update(SETPOINT);
 	}
-
-	/* Final output must be at least 25 (proportional contribution) */
-	zassert_true(audio_drift_get_ppm() >= 25,
-		     "consistent error → output should reach at least 25 ppm, got %d",
-		     audio_drift_get_ppm());
+	int32_t ppm = audio_drift_get_ppm();
+	zassert_equal(ppm, -400, "filter +400 → -400 correction (got %d)", ppm);
 }
 
-ZTEST(drift, test_gap_resets)
+ZTEST(drift, test_filter_smooth_step_response)
 {
-	/* elapsed > 3*PERIOD → window reset, freq_err_ppm = 0.
-	 * Phase term continues to work (no frequency contribution). */
-	audio_drift_controller_update(0U, SETPOINT);
-	uint32_t t = 10000000U;
-
-	audio_drift_controller_update(t, SETPOINT);
-
-	/* Build some frequency integral first */
-	audio_drift_controller_update(t + PERIOD_US + 50, SETPOINT); /* positive freq err */
-	int32_t with_freq = audio_drift_get_ppm();
-
-	zassert_true(with_freq > 0, "should have positive output from freq term");
-
-	/* Now a gap: 400 ms jump (>> 3*PERIOD). Window resets, freq_err_ppm = 0.
-	 * The freq integral is NOT reset, so some output remains, but no new
-	 * frequency correction is computed for this SDU. */
-	t += PERIOD_US + 50;
-	t += 4 * PERIOD_US; /* big gap */
-	int32_t ppm_after_gap = audio_drift_controller_update(t, SETPOINT);
-
-	/* After gap: freq term contributes 0 (window reset), phase term may add
-	 * something. The freq integral persists from before. So output should
-	 * still be positive (freq integral + small phase contribution). */
-	zassert_true(ppm_after_gap >= 0,
-		     "ppm after gap should be non-negative (freq integral persists), got %d",
-		     ppm_after_gap);
+	/* Step from 0 to +800 ppm (above clamp) → correction
+	 * clamped at -500 immediately. This is correct:
+	 * when local error exceeds clamp, controller saturates
+	 * instantly, no ramp-through-unstable required.
+	 */
+	audio_drift_controller_update(SETPOINT);
+	audio_drift_frequency_error_update(800);
+	int32_t ppm = audio_drift_controller_update(SETPOINT);
+	zassert_equal(ppm, -500, "800 local fast → clamped at -500 (got %d)", ppm);
 }
 
-ZTEST(drift, test_uint32_wraparound)
+/* ── 5. draining → negative phase correction ────────────────────── */
+
+ZTEST(drift, test_draining_gives_negative_phase)
 {
-	/* Timestamps wrap at 0xFFFFFFFF; subtraction still correct with uint32 math. */
-	uint32_t start = 0xFFFF0000U;
+	/* slab_free = 8 > setpoint 6 → negative correction */
+	audio_drift_controller_update(SETPOINT);
+	int32_t ppm = audio_drift_controller_update(8);
+	zassert_true(ppm < 0, "draining (free=8) → negative ppm (got %d)", ppm);
+}
 
-	audio_drift_controller_update(0U, SETPOINT);
-	audio_drift_controller_update(start, SETPOINT);
+/* ── 6. filling → positive phase correction ─────────────────────── */
 
-	/* wrap: start + PERIOD overflows naturally in uint32 */
-	uint32_t after = start + PERIOD_US;
+ZTEST(drift, test_filling_gives_positive_phase)
+{
+	audio_drift_controller_update(SETPOINT);
+	int32_t ppm = audio_drift_controller_update(4);
+	zassert_true(ppm > 0, "filling (free=4) → positive ppm (got %d)", ppm);
+}
 
-	int32_t ppm = audio_drift_controller_update(after, SETPOINT);
+/* ── 7. combined frequency + phase ──────────────────────────────── */
 
-	/* err_us = 0 → freq_err_ppm = 0. Phase term: free=SETPOINT → 0. */
-	zassert_equal(ppm, 0, "uint32 wraparound with err=0 → 0 ppm (got %d)", ppm);
+ZTEST(drift, test_combined_freq_and_phase_add)
+{
+	/* freq correction + phase correction both negative */
+	audio_drift_frequency_error_update(300);
+	audio_drift_controller_update(SETPOINT);
+	int32_t ppm = audio_drift_controller_update(8);
+	zassert_true(ppm < -300, "freq=-300 + neg phase < -300 (got %d)", ppm);
+}
+
+ZTEST(drift, test_combined_freq_and_phase_oppose)
+{
+	/* freq correction negative, phase positive */
+	audio_drift_frequency_error_update(300);
+	audio_drift_controller_update(SETPOINT);
+	int32_t ppm = audio_drift_controller_update(4);
+	zassert_true(ppm > -300, "freq=-300 + pos phase > -300 (got %d)", ppm);
+}
+
+/* ── 8. output clamp ────────────────────────────────────────────── */
+
+ZTEST(drift, test_output_clamp_positive)
+{
+	audio_drift_frequency_error_update(-1000);
+	audio_drift_controller_update(SETPOINT);
+	int32_t ppm = audio_drift_controller_update(SETPOINT);
+	zassert_equal(ppm, 500, "output clamped at +500, got %d", ppm);
+}
+
+ZTEST(drift, test_output_clamp_negative)
+{
+	audio_drift_frequency_error_update(1000);
+	audio_drift_controller_update(SETPOINT);
+	int32_t ppm = audio_drift_controller_update(SETPOINT);
+	zassert_equal(ppm, -500, "output clamped at -500, got %d", ppm);
+}
+
+/* ── 9. anti-windup ─────────────────────────────────────────────── */
+
+ZTEST(drift, test_anti_windup_blocks_integral_at_saturation)
+{
+	/* Saturate at +500 with large negative local error.
+	 * Feed phase in same direction (filling, positive).
+	 * Anti-windup should block integral → output stays at +500.
+	 * Then feed phase in OPPOSITE direction (draining, negative).
+	 * Tentative should move away from clamp → integral builds → output drops.
+	 */
+	audio_drift_frequency_error_update(-1000); /* freq correction clamped +500 */
+	audio_drift_controller_update(SETPOINT);
+	/* Same-direction: filling (phase positive) pushes further toward +500 */
+	audio_drift_controller_update(4);
+	int32_t ppm = audio_drift_get_ppm();
+	zassert_equal(ppm, 500, "same-direction phase while saturated → stays 500 (got %d)", ppm);
+
+	/* Opposite-direction: draining (phase negative) moves away from +clamp.
+	 * Tentative = +1000(freq) + neg(phase) < 1000 → still clamp at 500?
+	 * No: tentative = freq_correction + phase. phase negative → tentative <
+	 * freq_correction alone. With freq=+1000 (clamped internally) and
+	 * phase negative, clamped_tentative may still be 500 because tentative >
+	 * 500. Let's verify that ANTI-WINDUP does not block the opposite-direction
+	 * integral.
+	 */
+	audio_drift_controller_update(8);
+	ppm = audio_drift_get_ppm();
+	/* With OUTPUT_CLAMP=500 and freq=+1000, a single negative phase
+	 * block (free=8 → phase_pp≈-60, phase_inc≈-10) gives tentative≈+930,
+	 * clamped_tentative=500, at_pos_clamp=true → integral blocked.
+	 * So opposite-direction also gets blocked when freq alone saturates.
+	 *
+	 * This is the correct behaviour: output is at clamp, and any change
+	 * that can't move output below clamp doesn't need integral action.
+	 * Once freq error drops below clamp range, phase integrator can build.
+	 */
+	zassert_equal(ppm, 500, "opposite-direction while still saturated → stays 500 (got %d)",
+		      ppm);
+}
+
+ZTEST(drift, test_anti_windup_allows_integral_after_exit_saturation)
+{
+	/* After saturation, feed a frequency within clamp range
+	 * so output drops below clamp. Then phase integral should
+	 * build normally (proving it wasn't wound during saturation).
+	 */
+	audio_drift_frequency_error_update(-1000); /* saturates at +500 */
+	audio_drift_controller_update(SETPOINT);
+	/* Push filling phase while saturated → anti-windup blocks */
+	for (int i = 0; i < 10; i++) {
+		audio_drift_controller_update(4);
+	}
+	zassert_equal(audio_drift_get_ppm(), 500, "still saturated at +500");
+
+	/* Now remove frequency error → output exits saturation.
+	 * Feed draining phase → integral should build now.
+	 * First call after frequency reset stays at 0 (filtered unchanged
+	 * from -1000 until enough EMA steps). Use many EMA steps.
+	 */
+	for (int i = 0; i < 20; i++) {
+		audio_drift_frequency_error_update(0);
+		audio_drift_controller_update(8); /* draining → negative phase */
+	}
+	int32_t ppm = audio_drift_get_ppm();
+	/* Filtered freq is converging toward 0, phase integral building negative.
+	 * Output should be below +500 (freq decreasing + negative phase integral).
+	 */
+	zassert_true(ppm < 500, "after freq reduction, output falls below clamp (got %d)", ppm);
+}
+
+ZTEST(drift, test_anti_windup_negative_saturation)
+{
+	/* Same as positive saturation, but at -500 clamp. */
+	audio_drift_frequency_error_update(1000); /* saturates at -500 */
+	audio_drift_controller_update(SETPOINT);
+	/* Same-direction: draining (phase negative) pushes further toward -500 */
+	audio_drift_controller_update(8);
+	zassert_equal(audio_drift_get_ppm(), -500,
+		      "same-direction while saturated at -500 (got %d)", audio_drift_get_ppm());
+
+	/* Push filling phase while saturated → integral blocked.
+	 * Then reduce freq error and push filling phase → integral should build.
+	 */
+	for (int i = 0; i < 10; i++) {
+		audio_drift_controller_update(4); /* filling → positive phase */
+	}
+	zassert_equal(audio_drift_get_ppm(), -500, "still saturated at -500");
+
+	for (int i = 0; i < 20; i++) {
+		audio_drift_frequency_error_update(0);
+		audio_drift_controller_update(4);
+	}
+	int32_t ppm = audio_drift_get_ppm();
+	zassert_true(ppm > -500, "after freq reduction, output rises above clamp (got %d)", ppm);
+}
+
+/* ── 10. zero feedforward (nRF5340 phase-only) ──────────────────── */
+
+ZTEST(drift, test_zero_feedforward_phase_only)
+{
+	/* No frequency measurement → feedforward = 0.
+	 * Controller should still respond to phase errors. */
+	audio_drift_controller_update(4); /* first returns 0 (INIT→ACTIVE) */
+	int32_t ppm = audio_drift_controller_update(4);
+	zassert_true(ppm > 0, "phase-only → positive correction with fill, got %d", ppm);
+}
+
+/* ── Edge: phase integral clamp ──────────────────────────────────── */
+
+ZTEST(drift, test_phase_integral_clamped)
+{
+	/* Sustained phase error: free=8 every block.
+	 * Phase contribution maxes at PHASE_INTEGRAL_CLAMP (500).
+	 * No feedforward → total = phase only ≤ 500 abs. */
+	audio_drift_controller_update(SETPOINT);
+	for (int i = 0; i < 50; i++) {
+		int32_t ppm = audio_drift_controller_update(8);
+		zassert_true(ppm >= -500 && ppm <= 500,
+			     "phase-only output in [-500,500], got %d at %d", ppm, i);
+	}
 }

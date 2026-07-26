@@ -1,0 +1,9 @@
+source "Kconfig.zephyr"
+
+config AUDIO_DRIFT_OUTPUT_CLAMP
+	int "Controller output clamp (±ppm)"
+	default 500
+
+config AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
+	int "Phase integral clamp (±ppm)"
+	default 500

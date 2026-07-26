@@ -31,6 +31,7 @@
 
 #include "audio_timing.h"
 #include "audio_timing_math.h"
+#include "audio_drift.h"
 
 #include <nrfx_grtc.h>
 #include <helpers/nrfx_gppi.h>
@@ -153,9 +154,18 @@ static void diag_work_handler(struct k_work *work)
 
 	int32_t ppm = audio_timing_compute_ppm(diag.tick_delta, nominal);
 
-	LOG_INF("PCLK timer diag[%" PRIu32 "]: %" PRIu32 " ticks in %" PRIu32 " us (nom %" PRIu32
-		" @ %" PRIu32 " Hz) → %" PRId32 " ppm",
-		diag.seq, diag.tick_delta, diag.elapsed_us, nominal, diag.nominal_hz, ppm);
+	/* Phase 4b.2: every measurement feeds the PCLK frequency
+	 * error into the drift controller's feedforward path.
+	 * Positive ppm → local PCLK/I2S faster than controller.
+	 */
+	audio_drift_frequency_error_update(ppm);
+
+	/* Bounded diagnostic logging: sequence 1 and every DIAG_PERIOD_S. */
+	if (diag.seq == DIAG_FIRST_SEQ || (diag.seq % DIAG_PERIOD_S) == 0) {
+		LOG_INF("PCLK timer diag[%" PRIu32 "]: %" PRIu32 " ticks in %" PRIu32
+			" us (nom %" PRIu32 " @ %" PRIu32 " Hz) → %" PRId32 " ppm",
+			diag.seq, diag.tick_delta, diag.elapsed_us, nominal, diag.nominal_hz, ppm);
+	}
 }
 
 /* ── GRTC compare callback (ISR context) ──────────────────────────── */
@@ -221,19 +231,20 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 		 */
 		ts.diag_seq++;
 
-		/* Log first measurement, then every DIAG_PERIOD_S */
-		if (ts.diag_seq == DIAG_FIRST_SEQ || (ts.diag_seq % DIAG_PERIOD_S) == 0) {
-			k_spinlock_key_t key = k_spin_lock(&diag_lock);
-			pending_diag.is_error = false;
-			pending_diag.tick_delta = tick_delta;
-			pending_diag.elapsed_us = elapsed_us;
-			pending_diag.nominal_hz = timer_nominal_hz;
-			pending_diag.seq = ts.diag_seq;
-			pending_diag.gen = atomic_get(&generation);
-			k_spin_unlock(&diag_lock, key);
+		/* Phase 4b.2: publish every measurement for the
+		 * frequency-error feedforward path.  Diagnostic
+		 * logging is gated in the work handler.
+		 */
+		k_spinlock_key_t key = k_spin_lock(&diag_lock);
+		pending_diag.is_error = false;
+		pending_diag.tick_delta = tick_delta;
+		pending_diag.elapsed_us = elapsed_us;
+		pending_diag.nominal_hz = timer_nominal_hz;
+		pending_diag.seq = ts.diag_seq;
+		pending_diag.gen = atomic_get(&generation);
+		k_spin_unlock(&diag_lock, key);
 
-			k_work_submit(&diag_work);
-		}
+		k_work_submit(&diag_work);
 	}
 
 	/* Update state for next interval */

@@ -414,6 +414,29 @@ The `AUDIO_CLOCK_ACTUATOR` Kconfig choice selects the actuator. Three options:
 `audio_clock_actuator_consume_sample_adjustment()` returns ±1/0; APLL and NONE
 always return 0 (data-path adjustment is a no-op for clock-steering actuators).
 
+### Drift controller: PCLK feedforward + per-block phase PI (Phase 4b.2)
+
+Controller has two explicit inputs:
+- `audio_drift_frequency_error_update(local_clock_error_ppm)` — from platform
+  timing (nRF54L15: PCLK TIMER20 vs GRTC; nRF5340: never called, stays zero).
+  Positive = local PCLK/I2S runs faster than controller. Feedforward correction
+  = `-measured` (local fast → negative correction → eventual insert).
+- `audio_drift_controller_update(slab_free)` — called ONCE per rendered stereo
+  block in `audio_sink_push()`, before slab allocation. Phase error =
+  `PHASE_SETPOINT - slab_free` (corrected sign vs earlier code). Combines
+  filtered frequency feedforward + phase PI. No floating point; pure 32-bit
+  integer with 64-bit intermediate multiplication.
+
+Output sign: positive ppm = consume source faster / drop frame eventually;
+negative ppm = consume source slower / insert frame eventually.
+Output clamp: `CONFIG_AUDIO_DRIFT_OUTPUT_CLAMP` (default 500; nRF54L15: 2000).
+Phase integral clamp: `CONFIG_AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP` (default 500;
+nRF54L15: 150).
+
+`audio_sink_sdu_ref_update()` is REMOVED. ISO timestamps go ONLY to
+`audio_timing_sdu_ref_update()` for GRTC scheduling. Never call drift
+controller from ISR — work/thread context only.
+
 ### SDC/MPSL owns RADIO — never access RADIO directly
 
 On nRF54L15 (SDC on cpuapp), MPSL owns the RADIO peripheral. Never configure

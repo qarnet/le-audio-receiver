@@ -18,7 +18,29 @@ D1/P1.5 (LRCK), D2/P1.6 (SDOUT) proven.
 low, D1/LRCK was held high (no toggling). With digital wires removed, D1
 toggles. The old breakout/wiring assembly is incompatible or defective.
 
-**Phase 4a.2 rate conversion: PASS** — 35-second Mode A stereo stream,
+**Phase 4b.2 — PCLK feedforward + phase PI: COMPLETE** (2026-07-26).
+Refactored `audio_drift.c` to explicit PCLK frequency feedforward
+(`audio_drift_frequency_error_update()`) and per-block buffer-phase PI
+(`audio_drift_controller_update(slab_free)`).  Pure integer, no floating
+point.  Corrected sign (phase error = setpoint - slab_free).  Added
+anti-windup, configurable output clamp and phase integral clamp via
+Kconfig.  nRF54L15 board sets output clamp=2000, phase integral=150.
+nRF5340 keeps defaults (500/500).  Removed timestamp-based frequency
+estimation and `audio_sink_sdu_ref_update()`.  ISO timestamps now go
+ONLY to `audio_timing_sdu_ref_update()` for GRTC scheduling.  nRF54
+timing feeds every 1 s PCLK measurement (not just diagnostics) to
+`audio_drift_frequency_error_update()` via the work handler (ISR-safe).
+
+| Test | Result |
+|------|--------|
+| fw-build-5340 | PASS, zero warnings |
+| fw-build-54l15 | PASS, zero warnings |
+| drift unit tests | 17/17 PASS |
+| actuator unit tests | 7/7 PASS (incl. sign-chain verification) |
+| timing unit tests | all PASS |
+| lifecycle unit tests | all PASS |
+| decode unit tests | all PASS |
+| rate_convert unit tests | all PASS |
 3,500 frames at 100 fps, zero slab-full drops, zero DMA underruns,
 I2S DMA started cleanly, push_ret=0 consistently. Root cause was fixed
 PCLK32M hardware-rate mismatch (~47,619 Hz LRCK vs 48,000 Hz decoder output)
@@ -85,7 +107,8 @@ receiver pipeline with a new DAC needs end-to-end retest.
 
 ### Next actions (ordered)
 
-1. **Phase 4b.1** (revised 2026-07-26) — GRTC-referenced timing foundation:
+1. ~~**Phase 4b.1** — GRTC-referenced timing foundation~~ → **Phase 4b.2 COMPLETE**
+2. **Phase 4c** — Stability + artifact verification:
    validate `BT_ISO_FLAGS_TS`, consume `info->ts` as controller-clock reference,
    schedule future GRTC presentation compare (Nordic ISO-time-sync pattern),
    measure PCLK-derived TIMER20 ticks against GRTC time, and log diagnostics at

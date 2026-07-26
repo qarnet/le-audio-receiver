@@ -23,11 +23,6 @@ void audio_sink_stop(void)
 	atomic_store(&frame_count, 0);
 }
 
-void audio_sink_sdu_ref_update(uint32_t sdu_ref_us)
-{
-	(void)sdu_ref_us;
-}
-
 int audio_sink_push(const int16_t *data, size_t sample_count)
 {
 	(void)data;

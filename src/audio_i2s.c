@@ -61,17 +61,6 @@ static size_t saved_frame_len; /* bytes */
  */
 static struct audio_rate_converter rate_ctx;
 
-void audio_sink_sdu_ref_update(uint32_t sdu_ref_us)
-{
-	int slab_free = k_mem_slab_num_free_get(&i2s_slab);
-	int32_t ppm = audio_drift_controller_update(sdu_ref_us, slab_free);
-
-	if (ppm != 0) {
-		audio_clock_actuator_apply_ppm(ppm);
-		LOG_DBG("Drift → %d ppm (free=%d)", ppm, slab_free);
-	}
-}
-
 static void drift_reset(void)
 {
 	audio_drift_reset();
@@ -145,14 +134,39 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	}
 
 	/*
-	 * Step 1: compute output frame count for this input block.
-	 *   base = rate-converter output (476 or 477 at 47,619 Hz;
-	 *          480 at 48,000 Hz identity).
+	 * Step 0: rate conversion — compute output frame count for
+	 * this input block independent of slab or controller state.
+	 */
+	size_t base_output = audio_rate_converter_next_frames(&rate_ctx, SAMPLES_PER_FRAME);
+
+	/*
+	 * Step 1: per-block PI controller update.
+	 * Read slab free count BEFORE allocating the next block so
+	 * setpoint meaning stays stable.  The controller combines
+	 * PCLK frequency feedforward with buffer-phase PI, applies
+	 * the result to the clock actuator, then we check for a
+	 * pending sample adjustment.
+	 *
+	 * Skipped during pre-fill: the DMA is not yet running and
+	 * frequency feedforward may not have a measurement.
+	 */
+	int adj = 0;
+	if (started) {
+		int slab_free = k_mem_slab_num_free_get(&i2s_slab);
+		int32_t ppm = audio_drift_controller_update(slab_free);
+
+		if (ppm != 0) {
+			audio_clock_actuator_apply_ppm(ppm);
+			LOG_DBG("Drift → %d ppm (free=%d)", ppm, slab_free);
+		}
+	}
+	adj = audio_clock_actuator_consume_sample_adjustment();
+
+	/*
+	 * Step 2: apply sample-adjust to output frame count.
 	 *   adj  = sample-adjust actuator: +1 = drop, -1 = insert.
 	 *   output_frames = base - adj (clamped).
 	 */
-	size_t base_output = audio_rate_converter_next_frames(&rate_ctx, SAMPLES_PER_FRAME);
-	int adj = audio_clock_actuator_consume_sample_adjustment();
 	size_t output_frames;
 
 	/* +1 (drop) → subtract; -1 (insert) → add */
@@ -168,7 +182,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	size_t out_bytes = output_frames * CHANNELS * (BIT_WIDTH / 8);
 
 	/*
-	 * Step 2: allocate slab block and apply nearest-neighbor
+	 * Step 3: allocate slab block and apply nearest-neighbor
 	 * stereo resampling.
 	 */
 	void *block;
@@ -186,7 +200,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 					    output_frames);
 
 	/*
-	 * Step 3: pre-fill or normal queue.
+	 * Step 4: pre-fill or normal queue.
 	 */
 	if (!started) {
 		/* Pre-fill 6 silent blocks (~60 ms) to absorb jitter.
@@ -224,7 +238,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	}
 
 	/*
-	 * Step 4: save frame for packet-repeat, then queue.
+	 * Step 5: save frame for packet-repeat, then queue.
 	 */
 	memcpy(saved_frame, block, out_bytes);
 	saved_frame_len = out_bytes;
@@ -243,7 +257,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	}
 
 	/*
-	 * Step 5: packet-repeat fallback — pad queue when draining.
+	 * Step 6: packet-repeat fallback — pad queue when draining.
 	 */
 	if (k_mem_slab_num_free_get(&i2s_slab) >= DRIFT_THRESHOLD) {
 		void *dup;

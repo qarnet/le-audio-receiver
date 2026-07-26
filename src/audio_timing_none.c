@@ -4,8 +4,8 @@
  *
  * No-op audio timing for nRF5340.
  *
- * The nRF5340 uses ISO-timestamp-based PI drift compensation via
- * audio_drift_controller_update() / audio_sink_sdu_ref_update().
+ * The nRF5340 uses buffer-phase PI drift compensation via
+ * audio_drift_controller_update() in audio_i2s.c / audio_sink_push().
  * The GRTC+TIMER20+LRCK measurement path is specific to nRF54L15.
  */
 

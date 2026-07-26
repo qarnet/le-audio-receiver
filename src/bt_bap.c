@@ -411,21 +411,15 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	const int spc = as->decode.samples_per_ch;
 	static size_t diagnostic_cnt;
 
-	/* Feed ISO timestamp to APLL drift compensation only when
-	 * the SDU is valid and carries a timestamp.  Gated behind
-	 * audio-path-open: after teardown, the PI controller state
-	 * is reset by audio_sink_stop() and further updates are
-	 * not needed.
-	 */
-	if (valid && has_ts && stream_lifecycle_audio_path_is_open()) {
-		audio_sink_sdu_ref_update(info->ts);
-	}
-
 	/* Phase 4b.1: feed validated timestamp + presentation delay to
 	 * hardware timing measurement (nRF54L15 GRTC path).  Only stream 0
 	 * is used as the timing reference.  Gated behind audio-path-open
 	 * to prevent late callbacks from re-arming hardware timers after
 	 * teardown.
+	 *
+	 * Phase 4b.2: drift compensation is now per-block in
+	 * audio_sink_push(), driven by PCLK feedforward + buffer-phase PI.
+	 * ISO timestamps go ONLY to audio_timing for GRTC scheduling.
 	 */
 	if (idx == 0 && valid && has_ts && stream_lifecycle_audio_path_is_open()) {
 		audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
@@ -536,11 +530,6 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 {
 	const bool valid = (info->flags & BT_ISO_FLAGS_VALID) != 0;
 	const bool has_ts = (info->flags & BT_ISO_FLAGS_TS) != 0;
-
-	/* Gate drift + timing updates behind audio-path-open. */
-	if (valid && has_ts && stream_lifecycle_audio_path_is_open()) {
-		audio_sink_sdu_ref_update(info->ts);
-	}
 
 	if (valid) {
 		sinks[sink_idx(stream)].recv_cnt++;

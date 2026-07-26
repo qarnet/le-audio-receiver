@@ -44,16 +44,4 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count);
  */
 void audio_sink_stop(void);
 
-/**
- * @brief Feed ISO SDU reference timestamp for APLL drift compensation.
- *
- * Must be called on every ISO RX event (valid or PLC) with the controller-
- * provided anchor timestamp. Drives a state machine (INIT→CALIB→LOCKED) that
- * adjusts the audio clock to track the BLE controller clock. No-op on hardware
- * without adjustable audio clock.
- *
- * @param sdu_ref_us  ISO SDU reference timestamp in microseconds (info->ts).
- */
-void audio_sink_sdu_ref_update(uint32_t sdu_ref_us);
-
 #endif /* AUDIO_SINK_H */
