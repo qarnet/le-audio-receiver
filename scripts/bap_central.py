@@ -780,6 +780,7 @@ def main():
     # ── 5. Raw-HCI connect (kernel accept-list scan path is broken on
     # this hci_usb controller) then Pair over the existing ACL link ──────
     device = _dbus.Interface(bus.get_object("org.bluez", dev_path), "org.bluez.Device1")
+    raw_connect_proc = None  # set if we spawn the raw-HCI helper; cleaned up in §9
 
     # If BlueZ thinks the device is already connected, disconnect first so we
     # get a clean GATT service discovery cycle. BlueZ caches Device1 objects
@@ -800,7 +801,7 @@ def main():
         addr = dev_path.split("_", 1)[1].replace("_", ":")
         print("[main] Bringing ACL link up via raw HCI (direct connect)...")
         hold_secs = args.duration + 120
-        proc = subprocess.Popen(
+        raw_connect_proc = subprocess.Popen(
             ["sudo", "-n", "python3", RAW_CONNECT_HELPER, addr, str(hold_secs)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -822,7 +823,7 @@ def main():
             time.sleep(0.1)
         if not connected:
             print("[error] Raw HCI connect failed (link not up in 10 s)")
-            proc.terminate()
+            raw_connect_proc.terminate()
             sys.exit(1)
         print("[main] ACL link up")
 
@@ -1153,6 +1154,36 @@ def main():
         print("[cleanup] Agent unregistered")
     except Exception as e:
         print("[cleanup] Agent unregister error: {}".format(e))
+
+    # Gracefully tear down the ACL link so the controller's connection
+    # slots are freed cleanly. Without this the raw-HCI helper keeps the
+    # socket open, the kernel reaps the connection abruptly on socket
+    # close, and the SDC netcore accumulates zombie connection slots
+    # (eventually "Connection Rejected 0x0d" until a full DK reset).
+    # Order: BlueZ Disconnect (HCI Disconnect, graceful) → wait for the
+    # link to drop → terminate the raw-HCI helper (closes its socket).
+    try:
+        device.Disconnect()
+        print("[cleanup] ACL link disconnected")
+        disc_deadline = time.monotonic() + 5
+        while time.monotonic() < disc_deadline:
+            try:
+                if not bool(dev_props.Get("org.bluez.Device1", "Connected")):
+                    break
+            except _dbus.exceptions.DBusException:
+                break
+            _GLib.MainContext.default().iteration(False)
+            time.sleep(0.1)
+    except Exception as e:
+        print("[cleanup] Disconnect error: {}".format(e))
+
+    if raw_connect_proc is not None:
+        try:
+            raw_connect_proc.terminate()
+            raw_connect_proc.wait(timeout=3)
+            print("[cleanup] Raw-HCI helper terminated")
+        except Exception as e:
+            print("[cleanup] Raw-HCI helper terminate error: {}".format(e))
 
     print("[main] Exiting")
 
