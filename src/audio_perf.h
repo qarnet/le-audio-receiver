@@ -9,8 +9,8 @@
  * only — no division, no heap, no floating point.  Cycle-to-time
  * conversion and deadline comparison happen at snapshot/print time.
  *
- * Gated behind CONFIG_AUDIO_PERF_MEASUREMENT; compiles to no-ops
- * when disabled.
+ * When CONFIG_AUDIO_PERF_MEASUREMENT is disabled, all public functions
+ * compile to static inline no-ops that the compiler removes entirely.
  */
 
 #ifndef AUDIO_PERF_H
@@ -30,11 +30,10 @@ enum audio_perf_path {
 	AUDIO_PERF_PATH_SINK_PUSH,    /* audio_sink_push (entire) */
 };
 
-/** Per-path cycle accumulator snapshot (all fields 32-bit, no division). */
+/** Per-path cycle accumulator snapshot. */
 struct audio_perf_path_snapshot {
 	uint32_t count;             /* number of samples */
-	uint32_t total_cycles;      /* sum of all elapsed cycles (low 32) */
-	uint32_t total_cycles_hi;   /* sum high 32 bits */
+	uint64_t total_cycles;      /* sum of all elapsed cycles */
 	uint32_t max_cycles;        /* largest single elapsed */
 	uint32_t deadline_overruns; /* count of samples exceeding deadline */
 };
@@ -50,47 +49,78 @@ struct audio_perf_queue_snapshot {
 	uint32_t output_blocks;         /* number of pushes observed */
 };
 
-/* ── Per-path cycle accounting ──────────────────────────────────── */
+#if defined(CONFIG_AUDIO_PERF_MEASUREMENT)
 
-/**
- * Capture cycle counter for start of a measured region.
- * Returns 0 when CONFIG_AUDIO_PERF_MEASUREMENT is disabled (no overhead).
- */
+/* ── Enabled: real implementations (audio_perf.c) ──────────────── */
+
 uint32_t audio_perf_cycle_start(void);
-
-/**
- * Record elapsed cycles for @p path.
- * start must come from a prior audio_perf_cycle_start() call.
- * No-op when CONFIG_AUDIO_PERF_MEASUREMENT is disabled.
- */
 void audio_perf_cycle_end(uint32_t start, enum audio_perf_path path);
-
-/* ── Queue / data-path metrics ──────────────────────────────────── */
-
-/**
- * Sample slab free count and output frame count for one push.
- * Call from audio_sink_push() after computing output_frames and
- * reading slab free count.
- */
 void audio_perf_queue_sample(int slab_free, size_t output_frames);
-
-/** Record an audio_sink_push failure (any negative return). */
 void audio_perf_push_failure(void);
-
-/** Record a packet-repeat fallback event. */
 void audio_perf_repeat_fallback(void);
-
-/* ── Snapshot and control ───────────────────────────────────────── */
-
-/**
- * Fill all path snapshots and the queue snapshot in one lock-held read.
- * Safe to call from shell or any thread context concurrently with
- * cycle-end / queue-sample updates.
- */
 void audio_perf_snapshot(struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS],
 			 struct audio_perf_queue_snapshot *queue);
-
-/** Reset all counters to zero.  Thread-safe. */
 void audio_perf_reset(void);
+
+/**
+ * Deterministic test injection: record elapsed cycles for @p path
+ * without reading the hardware cycle counter.  Only call from unit
+ * tests; never used in production data-path code.
+ */
+void audio_perf_test_inject_cycles(enum audio_perf_path path, uint32_t elapsed);
+
+#else /* !CONFIG_AUDIO_PERF_MEASUREMENT */
+
+/* ── Disabled: inline no-ops that the compiler removes ──────────── */
+
+static inline uint32_t audio_perf_cycle_start(void)
+{
+	return 0;
+}
+static inline void audio_perf_cycle_end(uint32_t start, enum audio_perf_path path)
+{
+	(void)start;
+	(void)path;
+}
+static inline void audio_perf_queue_sample(int slab_free, size_t output_frames)
+{
+	(void)slab_free;
+	(void)output_frames;
+}
+static inline void audio_perf_push_failure(void)
+{
+}
+static inline void audio_perf_repeat_fallback(void)
+{
+}
+static inline void audio_perf_snapshot(struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS],
+				       struct audio_perf_queue_snapshot *queue)
+{
+	for (int i = 0; i < AUDIO_PERF_NUM_PATHS; i++) {
+		paths[i].count = 0;
+		paths[i].total_cycles = 0;
+		paths[i].max_cycles = 0;
+		paths[i].deadline_overruns = 0;
+	}
+	if (queue) {
+		queue->slab_min_free = 0;
+		queue->slab_max_free = 0;
+		queue->push_failures = 0;
+		queue->repeat_fallback_count = 0;
+		queue->output_frames_min = 0;
+		queue->output_frames_max = 0;
+		queue->output_blocks = 0;
+	}
+}
+static inline void audio_perf_reset(void)
+{
+}
+static inline void audio_perf_test_inject_cycles(enum audio_perf_path path, uint32_t elapsed)
+{
+	(void)path;
+	(void)elapsed;
+}
+
+#endif /* CONFIG_AUDIO_PERF_MEASUREMENT */
 
 #endif /* AUDIO_PERF_H */

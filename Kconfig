@@ -77,16 +77,16 @@ config AUDIO_PERF_MEASUREMENT
 	help
 	  Low-overhead cycle and queue measurement for LC3 decode, volume,
 	  sink push, and ISO receive paths.  Adds ~50–100 cycles per measured
-	  region; compiled to no-ops when disabled.  Exposed through
-	  "audio perf" shell command.
+	  region; compiles to static inline no-ops when disabled.  Exposed
+	  through "audio perf" shell command.
 
-config AUDIO_PERF_DEADLINE_CYCLES
-	int "Per-path deadline threshold in CPU cycles"
-	default 1280000
+config AUDIO_PERF_DEADLINE_US
+	int "Per-path deadline threshold in microseconds"
+	default 10000
 	depends on AUDIO_PERF_MEASUREMENT
 	help
-	  Deadline in CPU cycles (~10 ms at the given core frequency).
-	  Default 1,280,000 = 10 ms at 128 MHz (nRF54L15).
-	  Set to 640,000 for 64 MHz nRF5340.
+	  Deadline for per-path overrun counting.  Converted to CPU cycles
+	  at runtime via k_us_to_cyc_ceil32().  Default 10000 us = 10 ms.
+	  Works correctly across all platforms and native_sim.
 
 source "Kconfig.zephyr"

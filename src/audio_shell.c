@@ -10,6 +10,7 @@
 #include "audio_sink.h"
 
 #include <inttypes.h>
+#include <zephyr/kernel.h>
 #include <zephyr/shell/shell.h>
 
 static const char *perf_path_names[AUDIO_PERF_NUM_PATHS] = {
@@ -52,7 +53,6 @@ static int cmd_stop(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "I2S stopped; drift reset.");
 	return 0;
 }
-
 static int cmd_perf(const struct shell *sh, size_t argc, char **argv)
 {
 	struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS];
@@ -60,13 +60,29 @@ static int cmd_perf(const struct shell *sh, size_t argc, char **argv)
 
 	audio_perf_snapshot(paths, &queue);
 
+#if defined(CONFIG_AUDIO_PERF_MEASUREMENT)
+	uint32_t deadline_cyc = k_us_to_cyc_ceil32((uint32_t)CONFIG_AUDIO_PERF_DEADLINE_US);
+#else
+	uint32_t deadline_cyc = 1; /* avoid div0 */
+#endif
+
 	shell_print(sh, "--- Performance ---");
-	shell_print(sh, "  Path          Count     Total cyc     Max cyc  Deadline ovr");
+	shell_print(sh, "  Path          Count   Avg(cyc)  Avg(us)  Max(cyc)  Max(us)  %%deadline");
 	for (int i = 0; i < AUDIO_PERF_NUM_PATHS; i++) {
-		uint32_t avg =
-			paths[i].count ? (uint32_t)(paths[i].total_cycles / paths[i].count) : 0;
-		shell_print(sh, "  %-12s  %6u  %12u  %9u  %12u", perf_path_names[i], paths[i].count,
-			    avg, paths[i].max_cycles, paths[i].deadline_overruns);
+		uint32_t count = paths[i].count;
+		uint32_t max_cyc = paths[i].max_cycles;
+		uint32_t avg_cyc = count ? (uint32_t)(paths[i].total_cycles / count) : 0;
+		uint32_t avg_us = k_cyc_to_us_ceil32(avg_cyc);
+		uint32_t max_us = k_cyc_to_us_ceil32(max_cyc);
+
+		/* Deadline percentage: (max_cyc * 100) / deadline_cyc.
+		 * Use CEIL division to handle partial deadlines.
+		 */
+		uint32_t deadline_pct =
+			deadline_cyc ? (max_cyc * 100U + deadline_cyc - 1U) / deadline_cyc : 0;
+
+		shell_print(sh, "  %-12s  %6u  %8u  %7u  %8u  %7u  %7u%%", perf_path_names[i],
+			    count, avg_cyc, avg_us, max_cyc, max_us, deadline_pct);
 	}
 
 	shell_print(sh, "  Queue:");
@@ -80,7 +96,6 @@ static int cmd_perf(const struct shell *sh, size_t argc, char **argv)
 
 	return 0;
 }
-
 static int cmd_perf_reset(const struct shell *sh, size_t argc, char **argv)
 {
 	audio_perf_reset();

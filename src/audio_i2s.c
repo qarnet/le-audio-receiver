@@ -137,8 +137,21 @@ int audio_sink_init(void)
 	return 0;
 }
 
+/*
+ * Helper: record cycle measurement for a steady-state push that failed.
+ * Only called when started==true and t0 was captured.
+ */
+static void perf_end_failed_push(uint32_t t0)
+{
+	if (t0 != 0) {
+		audio_perf_cycle_end(t0, AUDIO_PERF_PATH_SINK_PUSH);
+	}
+}
+
 int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 {
+	int ret;
+
 	if (!configured) {
 		return -EIO;
 	}
@@ -167,6 +180,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	 */
 	int adj = 0;
 	int slab_free = 0;
+
 	if (started) {
 		slab_free = k_mem_slab_num_free_get(&i2s_slab);
 		int32_t ppm = audio_drift_controller_update(slab_free);
@@ -232,12 +246,12 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	 * stereo resampling.
 	 */
 	void *block;
-	int ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
 
+	ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
 	if (ret < 0) {
 		LOG_WRN("I2S slab full — dropping frame");
 		audio_stats_i2s_underrun();
-		audio_perf_push_failure();
+		perf_end_failed_push(t0);
 		return -ENOMEM;
 	}
 
@@ -300,7 +314,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 			audio_stats_stream_reset();
 			started = false;
 		}
-		audio_perf_push_failure();
+		perf_end_failed_push(t0);
 		return ret;
 	}
 

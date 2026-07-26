@@ -3,22 +3,33 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Performance instrumentation — cycle and queue accumulators.
- * Compiled to no-ops when CONFIG_AUDIO_PERF_MEASUREMENT is disabled.
+ * Only compiled when CONFIG_AUDIO_PERF_MEASUREMENT is enabled.
  */
 
 #include "audio_perf.h"
 
 #include <zephyr/kernel.h>
-#include <zephyr/sys/atomic.h>
 
 #if defined(CONFIG_AUDIO_PERF_MEASUREMENT)
+
+/* Deadline converted from microseconds to cycles once at boot.
+ * Lazy-init in first cycle_end call (k_us_to_cyc_ceil32 is cheap).
+ */
+static uint32_t perf_deadline_cycles;
+
+static void perf_lazy_init_deadline(void)
+{
+	if (perf_deadline_cycles == 0) {
+		perf_deadline_cycles = k_us_to_cyc_ceil32((uint32_t)CONFIG_AUDIO_PERF_DEADLINE_US);
+	}
+}
 
 /* ── Internal state ─────────────────────────────────────────────── */
 
 struct perf_state {
 	struct k_spinlock lock;
 
-	/* Per-path cycle accumulators (64-bit total_cycles avoid overflow) */
+	/* Per-path cycle accumulators (64-bit total_cycles avoids overflow) */
 	struct {
 		uint32_t count;
 		uint64_t total_cycles;
@@ -53,7 +64,8 @@ void audio_perf_cycle_end(uint32_t start, enum audio_perf_path path)
 	}
 
 	uint32_t elapsed = k_cycle_get_32() - start;
-	uint32_t deadline = (uint32_t)CONFIG_AUDIO_PERF_DEADLINE_CYCLES;
+
+	perf_lazy_init_deadline();
 
 	k_spinlock_key_t key = k_spin_lock(&perf.lock);
 
@@ -62,7 +74,29 @@ void audio_perf_cycle_end(uint32_t start, enum audio_perf_path path)
 	if (elapsed > perf.paths[path].max_cycles) {
 		perf.paths[path].max_cycles = elapsed;
 	}
-	if (elapsed > deadline) {
+	if (elapsed > perf_deadline_cycles) {
+		perf.paths[path].deadline_overruns++;
+	}
+
+	k_spin_unlock(&perf.lock, key);
+}
+
+void audio_perf_test_inject_cycles(enum audio_perf_path path, uint32_t elapsed)
+{
+	if (path >= AUDIO_PERF_NUM_PATHS) {
+		return;
+	}
+
+	perf_lazy_init_deadline();
+
+	k_spinlock_key_t key = k_spin_lock(&perf.lock);
+
+	perf.paths[path].count++;
+	perf.paths[path].total_cycles += elapsed;
+	if (elapsed > perf.paths[path].max_cycles) {
+		perf.paths[path].max_cycles = elapsed;
+	}
+	if (elapsed > perf_deadline_cycles) {
 		perf.paths[path].deadline_overruns++;
 	}
 
@@ -124,19 +158,20 @@ void audio_perf_snapshot(struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PA
 
 	for (int i = 0; i < AUDIO_PERF_NUM_PATHS; i++) {
 		paths[i].count = perf.paths[i].count;
-		paths[i].total_cycles = (uint32_t)(perf.paths[i].total_cycles & 0xFFFFFFFFUL);
-		paths[i].total_cycles_hi = (uint32_t)(perf.paths[i].total_cycles >> 32);
+		paths[i].total_cycles = perf.paths[i].total_cycles;
 		paths[i].max_cycles = perf.paths[i].max_cycles;
 		paths[i].deadline_overruns = perf.paths[i].deadline_overruns;
 	}
 
-	queue->slab_min_free = perf.slab_min_free;
-	queue->slab_max_free = perf.slab_max_free;
-	queue->push_failures = perf.push_failures;
-	queue->repeat_fallback_count = perf.repeat_fallback_count;
-	queue->output_frames_min = perf.output_frames_min;
-	queue->output_frames_max = perf.output_frames_max;
-	queue->output_blocks = perf.output_blocks;
+	if (queue) {
+		queue->slab_min_free = perf.slab_min_free;
+		queue->slab_max_free = perf.slab_max_free;
+		queue->push_failures = perf.push_failures;
+		queue->repeat_fallback_count = perf.repeat_fallback_count;
+		queue->output_frames_min = perf.output_frames_min;
+		queue->output_frames_max = perf.output_frames_max;
+		queue->output_blocks = perf.output_blocks;
+	}
 
 	k_spin_unlock(&perf.lock, key);
 }
@@ -162,58 +197,6 @@ void audio_perf_reset(void)
 	perf.output_blocks = 0;
 
 	k_spin_unlock(&perf.lock, key);
-}
-
-#else /* !CONFIG_AUDIO_PERF_MEASUREMENT */
-
-/* ── No-op stubs — zero overhead ────────────────────────────────── */
-
-uint32_t audio_perf_cycle_start(void)
-{
-	return 0;
-}
-
-void audio_perf_cycle_end(uint32_t start, enum audio_perf_path path)
-{
-	(void)start;
-	(void)path;
-}
-
-void audio_perf_queue_sample(int slab_free, size_t output_frames)
-{
-	(void)slab_free;
-	(void)output_frames;
-}
-
-void audio_perf_push_failure(void)
-{
-}
-
-void audio_perf_repeat_fallback(void)
-{
-}
-
-void audio_perf_snapshot(struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS],
-			 struct audio_perf_queue_snapshot *queue)
-{
-	for (int i = 0; i < AUDIO_PERF_NUM_PATHS; i++) {
-		paths[i].count = 0;
-		paths[i].total_cycles = 0;
-		paths[i].total_cycles_hi = 0;
-		paths[i].max_cycles = 0;
-		paths[i].deadline_overruns = 0;
-	}
-	queue->slab_min_free = 0;
-	queue->slab_max_free = 0;
-	queue->push_failures = 0;
-	queue->repeat_fallback_count = 0;
-	queue->output_frames_min = 0;
-	queue->output_frames_max = 0;
-	queue->output_blocks = 0;
-}
-
-void audio_perf_reset(void)
-{
 }
 
 #endif /* CONFIG_AUDIO_PERF_MEASUREMENT */

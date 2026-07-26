@@ -515,6 +515,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_info *info,
 			struct net_buf *buf)
 {
+	uint32_t t0 = audio_perf_cycle_start();
 	const bool valid = (info->flags & BT_ISO_FLAGS_VALID) != 0;
 	const bool has_ts = (info->flags & BT_ISO_FLAGS_TS) != 0;
 
@@ -527,6 +528,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 			audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
 		}
 	}
+	audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
 }
 
 #endif /* CONFIG_LIBLC3 */
@@ -562,8 +564,14 @@ static void stream_started(struct bt_bap_stream *s)
 
 	/* Lifecycle gate: open audio path when all required ASEs are started. */
 	bool gate_opened = stream_lifecycle_sink_started(idx);
+
 	if (gate_opened) {
 		LOG_INF("Audio path gate OPEN (stream[%zu] completed the set)", idx);
+		/* Phase 5.0: reset perf counters at start of new audio session.
+		 * Metrics from previous session are discarded here; use
+		 * 'audio perf' before gate opens to inspect completed-session data.
+		 */
+		audio_perf_reset();
 	}
 }
 
@@ -605,7 +613,6 @@ static void stream_disabled_cb(struct bt_bap_stream *s)
 	 */
 	audio_sink_stop();
 	audio_stats_reset();
-	audio_perf_reset();
 }
 
 static struct bt_bap_stream_ops stream_ops = {
@@ -665,7 +672,6 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
 	audio_sink_stop();
 	audio_stats_reset();
-	audio_perf_reset();
 
 	num_sink_ase = 0;
 
