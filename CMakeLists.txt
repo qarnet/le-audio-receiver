@@ -24,6 +24,7 @@ target_sources(app PRIVATE
   src/audio_decode.c
   src/audio_i2s.c
   src/audio_drift.c
+  src/audio_rate_convert.c
   src/audio_stats.c
   src/audio_volume.c
 )

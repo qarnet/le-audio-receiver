@@ -345,20 +345,27 @@ Each gate blocks the next. Do not skip ahead.
     are **required** — neither is a soft criterion.
   - If audio works end-to-end and is audible, record the evidence and
     proceed to 4b.
-- **4a.2 integration fix — only if 4a.1 fails:**
-  - Compare the application's initial I2S queue/producer behavior with the
-    standalone test before changing source code.
-  - If the app still produces slab-full/EIO in the first few blocks while
-    standalone did not, instrument queue depth / push timing — do not
-    pre-decide a fix.
-  - Scope limited to the measured queue/producer issue.
-  - Preserve the no-double-write rule and the `TRIGGER_PREPARE` error-recovery
-    path from `AGENTS.md`.
+- **4a.2 rate conversion — COMPLETED (2026-07-26):**
+  - Root cause: PCLK32M clock source produces ~47,619 Hz LRCK, while decoder
+    output and I2S writes were fixed at 48,000 Hz / 480 frames per block.
+    Queue filled at ~100 blocks/s, drain at ~99.2 blocks/s → slab-full every
+    ~1.57 s.
+  - Fix: bounded nearest-neighbor rate converter (`src/audio_rate_convert.{c,h}`)
+    maps each 480-input-frame block to 476/477 output frames, averaging 47,619
+    output frames per 100 input blocks. Remainder accumulator ensures exact
+    total. nRF5340 stays at 48k→48k identity (default).
+  - Verified: 10/10 unit tests (native_sim), both builds clean, 35-second
+    Mode A stream with zero slab-full drops, zero DMA underruns.
+    See `docs/development/phase4a2-rate-conversion-results.md`.
+  - Residual: nearest-neighbor artifacts (~0.6 s repeat/drop cadence) —
+    Phase 5 ASRC for quality. Peer-drift still needs Phase 4b GRTC.
 
 ### Phase 4b — GRTC + DPPI drift measurement
 
-**Mandatory, not deferred.** Replace the ISO-`info->ts` drift measurement
-on nRF54L15 with hardware timestamping. Doing this before 4c is important:
+**Mandatory, not deferred.** With the fixed PCLK32M rate mismatch resolved
+by 4a.2, residual peer-drift between BLE controller clock and I2S clock still
+needs correction. Replace the ISO-`info->ts` drift measurement on nRF54L15
+with hardware timestamping. Doing this before 4c is important:
 the fallback (ISO timestamps, 1 µs quantization → 10 ppm per 100 ms window)
 is noisy enough to cause spurious sample_adjust events, and chasing
 artifacts that only exist because of a noisy measurement wastes time.

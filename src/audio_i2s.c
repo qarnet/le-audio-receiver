@@ -6,6 +6,7 @@
 #include "audio_sink.h"
 #include "audio_drift.h"
 #include "audio_clock_actuator.h"
+#include "audio_rate_convert.h"
 #include "audio_stats.h"
 
 #include <string.h>
@@ -23,7 +24,14 @@ LOG_MODULE_REGISTER(audio_i2s, LOG_LEVEL_INF);
 #define BIT_WIDTH         16
 #define CHANNELS          2
 #define SAMPLES_PER_FRAME 480
-#define BLOCK_SIZE        (SAMPLES_PER_FRAME * CHANNELS * (BIT_WIDTH / 8))
+
+/*
+ * Maximum output stereo frames per block: nominal 480 + 1 for a possible
+ * sample-insert.  The rate converter normally produces 476 or 477 frames at
+ * 47,619 Hz drain; 481 is the ceiling for 48k → 48k plus one insert.
+ */
+#define MAX_OUTPUT_FRAMES 481
+#define BLOCK_SIZE        ((size_t)(MAX_OUTPUT_FRAMES) * CHANNELS * (BIT_WIDTH / 8))
 #define BLOCK_COUNT       12
 
 /*
@@ -41,7 +49,16 @@ K_MEM_SLAB_DEFINE_STATIC(i2s_slab, BLOCK_SIZE, BLOCK_COUNT, 4);
 static const struct device *i2s_dev;
 static bool configured;
 static bool started;
-static int16_t saved_frame[BLOCK_SIZE / sizeof(int16_t)];
+
+/* Saved last-output frame for packet-repeat (variable length). */
+static int16_t saved_frame[MAX_OUTPUT_FRAMES * CHANNELS];
+static size_t saved_frame_len; /* bytes */
+
+/*
+ * Rate converter: maps decoder 48 kHz output to actual I2S drain rate.
+ * Configured once in audio_sink_init.
+ */
+static struct audio_rate_converter rate_ctx;
 
 void audio_sink_sdu_ref_update(uint32_t sdu_ref_us)
 {
@@ -91,10 +108,14 @@ int audio_sink_init(void)
 		return ret;
 	}
 
+	audio_rate_converter_init(&rate_ctx, 48000, CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ);
+
 	configured = true;
 	audio_clock_actuator_init();
-	LOG_INF("I2S ready (%d kHz, %d-bit, stereo, %d blocks)", SAMPLE_RATE / 1000, BIT_WIDTH,
-		BLOCK_COUNT);
+	LOG_INF("I2S ready (%d kHz nom, %d-bit, stereo, %d blocks, "
+		"rate-conv %d→%d Hz)",
+		SAMPLE_RATE / 1000, BIT_WIDTH, BLOCK_COUNT, 48000,
+		CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ);
 	return 0;
 }
 
@@ -104,12 +125,33 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 		return -EIO;
 	}
 
-	size_t bytes = sample_count * sizeof(int16_t);
+	/*
+	 * Step 1: compute output frame count for this input block.
+	 *   base = rate-converter output (476 or 477 at 47,619 Hz;
+	 *          480 at 48,000 Hz identity).
+	 *   adj  = sample-adjust actuator: +1 = drop, -1 = insert.
+	 *   output_frames = base - adj (clamped).
+	 */
+	size_t base_output = audio_rate_converter_next_frames(&rate_ctx, SAMPLES_PER_FRAME);
+	int adj = audio_clock_actuator_consume_sample_adjustment();
+	size_t output_frames;
 
-	if (bytes > BLOCK_SIZE) {
-		bytes = BLOCK_SIZE;
+	/* +1 (drop) → subtract; -1 (insert) → add */
+	if (adj > 0 && (size_t)adj <= base_output) {
+		output_frames = base_output - (size_t)adj;
+	} else if (adj < 0) {
+		output_frames = base_output + (size_t)(-adj);
+	} else {
+		output_frames = base_output;
 	}
+	output_frames = CLAMP(output_frames, 1, MAX_OUTPUT_FRAMES);
 
+	size_t out_bytes = output_frames * CHANNELS * (BIT_WIDTH / 8);
+
+	/*
+	 * Step 2: allocate slab block and apply nearest-neighbor
+	 * stereo resampling.
+	 */
 	void *block;
 	int ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
 
@@ -120,45 +162,33 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	}
 
 	memset(block, 0, BLOCK_SIZE);
-	memcpy(block, stereo_data, bytes);
+
+	audio_rate_converter_nearest_stereo(stereo_data, SAMPLES_PER_FRAME, (int16_t *)block,
+					    output_frames);
 
 	/*
-	 * Apply sample-level adjustment (insert/drop) to this block.
-	 * Positive = drop one stereo sample (clock too slow → speed up playback).
-	 * Negative = insert one stereo sample (clock too fast → slow down playback).
-	 * Zero = no adjustment.
+	 * Step 3: pre-fill or normal queue.
 	 */
-	int adj = audio_clock_actuator_consume_sample_adjustment();
-
-	if (adj != 0) {
-		int16_t *samples = (int16_t *)block;
-
-		if (adj == +1) {
-			/* Drop: shift left by one stereo sample, repeat last sample in tail. */
-			memmove(samples, samples + 2, BLOCK_SIZE - 4);
-			memcpy(samples + (BLOCK_SIZE / sizeof(int16_t)) - 2,
-			       samples + (BLOCK_SIZE / sizeof(int16_t)) - 4, 4);
-		} else { /* adj == -1 */
-			/* Insert: shift right by one stereo sample, duplicate first sample. */
-			memmove(samples + 2, samples, BLOCK_SIZE - 4);
-			memcpy(samples, samples + 2, 4);
-		}
-	}
-
 	if (!started) {
-		/* Pre-fill 6 silent blocks (~60 ms) to absorb jitter */
+		/* Pre-fill 6 silent blocks (~60 ms) to absorb jitter.
+		 * Use the rate converter so the pre-fill matches the
+		 * HW drain rate exactly.
+		 */
 		for (int pre = 0; pre < 6; pre++) {
+			size_t pre_frames =
+				audio_rate_converter_next_frames(&rate_ctx, SAMPLES_PER_FRAME);
+			size_t pre_bytes = pre_frames * CHANNELS * (BIT_WIDTH / 8);
 			void *sil;
 
 			if (k_mem_slab_alloc(&i2s_slab, &sil, K_NO_WAIT) == 0) {
-				memset(sil, 0, BLOCK_SIZE);
-				if (i2s_write(i2s_dev, sil, BLOCK_SIZE) < 0) {
+				memset(sil, 0, pre_bytes);
+				if (i2s_write(i2s_dev, sil, pre_bytes) < 0) {
 					k_mem_slab_free(&i2s_slab, sil);
 				}
 			}
 		}
 
-		ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
+		ret = i2s_write(i2s_dev, block, out_bytes);
 		if (ret < 0) {
 			k_mem_slab_free(&i2s_slab, block);
 			return ret;
@@ -174,9 +204,13 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 		return 0;
 	}
 
-	memcpy(saved_frame, block, BLOCK_SIZE);
+	/*
+	 * Step 4: save frame for packet-repeat, then queue.
+	 */
+	memcpy(saved_frame, block, out_bytes);
+	saved_frame_len = out_bytes;
 
-	ret = i2s_write(i2s_dev, block, BLOCK_SIZE);
+	ret = i2s_write(i2s_dev, block, out_bytes);
 	if (ret < 0) {
 		k_mem_slab_free(&i2s_slab, block);
 		if (ret == -EIO) {
@@ -189,13 +223,15 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 		return ret;
 	}
 
-	/* Packet-repeat fallback: pad queue when it is draining */
+	/*
+	 * Step 5: packet-repeat fallback — pad queue when draining.
+	 */
 	if (k_mem_slab_num_free_get(&i2s_slab) >= DRIFT_THRESHOLD) {
 		void *dup;
 
 		if (k_mem_slab_alloc(&i2s_slab, &dup, K_NO_WAIT) == 0) {
-			memcpy(dup, saved_frame, BLOCK_SIZE);
-			if (i2s_write(i2s_dev, dup, BLOCK_SIZE) < 0) {
+			memcpy(dup, saved_frame, saved_frame_len);
+			if (i2s_write(i2s_dev, dup, saved_frame_len) < 0) {
 				k_mem_slab_free(&i2s_slab, dup);
 			}
 		}

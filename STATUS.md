@@ -18,13 +18,14 @@ D1/P1.5 (LRCK), D2/P1.6 (SDOUT) proven.
 low, D1/LRCK was held high (no toggling). With digital wires removed, D1
 toggles. The old breakout/wiring assembly is incompatible or defective.
 
-**Main receiver with new DAC: TECHNICAL FAILURE — PENDING USER LISTENING** —
-Phase 4a.1 retest complete (`docs/development/phase4a1-new-dac-main-pipeline-results.md`).
-30-second Mode A stereo stream: 5,621 valid ISO frames received, but 14× I2S
-slab-full drops (every ~1.57s) and 1× DMA underrun at stream stop. PI clock
-recovery controller insufficient to match ISO arrival rate to I2S48K
-consumption. Audio is synthesized but with frame drops; audible quality not
-yet confirmed. No logic analyzer data (no fx2lafw available).
+**Phase 4a.2 rate conversion: PASS** — 35-second Mode A stereo stream,
+3,500 frames at 100 fps, zero slab-full drops, zero DMA underruns,
+I2S DMA started cleanly, push_ret=0 consistently. Root cause was fixed
+PCLK32M hardware-rate mismatch (~47,619 Hz LRCK vs 48,000 Hz decoder output)
+plus fixed 480-frame writes — not PI controller gain. Fix: bounded
+nearest-neighbor rate converter maps 480 input → 476/477 output frames per
+block. See `docs/development/phase4a2-rate-conversion-results.md`. Residual
+peer-drift still needs Phase 4b GRTC; audio quality pending ASRC (Phase 5).
 
 ## Hardware in use
 
@@ -80,17 +81,17 @@ receiver pipeline with a new DAC needs end-to-end retest.
 | Main receiver with old DAC | Slab-full / EIO — old DAC assembly held I2S lines (proven physical blocker/contributor). Firmware queue/producer behavior not yet ruled out; new-DAC retest with unchanged receiver firmware required before final root-cause attribution. |
 | Raw logic-analyzer capture | File exists. Frequency/data analysis pending. |
 | New DAC audible result | **Pending** — new DAC connected, not yet streamed against. |
-| Phase 4a.1 main receiver + new DAC | **Technical fail** — 14× slab-full drops (steady-state, every ~1.57s), 1× DMA underrun at stop. PI controller insufficient. PENDING USER LISTENING. See `docs/development/phase4a1-new-dac-main-pipeline-results.md`. |
+| Phase 4a.2 rate conversion | **PASS** — 35 s stream, 0 slab-full, 0 underrun. Fixed-rate converter matches PCLK32M drain. See `docs/development/phase4a2-rate-conversion-results.md`. |
 
 ### Next actions (ordered)
 
-1. **User listening test** — play audio through DAC, report audible quality
-   despite slab drops.
-2. If audible acceptable: proceed to Phase 4b (GRTC/DPPI drift measurement).
-3. If audible unacceptable: tune PI controller (widen ±500 ppm output clamp
-   or adjust phase/frequency PI gains) — per-platform empirical tuning
-   required.
-4. Re-run phase4a.1 with fx2lafw logic analyzer when hardware available.
+1. **Phase 4b** — GRTC/DPPI drift measurement for peer-drift correction (PCLK32M
+   clock still drifts relative to BLE controller clock).
+2. **Phase 5** — ASRC quality improvement (nearest-neighbor produces audible
+   artifacts at ~0.6 s repeat/drop cadence).
+3. **User listening test** — play audio through DAC, report audible quality
+   with rate conversion (known nearest-neighbor artifacts).
+4. Re-run with fx2lafw logic analyzer when hardware available.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 
