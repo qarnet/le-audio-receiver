@@ -13,6 +13,12 @@ nRF54L15 receiver via an nRF5340DK flashed with Zephyr `hci_uart` firmware
 discovery, connect, JustWorks pairing (bonded), and BAP negotiation all
 work. The I2S/audio-out path on the receiver is out of scope here.
 
+The dongle firmware config is now **folded into the repo** —
+`dongle/hci_uart/{app,netcore}.conf` + `fw-build-dongle` /
+`fw-flash-dongle` build and flash the upstream hci_uart sample with the
+SDC netcore tuned as an LE Audio central. No more `/tmp` conf fragments.
+The receiver is flashed with a clean build (no SMP debug logging).
+
 ## Hardware in use
 
 | Role | Board | Console | Notes |
@@ -49,56 +55,37 @@ work. The I2S/audio-out path on the receiver is out of scope here.
 - **hci_usb firmware cannot do ISO** (Zephyr `bt_hci.c` device_next class
   has no ISO data path; endpoints are descriptor stubs). Don't try to go
   back to it. hci_uart is the only working transport. Patching hci_usb for
-  ISO would mean SDK surgery + nRF UDC EP8+ remap — declined.
+  ISO would mean SDK surgery + nRF UDC EP8+ remap — declined. The legacy
+  USB BT class (`subsys/usb/device/class/bluetooth.c`) has no
+  isochronous endpoints at all either, so there is no USB option in v3.3.0.
 - **I2S audio output on the receiver** is explicitly out of scope for the
   current task. The receiver still gets SDUs but the analog path is not
   verified here.
-- **Receiver debug build**: currently flashed with
-  `CONFIG_BT_SMP_LOG_LEVEL_DBG=y` (prints keys). Must rebuild without it
-  before calling this production-ready.
 - **btattach not persistent**: runs as a background process from the
   session. Needs a udev rule / systemd unit so it survives reboot and
   re-enumeration.
-- **Dongle firmware config lives in `/tmp`** (`/tmp/hciuart_build`,
-  `/tmp/hciipc_iso.conf`, `/tmp/hciusb_iso.conf`). Should be committed as
-  a small repo project (e.g. `dongle/hci_uart/`) so the setup is
-  reproducible and not lost on reboot.
+- **Dongle netcore zombie connection slots**: repeated raw-HCI connects
+  without clean disconnects can exhaust the SDC's 2 connection slots
+  (`Connection Rejected due to Limited Resources (0x0d)`). Fix is to
+  reset the DK (openocd `reset run` on J-Link `001050023938`) and restart
+  btattach. A cleaner disconnect path in `bap_central.py` would help.
 
 ## Reproduce
 
 ### 1. Build + flash the nRF5340DK central (hci_uart)
 
-Netcore conf `/tmp/hciipc_iso.conf`:
-```
-CONFIG_BT_ISO_CENTRAL=y
-CONFIG_BT_MAX_CONN=2
-CONFIG_BT_CTLR_CONN_ISO_STREAMS=2
-CONFIG_BT_CTLR_CONN_ISO_STREAMS_PER_GROUP=2
-CONFIG_BT_CTLR_SDC_PERIPHERAL_COUNT=1
-CONFIG_BT_EXT_ADV=y
-CONFIG_BT_CTLR_PHY_CODED=n
-CONFIG_BT_CTLR_PRIVACY=n
+The dongle config lives in `dongle/hci_uart/{app,netcore}.conf`; the
+build helpers build the upstream Zephyr hci_uart sample with those
+fragments applied:
+
+```bash
+fw-build-dongle      # builds into build/dongle/
+fw-flash-dongle      # flashes both cores via the DK's onboard J-Link
 ```
 
-Build (from NCS v3.3.0 toolchain shell):
-```bash
-west build -b nrf5340dk/nrf5340/cpuapp --sysbuild -p auto -d /tmp/hciuart_build \
-  ~/ncs/v3.3.0/zephyr/samples/bluetooth/hci_uart -- \
-  -DSB_CONFIG_NETCORE_HCI_IPC=y \
-  -Dhci_ipc_EXTRA_CONF_FILE=/tmp/hciipc_iso.conf
-```
-
-Flash both cores via J-Link:
-```bash
-sudo openocd -f interface/jlink.cfg -c "adapter serial 001050023938" \
-  -c "transport select swd" -c "adapter speed 2000" \
-  -f target/nordic/nrf53.cfg -c init \
-  -c "targets nrf53.cpunet" \
-  -c "program /tmp/hciuart_build/hci_ipc/zephyr/zephyr.hex verify" \
-  -c "targets nrf53.cpuapp" \
-  -c "program /tmp/hciuart_build/hci_uart/zephyr/zephyr.hex verify" \
-  -c "reset run" -c shutdown
-```
+The netcore conf (`dongle/hci_uart/netcore.conf`) is the load-bearing
+part: ISO central, 2 conns / 2 CISes, ext adv, no Coded PHY, no privacy.
+See `dongle/README.md` for the full rationale.
 
 ### 2. Attach + set up hci0
 
@@ -154,17 +141,22 @@ sudo btmon -i hci0 -r /tmp/btmon.btsnoop 2>/dev/null | grep -c "Number of Comple
 Full evidence + the dead-ends explored are in
 `SESSION_DEBUG_2026-07-25.md`.
 
-## Repo changes this session
+## Repo changes this session (all committed)
 
-| File | Change | Committed? |
-|------|--------|-----------|
-| `scripts/bap_central.py` | NINO agent; raw-HCI connect step; no explicit `Pair()` (auto-security via GATT); stale-conn fallthrough to raw reconnect | No |
-| `scripts/hci_raw_connect.py` | **New.** Raw-HCI direct LE Extended Create Connection; holds socket open | No |
-| `src/audio_i2s.c` | `audio_sink_stop()` PREPARE-before-DROP panic fix | No |
-| `SESSION_DEBUG_2026-07-25.md` | **New.** Debug session write-up | No |
-| `STATUS.md` | **New.** This file | No |
+| File | Change |
+|------|--------|
+| `src/audio_i2s.c` | `audio_sink_stop()` PREPARE-before-DROP panic fix |
+| `scripts/bap_central.py` | NINO agent; raw-HCI connect step; no explicit `Pair()` (auto-security via GATT); stale-conn fallthrough to raw reconnect |
+| `scripts/hci_raw_connect.py` | **New.** Raw-HCI direct LE Extended Create Connection; holds socket open |
+| `dongle/hci_uart/app.conf` | **New.** App-core conf fragment pinning ISO central + buffer counts + ext adv |
+| `dongle/hci_uart/netcore.conf` | **New.** Net-core (hci_ipc/SDC) conf: ISO central, 2 conns / 2 CISes, ext adv, no Coded PHY, no privacy |
+| `dongle/README.md` | **New.** Why hci_uart, build/flash/attach instructions |
+| `scripts/bin/fw-build-dongle` | **New.** Builds the upstream hci_uart sample with the repo conf fragments |
+| `scripts/bin/fw-flash-dongle` | **New.** Flashes both cores via the DK's onboard J-Link (OpenOCD) |
+| `STATUS.md` | **New.** This file |
+| `SESSION_DEBUG_2026-07-25.md` | **New.** Debug session write-up |
 
-Dongle firmware (hci_uart build + conf fragments) is **not** in the repo.
+The dongle firmware config is now in the repo — no more `/tmp` fragments.
 
 ## Gotchas to remember
 
