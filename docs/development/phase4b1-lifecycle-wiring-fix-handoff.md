@@ -1,6 +1,6 @@
 # Phase 4b.1 Lifecycle Wiring Fix
 
-Status: required after review of `79a14b8`
+Status: implemented — see `08a6f7a`
 
 ## Bug
 
