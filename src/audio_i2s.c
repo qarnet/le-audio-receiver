@@ -111,19 +111,25 @@ int audio_sink_init(void)
 
 	audio_rate_converter_init(&rate_ctx, 48000, CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ);
 
-	configured = true;
-	audio_clock_actuator_init();
+	ret = audio_clock_actuator_init();
+	if (ret < 0) {
+		LOG_ERR("audio_clock_actuator_init failed: %d", ret);
+		return ret;
+	}
 
 	/* Initialize platform audio timing measurement.
 	 * On nRF54L15 this sets up GRTC + TIMER20 + GPPI for
 	 * hardware-timed LRCK frame counting.  Must fail loudly
 	 * if required hardware is unavailable.
 	 */
-	int tret = audio_timing_init();
-	if (tret < 0) {
-		LOG_ERR("audio_timing_init failed: %d", tret);
-		return tret;
+	ret = audio_timing_init();
+	if (ret < 0) {
+		LOG_ERR("audio_timing_init failed: %d", ret);
+		return ret;
 	}
+
+	/* Only mark configured after all subsystems succeed */
+	configured = true;
 
 	LOG_INF("I2S ready (%d kHz nom, %d-bit, stereo, %d blocks, "
 		"rate-conv %d→%d Hz)",
@@ -255,6 +261,12 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 
 void audio_sink_stop(void)
 {
+	/* Always reset drift and timing state, even if I2S was never
+	 * started — they may carry stale state from a previous session.
+	 */
+	drift_reset();
+	audio_timing_reset();
+
 	if (!started) {
 		return;
 	}
@@ -270,6 +282,4 @@ void audio_sink_stop(void)
 	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_PREPARE);
 	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
 	started = false;
-	drift_reset();
-	audio_timing_reset();
 }

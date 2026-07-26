@@ -377,19 +377,23 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	size_t idx = sink_idx(stream);
 	struct bt_sink *as = &sinks[idx];
 	const bool valid = (info->flags & BT_ISO_FLAGS_VALID) != 0;
+	const bool has_ts = (info->flags & BT_ISO_FLAGS_TS) != 0;
 	const int f_per_sdu = as->decode.frames_per_sdu;
 	const int spc = as->decode.samples_per_ch;
 	static size_t diagnostic_cnt;
 
-	/* Feed ISO timestamp to APLL drift compensation regardless of packet validity */
-	audio_sink_sdu_ref_update(info->ts);
+	/* Feed ISO timestamp to APLL drift compensation only when
+	 * the SDU is valid and carries a timestamp.
+	 */
+	if (valid && has_ts) {
+		audio_sink_sdu_ref_update(info->ts);
+	}
 
 	/* Phase 4b.1: feed validated timestamp + presentation delay to
 	 * hardware timing measurement (nRF54L15 GRTC path).  Only stream 0
 	 * is used as the timing reference.
 	 */
 	if (idx == 0 && valid) {
-		const bool has_ts = (info->flags & BT_ISO_FLAGS_TS) != 0;
 		static size_t ts_absent_cnt;
 		if (has_ts) {
 			audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
@@ -488,14 +492,19 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_info *info,
 			struct net_buf *buf)
 {
-	audio_sink_sdu_ref_update(info->ts);
+	const bool valid = (info->flags & BT_ISO_FLAGS_VALID) != 0;
+	const bool has_ts = (info->flags & BT_ISO_FLAGS_TS) != 0;
 
-	if (info->flags & BT_ISO_FLAGS_VALID) {
+	if (valid && has_ts) {
+		audio_sink_sdu_ref_update(info->ts);
+	}
+
+	if (valid) {
 		sinks[sink_idx(stream)].recv_cnt++;
 
 		/* Phase 4b.1: timing measurement for stream 0 */
 		size_t idx = sink_idx(stream);
-		if (idx == 0 && (info->flags & BT_ISO_FLAGS_TS)) {
+		if (idx == 0 && has_ts) {
 			audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
 		}
 	}

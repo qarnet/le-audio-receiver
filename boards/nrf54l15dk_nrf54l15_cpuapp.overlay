@@ -96,11 +96,16 @@
  * its parent &spi00 (no other users) to silence the boot error:
  *   <err> spi_nor: Device id 00 00 00 does not match config c2 28 17
  *
- * TIMER20 (0x400CA000) is reserved for nrfx direct use by audio_timing_nrf54.c
- * (Phase 4b.1 LRCK edge counter). No DT node exists for it in the base
- * nRF54L15 DTS, and no Zephyr driver binds to it. The nrfx API accesses
- * NRF_TIMER20 via MDK registers — no overlay needed.
+ * TIMER20 (&timer20, reg = <0xca000 0x1000>) is reserved for direct HAL
+ * use by audio_timing_nrf54.c (Phase 4b.1 LRCK edge counter). The base DTS
+ * defines it with status "disabled". Mark it "reserved" so no Zephyr counter
+ * driver binds to it, but it remains addressable via DT_NODELABEL(timer20) /
+ * DT_REG_ADDR for our HAL code.
  */
+&timer20 {
+	status = "reserved";
+};
+
 &mx25r64 {
 	status = "disabled";
 };

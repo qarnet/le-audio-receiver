@@ -44,7 +44,15 @@ no hard-coded DPPI/PPIB channels, and no SDC-owned interconnect resources.
   - `int audio_timing_init(void);`
   - `void audio_timing_sdu_ref_update(uint32_t ts_us, uint32_t presentation_delay_us);`
   - `void audio_timing_reset(void);`
-- Add nRF54 implementation, suggested `src/audio_timing_nrf54.c`.
+- Add nRF54 implementation: `src/audio_timing_nrf54.c` (HAL, DT-derived TIMER20).
+  - TIMER20 register base derived from `DT_NODELABEL(timer20)` /
+    `DT_REG_ADDR(TIMER20_NODE)`.  The base DTS defines `&timer20` at
+    `reg = <0xca000 0x1000>`; the overlay marks it `status = "reserved"`.
+  - Uses `nrf_timer_*` HAL functions instead of nrfx_timer; no
+    `CONFIG_NRFX_TIMER=y` needed.
+  - Production math helpers (`iso_ts_to_grtc64`, `counter_delta_u32`,
+    `compute_ppm`) live in `src/audio_timing_math.c/.h` and are compiled
+    into both firmware and `tests/unit/timing` for exact coverage.
 - Add no-op implementation, suggested `src/audio_timing_none.c`, for nRF5340.
 - Call `audio_timing_init()` from `audio_sink_init()` after I2S configuration.
 - In `bt_bap.c`, save negotiated `qos->pd` per sink in `lc3_qos()` and call timing
@@ -58,10 +66,10 @@ no hard-coded DPPI/PPIB channels, and no SDC-owned interconnect resources.
   compile only for nRF54L15/sample-adjust target, while nRF5340 uses no-op.
 - nRF54 board config: enable `CONFIG_NRFX_GPPI=y` and any verified generic nrfx
   timer dependency required by build.
-- nRF54 overlay: reserve `&timer20` (`status = "reserved"`) for direct HAL/nrfx
-  use. Do not mark it `okay` and bind Zephyr counter driver simultaneously.
-- Use DT-derived TIMER20 register address or verified `NRFX_TIMER_INSTANCE`.
-  Do not introduce raw numeric peripheral addresses.
+- nRF54 overlay: `&timer20 { status = "reserved"; }` for direct HAL
+  use.  Do not mark it `okay` and bind Zephyr counter driver simultaneously.
+- Use DT-derived TIMER20 register address via `DT_NODELABEL(timer20)` /
+  `DT_REG_ADDR`.  Do not introduce raw numeric peripheral addresses.
 
 ### Documentation
 

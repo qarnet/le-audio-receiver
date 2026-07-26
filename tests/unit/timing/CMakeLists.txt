@@ -4,4 +4,9 @@ project(test_timing)
 
 target_sources(app PRIVATE
   src/test_timing.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/audio_timing_math.c
+)
+
+target_include_directories(app PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../src
 )
