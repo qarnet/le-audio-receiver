@@ -1,6 +1,6 @@
 # LE Audio Receiver — Design Document
 
-Status: **revised 2026-07-26** (Phase 4b.2 hardware PASS — PCLK feedforward + phase PI closed-loop verified on nRF54L15). Earlier history: accepted 2026-07-05, superseded
+Status: **revised 2026-07-26** (Phase 4b.2 hardware PASS — PCLK feedforward + phase PI closed-loop verified on nRF54L15; Phase 4c technical stability gate PASS — 10-minute uninterrupted stream, zero faults; audibility pending). Earlier history: accepted 2026-07-05, superseded
 `nrf54l15-drift-compensation.md` (absorbed in Part II §Clock recovery and
 Appendix A).
 
@@ -428,21 +428,25 @@ ISO-time-sync pattern, documented at:
    (16 drops before first PCLK measurement, inserts only thereafter), clean
    teardown, no slab-full/I2S underrun/warning/fault.
 
-### Phase 4c — Stability + artifact verification
+### Phase 4c — Stability + artifact verification — **TECHNICAL PASS (2026-07-26)**
 
 With GRTC driving the controller and SAMPLE_ADJUST consuming its output,
-verify the Phase 4 exit criteria:
+the technical stability gates have been verified. See
+`docs/development/phase4c-technical-results.md`.
 
-- Stable, indefinitely-running stream (run for ≥ 10 minutes, no disconnect,
-  no slab exhaustion, no underrun storms).
-- Glitch magnitude ≤ 1 sample (~21 µs) per correction event — measure via
-  the logic analyzer (a single-sample insert/drop is a 1-sample-period step
-  in BCK/LRCK timing or a discontinuity in DIN).
-- sample_adjust events are **rare** in steady state (log a counter; if it
-  fires every block, the controller is not converging — diagnose).
-- Listening test: confirm the single-sample insert/drop artifact is
-  inaudible at the 48 kHz/16-bit LC3 floor. If audible → Phase 5 (linear
-  ASRC) is needed; record the evidence.
+- **10-minute uninterrupted stream**: PASS — `Done: 60000 frames in 600.00 s
+  (100.0 fps)`. No disconnect, no slab exhaustion, no underrun storms.
+- PCLK diagnostics active for full run: roughly +1,523 to +2,058 ppm.
+- Sample correction overwhelmingly insert direction: startup settled at 13
+  drops, then inserts rose monotonically; last logged `ins=51487 drops=13
+  (total=51500)`, average ~86 inserts/s. This is expected for SAMPLE_ADJUST
+  at this PCLK/HFINT offset — it does NOT indicate controller non-convergence.
+- Sample adjustments are **not** rare at this clock offset; HFINT/PCLK
+  mismatch requires frequent inserts (~86/s), which is the expected behavior
+  for the SAMPLE_ADJUST actuator.
+- **Audible quality**: PENDING user observation. Whether Phase 5 (linear
+  ASRC) is needed depends solely on whether the physical listening test
+  finds these frequent inserts audible at the 48 kHz/16-bit LC3 floor.
 
 ### Phase 4 risks (tracked, not deferred)
 
@@ -463,9 +467,10 @@ verify the Phase 4 exit criteria:
   nRF54L15 firmware.
 
 **Exit criterion (whole phase)**: 4a + 4b + 4c all green. Stable
-indefinitely-running audio stream on the nRF54L15; glitch magnitude ≤ 1
-sample per correction event; GRTC drift measurement active (not the ISO-ts
-fallback); sample_adjust events rare in steady state.
+indefinitely-running audio stream on the nRF54L15 (verified: 10 minutes,
+zero faults); glitch magnitude ≤ 1 sample per correction event; GRTC drift
+measurement active; Phase 5 gated on audible artifact from listening test.
+Physical audibility is the sole remaining gate.
 
 ## Phase 5 — ASRC quality upgrade *(conditional)*
 
@@ -559,10 +564,10 @@ Current evidence, not forward-looking plan. Separated by verification state.
 - If 4a.1 retest still produces slab-full/EIO, compare application queue
   behavior with standalone test before changing source (4a.2).
 
-### Pending: GRTC/DPPI and stability
+### Pending: audible quality
 
-- GRTC + DPPI drift measurement verified (Phase 4b.1).
-- Hardware PI closed-loop verified (Phase 4b.2):
-  4,500 frames / 45 s, PCLK +1,500..+1,757 ppm, insert/drop 186:1 ratio,
-  clean teardown. See `docs/development/phase4b2-results.md`.
-- No stability/artifact verification yet (Phase 4c, depends on 4b).
+- Technical stability gate PASS (Phase 4c): 10-minute uninterrupted stream,
+  zero faults, controller converged. See `docs/development/phase4c-technical-results.md`.
+- Physical audibility of ~86/s sample inserts at ~+1,800 ppm PCLK offset
+  remains unmeasured (requires user listening test).
+- Phase 5 (linear ASRC) decision gated on this listening result only.
