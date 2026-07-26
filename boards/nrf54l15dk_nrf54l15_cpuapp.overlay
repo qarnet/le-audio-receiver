@@ -46,9 +46,19 @@
 
 	i2s20_default: i2s20_default {
 		group1 {
+			/* SCK_M, LRCK_M, SDOUT on Xiao D0/D1/D2.
+			 * MCK routed to D3 (P1.7) even though the UDA1334A/PCM5102A
+			 * DAC doesn't use it (internal PLL from BCK). The nRF54L15
+			 * I2S peripheral needs a real MCK PSEL connected for the MCK
+			 * generator to run and derive SCK/LRCK — without an MCK pin
+			 * the master-mode transfer never progresses (DMA slab fills,
+			 * no SCK/LRCK on the pins). D3 is a free Xiao header pin on
+			 * the same GPIO port 1.
+			 */
 			psels = <NRF_PSEL(I2S_SCK_M,  1, 4)>,
 				<NRF_PSEL(I2S_LRCK_M, 1, 5)>,
-				<NRF_PSEL(I2S_SDOUT,  1, 6)>;
+				<NRF_PSEL(I2S_SDOUT,  1, 6)>,
+				<NRF_PSEL(I2S_MCK,    1, 7)>;
 		};
 	};
 };
@@ -61,6 +71,19 @@
 
 &i2s20 {
 	status = "okay";
+	/* nRF54L15 has no HFCLKAUDIO/APLL. The I2S MCK is derived from
+	 * PCLK32M. Use the internal 32 MHz RC (HFINT) directly rather than
+	 * PCLK32M_HFXO so the driver does not wait on an HFXO onoff
+	 * request before starting the transfer — that onoff path never
+	 * completes on this board (no LFCLK for the onoff manager before
+	 * SDC is up) and TASKS_START never fires, leaving SCK/LRCK flat
+	 * and the TX slab filling with undelivered buffers.
+	 *
+	 * Clock accuracy/jitter is HFINT-grade (RC, ~±250 ppm), which is
+	 * fine for the sample-insert/drop drift actuator; an external
+	 * low-jitter MCK is not wired on the Xiao.
+	 */
+	clock-source = "PCLK32M";
 	pinctrl-0 = <&i2s20_default>;
 	pinctrl-names = "default";
 };
