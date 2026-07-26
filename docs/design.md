@@ -1,8 +1,6 @@
 # LE Audio Receiver — Design Document
 
-Status: **revised 2026-07-26** (plan rewritten after Phase 4 code landed and
-the nRF54L15 first-stream bring-up revealed gaps in the original Phase 4
-definition). Earlier history: accepted 2026-07-05, superseded
+Status: **revised 2026-07-26** (Phase 4b.2 hardware PASS — PCLK feedforward + phase PI closed-loop verified on nRF54L15). Earlier history: accepted 2026-07-05, superseded
 `nrf54l15-drift-compensation.md` (absorbed in Part II §Clock recovery and
 Appendix A).
 
@@ -374,7 +372,7 @@ Each gate blocks the next. Do not skip ahead.
     Peer-drift still needs Phase 4b GRTC. Phase 5 quality ASRC stays
     conditional on listening result.
 
-### Phase 4b — Supported ISO timestamp presentation scheduling — **4b.1 PASS, 4b.2 SOFTWARE COMPLETE (review fixes 2026-07-26), HARDWARE PENDING**
+### Phase 4b — Supported ISO timestamp presentation scheduling — **4b.1 PASS, 4b.2 HARDWARE PASS (2026-07-26)**
 
 **Mandatory, not deferred.** With the fixed PCLK32M rate mismatch resolved
 by 4a.2, residual peer-drift between BLE controller clock and I2S clock still
@@ -424,12 +422,11 @@ ISO-time-sync pattern, documented at:
    optional ACL timing-event diagnostic only. It is not a CIS RX/SDU timestamp
    and is not an input to the PI controller.
 
-7. **Phase 4b.1 hardware PASS recorded** in `docs/development/phase4b1-results.md`:
-   3,000 stereo frames / 30 s, PCLK TIMER20 measurement +1,665..+1,884 ppm
-   vs GRTC, two-ASE gate correct, clean teardown, no warnings. Phase 4b.2
-   software is complete (directional anti-windup, spinlock thread-safety,
-   bounded actuator evidence); hardware streaming with the PI controller in
-   closed loop is pending.
+7. **Phase 4b.2 hardware PASS recorded** in `docs/development/phase4b2-results.md`:
+   4,500 frames / 45 s at 100 fps, PCLK diagnostics +1,500..+1,757 ppm,
+   closed-loop correction (insert-to-drop 186:1), channel-pair gate correct
+   (16 drops before first PCLK measurement, inserts only thereafter), clean
+   teardown, no slab-full/I2S underrun/warning/fault.
 
 ### Phase 4c — Stability + artifact verification
 
@@ -564,5 +561,8 @@ Current evidence, not forward-looking plan. Separated by verification state.
 
 ### Pending: GRTC/DPPI and stability
 
-- GRTC + DPPI drift measurement not yet implemented (Phase 4b).
-- No stability/artifact verification yet (Phase 4c, depends on 4a.1 + 4b).
+- GRTC + DPPI drift measurement verified (Phase 4b.1).
+- Hardware PI closed-loop verified (Phase 4b.2):
+  4,500 frames / 45 s, PCLK +1,500..+1,757 ppm, insert/drop 186:1 ratio,
+  clean teardown. See `docs/development/phase4b2-results.md`.
+- No stability/artifact verification yet (Phase 4c, depends on 4b).

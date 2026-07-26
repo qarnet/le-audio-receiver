@@ -389,12 +389,7 @@ static void push_stereo(void)
 
 		audio_decode_interleave(l_buf, r_buf, stereo_out, n);
 		audio_volume_apply(stereo_out, n * 2);
-		int pr = audio_sink_push(stereo_out, n * 2);
-		static size_t push_cnt;
-		if (push_cnt < 5) {
-			LOG_INF("push_stereo: n=%d push_ret=%d", n, pr);
-			push_cnt++;
-		}
+		audio_sink_push(stereo_out, n * 2);
 		l_received = false;
 		r_received = false;
 	}
@@ -409,7 +404,6 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	const bool has_ts = (info->flags & BT_ISO_FLAGS_TS) != 0;
 	const int f_per_sdu = as->decode.frames_per_sdu;
 	const int spc = as->decode.samples_per_ch;
-	static size_t diagnostic_cnt;
 
 	/* Phase 4b.1: feed validated timestamp + presentation delay to
 	 * hardware timing measurement (nRF54L15 GRTC path).  Only stream 0
@@ -423,26 +417,6 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	 */
 	if (idx == 0 && valid && has_ts && stream_lifecycle_audio_path_is_open()) {
 		audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
-	}
-
-	if (diagnostic_cnt < 5) {
-		LOG_INF("stream_recv[%zu]: valid=%d buf_len=%u f_per_sdu=%d spc=%d cc=%d "
-			"num_ase=%zu",
-			idx, valid, buf->len, f_per_sdu, spc, as->decode.chan_count, num_sink_ase);
-		diagnostic_cnt++;
-	}
-	/* Running tally: log every 50th packet so we can see if valid data
-	 * ever arrives (vs. only invalid/empty CIS events).
-	 */
-	static size_t valid_cnt, invalid_cnt;
-	if (valid) {
-		valid_cnt++;
-	} else {
-		invalid_cnt++;
-	}
-	if (((valid_cnt + invalid_cnt) % 50U) == 0U) {
-		LOG_INF("stream_recv tally[%zu]: valid=%zu invalid=%zu", idx, valid_cnt,
-			invalid_cnt);
 	}
 
 	if (valid) {

@@ -18,8 +18,7 @@ D1/P1.5 (LRCK), D2/P1.6 (SDOUT) proven.
 low, D1/LRCK was held high (no toggling). With digital wires removed, D1
 toggles. The old breakout/wiring assembly is incompatible or defective.
 
-**Phase 4b.2 — PCLK feedforward + phase PI: SOFTWARE COMPLETE, HARDWARE PENDING**
-(impl `e066ab6`, review fixes applied 2026-07-26).
+**Phase 4b.2 — PCLK feedforward + phase PI: HARDWARE PASS** (2026-07-26).
 Refactored `audio_drift.c` to explicit PCLK frequency feedforward
 (`audio_drift_frequency_error_update()`) and per-block buffer-phase PI
 (`audio_drift_controller_update(slab_free)`).  Pure integer, no floating
@@ -36,8 +35,14 @@ scheduling.  nRF54 timing feeds every 1 s PCLK measurement (not just
 diagnostics) to `audio_drift_frequency_error_update()` via the work
 handler (ISR-safe).  Bounded runtime actuator evidence: in `audio_i2s.c`,
 counts insert/drop adjustments; logs first and every 500th adjustment.
+Closed-loop streaming verified: 4,500 frames / 45 s at 100 fps, PCLK
+diagnostics +1,500..+1,757 ppm, channel-pair gate correct (drops-only
+before first PCLK measurement), inserts dominate (186:1 ratio), clean
+teardown.  Phase 4c (10-minute stability + listening test) remains next.
 See `docs/development/phase4b1-results.md` for Phase 4b.1 hardware PASS
-evidence (3,000 frames / 30 s, +1,665..+1,884 ppm).
+evidence (3,000 frames / 30 s, +1,665..+1,884 ppm) and
+`docs/development/phase4b2-results.md` for Phase 4b.2 hardware PASS
+evidence.
 
 | Test | Result |
 |------|--------|
@@ -117,8 +122,9 @@ receiver pipeline with a new DAC needs end-to-end retest.
 
  1. ~~**Phase 4b.1** — GRTC-referenced timing foundation~~ → **PASS**
     (3,000 frames / 30 s, +1,665..+1,884 ppm, `docs/development/phase4b1-results.md`)
- 2. ~~**Phase 4b.2** — PCLK feedforward + phase PI~~ → **SOFTWARE COMPLETE**
-    (directional anti-windup, spinlock thread-safety, bounded actuator evidence)
+ 2. ~~**Phase 4b.2** — PCLK feedforward + phase PI~~ → **PASS**
+    (4,500 frames / 45 s, closed-loop insert/drop at 186:1 ratio, clean teardown,
+    `docs/development/phase4b2-results.md`)
  3. **Phase 4c** — Hardware streaming verification with closed-loop PI controller:
     run on nRF54L15 with GRTC feedforward + SAMPLE_ADJUST; verify stable stream
     (≥10 min), rare adjustment events, no slab exhaustion/underrun storms.
