@@ -1,8 +1,7 @@
 # STATUS — le-audio-receiver — 2026-07-26
 
-> Snapshot of what works and what's open. Debug history lives in
-> `SESSION_DEBUG_2026-07-25.md`; USB/probe map in `SESSION_USB_TABLE.md`.
-> This file supersedes those two for "current state" questions.
+> Single source of truth for current project state. USB/probe map in
+> `SESSION_USB_TABLE.md` (re-verify with `nrf-probes`).
 
 ## Bottom line
 
@@ -11,21 +10,27 @@ nRF54L15 receiver via an nRF5340DK flashed with Zephyr `hci_uart` firmware
 (USB-attached J-Link VCOM). Two CISes (Mode A stereo) stream 48 kHz LC3 at
 100 fps for the full duration with zero flow-control stalls. Bluetooth
 discovery, connect, JustWorks pairing (bonded), and BAP negotiation all
-work. The I2S/audio-out path on the receiver is out of scope here.
+work.
 
-The dongle firmware config is now **folded into the repo** —
+**I2S audio output on the receiver does NOT work** — the I2S peripheral
+"starts" but never completes a DMA transfer; the TX slab fills and frames
+are dropped. ISO SDUs arrive correctly (verified: ~1000 valid/100 invalid
+per stream), but decoded PCM never reaches the I2S pins. This is the
+open blocker for actual audio. See "I2S DMA stall" below.
+
+The dongle firmware config is **folded into the repo** —
 `dongle/hci_uart/{app,netcore}.conf` + `fw-build-dongle` /
 `fw-flash-dongle` build and flash the upstream hci_uart sample with the
-SDC netcore tuned as an LE Audio central. No more `/tmp` conf fragments.
-The receiver is flashed with a clean build (no SMP debug logging).
+SDC netcore tuned as an LE Audio central. The receiver runs a clean build
+(no SMP debug logging).
 
 ## Hardware in use
 
 | Role | Board | Console | Notes |
 |------|-------|---------|-------|
 | LE Audio central (USB BT dongle replacement) | nRF5340DK (J-Link `001050023938`) | none | runs `hci_uart`, attached to PC over J-Link VCOM |
-| LE Audio receiver | nRF54L15 (Seeed Xiao, CMSIS-DAP `8EE9B3FF`) | `/dev/ttyACM0` @ 115200 | runs this repo's firmware |
-| Logic analyzer | fx2lafw | — | D0=SCK, D1=LRCK, D2=SDOUT |
+| LE Audio receiver | nRF54L15 (Seeed Xiao, CMSIS-DAP `8EE9B3FF`) | `/dev/ttyACM0` @ 115200 (serial-mcp) | runs this repo's firmware |
+| Logic analyzer | fx2lafw | — | D0=SCK (P1.4), D1=LRCK (P1.5), D2=SDOUT (P1.6) |
 
 - PC-side BT controller: `hci0` = nRF5340DK `hci_uart` on
   **`/dev/ttyACM2`** (J-Link VCOM, USB iface 02 — not ttyACM1/iface-00)
@@ -34,7 +39,7 @@ The receiver is flashed with a clean build (no SMP debug logging).
   `DB:A6:0C:05:A2:AA`. BlueZ assigns the central a static random
   `E3:C4:1A:96:D7:D2`.
 
-## What works (verified this session)
+## What works (verified)
 
 - Discovery (raw unfiltered scan), connect (raw direct LE Extended Create
   Connection — kernel accept-list connect path is broken on SDC).
@@ -47,6 +52,9 @@ The receiver is flashed with a clean build (no SMP debug logging).
   1500 frames) with **3024 Number of Completed Packets** events returned.
   No EAGAIN, no stall. `bap_central.py --duration 15` reports
   `Done: 1500 frames in 15.00 s (100.0 fps)`.
+- ISO data RX at the receiver: valid SDUs arrive — `stream_recv tally:
+  valid=1006 invalid=144` (climbing). The transport is fine; the failure
+  is downstream in the I2S push (see below).
 - Receiver-side recovery from the post-stream disconnect panic
   (`audio_sink_stop`: PREPARE before DROP in `src/audio_i2s.c`).
 - **Clean ACL teardown** in `bap_central.py` (BlueZ Disconnect +
@@ -56,29 +64,81 @@ The receiver is flashed with a clean build (no SMP debug logging).
 
 ## What does NOT work / open
 
-- **hci_usb firmware cannot do ISO** (Zephyr `bt_hci.c` device_next class
-  has no ISO data path; endpoints are descriptor stubs). Don't try to go
-  back to it. hci_uart is the only working transport. Patching hci_usb for
-  ISO would mean SDK surgery + nRF UDC EP8+ remap — declined. The legacy
-  USB BT class (`subsys/usb/device/class/bluetooth.c`) has no
-  isochronous endpoints at all either, so there is no USB option in v3.3.0.
-- **I2S audio output on the receiver** is explicitly out of scope for the
-  current task. The receiver still gets SDUs but the analog path is not
-  verified here.
-- **btattach not persistent**: runs as a background process from the
-  session. Needs a udev rule / systemd unit so it survives reboot and
-  re-enumeration.
-- **LSP `gnu/stubs-32.h` not found warning**: the C/C++ language server
-  (clangd/editor) reports `gnu/stubs-32.h` missing when parsing
-  `src/*.c` and NCS headers — glibc on this system is 64-bit-only and
-  the LSP falls back to the host sysroot instead of the NCS
-  toolchain's. It is **IDE noise only**; the firmware build
-  (`fw-build-*`) is unaffected (it uses the NCS toolchain's own
-  sysroot). Fix later by pointing the LSP/compiler-commands at the NCS
-  toolchain sysroot (e.g. `clangd` config with `--sysroot=` from
-  `nix-nrf-dev`, or generate `compile_commands.json` from the Zephyr
-  build and let clangd use it). Low priority — does not block builds
-  or flashing.
+### I2S DMA stall on nRF54L15 (primary blocker)
+
+The I2S20 peripheral "starts" (`i2s_trigger(START)` returns success,
+"I2S DMA started" logged) but **never completes a DMA transfer**. The
+TX slab fills: `audio_i2s: I2S slab full — dropping frame` repeats every
+stream. Decoded PCM never reaches the I2S pins → DAC silent.
+
+**Evidence:**
+- Receiver console: valid ISO SDUs arrive (~1000 valid per 10 s), LC3
+  decoders created, "I2S DMA started" logged, then "I2S slab full —
+  dropping frame" repeats. At stream stop: `i2s_nrfx: Next buffers not
+  supplied on time`.
+- sigrok: D0 (SCK) toggles ~6 MHz (not the clean 3.072 MHz expected for
+  48 kHz × 64); D1 (LRCK) and D2 (SDOUT) **completely flat** (0
+  transitions). Either the peripheral isn't actually clocking, or the LA
+  probes on D1/D2 are loose (cannot rule out measurement artifact yet).
+
+**Ruled out:**
+
+| Suspect | Test | Result |
+|---------|------|--------|
+| `CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS` needed | ncs-source deep dive | nRF53-only (`depends on SOC_SERIES_NRF53`); compiled out on nRF54L15. "Bypass" = `CONFIG.CLKCONFIG.BYPASS` register bit that nRF54L15 I2S doesn't have. Not the fix. |
+| HFXO onoff never completes (default `clock-source = PCLK32M_HFXO`) | Set `clock-source = "PCLK32M"` in overlay (skip onoff) | No change — still slab-full. |
+| MCK pin not connected | Added `NRF_PSEL(I2S_MCK, 1, 7)` (Xiao D3, free pin) to pinctrl | No change — still slab-full, D1/D2 still flat. |
+| Pin conflict (pwm20/pdm20 reclaiming P1.4/5/6) | Decoded all resolved psels | pwm20 = P1.10; no conflict with P1.4/5/6. pdm20 disabled in overlay. |
+
+**Remaining suspects (next debug steps):**
+1. **Re-seat LA probes on D1/D2**, re-capture — rule out loose jumpers
+   (D0 toggling but D1/D2 perfectly flat is suspicious).
+2. **Read I2S20 registers via openocd** during a stream (CONFIG, RATIO,
+   PSEL.MCK/SCK/LRCK/SDOUT, ENABLE, TASKS_START) to see the actual
+   hardware state — is ENABLE set? What RATIO was selected? Are PSELs
+   correct? This is the sharpest next tool.
+3. **nRF54L15 I2S erratum** — the nRF54L series is new; check for a
+   silicon erratum on I2S master mode. No upstream NCS sample uses I2S
+   on nRF54L15 (verified).
+4. **Try I2S slave mode** with an external MCK/BCK from a signal
+   generator to isolate whether master-mode clock generation is broken.
+
+**Uncommitted diagnostic state:**
+- `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` has `clock-source = "PCLK32M"`
+  and the MCK pin on P1.7 — both diagnostic additions that didn't fix it;
+  re-evaluate before keeping.
+- `src/bt_bap.c` has temporary `LOG_INF` tally logging in `stream_recv` /
+  `push_stereo` — revert before final.
+
+### hci_usb firmware cannot do ISO (settled — don't revisit)
+
+Zephyr's USB device_next BT HCI class
+(`subsys/usb/device_next/class/bt_hci.c`) has **no ISO data path** — the
+isochronous endpoints are descriptor stubs so Linux `btusb` binds (source
+comment lines 85–90: "we do not implement isochronous endpoints
+handling"). ISO TX (device→host) hits a `default:` case that drops the
+packet **and leaks the net_buf**; ISO RX is never armed. The legacy USB BT
+class (`subsys/usb/device/class/bluetooth.c`) has no isochronous
+endpoints at all either. **No Zephyr USB BT transport can carry LE Audio
+ISO in v3.3.0.** hci_uart is the only working transport. Patching hci_usb
+for ISO would mean SDK surgery + nRF UDC EP8+ remap — declined.
+
+### btattach not persistent
+
+Runs as a background process from the session. Needs a udev rule /
+systemd unit so it survives reboot and re-enumeration.
+
+### LSP `gnu/stubs-32.h` not found warning
+
+The C/C++ language server (clangd/editor) reports `gnu/stubs-32.h`
+missing when parsing `src/*.c` and NCS headers — glibc on this system is
+64-bit-only and the LSP falls back to the host sysroot instead of the
+NCS toolchain's. It is **IDE noise only**; the firmware build
+(`fw-build-*`) is unaffected (it uses the NCS toolchain's own sysroot).
+Fix later by pointing the LSP/compiler-commands at the NCS toolchain
+sysroot (e.g. clangd config with `--sysroot=` from `nix-nrf-dev`, or
+generate `compile_commands.json` from the Zephyr build and let clangd
+use it). Low priority — does not block builds or flashing.
 
 ## Reproduce
 
@@ -109,7 +169,9 @@ sudo btmgmt --index hci0 sc on        # receiver requires SC pairing
 ```
 
 If `btmgmt` reports no adapter, btattach isn't running or the DK
-re-enumerated — re-run the btattach line.
+re-enumerated — re-run the btattach line. If the dongle's netcore has
+zombie connection slots from a crashed run (`Connection Rejected 0x0d`),
+reset with `fw-reset-dongle` then re-attach.
 
 ### 3. Stream
 
@@ -121,9 +183,11 @@ Expected: `ACL link up` → `ServicesResolved` → 2× SelectProperties →
 2× SetConfiguration → 2× Acquired → `Streaming 1000 Hz sine` →
 `Done: 1500 frames in 15.00 s (100.0 fps)`.
 
-Receiver console (`/dev/ttyACM0`, separate terminal) during a good run:
+Receiver console (serial-mcp on `/dev/ttyACM0`) during a good run:
 `Pairing complete, bonded: 1`, 2× `ASE Config`, `LC3 decoder[0/1]`,
-`Stream[x] started`, `audio_i2s: I2S DMA started`.
+`Stream[x] started`, `audio_i2s: I2S DMA started` — then (currently)
+`I2S slab full — dropping frame` repeats because the I2S DMA doesn't
+drain.
 
 ### 4. Verify ISO actually crossed HCI (optional)
 
@@ -136,45 +200,74 @@ sudo btmon -i hci0 -r /tmp/btmon.btsnoop 2>/dev/null | grep -c "Number of Comple
 # expect: ~3000 ISO Data TX, ~3000+ Number of Completed Packets
 ```
 
-## Why it works now (root causes fixed this session)
+## Why the BT transport works now (root causes fixed)
 
 | # | Problem | Fix |
 |---|---------|-----|
 | 1 | hci_usb firmware had no ISO path at all — ISO packets died at the USB layer, no completions ever returned → 3-packet stall | Switched to `hci_uart` (app core is a plain H4 pipe; ISO passes as H4 type 0x05) |
 | 2 | Dongle netcore had no ISO / ext-adv / coded-PHY tuning | Netcore conf with `BT_ISO_CENTRAL=y`, `BT_MAX_CONN=2`, `CONN_ISO_STREAMS=2`, `BT_EXT_ADV=y`, `BT_CTLR_PHY_CODED=n`, `BT_CTLR_PRIVACY=n` |
-| 3 | Kernel LE connect uses accept-list filtered scan — broken on SDC (zero reports) | Raw-HCI direct `LE Extended Create Connection` via `scripts/hci_raw_connect.py`, wired into `bap_central.py` |
-| 4 | BlueZ demanded MITM; receiver is JustWorks-only | NINO agent + `btmgmt io-cap 3` |
-| 5 | Kernel mgmt `Pair Device` on raw-created conn completes instantly → BlueZ clears bonding early → auto-rejects JustWorks confirm | Script no longer calls `Pair()`; relies on BlueZ auto-security via GATT |
-| 6 | Stale Realtek-era bond on PC vs wiped receiver keys | Deleted stale bond dir, power-cycled adapter |
+| 3 | Kernel LE connect uses accept-list filtered scan — broken on SDC (zero reports, even for legacy advertisers) | Raw-HCI direct `LE Extended Create Connection` via `scripts/hci_raw_connect.py`, wired into `bap_central.py` |
+| 4 | BlueZ demanded MITM; receiver is JustWorks-only (`CONFIG_BT_SMP_ENFORCE_MITM=n`) | NINO agent + `btmgmt io-cap 3` (adapter-level IO cap must also be NINO — kernel uses it for auto-security SMP) |
+| 5 | Kernel mgmt `Pair Device` on raw-created conn completes instantly (~6 µs) → BlueZ's `pair_device_complete` clears bonding early → auto-rejects the SMP User Confirmation (CVE-2020-26555: kernels always confirm JustWorks) | Script no longer calls `Pair()`; relies on BlueZ auto-security via GATT (encrypted access to PACS triggers kernel SMP directly). NINO agent's `RequestAuthorization` accepts the confirmation. |
+| 6 | Stale Realtek-era bond on PC vs wiped receiver keys → auth failure loop | Deleted `/var/lib/bluetooth/<old-adapter>/<receiver>/` bond dir, power-cycled hci0 (`btmgmt power off/on` flushes kernel key store — bluetoothd restart alone does not) |
 | 7 | Receiver kernel panic on disconnect after stream (nrfx_i2s ASSERT on de-initialized instance) | `audio_sink_stop()` sends `TRIGGER_PREPARE` before `TRIGGER_DROP` (`src/audio_i2s.c`) |
+| 8 | Zombie SDC connection slots on the dongle netcore after repeated raw-HCI connects without clean disconnect (`Connection Rejected 0x0d`) | `bap_central.py` cleanup now calls BlueZ `Device1.Disconnect()` (graceful HCI disconnect) then terminates the raw-HCI helper. Three consecutive runs with no DK reset. `fw-reset-dongle` helper for recovery. |
 
-Full evidence + the dead-ends explored are in
-`SESSION_DEBUG_2026-07-25.md`.
+### Evidence for the hci_usb → hci_uart switch
 
-## Repo changes this session (all committed)
+The original hci_usb dongle carried a vanilla Zephyr hci_usb build
+(SW-split LL). Connections hung ~90 s. Reflashing with the SDC netcore
+tuning above fixed discovery but ISO data stalled after exactly 3
+packets (SDC default ISO TX HCI buffer count): only 3 `ISO Data TX`
+crossed HCI, no `Number of Completed Packets` ever returned, BlueZ's
+userspace buffer filled (~445 writes ≈ 2.2 s) → EAGAIN. Root cause:
+hci_usb has no ISO USB path (see "settled" above). Switching to hci_uart
+made ISO flow as ordinary H4 type-0x05 frames — 3000 ISO TX / 3024
+completions over 15 s.
 
-| File | Change |
-|------|--------|
-| `src/audio_i2s.c` | `audio_sink_stop()` PREPARE-before-DROP panic fix |
-| `scripts/bap_central.py` | NINO agent; raw-HCI connect step; no explicit `Pair()` (auto-security via GATT); stale-conn fallthrough to raw reconnect |
-| `scripts/hci_raw_connect.py` | **New.** Raw-HCI direct LE Extended Create Connection; holds socket open |
-| `dongle/hci_uart/app.conf` | **New.** App-core conf fragment pinning ISO central + buffer counts + ext adv |
-| `dongle/hci_uart/netcore.conf` | **New.** Net-core (hci_ipc/SDC) conf: ISO central, 2 conns / 2 CISes, ext adv, no Coded PHY, no privacy |
-| `dongle/README.md` | **New.** Why hci_uart, build/flash/attach instructions |
-| `scripts/bin/fw-build-dongle` | **New.** Builds the upstream hci_uart sample with the repo conf fragments |
-| `scripts/bin/fw-flash-dongle` | **New.** Flashes both cores via the DK's onboard J-Link (OpenOCD) |
-| `STATUS.md` | **New.** This file |
-| `SESSION_DEBUG_2026-07-25.md` | **New.** Debug session write-up |
+### Evidence for the broken accept-list connect path
 
-The dongle firmware config is now in the repo — no more `/tmp` fragments.
+Linux 7.1 connects via accept-list + passive background scan. On this
+SDC/hci_uart combo, **filtered scanning reports nothing** — verified
+with raw HCI (bluetoothd stopped, btmon watching):
+- unfiltered passive scan: 225 peer reports / 6 s (ext adv, 1M/2M)
+- filter=accept-list, AR on: 1 report / 6 s
+- filter=accept-list, AR off: 0 reports / 6 s
+- same test against a legacy advertiser: also 0
+- legacy scan interface (0x200B/0x200C): `Command Disallowed (0x0c)`
+
+So BlueZ Pair/Connect hung; the raw-HCI direct-connect helper
+(`scripts/hci_raw_connect.py`) issues `LE Extended Create Connection`
+directly and holds the socket open (kernel reaps raw-socket connections
+on close).
+
+## Repo changes this session (all committed unless noted)
+
+| File | Change | Committed? |
+|------|--------|-----------|
+| `src/audio_i2s.c` | `audio_sink_stop()` PREPARE-before-DROP panic fix | Yes |
+| `scripts/bap_central.py` | NINO agent; raw-HCI connect step; no explicit `Pair()` (auto-security via GATT); stale-conn fallthrough; graceful ACL disconnect + helper teardown in cleanup | Yes |
+| `scripts/hci_raw_connect.py` | **New.** Raw-HCI direct LE Extended Create Connection; holds socket open | Yes |
+| `dongle/hci_uart/app.conf` | **New.** App-core conf fragment pinning ISO central + buffer counts + ext adv | Yes |
+| `dongle/hci_uart/netcore.conf` | **New.** Net-core (hci_ipc/SDC) conf: ISO central, 2 conns / 2 CISes, ext adv, no Coded PHY, no privacy | Yes |
+| `dongle/README.md` | **New.** Why hci_uart, build/flash/attach instructions | Yes |
+| `scripts/bin/fw-build-dongle` | **New.** Builds the upstream hci_uart sample with the repo conf fragments | Yes |
+| `scripts/bin/fw-flash-dongle` | **New.** Flashes both cores via the DK's onboard J-Link (OpenOCD) | Yes |
+| `scripts/bin/fw-reset-dongle` | **New.** Resets the DK to clear zombie SDC connection slots | Yes |
+| `STATUS.md` | **New.** This file | Yes |
+| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | `clock-source = "PCLK32M"` + MCK pin on P1.7 (diagnostic, didn't fix I2S) | **No — diagnostic** |
+| `src/bt_bap.c` | Temporary `LOG_INF` tally logging in `stream_recv` / `push_stereo` (I2S debug) | **No — diagnostic** |
+
+The dongle firmware config is in the repo — no more `/tmp` fragments.
 
 ## Gotchas to remember
 
-- **`pkill -f <pattern>` kills your own shell** when the pattern appears in
-  the command line. Use a bracket: `pkill -f "btmo[n] -i hci0 -w"`, or
-  `pkill -x btattach`.
+- **`pkill -f <pattern>` kills your own shell** when the pattern appears
+  in the command line. Use a bracket: `pkill -f "btmo[n] -i hci0 -w"`,
+  or `pkill -x btattach`.
 - **UART0 on the nRF5340DK is on ttyACM2 (USB iface 02)**, not ttyACM1.
-  ttyACM1 stays silent. Verified by sending HCI Reset manually.
+  ttyACM1 stays silent. Verified by sending HCI Reset manually:
+  ttyACM2 replies `04 0e 04 01 03 0c 00`.
 - **Raw HCI RX sockets are deaf on this kernel** — observe via
   `btmon -i hci0 -w <file>`, not by reading a raw socket.
 - `hcitool lescan` fails with `I/O error` — legacy scan interface not
@@ -185,3 +278,12 @@ The dongle firmware config is now in the repo — no more `/tmp` fragments.
 - `btmgmt io-cap 3` and `sc on` must be re-applied after adapter power
   loss / USB re-enumeration. Put them next to `btattach` in any
   persistent setup script.
+- **Use serial-mcp** for the receiver console (`/dev/ttyACM0`), not
+  `stty`/`cat` — serial-mcp holds the port exclusively and survives
+  USB disconnects during reset.
+- **Zephyr does NOT detect devicetree pinctrl overlaps** — two
+  peripherals claiming the same pin produce no compile error. Verify pin
+  assignments against all enabled peripherals by decoding the resolved
+  `zephyr.dts` (psel encoding: `NRF_PSEL(fun, port, pin)` =
+  `(fun << 24) | ((port*32+pin) & 0x1ff)`). AGENTS.md documents a past
+  P1.10/P1.11/P1.12 conflict found this way.
