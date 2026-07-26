@@ -44,7 +44,7 @@ slab-full/underrun/warning/error/fault, clean teardown).  Physical
 audibility UNAVAILABLE (user did not provide listening report) — not failed,
 not blocking further measurable work.  Phase 5 conditional on listening
 evidence or another measurable quality criterion.
-  See `docs/development/phase4b1-results.md` for Phase 4b.1 hardware PASS
+See `docs/development/phase4b1-results.md` for Phase 4b.1 hardware PASS
 evidence (3,000 frames / 30 s, +1,665..+1,884 ppm),
 `docs/development/phase4b2-results.md` for Phase 4b.2 hardware PASS
 evidence, and
@@ -53,8 +53,8 @@ PASS evidence.
 
 | Test | Result |
 |------|--------|
-| fw-build-5340 | PASS, zero warnings |
-| fw-build-54l15 | PASS, zero warnings |
+| fw-build-5340 | PASS (no compiler warnings; 8 Kconfig/CMake diagnostics — SDK deprecations, experimental symbols, upstream Kconfig gap — none attributable to repo source; see warning diagnostics below) |
+| fw-build-54l15 | PASS (no compiler warnings; 5 Kconfig/CMake diagnostics — SDK deprecations, informational, watchdog-library-no-sources — none attributable to repo source; see warning diagnostics below) |
 | drift unit tests | 18/18 PASS (incl. directional anti-windup) |
 | actuator unit tests | 7/7 PASS (incl. sign-chain verification) |
 | timing unit tests | all PASS |
@@ -70,6 +70,32 @@ block. See `docs/development/phase4a2-rate-conversion-results.md`. Phase 4b
 GRTC + PCLK feedforward + SAMPLE_ADJUST now operational (see Phase 4b.1/4b.2
 results above). Physical audibility UNAVAILABLE (user did not provide
 listening report); Phase 5 (ASRC) conditional on listening evidence.
+
+### Build warning diagnostics (2026-07-27)
+
+Neither target produces compiler warnings in application or Zephyr source.
+All printed diagnostics are Kconfig/CMake configuration messages.
+
+**nRF5340 (8 diagnostics):**
+
+| Diagnostic | Classification | Cannot remove because |
+|---|---|---|
+| Deprecated `PARTITION_MANAGER` / `_ENABLED` | NCS v3.3.0 SDK deprecation | Required for multi-image flash layout; no migration path in v3.3.0 |
+| `__ASSERT()` statements globally ENABLED | Zephyr informational | Not a defect |
+| `BT_CTLR_CONN_ISO_LOW_LATENCY_POLICY` choice has no selection | Upstream Kconfig gap in SW Split LL | Both sub-options (`RELIABILITY`, `LOW_LATENCY`) depend on `BT_CTLR_CENTRAL_ISO`, which is disabled for peripheral-only; choice has no NONE fallback |
+| Experimental `BT_LL_SW_SPLIT` | Required architecture | Only ISO-capable open-source controller for nRF5340 |
+| Experimental `BT_CTLR_SET_HOST_FEATURE` | Required for ISO | Feature negotiation required |
+| Experimental `BT_CTLR_PERIPHERAL_ISO` | Required for ISO | Peripheral ISO support required |
+| `SB_CONFIG_PARTITION_MANAGER` sysbuild warning | Required sysbuild infrastructure | Partition manager required by NCS build system |
+
+**nRF54L15 (5 diagnostics):**
+
+| Diagnostic | Classification | Cannot remove because |
+|---|---|---|
+| Deprecated `PARTITION_MANAGER` / `_ENABLED` | NCS v3.3.0 SDK deprecation | Same as nRF5340 |
+| `__ASSERT()` statements globally ENABLED | Zephyr informational | Not a defect |
+| `drivers__watchdog`: No SOURCES given | Zephyr internal: `CONFIG_WATCHDOG=y` but no DT node on nRF54L15 board | WD disabled on nRF54L15 would change firmware behavior (watchdog is desired) and is out of scope for closeout; DT node is board-level, not repo |
+| `SB_CONFIG_PARTITION_MANAGER` sysbuild warning | Required sysbuild infrastructure | Same as nRF5340 |
 
 ## Hardware in use
 
