@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# Build the nRF5340DK "dongle" firmware: Zephyr hci_uart sample with the
+# SoftDevice Controller on the network core, configured as an LE Audio
+# central for this repo's receiver.
+#
+# The app-core firmware is the upstream hci_uart sample (a plain H:4 pipe
+# over UART0 @ 1 Mbaud with HW flow control); ISO data passes through as
+# H:4 type 0x05. The repo's dongle/hci_uart/{app,netcore}.conf fragments
+# pin the ISO/controller symbols on top of the sample's board conf.
+#
+# hci_usb (the previous dongle firmware) has NO ISO data path in Zephyr's
+# USB BT class — its isochronous endpoints are descriptor stubs — so it
+# cannot carry LE Audio. hci_uart is the only working transport.
+#
+# Build dir:  build/dongle
+# Result:     build/dongle/hci_uart/zephyr/zephyr.{elf,hex}  (app core)
+#             build/dongle/hci_ipc/zephyr/zephyr.{elf,hex}  (net core)
+#             build/dongle/merged.hex / merged_CPUNET.hex    (combined)
+#
+# Flash with: fw-flash-dongle
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/bin/fw-common.sh
+source "$SCRIPT_DIR/fw-common.sh"
+
+_fw_require_env
+
+REPO="$(_fw_repo_dir)"
+BUILD_DIR="$REPO/build/dongle"
+SAMPLE_DIR="$ZEPHYR_BASE/samples/bluetooth/hci_uart"
+APP_CONF="$REPO/dongle/hci_uart/app.conf"
+NETCORE_CONF="$REPO/dongle/hci_uart/netcore.conf"
+
+if [ ! -d "$SAMPLE_DIR" ]; then
+	printf 'hci_uart sample not found at %s\n' "$SAMPLE_DIR" >&2
+	printf 'Is ZEPHYR_BASE correct? (currently %s)\n' "$ZEPHYR_BASE" >&2
+	exit 1
+fi
+if [ ! -f "$APP_CONF" ] || [ ! -f "$NETCORE_CONF" ]; then
+	printf 'Missing dongle conf fragment(s) under dongle/hci_uart/\n' >&2
+	exit 1
+fi
+
+printf 'Building nRF5340DK hci_uart dongle (LE Audio central)\n'
+printf '  sample:    %s\n' "$SAMPLE_DIR"
+printf '  app conf:  %s\n' "$APP_CONF"
+printf '  net conf:  %s\n' "$NETCORE_CONF"
+printf '  build dir: %s\n\n' "$BUILD_DIR"
+
+exec west build -b nrf5340dk/nrf5340/cpuapp --sysbuild --pristine -d "$BUILD_DIR" "$SAMPLE_DIR" -- \
+	-DSB_CONFIG_NETCORE_HCI_IPC=y \
+	-Dhci_uart_EXTRA_CONF_FILE="$APP_CONF" \
+	-Dhci_ipc_EXTRA_CONF_FILE="$NETCORE_CONF" \
+	"$@"

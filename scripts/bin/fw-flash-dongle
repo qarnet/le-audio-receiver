@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# Flash the nRF5340DK "dongle" firmware (hci_uart app core + hci_ipc net
+# core) via OpenOCD and the DK's onboard J-Link.
+#
+# Both cores are programmed explicitly (net core first, then app core) so
+# the ordering is deterministic — same sequence used during bring-up.
+# UICR.APPROTECT is not touched here: the nRF5340DK ships with APPROTECT
+# disabled by default and this firmware never re-enables it. If debug
+# access is ever lost, run an nrf53 CTRL-AP recovery (mass erase) and
+# reflash.
+#
+# The probe is resolved in order:
+#   1. scripts/probe-serial.local (gitignored override, single line serial)
+#   2. nrf-probes --find nrf53 (auto-detect: the probe whose target is an
+#      nRF53 — the DK is normally the only nRF53 on the bench when the
+#      receiver is the nRF54L15)
+#   3. no serial — OpenOCD auto-detects
+#
+# Build dir:  build/dongle
+# Build with: fw-build-dongle
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/bin/fw-common.sh
+source "$SCRIPT_DIR/fw-common.sh"
+
+_fw_require_env
+
+cd "$(_fw_repo_dir)"
+
+BUILD_DIR="$(_fw_repo_dir)/build/dongle"
+APP_HEX="$BUILD_DIR/hci_uart/zephyr/zephyr.hex"
+NET_HEX="$BUILD_DIR/hci_ipc/zephyr/zephyr.hex"
+
+if [ ! -f "$APP_HEX" ] || [ ! -f "$NET_HEX" ]; then
+	printf 'No build artifacts found under %s\n' "$BUILD_DIR" >&2
+	printf 'Build first: fw-build-dongle\n' >&2
+	exit 1
+fi
+
+SERIAL=""
+if [ -s "scripts/probe-serial.local" ]; then
+	SERIAL="$(head -n1 scripts/probe-serial.local | tr -d '[:space:]')"
+	printf 'Probe %s (from scripts/probe-serial.local override)\n' "$SERIAL"
+elif SERIAL="$(nrf-probes --find nrf53 2>/dev/null)"; then
+	printf 'Probe %s (auto-detected: target identifies as nRF53)\n' "$SERIAL"
+else
+	SERIAL=""
+	printf 'No nRF53 probe identified — letting OpenOCD auto-detect\n' >&2
+fi
+
+# NOTE: openocd -f interface/jlink.cfg (the DK's onboard J-Link), not
+# cmsis-dap. The nRF5340DK ships with a Segger J-Link interface MCU.
+# Build the argv as an array so the optional serial -c argument is a
+# single argv element (no fragile IFS word-splitting).
+OPENOCD_ARGS=(
+	-f interface/jlink.cfg
+	-c "transport select swd"
+	-c "adapter speed 2000"
+)
+if [ -n "$SERIAL" ]; then
+	OPENOCD_ARGS+=(-c "adapter serial $SERIAL")
+fi
+OPENOCD_ARGS+=(
+	-f target/nordic/nrf53.cfg
+	-c init
+	-c "targets nrf53.cpunet"
+	-c "program $NET_HEX verify"
+	-c "targets nrf53.cpuapp"
+	-c "program $APP_HEX verify"
+	-c "reset run"
+	-c shutdown
+)
+
+exec openocd "${OPENOCD_ARGS[@]}"
