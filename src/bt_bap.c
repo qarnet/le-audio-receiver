@@ -217,16 +217,6 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 	sinks[idx].recv_cnt = 0;
 	num_sink_ase++;
 
-	/*
-	 * Record configuration in lifecycle gate so the started
-	 * callback knows whether this is Mode A (two mono ASEs)
-	 * or Mode B / mono (single ASE).
-	 */
-	{
-		int ch = sinks[idx].decode.chan_count;
-		stream_lifecycle_sink_configured(idx, ch);
-	}
-
 	enum bt_audio_location chan_alloc;
 	int cc = bt_audio_codec_cfg_get_chan_allocation(codec_cfg, &chan_alloc, false);
 
@@ -239,6 +229,14 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 		LOG_DBG("  chan alloc not found (%d), defaulting chan_count=1", cc);
 		sinks[idx].decode.chan_count = 1;
 	}
+
+	/*
+	 * Register with lifecycle gate AFTER final chan_count is known,
+	 * so the started callback can distinguish Mode A (two mono ASEs)
+	 * from Mode B / mono (single ASE).
+	 */
+	LOG_DBG("lifecycle: sink[%zu] configured chan_count=%d", idx, sinks[idx].decode.chan_count);
+	stream_lifecycle_sink_configured(idx, sinks[idx].decode.chan_count);
 
 	LOG_INF("  ASE[%zu] configured: num_sink_ase=%zu", idx, num_sink_ase);
 

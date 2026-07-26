@@ -192,6 +192,25 @@ ZTEST(lifecycle, test_started_without_configure_noop)
 	zassert_false(stream_lifecycle_audio_path_is_open());
 }
 
+/* ── Edge: zero chan_count treated as absent ─────────────────────── */
+
+ZTEST(lifecycle, test_zero_chan_count_sink_absent)
+{
+	stream_lifecycle_reset();
+
+	/* Explicit zero chan_count: gate must NOT open. */
+	stream_lifecycle_sink_configured(0, 0);
+	bool ret = stream_lifecycle_sink_started(0);
+	zassert_false(ret, "zero chan_count should be treated as absent");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "gate stays closed");
+
+	/* Reconfigure with nonzero: gate opens normally. */
+	stream_lifecycle_sink_configured(0, 2);
+	ret = stream_lifecycle_sink_started(0);
+	zassert_true(ret, "nonzero chan_count opens gate");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate open");
+}
+
 ZTEST(lifecycle, test_out_of_bounds_idx_noop)
 {
 	stream_lifecycle_reset();
