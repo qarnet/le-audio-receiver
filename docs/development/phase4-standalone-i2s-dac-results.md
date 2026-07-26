@@ -117,7 +117,9 @@ matches configured block size.
 All captures on CH0=D0(SCK), CH1=D1(LRCK), CH2=D2(SDOUT), CH3=3V3.
 
 The fx2lafw captures ~490 ms of 24 MHz data per run (USB bandwidth limit).
-Each capture represents ~490 ms of active I2S during the 20-second test.
+Each capture spans ~490 ms of the 20-second test. Captures are raw,
+un-decoded; BCK/LRCK/SDOUT edge-rate, ratio, and SDOUT-transition
+analysis have not been extracted from them.
 
 ### DAC
 
@@ -131,7 +133,7 @@ wave at ~80% amplitude.  DAC model not yet identified.
 |-----------|--------|
 | Full 20-second test, no I2S EIO/underrun | **PASS** — 2016 blocks in 20001 ms, zero errors |
 | Register snapshot confirms enabled master/TX, PSEL | **PASS** — ENABLE=1, CONFIG.TXEN=1, all PSEL match |
-| Analyzer proves BCK/LRCK/SDOUT, correct ratio | **PASS** — sigrok captures active I2S; MCKFREQ gives 32:1 BCK/LRCK ratio per register config; FRAMESTART=1 confirms clock output |
+| Analyzer proves BCK/LRCK/SDOUT, correct ratio | **PENDING ANALYSIS** — raw sigrok captures exist but BCK/LRCK/SDOUT measurements were not extracted. Register config (MCKFREQ=32MHz÷21, RATIO=32×) and FRAMESTART=1 confirm clock generation from digital side; external waveform validation requires capture decoding. |
 | Receiver rebuilt and restored | **PASS** — `fw-build-54l15 && fw-flash-54l15` clean |
 | PCLK32M_HFXO clock source | **BLOCKED** — USAGE FAULT (Illegal use of EPSR, pc=0x1320) in onoff callback chain; root cause TBD. Fell back to PCLK32M (HFINT) which works. |
 | DAC audible | **PENDING** — user confirmation |
