@@ -70,11 +70,12 @@ suppress with a recorded reason. Do not normalize noise.
 
 `docs/design.md` is the accepted design doc and phased plan (Phases 0–6) for
 supporting both nRF5340 and nRF54L15. Read it before structural changes.
-Current status: **Phase 4 landed** — PI clock recovery controller (dual-term,
+Current status: **Phase 4 landed and closed** — PI clock recovery controller (dual-term,
 ppm output) + actuator interface with two actuators: APLL (nRF5340) and
 SAMPLE_ADJUST (nRF54L15, sample insert/drop). The nRF54L15 target now builds,
-flashes, and boots with I2S + BT working. Phase 5 (ASRC on cpuapp) and
-Phase 6 (FLPR offload) remain.
+flashes, boots, and streams audio with I2S + BT working (technical stability
+gate PASS: 10-minute 60,000-frame stream, zero faults). Phase 5 (ASRC on
+cpuapp) and Phase 6 (FLPR offload) remain conditional/deferred.
 
 Consequences for work in this repo today:
 
@@ -502,10 +503,17 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 | `src/main.c` | Lifecycle wiring + watchdog + advertising restart loop |
 | `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising |
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
-| `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop, sdu_ref) |
+| `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop) |
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA, 48 kHz stereo) — implements audio_sink.h |
 | `src/audio_drift.c` | PI clock recovery controller (dual-term, ppm output) |
 | `src/audio_drift.h` | Controller API + APLL register constants |
+| `src/audio_rate_convert.c` | Nearest-neighbor rate converter (PCLK32M mismatch fix) |
+| `src/audio_rate_convert.h` | Rate converter public API (unit-testable) |
+| `src/audio_timing.h` | Platform timing interface (frequency error, GRTC scheduling) |
+| `src/audio_timing_math.c` | Timing math shared across platforms |
+| `src/audio_timing_nrf54.c` | nRF54L15 TIMER20-vs-GRTC PCLK frequency measurement |
+| `src/audio_timing_none.c` | nRF5340 no-op timing (no GRTC/TIMER20) |
+| `src/stream_lifecycle.c` | Stream start/stop lifecycle (unit-testable) |
 | `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset, consume_sample_adjustment) |
 | `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator (ppm → register trim) |
 | `src/audio_clock_actuator_sample_adjust.c` | nRF54L15 sample insert/drop actuator (ppm → ±1 sample) |

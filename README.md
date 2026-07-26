@@ -2,15 +2,17 @@
 
 Bluetooth LE Audio BAP Unicast Server — a sink-only receiver that decodes LC3
 audio from a BAP unicast source and plays it out over I2S to an external DAC. Built on the
-nRF Connect SDK (Zephyr) for the **nRF5340** (Ebyte E83-2G4M03S module), with a
-secondary **nRF54L15** (Seeed Xiao) target in progress.
+nRF Connect SDK (Zephyr) for the **nRF5340** (Ebyte E83-2G4M03S module) and
+the **nRF54L15** (Seeed Xiao).
 
 - 2 sink ASEs (mono / stereo Mode A / stereo Mode B)
 - LC3 decode via liblc3 → I2S 48 kHz stereo
 - SoftDevice-free link layer: BT_LL_SW_SPLIT (Zephyr open-source controller,
   required for ISO) on nRF5340; SDC controller on nRF54L15
-- PI clock-recovery controller steering the HFCLKAUDIO APLL from ISO timestamps
-  (nRF5340); sample insert/drop actuator on nRF54L15
+- Dual-platform PI clock-recovery controller (ppm output) with platform-specific
+  actuators: HFCLKAUDIO APLL trim (nRF5340) and sample insert/drop (nRF54L15).
+  Feedforward from PCLK-vs-GRTC frequency measurement (nRF54L15) plus per-block
+  I2S buffer-phase PI. Rate conversion for PCLK32M fixed-rate mismatch.
 - VCP volume, CAS, shell diagnostics, watchdog
 
 ---
@@ -197,13 +199,24 @@ before reflashing — `west flash` does not erase the settings partition.
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
 | `src/audio_sink.h` | Platform-neutral audio-sink interface |
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA) — implements `audio_sink.h` |
-| `src/audio_drift.c` | PI clock-recovery controller (ppm output) |
+| `src/audio_drift.c` | PI clock-recovery controller (ppm output, dual-platform) |
+| `src/audio_drift.h` | Controller API + APLL register constants |
+| `src/audio_rate_convert.c` | Nearest-neighbor rate converter (PCLK32M mismatch fix) |
+| `src/audio_rate_convert.h` | Rate converter public API |
+| `src/audio_timing.h` | Platform timing interface (frequency error, GRTC scheduling) |
+| `src/audio_timing_math.c` | Timing math shared across platforms |
+| `src/audio_timing_nrf54.c` | nRF54L15 TIMER20-vs-GRTC PCLK measurement |
+| `src/audio_timing_none.c` | nRF5340 no-op timing (no GRTC/TIMER20) |
+| `src/stream_lifecycle.c` | Stream start/stop lifecycle (unit-testable) |
+| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset, consume_sample_adjustment) |
 | `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator |
+| `src/audio_clock_actuator_sample_adjust.c` | nRF54L15 sample insert/drop actuator |
+| `src/audio_clock_actuator_none.c` | No-op actuator (testing only) |
 | `boards/ebyte/e83_nrf5340/` | Custom nRF5340 board: I2S0 pins, ACLK 12.288 MHz, QSPI disabled |
 | `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2 |
 | `prj.conf` | App Kconfig |
 | `sysbuild.cmake` | Applies SW Split DT + Kconfig overlays to `hci_ipc` |
-| `tests/` | Unit (`drift`, `audio_decode`) and bsim tests |
+| `tests/` | Unit tests (drift, actuator, timing, lifecycle, decode, rate_convert) |
 | `docs/design.md` | Accepted design doc + phased plan (Phases 0–6) |
 | `docs/flashing.md` | Dual-core flash workflow in depth |
 

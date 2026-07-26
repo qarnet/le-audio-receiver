@@ -36,8 +36,9 @@ documents are written per phase when work on it starts.
   initializes (`I2S ready`, `I2S DMA started`). GPIO mapping proven: D0=BCK
   toggles, D1/LRCK and D2/SDOUT toggle when DAC digital wires removed.
   Standalone I2S20 test ran 20 seconds, fed 2,016 blocks, zero EIO/underrun.
-  SAMPLE_ADJUST actuator wired. **Main receiver end-to-end audio not yet
-  accepted; new DAC connected, audible result pending** — see Phase 4.
+  SAMPLE_ADJUST actuator wired. **Main receiver end-to-end audio: technical
+  PASS (Phase 4c, 10-minute stability gate); physical audibility UNAVAILABLE**
+  — see Phase 4 for completed sub-gates and evidence.
 - Clean small modules: `audio_stats`, `audio_volume`, `audio_shell`.
 
 ## Findings
@@ -318,16 +319,20 @@ covered by new unit tests.
 **Exit criterion**: packet-repeat fallback does **not** fire in steady-state
 streaming on nRF5340 (observable via `audio status` shell counters).
 
-## Phase 4 — nRF54L15 audio bring-up
+## Phase 4 — nRF54L15 audio bring-up — COMPLETE (2026-07-26)
 
-This phase is **not done** as of the 2026-07-26 rewrite. Code landed (I2S20
+Phase 4 is closed on measurable exit criteria. Code landed (I2S20
 pinctrl fix, SAMPLE_ADJUST actuator, SDC-on-cpuapp buffer counts), boot +
 PACS/ASCS + BlueZ bonding verified. BLE CIS transport verified through
 nRF5340DK `hci_uart` central. GPIO mapping D0/D1/D2 (P1.4/P1.5/P1.6) proven.
 Standalone I2S20 DMA test completed (20 s, 2,016 blocks, no EIO). The old
 DAC breakout held D1/LRCK high when unmuted — incompatible or defective
-assembly. A new DAC is connected; main receiver end-to-end audio and
-audible output are pending. The phase is re-scoped into ordered sub-steps:
+assembly; replaced with known-good DAC. All sub-gates completed: rate
+conversion (4a.2), GRTC-driven PCLK feedforward + phase PI (4b.1/4b.2),
+and 10-minute stability gate (4c) — all PASS. External digital I2S gate
+PASS at DAC pins (BCK/LRCK ratio 31.999701). Physical audibility UNAVAILABLE
+by user — not failed, not blocking further measurable work.
+The sub-steps and their evidence are summarized below:
 
 ### Phase 4a — Ordered verification gates
 
@@ -527,7 +532,7 @@ re-litigated.
 
 | Option | Disposition | Reason |
 |---|---|---|
-| A. ASRC on cpuapp | **Adopted** (Phase 5) | 5–15 % cpuapp load at 48 kHz stereo; linear interp cheap |
+| A. ASRC on cpuapp | **Adopted, conditional/deferred** (Phase 5) | 5–15 % cpuapp load at 48 kHz stereo; linear interp cheap; gated on measurable quality criterion or listening evidence |
 | B. ASRC on FLPR | **Adopted, gated** (Phase 6) | Zero cpuapp impact; costs IPC + fixed-point port + ~10 ms latency |
 | C. FLPR bit-banged BCLK/LRCK (I2S slave) | **Rejected** | Any FLPR stall (cache miss, IPC, VEVIF) becomes clock jitter → audible; burns the FLPR entirely; needs physical jumper wires. Only unique benefit was bit-perfect output — for 16-bit LC3-decoded audio, resampling error sits below the codec noise floor, so the benefit is inaudible here. |
 | D. PWM-generated I2S clock (slave) | **Rejected** | Same bit-perfect argument as C; limited frequency resolution (~PCLK/N steps); needs physical wires + DPPI choreography to keep LRCK = BCLK/64. |
@@ -557,8 +562,8 @@ Current evidence, not forward-looking plan. Separated by verification state.
   Register state: ENABLE=1, TASKS_START triggered, PSEL correct, FRAMESTART
   firing. I2S20 hardware works.
 - PCLK32M clock source works; `PCLK32M_HFXO` UsageFault is tracked separately
-  (not an I2S issue).
-- Raw logic-analyzer capture file exists; frequency/data analysis pending.
+  (not an I2S issue). Frequency analysis completed in Phase 4c — see
+  `docs/development/phase4c-i2s-analyzer-results.md`.
 
 ### Old DAC failure/isolation evidence
 

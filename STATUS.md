@@ -40,9 +40,11 @@ diagnostics +1,500..+1,757 ppm, channel-pair gate correct (drops-only
 before first PCLK measurement), inserts dominate (186:1 ratio), clean
 teardown.  Phase 4c (10-minute stability + listening test): **Technical
 PASS** (60,000 frames / 600.00 s, zero disconnect, zero
-slab-full/underrun/warning/error/fault, clean teardown).  Audible quality
-pending user observation; Phase 5 conditional on listening result.
-See `docs/development/phase4b1-results.md` for Phase 4b.1 hardware PASS
+slab-full/underrun/warning/error/fault, clean teardown).  Physical
+audibility UNAVAILABLE (user did not provide listening report) — not failed,
+not blocking further measurable work.  Phase 5 conditional on listening
+evidence or another measurable quality criterion.
+  See `docs/development/phase4b1-results.md` for Phase 4b.1 hardware PASS
 evidence (3,000 frames / 30 s, +1,665..+1,884 ppm),
 `docs/development/phase4b2-results.md` for Phase 4b.2 hardware PASS
 evidence, and
@@ -65,8 +67,9 @@ PCLK32M hardware-rate mismatch (~47,619 Hz LRCK vs 48,000 Hz decoder output)
 plus fixed 480-frame writes — not PI controller gain. Fix: bounded
 nearest-neighbor rate converter maps 480 input → 476/477 output frames per
 block. See `docs/development/phase4a2-rate-conversion-results.md`. Phase 4b
-GRTC + PCLK feedforward + SAMPLE_ADJUST now operational. Audio quality
-pending user listening test; Phase 5 (ASRC) conditional on result.
+GRTC + PCLK feedforward + SAMPLE_ADJUST now operational (see Phase 4b.1/4b.2
+results above). Physical audibility UNAVAILABLE (user did not provide
+listening report); Phase 5 (ASRC) conditional on listening evidence.
 
 ## Hardware in use
 
@@ -118,9 +121,8 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
 | Standalone I2S20 tone test | 20.001 s, 2,016 blocks fed, zero EIO/underrun. ENABLE=1, PSEL correct, FRAMESTART firing. |
 | Old DAC digital wires connected, MUTE low | D1/LRCK held high — no toggling. Breakout/wiring incompatible or defective. |
 | Old DAC digital wires removed | D1/LRCK toggles. GPIO toggling confirmed. |
-| Main receiver with old DAC | Slab-full / EIO — old DAC assembly held I2S lines (proven physical blocker/contributor). Firmware queue/producer behavior not yet ruled out; new-DAC retest with unchanged receiver firmware required before final root-cause attribution. |
+| Main receiver with new DAC (Phase 4c) | **Technical PASS** — 60,000 frames / 600.00 s, zero disconnect, zero slab-full/underrun/warning/error/fault, clean teardown. See `docs/development/phase4c-technical-results.md`. |
 | External I2S analyzer | **PASS** — 24 MHz fx2lafw capture at DAC pins: BCK 1,525,637.347 Hz, LRCK 47,676.613 Hz, ratio 31.999701, SDOUT active. See `docs/development/phase4c-i2s-analyzer-results.md`. |
-| New DAC Phase 4c results | **Technical PASS** — 60,000 frames / 600.00 s (10 minutes), zero disconnect during stream, zero slab-full/underrun/warning/error/fault, clean teardown. Physical audibility unavailable by user and not blocking measurable work. See `docs/development/phase4c-technical-results.md`. |
 | Phase 4a.2 rate conversion | **PASS** — 35 s stream, 0 slab-full, 0 underrun. Fixed-rate converter matches PCLK32M drain. See `docs/development/phase4a2-rate-conversion-results.md`. |
 
 ### Next actions (ordered)
@@ -215,9 +217,9 @@ Expected: `ACL link up` → `ServicesResolved` → 2× SelectProperties →
 
 Receiver console (serial-mcp on `/dev/ttyACM0`) during a good run:
 `Pairing complete, bonded: 1`, 2× `ASE Config`, `LC3 decoder[0/1]`,
-`Stream[x] started`, `audio_i2s: I2S DMA started` — then (currently)
-`I2S slab full — dropping frame` repeats because the I2S DMA doesn't
-drain.
+`Stream[x] started`, `audio_i2s: I2S DMA started` — then steady-state
+streaming with sample-insert/drop corrections logged at startup and every
+500th adjustment; no slab-full or underrun events in steady state.
 
 ### 4. Verify ISO actually crossed HCI (optional)
 
