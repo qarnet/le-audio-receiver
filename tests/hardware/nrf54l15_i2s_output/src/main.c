@@ -9,7 +9,7 @@
  * from the main receiver pipeline.
  *
  * I2S config: 48 kHz, 16-bit, stereo, master (BCK+FRAME clock).
- * Blocks: 480 samples × 2 ch × 2 bytes = 1920 bytes each, 12 blocks.
+ * Blocks: 480 samples × 2 ch × 2 bytes = 1920 bytes each, 16 blocks.
  *
  * Only start/config/trigger errors and periodic status printed.
  * No per-block log spam.
@@ -28,7 +28,7 @@
 #define CHANNELS          2
 #define SAMPLES_PER_FRAME 480                                              /* 10 ms at 48 kHz */
 #define BLOCK_SIZE        (SAMPLES_PER_FRAME * CHANNELS * (BIT_WIDTH / 8)) /* 1920 */
-#define BLOCK_COUNT       12
+#define BLOCK_COUNT       16
 
 #define SINE_FREQ 1000
 #define AMPLITUDE 26214 /* ~80% of 32767 */
@@ -48,17 +48,30 @@ K_MEM_SLAB_DEFINE_STATIC(i2s_slab, BLOCK_SIZE, BLOCK_COUNT, 4);
 
 static const struct device *i2s_dev;
 
+/* Pre-computed 1 kHz sine LUT: 48 entries = one cycle at 48 kHz.
+ * Filled at init time, then fast indexed during feed loop.
+ * Avoids run-time double-precision sin() which is software-emulated
+ * on Cortex-M33's single-precision FPU (~12 ms per block = starvation).
+ */
+static int16_t sine_lut[48];
+
+static void init_lut(void)
+{
+	for (int i = 0; i < 48; i++) {
+		sine_lut[i] = (int16_t)(AMPLITUDE * sinf(2.0f * (float)M_PI * (float)i / 48.0f));
+	}
+}
+
 /* Fill one block with a slice of the sine wave, continuing from global phase. */
 static void fill_block(int16_t *block, uint32_t *phase_accum)
 {
+	uint32_t p = *phase_accum;
 	for (int i = 0; i < SAMPLES_PER_FRAME; i++) {
-		double t = (double)(*phase_accum + i) / (double)SAMPLE_RATE;
-		int16_t sample = (int16_t)(AMPLITUDE * sin(2.0 * M_PI * SINE_FREQ * t));
-
+		int16_t sample = sine_lut[(p + i) % 48];
 		block[i * 2] = sample;     /* L */
 		block[i * 2 + 1] = sample; /* R */
 	}
-	*phase_accum += SAMPLES_PER_FRAME;
+	*phase_accum = p + SAMPLES_PER_FRAME;
 }
 
 int main(void)
@@ -98,6 +111,9 @@ int main(void)
 	}
 	printk("I2S configured OK.\n");
 
+	/* Pre-compute 1 kHz sine LUT */
+	init_lut();
+
 	/* --- Pre-fill slab with distinct sine blocks --- */
 	void *blocks[BLOCK_COUNT];
 	for (int i = 0; i < BLOCK_COUNT; i++) {
@@ -124,18 +140,19 @@ int main(void)
 	}
 	printk("I2S started. Feeding for %u seconds...\n", TEST_DURATION_SEC);
 
-	/* --- Feed loop: refill buffers as DMA consumes them --- */
+	/* --- Feed loop: refill buffers as DMA consumes them ---
+	 * Use K_FOREVER allocation so the producer never misses
+	 * a freed block — the slab free happens synchronously in
+	 * the DMA ISR (via free_tx_buffer → k_mem_slab_free).
+	 * This avoids the producer-gap-after-release that caused
+	 * the prior K_NO_WAIT + k_sleep approach to starve.
+	 */
 	uint32_t blocks_fed = 0;
 	uint64_t start_ms = k_uptime_get();
 
 	while ((k_uptime_get() - start_ms) < (TEST_DURATION_SEC * 1000)) {
 		void *block;
-		ret = k_mem_slab_alloc(&i2s_slab, &block, K_NO_WAIT);
-		if (ret == -ENOMEM) {
-			/* Slab full: DMA hasn't freed a block yet. */
-			k_sleep(K_MSEC(1));
-			continue;
-		}
+		ret = k_mem_slab_alloc(&i2s_slab, &block, K_FOREVER);
 		if (ret != 0) {
 			printk("ERROR: slab alloc in feed loop: %d\n", ret);
 			break;
@@ -149,10 +166,8 @@ int main(void)
 		}
 		blocks_fed++;
 
-		/* Periodic status every 4800 blocks (~48 seconds worth of
-		 * data, but the loop wakes every ~10 ms, so ~every 48 s).
-		 * This fires roughly once mid-test. */
-		if ((blocks_fed % 4800) == 0) {
+		/* Periodic status every 100 blocks (~1 second). */
+		if ((blocks_fed % 100) == 0) {
 			int free_now = k_mem_slab_num_free_get(&i2s_slab);
 			printk("STATUS: %u blocks fed, free=%d\n", (unsigned int)blocks_fed,
 			       free_now);

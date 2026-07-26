@@ -36,10 +36,12 @@
 
 &i2s20 {
 	status = "okay";
-	/* PCLK32M_HFXO requires the onoff clock manager (HFXO driver)
-	 * which is not available in this minimal test firmware without
-	 * MPSL/SDC/HFXO init.  Fall back to PCLK32M (HFINT, ~±250 ppm)
-	 * which starts directly without a clock-manager round-trip. */
+	/* PCLK32M (HFINT): tested working, no onoff callback chain.
+	 * PCLK32M_HFXO (binding default): USAGE FAULT crash after
+	 * clock_started_callback → start_transfer on nRF54L15 I2S20.
+	 * Fault pc=0x1320 (literal pool), Illegal use of EPSR.
+	 * Root cause TBD — suspected onoff callback call to nrfx_i2s_init
+	 * in non-thread context with incorrect function pointer. */
 	clock-source = "PCLK32M";
 	pinctrl-0 = <&i2s20_default>;
 	pinctrl-names = "default";
