@@ -5,24 +5,23 @@
 
 ## Bottom line
 
-**LE Audio transmission works end-to-end** from this Linux PC to the
-nRF54L15 receiver via an nRF5340DK flashed with Zephyr `hci_uart` firmware
-(USB-attached J-Link VCOM). Two CISes (Mode A stereo) stream 48 kHz LC3 at
-100 fps for the full duration with zero flow-control stalls. Bluetooth
-discovery, connect, JustWorks pairing (bonded), and BAP negotiation all
-work.
+**BLE ISO transport verified** — 3,000 ISO Data TX packets over 15 s through
+nRF5340DK `hci_uart` central; two CISes (Mode A stereo), 48 kHz LC3 at 100
+fps, zero flow-control stalls. Receiver SDUs arrive correctly.
 
-**I2S audio output on the receiver does NOT work** — the I2S peripheral
-"starts" but never completes a DMA transfer; the TX slab fills and frames
-are dropped. ISO SDUs arrive correctly (verified: ~1000 valid/100 invalid
-per stream), but decoded PCM never reaches the I2S pins. This is the
-open blocker for actual audio. See "I2S DMA stall" below.
+**Standalone I2S20 hardware/DMA verified** — a standalone I2S20 tone test ran
+20.001 seconds, fed 2,016 blocks, zero EIO/underrun. I2S20 register state
+(ENABLE, PSEL, FRAMESTART) confirmed working. GPIO mapping D0/P1.4 (BCK),
+D1/P1.5 (LRCK), D2/P1.6 (SDOUT) proven.
 
-The dongle firmware config is **folded into the repo** —
-`dongle/hci_uart/{app,netcore}.conf` + `fw-build-dongle` /
-`fw-flash-dongle` build and flash the upstream hci_uart sample with the
-SDC netcore tuned as an LE Audio central. The receiver runs a clean build
-(no SMP debug logging).
+**Old DAC caused LRCK anomaly** — with the old DAC breakout connected and MUTE
+low, D1/LRCK was held high (no toggling). With digital wires removed, D1
+toggles. The old breakout/wiring assembly is incompatible or defective.
+
+**Main receiver with new DAC needs end-to-end retest** — new DAC connected to
+the Xiao; audible output not yet confirmed. Main receiver firmware has not
+been streamed against with the new DAC. Required: external analyzer
+measurement + user listening report.
 
 ## Hardware in use
 
@@ -53,8 +52,7 @@ SDC netcore tuned as an LE Audio central. The receiver runs a clean build
   No EAGAIN, no stall. `bap_central.py --duration 15` reports
   `Done: 1500 frames in 15.00 s (100.0 fps)`.
 - ISO data RX at the receiver: valid SDUs arrive — `stream_recv tally:
-  valid=1006 invalid=144` (climbing). The transport is fine; the failure
-  is downstream in the I2S push (see below).
+  valid=1006 invalid=144` (climbing). BLE transport verified.
 - Receiver-side recovery from the post-stream disconnect panic
   (`audio_sink_stop`: PREPARE before DROP in `src/audio_i2s.c`).
 - **Clean ACL teardown** in `bap_central.py` (BlueZ Disconnect +
@@ -64,51 +62,32 @@ SDC netcore tuned as an LE Audio central. The receiver runs a clean build
 
 ## What does NOT work / open
 
-### I2S DMA stall on nRF54L15 (primary blocker)
+### I2S20 hardware evidence
 
-The I2S20 peripheral "starts" (`i2s_trigger(START)` returns success,
-"I2S DMA started" logged) but **never completes a DMA transfer**. The
-TX slab fills: `audio_i2s: I2S slab full — dropping frame` repeats every
-stream. Decoded PCM never reaches the I2S pins → DAC silent.
+Standalone I2S20 works. The old DAC breakout caused LRCK anomaly. The main
+receiver pipeline with a new DAC needs end-to-end retest.
 
-**Evidence:**
-- Receiver console: valid ISO SDUs arrive (~1000 valid per 10 s), LC3
-  decoders created, "I2S DMA started" logged, then "I2S slab full —
-  dropping frame" repeats. At stream stop: `i2s_nrfx: Next buffers not
-  supplied on time`.
-- sigrok: D0 (SCK) toggles ~6 MHz (not the clean 3.072 MHz expected for
-  48 kHz × 64); D1 (LRCK) and D2 (SDOUT) **completely flat** (0
-  transitions). Either the peripheral isn't actually clocking, or the LA
-  probes on D1/D2 are loose (cannot rule out measurement artifact yet).
+| Test | Result |
+|------|--------|
+| GPIO pin map | D0/P1.4 = BCK, D1/P1.5 = LRCK, D2/P1.6 = SDOUT. Confirmed. |
+| PCLK32M clock source | Works. `PCLK32M_HFXO` UsageFault tracked separately. |
+| Standalone I2S20 tone test | 20.001 s, 2,016 blocks fed, zero EIO/underrun. ENABLE=1, PSEL correct, FRAMESTART firing. |
+| Old DAC digital wires connected, MUTE low | D1/LRCK held high — no toggling. Breakout/wiring incompatible or defective. |
+| Old DAC digital wires removed | D1/LRCK toggles. GPIO toggling confirmed. |
+| Main receiver with old DAC | Slab-full / EIO — DAC held I2S lines; not a firmware bug. |
+| Raw logic-analyzer capture | File exists. Frequency/data analysis pending. |
+| New DAC audible result | **Pending** — new DAC connected, not yet streamed against. |
 
-**Ruled out:**
+### Next actions (ordered)
 
-| Suspect | Test | Result |
-|---------|------|--------|
-| `CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS` needed | ncs-source deep dive | nRF53-only (`depends on SOC_SERIES_NRF53`); compiled out on nRF54L15. "Bypass" = `CONFIG.CLKCONFIG.BYPASS` register bit that nRF54L15 I2S doesn't have. Not the fix. |
-| HFXO onoff never completes (default `clock-source = PCLK32M_HFXO`) | Set `clock-source = "PCLK32M"` in overlay (skip onoff) | No change — still slab-full. |
-| MCK pin not connected | Added `NRF_PSEL(I2S_MCK, 1, 7)` (Xiao D3, free pin) to pinctrl | No change — still slab-full, D1/D2 still flat. |
-| Pin conflict (pwm20/pdm20 reclaiming P1.4/5/6) | Decoded all resolved psels | pwm20 = P1.10; no conflict with P1.4/5/6. pdm20 disabled in overlay. |
-
-**Remaining suspects (next debug steps):**
-1. **Re-seat LA probes on D1/D2**, re-capture — rule out loose jumpers
-   (D0 toggling but D1/D2 perfectly flat is suspicious).
-2. **Read I2S20 registers via openocd** during a stream (CONFIG, RATIO,
-   PSEL.MCK/SCK/LRCK/SDOUT, ENABLE, TASKS_START) to see the actual
-   hardware state — is ENABLE set? What RATIO was selected? Are PSELs
-   correct? This is the sharpest next tool.
-3. **nRF54L15 I2S erratum** — the nRF54L series is new; check for a
-   silicon erratum on I2S master mode. No upstream NCS sample uses I2S
-   on nRF54L15 (verified).
-4. **Try I2S slave mode** with an external MCK/BCK from a signal
-   generator to isolate whether master-mode clock generation is broken.
-
-**Uncommitted diagnostic state:**
-- `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` has `clock-source = "PCLK32M"`
-  and the MCK pin on P1.7 — both diagnostic additions that didn't fix it;
-  re-evaluate before keeping.
-- `src/bt_bap.c` has temporary `LOG_INF` tally logging in `stream_recv` /
-  `push_stereo` — revert before final.
+1. Reflash standalone tone test when user ready to listen; analyze raw
+   logic-analyzer capture for frequency/data.
+2. Run main receiver with new DAC unchanged against nRF5340DK `hci_uart`
+   central. Capture serial + logic analyzer. Requires external analyzer
+   measurement + user listening report.
+3. If 4a.1 retest still fails with slab-full/EIO, compare application
+   queue behavior with standalone test — instrument, do not pre-decide fix.
+4. Phase 4b: GRTC/DPPI drift measurement.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 

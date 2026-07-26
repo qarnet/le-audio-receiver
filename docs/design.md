@@ -1,6 +1,6 @@
 # LE Audio Receiver — Design Document
 
-Status: **revised 2026-07-25** (plan rewritten after Phase 4 code landed and
+Status: **revised 2026-07-26** (plan rewritten after Phase 4 code landed and
 the nRF54L15 first-stream bring-up revealed gaps in the original Phase 4
 definition). Earlier history: accepted 2026-07-05, superseded
 `nrf54l15-drift-compensation.md` (absorbed in Part II §Clock recovery and
@@ -33,10 +33,13 @@ documents are written per phase when work on it starts.
   APLL from ISO timestamps. Hardware-independent module with a ztest unit
   suite (`tests/unit/drift`) and a bsim scaffold (`tests/bsim`).
 - **nRF54L15 (Seeed Xiao)**: builds, flashes (OpenOCD + Xiao CMSIS-DAP),
-  boots, advertises, pairs with BlueZ (BT540/hci0), exposes PACS (0x1844) +
-  ASCS (0x1850) over GATT. I2S20 on D0/D1/D2 (P1.4/P1.5/P1.6) initializes
-  (`I2S ready` log). SAMPLE_ADJUST actuator wired. **Audio has not streamed
-  yet** — see Phase 4.
+  boots, advertises, pairs with BlueZ (nRF5340DK `hci_uart` central), exposes
+  PACS (0x1844) + ASCS (0x1850) over GATT. I2S20 on D0/D1/D2 (P1.4/P1.5/P1.6)
+  initializes (`I2S ready`, `I2S DMA started`). GPIO mapping proven: D0=BCK
+  toggles, D1/LRCK and D2/SDOUT toggle when DAC digital wires removed.
+  Standalone I2S20 test ran 20 seconds, fed 2,016 blocks, zero EIO/underrun.
+  SAMPLE_ADJUST actuator wired. **Main receiver end-to-end audio not yet
+  accepted; new DAC connected, audible result pending** — see Phase 4.
 - Clean small modules: `audio_stats`, `audio_volume`, `audio_shell`.
 
 ## Findings
@@ -307,33 +310,52 @@ streaming on nRF5340 (observable via `audio status` shell counters).
 
 ## Phase 4 — nRF54L15 audio bring-up
 
-This phase is **not done** as of the 2026-07-25 rewrite. Code landed (I2S20
+This phase is **not done** as of the 2026-07-26 rewrite. Code landed (I2S20
 pinctrl fix, SAMPLE_ADJUST actuator, SDC-on-cpuapp buffer counts), boot +
-PACS/ASCS + BlueZ bonding verified, but no audio has streamed and the
-hardware drift measurement is not implemented. The phase is re-scoped into
-ordered sub-steps so the make-or-break runtime verification is explicit and
-the GRTC work is not deferred to a later phase.
+PACS/ASCS + BlueZ bonding verified. BLE CIS transport verified through
+nRF5340DK `hci_uart` central. GPIO mapping D0/D1/D2 (P1.4/P1.5/P1.6) proven.
+Standalone I2S20 DMA test completed (20 s, 2,016 blocks, no EIO). The old
+DAC breakout held D1/LRCK high when unmuted — incompatible or defective
+assembly. A new DAC is connected; main receiver end-to-end audio and
+audible output are pending. The phase is re-scoped into ordered sub-steps:
 
-### Phase 4a — Stream verification (audio flows end-to-end)
+### Phase 4a — Ordered verification gates
 
-Trigger a BAP unicast source stream from Linux (BlueZ on hci0 = BT540;
-fallback hci1 = nRF5340 USB HCI if hci0 ISO/CIS is flaky) into the nRF54L15
-receiver. This is the first time audio has ever flowed on the nRF54L15
-target. Goal: prove the data path, not quality.
+Each gate blocks the next. Do not skip ahead.
 
-- Run `scripts/bap_central.py` (BlueZ BAP source endpoint, LC3 sine) against
-  the receiver. Pre-req: python deps installed via `mkNrfShell { packages
-  = [ python3Packages.dbus-python python3Packages.pygobject3 ]; }` (Phase 0
-  extension; do not pollute the toolchain's scoped python).
-- Capture serial (`serial-mcp` on `/dev/ttyACM0`) + logic analyzer
-  (sigrok-cli fx2lafw on D0/D1/D2 + 3V3) in parallel during the run.
-- Success criteria (all observable):
-  - Serial log shows `stream_recv` SDUs arriving, no `LC3 decoder not ready`.
-  - Logic analyzer shows D0 (BCK) ≈ 3.072 MHz, D1 (LRCK) = 48 kHz, D2 (DIN)
-    toggling. D3 (3V3) stable high.
-  - No `i2s_nrfx: Next buffers not supplied on time` in steady state.
-  - `audio status` shell counters: recv_cnt climbing, underrun_count not
-    climbing in steady state.
+- **4a.0 completed hardware characterization:**
+  - Correct Xiao pin map: D0/P1.4 = BCK, D1/P1.5 = LRCK, D2/P1.6 = SDOUT.
+  - Old DAC isolation result: with DAC digital wires connected and MUTE low,
+    D1/LRCK held high; with digital wires removed, D1 toggles. The old
+    breakout/wiring assembly is incompatible or defective.
+  - Standalone I2S20 evidence: 20.001 seconds, 2,016 blocks fed, zero
+    EIO/underrun, ENABLE=1, TASKS_START triggered, PSEL correct,
+    FRAMESTART firing. I2S20 hardware works.
+  - PCLK32M clock source works; `PCLK32M_HFXO` usage-fault is tracked
+    separately.
+- **4a.1 current main-pipeline retest:**
+  - First run the unchanged receiver firmware with the new DAC and a working
+    central (nRF5340DK `hci_uart`).
+  - Capture serial (`serial-mcp` on `/dev/ttyACM0`) + logic analyzer
+    (sigrok-cli fx2lafw on D0/D1/D2 + 3V3) in parallel during the run.
+  - Expected BCK: **approximately 1.536 MHz** (48 kHz × 16 bits × 2 channels
+    = 1,536,000 Hz); BCK/LRCK ratio = 32. The old plan's 3.072 MHz figure
+    was incorrect for 16-bit I2S.
+  - External analyzer measurement and user audible report of the new DAC output
+    are **required** — neither is a soft criterion.
+  - If audio works end-to-end and is audible, record the evidence and
+    proceed to 4b.
+- **4a.2 integration fix — only if 4a.1 fails:**
+  - Compare the application's initial I2S queue/producer behavior with the
+    standalone test before changing source code.
+  - If the app still produces slab-full/EIO in the first few blocks while
+    standalone did not, instrument queue depth / push timing — do not
+    pre-decide a fix.
+  - Scope limited to the measured queue/producer issue.
+  - Preserve the no-double-write rule and the `TRIGGER_PREPARE` error-recovery
+    path from `AGENTS.md`.
+
+### Phase 4b — GRTC + DPPI drift measurement
 
 ### Phase 4b — GRTC + DPPI drift measurement
 
@@ -450,51 +472,46 @@ re-litigated.
 
 ---
 
-# Appendix B — Phase 4 status (2026-07-25)
+# Appendix B — Phase 4 evidence (2026-07-26)
 
-Snapshot at the time of the plan rewrite. Not part of the forward-looking
-plan; records what is and isn't done so the next session doesn't re-verify
-from scratch.
+Current evidence, not forward-looking plan. Separated by verification state.
 
-**Done:**
-- Phase 4a test dependencies are part of the project dev shell:
-  `mkNrfShell { packages = [ python3Packages.dbus-python
-  python3Packages.pygobject3 ]; }`. Verified from a fresh `nix develop`:
-  D-Bus/GLib imports work, `bap_central.py --help` loads liblc3, both firmware
-  targets build, and `west`, `openocd`, `nrf-probes`, sigrok-cli, ZEPHYR_BASE,
-  and all four `fw-*` helpers remain available.
-- nRF54L15 builds (`fw-build-54l15` green), flashes (`fw-flash-54l15`),
-  boots (`BLE ready`, `settings_load() OK`, `Advertising as "LE Audio
-  Receiver"`, `I2S ready (48 kHz, 16-bit, stereo, 12 blocks)`).
-- I2S20 pinctrl fixed: D0/D1/D2 (P1.4/P1.5/P1.6), `&pdm20` disabled. The
-  earlier P1.10/P1.11/P1.12 assignment silently collided with pwm20/pdm20
-  (Zephyr does not detect pinctrl overlaps — see AGENTS.md).
-- BlueZ on hci0 (BT540) connects + bonds to the receiver; PACS (0x1844) +
-  ASCS (0x1850) visible on D-Bus. `bap_central.py` targets hci0.
-- SAMPLE_ADJUST actuator wired: `audio_sink_sdu_ref_update` → controller →
-  `audio_clock_actuator_apply_ppm` → accumulator →
-  `consume_sample_adjustment` → insert/drop in `audio_sink_push`.
-- ISO TX buffer warning silenced at source
-  (`BT_CTLR_SDC_ISO_TX_HCI_BUFFER_COUNT=1` matches `BT_ISO_TX_BUF_COUNT=1`,
-  sink-only).
-- `I2S_NRFX_ALLOW_MCK_BYPASS` moved to the nRF5340 board conf (no longer
-  warns on nRF54L15).
-- J-Link udev rule added via `nixos-config-flake/data/usb-device-extras.json`
-  (VID 1366 PID 1061); nRF5340DK fallback flash path works.
-- Logic analyzer (fx2lafw) + serial-mcp verified capturing.
+### Established: BLE ISO delivery
 
-**Not done (the Phase 4 work):**
-- 4a: no audio has streamed yet. Tooling and dependencies are ready;
-  next action is running `bap_central.py` with serial + logic capture active.
-- 4b: GRTC + DPPI drift measurement not implemented. `audio_drift.c` still
-  uses ISO `info->ts` (the fallback path).
-- 4c: no stability/artifact verification yet (depends on 4a + 4b).
+- nRF5340DK `hci_uart` central verified: 3,000 ISO Data TX packets over 15 s,
+  two CISes (Mode A stereo), 48 kHz LC3 at 100 fps, zero flow-control stalls.
+- Receiver SDUs arrive: `stream_recv tally: valid=1006 invalid=144` (climbing).
+- BlueZ connect, JustWorks pairing (bonded), BAP negotiation all work.
+- Clean ACL teardown in `bap_central.py`; three consecutive runs with no DK
+  reset, no zombie-slot exhaustion.
 
-**Tooling decisions made permanent this session:**
-- `nix-nrf-dev` is the toolchain flake (was already true; now documented in
-  Part I and the Assumptions).
-- AGENTS.md gained the "never ignore warnings" policy + the pinctrl-overlap
-  gotcha + the board-conf-vs-prj.conf gotcha + the matched ISO TX buffer
-  counts note.
-- `README.md` + `SESSION_USB_TABLE.md` added (human-facing + session
-  bring-up snapshot).
+### Established: standalone I2S hardware/DMA
+
+- I2S20 on D0/P1.4 (BCK), D1/P1.5 (LRCK), D2/P1.6 (SDOUT) — mapping confirmed.
+- Standalone test ran 20.001 seconds, fed 2,016 blocks, zero EIO/underrun.
+  Register state: ENABLE=1, TASKS_START triggered, PSEL correct, FRAMESTART
+  firing. I2S20 hardware works.
+- PCLK32M clock source works; `PCLK32M_HFXO` UsageFault is tracked separately
+  (not an I2S issue).
+- Raw logic-analyzer capture file exists; frequency/data analysis pending.
+
+### Old DAC failure/isolation evidence
+
+- With old DAC breakout connected and MUTE low: D1/LRCK held high, no toggling.
+- With digital wires removed (BCK/LRCK/SDOUT disconnected): D1/LRCK toggles.
+- Conclusion: old breakout/wiring assembly is incompatible or defective. Must
+  not be treated as known-good.
+
+### Pending: main-pipeline / new-DAC retest
+
+- New DAC connected to the Xiao. Audible output not yet confirmed.
+- Main receiver firmware with new DAC has not yet been streamed against.
+- Required: external analyzer measurement of I2S20 waveform +
+  user listening report. Expected BCK ≈ 1.536 MHz, BCK/LRCK ratio = 32.
+- If 4a.1 retest still produces slab-full/EIO, compare application queue
+  behavior with standalone test before changing source (4a.2).
+
+### Pending: GRTC/DPPI and stability
+
+- GRTC + DPPI drift measurement not yet implemented (Phase 4b).
+- No stability/artifact verification yet (Phase 4c, depends on 4a.1 + 4b).

@@ -37,14 +37,27 @@ dynamic range by a wide margin — the spec advantage is inaudible here.
 
 Practical differences when wiring to this project's 3-wire no-MCK topology:
 
-- **UDA1334A (CJMCU-1334 / Adafruit #3678):** drop-in. Format (SF0/SF1) and MUTE
-  are pre-pulled to GND on the Adafruit breakout — no config wires needed.
+- **UDA1334A (CJMCU-1334 / Adafruit #3678):** Format (SF0/SF1) and MUTE are
+  pre-pulled to GND on the Adafruit breakout — no config wires needed on that
+  specific board. Not all clones or assemblies are equivalent.
 - **PCM5102A (GY-PCM5102 and clones):** the **SCK pad must be solder-bridged to
   GND** to enable internal-PLL 3-wire mode. If the pad is open you get silence or
   hiss — the single most-reported PCM5102A "no sound" cause. Adafruit's own
   PCM5102 breakout (#6250) has this handled; cheap clones often don't.
 
-Use whichever you prefer. Pinout below is identical for both — 3 wires, no MCK.
+### Hardware validation before trusting a DAC breakout
+
+Before treating a new DAC breakout/wiring assembly as working, validate the I2S
+waveform with a standalone test (e.g. a tone loop that drives BCK/LRCK/SDOUT
+without the full BAP stack). An old CJMCU-1334-compatible breakout tested with
+this project **held LRCK high when unmuted** and is not suitable — the breakout
+or wiring assembly was incompatible or defective.
+
+**MUTE high mutes the analog output** (inverted logic — LOW = unmuted). Raising
+MUTE is a silence/diagnostic control, not a fix for an I2S-line anomaly.
+
+Use whichever DAC you prefer. Pinout below is identical for both — 3 wires, no
+MCK.
 
 ---
 
