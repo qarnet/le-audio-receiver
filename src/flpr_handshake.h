@@ -4,7 +4,7 @@
  *
  * CPUAPP ↔ FLPR handshake protocol.
  * VPR launcher boots FLPR; this module receives READY, sends ACK,
- * and maintains heartbeat counters. Graceful if FLPR absent.
+ * maintains bidirectional heartbeat counters. Graceful if FLPR absent.
  */
 
 #ifndef FLPR_HANDSHAKE_H_
@@ -17,32 +17,28 @@
 extern "C" {
 #endif
 
-/* Protocol version — must match src/flpr/main.c FLPR_PROTOCOL_VERSION. */
-#define FLPR_PROTOCOL_VERSION 1U
+/* Re-export protocol version from shared header. */
+#include "flpr_protocol.h"
 
-/* Message types. */
-#define FLPR_MSG_READY     0x01U
-#define FLPR_MSG_ACK       0x02U
-#define FLPR_MSG_HEARTBEAT 0x03U
-
-/* Fixed-size message — keep in sync with src/flpr/main.c. */
-struct flpr_msg {
-	uint8_t type;    /* FLPR_MSG_* */
-	uint8_t version; /* protocol version */
-	uint16_t seq;    /* sequence number (wrapping) */
-	uint32_t data;   /* heartbeat counter (uptime ms) */
-};
-
-/* Handshake status exposed for shell diagnostics.
- * All counters are safe to read from any context (atomic).
- */
+/* Handshake + heartbeat status exposed for shell diagnostics.
+ * All counters are race-safe (spinlock-protected snapshot). */
 struct flpr_status {
-	bool ready;            /* FLPR sent READY? */
-	bool acked;            /* CPUAPP sent ACK? */
-	uint32_t rx_heartbeat; /* last FLPR heartbeat counter */
-	uint32_t tx_heartbeat; /* last CPUAPP heartbeat counter */
-	uint32_t ready_count;  /* total READY messages received (epochs) */
-	uint32_t error_count;  /* version mismatch / IPC errors */
+	bool ready;           /* FLPR sent READY? */
+	bool acked;           /* CPUAPP sent ACK? */
+	bool healthy;         /* heartbeat not missed too many */
+	uint32_t ready_count; /* total READY received (reset epochs) */
+	uint32_t epoch;       /* last FLPR boot nonce (epoch) */
+	uint32_t error_count; /* version mismatch / short msg / IPC err */
+
+	/* Heartbeat: CPUAPP → FLPR */
+	uint32_t tx_seq;  /* last seq we sent */
+	uint32_t tx_lost; /* cumulative ACK gaps (FLPR didn't echo) */
+
+	/* Heartbeat: FLPR → CPUAPP */
+	uint32_t rx_seq;     /* last seq received from FLPR */
+	uint32_t rx_lost;    /* cumulative gaps */
+	uint32_t rx_last_ms; /* last rx uptime (for staleness) */
+	uint32_t rx_missed;  /* consecutive missed (resets on rx) */
 };
 
 /**
@@ -50,24 +46,23 @@ struct flpr_status {
  *
  * Must be called after the VPR launcher has released the FLPR from reset.
  * Opens IPC instance, registers endpoint, sends ACK on READY.
- * Gracefully tolerates absent/mismatched FLPR.
+ * Gracefully tolerates absent/mismatched FLPR (one error logged, non-fatal).
  *
- * @return 0 on success (IPC endpoint registered).
+ * @return 0 on success (IPC endpoint registered), negative errno on failure.
  */
 int flpr_handshake_init(void);
 
 /**
- * @brief Get current handshake status (snapshot of atomic counters).
- *
- * @param status  Output structure to fill.
+ * @brief Get current handshake status (race-safe snapshot).
  */
 void flpr_handshake_get_status(struct flpr_status *status);
 
 /**
  * @brief Periodic heartbeat sender — call from application idle loop.
  *
- * Sends heartbeat to FLPR every ~1 s if handshake is established.
- * Returns immediately if no IPC bound yet.
+ * Sends heartbeat to FLPR at ~1 Hz if handshake is established.
+ * Tracks tx sequence, rx echo gaps, and missed-heartbeat health.
+ * Never blocks: returns immediately if IPC not bound or send buffer full.
  */
 void flpr_handshake_heartbeat(void);
 

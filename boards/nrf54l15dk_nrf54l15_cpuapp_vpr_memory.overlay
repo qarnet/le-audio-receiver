@@ -1,0 +1,28 @@
+/*
+ * Copyright (c) 2025
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Override nordic-flpr snippet memory layout for nRF54L15.
+ * Applied AFTER the snippet via sysbuild add_overlay_dts.
+ *
+ * Physical SRAM (256 KB at 0x20000000):
+ *   0x20000000..0x20028000  cpuapp SRAM          (160 KB)
+ *   0x20028000..0x20030000  shared IPC/ICMsg     ( 32 KB)
+ *   0x20030000..0x20040000  FLPR execution SRAM  ( 64 KB)
+ *
+ * The nordic-flpr snippet defines cpuflpr_sram_code_data at 0x20028000
+ * with 96 KB. We /delete-property/ its reg and redefine, moving the node
+ * contents to 0x20030000 with 64 KB so the shared IPC region is clear.
+ */
+
+&cpuflpr_sram_code_data {
+	/delete-property/ reg;
+	reg = <0x20030000 DT_SIZE_K(64)>;
+	ranges = <0x0 0x20030000 0x10000>;
+};
+
+/* Ensure cpuapp_sram stays at 160 KB (ending before shared IPC). */
+&cpuapp_sram {
+	reg = <0x20000000 DT_SIZE_K(160)>;
+	ranges = <0x0 0x20000000 0x28000>;
+};

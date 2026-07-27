@@ -46,5 +46,15 @@ if(SB_CONFIG_BOARD_NRF54L15DK_NRF54L15_CPUAPP OR
   # nordic-flpr snippet: enables &cpuflpr_vpr on cpuapp, which triggers
   # the VPR launcher driver to copy the FLPR image from source memory
   # (cpuflpr_rram) to execution memory (cpuflpr_sram) and release from reset.
+  # The snippet's default cpuflpr_sram at 0x20028000 conflicts with our
+  # shared IPC region; the overlay below overrides to 0x20030000.
   sysbuild_cache_set(VAR ${DEFAULT_IMAGE}_SNIPPET APPEND REMOVE_DUPLICATES nordic-flpr)
+
+  # Override snippet's memory layout: FLPR execution SRAM at 0x20030000 (64 KB),
+  # keeping cpuapp SRAM at 0x20000000..0x20028000 (160 KB) and shared IPC at
+  # 0x20028000..0x20030000 (32 KB).
+  add_overlay_dts(
+    ${DEFAULT_IMAGE}
+    ${APP_DIR}/boards/nrf54l15dk_nrf54l15_cpuapp_vpr_memory.overlay
+  )
 endif()

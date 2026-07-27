@@ -113,7 +113,8 @@
 
 /*
  * FLPR IPC: ICMsg over VEVIF for cpuapp↔FLPR handshake.
- * Shared memory regions at 0x20018000 (8 KB rx) / 0x20020000 (8 KB tx).
+ * Shared memory at 0x20028000..0x20030000 (32 KB between cpuapp and FLPR SRAM).
+ * rx = 8 KB at 0x20028000, tx = 8 KB at 0x2002A000.
  * Must stay in sync with src/flpr/boards/*.overlay (swapped perspective).
  */
 / {
@@ -122,12 +123,12 @@
 			#address-cells = <1>;
 			#size-cells = <1>;
 
-			sram_rx: memory@20018000 {
-				reg = <0x20018000 0x2000>;
+			sram_rx: memory@20028000 {
+				reg = <0x20028000 0x2000>;
 			};
 
-			sram_tx: memory@20020000 {
-				reg = <0x20020000 0x2000>;
+			sram_tx: memory@2002A000 {
+				reg = <0x2002A000 0x2000>;
 			};
 		};
 	};

@@ -34,28 +34,25 @@ CPUAPP_HEX="$BUILD_DIR/le-audio-receiver/zephyr/zephyr.hex"
 FLPR_HEX="$BUILD_DIR/flpr/zephyr/zephyr.hex"
 OPENOCD_CFG="$ZEPHYR_BASE/boards/seeed/xiao_nrf54l15/support/openocd.cfg"
 
-# Pick image(s): merged.hex if present (partition-manager build),
-# otherwise load cpuapp + flpr separately.
-HEX_ARGS=()
-if [ -f "$MERGED_HEX" ]; then
-  printf 'Using merged.hex (partition-manager build)\n'
-  HEX_ARGS=(-c "nrf54l-load $MERGED_HEX" -c "verify_image $MERGED_HEX")
-elif [ -f "$CPUAPP_HEX" ] && [ -f "$FLPR_HEX" ]; then
-  printf 'Loading cpuapp + flpr hex images\n'
-  HEX_ARGS=(
-    -c "nrf54l-load $CPUAPP_HEX"
-    -c "verify_image $CPUAPP_HEX"
-    -c "nrf54l-load $FLPR_HEX"
-    -c "verify_image $FLPR_HEX"
-  )
-elif [ -f "$CPUAPP_HEX" ]; then
-  printf 'Warning: no FLPR image found, loading cpuapp only\n'
-  HEX_ARGS=(-c "nrf54l-load $CPUAPP_HEX" -c "verify_image $CPUAPP_HEX")
-else
-  printf 'No build artifacts found at %s\n' "$BUILD_DIR" >&2
+# Stage 0 requires both cpuapp and flpr images. Fail if either missing.
+# merged.hex is from partition-manager builds (deprecated path); prefer
+# the sysbuild multi-image layout. Load each HEX at its encoded address.
+MISSING=""
+[ -f "$CPUAPP_HEX" ] || MISSING="$MISSING cpuapp ($CPUAPP_HEX)"
+[ -f "$FLPR_HEX"   ] || MISSING="$MISSING flpr ($FLPR_HEX)"
+if [ -n "$MISSING" ]; then
+  printf 'Missing build artifacts:%s\n' "$MISSING" >&2
   printf 'Build first: fw-build-54l15\n' >&2
   exit 1
 fi
+
+HEX_ARGS=(
+  -c "nrf54l-load $CPUAPP_HEX"
+  -c "verify_image $CPUAPP_HEX"
+  -c "nrf54l-load $FLPR_HEX"
+  -c "verify_image $FLPR_HEX"
+)
+printf 'Loading cpuapp + flpr hex images\n'
 
 SERIAL="$(nrf-probes --find nrf54l)"
 printf 'Probe %s (auto-detected: target identifies as nRF54L15)\n' "$SERIAL"
