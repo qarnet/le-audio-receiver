@@ -43,6 +43,7 @@ struct perf_state {
 	bool slab_first; /* first sample initialises min/max */
 	uint32_t push_failures;
 	uint32_t repeat_fallback_count;
+	uint32_t asrc_capacity_failures;
 	uint32_t output_frames_min;
 	uint32_t output_frames_max;
 	uint32_t output_blocks;
@@ -153,6 +154,15 @@ void audio_perf_repeat_fallback(void)
 	k_spin_unlock(&perf.lock, key);
 }
 
+void audio_perf_asrc_capacity_failure(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&perf.lock);
+
+	perf.asrc_capacity_failures++;
+
+	k_spin_unlock(&perf.lock, key);
+}
+
 void audio_perf_snapshot(struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS],
 			 struct audio_perf_queue_snapshot *queue)
 {
@@ -170,6 +180,7 @@ void audio_perf_snapshot(struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PA
 		queue->slab_max_free = perf.slab_max_free;
 		queue->push_failures = perf.push_failures;
 		queue->repeat_fallback_count = perf.repeat_fallback_count;
+		queue->asrc_capacity_failures = perf.asrc_capacity_failures;
 		queue->output_frames_min = perf.output_frames_min;
 		queue->output_frames_max = perf.output_frames_max;
 		queue->output_blocks = perf.output_blocks;
@@ -194,6 +205,7 @@ void audio_perf_reset(void)
 	perf.slab_first = true;
 	perf.push_failures = 0;
 	perf.repeat_fallback_count = 0;
+	perf.asrc_capacity_failures = 0;
 	perf.output_frames_min = 0;
 	perf.output_frames_max = 0;
 	perf.output_blocks = 0;

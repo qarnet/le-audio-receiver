@@ -26,6 +26,38 @@ config AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ
 	  decoder output to drain rate. The I2S config frame_clk_freq
 	  stays at 48000 (the nominal requested rate).
 
+choice AUDIO_RESAMPLER
+	prompt "Audio resampler"
+	default AUDIO_RESAMPLER_IDENTITY
+	help
+	  Selects the data-path resampler between decoder output and I2S.
+	  Independent of the physical clock actuator (AUDIO_CLOCK_ACTUATOR).
+	  The resampler handles rate mismatch (48k decoder → 47 619 Hz I2S
+	  drain) and/or the drift-controller ppm correction, depending on
+	  which module is selected.
+
+config AUDIO_RESAMPLER_IDENTITY
+	bool "Identity (passthrough)"
+	help
+	  Passes samples through unchanged.  Use on nRF5340 where the APLL
+	  handles drift at the clock and the decoder rate matches I2S.
+
+config AUDIO_RESAMPLER_ASRC_LINEAR
+	bool "Linear ASRC"
+	help
+	  Stateful cross-block fixed-point linear-interpolation stereo ASRC.
+	  Consumes the drift-controller ppm as source_step correction.
+	  Replaces both the fixed-rate converter and discrete sample-insert/
+	  drop.  Production path for nRF54L15 after Phase 5 acceptance.
+
+config AUDIO_RESAMPLER_SAMPLE_ADJUST
+	bool "Sample insert/drop (legacy)"
+	help
+	  Legacy nearest-neighbour rate converter + discrete sample insert/
+	  drop via SAMPLE_ADJUST actuator.  Retained during Phase 5 for A/B
+	  comparison against ASRC_LINEAR.  Removed after ASRC acceptance.
+endchoice
+
 choice AUDIO_CLOCK_ACTUATOR
 	prompt "Audio clock actuator"
 	default AUDIO_CLOCK_ACTUATOR_APLL

@@ -20,7 +20,7 @@
 #include <stddef.h>
 
 /* Number of measured code paths */
-#define AUDIO_PERF_NUM_PATHS 4
+#define AUDIO_PERF_NUM_PATHS 5
 
 /** Code paths tracked independently. */
 enum audio_perf_path {
@@ -28,6 +28,7 @@ enum audio_perf_path {
 	AUDIO_PERF_PATH_LC3_DECODE,   /* lc3_decode calls */
 	AUDIO_PERF_PATH_VOLUME,       /* audio_volume_apply */
 	AUDIO_PERF_PATH_SINK_PUSH,    /* audio_sink_push (entire) */
+	AUDIO_PERF_PATH_ASRC,         /* audio_asrc_process call */
 };
 
 /** Per-path cycle accumulator snapshot. */
@@ -40,13 +41,14 @@ struct audio_perf_path_snapshot {
 
 /** Queue / data-path metrics snapshot. */
 struct audio_perf_queue_snapshot {
-	uint32_t slab_min_free;         /* minimum free slab blocks observed */
-	uint32_t slab_max_free;         /* maximum free slab blocks observed */
-	uint32_t push_failures;         /* audio_sink_push returned <0 */
-	uint32_t repeat_fallback_count; /* packet-repeat events */
-	uint32_t output_frames_min;     /* minimum output_frames per push */
-	uint32_t output_frames_max;     /* maximum output_frames per push */
-	uint32_t output_blocks;         /* number of pushes observed */
+	uint32_t slab_min_free;          /* minimum free slab blocks observed */
+	uint32_t slab_max_free;          /* maximum free slab blocks observed */
+	uint32_t push_failures;          /* audio_sink_push returned <0 */
+	uint32_t repeat_fallback_count;  /* packet-repeat events */
+	uint32_t output_frames_min;      /* minimum output_frames per push */
+	uint32_t output_frames_max;      /* maximum output_frames per push */
+	uint32_t output_blocks;          /* number of pushes observed */
+	uint32_t asrc_capacity_failures; /* ASRC output capacity exceeded */
 };
 
 #if defined(CONFIG_AUDIO_PERF_MEASUREMENT)
@@ -58,6 +60,7 @@ void audio_perf_cycle_end(uint32_t start, enum audio_perf_path path);
 void audio_perf_queue_sample(int slab_free, size_t output_frames);
 void audio_perf_push_failure(void);
 void audio_perf_repeat_fallback(void);
+void audio_perf_asrc_capacity_failure(void);
 void audio_perf_snapshot(struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS],
 			 struct audio_perf_queue_snapshot *queue);
 void audio_perf_reset(void);
@@ -95,6 +98,9 @@ static inline void audio_perf_push_failure(void)
 static inline void audio_perf_repeat_fallback(void)
 {
 }
+static inline void audio_perf_asrc_capacity_failure(void)
+{
+}
 static inline void audio_perf_snapshot(struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS],
 				       struct audio_perf_queue_snapshot *queue)
 {
@@ -112,6 +118,7 @@ static inline void audio_perf_snapshot(struct audio_perf_path_snapshot paths[AUD
 		queue->output_frames_min = 0;
 		queue->output_frames_max = 0;
 		queue->output_blocks = 0;
+		queue->asrc_capacity_failures = 0;
 	}
 }
 static inline void audio_perf_reset(void)

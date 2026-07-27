@@ -13,11 +13,20 @@
 #include <zephyr/kernel.h>
 #include <zephyr/shell/shell.h>
 
+#if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
+#define RESAMPLER_NAME "ASRC linear"
+#elif defined(CONFIG_AUDIO_RESAMPLER_SAMPLE_ADJUST)
+#define RESAMPLER_NAME "sample adjust"
+#elif defined(CONFIG_AUDIO_RESAMPLER_IDENTITY)
+#define RESAMPLER_NAME "identity"
+#else
+#define RESAMPLER_NAME "none"
+#endif
+
 static const char *perf_path_names[AUDIO_PERF_NUM_PATHS] = {
-	[AUDIO_PERF_PATH_ISO_RECV] = "iso_recv",
-	[AUDIO_PERF_PATH_LC3_DECODE] = "lc3_decode",
-	[AUDIO_PERF_PATH_VOLUME] = "volume",
-	[AUDIO_PERF_PATH_SINK_PUSH] = "sink_push",
+	[AUDIO_PERF_PATH_ISO_RECV] = "iso_recv", [AUDIO_PERF_PATH_LC3_DECODE] = "lc3_decode",
+	[AUDIO_PERF_PATH_VOLUME] = "volume",     [AUDIO_PERF_PATH_SINK_PUSH] = "sink_push",
+	[AUDIO_PERF_PATH_ASRC] = "asrc",
 };
 
 static int cmd_status(const struct shell *sh, size_t argc, char **argv)
@@ -34,6 +43,7 @@ static int cmd_status(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "  Stream resets  : %u", s.stream_resets);
 	shell_print(sh, "  Drift state    : %s", audio_drift_state_str());
 	shell_print(sh, "  Drift ppm      : %" PRId32, audio_drift_get_ppm());
+	shell_print(sh, "  Resampler      : %s", RESAMPLER_NAME);
 	shell_print(sh, "  Volume         : %u / 255%s", audio_volume_get(),
 		    audio_volume_is_muted() ? " (muted)" : "");
 
@@ -98,6 +108,7 @@ static int cmd_perf(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "    Output blocks : %u", queue.output_blocks);
 	shell_print(sh, "    Push failures : %u", queue.push_failures);
 	shell_print(sh, "    Repeat fb     : %u", queue.repeat_fallback_count);
+	shell_print(sh, "    ASRC cap fail : %u", queue.asrc_capacity_failures);
 
 	return 0;
 }
