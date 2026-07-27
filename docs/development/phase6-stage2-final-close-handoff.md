@@ -33,6 +33,12 @@
   starves agent dispatch and causes kernel `User Confirmation Negative Reply`.
 - Add peer address type argument to raw helper. Own address remains public;
   receiver peer type is random. Do not conflate own and peer address types.
+- For normal discovery path, remove raw-HCI pre-connect. With compiled public
+  dongle address, scanning works. Invoke asynchronous `Device.Pair()` while
+  Device1 is disconnected; BlueZ must issue MGMT Pair Device before LE
+  Connection Complete, establishing `device->bonding` before SMP. BlueZ then
+  auto-accepts Just Works `confirm_hint=1` without an Agent1 callback. Only use
+  raw ACL path for explicit `--peer-addr` fallback.
 - Build both targets and inspect nRF54 resolved config:
   `CONFIG_BT_SMP_SC_PAIR_ONLY=y`, `CONFIG_BT_SMP_ENFORCE_MITM` unset/n.
 
@@ -43,7 +49,8 @@
 3. Clear receiver bonds using `bt unpair`; clear BlueZ device using
    `bluetoothctl remove <actual receiver address>`; power-cycle adapter and set
    IO capability/SC.
-4. Run Mode A for at least 90 s using normal scan path first. If scanning is
+4. Run Mode A for at least 90 s using normal scan path first. Verify btmon shows
+   MGMT Pair Device before LE Connection Complete. If scanning is
    externally unavailable, use `--peer-addr` with public own-address helper.
 5. After offload ACTIVE and >=100 successes, send stall-on, verify shell ACK,
    wait 250 ms, send stall-off, verify shell ACK.

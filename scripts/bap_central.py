@@ -999,54 +999,78 @@ def main():
             print("[main] Could not read device state after Pair")
 
     else:
-        # No --peer-addr: use raw HCI direct connect.
-        if not already_connected:
-            addr = dev_path.split("_", 1)[1].replace("_", ":")
-            print("[main] Bringing ACL link up via raw HCI (direct connect)...")
-            hold_secs = args.duration + 120
-            raw_connect_proc = subprocess.Popen(
-                [
-                    "sudo",
-                    "-n",
-                    "python3",
-                    RAW_CONNECT_HELPER,
-                    addr,
-                    str(hold_secs),
-                    "--addr-type",
-                    "public",
-                    "--peer-addr-type",
-                    "random",
-                    "--device",
-                    str(hci_dev),
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            # Wait for the Device1 Connected property (up to 10 s).
-            dev_props0 = _dbus.Interface(
-                bus.get_object("org.bluez", dev_path),
-                "org.freedesktop.DBus.Properties",
-            )
-            conn_deadline = time.monotonic() + 10
-            connected = False
-            while time.monotonic() < conn_deadline:
-                try:
-                    if bool(dev_props0.Get("org.bluez.Device1", "Connected")):
-                        connected = True
-                        break
-                except _dbus.exceptions.DBusException:
-                    pass
-                _GLib.MainContext.default().iteration(False)
-                time.sleep(0.1)
-            if not connected:
-                print("[error] Raw HCI connect failed (link not up in 10 s)")
-                raw_connect_proc.terminate()
-                sys.exit(1)
-            print("[main] ACL link up")
+        # Normal discovery path: no raw-HCI preconnect.
+        # BlueZ owns the ACL and bonding transaction. Invoke async
+        # Device.Pair() while disconnected so BlueZ issues MGMT Pair
+        # Device before LE Connection Complete, establishing
+        # device->bonding before SMP. BlueZ auto-accepts Just Works
+        # confirm_hint=1 without an Agent1 callback.
+        #
+        # Only the explicit --peer-addr fallback uses raw HCI.
+        #
+        # Important: do NOT call RemoveDevice here — the Device1 object
+        # must exist (just discovered via scan) for Pair() to work.
 
-        # ── 7. Trust + wait for services (normal path) ──────────────────
-        dev_props.Set("org.bluez.Device1", "Trusted", _dbus.Boolean(True))
-        print("[main] Trusted, waiting for GATT service resolution...")
+        # 5a. Set Pairable on the adapter so bonding proceeds.
+        try:
+            adapter_props.Set("org.bluez.Adapter1", "Pairable", _dbus.Boolean(True))
+            pairable = bool(adapter_props.Get("org.bluez.Adapter1", "Pairable"))
+            print("[main] Adapter Pairable={}".format(pairable))
+        except _dbus.exceptions.DBusException as e:
+            print("[main] Pairable set error: {}".format(e))
+
+        # 5b. Trust the device.
+        try:
+            dev_props.Set("org.bluez.Device1", "Trusted", _dbus.Boolean(True))
+            print("[main] Trusted, async pairing (disconnected → BlueZ ACL)...")
+        except _dbus.exceptions.DBusException as e:
+            print("[main] Trust set error: {}".format(e))
+
+        # 5c. Async Pair() while disconnected — BlueZ creates ACL, runs
+        # SMP, and auto-accepts Just Works without Agent1 callback.
+        pair_result = [None]
+        pair_error = [None]
+        pair_done = [False]
+
+        def _on_pair_ok_norm():
+            pair_result[0] = True
+            pair_done[0] = True
+            print("[main] Pair() async reply: OK")
+
+        def _on_pair_err_norm(error):
+            pair_error[0] = error
+            pair_done[0] = True
+            print("[main] Pair() async error: {}".format(error))
+
+        device.Pair(
+            reply_handler=_on_pair_ok_norm,
+            error_handler=_on_pair_err_norm,
+            timeout=30000,
+        )
+        # Iterate GLib: Agent1 dispatch happens here during Pair().
+        pair_deadline = time.monotonic() + 35
+        while not pair_done[0] and time.monotonic() < pair_deadline:
+            _GLib.MainContext.default().iteration(False)
+            time.sleep(0.05)
+
+        if pair_error[0] is not None:
+            print("[main] Pair() async completed with error: {}".format(pair_error[0]))
+        elif pair_result[0]:
+            print("[main] Pair() async completed OK")
+        else:
+            print("[main] Pair() async timed out (35 s)")
+
+        # 5d. Check resulting state.
+        try:
+            paired = bool(dev_props.Get("org.bluez.Device1", "Paired"))
+            connected2 = bool(dev_props.Get("org.bluez.Device1", "Connected"))
+            print(
+                "[main] After Pair: Paired={}, Connected={}".format(paired, connected2)
+            )
+        except _dbus.exceptions.DBusException:
+            print("[main] Could not read device state after Pair")
+
+        print("[main] Waiting for GATT service resolution...")
 
     sr_deadline = time.monotonic() + 30
     services_resolved = False
