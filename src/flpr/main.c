@@ -45,6 +45,11 @@ BUILD_ASSERT(FLPR_RING_TOTAL_SIZE == 8192U, "ring size must be 8 KiB");
 static struct ipc_ept ipc_ep;
 static K_SEM_DEFINE(bound_sem, 0, 1);
 
+/* Wake semaphore: IPC callback gives it, main loop takes it.
+ * This eliminates the race between the callback's ring_process_input()
+ * and the main loop's.  Timeout provides the polling fallback. */
+static K_SEM_DEFINE(ring_wake_sem, 0, K_SEM_MAX_LIMIT);
+
 /* Tracks remote peer (CPUAPP). Single-threaded on FLPR, no lock. */
 static struct flpr_peer cpuapp;
 
@@ -410,12 +415,11 @@ static void ep_received(const void *data, size_t len, void *priv)
 	}
 
 	case FLPR_MSG_RING_PRODUCER:
-		/* CPUAPP published input data — consume it. */
+		/* CPUAPP published input data — signal main loop to consume.
+		 * Do NOT call ring_process_input() here (the IPC callback may
+		 * race with the main loop).  The semaphore wake is immediate. */
 		diag_notify_rcv++;
-		{
-			uint32_t consumed = ring_process_input();
-			ring_notify_cpuapp(consumed);
-		}
+		k_sem_give(&ring_wake_sem);
 		break;
 
 	case FLPR_MSG_RING_STALL: {
@@ -520,7 +524,9 @@ int main(void)
 		k_msleep(10);
 	}
 
-	/* 1 Hz heartbeat with ring polling. */
+	/* 1 Hz heartbeat with ring-polling that is now event-driven.
+	 * The IPC callback gives ring_wake_sem on RING_PRODUCER.
+	 * Main loop takes it (with 10 ms timeout for polling fallback). */
 	uint32_t last_hb_ms = k_uptime_get_32();
 
 	while (1) {
@@ -546,17 +552,15 @@ int main(void)
 			last_hb_ms = now_ms;
 		}
 
-		/* Poll input ring.  If IPC notification arrives between polls,
-		 * the callback handles it immediately.  This polling path also
-		 * sends RING_CONSUMER so CPUAPP never gets stuck if an IPC
-		 * notification is dropped. */
-		{
-			uint32_t consumed = ring_process_input();
-			ring_notify_cpuapp(consumed);
-		}
+		/* Wait for ring event (immediate via IPC callback) or
+		 * timeout (10 ms polling fallback). */
+		k_sem_take(&ring_wake_sem, K_MSEC(10));
 
-		/* Yield CPU — IPC callbacks wake us. */
-		k_msleep(10);
+		/* Process ALL pending input ring slots.
+		 * This is the ONLY place ring_process_input() runs —
+		 * the IPC callback only signals, never processes. */
+		uint32_t consumed = ring_process_input();
+		ring_notify_cpuapp(consumed);
 	}
 
 	return 0;

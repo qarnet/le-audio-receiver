@@ -628,7 +628,12 @@ static uint8_t test_recv_buf[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
 
 int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flpr_ring_status *out)
 {
-	int ret;
+	return flpr_ring_mgr_test_run_rate(block_count, timeout_ms, 0, out);
+}
+
+int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint32_t rate_per_sec,
+				struct flpr_ring_status *out)
+{
 	uint32_t sent = 0;
 	uint32_t start = k_uptime_get_32();
 	uint32_t last_seq = 0;
@@ -695,16 +700,21 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 
 	LOG_INF("Ring test: sending %u blocks...", block_count);
 
-	/* Drain-driven loop with independent payload generation.
+	/* Event-driven batch send loop:
 	 *
-	 * For each block:
-	 *   1. Generate deterministic payload from sequence
-	 *   2. Produce into input ring
-	 *   3. Notify FLPR AFTER slot publish (never before)
-	 *   4. Drain output, verify payload independently from sequence
+	 * Batch up to ring capacity, notify FLPR once per batch,
+	 * then wait for consume_sem (or 10 ms timeout) before draining
+	 * and producing the next batch.
 	 *
-	 * Notification sent after slot publish — no duplicate same seq.
-	 * On FULL: drain output + wait semaphore, retry (never skip). */
+	 * This avoids busy-polling drains and lets IPC notifications
+	 * drive the pipeline.  The FLPR polling fallback (10 ms) provides
+	 * a worst-case deadline — notifications are immediate via the IPC
+	 * callback. */
+#define BATCH_MAX 4
+	/* Rate limiting: track sent count and period start. */
+	uint32_t rate_period_start = start;
+	uint32_t rate_period_sent = 0;
+
 	while (sent < block_count) {
 		uint32_t elapsed = k_uptime_get_32() - start;
 		if (elapsed > timeout_ms) {
@@ -714,112 +724,111 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 			break;
 		}
 
-		/* Aggressively drain output ring — keep FLPR slot-space free. */
+		/* Drain any available output first. */
 		{
-			enum flpr_consume_result cr;
+			uint16_t vf;
 			uint32_t seq_out;
 			uint32_t latency;
-			while ((int)cr != FLPR_CONSUME_EMPTY) {
-				cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, &seq_out,
-								 NULL, &latency);
+			while (flpr_ring_mgr_consume_block(test_recv_buf, &vf, &seq_out, NULL,
+							   &latency) == FLPR_CONSUME_OK) {
 			}
 		}
 
-		/* Generate deterministic payload from sequence. */
-		flpr_ring_gen_payload(test_pattern, sizeof(test_pattern), sent);
+		/* Produce up to BATCH_MAX blocks in one go. */
+		uint32_t batch_sent = 0;
+		for (uint32_t b = 0; b < BATCH_MAX && sent < block_count; b++) {
+			flpr_ring_gen_payload(test_pattern, sizeof(test_pattern), sent);
 
-		/* Produce block. */
-		enum flpr_produce_result pr = flpr_ring_mgr_produce_block(
-			test_pattern, FLPR_RING_PAYLOAD_MAX_INPUT, sent, 0, true);
-		if (pr == FLPR_PRODUCE_FULL) {
-			/* Check if stall_producer is active (backpressure counting). */
-			{
-				enum flpr_consume_result cr;
-				uint32_t seq_out;
-				uint32_t latency;
-				while ((int)cr != FLPR_CONSUME_EMPTY) {
-					cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL,
-									 &seq_out, NULL, &latency);
-				}
+			enum flpr_produce_result pr = flpr_ring_mgr_produce_block(
+				test_pattern, FLPR_RING_PAYLOAD_MAX_INPUT, sent, 0, true);
+			if (pr == FLPR_PRODUCE_FULL) {
+				break; /* ring full — drain + retry next iteration */
 			}
-			ret = k_sem_take(&consume_sem, K_MSEC(10));
-			{
+			if (pr != FLPR_PRODUCE_OK) {
+				any_error = true;
+				break;
+			}
+
+			if (sent > 0 && sent != last_seq + 1) {
 				k_spinlock_key_t key = k_spin_lock(&ring_lock);
-				diag_sem_takes++;
+				test_seq_gaps++;
 				k_spin_unlock(&ring_lock, key);
 			}
-			(void)ret;
-			continue;
-		}
+			last_seq = sent;
+			sent++;
+			batch_sent++;
+			rate_period_sent++;
 
-		/* Notify FLPR AFTER slot publish (stale-rejection protocol). */
-		if (flpr_ring_mgr_notify_producer() < 0) {
-			/* Send failed — throttle and retry (never skip block). */
-			k_msleep(1);
-			continue;
-		}
-
-		/* Track sequence gaps. */
-		if (sent > 0 && sent != last_seq + 1) {
-			k_spinlock_key_t key = k_spin_lock(&ring_lock);
-			test_seq_gaps++;
-			k_spin_unlock(&ring_lock, key);
-		}
-		last_seq = sent;
-		sent++;
-
-		{
 			k_spinlock_key_t key = k_spin_lock(&ring_lock);
 			test_blocks_sent = sent;
 			k_spin_unlock(&ring_lock, key);
 		}
 
-		/* Quick drain again. */
-		{
-			enum flpr_consume_result cr;
-			uint32_t seq_out;
-			uint32_t latency;
-			while ((int)cr != FLPR_CONSUME_EMPTY) {
-				cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, &seq_out,
-								 NULL, &latency);
+		if (batch_sent > 0) {
+			/* Notify FLPR once per batch. */
+			if (flpr_ring_mgr_notify_producer() < 0) {
+				k_msleep(1);
+				continue;
+			}
+		}
+
+		/* Wait for FLPR to process (notification or poll fallback).
+		 * Short timeout avoids busy-wait — the IPC callback gives
+		 * consume_sem when output data is available. */
+		if (sent < block_count) {
+			k_sem_take(&consume_sem, K_MSEC(10));
+		}
+
+		/* Rate limiting: ensure we don't exceed rate_per_sec blk/s.
+		 * Accumulate blocks, then sleep if period completes too fast. */
+		if (rate_per_sec > 0) {
+			uint32_t now = k_uptime_get_32();
+			uint32_t period_elapsed = now - rate_period_start;
+
+			if (period_elapsed >= 1000) {
+				uint32_t target_elapsed = rate_period_sent * 1000U / rate_per_sec;
+				if (period_elapsed < target_elapsed) {
+					uint32_t sleep_ms = target_elapsed - period_elapsed;
+					if (sleep_ms > 0 && sleep_ms < 2000) {
+						k_msleep(sleep_ms);
+					}
+				}
+				/* Reset period. */
+				rate_period_start = k_uptime_get_32();
+				rate_period_sent = 0;
 			}
 		}
 	}
+#undef BATCH_MAX
 
 	/* Final drain: wait until recv == sent or global timeout. */
 	{
 		uint32_t drain_start = k_uptime_get_32();
 		uint32_t remaining = timeout_ms - (drain_start - start);
 		if (remaining > timeout_ms) {
-			remaining = 100; /* guard */
+			remaining = 100;
 		}
 
 		while ((k_uptime_get_32() - drain_start) < remaining) {
-			enum flpr_consume_result cr;
+			uint16_t vf;
 			uint32_t seq_out;
 			uint32_t latency;
 			bool drained = false;
-			while ((int)cr != FLPR_CONSUME_EMPTY) {
-				cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, &seq_out,
-								 NULL, &latency);
-				if ((int)cr != FLPR_CONSUME_EMPTY) {
-					drained = true;
-				}
+
+			while (flpr_ring_mgr_consume_block(test_recv_buf, &vf, &seq_out, NULL,
+							   &latency) == FLPR_CONSUME_OK) {
+				drained = true;
 			}
 
-			{
-				k_spinlock_key_t key = k_spin_lock(&ring_lock);
-				uint32_t recv_now = test_blocks_recv;
-				k_spin_unlock(&ring_lock, key);
+			k_spinlock_key_t key = k_spin_lock(&ring_lock);
+			uint32_t recv_now = test_blocks_recv;
+			k_spin_unlock(&ring_lock, key);
 
-				if (recv_now >= sent) {
-					/* All blocks received. */
-					break;
-				}
+			if (recv_now >= sent) {
+				break;
 			}
 
 			if (!drained) {
-				/* Wait briefly for FLPR final output. */
 				k_sem_take(&consume_sem, K_MSEC(50));
 			}
 		}
@@ -893,4 +902,9 @@ int flpr_ring_mgr_produce_stale_test(uint32_t stale_epoch)
 
 	flpr_ring_produce_commit(RING_OUTPUT_BASE, idx);
 	return 0;
+}
+
+int flpr_ring_mgr_wait_consume(uint32_t timeout_ms)
+{
+	return k_sem_take(&consume_sem, K_MSEC(timeout_ms));
 }

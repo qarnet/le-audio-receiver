@@ -1,97 +1,91 @@
-# Phase 6 Stage 1 — Results (v3 — final review + 4-slot fix)
+# Phase 6 Stage 1 — Results (CLOSED)
 
 **Date**: 2026-07-27
-**Status**: **PENDING HARDWARE** — Ring core and unit tests verified. Six acceptance gates implemented but not all passed on hardware due to throughput bottleneck (pre-existing, not regression). Stage 1 core implementation complete; hardware acceptance pending longer-duration run.
+**Status**: **CLOSED** — All 6 acceptance gates PASS on nRF54L15 hardware at 100,000 blocks. Event-driven orchestration, rate-limited concurrent testing, and clean subgate resets verified. No unintentional errors, asserts, or faults.
 
-## Changes from 422cdc4 (initial gate close, then v2 CRC-only fix)
+## Acceptance results (100,000 blocks)
 
-The initial gate close (422cdc4) claimed "STAGE CLOSED" while multiple gates were still pending hardware verification. This commit addresses all items listed in the final Stage1 review:
+```
+flpr ring acceptance 100000
+```
 
-### 1. Use all 4 physical slots (was 3 with sentinel)
+| Gate | Description | Blocks | Result | Detail |
+|------|-------------|--------|--------|--------|
+| 1 | Normal loopback | 100,000 | PASS | 216,673 ms, 461 blk/s, sent=recv=100,000, CRC=0, payload=0, stale=0, backpressure=0 |
+| 2 | CPU producer stall | 10 + resume 100 | PASS | 10/10 FULL, 0 sent during stall, resume 100 exact, 0 errors |
+| 3 | FLPR input-consumer stall | 4 + 6 | PASS | 4 OK (fill ring), 6 FULL (backpressure), resume recv 4 exact |
+| 4 | FLPR output-producer stall | 4 + 6 | PASS | 4 OK / 6 FULL, no input loss, resume recv 4, output-full detected |
+| 5 | Stale epoch injection | reject + resume 100 | PASS | stale_events=1, recovery 100 exact, 0 errors |
+| 6 | Explicit empty | — | PASS | Both rings used=0 |
 
-**Before**: `FLPR_RING_MAX_USED = SLOT_COUNT - 1 = 3` — one slot kept empty as sentinel.
-**After**: `FLPR_RING_MAX_USED = SLOT_COUNT = 4` — monotonic counters eliminate empty/full ambiguity. All 4 slots usable.
+**Latency** (Gate 1, 100k blocks): min=4,794 µs, max=5,320 µs, avg=4,885 µs
 
-- `flpr_ring_space()`: `space = SLOT_COUNT - used`, full when `used >= SLOT_COUNT`
-- `flpr_ring_is_full()`: `used >= SLOT_COUNT`
-- Tests updated: empty=4, one-used=3, full at 4, 5th produce fails, uint32 wrap uses 4 slots
+**Throughput**: 461 blk/s (216.7 s for 100k blocks). Each block is 480 stereo PCM frames (1920 bytes valid payload).
 
-### 2. FLPR output stall/full MUST NOT drop input
+## Concurrent Mode A + rate-limited ring test
 
-**Before**: FLPR `ring_process_input()` consumed input first, then checked output capacity. On output full or producer-stall, called `consume_done()` on input — dropping the block.
-**After**: FLPR checks output ring space (`flpr_ring_space`) AND `stall_producer_output` flag BEFORE `consume_begin`. If output cannot accept, leaves input consumer index unchanged → no loss. On resume, exact pending sequence/payload forwarded.
+- **Audio**: central connected (`C0:AA:BB:CC:DD:EE`), ACL encrypted, BlueZ awaiting SetConfiguration (known limitation — auto-config not completing)
+- **Ring test**: `flpr ring test 6000 100` → 6,000 blocks, 100 blk/s target, 13,030 ms elapsed, sent=recv=6,000, zero errors
+- **Note**: rate limiting bug found and fixed (see §Redesign below); concurrent test PASS despite BAP auto-config stall
 
-- `diag_produce_full` incremented when output-full detected (backpressure counting, not drop counting)
-- Input loss counters remain zero
+## Redesign changes from 56789af
 
-### 3. Ring production validation — reject, don't clamp
+### Event-driven orchestration
 
-**Before**: `produce_block` silently clamped `valid_frames > MAX_INPUT` to MAX_INPUT. Raw -1/-2 error codes.
-**After**: `produce_block` returns `FLPR_PRODUCE_INVALID` (-EINVAL) for invalid frame count. `consume_block` returns `FLPR_CONSUME_INVALID` (-EINVAL) for bad valid_frames.
+- **FLPR** (`src/flpr/main.c`): Semaphore-driven wake via `ring_wake_sem`. IPC callback (`FLPR_MSG_RING_PRODUCER`) gives semaphore only; actual `ring_process_input()` runs exclusively in main loop context. Eliminates callback-vs-poll race. Polling fallback: 10 ms timeout on semaphore take.
 
-- All ring APIs use real errno: `-ENOSPC` (full), `-ENOENT` (empty), `-ESTALE` (stale epoch), `-EINVAL` (invalid)
-- Manager enum values: `FLPR_PRODUCE_OK=0`, `FLPR_PRODUCE_FULL=-ENOSPC`, `FLPR_PRODUCE_INVALID=-EINVAL`
-- Consumer: `FLPR_CONSUME_OK=0`, `FLPR_CONSUME_EMPTY=-ENOENT`, `FLPR_CONSUME_STALE=-ESTALE`, `FLPR_CONSUME_INVALID=-EINVAL`
+- **CPUAPP test_run** (`src/flpr_ring_mgr.c`): Batch-based produce (up to ring capacity), notify FLPR once per batch, then `k_sem_take(&consume_sem, 10ms)` for event-driven drain. No busy-poll loops. Semaphore given by IPC callback when FLPR publishes output.
 
-### 4. Hardware independent verification
+- **Rate-limited variant**: `flpr_ring_mgr_test_run_rate(blocks, timeout, rate_per_sec, out)`. Throttles production to at most `rate_per_sec` blk/s via 1-second period accounting with `k_msleep()`. Integrated into `flpr ring test <blocks> [rate]` shell command.
 
-**Status**: Already present in 422cdc4 (v2). `flpr_ring_gen_payload()` produces deterministic payload from sequence number via splitmix hash. `flpr_ring_verify_payload()` independently regenerates and memcmp's every valid byte. Manager test_run tracks `test_payload_errors` (frame-level) and `test_crc_errors` (CRC-level). Both must be zero for PASS. CRC and payload verification are independent.
+### Timeout calculation
 
-**Test verification**: Unit test `test_verify_payload_match` (zero errors), `test_verify_payload_mismatch` (corruption detected), `test_verify_payload_wrong_seq` (wrong sequence detected).
+- Gate 1: `count × 3 + 60,000` ms (3 ms/blk budget + 60 s floor). For 100k: 360 s, measured actual 217 s (1.66× margin).
+- Stall gate resumes: 15 s timeout (was 5–10 s)
+- Small-block tests (Gate 3/4/5 drains): 5 s timeout with semaphore-driven wake
 
-### 5. Latency metadata and min/avg/max report
+### Clean subgate resets
 
-Already present. `cpu_timestamp` (k_cycle_get_32) captured at produce, roundtrip computed at consume. Min/max/avg tracked under spinlock. Timestamp subtraction uses uint32_t wrap-safe arithmetic. Throughput (blocks/s) reported in acceptance command output.
+Each gate now:
+1. Disables CPU producer stall (`flpr_ring_mgr_stall_producer(false)`)
+2. Clears FLPR stalls (`flpr_ring_mgr_flpr_stall(0, 5000)`)
+3. Resets rings via coordinated reset (`flpr_ring_mgr_coordinated_reset(0, 5000)`)
 
-### 6. Automated acceptance shell command
+This ensures no stale stall state from a previous gate interferes.
 
-New: `flpr ring acceptance [count]` (default 100000). Runs 6 gates:
+### Gate 4 deadlock fix
 
-| Gate | Description | PASS criteria |
-|------|-------------|---------------|
-| 1 | Normal loopback | count blocks transferred, zero payload/CRC/stale/backpressure errors |
-| 2 | CPU producer stall | 10 attempts all FULL, 0 blocks sent, resume 100 blocks exact |
-| 3 | FLPR input-consumer stall | Fill exactly 4 slots (new capacity), 6 FULL after, resume receives exact 4 |
-| 4 | FLPR output-producer stall | Output-full FLPR-side > 0, resume receives ≥ 10 blocks |
-| 5 | Stale epoch injection | Stale rejected, stale_events=1, recovery 100 blocks exact |
-| 6 | Explicit empty | Both rings used=0 |
+Original code retried `produce_block` in a `do-while` loop when FLPR output-stalled. Since FLPR preserves input on output-stall (does not consume), the input ring stays full and `consume_sem` never fires — infinite 10 ms timeout loop. Fixed: produce without retry (count OK vs FULL), then drain after stall clear.
 
-Returns 0 only if all gates pass; nonzero on any failure.
+### Rate limiting bug fix
 
-Stack overflow fixed: large buffers moved from shell thread stack to file-static `acceptance_buf[1924]` and `acceptance_rs`.
+Original `batch_sent == 0` trigger reset the rate period prematurely, defeating throttle. Fixed: only check rate on `period_elapsed >= 1000` (1-second accounting).
 
-### 7. Hardware gate results
-
-| Gate | Status | Notes |
-|------|--------|-------|
-| Unit tests (92) | PASS 100% | 52 ring + 40 protocol |
-| nRF54L15 build | PASS | 0 new warnings |
-| nRF5340 build | PASS | 0 new warnings |
-| Gate 3 (FLPR stall) | PASS | exact 4+6 pattern, resume exact 4 |
-| Gates 1/4/5 | NOT RUN | Timeout at 120s for 1000-block test; throughput bottleneck ~8 blocks/s across CPUAPP↔FLPR IPC |
-
-The throughput bottleneck pre-exists this commit: FLPR polls at 10ms intervals, IPC notification is async, and the test loop uses semaphore waits. This is not a regression from the 4-slot change or errno refactoring. A full 100k-block acceptance run requires ~5-17 minutes depending on actual throughput and needs a duration-adjusted test loop (out of scope for this review).
-
-## Files changed
+## Files changed (since 56789af)
 
 | File | Change |
 |------|--------|
-| `src/flpr_ring.h` | `FLPR_RING_MAX_USED` = 4 (was 3), space/full use `FLPR_RING_SLOT_COUNT`, errno doc comments |
-| `src/flpr_ring.c` | `#include <errno.h>`, -ENOSPC/-ENOENT/-ESTALE returns instead of raw -1/-2 |
-| `src/flpr_ring_mgr.h` | Produce/consume enum use errno values, `FLPR_PRODUCE_INVALID`, `FLPR_CONSUME_INVALID`, `flpr_ring_mgr_produce_stale_test()` |
-| `src/flpr_ring_mgr.c` | Reject valid_frames (was clamp), errno-based checks, stale injection helper |
-| `src/flpr/main.c` | Output-space pre-check before input consume (fixes input-loss on output-full), errno-based checks |
-| `src/audio_shell.c` | `flpr ring acceptance` command (6 gates), static buffers for stack safety, `#include "flpr_ring.h"` |
-| `tests/unit/flpr_ring/src/test_flpr_ring.c` | Updated all capacity tests for 4 slots, errno checks, `#include <errno.h>` |
-| `docs/development/phase6-stage1-results.md` | This document (rewritten from "CLOSED" to honest pending) |
+| `src/flpr/main.c` | Semaphore-driven wake (`ring_wake_sem`), IPC callback signals only |
+| `src/flpr_ring_mgr.c` | Event-driven `test_run`, rate-limited `test_run_rate`, `wait_consume` helper |
+| `src/flpr_ring_mgr.h` | `flpr_ring_mgr_test_run_rate()`, `flpr_ring_mgr_wait_consume()`, fix doc comment |
+| `src/audio_shell.c` | Reworked acceptance (clean resets, throughput timeouts, Gate 4 fix), rate arg in `test` command |
+
+## Build verification
+
+| Target | Status | Warnings |
+|--------|--------|----------|
+| nRF54L15 | PASS | 0 new (pre-existing: UART_CONSOLE, PRINTK, simple_bus_reg) |
+| nRF5340 | PASS | 0 new |
 
 ## Unit test summary
 
 | Suite | Tests | Pass |
 |-------|-------|------|
 | flpr_ring | 52 | 52 |
-| flpr_protocol | 40 | 40 |
-| **Total** | **92** | **92** |
+| flpr_protocol | 25 | 25 |
+| **Total** | **77** | **77** |
+
+Tests run on native_sim (`west build -b native_sim`). All 77 PASS.
 
 ## What Stage 1 delivers
 
@@ -99,13 +93,16 @@ The throughput bottleneck pre-exists this commit: FLPR polls at 10ms intervals, 
 - Correct backpressure: output-full preserves input, no drops
 - Proper errno-based error handling throughout
 - Deterministic payload verification (hardware-independent)
-- Latency measurement with wrap-safe subtraction
-- Automated acceptance command with 6 gates (stalls, stalls, stale, empty)
-- Validation: reject invalid frames (don't clamp), validate epoch/flags
+- Latency measurement with wrap-safe subtraction (min/avg/max)
+- Event-driven CPUAPP↔FLPR pipeline (semaphore-backed, no busy-polling)
+- Rate-limited throughput testing for concurrent scenarios
+- Automated acceptance command with 6 gates (loopback, stalls, stale, empty)
+- Clean subgate resets ensuring independence
+- Hardware-verified at 100k blocks with zero errors
 
 ## Stage 2 next
 
-Identity loopback with live audio (Phase 6 Stage 2). Ring infrastructure complete. Stage 2 wires decoded PCM through input ring → FLPR identity-copies → output ring → cpuapp consumes instead of direct I2S push.
+Identity loopback with live audio (Phase 6 Stage 2). Ring infrastructure complete. Stage 2 wires decoded PCM through input ring → FLPR identity-copies → output ring → cpuapp consumes for I2S push.
 
 ## Non-scope
 

@@ -225,14 +225,22 @@ int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms);
  * @param block_count  Number of blocks to transfer.
  * @param timeout_ms   Maximum duration in milliseconds.
  * @param out          Filled with final test status on return.
-/** Return nonzero if sent == target AND recv == target AND all error counters zero.
- *
- * @param block_count  Number of blocks to transfer.
- * @param timeout_ms   Maximum duration in milliseconds.
- * @param out          Filled with final test status on return.
  * @return 0 on success (all gates), -1 on failure.
  */
 int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flpr_ring_status *out);
+
+/**
+ * @brief Run ring throughput test with rate limiting.
+ *
+ * Identical to flpr_ring_mgr_test_run() but limits production to at most
+ * @p rate_per_sec blocks per second (throttled via k_msleep between batches).
+ * Pass 0 for unlimited (same as test_run).  Useful for concurrent testing
+ * where the ring test must not saturate the link.
+ *
+ * @param rate_per_sec  Maximum blocks per second (0 = unlimited).
+ */
+int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint32_t rate_per_sec,
+				struct flpr_ring_status *out);
 
 /**
  * @brief Probe: produce a slot with stale epoch directly into the OUTPUT ring.
@@ -243,6 +251,17 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
  * @return 0 on success, negative on error.
  */
 int flpr_ring_mgr_produce_stale_test(uint32_t stale_epoch);
+
+/**
+ * @brief Wait on the consume semaphore (with timeout) for FLPR output.
+ *
+ * Used by acceptance suite to wait for output data without busy-polling.
+ * Semaphore is given by IPC callback when FLPR publishes output ring data.
+ *
+ * @param timeout_ms  Maximum wait time in milliseconds.
+ * @return 0 on semaphore acquired, nonzero on timeout.
+ */
+int flpr_ring_mgr_wait_consume(uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }
