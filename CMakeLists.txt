@@ -34,7 +34,6 @@ target_sources(app PRIVATE
 zephyr_sources_ifdef(CONFIG_AUDIO_PERF_MEASUREMENT src/audio_perf.c)
 
 zephyr_sources_ifdef(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR src/audio_asrc.c)
-zephyr_sources_ifdef(CONFIG_AUDIO_RESAMPLER_IDENTITY src/audio_asrc.c)
 zephyr_sources_ifdef(CONFIG_AUDIO_CLOCK_ACTUATOR_APLL src/audio_clock_actuator_apll.c)
 zephyr_sources_ifdef(CONFIG_AUDIO_CLOCK_ACTUATOR_NONE src/audio_clock_actuator_none.c)
 zephyr_sources_ifdef(CONFIG_AUDIO_CLOCK_ACTUATOR_SAMPLE_ADJUST src/audio_clock_actuator_sample_adjust.c)

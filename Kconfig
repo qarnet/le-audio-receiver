@@ -30,32 +30,34 @@ choice AUDIO_RESAMPLER
 	prompt "Audio resampler"
 	default AUDIO_RESAMPLER_IDENTITY
 	help
-	  Selects the data-path resampler between decoder output and I2S.
-	  Independent of the physical clock actuator (AUDIO_CLOCK_ACTUATOR).
-	  The resampler handles rate mismatch (48k decoder → 47 619 Hz I2S
-	  drain) and/or the drift-controller ppm correction, depending on
-	  which module is selected.
+	  Data-path resampler between decoder output (48 kHz) and I2S
+	  drain.  Must be paired with a compatible AUDIO_CLOCK_ACTUATOR:
+	    IDENTITY       → APLL  (nRF5340 production)
+	    ASRC_LINEAR     → NONE  (nRF54L15 production, ASRC consumes ppm)
+	    SAMPLE_ADJUST   → SAMPLE_ADJUST  (legacy A/B comparison)
 
 config AUDIO_RESAMPLER_IDENTITY
-	bool "Identity (passthrough)"
+	bool "Identity (memcpy passthrough)"
 	help
-	  Passes samples through unchanged.  Use on nRF5340 where the APLL
-	  handles drift at the clock and the decoder rate matches I2S.
+	  memcpy pass-through.  On nRF5340 the APLL steers the audio
+	  clock so no data-path resampling is needed.
 
 config AUDIO_RESAMPLER_ASRC_LINEAR
 	bool "Linear ASRC"
 	help
-	  Stateful cross-block fixed-point linear-interpolation stereo ASRC.
-	  Consumes the drift-controller ppm as source_step correction.
-	  Replaces both the fixed-rate converter and discrete sample-insert/
-	  drop.  Production path for nRF54L15 after Phase 5 acceptance.
+	  Stateful cross-block fixed-point linear-interpolation stereo
+	  ASRC.  Consumes drift-controller ppm as source_step correction.
+	  Production path for nRF54L15.  Must pair with
+	  AUDIO_CLOCK_ACTUATOR_NONE (ASRC handles the data path; no
+	  physical actuator exists on this platform).
 
 config AUDIO_RESAMPLER_SAMPLE_ADJUST
 	bool "Sample insert/drop (legacy)"
 	help
-	  Legacy nearest-neighbour rate converter + discrete sample insert/
-	  drop via SAMPLE_ADJUST actuator.  Retained during Phase 5 for A/B
-	  comparison against ASRC_LINEAR.  Removed after ASRC acceptance.
+	  Legacy nearest-neighbour rate converter + discrete sample
+	  insert/drop via SAMPLE_ADJUST actuator.  Must pair with
+	  AUDIO_CLOCK_ACTUATOR_SAMPLE_ADJUST.  Retained for Phase 5
+	  A/B comparison; removed after ASRC acceptance.
 endchoice
 
 choice AUDIO_CLOCK_ACTUATOR
@@ -65,21 +67,20 @@ choice AUDIO_CLOCK_ACTUATOR
 config AUDIO_CLOCK_ACTUATOR_APLL
 	bool "APLL (nRF5340 HFCLKAUDIO)"
 	help
-	  Use the nRF5340 HFCLKAUDIO APLL for clock steering.
-	  ppm → APLL register trim.
+	  HFCLKAUDIO APLL register trim.  ppm → register write.
+	  Pair with AUDIO_RESAMPLER_IDENTITY (nRF5340 production).
 
 config AUDIO_CLOCK_ACTUATOR_NONE
-	bool "None (no actuator)"
+	bool "None (data-path only)"
 	help
-	  No clock actuator. Controller runs but output is discarded.
-	  For testing on platforms without a clock steering mechanism.
+	  No physical clock actuator.  Controller ppm is consumed by the
+	  data-path resampler (ASRC_LINEAR).  Used on nRF54L15.
 
 config AUDIO_CLOCK_ACTUATOR_SAMPLE_ADJUST
-	bool "Sample insert/drop (nRF54L15)"
+	bool "Sample insert/drop (nRF54L15 legacy)"
 	help
-	  Compensate clock drift by inserting or dropping single PCM samples
-	  in the I2S output block. Degenerate ASRC (nearest-neighbor). For
-	  platforms without a steerable audio clock (nRF54L15).
+	  Discrete sample insert/drop actuator.  Pair with
+	  AUDIO_RESAMPLER_SAMPLE_ADJUST for legacy A/B comparison.
 endchoice
 
 config AUDIO_DRIFT_OUTPUT_CLAMP
@@ -88,10 +89,10 @@ config AUDIO_DRIFT_OUTPUT_CLAMP
 	range 1 3000
 	help
 	  Maximum absolute ppm output from the PI clock recovery controller.
-	  Default 500 ppm is correct for nRF5340 APLL (steps ≈3.3 ppm, range
-	  ≈±600 ppm around centre).  Set to 2000 on nRF54L15 where
-	  SAMPLE_ADJUST capacity is one sample per 480-frame block
-	  (~2,083 ppm).
+	  Default 500 ppm for nRF5340 APLL (steps ≈3.3 ppm, range
+	  ≈±600 ppm around centre).  Set to 2000 on nRF54L15 (ASRC or
+	  SAMPLE_ADJUST; paired with AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
+	  for headroom around the measured PCLK offset).
 
 config AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
 	int "Phase integral clamp (±ppm)"
@@ -99,9 +100,9 @@ config AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
 	range 1 2000
 	help
 	  Maximum absolute ppm the phase integral term can contribute.
-	  Default 500 ppm preserves existing nRF5340 behaviour.
-	  Recommended 150–200 ppm on nRF54L15 so phase authority does not
-	  consume all headroom around the measured ~1,775 ppm PCLK offset.
+	  Default 500 ppm preserves existing nRF5340 behaviour.
+	  Recommended 150–200 ppm on nRF54L15 so phase authority does not
+	  consume all headroom around the measured PCLK offset.
 
 config AUDIO_PERF_MEASUREMENT
 	bool "Audio performance instrumentation"
