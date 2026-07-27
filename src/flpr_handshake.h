@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * CPUAPP ↔ FLPR handshake protocol.
- * VPR launcher boots FLPR; this module receives READY, sends ACK,
- * maintains bidirectional heartbeat counters. Graceful if FLPR absent.
+ * VPR launcher boots FLPR; this module handles handshake, bidirectional
+ * 1 Hz heartbeat (via k_work_delayable, independent of main loop), and
+ * stress-test ping/pong. Graceful if FLPR absent.
+ *
+ * Uses flpr_protocol.h (shared wire protocol) + flpr_peer (state machine).
  */
 
 #ifndef FLPR_HANDSHAKE_H_
@@ -12,59 +15,64 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "flpr_protocol.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Re-export protocol version from shared header. */
-#include "flpr_protocol.h"
-
-/* Handshake + heartbeat status exposed for shell diagnostics.
- * All counters are race-safe (spinlock-protected snapshot). */
+/* Snapshot of all handshake/health counters (shell-readable). */
 struct flpr_status {
-	bool ready;           /* FLPR sent READY? */
-	bool acked;           /* CPUAPP sent ACK? */
-	bool healthy;         /* heartbeat not missed too many */
-	uint32_t ready_count; /* total READY received (reset epochs) */
-	uint32_t epoch;       /* last FLPR boot nonce (epoch) */
-	uint32_t error_count; /* version mismatch / short msg / IPC err */
+	bool ready;
+	bool acked;
+	bool healthy;
+	uint32_t epoch;
+	uint32_t ready_count;
+	uint32_t err_len;
+	uint32_t err_version;
+	uint32_t err_unknown;
+	uint32_t err_send;
+	uint32_t tx_seq;
+	uint32_t tx_acked_seq;
+	uint32_t rx_seq;
+	uint32_t rx_lost;
+	uint32_t rx_dup;
+	uint32_t rx_ooo;
+	uint32_t rx_last_ms;
+	uint32_t rx_consec_missed;
 
-	/* Heartbeat: CPUAPP → FLPR */
-	uint32_t tx_seq;  /* last seq we sent */
-	uint32_t tx_lost; /* cumulative ACK gaps (FLPR didn't echo) */
-
-	/* Heartbeat: FLPR → CPUAPP */
-	uint32_t rx_seq;     /* last seq received from FLPR */
-	uint32_t rx_lost;    /* cumulative gaps */
-	uint32_t rx_last_ms; /* last rx uptime (for staleness) */
-	uint32_t rx_missed;  /* consecutive missed (resets on rx) */
+	/* Stress test */
+	bool stress_active;
+	uint32_t stress_count;
+	uint32_t stress_sent;
+	uint32_t stress_recv;
+	uint32_t stress_timeouts;
 };
 
 /**
- * @brief Initialize the FLPR handshake subsystem.
+ * @brief Initialize FLPR handshake subsystem.
  *
- * Must be called after the VPR launcher has released the FLPR from reset.
- * Opens IPC instance, registers endpoint, sends ACK on READY.
- * Gracefully tolerates absent/mismatched FLPR (one error logged, non-fatal).
+ * Opens IPC, registers endpoint, starts k_work_delayable for 1 Hz heartbeat.
+ * Non-blocking, non-fatal on absence.
  *
- * @return 0 on success (IPC endpoint registered), negative errno on failure.
+ * @return 0 on success, negative errno on failure.
  */
 int flpr_handshake_init(void);
 
-/**
- * @brief Get current handshake status (race-safe snapshot).
- */
+/** Race-safe snapshot of current status. */
 void flpr_handshake_get_status(struct flpr_status *status);
 
 /**
- * @brief Periodic heartbeat sender — call from application idle loop.
+ * @brief Start stress test: send STRESS_PING messages, count PONG replies.
  *
- * Sends heartbeat to FLPR at ~1 Hz if handshake is established.
- * Tracks tx sequence, rx echo gaps, and missed-heartbeat health.
- * Never blocks: returns immediately if IPC not bound or send buffer full.
+ * Uses stop-and-wait with 100 ms timeout per ping. Runs synchronously in
+ * calling thread context (NOT audio callback). Blocks for ~count*100ms.
+ * Safe to call from shell or test thread only.
+ *
+ * @param count  Number of ping/pong to attempt (clamped to 1..1,000,000).
+ * @param out    Filled with results on return (even on early timeout).
  */
-void flpr_handshake_heartbeat(void);
+void flpr_handshake_stress(uint32_t count, struct flpr_status *out);
 
 #ifdef __cplusplus
 }

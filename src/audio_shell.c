@@ -9,6 +9,10 @@
 #include "audio_volume.h"
 #include "audio_sink.h"
 
+#if defined(CONFIG_SOC_NRF54L15)
+#include "flpr_handshake.h"
+#endif
+
 #include <inttypes.h>
 #include <zephyr/kernel.h>
 #include <zephyr/shell/shell.h>
@@ -124,3 +128,67 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
 	SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(audio, &audio_cmds, "LE Audio sink commands.", NULL);
+
+/* ── FLPR shell commands (nRF54L15 only) ───────────────────────── */
+
+#if defined(CONFIG_SOC_NRF54L15)
+
+static int cmd_flpr_status(const struct shell *sh, size_t argc, char **argv)
+{
+	struct flpr_status s;
+	flpr_handshake_get_status(&s);
+
+	shell_print(sh, "--- FLPR handshake ---");
+	shell_print(sh, "  Ready        : %s", s.ready ? "yes" : "no");
+	shell_print(sh, "  ACKed        : %s", s.acked ? "yes" : "no");
+	shell_print(sh, "  Healthy      : %s", s.healthy ? "yes" : "no");
+	shell_print(sh, "  Epoch        : %u", s.epoch);
+	shell_print(sh, "  Ready count  : %u", s.ready_count);
+	shell_print(sh, "  Errors       : len=%u ver=%u unk=%u send=%u", s.err_len, s.err_version,
+		    s.err_unknown, s.err_send);
+	shell_print(sh, "  TX seq       : %u (acked=%u)", s.tx_seq, s.tx_acked_seq);
+	shell_print(sh, "  RX seq       : %u (last=%u ms, consec_missed=%u)", s.rx_seq,
+		    s.rx_last_ms, s.rx_consec_missed);
+	shell_print(sh, "  RX lost      : %u", s.rx_lost);
+	shell_print(sh, "  RX dup       : %u", s.rx_dup);
+	shell_print(sh, "  RX ooo       : %u", s.rx_ooo);
+
+	if (s.stress_active) {
+		shell_print(sh, "  Stress (active): count=%u sent=%u recv=%u timeouts=%u",
+			    s.stress_count, s.stress_sent, s.stress_recv, s.stress_timeouts);
+	} else if (s.stress_count > 0) {
+		shell_print(sh, "  Stress (done):  count=%u sent=%u recv=%u timeouts=%u",
+			    s.stress_count, s.stress_sent, s.stress_recv, s.stress_timeouts);
+	}
+
+	return 0;
+}
+
+static int cmd_flpr_stress(const struct shell *sh, size_t argc, char **argv)
+{
+	uint32_t count = FLPR_STRESS_DEFAULT_COUNT;
+
+	if (argc >= 2) {
+		count = (uint32_t)shell_strtoul(argv[1], 0, NULL);
+	}
+
+	struct flpr_status s;
+	flpr_handshake_stress(count, &s);
+
+	shell_print(sh, "Stress complete: sent=%u recv=%u timeouts=%u (of %u)", s.stress_sent,
+		    s.stress_recv, s.stress_timeouts, count);
+
+	return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(flpr_cmds,
+			       SHELL_CMD_ARG(status, NULL, "FLPR handshake/health status.",
+					     cmd_flpr_status, 1, 0),
+			       SHELL_CMD_ARG(stress, NULL,
+					     "Stress test N ping/pong (default 100k, max 1M).",
+					     cmd_flpr_stress, 1, 1),
+			       SHELL_SUBCMD_SET_END);
+
+SHELL_CMD_REGISTER(flpr, &flpr_cmds, "FLPR co-processor commands.", NULL);
+
+#endif /* CONFIG_SOC_NRF54L15 */

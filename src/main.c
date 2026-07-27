@@ -149,9 +149,8 @@ int main(void)
 	LOG_INF("Advertising as \"%s\"", CONFIG_BT_DEVICE_NAME);
 
 	while (true) {
-#if defined(CONFIG_SOC_NRF54L15)
-		flpr_handshake_heartbeat();
-#endif
+		/* Heartbeat runs via k_work_delayable (flpr_handshake_init).
+		 * No poll call needed in main loop. */
 		bt_bap_wait_disconnect();
 		LOG_INF("Restarting advertising...");
 

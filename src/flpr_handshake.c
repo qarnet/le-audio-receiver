@@ -2,64 +2,93 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * CPUAPP side of FLPR handshake protocol.
- * Opens IPC instance, registers endpoint, handles READY/HEARTBEAT messages.
- * Sends bidirectional heartbeats at 1 Hz, tracks loss/gap/health.
- * Graceful if FLPR absent or version-mismatched — one actionable error logged.
- * No blocking: never hangs the audio pipeline.
+ * CPUAPP side of FLPR handshake, heartbeat (k_work_delayable), and stress.
+ * Uses flpr_peer state machine from flpr_protocol.h.
  *
- * References: src/flpr_protocol.h (shared wire protocol, single source of truth).
+ * Heartbeat runs at 1 Hz via k_work_delayable, independent of main loop.
+ * Stress-test runs synchronously with stop-and-wait ping/pong.
  */
 
 #include "flpr_handshake.h"
 
+#include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/ipc/ipc_service.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/spinlock.h>
-#include <zephyr/sys/atomic.h>
 
 LOG_MODULE_REGISTER(flpr_hs, LOG_LEVEL_INF);
 
-/* ── IPC variables ──────────────────────────────────────────────── */
+/* ── IPC ────────────────────────────────────────────────────────── */
 
 static struct ipc_ept flpr_ep;
 static K_SEM_DEFINE(bound_sem, 0, 1);
-
-/* ── Spinlock-protected status ──────────────────────────────────── */
-
 static struct k_spinlock flpr_lock;
 
-static bool flpr_ready;
-static bool flpr_acked;
-static bool flpr_healthy;
-static uint32_t flpr_ready_cnt;
-static uint32_t flpr_epoch;
-static uint32_t flpr_err_cnt;
+/* ── State ──────────────────────────────────────────────────────── */
 
-/* Heartbeat: CPUAPP → FLPR */
-static uint32_t flpr_tx_seq;
-static uint32_t flpr_tx_lost;
-static uint32_t flpr_tx_last_ms; /* last time we sent */
+static struct flpr_peer flpr; /* tracks FLPR (remote) */
 
-/* Heartbeat: FLPR → CPUAPP */
-static uint32_t flpr_rx_seq;
-static uint32_t flpr_rx_lost;
-static uint32_t flpr_rx_last_ms;
-static uint32_t flpr_rx_missed;
+/* ── Delayed work for heartbeat ─────────────────────────────────── */
+
+static struct k_work_delayable hb_work;
+static bool hb_started;
+
+/* ── Stress ─────────────────────────────────────────────────────── */
+
+static struct k_sem stress_sem;
+static uint32_t stress_count;
+static uint32_t stress_sent;
+static uint32_t stress_recv;
+static uint32_t stress_timeouts;
+static bool stress_active;
+static uint32_t stress_cookie; /* increments per ping */
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 
-static int send_msg(uint8_t type, uint16_t seq, uint32_t data_val)
+/* Send a message. Must NOT be called under spinlock (IPC callbacks may re-enter). */
+static int send_msg(const struct flpr_msg *msg)
 {
+	int ret = ipc_service_send(&flpr_ep, msg, sizeof(*msg));
+	if (ret < 0) {
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+		flpr.err_send++;
+		k_spin_unlock(&flpr_lock, key);
+	}
+	return ret;
+}
+
+/* ── Heartbeat work handler ─────────────────────────────────────── */
+
+static void hb_work_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	if (!flpr.acked) {
+		goto reschedule;
+	}
+
+	uint32_t now_ms = k_uptime_get_32();
+	uint16_t seq = (uint16_t)(flpr.tx_seq & 0xFFFFU);
+
 	struct flpr_msg msg = {
-		.type = type,
+		.type = FLPR_MSG_HEARTBEAT,
 		.version = FLPR_PROTOCOL_VERSION,
 		.seq = seq,
-		.data = data_val,
+		.data = now_ms,
 	};
-	return ipc_service_send(&flpr_ep, &msg, sizeof(msg));
+
+	int ret = send_msg(&msg);
+	if (ret >= 0) {
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+		flpr.tx_seq++;
+		flpr.healthy = flpr_peer_check_health(&flpr, now_ms);
+		k_spin_unlock(&flpr_lock, key);
+	}
+
+reschedule:
+	k_work_schedule(&hb_work, K_MSEC(FLPR_HEARTBEAT_INTERVAL_MS));
 }
 
 /* ── IPC callbacks ──────────────────────────────────────────────── */
@@ -67,6 +96,9 @@ static int send_msg(uint8_t type, uint16_t seq, uint32_t data_val)
 static void ep_bound(void *priv)
 {
 	ARG_UNUSED(priv);
+	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+	flpr.bound = true;
+	k_spin_unlock(&flpr_lock, key);
 	LOG_INF("FLPR IPC bound");
 	k_sem_give(&bound_sem);
 }
@@ -76,122 +108,126 @@ static void ep_unbound(void *priv)
 	ARG_UNUSED(priv);
 	LOG_WRN("FLPR IPC unbound");
 	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-	flpr_ready = false;
-	flpr_acked = false;
-	flpr_healthy = false;
+	flpr = (struct flpr_peer){0};
 	k_spin_unlock(&flpr_lock, key);
 }
 
 static void ep_received(const void *data, size_t len, void *priv)
 {
 	ARG_UNUSED(priv);
+	uint32_t now_ms = k_uptime_get_32();
 
-	if (len < sizeof(struct flpr_msg)) {
-		LOG_ERR("FLPR short message (%zu < %zu)", len, sizeof(struct flpr_msg));
+	if (len != sizeof(struct flpr_msg)) {
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		flpr_err_cnt++;
+		flpr.err_len++;
 		k_spin_unlock(&flpr_lock, key);
 		return;
 	}
 
 	const struct flpr_msg *msg = data;
 
+	if (msg->version != FLPR_PROTOCOL_VERSION) {
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+		flpr.err_version++;
+		k_spin_unlock(&flpr_lock, key);
+		return;
+	}
+
 	switch (msg->type) {
 
 	case FLPR_MSG_READY: {
-		if (msg->version != FLPR_PROTOCOL_VERSION) {
-			LOG_ERR("FLPR version mismatch: got %u, expected %u", msg->version,
-				FLPR_PROTOCOL_VERSION);
-			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-			flpr_err_cnt++;
-			k_spin_unlock(&flpr_lock, key);
-			return;
-		}
-
 		uint32_t epoch = msg->data;
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		flpr_ready = true;
-		flpr_ready_cnt++;
-		flpr_epoch = epoch;
+		flpr.ready = true;
+		flpr.ready_count++;
+		flpr.epoch = epoch;
+		flpr.healthy = true;
 		k_spin_unlock(&flpr_lock, key);
 
-		LOG_INF("FLPR READY (version=%u, epoch=%u, count=%u)", msg->version, epoch,
-			flpr_ready_cnt);
+		LOG_INF("FLPR READY (epoch=%u, count=%u)", epoch, flpr.ready_count);
 
-		/* Send ACK. */
-		int ret = send_msg(FLPR_MSG_ACK, 0, k_uptime_get_32());
+		/* Send READY_ACK (outside lock). */
+		struct flpr_msg ack = {
+			.type = FLPR_MSG_READY_ACK,
+			.version = FLPR_PROTOCOL_VERSION,
+			.seq = 0,
+			.data = now_ms,
+		};
+		int ret = ipc_service_send(&flpr_ep, &ack, sizeof(ack));
 		if (ret < 0) {
-			LOG_ERR("FLPR ACK send failed: %d", ret);
 			key = k_spin_lock(&flpr_lock);
-			flpr_err_cnt++;
+			flpr.err_send++;
 			k_spin_unlock(&flpr_lock, key);
+			LOG_ERR("FLPR READY_ACK send failed: %d", ret);
 		} else {
 			key = k_spin_lock(&flpr_lock);
-			flpr_acked = true;
-			flpr_healthy = true; /* start healthy */
+			flpr.acked = true;
 			k_spin_unlock(&flpr_lock, key);
-			LOG_INF("FLPR ACK sent");
+			LOG_INF("FLPR READY_ACK sent");
+
+			/* Start heartbeat work if not already. */
+			if (!hb_started) {
+				hb_started = true;
+				k_work_schedule(&hb_work, K_NO_WAIT);
+			}
 		}
 		break;
 	}
 
 	case FLPR_MSG_HEARTBEAT: {
-		if (msg->version != FLPR_PROTOCOL_VERSION) {
-			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-			flpr_err_cnt++;
-			k_spin_unlock(&flpr_lock, key);
-			return;
-		}
-		uint16_t rx_seq = msg->seq;
-		uint32_t now_ms = k_uptime_get_32();
+		/* Remote heartbeat: track sequence. */
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		/* Gap detection: if we've received heartbeats before. */
-		if (flpr_rx_seq != 0 || flpr_rx_last_ms != 0) {
-			if (flpr_seq_after(rx_seq, (uint16_t)flpr_rx_seq)) {
-				uint16_t gap = flpr_seq_gap(rx_seq, (uint16_t)flpr_rx_seq);
-				if (gap > 1) {
-					flpr_rx_lost += gap - 1;
-				}
-				flpr_rx_seq = rx_seq;
-				flpr_rx_missed = 0;
-				flpr_healthy = true;
-			} else if (rx_seq == (uint16_t)flpr_rx_seq) {
-				/* Duplicate — don't count as missed. */
-			} else {
-				/* Wrapped or out of order — reset tracking. */
-				flpr_rx_seq = rx_seq;
-				flpr_rx_missed = 0;
-			}
-		} else {
-			/* First heartbeat. */
-			flpr_rx_seq = rx_seq;
+		flpr_peer_rx_seq(&flpr, msg->seq, now_ms);
+		flpr.healthy = flpr_peer_check_health(&flpr, now_ms);
+		k_spin_unlock(&flpr_lock, key);
+
+		/* Echo back as HEARTBEAT_ACK (outside lock). */
+		struct flpr_msg echo = {
+			.type = FLPR_MSG_HEARTBEAT_ACK,
+			.version = FLPR_PROTOCOL_VERSION,
+			.seq = msg->seq,
+			.data = now_ms,
+		};
+		int ret = ipc_service_send(&flpr_ep, &echo, sizeof(echo));
+		if (ret < 0) {
+			key = k_spin_lock(&flpr_lock);
+			flpr.err_send++;
+			k_spin_unlock(&flpr_lock, key);
 		}
-		flpr_rx_last_ms = now_ms;
+		break;
+	}
+
+	case FLPR_MSG_HEARTBEAT_ACK: {
+		/* FLPR echoed a heartbeat we sent. Track ack. */
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+		uint16_t acked_seq = msg->seq;
+		if (flpr_seq_after(acked_seq, (uint16_t)flpr.tx_acked_seq) ||
+		    acked_seq == (uint16_t)flpr.tx_acked_seq) {
+			flpr.tx_acked_seq = acked_seq;
+		}
 		k_spin_unlock(&flpr_lock, key);
 		break;
 	}
 
-	case FLPR_MSG_ACK: {
-		/* FLPR echoed our heartbeat back (echo via ACK). */
-		if (msg->version != FLPR_PROTOCOL_VERSION) {
-			return;
+	case FLPR_MSG_STRESS_PONG: {
+		/* FLPR responded to our stress ping. */
+		if (stress_active && msg->data == stress_cookie) {
+			stress_recv++;
+			k_sem_give(&stress_sem);
 		}
-		uint16_t echoed_seq = msg->seq;
-		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		if (flpr_seq_after(echoed_seq, (uint16_t)flpr_tx_seq)) {
-			/* FLPR echoed a future seq (gap in our tracking). */
-		} else {
-			uint16_t gap = flpr_seq_gap((uint16_t)flpr_tx_seq, echoed_seq);
-			if (gap > 0 && gap < 32768) {
-				flpr_tx_lost += gap;
-			}
-		}
-		k_spin_unlock(&flpr_lock, key);
 		break;
 	}
+
+	case FLPR_MSG_STRESS_PING:
+	case FLPR_MSG_READY_ACK:
+		/* CPUAPP receives these — unexpected but not errors.
+		 * FLPR may send READY_ACK if it receives our READY_ACK. */
+		break;
 
 	default:
-		LOG_WRN("FLPR unknown msg type %u", msg->type);
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+		flpr.err_unknown++;
+		k_spin_unlock(&flpr_lock, key);
 		break;
 	}
 }
@@ -200,9 +236,6 @@ static void ep_error(const char *message, void *priv)
 {
 	ARG_UNUSED(priv);
 	LOG_ERR("FLPR IPC error: %s", message ? message : "unknown");
-	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-	flpr_err_cnt++;
-	k_spin_unlock(&flpr_lock, key);
 }
 
 static const struct ipc_ept_cfg flpr_ep_cfg = {
@@ -222,6 +255,11 @@ int flpr_handshake_init(void)
 {
 	const struct device *ipc_dev;
 	int ret;
+
+	memset(&flpr, 0, sizeof(flpr));
+
+	k_work_init_delayable(&hb_work, hb_work_fn);
+	k_sem_init(&stress_sem, 0, 1);
 
 	ipc_dev = DEVICE_DT_GET(DT_NODELABEL(ipc0));
 	if (!device_is_ready(ipc_dev)) {
@@ -252,50 +290,91 @@ void flpr_handshake_get_status(struct flpr_status *status)
 	}
 
 	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-	status->ready = flpr_ready;
-	status->acked = flpr_acked;
-	status->healthy = flpr_healthy;
-	status->ready_count = flpr_ready_cnt;
-	status->epoch = flpr_epoch;
-	status->error_count = flpr_err_cnt;
-	status->tx_seq = flpr_tx_seq;
-	status->tx_lost = flpr_tx_lost;
-	status->rx_seq = flpr_rx_seq;
-	status->rx_lost = flpr_rx_lost;
-	status->rx_last_ms = flpr_rx_last_ms;
-	status->rx_missed = flpr_rx_missed;
+	status->ready = flpr.ready;
+	status->acked = flpr.acked;
+	status->healthy = flpr.healthy;
+	status->epoch = flpr.epoch;
+	status->ready_count = flpr.ready_count;
+	status->err_len = flpr.err_len;
+	status->err_version = flpr.err_version;
+	status->err_unknown = flpr.err_unknown;
+	status->err_send = flpr.err_send;
+	status->tx_seq = flpr.tx_seq;
+	status->tx_acked_seq = flpr.tx_acked_seq;
+	status->rx_seq = flpr.rx_seq;
+	status->rx_lost = flpr.rx_lost;
+	status->rx_dup = flpr.rx_dup;
+	status->rx_ooo = flpr.rx_ooo;
+	status->rx_last_ms = flpr.rx_last_ms;
+	status->rx_consec_missed = flpr.rx_consec_missed;
+	status->stress_active = stress_active;
+	status->stress_count = stress_count;
+	status->stress_sent = stress_sent;
+	status->stress_recv = stress_recv;
+	status->stress_timeouts = stress_timeouts;
 	k_spin_unlock(&flpr_lock, key);
 }
 
-void flpr_handshake_heartbeat(void)
+void flpr_handshake_stress(uint32_t count, struct flpr_status *out)
 {
-	/* Only send if handshake established. */
-	if (!flpr_acked) {
+	if (count == 0) {
+		return;
+	}
+	if (count > FLPR_STRESS_MAX_COUNT) {
+		count = FLPR_STRESS_MAX_COUNT;
+	}
+
+	/* Guard against concurrent stress runs. */
+	if (stress_active) {
+		if (out) {
+			flpr_handshake_get_status(out);
+		}
 		return;
 	}
 
-	uint32_t now_ms = k_uptime_get_32();
+	stress_active = true;
+	stress_count = count;
+	stress_sent = 0;
+	stress_recv = 0;
+	stress_timeouts = 0;
+	stress_cookie = 0;
 
-	/* Rate-limit to 1 Hz. */
-	if (now_ms - flpr_tx_last_ms < FLPR_HEARTBEAT_INTERVAL_MS) {
-		return;
-	}
-	flpr_tx_last_ms = now_ms;
+	LOG_INF("FLPR stress start: %u pings", count);
 
-	uint16_t seq = (uint16_t)(flpr_tx_seq & 0xFFFFU);
-	int ret = send_msg(FLPR_MSG_HEARTBEAT, seq, now_ms);
-	if (ret < 0) {
-		/* Skip this beat — buffer full. Don't count as lost. */
-		LOG_DBG("FLPR heartbeat send: %d", ret);
-		return;
-	}
-	flpr_tx_seq++;
+	for (uint32_t i = 0; i < count; i++) {
+		stress_cookie++;
 
-	/* Health check: if rx has been silent too long, mark unhealthy. */
-	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-	if (flpr_rx_last_ms > 0 &&
-	    now_ms - flpr_rx_last_ms > FLPR_HEARTBEAT_MISS_MAX * FLPR_HEARTBEAT_INTERVAL_MS) {
-		flpr_healthy = false;
+		struct flpr_msg ping = {
+			.type = FLPR_MSG_STRESS_PING,
+			.version = FLPR_PROTOCOL_VERSION,
+			.seq = (uint16_t)(i & 0xFFFFU),
+			.data = stress_cookie,
+		};
+
+		int ret = ipc_service_send(&flpr_ep, &ping, sizeof(ping));
+		if (ret < 0) {
+			stress_timeouts++;
+			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+			flpr.err_send++;
+			k_spin_unlock(&flpr_lock, key);
+			k_msleep(10);
+			continue;
+		}
+		stress_sent++;
+
+		/* Wait for PONG with 200 ms timeout. */
+		ret = k_sem_take(&stress_sem, K_MSEC(200));
+		if (ret != 0) {
+			stress_timeouts++;
+		}
 	}
-	k_spin_unlock(&flpr_lock, key);
+
+	LOG_INF("FLPR stress done: sent=%u recv=%u lost=%u timeouts=%u", stress_sent, stress_recv,
+		count - stress_recv, stress_timeouts);
+
+	stress_active = false;
+
+	if (out) {
+		flpr_handshake_get_status(out);
+	}
 }

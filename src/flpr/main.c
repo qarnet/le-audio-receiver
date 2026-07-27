@@ -2,15 +2,11 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * FLPR application — Stage 0 handshake + heartbeat.
- * Booting from SRAM after VPR launcher copies image from RRAM.
- * RV32E e/m/c no FPU, no atomic extension.
+ * FLPR application — Stage 0 handshake + heartbeat + stress pong.
+ * Uses flpr_peer for remote (CPUAPP) state tracking.
  *
- * Protocol:
- *   1. Send READY (type=READY, version, epoch=nonce).
- *   2. Wait for ACK from CPUAPP (5 s timeout).
- *   3. Enter heartbeat loop: send hb every 1 s, echo any received hb.
- *   4. Epoch: per-boot nonce from k_uptime_get() at boot start.
+ * Epoch: hardware GRTC counter at boot start (non-zero, monotonic
+ * across resets). GRTC owned-channels 3,4 available per board DTS.
  */
 
 #include <zephyr/kernel.h>
@@ -23,29 +19,35 @@
 
 static struct ipc_ept ipc_ep;
 static K_SEM_DEFINE(bound_sem, 0, 1);
-static bool acked;
 
-/* Heartbeat counters. */
-static uint32_t hb_tx_seq;  /* sent by us */
-static uint32_t hb_rx_seq;  /* last received from CPUAPP */
-static uint32_t hb_rx_lost; /* cumulative lost (gaps) */
+/* Tracks remote peer (CPUAPP). Single-threaded on FLPR, no lock. */
+static struct flpr_peer cpuapp;
 
-/* Epoch: boot-time nonce for reboot detection. */
-static uint32_t boot_nonce;
+/* Epoch from hardware GRTC at boot start. */
+static uint32_t boot_epoch;
 
-/* ── IPC callbacks ─────────────────────────────────────────────── */
+/* ── Helpers ────────────────────────────────────────────────────── */
+
+static int send_msg(const struct flpr_msg *msg)
+{
+	return ipc_service_send(&ipc_ep, msg, sizeof(*msg));
+}
+
+/* ── IPC callbacks ──────────────────────────────────────────────── */
 
 static void ep_bound(void *priv)
 {
 	ARG_UNUSED(priv);
+	cpuapp.bound = true;
 	k_sem_give(&bound_sem);
 }
 
 static void ep_received(const void *data, size_t len, void *priv)
 {
 	ARG_UNUSED(priv);
+	uint32_t now_ms = k_uptime_get_32();
 
-	if (len < sizeof(struct flpr_msg)) {
+	if (!flpr_msg_validate(data, len, &cpuapp)) {
 		return;
 	}
 
@@ -53,41 +55,54 @@ static void ep_received(const void *data, size_t len, void *priv)
 
 	switch (msg->type) {
 
-	case FLPR_MSG_ACK:
-		/* ACK from CPUAPP to our READY. Also used as heartbeat echo. */
-		if (msg->version == FLPR_PROTOCOL_VERSION) {
-			if (!acked) {
-				acked = true;
-			}
-			/* Treat ACK as heartbeat echo: record rx seq. */
+	case FLPR_MSG_READY_ACK:
+		cpuapp.acked = true;
+		cpuapp.healthy = true;
+		cpuapp.epoch = msg->data;
+		break;
+
+	case FLPR_MSG_HEARTBEAT:
+		/* CPUAPP heartbeat → track seq, echo with HEARTBEAT_ACK. */
+		flpr_peer_rx_seq(&cpuapp, msg->seq, now_ms);
+		cpuapp.healthy = flpr_peer_check_health(&cpuapp, now_ms);
+
+		{
+			struct flpr_msg echo = {
+				.type = FLPR_MSG_HEARTBEAT_ACK,
+				.version = FLPR_PROTOCOL_VERSION,
+				.seq = msg->seq,
+				.data = now_ms,
+			};
+			(void)send_msg(&echo);
+		}
+		break;
+
+	case FLPR_MSG_HEARTBEAT_ACK:
+		/* CPUAPP echoed our heartbeat. Track acked seq. */
+		{
 			uint16_t acked_seq = msg->seq;
-			if (flpr_seq_after(acked_seq, (uint16_t)hb_rx_seq)) {
-				hb_rx_lost += flpr_seq_gap(acked_seq, (uint16_t)hb_rx_seq) - 1U;
-				hb_rx_seq = acked_seq;
+			if (flpr_seq_after(acked_seq, (uint16_t)cpuapp.tx_acked_seq) ||
+			    acked_seq == (uint16_t)cpuapp.tx_acked_seq) {
+				cpuapp.tx_acked_seq = acked_seq;
 			}
 		}
 		break;
 
-	case FLPR_MSG_HEARTBEAT:
-		/* Bidirectional: CPUAPP sent us a heartbeat. Echo it back. */
-		if (msg->version == FLPR_PROTOCOL_VERSION) {
-			uint16_t cpuapp_seq = msg->seq;
-			if (flpr_seq_after(cpuapp_seq, (uint16_t)hb_rx_seq)) {
-				hb_rx_lost += flpr_seq_gap(cpuapp_seq, (uint16_t)hb_rx_seq) - 1U;
-				hb_rx_seq = cpuapp_seq;
-			}
-			/* Echo back as ACK with same seq. */
-			struct flpr_msg echo = {
-				.type = FLPR_MSG_ACK,
+	case FLPR_MSG_STRESS_PING:
+		/* Stress test: echo back as STRESS_PONG with same cookie. */
+		{
+			struct flpr_msg pong = {
+				.type = FLPR_MSG_STRESS_PONG,
 				.version = FLPR_PROTOCOL_VERSION,
-				.seq = cpuapp_seq,
-				.data = k_uptime_get_32(),
+				.seq = msg->seq,
+				.data = msg->data,
 			};
-			(void)ipc_service_send(&ipc_ep, &echo, sizeof(echo));
+			(void)send_msg(&pong);
 		}
 		break;
 
 	default:
+		cpuapp.err_unknown++;
 		break;
 	}
 }
@@ -101,20 +116,6 @@ static const struct ipc_ept_cfg ep_cfg = {
 		},
 };
 
-/* ── Helper ────────────────────────────────────────────────────── */
-
-static int send_msg(uint8_t type, uint16_t seq, uint32_t data_val)
-{
-	struct flpr_msg msg = {
-		.type = type,
-		.version = FLPR_PROTOCOL_VERSION,
-		.seq = seq,
-		.data = data_val,
-	};
-
-	return ipc_service_send(&ipc_ep, &msg, sizeof(msg));
-}
-
 /* ── main ──────────────────────────────────────────────────────── */
 
 int main(void)
@@ -122,8 +123,13 @@ int main(void)
 	const struct device *ipc_dev;
 	int ret;
 
-	/* Boot nonce: uptime at boot start. Detects reboot (epoch changes). */
-	boot_nonce = k_uptime_get_32();
+	/* Epoch: capture GRTC counter at boot. GRTC is a free-running
+	 * 32-bit counter driven by LFCLK (32.768 kHz). Nonzero, monotonic
+	 * across resets — provides distinct epochs for reboot detection.
+	 * k_cycle_get_32() returns GRTC cycle count on nRF54L15. */
+	boot_epoch = k_cycle_get_32();
+
+	memset(&cpuapp, 0, sizeof(cpuapp));
 
 	ipc_dev = DEVICE_DT_GET(DT_NODELABEL(ipc0));
 	if (!device_is_ready(ipc_dev)) {
@@ -140,29 +146,43 @@ int main(void)
 		return ret;
 	}
 
-	/* Wait for binding with CPUAPP. */
 	k_sem_take(&bound_sem, K_FOREVER);
 
-	/* Send READY with protocol version + epoch. */
-	do {
-		ret = send_msg(FLPR_MSG_READY, 0, boot_nonce);
-	} while (ret == -ENOMEM);
+	/* Send READY with epoch. */
+	{
+		struct flpr_msg ready = {
+			.type = FLPR_MSG_READY,
+			.version = FLPR_PROTOCOL_VERSION,
+			.seq = 0,
+			.data = boot_epoch,
+		};
+		do {
+			ret = send_msg(&ready);
+		} while (ret == -ENOMEM);
+	}
 
-	/* Wait for ACK (timeout 5 s). */
+	/* Wait for READY_ACK (timeout 5 s). */
 	uint32_t wait_start = k_uptime_get_32();
-	while (!acked && (k_uptime_get_32() - wait_start) < 5000U) {
+	while (!cpuapp.acked && (k_uptime_get_32() - wait_start) < 5000U) {
 		k_msleep(10);
 	}
 
-	/* Heartbeat loop: send every 1 s. CPUAPP sends at 1 Hz too; we echo. */
+	/* 1 Hz heartbeat loop. */
 	while (1) {
-		uint16_t seq = (uint16_t)(hb_tx_seq & 0xFFFFU);
-		ret = send_msg(FLPR_MSG_HEARTBEAT, seq, k_uptime_get_32());
+		uint32_t now_ms = k_uptime_get_32();
+		uint16_t seq = (uint16_t)(cpuapp.tx_seq & 0xFFFFU);
+
+		struct flpr_msg hb = {
+			.type = FLPR_MSG_HEARTBEAT,
+			.version = FLPR_PROTOCOL_VERSION,
+			.seq = seq,
+			.data = now_ms,
+		};
+		ret = send_msg(&hb);
 		if (ret == -ENOMEM) {
-			/* Buffer full — back off, skip this beat. */
 			k_msleep(FLPR_HEARTBEAT_INTERVAL_MS);
 		} else {
-			hb_tx_seq++;
+			cpuapp.tx_seq++;
 			k_sleep(K_MSEC(FLPR_HEARTBEAT_INTERVAL_MS));
 		}
 	}
