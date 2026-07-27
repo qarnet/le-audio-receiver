@@ -304,7 +304,6 @@ ZTEST(asrc, test_chunking_invariance_480_vs_irregular)
 
 /* ── 6.  Global continuous coordinates — independent float64 ref ──── */
 
-
 ZTEST(asrc, test_global_continuous_ref)
 {
 	/* Deterministic consistency: two independent ASRC instances
@@ -335,19 +334,24 @@ ZTEST(asrc, test_global_continuous_ref)
 		int16_t ni1, no1, ni2, no2;
 
 		zassert_equal(audio_asrc_process(&ctx1, buf_in, 480, buf_out1, 2000, ppm, pl1, pr1,
-					 pv1, &c1, &p1, &ni1, &no1),
+						 pv1, &c1, &p1, &ni1, &no1),
 			      0, "b%d ctx1", blk);
 		zassert_equal(audio_asrc_process(&ctx2, buf_in, 480, buf_out2, 2000, ppm, pl2, pr2,
-					 pv2, &c2, &p2, &ni2, &no2),
+						 pv2, &c2, &p2, &ni2, &no2),
 			      0, "b%d ctx2", blk);
 
 		zassert_equal(p1, p2, "b%d same produced", blk);
 		for (size_t i = 0; i < p1; i++) {
 			zassert_equal(buf_out1[i * 2], buf_out2[i * 2], "b%d L[%zu]", blk, i);
-			zassert_equal(buf_out1[i * 2 + 1], buf_out2[i * 2 + 1], "b%d R[%zu]", blk, i);
+			zassert_equal(buf_out1[i * 2 + 1], buf_out2[i * 2 + 1], "b%d R[%zu]", blk,
+				      i);
 		}
-		pl1 = ni1; pr1 = no1; pv1 = true;
-		pl2 = ni2; pr2 = no2; pv2 = true;
+		pl1 = ni1;
+		pr1 = no1;
+		pv1 = true;
+		pl2 = ni2;
+		pr2 = no2;
+		pv2 = true;
 		total += p1;
 	}
 	zassert_true(total > 0, "total %zu > 0", total);
@@ -510,13 +514,15 @@ ZTEST(asrc, test_deterministic_60000)
 		pv = true;
 	}
 	zassert_equal(total_in, 60000 * 480, "total in consumed");
-	size_t ideal_out = (size_t)(60000ULL * 480 * 47619 / 48000);
 
-	/* Fixed-point Q32.32 step rounding may shift the total by
-	 * a small amount per boundary.  ±200 is generous for 60 000 blocks.
+	/* Continuous ideal with varying ppm and nearest-rounded step:
+	 * 28 571 480 (computed by host reference; the simple
+	 * 60 000×480×47 619/48 000 formula ignores ppm variation).
 	 */
-	zassert_true(total_out >= ideal_out - 200 && total_out <= ideal_out + 200,
-		     "total out %zu ≈ %zu", total_out, ideal_out);
+	size_t ideal_out = 28571480;
+
+	zassert_true(total_out >= ideal_out - 2 && total_out <= ideal_out + 2,
+		     "total out %zu within ±2 of %zu", total_out, ideal_out);
 }
 
 /* ── 11. Monotonic ramp ──────────────────────────────────────────── */

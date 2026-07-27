@@ -33,9 +33,18 @@
 /* ── interp_s16 ────────────────────────────────────────────────────
  *
  * Linear interpolation between two signed-16 values.
- * Uses signed int64 exclusively; intermediate rounded by adding
- * 2³¹ before truncation (division by 2³² truncates toward zero
- * in C99 for negative — documented deterministic behaviour).
+ * Uses signed int64_t exclusively; result obtained by signed
+ * division by Q32_ONE (2³²) — no right shift of negative values.
+ *
+ * Rounding rule: nearest, ties away from zero.
+ * Implementation: truncate toward zero via C99 signed division,
+ * then inspect the remainder to decide whether to round away.
+ *
+ *   |remainder| >  Q32_ONE/2  → round away from zero
+ *   |remainder| == Q32_ONE/2  → tie, round away from zero
+ *
+ * Result guaranteed within s16 range (weighted average of two
+ * s16 values).
  */
 
 static inline int16_t interp_s16(int16_t a, int16_t b, uint32_t frac)
@@ -43,14 +52,16 @@ static inline int16_t interp_s16(int16_t a, int16_t b, uint32_t frac)
 	int64_t wa = (int64_t)a * (int64_t)(Q32_ONE - frac);
 	int64_t wb = (int64_t)b * (int64_t)frac;
 	int64_t sum = wa + wb;
+	int64_t q32 = (int64_t)Q32_ONE;
+	int64_t half = q32 / 2;
 
-	/* Round: add 2³¹ (half step) so truncation gives nearest.
-	 * For negative sums this biases toward +∞ (ties away from
-	 * zero).  The rounding error is ≤ 0.5 LSB.
-	 */
-	sum += (int64_t)(Q32_ONE >> 1);
+	int64_t result = sum / q32;       /* truncate toward zero (C99 §6.5.5) */
+	int64_t rem = sum - result * q32; /* exact remainder, sign = dividend */
 
-	return (int16_t)(sum >> 32);
+	if (rem > half || rem < -half || rem == half || rem == -half) {
+		result += (sum >= 0) ? 1 : -1;
+	}
+	return (int16_t)result;
 }
 
 /* ── compute_step ────────────────────────────────────────────────── */
@@ -62,12 +73,11 @@ static uint64_t compute_step(uint64_t step_base, int32_t ppm)
 	}
 
 	int64_t base_signed = (int64_t)step_base;
-	int64_t delta = (base_signed * (int64_t)ppm) / 1000000LL;
-
-	/* base_signed + delta: delta may be negative; step never
-	 * underflows for realistic rates (|ppm| ≤ 3000 → |delta|
-	 * < 0.3 % of step_base).
+	/* Round the delta to nearest (ties away from zero for
+	 * negative values via truncation toward zero in C99).
 	 */
+	int64_t delta = (base_signed * (int64_t)ppm + 500000) / 1000000LL;
+
 	int64_t step_signed = base_signed + delta;
 
 	if (step_signed <= 0) {
@@ -75,6 +85,8 @@ static uint64_t compute_step(uint64_t step_base, int32_t ppm)
 	}
 	return (uint64_t)step_signed;
 }
+
+/* ── public API ─────────────────────────────────────────────── */
 
 /* ── public API ──────────────────────────────────────────────────── */
 
@@ -90,7 +102,11 @@ int audio_asrc_init(struct audio_asrc *ctx, uint32_t input_rate_hz, uint32_t out
 		return -EINVAL;
 	}
 
-	uint64_t step = ((uint64_t)input_rate_hz << 32) / output_rate_hz;
+	/* Nearest-neighbour rounding of the exact rational step.
+	 * Without rounding the truncation bias accumulates, causing
+	 * cumulative output drift versus the continuous ideal.
+	 */
+	uint64_t step = (((uint64_t)input_rate_hz << 32) + output_rate_hz / 2) / output_rate_hz;
 
 	if (step == 0) {
 		return -EINVAL;
