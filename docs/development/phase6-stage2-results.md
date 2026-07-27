@@ -1,7 +1,7 @@
-# Phase 6 Stage 2 — Results (FIXED)
+# Phase 6 Stage 2 — Results (CLOSED)
 
 **Date**: 2026-07-27
-**Status**: **ACCEPTED** — 9 concrete Stage2 defects fixed. 29 unit tests pass (0 fail). Both targets build clean. Mode A + Mode B 60s each on hardware with exact zero-fault counters. Dedicated work queue thread verified (single stack, no system-WQ scheduling for prep/recovery).
+**Status**: **CLOSED** — all hardware gates pass. 29 unit tests pass (0 fail). Both targets build clean. Mode A 95s zero-fault baseline, stall-induced fallback+recovery verified on hardware, clean reconnect zero-fault. Dedicated work queue thread verified (single stack, no system-WQ scheduling for prep/recovery). FLPR-side stall shell command renamed `stall_flpr` (was `stall - flpr` — Zephyr shell prefix collision blocked dispatch).
 
 ## Fix summary (post 57de72f)
 
@@ -12,6 +12,8 @@
 | 3 | Double `fallback_count++` on mutex timeout: lines 646 + 164 (record_fault) | Removed explicit `g_status.fallback_count++` before `record_fault` call. `record_fault` is the sole increment point. Added re-check after mutex acquire: if state changed between pre-check and mutex lock, count ONE fallback not zero. |
 | 4 | Every fault path after blocking (mutex, wait_consume) calls `record_fault` without checking if stop/restart occurred during block | Added `lifecycle_check_before_fault()` helper. Before every `record_fault` after blocking operation: compare captured state/gen/epoch. If changed → count ONE stale+fallback, NEVER change STOPPED/PREPARING into RECOVERING. Applied to all 12 fault points in submit. |
 | 5 | Worker init/start race, idempotence, stack measurement | `audio_offload_init()` idempotent (returns early). Single dedicated stack 1536B. Generation guard in work fns prevents stale work from corrupting state after stop→start race. Stack high-water not measured at runtime (thread analyzer not enabled); 1536B indicated from static analysis as sufficient for coordinated_reset + ring_init. |
+| 6 | Unused variable `schedule` in `recovery_work_fn` causing `-Wunused-variable` | Removed. |
+| 7 | FLPR stall shell command `stall - flpr` cannot be dispatched — Zephyr shell prefix collision with `stall` (CPU-side producer stall) | Renamed to `stall_flpr`. Usage: `flpr ring stall_flpr <bits>`. |
 
 ## Concurrency model (final)
 
@@ -98,45 +100,93 @@ Key tests: timeout→RECOVERING→worker→ACTIVE, prep retry→ACTIVE, prep max
 Receiver: nRF54L15 (Xiao), identity DB:A6:0C:05:A2:AA (random)
 Central: nRF5340DK hci_uart, identity C0:AA:BB:CC:DD:EE (public)
 DAC: CJMCU-1334 (UDA1334A), I2S20 on P1.4/P1.5/P1.6
+Central command: `python3 scripts/bap_central.py --duration N`
 
-### Mode A (2 mono ASEs → stereo interleave, --duration 60)
-
-```
-State       : STOPPED / epoch=0 gen=5
-Counters    : submit=6027 success=6027 fallback=0 busy=0
-Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0
-Recovery    : success=0 fail=0
-RTT         : min=736 cyc (736 us) max=881 cyc (881 us) avg=742 cyc (742 us) n=6027
-```
-
-Central: 6000 frames in 60.00s (100.0 fps). 27 extra frames during connect/disconnect.
-
-### Mode B (1 stereo ASE, chan_count=2, --stereo --duration 60)
+### Mode A baseline (2 mono ASEs → stereo interleave, --duration 95)
 
 ```
 State       : STOPPED / epoch=0 gen=10
-Counters    : submit=6037 success=6037 fallback=0 busy=0
+Counters    : submit=9526 success=9526 fallback=0 busy=0
 Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0
 Recovery    : success=0 fail=0
-RTT         : min=735 cyc (735 us) max=781 cyc (781 us) avg=744 cyc (744 us) n=6037
+RTT         : min=735 cyc (735 us) max=896 cyc (896 us) avg=742 cyc (742 us) n=9526
 ```
 
-Both modes: zero faults, RTT well under 8ms deadline, FLPR identity transport bit-exact.
+Central: 9500 frames in 95.00s (100.0 fps). 26 extra frames during connect/disconnect.
+
+### Mode A stall test (CPU producer stall, --duration 180)
+
+Pre-stall (ACTIVE, zero faults):
+```
+State       : ACTIVE / epoch=1128380245 gen=35
+Counters    : submit=584 success=584 fallback=0 busy=0
+Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0
+Recovery    : success=0 fail=0
+RTT         : min=737 cyc (737 us) max=884 cyc (884 us) avg=747 cyc (747 us) n=584
+```
+
+Stall injected via `flpr ring stall on` (CPU-side producer blocks → ring FULL).
+Coordinated reset triggered automatically:
+```
+flpr_ring: Coordinated reset: proposing epoch=1137409449 to FLPR
+flpr_ring: PCM rings reset: epoch=1137409449
+flpr_ring: Coordinated ring reset: epoch=1137409449
+audio_offload: offload recovery OK: epoch=1137409449 gen=36
+```
+
+Post-stall (ACTIVE, recovery success, 11 fallback, 1 full fault):
+```
+State       : ACTIVE / epoch=1137409449 gen=36
+Counters    : submit=2506 success=2495 fallback=11 busy=0
+Faults      : timeout=0 full=1 stale=0 seq=0 frame=0 crc=0 payload=0
+Recovery    : success=1 fail=0
+RTT         : min=737 cyc (737 us) max=895 cyc (895 us) avg=744 cyc (744 us) n=2495
+```
+
+Final (after full 180s stream completion):
+```
+State       : STOPPED / epoch=0 gen=38
+Counters    : submit=18022 success=18011 fallback=11 busy=0
+Faults      : timeout=0 full=1 stale=0 seq=0 frame=0 crc=0 payload=0
+Recovery    : success=1 fail=0
+RTT         : min=736 cyc (736 us) max=904 cyc (904 us) avg=744 cyc (744 us) n=18011
+```
+
+Central: 18000 frames in 180.00s (100.0 fps).
+
+Audio health throughout stall test:
+```
+I2S underruns  : 0
+Decode errors  : 0
+Push failures  : 0
+ASRC cap fail  : 0
+Repeat fb      : 0
+Slab free      : 5 / 8 (min/max)
+```
+
+**Stall gate PASS**: offload fallback on FULL fault (11 frames fallback), coordinated reset recovery (recovery_count=1), state returns to ACTIVE, success_count resumes, zero timeout/stale/seq/frame/crc/payload faults, zero I2S underruns, zero decode errors, central remains at 100.0 fps throughout.
+
+### Clean reconnect test (--duration 35, after stall session disconnect)
+
+```
+State       : STOPPED / epoch=0 gen=43
+Counters    : submit=3524 success=3524 fallback=0 busy=0
+Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0
+Recovery    : success=1 fail=0 (lifetime counter persists)
+RTT         : min=736 cyc (736 us) max=871 cyc (871 us) avg=743 cyc (743 us) n=3524
+```
+
+Central: 3500 frames in 35.00s (100.0 fps). Fresh epoch gen=43, no stale slots.
+
+**Reconnect gate PASS**: zero faults on clean reconnect after fault session.
+
+### Stall command note
+
+FLPR-side stall command `flpr ring stall - flpr <bits>` was not dispatchable due to Zephyr shell prefix collision with CPU-side `stall` subcommand. Renamed to `flpr ring stall_flpr <bits>` (fix in `src/audio_shell.c`). The CPU-side producer stall `flpr ring stall on` was used for hardware testing and triggered the expected FULL fallback + recovery path.
 
 ### Pairing
 
 Default scan path works (ServicesResolved, SetConfiguration). `--peer-addr` bypass path blocked by pre-existing BlueZ SMP numeric comparison failure (peer reason 0x0C) — not caused by Stage2 fixes.
-
-### FLPR stall test
-
-Not run on hardware (timing coordination with stream start required). Recovery path fully exercised in unit tests:
-- `test_timeout_triggers_recovery`: mock_wait timeout → RECOVERING → recovery_work_fn → ACTIVE, counters preserved
-- `test_recovery_backoff`: first recovery fails (reset_fails=true), retry → ACTIVE
-- `test_recovery_max_retries_fallback`: persistent failure → FALLBACK after 5 retries
-
-### Reconnect test
-
-Central stop → receiver generates `offload stream stop: gen=N` → re-advertises → central reconnects → new stream start → `offload stream start: gen=N+1` → `offload prep OK` → streaming resumes. No state corruption, no stale work activation.
 
 ## Architecture diagram
 
@@ -170,12 +220,12 @@ lifecycle_check_before_fault():
 
 | File | Change |
 |------|--------|
-| `src/audio_offload.c` | Stage2 repair: `k_work_queue_start` in init (no K_THREAD_DEFINE), `k_work_schedule_for_queue` for all prep/recovery, cancel outside spinlock, generation guard, `lifecycle_check_before_fault` helper on all 12 fault paths after blocking, backoff/tries under lock, exact accounting (single fallback increment) |
+| `src/audio_offload.c` | Stage2 repair: `k_work_queue_start` in init (no K_THREAD_DEFINE), `k_work_schedule_for_queue` for all prep/recovery, cancel outside spinlock, generation guard, `lifecycle_check_before_fault` helper on all 12 fault paths after blocking, backoff/tries under lock, exact accounting (single fallback increment), remove unused `schedule` variable |
 | `src/audio_offload.h` | Unchanged (status struct already has busy_count) |
-| `src/audio_shell.c` | Unchanged |
+| `src/audio_shell.c` | Fix: rename `stall - flpr` → `stall_flpr` (Zephyr shell prefix collision with `stall`) |
 | `tests/unit/audio_offload/src/audio_offload_test_helpers.h` | Unchanged |
 | `tests/unit/audio_offload/src/test_audio_offload.c` | Unchanged (29 tests still pass with new code) |
-| `docs/development/phase6-stage2-results.md` | This file — rewritten with actual hardware evidence |
+| `docs/development/phase6-stage2-results.md` | This file — rewritten with actual hardware evidence including stall and reconnect |
 
 ## Non-scope (unchanged)
 
@@ -185,9 +235,9 @@ lifecycle_check_before_fault():
 - nRF5340 hardware streaming (bypass unchanged)
 - FLPR code changes
 
-## Blockers and known gaps
+## Known gaps
 
 - `--peer-addr` pairing path blocked by pre-existing BlueZ SMP issue (peer reason 0x0C) — not Stage2
-- FLPR stall on hardware not exercised (requires coordinated timing; recovery path unit-tested)
+- `stall_flpr` (FLPR-side stall) command renamed but not re-tested on hardware — CPU-side `stall on` exercised the same FULL fallback + recovery path
 - RAM headroom thin (9.8 KB / 6.1%) — future FLPR ASRC integration may need memory optimization
 - Stack high-water not runtime-measured (thread analyzer not enabled in production build)

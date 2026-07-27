@@ -840,7 +840,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
 		      cmd_flpr_ring_acceptance, 1, 1),
 	SHELL_CMD_ARG(stall, NULL, "CPU-side producer stall: on|off. Blocks produce_block as FULL.",
 		      cmd_flpr_ring_stall_producer, 1, 1),
-	SHELL_CMD_ARG(stall - flpr, NULL,
+	SHELL_CMD_ARG(stall_flpr, NULL,
 		      "FLPR-side stall: <bits> (0x01=cons_input 0x02=prod_output 0=clear).",
 		      cmd_flpr_ring_stall_flpr, 1, 1),
 	SHELL_SUBCMD_SET_END);

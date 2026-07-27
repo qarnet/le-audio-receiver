@@ -384,7 +384,6 @@ void recovery_work_fn(struct k_work *work)
 	(void)work;
 
 	uint32_t start_gen;
-	bool schedule = false;
 
 	/* ── Entry: check state + capture generation ──────────── */
 	{
