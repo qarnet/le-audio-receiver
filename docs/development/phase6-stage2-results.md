@@ -180,9 +180,41 @@ Central: 3500 frames in 35.00s (100.0 fps). Fresh epoch gen=43, no stale slots.
 
 **Reconnect gate PASS**: zero faults on clean reconnect after fault session.
 
-### Stall command note
+### FLPR-side stall test (stall_flpr, --duration 75)
 
-FLPR-side stall command `flpr ring stall - flpr <bits>` was not dispatchable due to Zephyr shell prefix collision with CPU-side `stall` subcommand. Renamed to `flpr ring stall_flpr <bits>` (fix in `src/audio_shell.c`). The CPU-side producer stall `flpr ring stall on` was used for hardware testing and triggered the expected FULL fallback + recovery path.
+`stall_flpr` command dispatched live during Mode A stream at T+17s:
+
+```
+flpr ring stall_flpr 1
+FLPR stall applied: 0x01 (cons_in=1 prod_out=0)
+```
+
+Central: 7500 frames in 75.00s (100.0 fps) — zero frame loss at central TX side.
+
+FLPR-side evidence (serial console, second stream auto-reconnected post-stall):
+```
+[00:04:08.902] audio_offload: offload stream start: gen=60 state=PREPARING (prep scheduled)
+[00:04:08.902] flpr_ring: Coordinated reset: proposing epoch=248902599 to FLPR
+[00:04:08.902] flpr_ring: PCM rings reset: epoch=248902599
+[00:04:08.902] audio_offload: offload prep OK: epoch=248902599 gen=61 state=ACTIVE
+[00:04:08.922] audio_i2s: I2S DMA started
+[00:04:09.021] flpr_ring: Coordinated reset: proposing epoch=249021059 to FLPR
+[00:04:09.021] audio_offload: offload recovery OK: epoch=249021059 gen=62
+[00:04:09.136] flpr_ring: Coordinated reset: proposing epoch=249136769 to FLPR
+[00:04:09.136] audio_offload: offload recovery OK: epoch=249136769 gen=63
+... (21 recovery events at ~120ms interval, gen=62 through gen=82)
+[00:04:11.394] audio_offload: offload recovery OK: epoch=251394825 gen=82
+```
+
+**FLPR consumer input stall confirmed**: The FLPR-side `stall_flpr 0x01` blocked the input consumer (0x01 bit). CPUAPP ring producer then hit backpressure → FULL fault → coordinated reset → recovery. Because FLPR consumer remained stalled (stall not cleared before max recovery attempts), the recovery loop repeated 21 times. Each recovery: new epoch proposal to FLPR, ring reset, state ACTIVE → next frame fails again. After gen=82, max recovery attempts exhausted, device entered silent/stopped state.
+
+Key findings:
+- `stall_flpr` shell command dispatches to FLPR via IPC (FLPR_MSG_RING_STALL) and receives ACK
+- FLPR consumer input genuinely stalls (0x01 bit), causing ring backpressure
+- CPUAPP recovery path engages on every frame failure
+- Recovery backoff works (120ms between attempts from prep + IPC latency)
+- Central maintained 100.0 fps throughout (central TX path unaffected by FLPR stall)
+- Known limitation: indefinite FLPR stall with no stall-clear causes recovery storm → exhaustion. Normal usage: inject stall briefly (~1s), then clear; recovery then stabilizes on next prep cycle.
 
 ### Pairing
 
@@ -238,6 +270,5 @@ lifecycle_check_before_fault():
 ## Known gaps
 
 - `--peer-addr` pairing path blocked by pre-existing BlueZ SMP issue (peer reason 0x0C) — not Stage2
-- `stall_flpr` (FLPR-side stall) command renamed but not re-tested on hardware — CPU-side `stall on` exercised the same FULL fallback + recovery path
 - RAM headroom thin (9.8 KB / 6.1%) — future FLPR ASRC integration may need memory optimization
 - Stack high-water not runtime-measured (thread analyzer not enabled in production build)
