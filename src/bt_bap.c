@@ -40,6 +40,7 @@
 #include "audio_stats.h"
 #include "audio_perf.h"
 #include "audio_volume.h"
+#include "audio_offload.h"
 #include "stream_lifecycle.h"
 
 #if defined(CONFIG_LIBLC3)
@@ -112,8 +113,10 @@ static const struct bt_data ad[] = {
 static int16_t l_buf[SAMPLES_PER_CHANNEL_MAX];
 static int16_t r_buf[SAMPLES_PER_CHANNEL_MAX];
 static int16_t stereo_out[STEREO_OUT_MAX];
+static int16_t offload_out[STEREO_OUT_MAX];
 static bool l_received;
 static bool r_received;
+static uint32_t stereo_block_seq; /* monotonic per-stereo-block counter */
 
 #endif /* CONFIG_LIBLC3 */
 
@@ -334,6 +337,7 @@ static int lc3_stop(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
 	 * callback may fire later and close it again harmlessly.
 	 */
 	if (stream_lifecycle_audio_path_close()) {
+		audio_offload_stream_stop();
 #if defined(CONFIG_LIBLC3)
 		l_received = false;
 		r_received = false;
@@ -355,12 +359,12 @@ static int lc3_release(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp
 	 * already closed by an earlier disable/stop callback.
 	 */
 	if (stream_lifecycle_audio_path_close()) {
+		audio_offload_stream_stop();
 #if defined(CONFIG_LIBLC3)
 		l_received = false;
 		r_received = false;
 #endif
 	}
-
 	memset(&sinks[idx], 0, sizeof(sinks[idx]));
 	if (num_sink_ase > 0) {
 		num_sink_ase--;
@@ -390,7 +394,18 @@ static void push_stereo(void)
 
 		audio_decode_interleave(l_buf, r_buf, stereo_out, n);
 		audio_volume_apply(stereo_out, n * 2);
-		if (audio_sink_push(stereo_out, n * 2) < 0) {
+
+		/* Phase 6 Stage 2: route through offload identity transport.
+		 * On success, offload_out has FLPR-identity output.
+		 * On failure, fall back to original stereo_out (no-drop). */
+		int16_t *push_data = stereo_out;
+		int off_ret =
+			audio_offload_submit(stereo_out, n * 2, stereo_block_seq++, 0, offload_out);
+		if (off_ret == 0) {
+			push_data = offload_out;
+		}
+
+		if (audio_sink_push(push_data, n * 2) < 0) {
 			audio_perf_push_failure();
 		}
 		l_received = false;
@@ -465,7 +480,16 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		audio_decode_sdu(&as->decode, valid ? buf->data : NULL, buf->len, valid,
 				 stereo_out);
 		audio_volume_apply(stereo_out, spc * 2);
-		if (audio_sink_push(stereo_out, spc * 2) < 0) {
+
+		/* Phase 6 Stage 2: FLPR identity transport. */
+		int16_t *push_data = stereo_out;
+		int off_ret = audio_offload_submit(stereo_out, spc * 2, stereo_block_seq++, 0,
+						   offload_out);
+		if (off_ret == 0) {
+			push_data = offload_out;
+		}
+
+		if (audio_sink_push(push_data, spc * 2) < 0) {
 			audio_perf_push_failure();
 		}
 	} else if (num_sink_ase >= 2) {
@@ -504,7 +528,16 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		audio_decode_sdu(&as->decode, valid ? buf->data : NULL, buf->len, valid,
 				 stereo_out);
 		audio_volume_apply(stereo_out, spc * 2);
-		if (audio_sink_push(stereo_out, spc * 2) < 0) {
+
+		/* Phase 6 Stage 2: FLPR identity transport. */
+		int16_t *push_data = stereo_out;
+		int off_ret = audio_offload_submit(stereo_out, spc * 2, stereo_block_seq++, 0,
+						   offload_out);
+		if (off_ret == 0) {
+			push_data = offload_out;
+		}
+
+		if (audio_sink_push(push_data, spc * 2) < 0) {
 			audio_perf_push_failure();
 		}
 	}
@@ -547,6 +580,7 @@ static void stream_stopped(struct bt_bap_stream *s, uint8_t reason)
 	 * callback may fire later and close it again harmlessly.
 	 */
 	if (stream_lifecycle_audio_path_close()) {
+		audio_offload_stream_stop();
 #if defined(CONFIG_LIBLC3)
 		l_received = false;
 		r_received = false;
@@ -574,6 +608,10 @@ static void stream_started(struct bt_bap_stream *s)
 		 * 'audio perf' before gate opens to inspect completed-session data.
 		 */
 		audio_perf_reset();
+
+		/* Phase 6 Stage 2: start offload pipeline for new stream. */
+		stereo_block_seq = 0;
+		audio_offload_stream_start();
 	}
 }
 
@@ -602,6 +640,7 @@ static void stream_disabled_cb(struct bt_bap_stream *s)
 	bool was_open = stream_lifecycle_audio_path_close();
 	if (was_open) {
 		LOG_INF("Audio path gate CLOSED (first disable)");
+		audio_offload_stream_stop();
 #if defined(CONFIG_LIBLC3)
 		l_received = false;
 		r_received = false;
@@ -661,6 +700,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	 * clear all state including the per-sink started flags.
 	 */
 	stream_lifecycle_audio_path_close();
+	audio_offload_stream_stop();
 	stream_lifecycle_reset();
 
 #if defined(CONFIG_LIBLC3)

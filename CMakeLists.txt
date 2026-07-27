@@ -29,6 +29,7 @@ target_sources(app PRIVATE
   src/audio_volume.c
   src/audio_timing_math.c
   src/stream_lifecycle.c
+  src/audio_offload.c
 )
 
 zephyr_sources_ifdef(CONFIG_AUDIO_PERF_MEASUREMENT src/audio_perf.c)

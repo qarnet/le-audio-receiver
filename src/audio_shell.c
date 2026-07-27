@@ -13,6 +13,7 @@
 #include "flpr_handshake.h"
 #include "flpr_ring_mgr.h"
 #include "flpr_ring.h"
+#include "audio_offload.h"
 #endif
 
 #include <inttypes.h>
@@ -771,6 +772,41 @@ gate2_done:
 	return 0;
 }
 
+/* ── Offload status command (Phase 6 Stage 2) ──────────────────── */
+
+static int cmd_offload_status(const struct shell *sh, size_t argc, char **argv)
+{
+	(void)argc;
+	(void)argv;
+
+	struct audio_offload_status s;
+	audio_offload_get_status(&s);
+
+	shell_print(sh, "--- Audio offload ---");
+	shell_print(sh, "  State       : %s / %s / epoch=%u", s.initialized ? "init" : "no-init",
+		    s.healthy ? "HEALTHY" : "bypass", s.epoch);
+	shell_print(sh, "  Submits     : %u (success=%u fallback=%u)", s.submit_count,
+		    s.success_count, s.fallback_count);
+	shell_print(sh, "  Faults      : timeout=%u full=%u stale=%u seq=%u frame=%u crc=%u",
+		    s.timeout_count, s.full_count, s.stale_count, s.seq_fault_count,
+		    s.frame_fault_count, s.crc_fault_count);
+	shell_print(sh, "  Recovery    : %u", s.recovery_count);
+
+	if (s.rtt_count > 0) {
+		uint32_t avg = (uint32_t)(s.rtt_sum_cycles / s.rtt_count);
+		shell_print(sh, "  RTT cycles  : min=%u max=%u avg=%u (count=%u)", s.rtt_min_cycles,
+			    s.rtt_max_cycles, avg, s.rtt_count);
+	} else {
+		shell_print(sh, "  RTT cycles  : (none)");
+	}
+
+	if (s.last_error != 0) {
+		shell_print(sh, "  Last err    : %d at seq %u", s.last_error, s.last_error_seq);
+	}
+
+	return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	flpr_ring_cmds, SHELL_CMD_ARG(status, NULL, "PCM ring status.", cmd_flpr_ring_status, 1, 0),
 	SHELL_CMD_ARG(init, NULL, "Initialize PCM rings.", cmd_flpr_ring_init, 1, 0),
@@ -791,6 +827,8 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
 	SHELL_CMD_ARG(stress, NULL, "Stress test N ping/pong (default 100k, max 1M).",
 		      cmd_flpr_stress, 1, 1),
 	SHELL_CMD(ring, &flpr_ring_cmds, "PCM ring transport commands.", NULL),
+	SHELL_CMD_ARG(offload, NULL, "Audio offload status (Phase 6 Stage 2).", cmd_offload_status,
+		      1, 0),
 	SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(flpr, &flpr_cmds, "FLPR co-processor commands.", NULL);

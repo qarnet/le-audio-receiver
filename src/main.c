@@ -20,6 +20,7 @@
 
 #include "audio_sink.h"
 #include "audio_volume.h"
+#include "audio_offload.h"
 #include "bt_bap.h"
 
 #if defined(CONFIG_SOC_NRF54L15)
@@ -138,6 +139,10 @@ int main(void)
 	 * VPR launcher has already released FLPR from reset at this point
 	 * (NORDIC_VPR_LAUNCHER init at POST_KERNEL level). */
 	flpr_handshake_init();
+
+	/* Phase 6 Stage 2: init audio offload (FLPR ring transport).
+	 * Non-blocking — may defer ring init if FLPR not ready yet. */
+	audio_offload_init();
 #endif
 
 	err = bt_bap_restart_advertising();
