@@ -1,6 +1,6 @@
 # LE Audio Receiver — Design Document
 
-Status: **revised 2026-07-27** (Phase 4 closed — PI clock recovery + dual actuators, technical stability gate PASS; Phase 5 ASRC + Phase 6 FLPR offload now planned as intended implementation work). Earlier history: accepted 2026-07-05.
+Status: **revised 2026-07-27** (Phase 5 closed — cpuapp ASRC accepted, Mode A+B 600s zero faults; Phase 6 FLPR offload is next intended implementation). Earlier history: accepted 2026-07-05.
 
 This is the consolidated design doc for the firmware supporting both **nRF5340**
 and **nRF54L15**. It records current state, findings (historical), target

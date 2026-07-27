@@ -30,9 +30,6 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_AUDIO_CLOCK_ACTUATOR_APLL),
 #elif defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
 BUILD_ASSERT(IS_ENABLED(CONFIG_AUDIO_CLOCK_ACTUATOR_NONE),
 	     "ASRC_LINEAR resampler requires NONE actuator");
-#elif defined(CONFIG_AUDIO_RESAMPLER_SAMPLE_ADJUST)
-BUILD_ASSERT(IS_ENABLED(CONFIG_AUDIO_CLOCK_ACTUATOR_SAMPLE_ADJUST),
-	     "SAMPLE_ADJUST resampler requires SAMPLE_ADJUST actuator");
 #endif
 
 #define I2S_NODE    DT_ALIAS(i2s_audio)
@@ -75,9 +72,6 @@ static int16_t asrc_prev_r;
 static bool asrc_prev_valid;
 #endif
 
-static uint32_t insert_count;
-static uint32_t drop_count;
-
 static void drift_reset(void)
 {
 	audio_drift_reset();
@@ -87,8 +81,6 @@ static void drift_reset(void)
 	asrc_prev_valid = false;
 #endif
 	audio_rate_converter_init(&rate_ctx, 48000, CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ);
-	insert_count = 0;
-	drop_count = 0;
 }
 
 static int i2s_do_configure(void)
@@ -224,60 +216,6 @@ static int fill_block_asrc(const int16_t *stereo_data, int32_t ppm, void **block
 	return 0;
 }
 
-#elif defined(CONFIG_AUDIO_RESAMPLER_SAMPLE_ADJUST)
-
-static int fill_block_legacy(const int16_t *stereo_data, int32_t ppm_unused, void **block,
-			     size_t *output_frames)
-{
-	(void)ppm_unused;
-
-	size_t base_output = audio_rate_converter_next_frames(&rate_ctx, INPUT_FRAMES);
-	int adj = audio_clock_actuator_consume_sample_adjustment();
-
-	if (adj == -1) {
-		insert_count++;
-	} else if (adj == +1) {
-		drop_count++;
-	}
-
-	if (adj != 0) {
-		uint32_t total = insert_count + drop_count;
-
-		if (total == 1) {
-			LOG_INF("First sample adjustment: %s (ins=%u drops=%u)",
-				adj == 1 ? "drop" : "insert", insert_count, drop_count);
-		} else if (total % 500 == 0) {
-			LOG_INF("Sample adjustments: ins=%u drops=%u (total=%u)", insert_count,
-				drop_count, total);
-		}
-	}
-
-	size_t out_frames;
-
-	if (adj > 0 && (size_t)adj <= base_output) {
-		out_frames = base_output - (size_t)adj;
-	} else if (adj < 0) {
-		out_frames = base_output + (size_t)(-adj);
-	} else {
-		out_frames = base_output;
-	}
-	out_frames = CLAMP(out_frames, 1, MAX_OUTPUT_FRAMES);
-
-	int ret = k_mem_slab_alloc(&i2s_slab, block, K_NO_WAIT);
-
-	if (ret < 0) {
-		LOG_WRN("I2S slab full — dropping frame");
-		audio_stats_i2s_underrun();
-		return ret;
-	}
-
-	memset(*block, 0, BLOCK_SIZE);
-	audio_rate_converter_nearest_stereo(stereo_data, INPUT_FRAMES, (int16_t *)*block,
-					    out_frames);
-	*output_frames = out_frames;
-	return 0;
-}
-
 #else /* AUDIO_RESAMPLER_IDENTITY */
 
 static int fill_block_identity(const int16_t *stereo_data, int32_t ppm_unused, void **block,
@@ -338,8 +276,6 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 
 #if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
 	ret = fill_block_asrc(stereo_data, ppm, &block, &output_frames);
-#elif defined(CONFIG_AUDIO_RESAMPLER_SAMPLE_ADJUST)
-	ret = fill_block_legacy(stereo_data, ppm, &block, &output_frames);
 #else
 	ret = fill_block_identity(stereo_data, ppm, &block, &output_frames);
 #endif

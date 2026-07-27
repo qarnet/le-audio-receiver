@@ -15,8 +15,6 @@
 
 #if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
 #define RESAMPLER_NAME "ASRC linear"
-#elif defined(CONFIG_AUDIO_RESAMPLER_SAMPLE_ADJUST)
-#define RESAMPLER_NAME "sample adjust"
 #elif defined(CONFIG_AUDIO_RESAMPLER_IDENTITY)
 #define RESAMPLER_NAME "identity"
 #else
@@ -70,10 +68,10 @@ static int cmd_perf(const struct shell *sh, size_t argc, char **argv)
 
 	audio_perf_snapshot(paths, &queue);
 
-#if defined(CONFIG_AUDIO_PERF_MEASUREMENT)
-	uint32_t deadline_cyc = k_us_to_cyc_ceil32((uint32_t)CONFIG_AUDIO_PERF_DEADLINE_US);
+#if !defined(CONFIG_AUDIO_PERF_MEASUREMENT)
+	uint32_t deadline_us = 1; /* avoid div0 */
 #else
-	uint32_t deadline_cyc = 1; /* avoid div0 */
+	uint32_t deadline_us = (uint32_t)CONFIG_AUDIO_PERF_DEADLINE_US;
 #endif
 
 	shell_print(sh, "--- Performance ---");
@@ -85,19 +83,17 @@ static int cmd_perf(const struct shell *sh, size_t argc, char **argv)
 		uint32_t avg_us = k_cyc_to_us_ceil32(avg_cyc);
 		uint32_t max_us = k_cyc_to_us_ceil32(max_cyc);
 
-		/* Deadline percentage: use uint64_t to avoid overflow in
-		 * max_cyc * 100.  Clamp at 999% so a single outlier does not
-		 * break the column layout.
+		/* Deadline percentage with single-decimal precision
+		 * using integer arithmetic: permille = (max_us * 1000) / deadline_us.
+		 * Display as permille/10 . permille%10 %.
 		 */
-		uint32_t deadline_pct = 0;
-		if (deadline_cyc && max_cyc) {
-			uint64_t pct = (uint64_t)max_cyc * 100ULL;
-			pct = (pct + deadline_cyc - 1U) / deadline_cyc; /* CEIL */
-			deadline_pct = pct > 999U ? 999U : (uint32_t)pct;
+		uint32_t permille = 0;
+		if (deadline_us && max_us) {
+			permille = (uint32_t)(((uint64_t)max_us * 1000ULL) / deadline_us);
 		}
 
-		shell_print(sh, "  %-12s  %6u  %8u  %7u  %8u  %7u  %7u%%", perf_path_names[i],
-			    count, avg_cyc, avg_us, max_cyc, max_us, deadline_pct);
+		shell_print(sh, "  %-12s  %6u  %8u  %7u  %8u  %7u  %5u.%01u%%", perf_path_names[i],
+			    count, avg_cyc, avg_us, max_cyc, max_us, permille / 10, permille % 10);
 	}
 
 	shell_print(sh, "  Queue:");

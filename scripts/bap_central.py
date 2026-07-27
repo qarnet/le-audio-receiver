@@ -2,15 +2,19 @@
 """
 BAP central test driver for LE Audio Receiver.
 
-Usage: sudo python3 scripts/bap_central.py [--stereo] [--duration 30] [--freq 1000]
+Prerequisite: nRF5340DK hci_uart central attached via btattach (see AGENTS.md
+"Central setup").  Run this script WITHOUT sudo; only the raw-HCI subprocess
+uses sudo internally.
+
+Usage: python3 scripts/bap_central.py [--stereo] [--duration N] [--freq FREQ]
 
 Registers a BAP source endpoint on hci0, pairs + connects to the LE Audio
 Receiver peripheral, acquires the MediaTransport, and streams a 1 kHz sine
-tone as LC3 (48 kHz / 10 ms / 96 kbps).
+tone as LC3 (48 kHz / 10 ms / 96 kbps for mono, 192 kbps for stereo).
 
 --stereo: use stereo Mode B (single ASE, 240-byte SDU)
 --duration N: stream for N seconds (default 30)
---freq FREQ: sine frequency (default 1000)
+--freq FREQ: sine frequency in Hz (default 1000)
 """
 
 import argparse

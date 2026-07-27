@@ -27,15 +27,15 @@ Two mono ASEs (FL=0x01, FR=0x02), Mode A stereo.
   ASRC capacity failure, or assertion
 - Clean teardown
 
-### Performance (Mode A, 128 MHz cpuapp)
+### Performance (Mode A, 1 MHz kernel timer = 1 µs/tick)
 
 | Path | Count | Avg cyc | Avg us | Max cyc | Max us | %deadline |
 |------|-------|---------|--------|---------|--------|-----------|
-| iso_recv | 120,058 | 1,819 | 14.6 | 2,451 | 19.6 | 25% |
-| lc3_decode | 120,048 | 1,425 | 11.4 | 1,636 | 13.1 | 17% |
-| volume | 60,023 | 99 | 0.8 | 159 | 1.3 | 2% |
-| sink_push | 60,022 | 631 | 5.0 | 780 | 6.2 | 8% |
-| **asrc** | **60,023** | **446** | **3.6** | **560** | **4.5** | **6%** |
+| iso_recv | 120,058 | 1,819 | 1,819 | 2,451 | 2,451 | 24.5% |
+| lc3_decode | 120,048 | 1,425 | 1,425 | 1,636 | 1,636 | 16.4% |
+| volume | 60,023 | 99 | 99 | 159 | 159 | 1.6% |
+| sink_push | 60,022 | 631 | 631 | 780 | 780 | 7.8% |
+| **asrc** | **60,023** | **446** | **446** | **560** | **560** | **5.6%** |
 
 Queue: slab free 5/7 (min/max), output frames 476/477, blocks 60,022.
 PCLK diagnostics active: ~1,091–1,542 ppm across run.
@@ -68,15 +68,15 @@ Audio path gate OPEN (stream[0] completed the set)
   ASRC capacity failure, or assertion
 - Clean teardown
 
-### Performance (Mode B, 128 MHz cpuapp)
+### Performance (Mode B, 1 MHz kernel timer = 1 µs/tick)
 
 | Path | Count | Avg cyc | Avg us | Max cyc | Max us | %deadline |
 |------|-------|---------|--------|---------|--------|-----------|
-| iso_recv | 60,024 | 3,498 | 28.0 | 3,786 | 30.3 | 38% |
-| lc3_decode | 120,048 | 1,375 | 11.0 | 1,680 | 13.4 | 17% |
-| volume | 60,024 | 99 | 0.8 | 128 | 1.0 | 2% |
-| sink_push | 60,023 | 634 | 5.1 | 848 | 6.8 | 9% |
-| **asrc** | **60,024** | **447** | **3.6** | **661** | **5.3** | **7%** |
+| iso_recv | 60,024 | 3,498 | 3,498 | 3,786 | 3,786 | 37.9% |
+| lc3_decode | 120,048 | 1,375 | 1,375 | 1,680 | 1,680 | 16.8% |
+| volume | 60,024 | 99 | 99 | 128 | 128 | 1.3% |
+| sink_push | 60,023 | 634 | 634 | 848 | 848 | 8.5% |
+| **asrc** | **60,024** | **447** | **447** | **661** | **661** | **6.6%** |
 
 Queue: slab free 5/7 (min/max), output frames 476/478, blocks 60,023.
 PCLK diagnostics active: ~1,510–1,837 ppm across run.
@@ -85,15 +85,13 @@ PCLK diagnostics active: ~1,510–1,837 ppm across run.
 
 | Metric | Mode A | Mode B |
 |--------|--------|--------|
-| ASRC avg cycles | 446 | 447 |
-| ASRC avg us | 3.6 | 3.6 |
-| ASRC max cycles | 560 | 661 |
-| ASRC max us | 4.5 | 5.3 |
-| Deadline % | 6% | 7% |
+| ASRC avg | 446 | 447 |
+| ASRC max | 560 | 661 |
+| Deadline % | 5.6% | 6.6% |
 | iso_recv count | 120,058 (2 ASE) | 60,024 (1 ASE) |
 | lc3_decode count | 120,048 | 120,048 |
 
-Negligible difference. Both modes ~7% of 10 ms deadline.
+Negligible difference. Both modes well under 10 ms deadline.
 
 ## nRF5340 regression
 
@@ -102,11 +100,21 @@ run deferred. `nrf-probes` evidence logged above.
 
 ## Unit tests
 
-All **20 ASRC unit tests PASS** (native_sim):
-- Capacity overflow, chunking invariance, cross-block phase continuity,
-  deterministic 60,000-block run, global continuous reference comparison,
-  identity passthrough, long-run totals, monotonic ramp, ppm sign chain,
-  null/rejection/bounds, signed extreme interpolation, worst-case fits 481.
+**ASRC: 20/20 PASS** (native_sim). All 20 tests from commit 4ee37ee rerun
+after deadline correction and SAMPLE_ADJUST removal — zero regressions.
+
+- Capacity overflow state unchanged, chunking invariance (480 vs irregular),
+  cross-block ramp prev-to-first, deterministic 60,000-block run, global
+  continuous reference (vs Python float64), identity cross-block, identity
+  exact N frames, init null rejection, init rate bounds, init step zero
+  rejection, long-run totals, monotonic ramp, negative ppm more frames,
+  positive ppm fewer frames, process null args, process ppm bounds,
+  reset clears phase, signed extreme interpolation, worst-case fits 481,
+  zero input outputs zero.
+
+**All other suites** as of Phase 5 entry (pre-existing, unaffected by this change):
+- drift: 18/18 PASS, actuator: 7/7 PASS, perf: 19/19 PASS
+- timing, lifecycle, decode, rate_convert: all PASS
 
 ## Defects found and fixed
 

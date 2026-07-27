@@ -76,14 +76,13 @@ diagnostics", not tolerated as warnings.
 
 `docs/design.md` is the accepted design doc and phased plan (Phases 0–6) for
 supporting both nRF5340 and nRF54L15. Read it before structural changes.
-Current status: **Phase 4 landed and closed** — PI clock recovery controller (dual-term,
-ppm output) + actuator interface with two actuators: APLL (nRF5340) and
-SAMPLE_ADJUST (nRF54L15, sample insert/drop). The nRF54L15 target now builds,
-flashes, boots, and streams audio with I2S + BT working (technical stability
-gate PASS: 10-minute 60,000-frame stream, zero faults). Phase 5 (ASRC on
-cpuapp) and Phase 6 (FLPR offload) are now intended implementation work —
-see `docs/design.md` for full staged plans. A BabbleSim cross-cutting
-verification track runs in parallel; not a release blocker.
+Current status: **Phase 5 landed and closed** — cpuapp fixed-point linear ASRC
+accepted (Mode A + Mode B, each 600 s, zero faults). Actuators reduced to two:
+APLL (nRF5340) and NONE (nRF54L15, ASRC consumes ppm). Phase 6 (FLPR offload)
+is next intended implementation. A BabbleSim cross-cutting verification track
+runs in parallel; not a release blocker.
+See `docs/design.md` for full staged plans and `docs/development/phase5-hardware-acceptance-results.md`
+for acceptance evidence.
 
 Consequences for work in this repo today:
 
@@ -433,17 +432,15 @@ so reconnect works without re-calling `audio_sink_init`.
 
 ### Clock recovery actuator must match platform
 
-The `AUDIO_CLOCK_ACTUATOR` Kconfig choice selects the actuator. Three options:
+The `AUDIO_CLOCK_ACTUATOR` Kconfig choice selects the actuator. Two production options:
 - `APLL` (default, nRF5340) — `audio_clock_actuator_apll.c`, trims HFCLKAUDIO APLL.
-- `SAMPLE_ADJUST` (nRF54L15) — `audio_clock_actuator_sample_adjust.c`, inserts/drops
-  single PCM samples in the I2S block (degenerate ASRC). The nRF54L15 board conf
-  sets this. No HFCLKAUDIO on nRF54L15 → APLL is not an option there.
-- `NONE` — `audio_clock_actuator_none.c`, controller runs but output is discarded
-  (testing only). Do NOT set on nRF5340 (controller output needs the APLL) and
-  do NOT set on nRF54L15 in production (use SAMPLE_ADJUST).
+- `NONE` — `audio_clock_actuator_none.c`, nRF54L15 production. ASRC consumes
+  controller ppm directly (no physical actuator on nRF54L15).
 
-`audio_clock_actuator_consume_sample_adjustment()` returns ±1/0; APLL and NONE
-always return 0 (data-path adjustment is a no-op for clock-steering actuators).
+`audio_clock_actuator_consume_sample_adjustment()` returns ±1/0; both APLL and
+NONE return 0 (data-path adjustment is a no-op for clock-steering actuators).
+Historical SAMPLE_ADJUST actuator source retained for regression testing only;
+no longer selectable in production Kconfig.
 
 ### Drift controller: PCLK feedforward + per-block phase PI (Phase 4b.2)
 

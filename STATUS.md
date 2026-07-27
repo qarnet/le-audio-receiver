@@ -3,6 +3,16 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
+## Phase 5 — COMPLETE (2026-07-27)
+
+cpuapp fixed-point linear stereo ASRC accepted. Mode A (two mono ASEs) +
+Mode B (single stereo ASE) each ran 600 s autonomous central streams on
+nRF54L15 with zero faults. SAMPLE_ADJUST actuator removed from production
+Kconfig; two actuators remain: APLL (nRF5340) and NONE (nRF54L15, ASRC
+consumes ppm). All 20 ASRC unit tests pass (native_sim). nRF5340 builds
+(hardware regression deferred — no E83 probe). See
+`docs/development/phase5-hardware-acceptance-results.md`.
+
 ## Bottom line
 
 **BLE ISO transport verified** — 3,000 ISO Data TX packets over 15 s through
@@ -53,14 +63,18 @@ PASS evidence.
 
 | Test | Result |
 |------|--------|
-| fw-build-5340 | PASS (no compiler warnings; 8 Kconfig/CMake diagnostics — SDK deprecations, experimental symbols, upstream Kconfig gap — none attributable to repo source; see warning diagnostics below) |
-| fw-build-54l15 | PASS (no compiler warnings; 5 Kconfig/CMake diagnostics — SDK deprecations, informational, watchdog-library-no-sources — none attributable to repo source; see warning diagnostics below) |
-| drift unit tests | 18/18 PASS (incl. directional anti-windup) |
-| actuator unit tests | 7/7 PASS (incl. sign-chain verification) |
-| timing unit tests | all PASS |
-| lifecycle unit tests | all PASS |
-| decode unit tests | all PASS |
-| rate_convert unit tests | all PASS |
+| fw-build-5340 | PASS (8 Kconfig/CMake diagnostics; no compiler warnings) |
+| fw-build-54l15 | PASS (5 Kconfig/CMake diagnostics; no compiler warnings) |
+| ASRC unit tests | 20/20 PASS (native_sim) |
+| drift unit tests | 18/18 PASS |
+| actuator unit tests | 7/7 PASS |
+| timing unit tests | PASS |
+| lifecycle unit tests | PASS |
+| decode unit tests | PASS |
+| rate_convert unit tests | PASS |
+| perf unit tests | PASS |
+| Mode A 600 s (nRF54L15) | PASS — 60000 frames, zero faults |
+| Mode B 600 s (nRF54L15) | PASS — 60000 frames, zero faults |
 3,500 frames at 100 fps, zero slab-full drops, zero DMA underruns,
 I2S DMA started cleanly, push_ret=0 consistently. Root cause was fixed
 PCLK32M hardware-rate mismatch (~47,619 Hz LRCK vs 48,000 Hz decoder output)
@@ -156,16 +170,15 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
  1. ~~**Phase 4b.1** — GRTC-referenced timing foundation~~ → PASS
  2. ~~**Phase 4b.2** — PCLK feedforward + phase PI~~ → PASS
  3. ~~**Phase 4c** — Hardware streaming verification~~ → Technical PASS
- 4. **Phase 5** — ASRC quality upgrade (intended implementation work).
-    Instrumentation baseline first, then stateful cross-block fixed-point
-    linear-interpolation ASRC on cpuapp. See `docs/design.md` Phase 5.
+ 4. ~~**Phase 5** — ASRC quality upgrade~~ → ACCEPTED (2026-07-27).
+    Mode A + Mode B 600 s, zero faults. See
+    `docs/development/phase5-hardware-acceptance-results.md`.
  5. **Phase 6** — FLPR offload (intended implementation work). Move accepted
     ASRC from cpuapp to FLPR. Staged: handshake/rings → identity loopback →
     ASRC port → reset/fault/fallback → optimize. See `docs/design.md` Phase 6.
  6. **BabbleSim** — cross-cutting verification track (research + implementation).
     Provision environment, fix sysbuild/harness, build smallest-useful
-    nRF5340bsim dual-core scenario. Runs in parallel with Phase 5. See
-    `docs/design.md` BabbleSim section.
+    nRF5340bsim dual-core scenario. See `docs/design.md` BabbleSim section.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 
@@ -304,7 +317,7 @@ on close).
 |-----------|---------|------|
 | Audio pipeline | `audio_sink.h`, `audio_i2s.c`, `audio_decode.c` | Sink interface → I2S DMA (slab allocator), LC3 decode + channel routing |
 | Clock recovery | `audio_drift.c`, `audio_drift.h` | PI controller: PCLK feedforward + phase term, ppm output |
-| Actuators | `audio_clock_actuator_apll.c`, `audio_clock_actuator_sample_adjust.c` | APLL (nRF5340) or sample insert/drop (nRF54L15) |
+| Actuators | `audio_clock_actuator_apll.c`, `audio_clock_actuator_none.c` | APLL (nRF5340) or NONE (nRF54L15, ASRC consumes ppm) |
 | Rate conversion | `audio_rate_convert.c` | Nearest-neighbor, 480→476/477 frames/block for PCLK32M mismatch |
 | Timing (nRF54L15) | `audio_timing_nrf54.c` | TIMER20-vs-GRTC PCLK freq measurement, 1 s intervals |
 | Central driver | `scripts/bap_central.py`, `scripts/hci_raw_connect.py` | Raw-HCI direct connect, NINO agent, auto-security via GATT |

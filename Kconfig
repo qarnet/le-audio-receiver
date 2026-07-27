@@ -32,9 +32,8 @@ choice AUDIO_RESAMPLER
 	help
 	  Data-path resampler between decoder output (48 kHz) and I2S
 	  drain.  Must be paired with a compatible AUDIO_CLOCK_ACTUATOR:
-	    IDENTITY       → APLL  (nRF5340 production)
-	    ASRC_LINEAR     → NONE  (nRF54L15 production, ASRC consumes ppm)
-	    SAMPLE_ADJUST   → SAMPLE_ADJUST  (legacy A/B comparison)
+	    IDENTITY     → APLL  (nRF5340 production)
+	    ASRC_LINEAR  → NONE  (nRF54L15 production, ASRC consumes ppm)
 
 config AUDIO_RESAMPLER_IDENTITY
 	bool "Identity (memcpy passthrough)"
@@ -50,14 +49,6 @@ config AUDIO_RESAMPLER_ASRC_LINEAR
 	  Production path for nRF54L15.  Must pair with
 	  AUDIO_CLOCK_ACTUATOR_NONE (ASRC handles the data path; no
 	  physical actuator exists on this platform).
-
-config AUDIO_RESAMPLER_SAMPLE_ADJUST
-	bool "Sample insert/drop (legacy)"
-	help
-	  Legacy nearest-neighbour rate converter + discrete sample
-	  insert/drop via SAMPLE_ADJUST actuator.  Must pair with
-	  AUDIO_CLOCK_ACTUATOR_SAMPLE_ADJUST.  Retained for Phase 5
-	  A/B comparison; removed after ASRC acceptance.
 endchoice
 
 choice AUDIO_CLOCK_ACTUATOR
@@ -75,12 +66,6 @@ config AUDIO_CLOCK_ACTUATOR_NONE
 	help
 	  No physical clock actuator.  Controller ppm is consumed by the
 	  data-path resampler (ASRC_LINEAR).  Used on nRF54L15.
-
-config AUDIO_CLOCK_ACTUATOR_SAMPLE_ADJUST
-	bool "Sample insert/drop (nRF54L15 legacy)"
-	help
-	  Discrete sample insert/drop actuator.  Pair with
-	  AUDIO_RESAMPLER_SAMPLE_ADJUST for legacy A/B comparison.
 endchoice
 
 config AUDIO_DRIFT_OUTPUT_CLAMP

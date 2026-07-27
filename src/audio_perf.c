@@ -12,17 +12,13 @@
 
 #if defined(CONFIG_AUDIO_PERF_MEASUREMENT)
 
-/* Deadline converted from microseconds to cycles once at boot.
- * Lazy-init in first cycle_end call (k_us_to_cyc_ceil32 is cheap).
+/*
+ * Deadline in microseconds — no cycle pre-conversion.
+ * k_cycle_get_32() elapsed is converted to us via k_cyc_to_us_ceil32
+ * at each comparison so deadline checking and shell reporting share
+ * one coherent domain (CONFIG_AUDIO_PERF_DEADLINE_US).
  */
-static uint32_t perf_deadline_cycles;
-
-static void perf_lazy_init_deadline(void)
-{
-	if (perf_deadline_cycles == 0) {
-		perf_deadline_cycles = k_us_to_cyc_ceil32((uint32_t)CONFIG_AUDIO_PERF_DEADLINE_US);
-	}
-}
+#define PERF_DEADLINE_US ((uint32_t)(CONFIG_AUDIO_PERF_DEADLINE_US))
 
 /* ── Internal state ─────────────────────────────────────────────── */
 
@@ -66,8 +62,6 @@ void audio_perf_cycle_end(uint32_t start, enum audio_perf_path path)
 
 	uint32_t elapsed = k_cycle_get_32() - start;
 
-	perf_lazy_init_deadline();
-
 	k_spinlock_key_t key = k_spin_lock(&perf.lock);
 
 	perf.paths[path].count++;
@@ -75,7 +69,11 @@ void audio_perf_cycle_end(uint32_t start, enum audio_perf_path path)
 	if (elapsed > perf.paths[path].max_cycles) {
 		perf.paths[path].max_cycles = elapsed;
 	}
-	if (elapsed > perf_deadline_cycles) {
+
+	/* Deadline in microseconds — convert cycles once, compare once. */
+	uint32_t elapsed_us = k_cyc_to_us_ceil32(elapsed);
+
+	if (elapsed_us > PERF_DEADLINE_US) {
 		perf.paths[path].deadline_overruns++;
 	}
 
@@ -89,8 +87,6 @@ void audio_perf_test_inject_cycles(enum audio_perf_path path, uint32_t elapsed)
 		return;
 	}
 
-	perf_lazy_init_deadline();
-
 	k_spinlock_key_t key = k_spin_lock(&perf.lock);
 
 	perf.paths[path].count++;
@@ -98,7 +94,10 @@ void audio_perf_test_inject_cycles(enum audio_perf_path path, uint32_t elapsed)
 	if (elapsed > perf.paths[path].max_cycles) {
 		perf.paths[path].max_cycles = elapsed;
 	}
-	if (elapsed > perf_deadline_cycles) {
+
+	uint32_t elapsed_us = k_cyc_to_us_ceil32(elapsed);
+
+	if (elapsed_us > PERF_DEADLINE_US) {
 		perf.paths[path].deadline_overruns++;
 	}
 

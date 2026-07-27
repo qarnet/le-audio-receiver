@@ -8,9 +8,10 @@
  * Uses audio_perf_test_inject_cycles() for deterministic cycle counts
  * (no reliance on k_busy_wait timing accuracy).
  *
- * CONFIG_AUDIO_PERF_DEADLINE_US=10000 → deadline_cycles varies by
- * platform.  Tests compare against zero (under) or known over-size
- * values with the inject API.
+ * Deadline comparisons use k_cyc_to_us_ceil32(elapsed) vs
+ * CONFIG_AUDIO_PERF_DEADLINE_US (10000).  At native_sim 1 MHz,
+ * cycles ≈ µs, so values under 10000 always pass and large
+ * values (0xFFFFFFFF) always overrun.
  */
 
 #include <zephyr/ztest.h>
