@@ -9,8 +9,9 @@
    Failed, not SC unsupported. Keep `CONFIG_BT_SMP_ENFORCE_MITM=n` in
    `prj.conf`.
 2. Use compiled-public dongle `C0:AA:BB:CC:DD:EE`. Apply adapter NINO after
-   every power cycle: `btmgmt io-cap 3`, `btmgmt sc on`. Register BlueZ
-   NoInputNoOutput default agent. Clear both bond stores before test.
+   every power cycle while powered off: `btmgmt io-cap 3`, `btmgmt bondable on`,
+   `btmgmt sc on`, then power on. Register BlueZ NoInputNoOutput default agent.
+   Clear both bond stores before test.
 3. Brief-stall gate uses FLPR consumer stall for 250 ms, not persistent stall:
    `stall_flpr 1`, confirm ACK, sleep 250 ms, `stall_flpr 0`, confirm ACK.
    Expected recovery: at most a few escalating attempts, then ACTIVE;
@@ -22,6 +23,16 @@
   `boards/nrf54l15dk_nrf54l15_cpuapp.conf`.
 - Update Stage 2 result/security documentation. Remove claims that SW Split LL
   cannot reliably support SC.
+- Fix `scripts/bap_central.py` Agent1 signatures to BlueZ 5.86 API:
+  `DisplayPinCode(os)` and `DisplayPasskey(ouq)`. Existing definitions are
+  swapped/wrong.
+- Set `Adapter1.Pairable=true` and verify property before ACL/pairing.
+- Replace synchronous `Device.Pair()` in `--peer-addr` path with async D-Bus
+  call using `reply_handler`/`error_handler`; iterate GLib context until done so
+  Agent1 `RequestAuthorization` can dispatch. Blocking Pair on same process
+  starves agent dispatch and causes kernel `User Confirmation Negative Reply`.
+- Add peer address type argument to raw helper. Own address remains public;
+  receiver peer type is random. Do not conflate own and peer address types.
 - Build both targets and inspect nRF54 resolved config:
   `CONFIG_BT_SMP_SC_PAIR_ONLY=y`, `CONFIG_BT_SMP_ENFORCE_MITM` unset/n.
 
@@ -41,7 +52,10 @@
 
 ## Acceptance
 
-- SMP trace contains SC and Just Works; no legacy pairing.
+- SMP trace contains SC and Just Works; no legacy pairing. Expected Linux mgmt
+  confirmation has `confirm_hint=1` and positive User Confirmation Reply. A
+  changed nonzero g2 value between attempts is normal and is not ECDH-failure
+  evidence.
 - Central remains 100 fps; no I2S/decode/push/ASRC faults.
 - Timeout/full fallback occurs during stall without audio drop.
 - Recovery attempts bounded; state returns ACTIVE after clear.

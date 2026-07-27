@@ -73,6 +73,13 @@ def main():
         help=f"Own random address (used only with --addr-type random; default: {DEFAULT_OWN_ADDR})",
     )
     parser.add_argument(
+        "--peer-addr-type",
+        choices=("public", "random"),
+        default="random",
+        help="Peer address type (default: random). "
+        "Most LE Audio receivers use a random static address.",
+    )
+    parser.add_argument(
         "--device",
         type=int,
         default=0,
@@ -84,6 +91,7 @@ def main():
     hold = args.hold
     addr_type = args.addr_type
     own_str = args.own_addr
+    peer_addr_type = args.peer_addr_type
 
     peer = bytes.fromhex(peer_str.replace(":", ""))[::-1]  # LE-first on the wire
 
@@ -100,12 +108,19 @@ def main():
     else:
         print("[hci_raw_connect] using controller public BD_ADDR", flush=True)
 
+    peer_addr_type_byte = 0x00 if peer_addr_type == "public" else 0x01
+    print(
+        f"[hci_raw_connect] peer addr type: {peer_addr_type} "
+        f"(0x{peer_addr_type_byte:02x})",
+        flush=True,
+    )
+
     # Stop any scan, disable address resolution, direct connect (1M).
     s.send(cmd(0x2042, bytes([0, 0, 0, 0, 0, 0])))
     time.sleep(0.2)
     s.send(cmd(0x202D, bytes([0x00])))
     time.sleep(0.2)
-    body = bytes([0x00, own_addr_type, 0x01]) + peer + bytes([0x01])
+    body = bytes([0x00, own_addr_type, peer_addr_type_byte]) + peer + bytes([0x01])
     body += struct.pack("<HHHHHHHH", 0x60, 0x60, 0x18, 0x28, 0, 0x64, 0, 0)
     s.send(cmd(0x2043, body))
     print(

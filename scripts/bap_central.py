@@ -589,20 +589,18 @@ def _make_agent_class(dbus_mod, dbus_service_mod, GLib_mod):
             return dbus_mod.UInt32(0)
 
         @dbus_service_mod.method(
-            "org.bluez.Agent1", in_signature="ou", out_signature=""
+            "org.bluez.Agent1", in_signature="os", out_signature=""
         )
-        def DisplayPasskey(self, device, passkey):
-            print(
-                "[agent] DisplayPasskey: device={}, passkey={}".format(device, passkey)
-            )
+        def DisplayPinCode(self, device, pincode):
+            print("[agent] DisplayPinCode: device={}, pin={}".format(device, pincode))
 
         @dbus_service_mod.method(
             "org.bluez.Agent1", in_signature="ouq", out_signature=""
         )
-        def DisplayPinCode(self, device, pincode, entered):
+        def DisplayPasskey(self, device, passkey, entered):
             print(
-                "[agent] DisplayPinCode: device={}, pin={}, entered={}".format(
-                    device, pincode, entered
+                "[agent] DisplayPasskey: device={}, passkey={}, entered={}".format(
+                    device, passkey, entered
                 )
             )
 
@@ -861,7 +859,7 @@ def main():
     )
 
     if args.peer_addr is not None:
-        # --peer-addr path: persistent raw HCI direct connect + Pair().
+        # --peer-addr path: persistent raw HCI direct connect + async Pair().
         #
         # BlueZ scanning is broken on this controller (nRF5340 SW Split LL
         # delivers no advertising reports when accept-list filter is active),
@@ -869,8 +867,18 @@ def main():
         # link directly via raw HCI and keep the socket open for the lifetime
         # of the stream — closing it tears down the ACL.
         #
-        # Uses --addr-type public because the dongle has a compile-time
-        # public BD_ADDR (bt_ctlr_set_public_addr in hci_ipc netcore).
+        # Own address stays public (dongle has compiled public BD_ADDR).
+        # Peer address type is random (receiver uses random static address).
+
+        # 5a. Clear any stale BlueZ device before connecting.
+        try:
+            adapter.RemoveDevice(dev_path)
+            print("[main] Removed stale BlueZ device cache")
+            time.sleep(0.5)
+        except _dbus.exceptions.DBusException as e:
+            # No cached device — expected on first run.
+            print("[main] RemoveDevice: no cached device (ok)")
+
         addr = args.peer_addr
         hold_secs = args.duration + 120
         print(
@@ -888,6 +896,8 @@ def main():
                 str(hold_secs),
                 "--addr-type",
                 "public",
+                "--peer-addr-type",
+                "random",
                 "--device",
                 str(hci_dev),
             ],
@@ -916,20 +926,69 @@ def main():
             sys.exit(1)
         print("[main] ACL link up")
 
-        # Trust + Pair over the existing raw-HCI ACL.
+        # After RemoveDevice + raw HCI reconnect, recreate proxies from the
+        # live bus.  Pre-existing proxies may be stale after RemoveDevice
+        # tears down and recreates the D-Bus object.
+        device = _dbus.Interface(
+            bus.get_object("org.bluez", dev_path), "org.bluez.Device1"
+        )
+        dev_props = _dbus.Interface(
+            bus.get_object("org.bluez", dev_path),
+            "org.freedesktop.DBus.Properties",
+        )
+
+        # 5b. Set Pairable so bonding can proceed.
+        try:
+            adapter_props.Set("org.bluez.Adapter1", "Pairable", _dbus.Boolean(True))
+            pairable = bool(adapter_props.Get("org.bluez.Adapter1", "Pairable"))
+            print("[main] Adapter Pairable={}".format(pairable))
+        except _dbus.exceptions.DBusException as e:
+            print("[main] Pairable set error: {}".format(e))
+
+        # 5c. Trust the device.
         try:
             dev_props.Set("org.bluez.Device1", "Trusted", _dbus.Boolean(True))
-            print("[main] Trusted, pairing over existing ACL...")
+            print("[main] Trusted, async pairing over existing ACL...")
         except _dbus.exceptions.DBusException as e:
             print("[main] Trust set error: {}".format(e))
 
-        try:
-            device.Pair(timeout=30)
-            print("[main] Pair() returned OK")
-        except _dbus.exceptions.DBusException as e:
-            print("[main] Pair() returned: {}".format(e))
+        # 5d. Async Pair() — use reply_handler/error_handler so GLib main
+        # loop stays serviceable.  Agent1 RequestAuthorization must dispatch
+        # during pairing; synchronous Pair() starves agent dispatch and
+        # causes kernel "User Confirmation Negative Reply" (wire reason 0x0c).
+        pair_result = [None]
+        pair_error = [None]
+        pair_done = [False]
 
-        # Check resulting state.
+        def _on_pair_ok():
+            pair_result[0] = True
+            pair_done[0] = True
+            print("[main] Pair() async reply: OK")
+
+        def _on_pair_err(error):
+            pair_error[0] = error
+            pair_done[0] = True
+            print("[main] Pair() async error: {}".format(error))
+
+        device.Pair(
+            reply_handler=_on_pair_ok,
+            error_handler=_on_pair_err,
+            timeout=30000,
+        )
+        # Iterate GLib: Agent1 RequestAuthorization dispatches here.
+        pair_deadline = time.monotonic() + 35
+        while not pair_done[0] and time.monotonic() < pair_deadline:
+            _GLib.MainContext.default().iteration(False)
+            time.sleep(0.05)
+
+        if pair_error[0] is not None:
+            print("[main] Pair() async completed with error: {}".format(pair_error[0]))
+        elif pair_result[0]:
+            print("[main] Pair() async completed OK")
+        else:
+            print("[main] Pair() async timed out (35 s)")
+
+        # 5e. Check resulting state.
         try:
             paired = bool(dev_props.Get("org.bluez.Device1", "Paired"))
             connected2 = bool(dev_props.Get("org.bluez.Device1", "Connected"))
@@ -955,6 +1014,8 @@ def main():
                     str(hold_secs),
                     "--addr-type",
                     "public",
+                    "--peer-addr-type",
+                    "random",
                     "--device",
                     str(hci_dev),
                 ],
