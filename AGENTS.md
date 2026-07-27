@@ -101,6 +101,29 @@ The only allowed user input is a true physical observation that an agent
 cannot make: whether sound is audible from connected speakers/headphones
 after the agent has completed its test run.
 
+### Central setup (required before every test session)
+
+The nRF5340DK `hci_uart` central attaches to the kernel via `btattach`.
+Run this BEFORE `scripts/bap_central.py`:
+
+```bash
+# Attach the HCI UART dongle (nRF5340DK as central) — one-time per boot:
+setsid sudo btattach -B /dev/ttyACM2 -S 1000000 </dev/null >/tmp/btattach.log 2>&1 &
+sleep 3
+sudo btmgmt --index hci0 power on
+sudo btmgmt --index hci0 io-cap 3
+sudo btmgmt --index hci0 sc on
+```
+
+Then run `bap_central.py` **without sudo** — the main script needs
+dbus-python from the nix-shell (Python path stripped by sudo).  Only the
+raw-HCI connect subprocess uses sudo internally.
+
+```bash
+python3 scripts/bap_central.py --duration 30   # Mode A (default)
+python3 scripts/bap_central.py --stereo --duration 30  # --stereo flag
+```
+
 ## Build
 
 Build **from the repo root**. Enter the dev shell first, then run the build
