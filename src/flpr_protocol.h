@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <string.h>
 #include <zephyr/sys/__assert.h>
 
 #ifdef __cplusplus
@@ -93,19 +94,20 @@ struct flpr_peer {
 	bool bound; /* IPC endpoint bound? */
 
 	/* Remote peer state (what we know about them). */
-	bool ready;           /* remote sent READY? */
-	bool acked;           /* we sent READY_ACK? */
-	bool healthy;         /* heartbeat not missed too many? */
-	uint32_t epoch;       /* remote boot nonce */
-	uint32_t ready_count; /* total READY received */
+	bool ready;            /* remote sent READY? */
+	bool acked;            /* we sent READY_ACK? (CPUAPP) / received READY_ACK? (FLPR) */
+	bool healthy;          /* heartbeat not missed too many? */
+	uint32_t epoch;        /* remote boot nonce */
+	uint32_t ready_count;  /* total READY received */
+	uint32_t reboot_count; /* distinct epochs = reboots detected */
 
 	/* Remote → local sequence tracking (heartbeats we receive). */
-	uint32_t rx_seq;          /* last seq received (32-bit, wraps at 16-bit) */
-	uint32_t rx_lost;         /* cumulative gaps counted */
-	uint32_t rx_dup;          /* duplicate heartbeats */
-	uint32_t rx_ooo;          /* out-of-order (backward delta, counted) */
-	uint32_t rx_last_ms;      /* last rx uptime for staleness */
-	uint32_t rx_missed_total; /* cumulative heartbeat check failures */
+	uint32_t rx_seq;     /* last IN-ORDER seq received (32-bit, wraps at 16-bit) */
+	uint32_t rx_lost;    /* cumulative gaps counted */
+	uint32_t rx_dup;     /* duplicate heartbeats */
+	uint32_t rx_ooo;     /* out-of-order (backward delta, counted but baseline NOT moved) */
+	uint32_t rx_last_ms; /* last IN-ORDER rx uptime for staleness */
+	uint32_t rx_missed_total; /* cumulative healthy→unhealthy transitions */
 
 	/* Local → remote tracking (heartbeats we send). */
 	uint32_t tx_seq;       /* last seq we sent */
@@ -135,10 +137,85 @@ static inline bool flpr_msg_validate(const struct flpr_msg *msg, size_t len, str
 	return true;
 }
 
+/* ── Peer reset ───────────────────────────────────────────────────
+ * Zeroes all state. Use on IPC unbound / restart / initialisation.
+ */
+static inline void flpr_peer_reset(struct flpr_peer *peer)
+{
+	memset(peer, 0, sizeof(*peer));
+}
+
+/* ── READY transition (peer side, pure) ───────────────────────────
+ * Process a READY message.  new epoch  → resets heartbeat sequence,
+ * ack and health state, increments reboot_count.  duplicate same
+ * epoch → increments ready_count only, does NOT reset counters.
+ * Returns true if this was a new epoch (= reboot detected).
+ *
+ * Caller must still send READY_ACK (not part of this helper because
+ * that requires IPC outside any lock).
+ */
+static inline bool flpr_peer_handle_ready(struct flpr_peer *peer, uint32_t epoch)
+{
+	bool new_epoch = (peer->ready_count == 0) || (epoch != peer->epoch);
+
+	peer->ready = true;
+	peer->ready_count++;
+
+	if (new_epoch) {
+		peer->epoch = epoch;
+		peer->reboot_count++;
+		peer->healthy = true;
+
+		/* Reset rx-side tracking for the new boot. */
+		peer->rx_seq = 0;
+		peer->rx_lost = 0;
+		peer->rx_dup = 0;
+		peer->rx_ooo = 0;
+		peer->rx_last_ms = 0;
+		peer->rx_missed_total = 0;
+
+		/* Reset ack tracking. */
+		peer->tx_acked_seq = 0;
+	} else {
+		/* Same epoch: duplicate READY.  Preserve all state,
+		 * only update epoch field (idempotent). */
+		peer->epoch = epoch;
+	}
+
+	return new_epoch;
+}
+
+/* ── READY_ACK handler (FLPR side) ────────────────────────────────
+ * Called when FLPR receives READY_ACK from CPUAPP.
+ * Sets acked + healthy, stores CPUAPP uptime for diagnostics.
+ */
+static inline void flpr_peer_handle_ready_ack(struct flpr_peer *peer, uint32_t data)
+{
+	peer->acked = true;
+	peer->healthy = true;
+	peer->epoch = data; /* CPUAPP uptime at ACK — diagnostic */
+}
+
+/* ── Heartbeat ACK validation ────────────────────────────────────
+ * Process a HEARTBEAT_ACK: update last acked sequence.
+ * Only advances tx_acked_seq (never regresses); stale seq no-op.
+ */
+static inline void flpr_peer_handle_heartbeat_ack(struct flpr_peer *peer, uint16_t acked_seq)
+{
+	/* Accept if acked_seq >= current in-order (including wrap). */
+	if (!flpr_seq_after((uint16_t)peer->tx_acked_seq, acked_seq)) {
+		peer->tx_acked_seq = acked_seq;
+	}
+}
+
 /* ── Sequence tracking ───────────────────────────────────────────
- * Process a received sequence number from the remote peer.
- * Updates rx_seq, rx_lost, rx_dup, rx_ooo.
- * Call AFTER msg_validate().
+ * Process a received HEARTBEAT sequence number from the remote peer.
+ * Updates rx_seq (in-order only), rx_lost, rx_dup, rx_ooo.
+ * Out-of-order packets are COUNTED but do NOT move the in-order
+ * rx_seq baseline or rx_last_ms — so a stale packet followed by
+ * the next in-order produces NO fake huge gap.
+ * Natural 16-bit wrap (diff > 0 after wrap) remains valid.
+ * Call AFTER flpr_msg_validate().
  */
 static inline void flpr_peer_rx_seq(struct flpr_peer *peer, uint16_t seq, uint32_t now_ms)
 {
@@ -152,37 +229,78 @@ static inline void flpr_peer_rx_seq(struct flpr_peer *peer, uint16_t seq, uint32
 	int16_t diff = flpr_seq_diff(seq, (uint16_t)peer->rx_seq);
 
 	if (diff > 0) {
-		/* Normal in-order advance. */
+		/* Normal in-order advance (including natural wrap). */
 		if (diff > 1) {
 			peer->rx_lost += (uint16_t)(diff - 1);
 		}
 		peer->rx_seq = seq;
+		peer->rx_last_ms = now_ms;
 	} else if (diff == 0) {
-		/* Duplicate. */
+		/* Duplicate.  Update timestamp for health. */
 		peer->rx_dup++;
+		peer->rx_last_ms = now_ms;
 	} else {
-		/* Out of order (backward delta — delayed/reordered). */
+		/* Out of order (backward delta — delayed/reordered).
+		 * Count but do NOT move in-order baseline or timestamp. */
 		peer->rx_ooo++;
-		peer->rx_seq = seq;
 	}
-	peer->rx_last_ms = now_ms;
 }
 
 /* ── Health check ────────────────────────────────────────────────
- * Call periodically. Returns true if heartbeat is current.
- * Updates rx_missed_total when check fails.
+ * Call periodically.  Returns current healthy state.
+ * Increments rx_missed_total ONLY on healthy→unhealthy transition
+ * (once per miss episode, not on repeated polling).
+ * A new in-order heartbeat arrival resets rx_last_ms so the next
+ * check_health call restores healthy automatically.
  */
 static inline bool flpr_peer_check_health(struct flpr_peer *peer, uint32_t now_ms)
 {
 	if (peer->rx_last_ms == 0) {
-		return peer->healthy; /* no heartbeats yet */
+		/* No heartbeat received yet — cannot determine health. */
+		return peer->healthy;
 	}
+
 	uint32_t elapsed = now_ms - peer->rx_last_ms;
+
 	if (elapsed > FLPR_HEARTBEAT_MISS_MAX * FLPR_HEARTBEAT_INTERVAL_MS) {
-		peer->rx_missed_total++;
+		/* Stale: transition from healthy → unhealthy. */
+		if (peer->healthy) {
+			peer->rx_missed_total++;
+			peer->healthy = false;
+		}
 		return false;
 	}
+
+	/* Recent heartbeat: restore healthy. */
+	peer->healthy = true;
 	return true;
+}
+
+/* ── Stress PONG cookie classification (pure) ────────────────────
+ * Classifies a received stress-PONG cookie against the expected
+ * value.  Late previous-cookie and future-cookie never signal.
+ * Caller takes action (semaphore give, counter increment).
+ */
+enum flpr_stress_pong_class {
+	FLPR_PONG_MATCH = 0, /* exact cookie match — signal caller */
+	FLPR_PONG_STALE,     /* cookie < expected (late from previous run/iter) */
+	FLPR_PONG_FUTURE,    /* cookie > expected (unknown/future) */
+	FLPR_PONG_INACTIVE,  /* stress not active — ignore */
+};
+
+static inline enum flpr_stress_pong_class
+flpr_classify_stress_pong(uint32_t pong_cookie, uint32_t expected_cookie, bool stress_active)
+{
+	if (!stress_active) {
+		return FLPR_PONG_INACTIVE;
+	}
+	if (pong_cookie == expected_cookie) {
+		return FLPR_PONG_MATCH;
+	}
+	if (pong_cookie < expected_cookie) {
+		return FLPR_PONG_STALE;
+	}
+	return FLPR_PONG_FUTURE;
 }
 
 #ifdef __cplusplus

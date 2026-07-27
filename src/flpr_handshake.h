@@ -28,6 +28,7 @@ struct flpr_status {
 	bool healthy;
 	uint32_t epoch;
 	uint32_t ready_count;
+	uint32_t reboot_count;
 	uint32_t err_len;
 	uint32_t err_version;
 	uint32_t err_unknown;
@@ -68,8 +69,8 @@ void flpr_handshake_get_status(struct flpr_status *status);
 /**
  * @brief Start stress test: send STRESS_PING messages, count PONG replies.
  *
- * Uses stop-and-wait with 100 ms timeout per ping. Runs synchronously in
- * calling thread context (NOT audio callback). Blocks for ~count*100ms.
+ * Uses stop-and-wait with 200 ms timeout per ping. Runs synchronously in
+ * calling thread context (NOT audio callback). Blocks for ~count*200ms.
  * Safe to call from shell or test thread only.
  *
  * @param count  Number of ping/pong to attempt (clamped to 1..1,000,000).

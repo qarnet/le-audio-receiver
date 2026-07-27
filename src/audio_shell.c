@@ -16,6 +16,8 @@
 #include <inttypes.h>
 #include <zephyr/kernel.h>
 #include <zephyr/shell/shell.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/addr.h>
 
 #if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
 #define RESAMPLER_NAME "ASRC linear"
@@ -119,6 +121,18 @@ static int cmd_perf_reset(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
+/* bt unpair — test-only, no confirmation, clears all bonds. */
+static int cmd_bt_unpair(const struct shell *sh, size_t argc, char **argv)
+{
+	int ret = bt_unpair(BT_ID_DEFAULT, BT_ADDR_LE_ANY);
+	if (ret == 0) {
+		shell_print(sh, "All bonds cleared.");
+	} else {
+		shell_error(sh, "bt_unpair failed: %d", ret);
+	}
+	return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	audio_cmds, SHELL_CMD_ARG(status, NULL, "Print audio stats and state.", cmd_status, 1, 0),
 	SHELL_CMD_ARG(reset - stats, NULL, "Clear all counters.", cmd_reset_stats, 1, 0),
@@ -128,6 +142,16 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
 	SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(audio, &audio_cmds, "LE Audio sink commands.", NULL);
+
+SHELL_STATIC_SUBCMD_SET_CREATE(
+	bt_cmds,
+	SHELL_CMD_ARG(unpair, NULL, "Clear all Bluetooth bonds (test-only, no confirmation).",
+		      cmd_bt_unpair, 1, 0),
+	SHELL_SUBCMD_SET_END);
+
+SHELL_CMD_REGISTER(bt, &bt_cmds, "Bluetooth test commands.", NULL);
+
+/* ── bt unpair command (both targets) ──────────────────────────── */
 
 /* ── FLPR shell commands (nRF54L15 only) ───────────────────────── */
 
@@ -142,7 +166,8 @@ static int cmd_flpr_status(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "  Ready        : %s", s.ready ? "yes" : "no");
 	shell_print(sh, "  ACKed        : %s", s.acked ? "yes" : "no");
 	shell_print(sh, "  Healthy      : %s", s.healthy ? "yes" : "no");
-	shell_print(sh, "  Epoch        : %u (count=%u)", s.epoch, s.ready_count);
+	shell_print(sh, "  Epoch        : %u (ready=%u reboot=%u)", s.epoch, s.ready_count,
+		    s.reboot_count);
 	shell_print(sh, "  Errors       : len=%u ver=%u unk=%u send=%u", s.err_len, s.err_version,
 		    s.err_unknown, s.err_send);
 	shell_print(sh, "  TX seq       : %u (acked=%u)", s.tx_seq, s.tx_acked_seq);

@@ -3,8 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Unit tests for flpr_protocol.h — wire protocol struct, sequence
- * arithmetic, message validation, peer state machine, health.
- * Exercises production helpers directly; no code restatement.
+ * arithmetic, message validation, peer state machine, health,
+ * READY/ACK transitions, heartbeat ACK validation, stress PONG
+ * cookie classification, peer reset.
+ *
+ * ALL tests call production helpers (flpr_peer_handle_ready, etc.)
+ * — never assign peer fields directly except for setup.
  * Runs on native_sim.
  */
 
@@ -176,7 +180,7 @@ ZTEST(flpr_protocol, test_rx_seq_gap)
 	zassert_equal(p.rx_ooo, 0);
 }
 
-/* ── Sequence tracking: duplicate ────────────────────────────────── */
+/* ── Sequence tracking: duplicate ───────────────────────────────── */
 
 ZTEST(flpr_protocol, test_rx_seq_duplicate)
 {
@@ -186,13 +190,14 @@ ZTEST(flpr_protocol, test_rx_seq_duplicate)
 	flpr_peer_rx_seq(&p, 10, 1000);
 	flpr_peer_rx_seq(&p, 10, 1500); /* duplicate */
 
-	zassert_equal(p.rx_seq, 10);
+	zassert_equal(p.rx_seq, 10); /* baseline unchanged */
 	zassert_equal(p.rx_lost, 0);
 	zassert_equal(p.rx_dup, 1);
 	zassert_equal(p.rx_ooo, 0);
+	zassert_equal(p.rx_last_ms, 1500); /* timestamp updated */
 }
 
-/* ── Sequence tracking: out-of-order (backward) ──────────────────── */
+/* ── Sequence tracking: out-of-order — counted but baseline NOT moved */
 
 ZTEST(flpr_protocol, test_rx_seq_out_of_order)
 {
@@ -200,13 +205,37 @@ ZTEST(flpr_protocol, test_rx_seq_out_of_order)
 	memset(&p, 0, sizeof(p));
 
 	flpr_peer_rx_seq(&p, 10, 1000);
-	/* 5 < 10 → ooo. */
+	/* 5 < 10 → ooo.  Counted but rx_seq baseline stays 10. */
 	flpr_peer_rx_seq(&p, 5, 1500);
 
-	zassert_equal(p.rx_seq, 5); /* reset to 5 */
-	zassert_equal(p.rx_ooo, 1);
+	zassert_equal(p.rx_seq, 10); /* baseline NOT moved */
+	zassert_equal(p.rx_ooo, 1);  /* counted */
 	zassert_equal(p.rx_lost, 0);
 	zassert_equal(p.rx_dup, 0);
+	zassert_equal(p.rx_last_ms, 1000); /* timestamp NOT updated on OOO */
+}
+
+/* ── Sequence tracking: OOO then next in-order — no fake huge gap ─ */
+
+ZTEST(flpr_protocol, test_rx_seq_ooo_then_inorder)
+{
+	struct flpr_peer p;
+	memset(&p, 0, sizeof(p));
+
+	flpr_peer_rx_seq(&p, 10, 1000);
+	/* Stale packet. */
+	flpr_peer_rx_seq(&p, 5, 1500);
+	zassert_equal(p.rx_ooo, 1);
+	zassert_equal(p.rx_seq, 10); /* baseline preserved */
+
+	/* Next in-order: 11 after 10 → diff=1, no gap. */
+	flpr_peer_rx_seq(&p, 11, 3000);
+
+	zassert_equal(p.rx_seq, 11);
+	zassert_equal(p.rx_lost, 0); /* no fake huge gap */
+	zassert_equal(p.rx_dup, 0);
+	zassert_equal(p.rx_ooo, 1); /* OOO count preserved */
+	zassert_equal(p.rx_last_ms, 3000);
 }
 
 /* ── Sequence tracking: wrap ────────────────────────────────────── */
@@ -226,7 +255,7 @@ ZTEST(flpr_protocol, test_rx_seq_wrap)
 	zassert_equal(p.rx_ooo, 0);
 }
 
-/* ── Sequence tracking: gap across wrap ──────────────────────────── */
+/* ── Sequence tracking: gap across wrap ─────────────────────────── */
 
 ZTEST(flpr_protocol, test_rx_seq_gap_across_wrap)
 {
@@ -243,7 +272,7 @@ ZTEST(flpr_protocol, test_rx_seq_gap_across_wrap)
 	zassert_equal(p.rx_ooo, 0);
 }
 
-/* ── Sequence tracking: multiple operations ──────────────────────── */
+/* ── Sequence tracking: multiple operations ─────────────────────── */
 
 ZTEST(flpr_protocol, test_rx_seq_complex)
 {
@@ -255,12 +284,13 @@ ZTEST(flpr_protocol, test_rx_seq_complex)
 	flpr_peer_rx_seq(&p, 11, 2500); /* dup */
 	flpr_peer_rx_seq(&p, 15, 3000); /* gap 12,13,14 */
 	flpr_peer_rx_seq(&p, 17, 4000); /* gap 16 */
-	flpr_peer_rx_seq(&p, 5, 5000);  /* ooo reset */
+	flpr_peer_rx_seq(&p, 5, 5000);  /* ooo — baseline stays 17 */
 
-	zassert_equal(p.rx_seq, 5);
+	zassert_equal(p.rx_seq, 17); /* baseline NOT moved by OOO */
 	zassert_equal(p.rx_lost, 4); /* seq 11→15 gap=3 + 15→17 gap=1 → lost=4 */
 	zassert_equal(p.rx_dup, 1);
 	zassert_equal(p.rx_ooo, 1);
+	zassert_equal(p.rx_last_ms, 4000); /* last IN-ORDER timestamp */
 }
 
 /* ── Health check ────────────────────────────────────────────────── */
@@ -272,6 +302,7 @@ ZTEST(flpr_protocol, test_health_no_heartbeat_yet)
 	p.healthy = true;
 	/* rx_last_ms = 0 → no heartbeats → keep current state. */
 	zassert_true(flpr_peer_check_health(&p, 10000));
+	zassert_true(p.healthy);
 }
 
 ZTEST(flpr_protocol, test_health_recent)
@@ -283,6 +314,7 @@ ZTEST(flpr_protocol, test_health_recent)
 
 	/* Now = 5500: 500 ms since last hb, well within 5 s. */
 	zassert_true(flpr_peer_check_health(&p, 5500));
+	zassert_true(p.healthy);
 	zassert_equal(p.rx_missed_total, 0);
 }
 
@@ -295,88 +327,268 @@ ZTEST(flpr_protocol, test_health_stale)
 
 	/* Now = 11000: 6000 ms since last hb, exceeds 5*1000=5000. */
 	zassert_false(flpr_peer_check_health(&p, 11000));
-	zassert_equal(p.rx_missed_total, 1);
+	zassert_false(p.healthy);
+	zassert_equal(p.rx_missed_total, 1); /* counted once on transition */
 }
 
-ZTEST(flpr_protocol, test_health_stale_multiple)
+/* ── Health: repeated stale polls do NOT inflate rx_missed_total ── */
+
+ZTEST(flpr_protocol, test_health_repeated_stale_poll)
 {
 	struct flpr_peer p;
 	memset(&p, 0, sizeof(p));
 	p.rx_last_ms = 5000;
 	p.healthy = true;
 
-	flpr_peer_check_health(&p, 11000); /* stale */
-	flpr_peer_check_health(&p, 17000); /* still stale */
-	flpr_peer_check_health(&p, 23000); /* still stale */
+	/* First stale check: transition healthy→unhealthy, counter +1. */
+	zassert_false(flpr_peer_check_health(&p, 11000));
+	zassert_equal(p.rx_missed_total, 1);
+	zassert_false(p.healthy);
 
-	zassert_equal(p.rx_missed_total, 3);
+	/* Second stale check: already unhealthy, NO extra increment. */
+	zassert_false(flpr_peer_check_health(&p, 17000));
+	zassert_equal(p.rx_missed_total, 1);
+
+	/* Third stale check: still no increment. */
+	zassert_false(flpr_peer_check_health(&p, 23000));
+	zassert_equal(p.rx_missed_total, 1);
 }
 
-ZTEST(flpr_protocol, test_health_recovery)
+/* ── Health: new heartbeat restores healthy ─────────────────────── */
+
+ZTEST(flpr_protocol, test_health_heartbeat_restores)
 {
 	struct flpr_peer p;
 	memset(&p, 0, sizeof(p));
 	p.rx_last_ms = 5000;
 	p.healthy = true;
 
-	flpr_peer_check_health(&p, 11000); /* stale → missed=1 */
+	/* Go stale. */
+	(void)flpr_peer_check_health(&p, 11000);
+	zassert_false(p.healthy);
 	zassert_equal(p.rx_missed_total, 1);
 
-	/* New heartbeat arrives → updates rx_last_ms */
-	flpr_peer_rx_seq(&p, 10, 12000);
-	/* Now check: 12000 vs 12000 → recent */
+	/* New heartbeat arrives — updates rx_last_ms via rx_seq. */
+	flpr_peer_rx_seq(&p, 20, 12000);
+
+	/* Now check: elapsed = 0 (12000-12000) → healthy restored. */
 	zassert_true(flpr_peer_check_health(&p, 12000));
-	zassert_equal(p.rx_missed_total, 1); /* not incremented on healthy */
+	zassert_true(p.healthy);
+	zassert_equal(p.rx_missed_total, 1); /* unchanged on recovery */
 }
 
-/* ── READY / epoch behavior ──────────────────────────────────────── */
+/* ── READY: new epoch resets heartbeat, seq, ack, health state ──── */
 
-ZTEST(flpr_protocol, test_ready_updates_epoch)
+ZTEST(flpr_protocol, test_ready_new_epoch_resets_state)
 {
 	struct flpr_peer p;
 	memset(&p, 0, sizeof(p));
 
-	p.ready = true;
-	p.ready_count = 1;
-	p.epoch = 0xABCDEF01;
-	zassert_equal(p.epoch, 0xABCDEF01);
+	/* Prime with some rx/tx state from a previous epoch. */
+	p.rx_seq = 100;
+	p.rx_lost = 5;
+	p.rx_dup = 2;
+	p.rx_ooo = 1;
+	p.rx_last_ms = 9999;
+	p.rx_missed_total = 3;
+	p.tx_acked_seq = 50;
+	p.healthy = false;
+
+	bool is_new = flpr_peer_handle_ready(&p, 0xBEEF);
+	zassert_true(is_new, "first READY is new epoch");
 	zassert_equal(p.ready_count, 1);
+	zassert_equal(p.reboot_count, 1);
+	zassert_equal(p.epoch, 0xBEEF);
 	zassert_true(p.ready);
+	zassert_true(p.healthy);
+
+	/* All rx/tx tracking reset. */
+	zassert_equal(p.rx_seq, 0);
+	zassert_equal(p.rx_lost, 0);
+	zassert_equal(p.rx_dup, 0);
+	zassert_equal(p.rx_ooo, 0);
+	zassert_equal(p.rx_last_ms, 0);
+	zassert_equal(p.rx_missed_total, 0);
+	zassert_equal(p.tx_acked_seq, 0);
 }
 
-ZTEST(flpr_protocol, test_ready_duplicate_increments_count)
+/* ── READY: same epoch does NOT reset seq/health state ──────────── */
+
+ZTEST(flpr_protocol, test_ready_same_epoch_no_reset)
 {
 	struct flpr_peer p;
 	memset(&p, 0, sizeof(p));
 
-	/* First READY. */
-	p.ready = true;
-	p.ready_count = 1;
-	p.epoch = 42;
+	/* First READY with epoch 42. */
+	flpr_peer_handle_ready(&p, 42);
+	zassert_equal(p.ready_count, 1);
+	zassert_equal(p.reboot_count, 1);
 
-	/* Second READY with new epoch. */
-	p.ready = true;
-	p.ready_count = 2;
-	p.epoch = 99;
+	/* Build up state. */
+	flpr_peer_rx_seq(&p, 10, 5000);
+	flpr_peer_rx_seq(&p, 12, 6000);
+	/* elapsed = 11001 - 6000 = 5001 > 5000 → stale, rx_missed_total=1 */
+	(void)flpr_peer_check_health(&p, 11001);
+	p.tx_acked_seq = 8;
 
+	/* Second READY with SAME epoch — duplicate, not a reboot. */
+	bool is_new = flpr_peer_handle_ready(&p, 42);
+	zassert_false(is_new, "same epoch not new");
 	zassert_equal(p.ready_count, 2);
-	zassert_equal(p.epoch, 99); /* overridden */
+	zassert_equal(p.reboot_count, 1);    /* unchanged */
+	zassert_equal(p.rx_seq, 12);         /* preserved */
+	zassert_equal(p.rx_lost, 1);         /* preserved (10→12 gap=1) */
+	zassert_equal(p.rx_missed_total, 1); /* preserved */
+	zassert_equal(p.tx_acked_seq, 8);    /* preserved */
 }
 
-/* ── ACK behavior ────────────────────────────────────────────────── */
+/* ── READY: new epoch increments reboot_count ───────────────────── */
 
-ZTEST(flpr_protocol, test_acked_persists)
+ZTEST(flpr_protocol, test_ready_new_epoch_increments_reboot)
 {
 	struct flpr_peer p;
 	memset(&p, 0, sizeof(p));
 
-	p.acked = true;
-	zassert_true(p.acked);
+	flpr_peer_handle_ready(&p, 100);
+	zassert_equal(p.reboot_count, 1);
+	zassert_equal(p.ready_count, 1);
 
-	/* Subsequent READY should not clear ack (caller's responsibility). */
-	p.ready = true;
-	p.ready_count++;
+	flpr_peer_handle_ready(&p, 200); /* new epoch */
+	zassert_equal(p.reboot_count, 2);
+	zassert_equal(p.ready_count, 2);
+
+	flpr_peer_handle_ready(&p, 300); /* another new epoch */
+	zassert_equal(p.reboot_count, 3);
+	zassert_equal(p.ready_count, 3);
+}
+
+/* ── READY_ACK handler ──────────────────────────────────────────── */
+
+ZTEST(flpr_protocol, test_ready_ack_sets_acked)
+{
+	struct flpr_peer p;
+	memset(&p, 0, sizeof(p));
+
+	flpr_peer_handle_ready_ack(&p, 12345);
+
 	zassert_true(p.acked);
+	zassert_true(p.healthy);
+	zassert_equal(p.epoch, 12345); /* stores CPUAPP uptime for diagnostics */
+}
+
+/* ── Heartbeat ACK: advances in-order ───────────────────────────── */
+
+ZTEST(flpr_protocol, test_heartbeat_ack_advances)
+{
+	struct flpr_peer p;
+	memset(&p, 0, sizeof(p));
+
+	flpr_peer_handle_heartbeat_ack(&p, 5);
+	zassert_equal(p.tx_acked_seq, 5);
+
+	flpr_peer_handle_heartbeat_ack(&p, 10);
+	zassert_equal(p.tx_acked_seq, 10); /* advances */
+
+	flpr_peer_handle_heartbeat_ack(&p, 20);
+	zassert_equal(p.tx_acked_seq, 20); /* advances */
+}
+
+/* ── Heartbeat ACK: stale rejected ─────────────────────────────── */
+
+ZTEST(flpr_protocol, test_heartbeat_ack_stale_rejected)
+{
+	struct flpr_peer p;
+	memset(&p, 0, sizeof(p));
+
+	flpr_peer_handle_heartbeat_ack(&p, 20);
+	zassert_equal(p.tx_acked_seq, 20);
+
+	/* Stale: 5 < 20 — rejected. */
+	flpr_peer_handle_heartbeat_ack(&p, 5);
+	zassert_equal(p.tx_acked_seq, 20); /* unchanged */
+
+	/* Same: 20 == 20 — accepted (idempotent). */
+	flpr_peer_handle_heartbeat_ack(&p, 20);
+	zassert_equal(p.tx_acked_seq, 20); /* unchanged (same value) */
+}
+
+/* ── Stress PONG classification ─────────────────────────────────── */
+
+ZTEST(flpr_protocol, test_stress_pong_match)
+{
+	zassert_equal(flpr_classify_stress_pong(42, 42, true), FLPR_PONG_MATCH);
+}
+
+ZTEST(flpr_protocol, test_stress_pong_stale)
+{
+	/* cookie 41 < expected 42 → stale */
+	zassert_equal(flpr_classify_stress_pong(41, 42, true), FLPR_PONG_STALE);
+}
+
+ZTEST(flpr_protocol, test_stress_pong_future)
+{
+	/* cookie 43 > expected 42 → future/unknown */
+	zassert_equal(flpr_classify_stress_pong(43, 42, true), FLPR_PONG_FUTURE);
+
+	/* Even with large gap. */
+	zassert_equal(flpr_classify_stress_pong(999, 50, true), FLPR_PONG_FUTURE);
+}
+
+ZTEST(flpr_protocol, test_stress_pong_inactive)
+{
+	/* Stress not active → all cookies are INACTIVE. */
+	zassert_equal(flpr_classify_stress_pong(42, 42, false), FLPR_PONG_INACTIVE);
+	zassert_equal(flpr_classify_stress_pong(0, 0, false), FLPR_PONG_INACTIVE);
+}
+
+/* ── Peer reset ─────────────────────────────────────────────────── */
+
+ZTEST(flpr_protocol, test_peer_reset_clears_all)
+{
+	struct flpr_peer p;
+
+	/* Prime all fields. */
+	p.bound = true;
+	p.ready = true;
+	p.acked = true;
+	p.healthy = true;
+	p.epoch = 0xDEADBEEF;
+	p.ready_count = 5;
+	p.reboot_count = 3;
+	p.rx_seq = 100;
+	p.rx_lost = 7;
+	p.rx_dup = 4;
+	p.rx_ooo = 2;
+	p.rx_last_ms = 55555;
+	p.rx_missed_total = 9;
+	p.tx_seq = 200;
+	p.tx_acked_seq = 150;
+	p.err_len = 1;
+	p.err_version = 2;
+	p.err_unknown = 3;
+	p.err_send = 4;
+
+	flpr_peer_reset(&p);
+
+	zassert_false(p.bound);
+	zassert_false(p.ready);
+	zassert_false(p.acked);
+	zassert_false(p.healthy);
+	zassert_equal(p.epoch, 0);
+	zassert_equal(p.ready_count, 0);
+	zassert_equal(p.reboot_count, 0);
+	zassert_equal(p.rx_seq, 0);
+	zassert_equal(p.rx_lost, 0);
+	zassert_equal(p.rx_dup, 0);
+	zassert_equal(p.rx_ooo, 0);
+	zassert_equal(p.rx_last_ms, 0);
+	zassert_equal(p.rx_missed_total, 0);
+	zassert_equal(p.tx_seq, 0);
+	zassert_equal(p.tx_acked_seq, 0);
+	zassert_equal(p.err_len, 0);
+	zassert_equal(p.err_version, 0);
+	zassert_equal(p.err_unknown, 0);
+	zassert_equal(p.err_send, 0);
 }
 
 /* ── Error counter accumulation ──────────────────────────────────── */
@@ -404,33 +616,6 @@ ZTEST(flpr_protocol, test_error_counters_independent)
 	zassert_equal(p.err_version, 2); /* unchanged */
 }
 
-/* ── Session edge: unbound → bound → unbound reset ──────────────── */
-
-ZTEST(flpr_protocol, test_unbound_reset)
-{
-	struct flpr_peer p;
-	memset(&p, 0, sizeof(p));
-
-	/* Simulate a session. */
-	p.bound = true;
-	p.ready = true;
-	p.acked = true;
-	p.healthy = true;
-	p.epoch = 12345;
-	p.ready_count = 3;
-	p.rx_seq = 100;
-	p.tx_seq = 200;
-
-	/* Reset on unbound. */
-	memset(&p, 0, sizeof(p));
-	zassert_false(p.bound);
-	zassert_false(p.ready);
-	zassert_false(p.acked);
-	zassert_equal(p.epoch, 0);
-	zassert_equal(p.rx_seq, 0);
-	zassert_equal(p.tx_seq, 0);
-}
-
 /* ── Protocol version constant ───────────────────────────────────── */
 
 ZTEST(flpr_protocol, test_protocol_version_constant)
@@ -449,10 +634,5 @@ ZTEST(flpr_protocol, test_message_type_values)
 	zassert_equal(FLPR_MSG_STRESS_PING, 0x05U);
 	zassert_equal(FLPR_MSG_STRESS_PONG, 0x06U);
 }
-
-/* ── ASSERT optimizations don't interfere. ─────────────────────────
-
- * BUILD_ASSERT on struct size/offsets is compile-time only — no runtime
- * test needed beyond test_msg_size/test_msg_offsets above. */
 
 ZTEST_SUITE(flpr_protocol, NULL, NULL, NULL, NULL, NULL);

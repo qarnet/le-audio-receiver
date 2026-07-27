@@ -7,6 +7,8 @@
  *
  * Epoch: hardware GRTC counter at boot start (non-zero, monotonic
  * across resets). GRTC owned-channels 3,4 available per board DTS.
+ *
+ * All state transitions use production helpers from flpr_protocol.h.
  */
 
 #include <zephyr/kernel.h>
@@ -56,15 +58,14 @@ static void ep_received(const void *data, size_t len, void *priv)
 	switch (msg->type) {
 
 	case FLPR_MSG_READY_ACK:
-		cpuapp.acked = true;
-		cpuapp.healthy = true;
-		cpuapp.epoch = msg->data;
+		flpr_peer_handle_ready_ack(&cpuapp, msg->data);
 		break;
 
 	case FLPR_MSG_HEARTBEAT:
-		/* CPUAPP heartbeat → track seq, echo with HEARTBEAT_ACK. */
+		/* CPUAPP heartbeat → track seq with production helper,
+		 * then echo with HEARTBEAT_ACK. */
 		flpr_peer_rx_seq(&cpuapp, msg->seq, now_ms);
-		cpuapp.healthy = flpr_peer_check_health(&cpuapp, now_ms);
+		(void)flpr_peer_check_health(&cpuapp, now_ms);
 
 		{
 			struct flpr_msg echo = {
@@ -78,14 +79,9 @@ static void ep_received(const void *data, size_t len, void *priv)
 		break;
 
 	case FLPR_MSG_HEARTBEAT_ACK:
-		/* CPUAPP echoed our heartbeat. Track acked seq. */
-		{
-			uint16_t acked_seq = msg->seq;
-			if (flpr_seq_after(acked_seq, (uint16_t)cpuapp.tx_acked_seq) ||
-			    acked_seq == (uint16_t)cpuapp.tx_acked_seq) {
-				cpuapp.tx_acked_seq = acked_seq;
-			}
-		}
+		/* CPUAPP echoed our heartbeat.  Validate and track
+		 * acked seq with production helper. */
+		flpr_peer_handle_heartbeat_ack(&cpuapp, msg->seq);
 		break;
 
 	case FLPR_MSG_STRESS_PING:
@@ -129,7 +125,7 @@ int main(void)
 	 * k_cycle_get_32() returns GRTC cycle count on nRF54L15. */
 	boot_epoch = k_cycle_get_32();
 
-	memset(&cpuapp, 0, sizeof(cpuapp));
+	flpr_peer_reset(&cpuapp);
 
 	ipc_dev = DEVICE_DT_GET(DT_NODELABEL(ipc0));
 	if (!device_is_ready(ipc_dev)) {

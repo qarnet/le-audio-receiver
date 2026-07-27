@@ -8,6 +8,10 @@
  * Lock discipline: all global state accessed only under flpr_lock.
  * ipc_service_send MUST NOT be called under spinlock — IPC callbacks
  * may re-enter.  Stress semaphore give is done outside lock.
+ *
+ * All state transitions go through PRODUCTION helpers in flpr_protocol.h.
+ * No raw field assignment on the peer struct — helpers enforce invariants
+ * (epoch detection, sequence tracking, health transition counting, etc.).
  */
 
 #include "flpr_handshake.h"
@@ -73,7 +77,6 @@ static void hb_work_fn(struct k_work *work)
 
 	bool should_send;
 	uint16_t seq;
-	uint32_t now_ms = k_uptime_get_32();
 
 	{
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
@@ -86,22 +89,27 @@ static void hb_work_fn(struct k_work *work)
 		goto reschedule;
 	}
 
-	struct flpr_msg msg = {
-		.type = FLPR_MSG_HEARTBEAT,
-		.version = FLPR_PROTOCOL_VERSION,
-		.seq = seq,
-		.data = now_ms,
-	};
+	{
+		uint32_t now_ms = k_uptime_get_32();
 
-	int ret = send_msg(&msg);
-	if (ret >= 0) {
-		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		flpr.tx_seq++;
-		flpr.healthy = flpr_peer_check_health(&flpr, now_ms);
-		k_spin_unlock(&flpr_lock, key);
+		struct flpr_msg msg = {
+			.type = FLPR_MSG_HEARTBEAT,
+			.version = FLPR_PROTOCOL_VERSION,
+			.seq = seq,
+			.data = now_ms,
+		};
+
+		int ret = send_msg(&msg);
+		if (ret >= 0) {
+			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+			flpr.tx_seq++;
+			/* Periodic health check of remote (FLPR) heartbeats. */
+			(void)flpr_peer_check_health(&flpr, now_ms);
+			k_spin_unlock(&flpr_lock, key);
+		}
+		/* On send error: tx_seq not incremented, counted in err_send.
+		 * Back off to next interval — no busy retry. */
 	}
-	/* On send error: tx_seq not incremented, counted in err_send.
-	 * Back off to next interval — no busy retry. */
 
 reschedule:
 	k_work_schedule(&hb_work, K_MSEC(FLPR_HEARTBEAT_INTERVAL_MS));
@@ -124,7 +132,7 @@ static void ep_unbound(void *priv)
 	ARG_UNUSED(priv);
 	LOG_WRN("FLPR IPC unbound");
 	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-	flpr = (struct flpr_peer){0};
+	flpr_peer_reset(&flpr);
 	hb_started = false;
 	k_spin_unlock(&flpr_lock, key);
 }
@@ -134,47 +142,35 @@ static void ep_received(const void *data, size_t len, void *priv)
 	ARG_UNUSED(priv);
 	uint32_t now_ms = k_uptime_get_32();
 
-	if (len != sizeof(struct flpr_msg)) {
-		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		flpr.err_len++;
-		k_spin_unlock(&flpr_lock, key);
+	/* Shared validation — rejects short/oversize and wrong version. */
+	if (!flpr_msg_validate((const struct flpr_msg *)data, len, &flpr)) {
 		return;
 	}
 
 	const struct flpr_msg *msg = data;
 
-	if (msg->version != FLPR_PROTOCOL_VERSION) {
-		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		flpr.err_version++;
-		k_spin_unlock(&flpr_lock, key);
-		return;
-	}
-
 	switch (msg->type) {
 
 	case FLPR_MSG_READY: {
 		uint32_t epoch = msg->data;
+		bool is_new_epoch;
 		bool start_hb_now = false;
-		bool send_ack = false;
 
 		{
 			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-			flpr.ready = true;
-			flpr.ready_count++;
-			flpr.epoch = epoch;
-			flpr.healthy = true;
+			is_new_epoch = flpr_peer_handle_ready(&flpr, epoch);
 			if (!hb_started) {
 				hb_started = true;
 				start_hb_now = true;
 			}
-			send_ack = true;
 			k_spin_unlock(&flpr_lock, key);
 		}
 
-		LOG_INF("FLPR READY (epoch=%u, count=%u)", epoch, flpr.ready_count);
+		LOG_INF("FLPR READY (epoch=%u, count=%u, %s)", epoch, flpr.ready_count,
+			is_new_epoch ? "new" : "duplicate");
 
 		/* Send READY_ACK outside lock. */
-		if (send_ack) {
+		{
 			struct flpr_msg ack = {
 				.type = FLPR_MSG_READY_ACK,
 				.version = FLPR_PROTOCOL_VERSION,
@@ -203,13 +199,14 @@ static void ep_received(const void *data, size_t len, void *priv)
 	}
 
 	case FLPR_MSG_HEARTBEAT: {
-		/* Remote heartbeat: track sequence, then echo back. */
+		/* Remote heartbeat: track sequence, then echo back.
+		 * Health updated inside rx_seq (timestamp) + check_health. */
 		bool should_echo;
 
 		{
 			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 			flpr_peer_rx_seq(&flpr, msg->seq, now_ms);
-			flpr.healthy = flpr_peer_check_health(&flpr, now_ms);
+			(void)flpr_peer_check_health(&flpr, now_ms);
 			should_echo = flpr.acked;
 			k_spin_unlock(&flpr_lock, key);
 		}
@@ -232,53 +229,49 @@ static void ep_received(const void *data, size_t len, void *priv)
 	}
 
 	case FLPR_MSG_HEARTBEAT_ACK: {
-		/* FLPR echoed a heartbeat we sent. Track ack. */
+		/* FLPR echoed a heartbeat we sent. Validate and track ack. */
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		uint16_t acked_seq = msg->seq;
-		if (flpr_seq_after(acked_seq, (uint16_t)flpr.tx_acked_seq) ||
-		    acked_seq == (uint16_t)flpr.tx_acked_seq) {
-			flpr.tx_acked_seq = acked_seq;
-		}
+		flpr_peer_handle_heartbeat_ack(&flpr, msg->seq);
 		k_spin_unlock(&flpr_lock, key);
 		break;
 	}
 
 	case FLPR_MSG_STRESS_PONG: {
-		/* Stress response: validate cookie under lock,
-		 * signal outside lock. */
-		bool is_match;
-		bool is_stale;
-		bool should_give = false;
+		/* Classify cookie with pure helper, act under lock. */
+		uint32_t cookie;
+		bool active;
+		enum flpr_stress_pong_class cls;
 
 		{
 			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+			cookie = msg->data;
+			active = stress_active;
 
-			if (!stress_active) {
+			if (!active) {
 				k_spin_unlock(&flpr_lock, key);
 				break;
 			}
 
-			is_match = (msg->data == stress_cookie);
-			is_stale = flpr_seq_after(stress_cookie, msg->data) ||
-				   stress_cookie == msg->data;
-			/* stale = cookie <= current_cookie but not exact match.
-			 * Since we just checked is_match, stale means
-			 * msg->data < stress_cookie. */
-			is_stale = (msg->data < stress_cookie);
+			cls = flpr_classify_stress_pong(cookie, stress_cookie, active);
 
-			if (is_match) {
+			switch (cls) {
+			case FLPR_PONG_MATCH:
 				stress_recv++;
-				should_give = true;
-			} else if (is_stale) {
+				break;
+			case FLPR_PONG_STALE:
 				stress_stale++;
-			} else {
-				/* cookie > current — future/unknown */
+				break;
+			case FLPR_PONG_FUTURE:
 				stress_mismatch++;
+				break;
+			default:
+				break;
 			}
 			k_spin_unlock(&flpr_lock, key);
 		}
 
-		if (should_give) {
+		/* Signal outside lock ONLY on MATCH. */
+		if (cls == FLPR_PONG_MATCH) {
 			k_sem_give(&stress_sem);
 		}
 		break;
@@ -289,11 +282,11 @@ static void ep_received(const void *data, size_t len, void *priv)
 		/* CPUAPP receives these — unexpected but not errors. */
 		break;
 
-	default:
+	default: {
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 		flpr.err_unknown++;
 		k_spin_unlock(&flpr_lock, key);
-		break;
+	} break;
 	}
 }
 
@@ -326,7 +319,7 @@ int flpr_handshake_init(void)
 
 	{
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		memset(&flpr, 0, sizeof(flpr));
+		flpr_peer_reset(&flpr);
 		hb_started = false;
 		k_spin_unlock(&flpr_lock, key);
 	}
@@ -365,6 +358,7 @@ void flpr_handshake_get_status(struct flpr_status *status)
 	status->healthy = flpr.healthy;
 	status->epoch = flpr.epoch;
 	status->ready_count = flpr.ready_count;
+	status->reboot_count = flpr.reboot_count;
 	status->err_len = flpr.err_len;
 	status->err_version = flpr.err_version;
 	status->err_unknown = flpr.err_unknown;
@@ -438,9 +432,19 @@ void flpr_handshake_stress(uint32_t count, struct flpr_status *out)
 	LOG_INF("FLPR stress start: %u pings", count);
 
 	for (uint32_t i = 0; i < count; i++) {
+
+		/* Drain semaphore before EVERY iteration: guards against late-PONG
+		 * from a previous timed-out iteration. */
+		while (k_sem_take(&stress_sem, K_NO_WAIT) == 0) {
+			/* drain */
+		}
+
+		/* Snapshot cookie under lock. */
+		uint32_t cookie;
 		{
 			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 			stress_cookie++;
+			cookie = stress_cookie;
 			k_spin_unlock(&flpr_lock, key);
 		}
 
@@ -448,7 +452,7 @@ void flpr_handshake_stress(uint32_t count, struct flpr_status *out)
 			.type = FLPR_MSG_STRESS_PING,
 			.version = FLPR_PROTOCOL_VERSION,
 			.seq = (uint16_t)(i & 0xFFFFU),
-			.data = stress_cookie,
+			.data = cookie,
 		};
 
 		int ret = ipc_service_send(&flpr_ep, &ping, sizeof(ping));
@@ -471,8 +475,12 @@ void flpr_handshake_stress(uint32_t count, struct flpr_status *out)
 		/* Wait for matching PONG with 200 ms timeout. */
 		ret = k_sem_take(&stress_sem, K_MSEC(200));
 		if (ret != 0) {
+			/* Timeout: invalidate expected cookie so any late PONG
+			 * for THIS iteration is classified as stale, not
+			 * mistaken for the next iteration's match. */
 			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 			stress_timeouts++;
+			stress_cookie++; /* invalidate → late PONG is stale */
 			k_spin_unlock(&flpr_lock, key);
 		}
 	}
