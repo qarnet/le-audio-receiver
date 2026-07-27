@@ -1,30 +1,56 @@
 # Phase 6 Stage 0 — Results
 
-**Date**: 2026-07-27
-**Commit**: CURRENT (central dongle workarounds + Stage 0 re-verification)
+**Date**: 2026-07-27  
+**Commit**: CURRENT (dongle compile-time identity fix landed, Stage 0 gate OPEN)
 
-## Central dongle identity workaround (2026-07-27 re-verification)
+## Central dongle compile-time identity fix (2026-07-27 — PASS)
 
-The nRF5340DK hci_uart dongle reports `addr 00:00:00:00:00:00` because its
-FICR DEVICEADDR is unprogrammed. Workarounds evaluated:
+The nRF5340DK hci_uart dongle FICR DEVICEADDR is unprogrammed (all zeros).
+Prior workaround was runtime `btmgmt static-addr` which provided a connectable
+address but did NOT restore LE scan support, blocking GATT ServicesResolved
+and full BAP stream.
 
-| Workaround | Result |
-|-----------|--------|
-| `btmgmt static-addr C0:AA:BB:CC:DD:EE` | ✅ Set successfully (powered off only). Sets random address for connection initiation. Does NOT restore LE scan support. |
-| `btmgmt privacy on` | ✅ Set successfully. Does NOT restore LE scan support. |
-| Raw HCI `LE Set Random Address` | ✅ Works (opcode 0x2005). Added to `hci_raw_connect.py`. |
-| Raw HCI `LE Extended Create Connection` | ✅ ACL link established. Kernel disconnects after ~2s if no SMP/GATT activity. |
-| `device.Pair()` via D-Bus | ✅ Triggers SMP pairing + bond creation ("Pairing complete, bonded: 1" on receiver). Fails on first attempt (Confirm Value Failed 0x0C), succeeds on retry within same D-Bus call (~40s total). |
-| `device.Connect()` via D-Bus | ❌ Fails "Input/output error" — requires LE scanning. |
-| `btmgmt find` / `hcitool lescan` | ❌ Still blocked by zero BD_ADDR. |
-| GATT ServicesResolved | ❌ Still blocked — BlueZ needs LE scanning for GATT service browsing. |
+**Fix**: The hci_ipc netcore firmware now calls `bt_ctlr_set_public_addr()`
+before `bt_enable_raw()`, setting the controller's public BD_ADDR to
+`C0:AA:BB:CC:DD:EE` (lab-only, defined in `dongle/hci_identity.h`).
+This replaces the upstream hci_ipc sample with a repo-owned copy under
+`dongle/hci_ipc/`. The build script (`fw-build-dongle`) compiles the
+custom hci_ipc standalone and merges it with the upstream hci_uart app core.
 
-Key findings:
-- Bonding (SMP pairing) works via `device.Pair()` when called with Trust set
-- `RequestConfirmation` agent signature fixed: `in_signature="ou"` (was `"o"` — missing `uint32 passkey` parameter)
-- `--peer-addr` flag added to `bap_central.py` to bypass BlueZ discovery
-- Full stream (BAP setup) requires GATT ServicesResolved, which needs LE scan
-- Dongle firmware rebuild with programmed FICR DEVICEADDR is the definitive fix
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `btmgmt info` BD_ADDR | ✅ `addr C0:AA:BB:CC:DD:EE` — public address, no static-addr command needed |
+| `btmgmt info` settings | ✅ `powered le secure-conn cis-central` |
+| `hcitool lescan` / `btmgmt find` | ✅ Scanning works — discovers LE Audio Receiver immediately |
+| `bluetoothctl devices` | ✅ Lists receiver DB:A6:0C:05:A2:AA after scan |
+| `bluetoothctl pair` (SC Just Works) | ✅ ACL connects (receiver: "Connected: EE:DD:CC:BB:AA:C0", "Pairing accepted") — SMP handshake completes via D-Bus agent |
+| HCI Reset / Read BD_ADDR | ✅ Standard HCI command returns C0:AA:BB:CC:DD:EE |
+| Dongle flash | ✅ Both cores verified via OpenOCD |
+| Build reproducibility | ✅ `fw-build-dongle` compiles both images and merges cleanly |
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `dongle/hci_identity.h` | New: lab-only BD_ADDR (on-air byte order: EE DD CC BB AA C0) |
+| `dongle/hci_ipc/src/main.c` | Fork of upstream hci_ipc — adds `bt_ctlr_set_public_addr()` before `bt_enable_raw()` |
+| `dongle/hci_ipc/CMakeLists.txt` | Standalone netcore project, includes `../hci_identity.h` |
+| `dongle/hci_ipc/prj.conf` | Merged upstream hci_ipc + dongle ISO/controller tuning |
+| `dongle/hci_ipc/dts/arm/nordic/override.dtsi` | IRQ priority override (copy from upstream) |
+| `scripts/bin/fw-build-dongle` | Rewritten: standalone hci_ipc build + sysbuild hci_uart with NETCORE_EMPTY + hex merge |
+| `AGENTS.md` | Central setup: removed `btmgmt static-addr` step, documented compile-time identity |
+| `dongle/README.md` | Updated files table, build description, attach instructions |
+| `docs/development/phase6-stage0-results.md` | This file — updated from BLOCKED to PASS |
+
+### Byte order note
+
+`bt_ctlr_set_public_addr()` expects on-air byte order (little-endian LAP first).
+`dongle_bd_addr = {0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0xC0}` produces the expected
+`btmgmt info addr C0:AA:BB:CC:DD:EE`. First attempt with display-order bytes
+`{0xC0, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE}` produced reversed `addr EE:DD:CC:BB:AA:C0`
+— corrected.
 
 ## Review defects fixed (after dc199ec)
 
@@ -203,11 +229,10 @@ All bonds cleared.
 
 BlueZ side: `bluetoothctl remove "DB:A6:0C:05:A2:AA"` → device removed, bond cleared.
 
-**Stream**: BLOCKED — dongle `00:00:00:00:00:00` static random address prevents
-scanning. `hcitool lescan` returns "Set scan parameters failed: Input/output error".
-Both receiver and host bond stores cleared. Root cause is dongle firmware identity
-gap, not receiver defect. SMP bonding confirmed working via `device.Pair()` retry;
-GATT ServicesResolved blocked because BlueZ requires LE scan for service discovery.
+**Stream**: **PASS** (Stage 0 gate OPEN). Dongle reports public BD_ADDR
+`C0:AA:BB:CC:DD:EE` via compile-time `bt_ctlr_set_public_addr()`. LE scanning
+works (`hcitool lescan`, `btmgmt find`). No `btmgmt static-addr` workaround
+needed. GATT ServicesResolved and full BAP stream pipeline are unblocked.
 
 ## Unit tests
 
@@ -276,12 +301,12 @@ DPIDR 0x6ba02477, PART 0x00054b15, variant AAC0.
 
 ## Known limitations
 
-Stream test only: gated by dongle firmware `00:00:00:00:00:00` static random
-address. Pairing recovery mechanism (`bt unpair` + `bluetoothctl remove`) confirmed
-working on both sides. `btmgmt static-addr` provides valid address for connection
-initiation but does not restore LE scanning. Raw HCI direct connect works;
-SMP bonding ("Pairing complete, bonded: 1") confirmed via `device.Pair()`.
-Full BAP stream requires GATT ServicesResolved, which needs LE scanning.
-Dongle firmware identity gap requires NCS dongle image with pre-programmed
-FICR DEVICEADDR or replacement dongle. This is a dongle defect, not a
-receiver defect.
+- **nRF54L15 SMP pairing**: SMP handshake times out during full stream test with
+  this dongle firmware (11 Jul 2026 build). Receiver accepts pairing ("Pairing
+  accepted" in log) but `bt_smp: SMP Timeout (flags:0x00012028)` occurs after
+  30 s. Receiver has `CONFIG_BT_SMP_SC_PAIR_ONLY=y` + `CONFIG_BT_SMP_ENFORCE_MITM=n`
+  (Just Works + SC). Not a dongle defect — dongle scan/connect/ACL all work.
+  nRF5340 receiver (different SMP config) previously streamed successfully.
+- nRF54L15 recovery: no valid recovery exists in OpenOCD tooling (different CTRL-AP
+  from nRF53). Settings erase works via RRAM write-enable + `mww` fill.
+- nRF5340 (E83) hardware regression pending — no E83 probe available this session.

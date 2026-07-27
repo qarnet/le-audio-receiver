@@ -4,12 +4,19 @@ This directory holds the configuration for the **Bluetooth central** used
 to stream LE Audio from the Linux PC to the receiver: an nRF5340DK
 flashed with Zephyr's `hci_uart` sample, tuned as an LE Audio central.
 
-The app-core firmware is the **upstream Zephyr hci_uart sample** (a plain
-H:4 pipe over UART0 @ 1 Mbaud with hardware flow control). The
-SoftDevice Controller runs on the network core via `hci_ipc`. The two
-`.conf` fragments in this directory pin the ISO/controller symbols on
-top of the sample's own board configuration so the build is reproducible
-from this repo.
+The **app-core** firmware is the upstream Zephyr hci_uart sample (a plain
+H:4 pipe over UART0 @ 1 Mbaud with hardware flow control).
+
+The **netcore** (cpunet / hci_ipc) is a **repo-owned copy** of the upstream
+hci_ipc sample, modified to call `bt_ctlr_set_public_addr()` before
+`bt_enable_raw()`. This fixes the zero-FICR DEVICEADDR on this lab
+nRF5340DK. The compiled-in BD_ADDR is `C0:AA:BB:CC:DD:EE` (defined in
+`dongle/hci_identity.h` — lab-only, not a production-assigned OUI).
+
+Prior to this fix (Stage0/blocked), the dongle was built from the
+unmodified upstream hci_ipc sample, which reported `00:00:00:00:00:00`
+and required a runtime `btmgmt static-addr` workaround. That workaround
+is no longer needed.
 
 ## Why hci_uart and not hci_usb
 
@@ -35,8 +42,12 @@ Completed Packets, zero stalls. See `STATUS.md`.
 
 | File | Purpose |
 |------|---------|
+| `hci_identity.h` | Lab-only BD_ADDR `C0:AA:BB:CC:DD:EE` (on-air byte order) |
+| `hci_ipc/src/main.c` | Repo-owned hci_ipc main — calls `bt_ctlr_set_public_addr()` before `bt_enable_raw()` |
+| `hci_ipc/prj.conf` | Merged hci_ipc + dongle ISO/controller tuning |
+| `hci_ipc/CMakeLists.txt` | Standalone netcore CMake project |
 | `hci_uart/app.conf` | App-core (cpuapp) fragment — re-asserts `BT_ISO_CENTRAL` + ISO buffer counts + ext adv |
-| `hci_uart/netcore.conf` | Net-core (cpunet / hci_ipc) fragment — SDC tuning: ISO central, 2 conns / 2 CISes, ext adv, no Coded PHY, no privacy |
+| `hci_uart/netcore.conf` | Reference conf (was EXTRA_CONF_FILE; now baked into hci_ipc/prj.conf) |
 
 ## Build + flash
 
@@ -47,9 +58,10 @@ fw-build-dongle     # builds into build/dongle/
 fw-flash-dongle     # flashes both cores via the DK's onboard J-Link
 ```
 
-The build points west at `$ZEPHYR_BASE/samples/bluetooth/hci_uart`
-(resolved from the dev shell, so it tracks the active NCS version) and
-applies both conf fragments via `EXTRA_CONF_FILE`.
+The build compiles two images and merges them:
+1. **hci_ipc netcore**: standalone build (`-b nrf5340dk/nrf5340/cpunet`) from `dongle/hci_ipc/`
+2. **hci_uart app core**: sysbuild with `NETCORE_EMPTY` from upstream sample + `dongle/hci_uart/app.conf`
+3. Hexes merged via `scripts/build/mergehex.py`
 
 ## Attach to Linux (BlueZ)
 
@@ -78,7 +90,8 @@ sleep 3
 sudo btmgmt --index hci0 power on
 sudo btmgmt --index hci0 io-cap 3     # NoInputNoOutput — required for JustWorks receiver
 sudo btmgmt --index hci0 sc on        # receiver requires Secure Connections
-# verify: settings should include "powered le secure-conn static-addr cis-central"
+# verify: settings should include "powered le secure-conn cis-central"
+# BD_ADDR should be C0:AA:BB:CC:DD:EE (compile-time identity — no static-addr needed)
 ```
 
 `btattach` is not persistent — it dies with the session. Re-run the

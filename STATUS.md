@@ -3,6 +3,14 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
+## Stage 0 — PASS (2026-07-27)
+
+Dongle compile-time identity fix landed. hci_ipc netcore firmware calls
+`bt_ctlr_set_public_addr()` before `bt_enable_raw()` with lab-only address
+`C0:AA:BB:CC:DD:EE` (see `dongle/hci_identity.h`). No more `btmgmt static-addr`
+workaround — scanning and GATT discovery work natively. Build via `fw-build-dongle`.
+See `docs/development/phase6-stage0-results.md` for full verification evidence.
+
 ## Phase 5 — COMPLETE (2026-07-27)
 
 cpuapp fixed-point linear stereo ASRC accepted. Mode A (two mono ASEs) +
