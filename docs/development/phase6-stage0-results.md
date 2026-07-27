@@ -1,7 +1,7 @@
 # Phase 6 Stage 0 — Results
 
 **Date**: 2026-07-27  
-**Commit**: CURRENT (dongle compile-time identity fix landed, Stage 0 gate OPEN)
+**Commit**: 52abde1 (Stage 0 gate CLOSED — PASS)
 
 ## Central dongle compile-time identity fix (2026-07-27 — PASS)
 
@@ -116,10 +116,19 @@ Added `bt unpair` shell command: calls `bt_unpair(BT_ID_DEFAULT, BT_ADDR_LE_ANY)
 Test-only, no confirmation. Confirmed working: `All bonds cleared.` on receiver.
 Paired with `bluetoothctl remove` on BlueZ side. Both bond stores explicitly cleared.
 
-**Result**: Still BLOCKED. Dongle `00:00:00:00:00:00` static random address prevents
-scanning/connecting (`hcitool lescan` → "Set scan parameters failed: Input/output error").
-Not a receiver defect — dongle firmware identity gap. Per user instruction, deferred
-to Stage 1; stream gate not falsely passed.
+**Result**: RESOLVED by commit 52abde1. Root cause was two-fold:
+1. Dongle identity was `00:00:00:00:00:00` (unprogrammed FICR) — resolved
+   by 87b8d36 (`bt_ctlr_set_public_addr()` before `bt_enable_raw()`).
+2. `--peer-addr` raw-HCI bypass used `own_address_type=Random` (0x01) in the
+   LE Extended Create Connection command, causing BlueZ SMP SC DHKey Check
+   mismatch (peer reason 0x0C). Fixed in 52abde1: raw-HCI helper always uses
+   `--addr-type public`, matching the dongle's compile-time public BD_ADDR.
+   The `--peer-addr` path now holds the ACL open for `duration+120 s` instead of
+   a brief connect+kill, allowing `Pair()` to succeed over the existing ACL.
+
+Both `--peer-addr` bypass and scan-based discovery now work. Scan-based
+discovery is the preferred path: GATT ServicesResolved fires normally, BlueZ
+auto-configures ASEs, BAP stream runs end-to-end without manual steps.
 
 ## Memory map (verified non-overlapping)
 
@@ -229,10 +238,88 @@ All bonds cleared.
 
 BlueZ side: `bluetoothctl remove "DB:A6:0C:05:A2:AA"` → device removed, bond cleared.
 
-**Stream**: **PASS** (Stage 0 gate OPEN). Dongle reports public BD_ADDR
-`C0:AA:BB:CC:DD:EE` via compile-time `bt_ctlr_set_public_addr()`. LE scanning
-works (`hcitool lescan`, `btmgmt find`). No `btmgmt static-addr` workaround
-needed. GATT ServicesResolved and full BAP stream pipeline are unblocked.
+## Stage 0 gate close — 60 s Mode A stream (2026-07-27 — PASS)
+
+### Test procedure
+
+1. Receiver bonds cleared: `bt unpair` → `All bonds cleared.`
+2. BlueZ bonds cleared: `bluetoothctl remove DB:A6:0C:05:A2:AA` + bluetoothd restart
+3. Dongle reattached: `btattach -B /dev/ttyACM2 -S 1000000`, verified
+   `addr C0:AA:BB:CC:DD:EE` public, `powered le secure-conn cis-central`
+4. Scan-based discovery: `python3 scripts/bap_central.py --duration 60`
+   (no `--peer-addr` — scan works with public dongle identity)
+5. Post-stream: `flpr status` and `audio perf` over serial shell
+
+### Stream results
+
+| Metric | Value |
+|--------|-------|
+| Duration | 60.00 s |
+| Frames | 6000 |
+| Rate | 100.0 fps |
+| Mode | stereo_a (2 ASEs, chan_alloc 0x01 + 0x02) |
+| Disconnects | 0 |
+| Slab full | 0 |
+| I2S underrun | 0 |
+| Warnings | 0 |
+| Assertions | 0 |
+| Faults | 0 |
+
+### Receiver serial (key events)
+
+```
+Connected: C0:AA:BB:CC:DD:EE (public)
+Pairing accepted
+Pairing complete, bonded: 1
+ASE[0] configured: chan alloc 0x00000001
+ASE[1] configured: chan alloc 0x00000002
+I2S DMA started
+Timing anchor: ts=1130747234 pd=40000
+PCLK timer diag[1..55]: 1505–1663 ppm range
+Stream[0] disabled, Stream[1] disabled  (reason 0x13)
+Disconnected: C0:AA:BB:CC:DD:EE (public) reason 0x13
+```
+
+### FLPR status (post-stream)
+
+```
+Ready: yes  ACKed: yes  Healthy: yes
+Epoch: 557137997 (ready=1 reboot=1)
+Errors: len=0 ver=0 unk=0 send=0
+TX seq: 648 (acked=647)
+RX seq: 647  lost=0  dup=0  ooo=0  missed=0
+```
+
+### Audio perf (post-stream)
+
+| Path | Count | Avg cycles | Max cycles | Deadline% |
+|------|-------|-----------|-----------|-----------|
+| iso_recv | 12072 | 1776 | 2441 | 24.4% |
+| lc3_decode | 12055 | 1385 | 1609 | 16.0% |
+| volume | 6026 | 99 | 159 | 1.5% |
+| sink_push | 6025 | 632 | 767 | 7.6% |
+| asrc | 6026 | 445 | 558 | 5.5% |
+
+Queue: slab_free 5/7 (min/max), output_frames 476/478, output_blocks 6025
+**Push failures: 0, Repeat fb: 0, ASRC cap fail: 0**
+
+### Pairing root cause and fix
+
+Two commits resolve the previously BLOCKED pairing:
+
+- **87b8d36** — dongle compile-time BD_ADDR via `bt_ctlr_set_public_addr()`,
+  defined in `dongle/hci_identity.h`. Replaces the broken `btmgmt static-addr`
+  workaround. Restores LE scanning.
+- **52abde1** — `--peer-addr` path uses `--addr-type public` (own_address_type=0x00)
+  in the raw-HCI LE Extended Create Connection command. Previously used Random
+  (0x01), causing BlueZ SMP SC DHKey Check mismatch (peer reason 0x0C —
+  Numeric Comparison Failed). Also fixes the raw-HCI ACL lifetime: kept open for
+  `duration+120 s` instead of brief connect+kill, so `Pair()` succeeds over the
+  existing ACL.
+
+With both fixes, scan-based discovery (preferred) and `--peer-addr` bypass
+both work. BAP end-to-end stream (pair → bond → ASE config → CIS → 6000 frames)
+confirmed on clean state (no prior bonds).
 
 ## Unit tests
 
@@ -301,12 +388,9 @@ DPIDR 0x6ba02477, PART 0x00054b15, variant AAC0.
 
 ## Known limitations
 
-- **nRF54L15 SMP pairing**: SMP handshake times out during full stream test with
-  this dongle firmware (11 Jul 2026 build). Receiver accepts pairing ("Pairing
-  accepted" in log) but `bt_smp: SMP Timeout (flags:0x00012028)` occurs after
-  30 s. Receiver has `CONFIG_BT_SMP_SC_PAIR_ONLY=y` + `CONFIG_BT_SMP_ENFORCE_MITM=n`
-  (Just Works + SC). Not a dongle defect — dongle scan/connect/ACL all work.
-  nRF5340 receiver (different SMP config) previously streamed successfully.
+- **nRF54L15 SMP pairing**: RESOLVED (52abde1). Scan-based discovery (preferred)
+  and `--peer-addr` bypass both work with the compile-time public dongle BD_ADDR.
+  See "Pairing root cause and fix" above.
 - nRF54L15 recovery: no valid recovery exists in OpenOCD tooling (different CTRL-AP
   from nRF53). Settings erase works via RRAM write-enable + `mww` fill.
 - nRF5340 (E83) hardware regression pending — no E83 probe available this session.

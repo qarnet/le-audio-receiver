@@ -5,10 +5,22 @@
 
 ## Stage 0 — PASS (2026-07-27)
 
-Dongle compile-time identity fix landed. hci_ipc netcore firmware calls
+Dongle compile-time identity fix landed (87b8d36). hci_ipc netcore firmware calls
 `bt_ctlr_set_public_addr()` before `bt_enable_raw()` with lab-only address
 `C0:AA:BB:CC:DD:EE` (see `dongle/hci_identity.h`). No more `btmgmt static-addr`
 workaround — scanning and GATT discovery work natively. Build via `fw-build-dongle`.
+
+SMP pairing fix landed (52abde1). `--peer-addr` raw-HCI path now uses
+`own_address_type=public` (0x00) matching the dongle's compile-time identity.
+Previously used Random (0x01) causing DHKey Check mismatch + SMP timeout.
+ACL held open for `duration+120 s` so `Pair()` succeeds over existing ACL.
+
+**Stage 0 gate closed**: 60 s Mode A stream (6000 frames, 100.0 fps) on nRF54L15.
+Pairing + bond + 2 ASE config + CIS audio path fully verified on clean state
+(no prior bonds). RX hex dump (chan_alloc 0x01+0x02) confirmed stereo content.
+FLPR: healthy, errors zero, RX lost/dup/ooo/missed zero. Audio: push failures=0,
+repeat fb=0, ASRC cap fail=0. Zero warnings, zero assertions, zero faults.
+
 See `docs/development/phase6-stage0-results.md` for full verification evidence.
 
 ## Phase 5 — COMPLETE (2026-07-27)
