@@ -55,7 +55,29 @@ LC3_CAPS = bytes(
         0x03,  # duration: 7.5+10ms
         0x02,
         0x03,
-        0x01,  # chan count: 1 (mono)
+        0x01,  # chan count: 1
+        0x05,
+        0x04,
+        0x78,
+        0x00,
+        0xF0,
+        0x00,  # frame len 120..240
+    ]
+)
+
+# Same as LC3_CAPS but with chan_count=2 for --stereo Mode B source.
+LC3_CAPS_STEREO = bytes(
+    [
+        0x03,
+        0x01,
+        0x80,
+        0x00,  # freq: 48k
+        0x02,
+        0x02,
+        0x03,  # duration: 7.5+10ms
+        0x02,
+        0x03,
+        0x02,  # chan count: 2
         0x05,
         0x04,
         0x78,
@@ -380,9 +402,11 @@ def _make_endpoint_class(dbus_mod, dbus_service_mod, GLib_mod):
             if channels == 0x03:
                 # Stereo Mode B (single ASE, both channels)
                 caps = LC3_CONFIG_STEREO
+                sdu = 240
             else:
                 # Mono ASE with the requested channel allocation (FL or FR).
                 # Build a config with the specific channel alloc LTV.
+                sdu = 120
                 caps = bytes(
                     [
                         0x02,
@@ -418,8 +442,8 @@ def _make_endpoint_class(dbus_mod, dbus_service_mod, GLib_mod):
                             "PHY": dbus_mod.Byte(0x02),
                             # Interval: 10000 us = 10 ms
                             "Interval": dbus_mod.UInt32(10000),
-                            # SDU: 120 bytes per frame (96 kbps LC3 @ 48k/10ms)
-                            "SDU": dbus_mod.UInt16(120),
+                            # SDU: 120 (mono) or 240 (stereo Mode B) bytes
+                            "SDU": dbus_mod.UInt16(sdu),
                             # Retransmissions: 2 (matches peripheral's pref)
                             "Retransmissions": dbus_mod.Byte(2),
                             # Latency: 10 ms (peripheral prefers 10; must be > 0)
@@ -655,12 +679,13 @@ def main():
     # ── 2. Register BAP source endpoint ──────────────────────────────────
     media = _dbus.Interface(bus.get_object("org.bluez", hci_path), "org.bluez.Media1")
     endpoint = BAPSourceEndpoint(bus, ENDPOINT_PATH, stereo=args.stereo)
+    endpoint_caps = LC3_CAPS_STEREO if args.stereo else LC3_CAPS
     props = _dbus.Dictionary(
         {
             "UUID": _dbus.String(PAC_SOURCE_UUID),
             "Codec": _dbus.Byte(LC3_CODEC),
             "Capabilities": _dbus.Array(
-                [_dbus.Byte(b) for b in LC3_CAPS], signature="y"
+                [_dbus.Byte(b) for b in endpoint_caps], signature="y"
             ),
         },
         signature="sv",
