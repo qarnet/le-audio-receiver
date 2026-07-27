@@ -11,6 +11,7 @@
 
 #if defined(CONFIG_SOC_NRF54L15)
 #include "flpr_handshake.h"
+#include "flpr_ring_mgr.h"
 #endif
 
 #include <inttypes.h>
@@ -225,13 +226,131 @@ static int cmd_flpr_stress(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
-SHELL_STATIC_SUBCMD_SET_CREATE(flpr_cmds,
-			       SHELL_CMD_ARG(status, NULL, "FLPR handshake/health status.",
-					     cmd_flpr_status, 1, 0),
-			       SHELL_CMD_ARG(stress, NULL,
-					     "Stress test N ping/pong (default 100k, max 1M).",
-					     cmd_flpr_stress, 1, 1),
-			       SHELL_SUBCMD_SET_END);
+static int cmd_flpr_ring_status(const struct shell *sh, size_t argc, char **argv)
+{
+	struct flpr_ring_status s;
+	flpr_ring_mgr_get_status(&s);
+
+	shell_print(sh, "--- FLPR PCM rings ---");
+	shell_print(sh, "  Initialized   : %s", s.initialized ? "yes" : "no");
+	shell_print(sh, "  Epoch         : %u", s.epoch);
+	shell_print(sh, "  Input  (→FLPR): prod=%u cons=%u epoch=%u", s.in_producer, s.in_consumer,
+		    s.in_epoch);
+	shell_print(sh, "  Output (→CPU): prod=%u cons=%u epoch=%u", s.out_producer, s.out_consumer,
+		    s.out_epoch);
+
+	if (s.test_active) {
+		shell_print(sh, "  Test (ACTIVE): sent=%u recv=%u", s.test_blocks_sent,
+			    s.test_blocks_recv);
+	} else if (s.test_blocks_sent > 0 || s.test_blocks_recv > 0) {
+		shell_print(sh,
+			    "  Test (done):  sent=%u recv=%u crc_err=%u "
+			    "full=%u empty=%u stale=%u",
+			    s.test_blocks_sent, s.test_blocks_recv, s.test_crc_errors, s.test_full,
+			    s.test_empty, s.test_stale);
+	}
+
+	return 0;
+}
+
+static int cmd_flpr_ring_test(const struct shell *sh, size_t argc, char **argv)
+{
+	uint32_t count = 10000; /* default: 10k blocks */
+
+	if (argc >= 2) {
+		count = (uint32_t)shell_strtoul(argv[1], 0, NULL);
+	}
+	if (count == 0) {
+		shell_error(sh, "Block count must be > 0");
+		return -EINVAL;
+	}
+	if (count > 1000000) {
+		shell_error(sh, "Block count must be ≤ 1,000,000");
+		return -EINVAL;
+	}
+
+	/* Quick pre-check: ensure rings are ready and FLPR is up. */
+	struct flpr_ring_status pre;
+	flpr_ring_mgr_get_status(&pre);
+	if (!pre.initialized || pre.epoch == 0) {
+		shell_error(sh, "Rings not initialized — init/reset first");
+		return -EAGAIN;
+	}
+
+	shell_print(sh, "Starting ring test: %u blocks (~480 stereo frames each)...", count);
+
+	uint32_t start = k_uptime_get_32();
+
+	/* Run the test. */
+	uint32_t timeout_ms = count * 5; /* 5 ms per block budget */
+	if (timeout_ms < 30000) {
+		timeout_ms = 30000;
+	}
+	struct flpr_ring_status s;
+	int ret = flpr_ring_mgr_test_run(count, timeout_ms, &s);
+
+	uint32_t elapsed = k_uptime_get_32() - start;
+
+	shell_print(sh, "Sent=%u Recv=%u CRC_Err=%u Full=%u Empty=%u Stale=%u", s.test_blocks_sent,
+		    s.test_blocks_recv, s.test_crc_errors, s.test_full, s.test_empty, s.test_stale);
+	shell_print(sh, "Duration: %u ms", elapsed);
+
+	if (ret == 0 && s.test_blocks_sent == count && s.test_crc_errors == 0) {
+		shell_print(sh, "PASS: all %u blocks transferred, zero CRC errors",
+			    s.test_blocks_recv);
+	} else {
+		shell_warn(sh, "FAIL/TIMEOUT: sent=%u/%u recv=%u err=%u", s.test_blocks_sent, count,
+			   s.test_blocks_recv, s.test_crc_errors);
+	}
+
+	return 0;
+}
+
+static int cmd_flpr_ring_reset(const struct shell *sh, size_t argc, char **argv)
+{
+	uint32_t epoch = k_cycle_get_32();
+
+	int ret = flpr_ring_mgr_reset(epoch);
+	if (ret != 0) {
+		shell_error(sh, "Ring reset failed: %d", ret);
+		return ret;
+	}
+
+	shell_print(sh, "Rings reset: epoch=%u", epoch);
+
+	/* Notify FLPR via IPC. The handshake module's IPC endpoint
+	 * is used for control. For Stage 1, reset is local-only
+	 * (FLPR gets reset via separate IPC path in handoff).
+	 * TODO: IPC-based coordinated reset. */
+	return 0;
+}
+
+static int cmd_flpr_ring_init(const struct shell *sh, size_t argc, char **argv)
+{
+	int ret = flpr_ring_mgr_init();
+	if (ret == 0) {
+		shell_print(sh, "PCM rings initialized.");
+	} else {
+		shell_error(sh, "Ring init failed: %d", ret);
+	}
+	return ret;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(
+	flpr_ring_cmds, SHELL_CMD_ARG(status, NULL, "PCM ring status.", cmd_flpr_ring_status, 1, 0),
+	SHELL_CMD_ARG(init, NULL, "Initialize PCM rings.", cmd_flpr_ring_init, 1, 0),
+	SHELL_CMD_ARG(reset, NULL, "Reset PCM rings with new epoch.", cmd_flpr_ring_reset, 1, 0),
+	SHELL_CMD_ARG(test, NULL, "Run ring throughput test (default 10k blocks).",
+		      cmd_flpr_ring_test, 1, 1),
+	SHELL_SUBCMD_SET_END);
+
+SHELL_STATIC_SUBCMD_SET_CREATE(
+	flpr_cmds,
+	SHELL_CMD_ARG(status, NULL, "FLPR handshake/health status.", cmd_flpr_status, 1, 0),
+	SHELL_CMD_ARG(stress, NULL, "Stress test N ping/pong (default 100k, max 1M).",
+		      cmd_flpr_stress, 1, 1),
+	SHELL_CMD(ring, &flpr_ring_cmds, "PCM ring transport commands.", NULL),
+	SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(flpr, &flpr_cmds, "FLPR co-processor commands.", NULL);
 

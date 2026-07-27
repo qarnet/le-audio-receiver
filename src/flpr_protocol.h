@@ -36,6 +36,15 @@ extern "C" {
 #define FLPR_MSG_STRESS_PING   0x05U /* CPUAPP → FLPR: stress test */
 #define FLPR_MSG_STRESS_PONG   0x06U /* FLPR → CPUAPP: stress response */
 
+/* Stage 1: PCM ring control */
+#define FLPR_MSG_RING_RESET       0x10U /* CPUAPP → FLPR: reset ring epoch */
+#define FLPR_MSG_RING_RESET_ACK   0x11U /* FLPR → CPUAPP: ack reset */
+#define FLPR_MSG_RING_TEST_START  0x12U /* CPUAPP → FLPR: start ring test (count in data) */
+#define FLPR_MSG_RING_TEST_STOP   0x13U /* CPUAPP → FLPR: abort test */
+#define FLPR_MSG_RING_TEST_REPORT 0x14U /* FLPR → CPUAPP: test results (count so far) */
+#define FLPR_MSG_RING_PRODUCER    0x15U /* FLPR → CPUAPP: input slot ready to read */
+#define FLPR_MSG_RING_CONSUMER    0x16U /* CPUAPP → FLPR: output slot consumed */
+
 /* ── Timing ────────────────────────────────────────────────────── */
 
 #define FLPR_HEARTBEAT_INTERVAL_MS 1000U

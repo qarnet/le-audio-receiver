@@ -14,4 +14,8 @@ project(flpr_handshake)
 # Shared protocol header lives one directory up.
 zephyr_include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)
 
-target_sources(app PRIVATE main.c)
+target_sources(app PRIVATE
+  main.c
+  ../flpr_ring.c
+  ../flpr_cache.c
+)
