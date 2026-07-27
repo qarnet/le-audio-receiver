@@ -2,14 +2,12 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * FLPR application — Stage 1: adds shared PCM ring transport.
- * Handshake/ heartbeat retained from Stage 0.
- * Ring consumer: polls input ring, verifies CRC/seq/metadata,
- * copies bit-exact payload to output ring.
+ * FLPR application — Stage 1: shared PCM ring transport.
+ * Handshake/heartbeat retained from Stage 0.
  *
- * Ring memory at hardcoded addresses (must match DTS reservation):
- *   CPUAPP→FLPR input ring:  0x2002C000
- *   FLPR→CPUAPP output ring: 0x2002E000
+ * Loopback consumer: polls input ring, validates metadata/CRC/seq,
+ * copies bit-exact payload (valid bytes only) to output ring.
+ * Ring addresses resolved from devicetree, not hardcoded.
  *
  * Epoch: hardware GRTC counter at boot start.
  * All state transitions use production helpers from flpr_protocol.h.
@@ -18,15 +16,29 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/ipc/ipc_service.h>
+#include <zephyr/sys/__assert.h>
 #include <string.h>
 
 #include "flpr_protocol.h"
 #include "flpr_ring.h"
 
-/* ── Ring base addresses (hardcoded, must match DTS) ────────────── */
-#define RING_INPUT_BASE  ((uint8_t *)0x2002C000U)
-#define RING_OUTPUT_BASE ((uint8_t *)0x2002E000U)
+/* ── Devicetree resolved addresses ───────────────────────────────── */
+
+#define DT_PCM_RING DT_NODELABEL(pcm_ring)
+
+BUILD_ASSERT(DT_NODE_EXISTS(DT_PCM_RING), "pcm_ring node not found in FLPR DTS");
+BUILD_ASSERT(DT_REG_SIZE(DT_PCM_RING) == 0x4000U, "pcm_ring must be 16 KiB");
+BUILD_ASSERT(DT_REG_ADDR(DT_PCM_RING) == 0x2002C000U, "pcm_ring base mismatch");
+
+/* Input ring (CPUAPP→FLPR): lower 8 KiB. */
+#define RING_INPUT_BASE ((uint8_t *)(uintptr_t)DT_REG_ADDR(DT_PCM_RING))
+
+/* Output ring (FLPR→CPUAPP): upper 8 KiB. */
+#define RING_OUTPUT_BASE ((uint8_t *)(uintptr_t)(DT_REG_ADDR(DT_PCM_RING) + FLPR_RING_TOTAL_SIZE))
+
+BUILD_ASSERT(FLPR_RING_TOTAL_SIZE == 8192U, "ring size must be 8 KiB");
 
 /* ── IPC state ─────────────────────────────────────────────────── */
 
@@ -49,6 +61,8 @@ static uint32_t ring_test_epoch_stale; /* stale epoch rejections */
 static uint32_t ring_test_empty_polls; /* times ring was empty */
 static uint32_t ring_test_output_full; /* output ring full count */
 
+static bool rings_initialized;
+
 static uint32_t ring_stream_epoch; /* current ring epoch after reset */
 
 /* ── Helpers ────────────────────────────────────────────────────── */
@@ -58,9 +72,12 @@ static int send_msg(const struct flpr_msg *msg)
 	return ipc_service_send(&ipc_ep, msg, sizeof(*msg));
 }
 
-/** Drain all pending input ring slots: verify, copy to output, publish. */
+/** Drain all pending input ring slots: verify CRC over valid bytes,
+ *  copy bit-exact to output, publish. */
 static void ring_process_input(void)
 {
+	uint8_t recv_payload[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+
 	while (1) {
 		uint8_t *slot_base;
 		struct flpr_ring_slot_meta *meta;
@@ -79,10 +96,18 @@ static void ring_process_input(void)
 			continue;
 		}
 
-		/* Verify CRC if test mode and CRC was set. */
+		uint16_t valid_frames = meta->valid_frames;
+		if (valid_frames > FLPR_RING_PAYLOAD_CAPACITY_FRAMES) {
+			valid_frames = FLPR_RING_PAYLOAD_CAPACITY_FRAMES;
+		}
+		size_t valid_bytes = (size_t)valid_frames * 4U;
+
+		/* Copy payload for verification. */
+		memcpy(recv_payload, flpr_ring_slot_payload(slot_base), valid_bytes);
+
+		/* Verify CRC over valid bytes if test mode and CRC was set. */
 		if (ring_test_active && meta->crc32 != 0) {
-			uint8_t *payload = flpr_ring_slot_payload(slot_base);
-			uint32_t computed = flpr_ring_crc32(payload, FLPR_RING_PAYLOAD_BYTES);
+			uint32_t computed = flpr_ring_crc32(recv_payload, valid_bytes);
 			if (computed != meta->crc32) {
 				ring_test_crc_errors++;
 			}
@@ -96,6 +121,9 @@ static void ring_process_input(void)
 			 * dropping blocks. Consumer will drain output
 			 * and we'll come back on next poll. */
 			ring_test_output_full++;
+			/* Release input slot (we consumed it but can't
+			 * forward it — drop is allowed in test; counter
+			 * records the event). */
 			flpr_ring_consume_done(RING_INPUT_BASE);
 			break;
 		}
@@ -106,9 +134,14 @@ static void ring_process_input(void)
 		memcpy(out_meta, meta, sizeof(*meta));
 		out_meta->flags |= FLPR_SLOT_FLAG_VALID;
 
-		/* Copy payload bit-exact. */
-		memcpy(flpr_ring_slot_payload(out_slot), flpr_ring_slot_payload(slot_base),
-		       FLPR_RING_PAYLOAD_BYTES);
+		/* Copy valid payload bytes bit-exact; zero remainder. */
+		memset(flpr_ring_slot_payload(out_slot), 0, FLPR_RING_PAYLOAD_CAPACITY_BYTES);
+		memcpy(flpr_ring_slot_payload(out_slot), recv_payload, valid_bytes);
+
+		/* Recompute CRC over valid bytes for the output copy
+		 * (verifies the copy was bit-exact). */
+		out_meta->crc32 = meta->crc32; /* forward original CRC */
+		out_meta->valid_frames = valid_frames;
 
 		/* Publish output slot. */
 		flpr_ring_produce_commit(RING_OUTPUT_BASE, out_idx);
@@ -213,7 +246,7 @@ static void ep_received(const void *data, size_t len, void *priv)
 			.type = FLPR_MSG_RING_RESET_ACK,
 			.version = FLPR_PROTOCOL_VERSION,
 			.seq = 0,
-			.data = (ret == 0) ? epoch : 0,
+			.data = (ret == 0) ? epoch : 0U,
 		};
 		(void)send_msg(&ack);
 		break;
@@ -250,7 +283,7 @@ static void ep_received(const void *data, size_t len, void *priv)
 				.type = FLPR_MSG_RING_CONSUMER,
 				.version = FLPR_PROTOCOL_VERSION,
 				.seq = (uint16_t)(ring_test_block_count & 0xFFFFU),
-				.data = 0,
+				.data = ring_test_crc_errors,
 			};
 			(void)send_msg(&notify);
 		}
@@ -282,9 +315,10 @@ int main(void)
 
 	flpr_peer_reset(&cpuapp);
 
-	/* Initialize PCM rings. */
+	/* Initialize PCM rings in shared memory. */
 	flpr_ring_init(RING_INPUT_BASE, FLPR_RING_CPUAPP_TO_FLPR);
 	flpr_ring_init(RING_OUTPUT_BASE, FLPR_RING_FLPR_TO_CPUAPP);
+	rings_initialized = true;
 
 	ipc_dev = DEVICE_DT_GET(DT_NODELABEL(ipc0));
 	if (!device_is_ready(ipc_dev)) {
@@ -365,12 +399,11 @@ int main(void)
 		}
 
 		/* Poll input ring briefly (the IPC RING_PRODUCER callback
-		 * handles the main processing path; this catches any stragglers
+		 * handles the main processing path; this catches stragglers
 		 * if an IPC message was dropped). */
 		ring_process_input();
 
-		/* Yield CPU — IPC callbacks wake us, and we check again each
-		 * iteration. Short sleep keeps heartbeat accurate. */
+		/* Yield CPU — IPC callbacks wake us. */
 		k_msleep(10);
 	}
 

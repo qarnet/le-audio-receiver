@@ -6,12 +6,26 @@
  * All cache/barrier operations go through the platform hook interface.
  *
  * This file is shared between CPUAPP and FLPR builds.
+ *
+ * Ordering contract for every slot transaction:
+ *
+ *   Producer:
+ *     1. Allocate slot (produce_begin).
+ *     2. Fill slot metadata + payload (both cores: plain stores).
+ *     3. RELEASE fence (write_barrier) — all prior stores visible.
+ *     4. Increment producer_idx (volatile aligned store).
+ *
+ *   Consumer:
+ *     1. Read producer_idx (volatile load).
+ *     2. ACQUIRE fence (read_barrier) — guarantee visibility of slot data.
+ *     3. Validate metadata + read payload.
+ *     4. Release slot (consume_done): RELEASE fence + increment consumer_idx.
  */
 
 #include "flpr_ring.h"
 #include <string.h>
 
-/* ── CRC-32 (Ethernet/gzip polynomial) ──────────────────────────── */
+/* ── CRC-32 (Ethernet/gzip polynomial, init=0xFFFFFFFF) ──────────── */
 
 static const uint32_t crc32_table[256] = {
 	0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, 0x076DC419, 0x706AF48F, 0xE963A535,
@@ -56,6 +70,10 @@ uint32_t flpr_ring_crc32(const uint8_t *data, size_t len)
 {
 	uint32_t crc = 0xFFFFFFFFU;
 
+	if (len == 0) {
+		return 0U;
+	}
+
 	for (size_t i = 0; i < len; i++) {
 		crc = crc32_table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
 	}
@@ -79,31 +97,38 @@ void flpr_ring_init(uint8_t *base, enum flpr_ring_dir dir)
 	hdr->stream_epoch = 0U; /* not yet agreed */
 	hdr->slot_count = FLPR_RING_SLOT_COUNT;
 	hdr->slot_stride = FLPR_RING_SLOT_STRIDE;
-	hdr->payload_frames = FLPR_RING_PAYLOAD_FRAMES;
-	hdr->payload_bytes = FLPR_RING_PAYLOAD_BYTES;
+	hdr->payload_cap_frames = FLPR_RING_PAYLOAD_CAPACITY_FRAMES;
+	hdr->payload_cap_bytes = FLPR_RING_PAYLOAD_CAPACITY_BYTES;
 	hdr->producer_idx = 0;
 	hdr->consumer_idx = 0;
 
-	/* Flush the full ring initialisation to memory before the other
-	 * core can observe it. */
-	flpr_cache_flush_range(base, FLPR_RING_TOTAL_SIZE);
-	flpr_cache_write_barrier();
+	/* Full bidirectional fence: ensure all init stores are visible
+	 * to the other core before it can observe the ring. */
+	flpr_cache_full_barrier();
 }
 
 int flpr_ring_reset_epoch(uint8_t *base, uint32_t new_epoch)
 {
 	struct flpr_ring_header *hdr = (struct flpr_ring_header *)base;
 
-	if (new_epoch == 0 || new_epoch == hdr->stream_epoch) {
+	if (new_epoch == 0) {
 		return -1; /* -EINVAL */
+	}
+
+	/* Idempotent: if the ring is already at this epoch with
+	 * cleared indices, it's a no-op (no error).  Two-phase
+	 * coordinated reset may race — FLPR may apply the epoch
+	 * before CPUAPP. */
+	if (new_epoch == hdr->stream_epoch && hdr->producer_idx == 0 && hdr->consumer_idx == 0) {
+		return 0; /* already reset */
 	}
 
 	hdr->stream_epoch = new_epoch;
 	hdr->producer_idx = 0;
 	hdr->consumer_idx = 0;
 
-	flpr_cache_flush_range(hdr, sizeof(*hdr));
-	flpr_cache_write_barrier();
+	/* Full fence: publish epoch + cleared indices. */
+	flpr_cache_full_barrier();
 
 	return 0;
 }
@@ -122,6 +147,9 @@ bool flpr_ring_validate(const uint8_t *base)
 		return false;
 	}
 	if (hdr->slot_stride != FLPR_RING_SLOT_STRIDE) {
+		return false;
+	}
+	if (hdr->payload_cap_frames != FLPR_RING_PAYLOAD_CAPACITY_FRAMES) {
 		return false;
 	}
 	return true;
@@ -143,7 +171,7 @@ int flpr_ring_produce_begin(uint8_t *base, uint32_t *slot_idx_out)
 		return -1; /* -ENOSPC */
 	}
 
-	*slot_idx_out = producer % FLPR_RING_SLOT_COUNT;
+	*slot_idx_out = producer;
 	return 0;
 }
 
@@ -152,23 +180,17 @@ void flpr_ring_produce_commit(uint8_t *base, uint32_t slot_idx)
 	(void)slot_idx;
 
 	struct flpr_ring_header *hdr = (struct flpr_ring_header *)base;
-	uint8_t *slot = flpr_ring_slot_base(base, slot_idx);
 
-	/* Flush the entire slot (metadata + payload) to ensure the
-	 * consumer sees the written data. */
-	flpr_cache_flush_range(slot, FLPR_RING_SLOT_STRIDE);
-
-	/* Barrier: ensure all slot writes are visible before the
-	 * producer index update. */
+	/* Release fence: ensure all slot stores (metadata + payload
+	 * written by caller) are visible before we publish the index. */
 	flpr_cache_write_barrier();
 
-	/* Increment producer index. Single writer — no atomic needed. */
+	/* Publish: increment producer index.  Single writer — no atomic. */
 	hdr->producer_idx++;
 
-	/* Flush the header (producer index) so the other core sees it.
-	 * Write barrier ensures prior slot flush is ordered before this. */
-	flpr_cache_flush_range((void *)&hdr->producer_idx, sizeof(hdr->producer_idx));
-	flpr_cache_write_barrier();
+	/* Full fence: ensure producer_idx store is visible to other
+	 * core before any subsequent producer_begin reads consumer_idx. */
+	flpr_cache_full_barrier();
 }
 
 /* ── Consumer API ───────────────────────────────────────────────── */
@@ -177,41 +199,44 @@ int flpr_ring_consume_begin(uint8_t *base, uint32_t current_epoch, uint8_t **slo
 			    struct flpr_ring_slot_meta **meta_out)
 {
 	struct flpr_ring_header *hdr = (struct flpr_ring_header *)base;
-	uint32_t producer, consumer, count;
+	uint32_t producer, consumer, used;
 	struct flpr_ring_slot_meta *meta;
 	uint32_t slot_idx;
 
-	/* Read barrier: ensure we see the latest producer index. */
+	/* Observe producer_idx (volatile). */
+	producer = hdr->producer_idx;
+
+	/* Acquire fence: ensure slot data written by producer
+	 * (before its release fence) is visible to us. */
 	flpr_cache_read_barrier();
 
-	producer = hdr->producer_idx;
 	consumer = hdr->consumer_idx;
+	used = flpr_ring_used(producer, consumer);
 
-	count = flpr_ring_count(producer, consumer);
-	if (count == 0) {
+	if (used == 0) {
 		return -1; /* -ENOENT — empty */
 	}
 
-	slot_idx = consumer % FLPR_RING_SLOT_COUNT;
+	slot_idx = consumer;
 
-	/* Invalidate the slot range before reading. */
-	uint8_t *slot = flpr_ring_slot_base(base, slot_idx);
-	flpr_cache_invld_range(slot, FLPR_RING_SLOT_STRIDE);
+	meta = (struct flpr_ring_slot_meta *)flpr_ring_slot_base(base, slot_idx);
 
-	meta = (struct flpr_ring_slot_meta *)slot;
-
-	/* Validate epoch. */
+	/* Validate epoch.  If consumer's current_epoch is set (non-zero)
+	 * and the slot has a non-zero epoch that doesn't match, treat
+	 * as stale. */
 	if (current_epoch != 0 && meta->epoch != 0 && meta->epoch != current_epoch) {
 		hdr->err_stale_epoch++;
-		/* Still consume the slot (advance consumer) to avoid
-		 * deadlock, but return stale so caller can discard. */
-		hdr->consumer_idx++;
-		flpr_cache_flush_range((void *)&hdr->consumer_idx, sizeof(hdr->consumer_idx));
-		flpr_cache_write_barrier();
+		/* Advance consumer past the stale slot to avoid deadlock.
+		 * No fence here — stale data is never claimed.  The
+		 * increment must still be visible for the producer to
+		 * reclaim space. */
+		consumer++;
+		hdr->consumer_idx = consumer;
+		flpr_cache_full_barrier();
 		return -2; /* -ESTALE */
 	}
 
-	*slot_base_out = slot;
+	*slot_base_out = (uint8_t *)meta; /* slot base == metadata pointer */
 	*meta_out = meta;
 	return 0;
 }
@@ -220,8 +245,12 @@ void flpr_ring_consume_done(uint8_t *base)
 {
 	struct flpr_ring_header *hdr = (struct flpr_ring_header *)base;
 
+	/* Release fence: ensure all consumer-side stores (e.g. FLAG_CRC_OK)
+	 * are visible before the consumer_index update. */
+	flpr_cache_write_barrier();
+
 	hdr->consumer_idx++;
 
-	flpr_cache_flush_range((void *)&hdr->consumer_idx, sizeof(hdr->consumer_idx));
-	flpr_cache_write_barrier();
+	/* Full fence: ensure the update is visible to the producer. */
+	flpr_cache_full_barrier();
 }

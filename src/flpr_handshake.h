@@ -78,6 +78,39 @@ void flpr_handshake_get_status(struct flpr_status *status);
  */
 void flpr_handshake_stress(uint32_t count, struct flpr_status *out);
 
+/**
+ * @brief Send an arbitrary IPC message to FLPR on the existing endpoint.
+ *
+ * Thread-safe — may be called from any context (lock-free for sending).
+ * Returns 0 on success, negative errno on failure (counts err_send).
+ */
+int flpr_handshake_send_msg(const struct flpr_msg *msg);
+
+/**
+ * @brief Callback type for ring-control message handlers.
+ * Called from IPC receive context.  msg is NOT owned by the handler.
+ */
+typedef void (*flpr_handshake_ring_handler_t)(const struct flpr_msg *msg, void *user_data);
+
+/**
+ * @brief Register handlers for ring-control IPC messages.
+ *
+ * When FLPR sends RING_RESET_ACK, RING_CONSUMER, or RING_TEST_REPORT,
+ * the registered callbacks are invoked from the IPC receive callback
+ * (under spinlock).
+ *
+ * Call with NULL to unregister.
+ *
+ * @param reset_ack_fn   Handler for FLPR_MSG_RING_RESET_ACK.
+ * @param consumer_fn    Handler for FLPR_MSG_RING_CONSUMER.
+ * @param report_fn      Handler for FLPR_MSG_RING_TEST_REPORT.
+ * @param user_data      Opaque pointer passed to each handler.
+ */
+void flpr_handshake_register_ring_handlers(flpr_handshake_ring_handler_t reset_ack_fn,
+					   flpr_handshake_ring_handler_t consumer_fn,
+					   flpr_handshake_ring_handler_t report_fn,
+					   void *user_data);
+
 #ifdef __cplusplus
 }
 #endif

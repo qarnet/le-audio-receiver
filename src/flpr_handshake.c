@@ -54,6 +54,13 @@ static uint32_t stress_stale;    /* protected by flpr_lock */
 static uint32_t stress_mismatch; /* protected by flpr_lock */
 static uint32_t stress_err_send; /* protected by flpr_lock */
 
+/* ── Ring control handlers (registered by flpr_ring_mgr) ──────────── */
+
+static flpr_handshake_ring_handler_t ring_reset_ack_fn;
+static flpr_handshake_ring_handler_t ring_consumer_fn;
+static flpr_handshake_ring_handler_t ring_report_fn;
+static void *ring_handler_user_data;
+
 /* ── Helpers ────────────────────────────────────────────────────── */
 
 /* Send a message. Returns 0 on success, negative errno on failure.
@@ -282,6 +289,23 @@ static void ep_received(const void *data, size_t len, void *priv)
 		/* CPUAPP receives these — unexpected but not errors. */
 		break;
 
+	/* ── Stage 1: ring control — route to ring manager ──────── */
+	case FLPR_MSG_RING_RESET_ACK:
+		if (ring_reset_ack_fn) {
+			ring_reset_ack_fn(msg, ring_handler_user_data);
+		}
+		break;
+	case FLPR_MSG_RING_CONSUMER:
+		if (ring_consumer_fn) {
+			ring_consumer_fn(msg, ring_handler_user_data);
+		}
+		break;
+	case FLPR_MSG_RING_TEST_REPORT:
+		if (ring_report_fn) {
+			ring_report_fn(msg, ring_handler_user_data);
+		}
+		break;
+
 	default: {
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 		flpr.err_unknown++;
@@ -499,4 +523,28 @@ void flpr_handshake_stress(uint32_t count, struct flpr_status *out)
 	if (out) {
 		flpr_handshake_get_status(out);
 	}
+}
+
+/* ── Ring control IPC helpers ─────────────────────────────────────── */
+
+int flpr_handshake_send_msg(const struct flpr_msg *msg)
+{
+	if (!msg) {
+		return -EINVAL;
+	}
+	return ipc_service_send(&flpr_ep, msg, sizeof(*msg));
+}
+
+void flpr_handshake_register_ring_handlers(flpr_handshake_ring_handler_t reset_ack_fn,
+					   flpr_handshake_ring_handler_t consumer_fn,
+					   flpr_handshake_ring_handler_t report_fn, void *user_data)
+{
+	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+
+	ring_reset_ack_fn = reset_ack_fn;
+	ring_consumer_fn = consumer_fn;
+	ring_report_fn = report_fn;
+	ring_handler_user_data = user_data;
+
+	k_spin_unlock(&flpr_lock, key);
 }

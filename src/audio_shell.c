@@ -246,8 +246,8 @@ static int cmd_flpr_ring_status(const struct shell *sh, size_t argc, char **argv
 		shell_print(sh,
 			    "  Test (done):  sent=%u recv=%u crc_err=%u "
 			    "full=%u empty=%u stale=%u",
-			    s.test_blocks_sent, s.test_blocks_recv, s.test_crc_errors, s.test_full,
-			    s.test_empty, s.test_stale);
+			    s.test_blocks_sent, s.test_blocks_recv, s.test_crc_errors,
+			    s.test_full_events, s.test_empty_events, s.test_stale_events);
 	}
 
 	return 0;
@@ -291,8 +291,10 @@ static int cmd_flpr_ring_test(const struct shell *sh, size_t argc, char **argv)
 
 	uint32_t elapsed = k_uptime_get_32() - start;
 
-	shell_print(sh, "Sent=%u Recv=%u CRC_Err=%u Full=%u Empty=%u Stale=%u", s.test_blocks_sent,
-		    s.test_blocks_recv, s.test_crc_errors, s.test_full, s.test_empty, s.test_stale);
+	shell_print(sh, "Sent=%u Recv=%u CRC_Err=%u Full=%u Empty=%u Stale=%u FLPR=%u FLPR_Full=%u",
+		    s.test_blocks_sent, s.test_blocks_recv, s.test_crc_errors, s.test_full_events,
+		    s.test_empty_events, s.test_stale_events, s.test_producer_blocks,
+		    s.test_output_full);
 	shell_print(sh, "Duration: %u ms", elapsed);
 
 	if (ret == 0 && s.test_blocks_sent == count && s.test_crc_errors == 0) {
@@ -308,20 +310,16 @@ static int cmd_flpr_ring_test(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_flpr_ring_reset(const struct shell *sh, size_t argc, char **argv)
 {
-	uint32_t epoch = k_cycle_get_32();
+	uint32_t epoch = 0; /* let coordinated_reset generate one */
 
-	int ret = flpr_ring_mgr_reset(epoch);
+	int ret = flpr_ring_mgr_coordinated_reset(epoch, 5000);
 	if (ret != 0) {
-		shell_error(sh, "Ring reset failed: %d", ret);
+		shell_error(sh, "Coordinated ring reset failed: %d (FLPR may not have acked)", ret);
 		return ret;
 	}
 
-	shell_print(sh, "Rings reset: epoch=%u", epoch);
+	shell_print(sh, "Coordinated ring reset OK");
 
-	/* Notify FLPR via IPC. The handshake module's IPC endpoint
-	 * is used for control. For Stage 1, reset is local-only
-	 * (FLPR gets reset via separate IPC path in handoff).
-	 * TODO: IPC-based coordinated reset. */
 	return 0;
 }
 
