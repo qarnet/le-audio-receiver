@@ -774,6 +774,24 @@ gate2_done:
 
 /* ── Offload status command (Phase 6 Stage 2) ──────────────────── */
 
+static const char *offload_state_str(enum audio_offload_state st)
+{
+	switch (st) {
+	case AUDIO_OFFLOAD_STOPPED:
+		return "STOPPED";
+	case AUDIO_OFFLOAD_PREPARING:
+		return "PREPARING";
+	case AUDIO_OFFLOAD_ACTIVE:
+		return "ACTIVE";
+	case AUDIO_OFFLOAD_FALLBACK:
+		return "FALLBACK";
+	case AUDIO_OFFLOAD_RECOVERING:
+		return "RECOVERING";
+	default:
+		return "UNKNOWN";
+	}
+}
+
 static int cmd_offload_status(const struct shell *sh, size_t argc, char **argv)
 {
 	(void)argc;
@@ -783,21 +801,27 @@ static int cmd_offload_status(const struct shell *sh, size_t argc, char **argv)
 	audio_offload_get_status(&s);
 
 	shell_print(sh, "--- Audio offload ---");
-	shell_print(sh, "  State       : %s / %s / epoch=%u", s.initialized ? "init" : "no-init",
-		    s.healthy ? "HEALTHY" : "bypass", s.epoch);
-	shell_print(sh, "  Submits     : %u (success=%u fallback=%u)", s.submit_count,
+	shell_print(sh, "  State       : %s / epoch=%u gen=%u",
+		    s.initialized ? offload_state_str(s.state) : "no-init", s.epoch, s.generation);
+	shell_print(sh, "  Counters    : submit=%u success=%u fallback=%u", s.submit_count,
 		    s.success_count, s.fallback_count);
-	shell_print(sh, "  Faults      : timeout=%u full=%u stale=%u seq=%u frame=%u crc=%u",
+	shell_print(sh,
+		    "  Faults      : timeout=%u full=%u stale=%u seq=%u frame=%u crc=%u payload=%u",
 		    s.timeout_count, s.full_count, s.stale_count, s.seq_fault_count,
-		    s.frame_fault_count, s.crc_fault_count);
-	shell_print(sh, "  Recovery    : %u", s.recovery_count);
+		    s.frame_fault_count, s.crc_fault_count, s.payload_fault_count);
+	shell_print(sh, "  Recovery    : success=%u fail=%u", s.recovery_count,
+		    s.recovery_fail_count);
 
 	if (s.rtt_count > 0) {
-		uint32_t avg = (uint32_t)(s.rtt_sum_cycles / s.rtt_count);
-		shell_print(sh, "  RTT cycles  : min=%u max=%u avg=%u (count=%u)", s.rtt_min_cycles,
-			    s.rtt_max_cycles, avg, s.rtt_count);
+		uint32_t avg_cyc = (uint32_t)(s.rtt_sum_cycles / s.rtt_count);
+		shell_print(sh,
+			    "  RTT         : min=%u cyc (%u us) max=%u cyc (%u us) avg=%u cyc (%u "
+			    "us) n=%u",
+			    s.rtt_min_cycles, k_cyc_to_us_ceil32(s.rtt_min_cycles),
+			    s.rtt_max_cycles, k_cyc_to_us_ceil32(s.rtt_max_cycles), avg_cyc,
+			    k_cyc_to_us_ceil32(avg_cyc), s.rtt_count);
 	} else {
-		shell_print(sh, "  RTT cycles  : (none)");
+		shell_print(sh, "  RTT         : (none)");
 	}
 
 	if (s.last_error != 0) {
