@@ -61,6 +61,15 @@ static uint32_t ring_test_epoch_stale; /* stale epoch rejections */
 static uint32_t ring_test_empty_polls; /* times ring was empty */
 static uint32_t ring_test_output_full; /* output ring full count */
 
+/* Diagnostic counters (no lock — single-threaded FLPR). */
+static uint32_t diag_notify_rcv;    /* RING_PRODUCER messages received */
+static uint32_t diag_worker_wake;   /* ring_process_input() call count */
+static uint32_t diag_consume_ok;    /* slots successfully consumed */
+static uint32_t diag_consume_empty; /* consumer found ring empty */
+static uint32_t diag_consume_stale; /* consumer found stale epoch */
+static uint32_t diag_produce_ok;    /* output slots produced */
+static uint32_t diag_produce_full;  /* output ring was full */
+
 static bool rings_initialized;
 
 static uint32_t ring_stream_epoch; /* current ring epoch after reset */
@@ -72,11 +81,18 @@ static int send_msg(const struct flpr_msg *msg)
 	return ipc_service_send(&ipc_ep, msg, sizeof(*msg));
 }
 
+/* Static buffer for ring_process_input — too large for FLPR main
+ * thread stack (1924 bytes vs 1024-byte default).  Single-writer:
+ * only one thread (FLPR main or IPC callback) runs at a time. */
+static uint8_t recv_payload[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+
 /** Drain all pending input ring slots: verify CRC over valid bytes,
- *  copy bit-exact to output, publish. */
-static void ring_process_input(void)
+ *  copy bit-exact to output, publish.  Returns number of slots consumed. */
+static uint32_t ring_process_input(void)
 {
-	uint8_t recv_payload[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+	uint32_t consumed = 0;
+
+	diag_worker_wake++;
 
 	while (1) {
 		uint8_t *slot_base;
@@ -88,13 +104,18 @@ static void ring_process_input(void)
 		if (ret == -1) {
 			/* Empty — stop draining. */
 			ring_test_empty_polls++;
+			diag_consume_empty++;
 			break;
 		}
 		if (ret == -2) {
 			/* Stale epoch — skip, already advanced by consume_begin. */
 			ring_test_epoch_stale++;
+			diag_consume_stale++;
 			continue;
 		}
+
+		diag_consume_ok++;
+		consumed++;
 
 		uint16_t valid_frames = meta->valid_frames;
 		if (valid_frames > FLPR_RING_PAYLOAD_CAPACITY_FRAMES) {
@@ -121,12 +142,15 @@ static void ring_process_input(void)
 			 * dropping blocks. Consumer will drain output
 			 * and we'll come back on next poll. */
 			ring_test_output_full++;
+			diag_produce_full++;
 			/* Release input slot (we consumed it but can't
 			 * forward it — drop is allowed in test; counter
 			 * records the event). */
 			flpr_ring_consume_done(RING_INPUT_BASE);
 			break;
 		}
+
+		diag_produce_ok++;
 
 		/* Copy metadata into output slot. */
 		uint8_t *out_slot = flpr_ring_slot_base(RING_OUTPUT_BASE, out_idx);
@@ -151,6 +175,8 @@ static void ring_process_input(void)
 
 		ring_test_block_count++;
 	}
+
+	return consumed;
 }
 
 /* ── Ring reset ─────────────────────────────────────────────────── */
@@ -178,7 +204,34 @@ static int ring_reset_with_epoch(uint32_t epoch)
 	ring_test_empty_polls = 0;
 	ring_test_output_full = 0;
 
+	/* Reset diagnostic counters. */
+	diag_notify_rcv = 0;
+	diag_worker_wake = 0;
+	diag_consume_ok = 0;
+	diag_consume_empty = 0;
+	diag_consume_stale = 0;
+	diag_produce_ok = 0;
+	diag_produce_full = 0;
+
 	return 0;
+}
+
+/** Send RING_CONSUMER notification + diagnostic counters to CPUAPP.
+ *  Called from IPC callback and polling path when data was consumed. */
+static void ring_notify_cpuapp(uint32_t consumed)
+{
+	if (consumed == 0) {
+		/* Nothing was consumed — don't send spurious notification. */
+		return;
+	}
+
+	struct flpr_msg notify = {
+		.type = FLPR_MSG_RING_CONSUMER,
+		.version = FLPR_PROTOCOL_VERSION,
+		.seq = (uint16_t)(ring_test_block_count & 0xFFFFU),
+		.data = (uint32_t)consumed, /* slots consumed this wake */
+	};
+	(void)send_msg(&notify);
 }
 
 /* ── IPC callbacks ──────────────────────────────────────────────── */
@@ -262,30 +315,65 @@ static void ep_received(const void *data, size_t len, void *priv)
 
 	case FLPR_MSG_RING_TEST_STOP: {
 		ring_test_active = false;
-		/* Send current stats as report. */
-		struct flpr_msg report = {
-			.type = FLPR_MSG_RING_TEST_REPORT,
-			.version = FLPR_PROTOCOL_VERSION,
-			.seq = (uint16_t)(ring_test_block_count & 0xFFFFU),
-			.data = ring_test_crc_errors,
-		};
-		(void)send_msg(&report);
-		break;
-	}
+		/* Send multi-report test results.
+		 * Subtype encoded in seq high byte:
+		 *   0x00: block_count (lo 16-bit) + crc_errors (data)
+		 *   0xD1: consume_ok (full 32-bit in data)
+		 *   0xD2: produce_ok (full 32-bit in data)
+		 *   0xD3: notify_rcv(lo 8) + worker_wake(hi 8 of data)
+		 *          produce_full(lo 16) in seq */
 
-	case FLPR_MSG_RING_PRODUCER:
-		/* CPUAPP just published input data — consume it. */
-		ring_process_input();
-
-		/* Notify CPUAPP that output may be available. */
+		/* Report 1: block_count + crc_errors. */
 		{
-			struct flpr_msg notify = {
-				.type = FLPR_MSG_RING_CONSUMER,
+			struct flpr_msg r0 = {
+				.type = FLPR_MSG_RING_TEST_REPORT,
 				.version = FLPR_PROTOCOL_VERSION,
 				.seq = (uint16_t)(ring_test_block_count & 0xFFFFU),
 				.data = ring_test_crc_errors,
 			};
-			(void)send_msg(&notify);
+			(void)send_msg(&r0);
+		}
+		/* Report 2: consume_ok (full 32-bit). */
+		{
+			struct flpr_msg r1 = {
+				.type = FLPR_MSG_RING_TEST_REPORT,
+				.version = FLPR_PROTOCOL_VERSION,
+				.seq = 0xD100U,
+				.data = diag_consume_ok,
+			};
+			(void)send_msg(&r1);
+		}
+		/* Report 3: produce_ok (full 32-bit). */
+		{
+			struct flpr_msg r2 = {
+				.type = FLPR_MSG_RING_TEST_REPORT,
+				.version = FLPR_PROTOCOL_VERSION,
+				.seq = 0xD200U,
+				.data = diag_produce_ok,
+			};
+			(void)send_msg(&r2);
+		}
+		/* Report 4: misc diagnostic counters. */
+		{
+			struct flpr_msg r3 = {
+				.type = FLPR_MSG_RING_TEST_REPORT,
+				.version = FLPR_PROTOCOL_VERSION,
+				.seq = (uint16_t)(0xD300U |
+						  (diag_notify_rcv > 255 ? 255 : diag_notify_rcv)),
+				.data = (diag_worker_wake & 0xFFFFU) |
+					((diag_produce_full & 0xFFFFU) << 16),
+			};
+			(void)send_msg(&r3);
+		}
+		break;
+	}
+
+	case FLPR_MSG_RING_PRODUCER:
+		/* CPUAPP published input data — consume it. */
+		diag_notify_rcv++;
+		{
+			uint32_t consumed = ring_process_input();
+			ring_notify_cpuapp(consumed);
 		}
 		break;
 
@@ -398,10 +486,14 @@ int main(void)
 			last_hb_ms = now_ms;
 		}
 
-		/* Poll input ring briefly (the IPC RING_PRODUCER callback
-		 * handles the main processing path; this catches stragglers
-		 * if an IPC message was dropped). */
-		ring_process_input();
+		/* Poll input ring.  If IPC notification arrives between polls,
+		 * the callback handles it immediately.  This polling path also
+		 * sends RING_CONSUMER so CPUAPP never gets stuck if an IPC
+		 * notification is dropped. */
+		{
+			uint32_t consumed = ring_process_input();
+			ring_notify_cpuapp(consumed);
+		}
 
 		/* Yield CPU — IPC callbacks wake us. */
 		k_msleep(10);

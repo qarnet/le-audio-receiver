@@ -53,6 +53,12 @@ struct flpr_ring_status {
 	uint32_t out_space;
 	uint32_t out_epoch;
 
+	/* Diagnostic counters (CPUAPP-local). */
+	uint32_t notify_sent;
+	uint32_t notify_err;
+	uint32_t sem_gives; /* from FLPR → CPUAPP ring consumer notifications */
+	uint32_t sem_takes;
+
 	/* Test */
 	bool test_active;
 	uint32_t test_blocks_sent;
@@ -64,6 +70,15 @@ struct flpr_ring_status {
 	uint32_t test_stale_events;
 	uint32_t test_producer_blocks; /* FLPR-side block count */
 	uint32_t test_output_full;     /* FLPR-side output-full count */
+
+	/* FLPR-reported diagnostic counters. */
+	uint32_t flpr_notify_rcv;  /* notification received */
+	uint32_t flpr_worker_wake; /* ring_process_input() calls */
+	uint32_t flpr_consume_ok;  /* slots consumed */
+	uint32_t flpr_consume_empty;
+	uint32_t flpr_consume_stale;
+	uint32_t flpr_produce_ok; /* slots produced to output */
+	uint32_t flpr_produce_full;
 };
 
 /**

@@ -234,10 +234,23 @@ static int cmd_flpr_ring_status(const struct shell *sh, size_t argc, char **argv
 	shell_print(sh, "--- FLPR PCM rings ---");
 	shell_print(sh, "  Initialized   : %s", s.initialized ? "yes" : "no");
 	shell_print(sh, "  Epoch         : %u", s.epoch);
-	shell_print(sh, "  Input  (→FLPR): prod=%u cons=%u epoch=%u", s.in_producer, s.in_consumer,
-		    s.in_epoch);
-	shell_print(sh, "  Output (→CPU): prod=%u cons=%u epoch=%u", s.out_producer, s.out_consumer,
-		    s.out_epoch);
+	shell_print(sh, "  Input  (→FLPR): prod=%u cons=%u epoch=%u used=%u space=%u",
+		    s.in_producer, s.in_consumer, s.in_epoch, s.in_used, s.in_space);
+	shell_print(sh, "  Output (→CPU): prod=%u cons=%u epoch=%u used=%u space=%u",
+		    s.out_producer, s.out_consumer, s.out_epoch, s.out_used, s.out_space);
+
+	shell_print(sh, "  Diag (CPUAPP): notify=%u err=%u sem_give=%u sem_take=%u", s.notify_sent,
+		    s.notify_err, s.sem_gives, s.sem_takes);
+
+	if (s.flpr_notify_rcv > 0 || s.flpr_worker_wake > 0) {
+		shell_print(sh,
+			    "  Diag (FLPR):   notif_rcv=%u worker=%u "
+			    "cons_ok=%u cons_empty=%u cons_stale=%u "
+			    "prod_ok=%u prod_full=%u",
+			    s.flpr_notify_rcv, s.flpr_worker_wake, s.flpr_consume_ok,
+			    s.flpr_consume_empty, s.flpr_consume_stale, s.flpr_produce_ok,
+			    s.flpr_produce_full);
+	}
 
 	if (s.test_active) {
 		shell_print(sh, "  Test (ACTIVE): sent=%u recv=%u", s.test_blocks_sent,

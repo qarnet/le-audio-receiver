@@ -42,8 +42,8 @@ extern "C" {
 #define FLPR_MSG_RING_TEST_START  0x12U /* CPUAPP → FLPR: start ring test (count in data) */
 #define FLPR_MSG_RING_TEST_STOP   0x13U /* CPUAPP → FLPR: abort test */
 #define FLPR_MSG_RING_TEST_REPORT 0x14U /* FLPR → CPUAPP: test results (count so far) */
-#define FLPR_MSG_RING_PRODUCER    0x15U /* FLPR → CPUAPP: input slot ready to read */
-#define FLPR_MSG_RING_CONSUMER    0x16U /* CPUAPP → FLPR: output slot consumed */
+#define FLPR_MSG_RING_PRODUCER    0x15U /* CPUAPP → FLPR: input data available */
+#define FLPR_MSG_RING_CONSUMER    0x16U /* FLPR → CPUAPP: output data available */
 
 /* ── Timing ────────────────────────────────────────────────────── */
 
