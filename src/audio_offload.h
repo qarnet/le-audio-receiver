@@ -66,6 +66,7 @@ struct audio_offload_status {
 	uint32_t payload_fault_count; /* memcmp mismatch */
 	uint32_t recovery_count;
 	uint32_t recovery_fail_count; /* recovery attempts that failed */
+	uint32_t busy_count;          /* mutex-timeout rejections */
 
 	/* Latency (k_cycle_get_32 cycles). */
 	uint32_t rtt_min_cycles;

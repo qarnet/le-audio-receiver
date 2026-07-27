@@ -803,8 +803,8 @@ static int cmd_offload_status(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "--- Audio offload ---");
 	shell_print(sh, "  State       : %s / epoch=%u gen=%u",
 		    s.initialized ? offload_state_str(s.state) : "no-init", s.epoch, s.generation);
-	shell_print(sh, "  Counters    : submit=%u success=%u fallback=%u", s.submit_count,
-		    s.success_count, s.fallback_count);
+	shell_print(sh, "  Counters    : submit=%u success=%u fallback=%u busy=%u", s.submit_count,
+		    s.success_count, s.fallback_count, s.busy_count);
 	shell_print(sh,
 		    "  Faults      : timeout=%u full=%u stale=%u seq=%u frame=%u crc=%u payload=%u",
 		    s.timeout_count, s.full_count, s.stale_count, s.seq_fault_count,
