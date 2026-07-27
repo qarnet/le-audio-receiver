@@ -476,10 +476,12 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		int16_t *dest = (idx == 0) ? l_buf : r_buf;
 
 		for (int i = 0; i < f_per_sdu; i++) {
+			uint32_t t1 = audio_perf_cycle_start();
 			const int err =
 				lc3_decode(as->decode.decoder,
 					   valid ? net_buf_pull_mem(buf, octets_per_frame) : NULL,
 					   octets_per_frame, LC3_PCM_FORMAT_S16, dest, 1);
+			audio_perf_cycle_end(t1, AUDIO_PERF_PATH_LC3_DECODE);
 			if (err == 1) {
 				audio_stats_frame_plc();
 			} else if (err < 0) {
