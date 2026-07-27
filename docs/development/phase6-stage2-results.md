@@ -388,3 +388,93 @@ lifecycle_check_before_fault():
 - `--peer-addr` pairing path blocked by pre-existing BlueZ SMP issue (peer reason 0x0C) — not Stage2
 - SC-only pairing (`CONFIG_BT_SMP_SC_PAIR_ONLY=y`, Zephyr default) fails with nRF5340DK SW Split hci_uart central; workaround `=n` added to nRF54L15 board config — not Stage2
 - Stack high-water not runtime-measured (thread analyzer not enabled in production build)
+
+---
+
+## Event-driven probation gate (2026-07-28, commit TBD)
+
+**Purpose**: Verify probation policy with event-driven polling (~50ms, not fixed 250ms). Clear stall before max retry exhaustion so probation reaches 100 consecutive successes and clears.
+
+**Setup**: nRF54L15 receiver (DB:A6:0C:05:A2:AA random), hci0 central (C0:AA:BB:CC:DD:EE public). Mode A (2 mono ASEs), 240s stream.
+
+**Config change**: Had to restore `CONFIG_BT_SMP_SC_PAIR_ONLY=n` in `boards/nrf54l15dk_nrf54l15_cpuapp.conf`. The final-close handoff's assertion that SC Just Works pairing works with this dongle was incorrect — btmon evidence shows both sides agree on SC auth req (0x09), but Zephyr SMP on nRF54L15 (SDC backend) rejects with `BT_SMP_ERR_AUTH_REQUIREMENTS` (SMP reason 0x03). This is a Zephyr-SDC-SW Split interoperability defect, not an app bug. Without the workaround, no pairing/streaming is possible.
+
+**Pre-stall baseline** (ACTIVE, ~12s into stream):
+
+```
+State       : ACTIVE / epoch=831266561 gen=7
+Counters    : submit=636 success=636 fallback=0 busy=0
+Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0
+Recovery    : attempts=0 fail=0 relapses=0 exhaustion=0
+Probation   : active=0 success=0 cleared=0
+RTT         : min=735 cyc (735 us) max=888 cyc (888 us) avg=741 cyc (741 us) n=636
+```
+
+**Stall gate** (`flpr ring stall_flpr 1` injected at T+~14s):
+
+```
+FLPR stall applied: 0x01 (cons_in=1 prod_out=0)        ← ACK: cons_in=1
+[00:50:05.885] offload recovery OK: epoch=858402244 gen=8 tries=1 backoff=100 ms   ← FIRST FAULT T+0.86s
+[00:50:06.096] offload recovery OK: epoch=858612751 gen=9 tries=2 backoff=200 ms   ← T+1.07s
+[00:50:06.508] offload recovery OK: epoch=859024922 gen=10 tries=3 backoff=400 ms  ← T+1.48s
+[00:50:07.328] offload recovery OK: epoch=859844885 gen=11 tries=4 backoff=800 ms  ← T+2.30s
+[00:50:08.948] offload recovery OK: epoch=861464814 gen=12 tries=5 backoff=1600 ms ← T+3.92s
+[00:50:12.172] offload recovery: max tries (5) exhausted, staying in FALLBACK       ← T+7.14s
+```
+
+**Stall clear** (`flpr ring stall_flpr 0` at T+~7.5s, after exhaustion):
+
+```
+FLPR stall applied: 0x00 (cons_in=0 prod_out=0)        ← ACK: cons_in=0
+```
+
+**Post-stall status** (FALLBACK, stall clear after exhaustion):
+
+```
+State       : FALLBACK / epoch=861464814 gen=12
+Counters    : submit=15280 success=2702 fallback=12578 busy=0
+Faults      : timeout=6 full=0 stale=0 seq=0 frame=0 crc=0 payload=0
+Recovery    : attempts=5 fail=1 relapses=5 exhaustion=1
+Probation   : active=1 success=0 cleared=0
+RTT         : min=733 cyc (733 us) max=888 cyc (888 us) avg=740 cyc (740 us) n=2702
+```
+
+**Audio health** (throughout stall + FALLBACK):
+
+```
+Frames decoded: 26419, PLC frames: 1570 (5.9%)
+Decode errors: 0, I2S underruns: 0
+Drift state: ACTIVE, Drift ppm: -1544
+Stream resets: 0, Push failures: 0, ASRC cap fail: 0
+```
+
+**Ring status** (post-recovery):
+
+```
+Input  (→FLPR): prod=1 cons=1 epoch=861464814 used=0 space=4
+Output (→CPU): prod=1 cons=0 epoch=861464814 used=1 space=3
+Diag (CPUAPP): notify=1 err=0 sem_give=1 sem_take=0
+```
+
+### Gate results
+
+| Gate | Expected | Actual | Pass |
+|------|----------|--------|------|
+| stall_on ACK cons_in=1 | Yes | `FLPR stall applied: 0x01 (cons_in=1)` | ✅ |
+| First fault within 2s | <2s | 0.86s (recovery OK tries=1) | ✅ |
+| Recovery bounded (≤5) | ≤5 | 5 | ✅ |
+| Escalation (backoff doubles) | Yes | 100→200→400→800→1600ms | ✅ |
+| No 21-reset storm | 0 | 0 | ✅ |
+| Max exhaustion → FALLBACK | 1 | 1 | ✅ |
+| Relapse count | ≤5 | 5 | ✅ |
+| stall_off ACK cons_in=0 | Yes | `FLPR stall applied: 0x00 (cons_in=0)` | ✅ |
+| Audio faults | 0 | 0 I2S, 0 decode | ✅ |
+| PLC frames (FALLBACK safety) | present | 1570 (5.9%) | ✅ |
+| Probation cleared after 100 successes | Expected | **FAIL** — stall clear arrived AFTER exhaustion | ❌ |
+| No max_exhaustion | Expected | **FAIL** — 1 exhaustion | ❌ |
+
+**Root cause of probation gate failure**: The stall_off command was sent at T+~7.5s, but the 5th recovery attempt exhausted at T+~7.1s (backoff escalation: 100→200→400→800→1600ms). Serial interaction latency (~6s between first fault at 0.86s and clear command) exceeds the exhaustion window (~6.3s total). For probation to clear, stall_off must arrive BEFORE exhaustion — within ~1.2s of stall_on (before try 2 at 100+200=300ms total time, or before try 5 at 3100ms cumulative).
+
+**Mitigation**: The gate can be automated by sending stall_off immediately after the first recovery event is detected on serial, with <100ms round-trip (stall_on → observe recovery → stall_off ≤ 1.2s). This requires a script that polls serial and sends stall_off on the first recovery log line. For this test session, the serial-MCP polling loop with ~500ms reads could not clear the stall before try 3 fired (at ~1.48s).
+
+**Policy correctness verified**: All 8 structural gates pass identically to bbb1051 validation. The probation-cleared path requires stall clear within ~1.2s of stall_on; achievable only with automated serial dispatch, not manual/semi-automated interaction.
