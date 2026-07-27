@@ -606,10 +606,14 @@ def _make_agent_class(dbus_mod, dbus_service_mod, GLib_mod):
                 )
             )
 
-        @dbus_service_mod.method("org.bluez.Agent1", in_signature="o", out_signature="")
-        def RequestConfirmation(self, device):
+        @dbus_service_mod.method(
+            "org.bluez.Agent1", in_signature="ou", out_signature=""
+        )
+        def RequestConfirmation(self, device, passkey):
             print(
-                "[agent] RequestConfirmation (Just Works): accepting {}".format(device)
+                "[agent] RequestConfirmation (Just Works): accepting {}, passkey={}".format(
+                    device, passkey
+                )
             )
 
         @dbus_service_mod.method("org.bluez.Agent1", in_signature="o", out_signature="")
@@ -656,6 +660,14 @@ def main():
         type=str,
         default="hci0",
         help="BlueZ adapter to use (default: hci0)",
+    )
+    parser.add_argument(
+        "--peer-addr",
+        type=str,
+        default=None,
+        help="Peer BLE address (xx:xx:xx:xx:xx:xx). "
+        "Skips BlueZ discovery; connects directly via raw HCI. "
+        "Required when controller BD_ADDR is all-zero (prevents scanning).",
     )
     args = parser.parse_args()
     hci_path = "/org/bluez/" + args.adapter
@@ -704,47 +716,59 @@ def main():
     adapter_props.Set("org.bluez.Adapter1", "Powered", _dbus.Boolean(True))
     print("[main] Adapter powered on")
 
-    # ── 4. Locate target device (existing or via discovery) ──────────────
+    # ── 4. Locate target device (existing, peer-addr, or via discovery) ──
     adapter = _dbus.Interface(
         bus.get_object("org.bluez", hci_path), "org.bluez.Adapter1"
     )
 
-    # 4a. First, enumerate existing devices (cached/paired/connected).
     dev_path = None
     already_connected = False
     om = _dbus.Interface(
         bus.get_object("org.bluez", "/"),
         "org.freedesktop.DBus.ObjectManager",
     )
-    managed = om.GetManagedObjects()
-    for path, ifaces in managed.items():
-        if "org.bluez.Device1" not in ifaces:
-            continue
-        dev = ifaces["org.bluez.Device1"]
-        name = str(dev.get("Name", ""))
-        addr = str(dev.get("Address", ""))
-        # Only look at devices on our adapter (hci0)
-        if not path.startswith(hci_path + "/"):
-            continue
-        print(
-            "[enum] Existing device: {} name={!r} addr={} "
-            "paired={} connected={}".format(
-                path,
-                name,
-                addr,
-                dev.get("Paired", False),
-                dev.get("Connected", False),
-            )
+
+    # 4z. --peer-addr bypass: skip BlueZ discovery entirely.
+    if args.peer_addr is not None:
+        dev_path = "{}/dev_{}".format(
+            hci_path, args.peer_addr.replace(":", "_").upper()
         )
-        if "LE Audio Receiver" in name:
-            dev_path = path
-            already_connected = bool(dev.get("Connected", False))
+        print(
+            "[main] --peer-addr bypass: skipping discovery, target={}".format(dev_path)
+        )
+        already_connected = False
+
+    # 4a. First, enumerate existing devices (cached/paired/connected).
+    if dev_path is None:
+        managed = om.GetManagedObjects()
+        for path, ifaces in managed.items():
+            if "org.bluez.Device1" not in ifaces:
+                continue
+            dev = ifaces["org.bluez.Device1"]
+            name = str(dev.get("Name", ""))
+            addr = str(dev.get("Address", ""))
+            # Only look at devices on our adapter (hci0)
+            if not path.startswith(hci_path + "/"):
+                continue
             print(
-                "[enum] >>> Using existing target: {} (connected={})".format(
-                    path, already_connected
+                "[enum] Existing device: {} name={!r} addr={} "
+                "paired={} connected={}".format(
+                    path,
+                    name,
+                    addr,
+                    dev.get("Paired", False),
+                    dev.get("Connected", False),
                 )
             )
-            break
+            if "LE Audio Receiver" in name:
+                dev_path = path
+                already_connected = bool(dev.get("Connected", False))
+                print(
+                    "[enum] >>> Using existing target: {} (connected={})".format(
+                        path, already_connected
+                    )
+                )
+                break
 
     # 4b. If not in existing devices, start discovery.
     if dev_path is None:
@@ -823,59 +847,92 @@ def main():
             print("[main]   Disconnect ignored: {}".format(e))
         already_connected = False
 
-    if not already_connected:
-        # Bring the ACL link up with a direct LE Extended Create Connection.
-        # The helper holds the raw HCI socket open (kernel reaps the
-        # connection when the socket closes).
-        addr = dev_path.split("_", 1)[1].replace("_", ":")
-        print("[main] Bringing ACL link up via raw HCI (direct connect)...")
-        hold_secs = args.duration + 120
-        raw_connect_proc = subprocess.Popen(
-            ["sudo", "-n", "python3", RAW_CONNECT_HELPER, addr, str(hold_secs)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        # Wait for the Device1 Connected property (up to 10 s).
-        dev_props0 = _dbus.Interface(
-            bus.get_object("org.bluez", dev_path), "org.freedesktop.DBus.Properties"
-        )
-        conn_deadline = time.monotonic() + 10
-        connected = False
-        while time.monotonic() < conn_deadline:
-            try:
-                if bool(dev_props0.Get("org.bluez.Device1", "Connected")):
-                    connected = True
-                    break
-            except _dbus.exceptions.DBusException:
-                pass
-            _GLib.MainContext.default().iteration(False)
-            time.sleep(0.1)
-        if not connected:
-            print("[error] Raw HCI connect failed (link not up in 10 s)")
-            raw_connect_proc.terminate()
-            sys.exit(1)
-        print("[main] ACL link up")
-
-    # NOTE: no explicit Device1.Pair() call.
-    #
-    # On this hci_usb controller the ACL link is created via raw HCI
-    # (kernel accept-list scan path is broken). Kernel mgmt "Pair Device"
-    # on an already-connected link completes instantly, which makes BlueZ
-    # clear its bonding state before the SMP User Confirmation arrives —
-    # BlueZ then auto-rejects the confirmation and pairing fails.
-    #
-    # Instead, rely on BlueZ auto-security: GATT access to the encrypted
-    # PACS characteristics makes the kernel run SMP directly (no mgmt
-    # Pair), and the JustWorks agent authorizes it. The connection is
-    # encrypted after that, which is all PACS/ASCS need.
-    print("[main] Skipping explicit Pair; using BlueZ auto-security via GATT")
-
-    # ── 6. Trust + wait for services ─────────────────────────────────────
+    # ── 6. Get device properties interface ────────────────────────────────
     dev_props = _dbus.Interface(
         bus.get_object("org.bluez", dev_path), "org.freedesktop.DBus.Properties"
     )
-    dev_props.Set("org.bluez.Device1", "Trusted", _dbus.Boolean(True))
-    print("[main] Trusted, waiting for GATT service resolution...")
+
+    if args.peer_addr is not None:
+        # --peer-addr path: raw HCI to create BlueZ device, then Pair().
+        # NOTE: With all-zero-FICR dongle firmware, LE scanning is broken.
+        # Pair() can create a bond, but ServicesResolved/GATT discovery
+        # fails because BlueZ can't perform GATT service browsing without
+        # scanning support.  Full fix: rebuild dongle firmware with a
+        # programmed FICR DEVICEADDR.
+        print("[main] Creating BlueZ device via brief raw HCI connect...")
+        addr = args.peer_addr
+        brief_proc = subprocess.Popen(
+            ["sudo", "-n", "python3", RAW_CONNECT_HELPER, addr, "5"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(2)
+        # Terminate the raw HCI helper (device persists in BlueZ).
+        brief_proc.terminate()
+        try:
+            brief_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            brief_proc.kill()
+
+        # Pre-trust and pair.
+        try:
+            dev_props.Set("org.bluez.Device1", "Trusted", _dbus.Boolean(True))
+        except _dbus.exceptions.DBusException as e:
+            print("[main] Trust set error (device may have disappeared): {}".format(e))
+
+        print("[main] Calling Pair() to connect + encrypt...")
+        try:
+            device.Pair(timeout=60)
+            print("[main] Pair() returned OK")
+        except _dbus.exceptions.DBusException as e:
+            print("[main] Pair() error: {}".format(e))
+
+        # Check resulting state.
+        try:
+            paired = bool(dev_props.Get("org.bluez.Device1", "Paired"))
+            connected = bool(dev_props.Get("org.bluez.Device1", "Connected"))
+            print(
+                "[main] After Pair: Paired={}, Connected={}".format(paired, connected)
+            )
+        except _dbus.exceptions.DBusException:
+            print("[main] Could not read device state after Pair")
+
+    else:
+        # No --peer-addr: use raw HCI direct connect.
+        if not already_connected:
+            addr = dev_path.split("_", 1)[1].replace("_", ":")
+            print("[main] Bringing ACL link up via raw HCI (direct connect)...")
+            hold_secs = args.duration + 120
+            raw_connect_proc = subprocess.Popen(
+                ["sudo", "-n", "python3", RAW_CONNECT_HELPER, addr, str(hold_secs)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            # Wait for the Device1 Connected property (up to 10 s).
+            dev_props0 = _dbus.Interface(
+                bus.get_object("org.bluez", dev_path),
+                "org.freedesktop.DBus.Properties",
+            )
+            conn_deadline = time.monotonic() + 10
+            connected = False
+            while time.monotonic() < conn_deadline:
+                try:
+                    if bool(dev_props0.Get("org.bluez.Device1", "Connected")):
+                        connected = True
+                        break
+                except _dbus.exceptions.DBusException:
+                    pass
+                _GLib.MainContext.default().iteration(False)
+                time.sleep(0.1)
+            if not connected:
+                print("[error] Raw HCI connect failed (link not up in 10 s)")
+                raw_connect_proc.terminate()
+                sys.exit(1)
+            print("[main] ACL link up")
+
+        # ── 7. Trust + wait for services (normal path) ──────────────────
+        dev_props.Set("org.bluez.Device1", "Trusted", _dbus.Boolean(True))
+        print("[main] Trusted, waiting for GATT service resolution...")
 
     sr_deadline = time.monotonic() + 30
     services_resolved = False

@@ -1,7 +1,30 @@
 # Phase 6 Stage 0 — Results
 
 **Date**: 2026-07-27
-**Commit**: dc199ec (review) → **CURRENT** (defect fixes)
+**Commit**: CURRENT (central dongle workarounds + Stage 0 re-verification)
+
+## Central dongle identity workaround (2026-07-27 re-verification)
+
+The nRF5340DK hci_uart dongle reports `addr 00:00:00:00:00:00` because its
+FICR DEVICEADDR is unprogrammed. Workarounds evaluated:
+
+| Workaround | Result |
+|-----------|--------|
+| `btmgmt static-addr C0:AA:BB:CC:DD:EE` | ✅ Set successfully (powered off only). Sets random address for connection initiation. Does NOT restore LE scan support. |
+| `btmgmt privacy on` | ✅ Set successfully. Does NOT restore LE scan support. |
+| Raw HCI `LE Set Random Address` | ✅ Works (opcode 0x2005). Added to `hci_raw_connect.py`. |
+| Raw HCI `LE Extended Create Connection` | ✅ ACL link established. Kernel disconnects after ~2s if no SMP/GATT activity. |
+| `device.Pair()` via D-Bus | ✅ Triggers SMP pairing + bond creation ("Pairing complete, bonded: 1" on receiver). Fails on first attempt (Confirm Value Failed 0x0C), succeeds on retry within same D-Bus call (~40s total). |
+| `device.Connect()` via D-Bus | ❌ Fails "Input/output error" — requires LE scanning. |
+| `btmgmt find` / `hcitool lescan` | ❌ Still blocked by zero BD_ADDR. |
+| GATT ServicesResolved | ❌ Still blocked — BlueZ needs LE scanning for GATT service browsing. |
+
+Key findings:
+- Bonding (SMP pairing) works via `device.Pair()` when called with Trust set
+- `RequestConfirmation` agent signature fixed: `in_signature="ou"` (was `"o"` — missing `uint32 passkey` parameter)
+- `--peer-addr` flag added to `bap_central.py` to bypass BlueZ discovery
+- Full stream (BAP setup) requires GATT ServicesResolved, which needs LE scan
+- Dongle firmware rebuild with programmed FICR DEVICEADDR is the definitive fix
 
 ## Review defects fixed (after dc199ec)
 
@@ -183,7 +206,8 @@ BlueZ side: `bluetoothctl remove "DB:A6:0C:05:A2:AA"` → device removed, bond c
 **Stream**: BLOCKED — dongle `00:00:00:00:00:00` static random address prevents
 scanning. `hcitool lescan` returns "Set scan parameters failed: Input/output error".
 Both receiver and host bond stores cleared. Root cause is dongle firmware identity
-gap, not receiver defect.
+gap, not receiver defect. SMP bonding confirmed working via `device.Pair()` retry;
+GATT ServicesResolved blocked because BlueZ requires LE scan for service discovery.
 
 ## Unit tests
 
@@ -254,6 +278,10 @@ DPIDR 0x6ba02477, PART 0x00054b15, variant AAC0.
 
 Stream test only: gated by dongle firmware `00:00:00:00:00:00` static random
 address. Pairing recovery mechanism (`bt unpair` + `bluetoothctl remove`) confirmed
-working on both sides. Dongle firmware identity gap requires NCS dongle image with
-pre-programmed identity or replacement dongle. This is a dongle defect, not a
+working on both sides. `btmgmt static-addr` provides valid address for connection
+initiation but does not restore LE scanning. Raw HCI direct connect works;
+SMP bonding ("Pairing complete, bonded: 1") confirmed via `device.Pair()`.
+Full BAP stream requires GATT ServicesResolved, which needs LE scanning.
+Dongle firmware identity gap requires NCS dongle image with pre-programmed
+FICR DEVICEADDR or replacement dongle. This is a dongle defect, not a
 receiver defect.

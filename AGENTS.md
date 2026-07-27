@@ -108,11 +108,44 @@ Run this BEFORE `scripts/bap_central.py`:
 ```bash
 # Attach the HCI UART dongle (nRF5340DK as central) — one-time per boot:
 setsid sudo btattach -B /dev/ttyACM2 -S 1000000 </dev/null >/tmp/btattach.log 2>&1 &
-sleep 3
+sleep 5
+# Set static random address while powered off (required when controller
+# BD_ADDR is all-zero — see dongle firmware note below).
+sudo btmgmt --index hci0 power off
+sudo btmgmt --index hci0 static-addr C0:AA:BB:CC:DD:EE
 sudo btmgmt --index hci0 power on
+sleep 2
 sudo btmgmt --index hci0 io-cap 3
 sudo btmgmt --index hci0 sc on
 ```
+
+Verify with `sudo btmgmt --index hci0 info`. Current settings must include
+`powered le secure-conn static-addr cis-central`.
+
+**Dongle firmware zero-FICR identity**: The nRF5340DK hci_uart controller
+reports `addr 00:00:00:00:00:00` because its FICR DEVICEADDR is unprogrammed.
+This prevents ALL LE scanning commands (`hcitool lescan`, `btmgmt find`,
+BlueZ discovery).  Workaround: `btmgmt static-addr` (set while powered off)
+provides a locally administered static random address for connections, and
+`hci_raw_connect.py` sets `LE Set Random Address` before each raw-HCI
+connection.  Bonding (SMP pairing) works via `device.Pair()` but GATT
+service discovery (ServicesResolved) fails because BlueZ requires LE
+scanning for GATT browsing.
+
+Full fix: rebuild the dongle firmware with a programmed FICR DEVICEADDR
+(requires modifying the hci_uart cpunet firmware on the nRF5340DK).
+
+### --peer-addr bypass
+
+When the dongle cannot scan, pass the receiver's BLE address directly:
+
+```bash
+# Get receiver address from boot log: "Identity: XX:XX:XX:XX:XX:XX (random)"
+python3 scripts/bap_central.py --peer-addr DB:A6:0C:05:A2:AA --duration 30
+```
+
+This skips BlueZ discovery, creates the device via brief raw-HCI connect,
+and calls `device.Pair()` to establish the bond + encrypted link.
 
 Then run `bap_central.py` **without sudo** — the main script needs
 dbus-python from the nix-shell (Python path stripped by sudo).  Only the
