@@ -45,6 +45,10 @@ extern "C" {
 #define FLPR_MSG_RING_PRODUCER    0x15U /* CPUAPP → FLPR: input data available */
 #define FLPR_MSG_RING_CONSUMER    0x16U /* FLPR → CPUAPP: output data available */
 
+/* Stage 1: stall controls */
+#define FLPR_MSG_RING_STALL     0x17U /* CPUAPP → FLPR: stall config (data: bitmask) */
+#define FLPR_MSG_RING_STALL_ACK 0x18U /* FLPR → CPUAPP: stall config applied */
+
 /* ── Timing ────────────────────────────────────────────────────── */
 
 #define FLPR_HEARTBEAT_INTERVAL_MS 1000U

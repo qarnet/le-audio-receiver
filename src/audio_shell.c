@@ -257,10 +257,23 @@ static int cmd_flpr_ring_status(const struct shell *sh, size_t argc, char **argv
 			    s.test_blocks_recv);
 	} else if (s.test_blocks_sent > 0 || s.test_blocks_recv > 0) {
 		shell_print(sh,
-			    "  Test (done):  sent=%u recv=%u crc_err=%u "
-			    "full=%u empty=%u stale=%u",
+			    "  Test (done):  sent=%u recv=%u crc_err=%u payload_err=%u "
+			    "full=%u empty=%u stale=%u backpressure=%u",
 			    s.test_blocks_sent, s.test_blocks_recv, s.test_crc_errors,
-			    s.test_full_events, s.test_empty_events, s.test_stale_events);
+			    s.test_payload_errors, s.test_full_events, s.test_empty_events,
+			    s.test_stale_events, s.test_backpressure);
+	}
+
+	if (s.latency_count > 0) {
+		uint32_t avg_cycles = (uint32_t)(s.latency_sum / s.latency_count);
+		uint32_t avg_us = k_cyc_to_us_ceil32(avg_cycles);
+		uint32_t min_us = k_cyc_to_us_ceil32(s.latency_min);
+		uint32_t max_us = k_cyc_to_us_ceil32(s.latency_max);
+		shell_print(sh,
+			    "  Latency: min=%u cyc (%u us) max=%u cyc (%u us) "
+			    "avg=%u cyc (%u us) count=%u",
+			    s.latency_min, min_us, s.latency_max, max_us, avg_cycles, avg_us,
+			    s.latency_count);
 	}
 
 	return 0;
@@ -304,18 +317,34 @@ static int cmd_flpr_ring_test(const struct shell *sh, size_t argc, char **argv)
 
 	uint32_t elapsed = k_uptime_get_32() - start;
 
-	shell_print(sh, "Sent=%u Recv=%u CRC_Err=%u Full=%u Empty=%u Stale=%u FLPR=%u FLPR_Full=%u",
-		    s.test_blocks_sent, s.test_blocks_recv, s.test_crc_errors, s.test_full_events,
-		    s.test_empty_events, s.test_stale_events, s.test_producer_blocks,
+	shell_print(sh,
+		    "Sent=%u Recv=%u CRC_Err=%u Payload_Err=%u Full=%u Empty=%u Stale=%u "
+		    "Backpressure=%u FLPR=%u FLPR_Full=%u",
+		    s.test_blocks_sent, s.test_blocks_recv, s.test_crc_errors,
+		    s.test_payload_errors, s.test_full_events, s.test_empty_events,
+		    s.test_stale_events, s.test_backpressure, s.test_producer_blocks,
 		    s.test_output_full);
 	shell_print(sh, "Duration: %u ms", elapsed);
 
-	if (ret == 0 && s.test_blocks_sent == count && s.test_crc_errors == 0) {
-		shell_print(sh, "PASS: all %u blocks transferred, zero CRC errors",
-			    s.test_blocks_recv);
+	/* Latency if measured. */
+	if (s.latency_count > 0) {
+		uint32_t avg_cycles = (s.latency_sum > 0 && s.latency_count > 0)
+					      ? (uint32_t)(s.latency_sum / s.latency_count)
+					      : 0;
+		uint32_t avg_us = k_cyc_to_us_ceil32(avg_cycles);
+		uint32_t min_us = k_cyc_to_us_ceil32(s.latency_min);
+		uint32_t max_us = k_cyc_to_us_ceil32(s.latency_max);
+		shell_print(sh, "Latency: min=%u us  max=%u us  avg=%u us  count=%u", min_us,
+			    max_us, avg_us, s.latency_count);
+	}
+
+	if (ret == 0 && s.test_blocks_sent == count && s.test_payload_errors == 0 &&
+	    s.test_crc_errors == 0 && s.test_stale_events == 0) {
+		shell_print(sh, "PASS: all %u blocks transferred, zero errors", s.test_blocks_recv);
 	} else {
-		shell_warn(sh, "FAIL/TIMEOUT: sent=%u/%u recv=%u err=%u", s.test_blocks_sent, count,
-			   s.test_blocks_recv, s.test_crc_errors);
+		shell_warn(sh, "FAIL: sent=%u/%u recv=%u crc=%u payload=%u stale=%u",
+			   s.test_blocks_sent, count, s.test_blocks_recv, s.test_crc_errors,
+			   s.test_payload_errors, s.test_stale_events);
 	}
 
 	return 0;
@@ -347,12 +376,46 @@ static int cmd_flpr_ring_init(const struct shell *sh, size_t argc, char **argv)
 	return ret;
 }
 
+static int cmd_flpr_ring_stall_producer(const struct shell *sh, size_t argc, char **argv)
+{
+	bool stall = true;
+	if (argc >= 2) {
+		if (strcmp(argv[1], "off") == 0 || strcmp(argv[1], "0") == 0) {
+			stall = false;
+		}
+	}
+	flpr_ring_mgr_stall_producer(stall);
+	shell_print(sh, "Producer stall: %s", stall ? "ON" : "OFF");
+	return 0;
+}
+
+static int cmd_flpr_ring_stall_flpr(const struct shell *sh, size_t argc, char **argv)
+{
+	uint8_t bits = 0;
+	if (argc >= 2) {
+		bits = (uint8_t)shell_strtoul(argv[1], 0, NULL);
+	}
+	int ret = flpr_ring_mgr_flpr_stall(bits, 5000);
+	if (ret == 0) {
+		shell_print(sh, "FLPR stall applied: 0x%02x (cons_in=%d prod_out=%d)", bits,
+			    (bits & 0x01) ? 1 : 0, (bits & 0x02) ? 1 : 0);
+	} else {
+		shell_error(sh, "FLPR stall failed: %d", ret);
+	}
+	return ret;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	flpr_ring_cmds, SHELL_CMD_ARG(status, NULL, "PCM ring status.", cmd_flpr_ring_status, 1, 0),
 	SHELL_CMD_ARG(init, NULL, "Initialize PCM rings.", cmd_flpr_ring_init, 1, 0),
 	SHELL_CMD_ARG(reset, NULL, "Reset PCM rings with new epoch.", cmd_flpr_ring_reset, 1, 0),
 	SHELL_CMD_ARG(test, NULL, "Run ring throughput test (default 10k blocks).",
 		      cmd_flpr_ring_test, 1, 1),
+	SHELL_CMD_ARG(stall, NULL, "CPU-side producer stall: on|off. Blocks produce_block as FULL.",
+		      cmd_flpr_ring_stall_producer, 1, 1),
+	SHELL_CMD_ARG(stall - flpr, NULL,
+		      "FLPR-side stall: <bits> (0x01=cons_input 0x02=prod_output 0=clear).",
+		      cmd_flpr_ring_stall_flpr, 1, 1),
 	SHELL_SUBCMD_SET_END);
 
 SHELL_STATIC_SUBCMD_SET_CREATE(

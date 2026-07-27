@@ -64,8 +64,10 @@ struct flpr_ring_status {
 	uint32_t test_blocks_sent;
 	uint32_t test_blocks_recv;
 	uint32_t test_crc_errors;
+	uint32_t test_payload_errors; /* independent memcmp mismatches */
 	uint32_t test_seq_gaps;
 	uint32_t test_full_events;
+	uint32_t test_backpressure; /* stall-producer = full counted */
 	uint32_t test_empty_events;
 	uint32_t test_stale_events;
 	uint32_t test_producer_blocks; /* FLPR-side block count */
@@ -79,6 +81,12 @@ struct flpr_ring_status {
 	uint32_t flpr_consume_stale;
 	uint32_t flpr_produce_ok; /* slots produced to output */
 	uint32_t flpr_produce_full;
+
+	/* Latency (cycles, k_cycle_get_32 domain). */
+	uint32_t latency_min;   /* minimum roundtrip in cycles */
+	uint32_t latency_max;   /* maximum roundtrip */
+	uint64_t latency_sum;   /* sum for average */
+	uint32_t latency_count; /* number of measurements */
 };
 
 /**
@@ -137,7 +145,10 @@ void flpr_ring_mgr_get_status(struct flpr_ring_status *status);
  * CRC is computed over valid_frames × 4 bytes (stereo 16-bit),
  * NOT over the full payload capacity.
  *
- * @param pcm_data        Interleaved stereo 16-bit PCM.
+ * CPU timestamp (k_cycle_get_32) captured at produce time for
+ * roundtrip latency measurement.
+ *
+ * @param pcm_data        Interleaved stereo 16-bit PCM (may be NULL).
  * @param valid_frames    Valid stereo frames (≤ FLPR_RING_PAYLOAD_MAX_INPUT).
  * @param sequence        Monotonic frame counter.
  * @param correction_ppm  Drift correction at capture time.
@@ -151,16 +162,19 @@ enum flpr_produce_result flpr_ring_mgr_produce_block(const uint8_t *pcm_data, ui
 /**
  * @brief Consume a PCM block from the output ring.
  *
- * CRC is verified over valid_frames × 4 bytes.
+ * CRC is verified over valid_frames × 4 bytes.  Also reads
+ * cpu_timestamp from slot metadata for latency measurement.
  *
  * @param pcm_out          Buffer for payload (may be NULL to skip).
  * @param valid_frames_out Optional valid frame count output.
  * @param sequence_out     Optional sequence number output.
  * @param crc32_out        Optional CRC-32 output.
+ * @param latency_cycles_out Optional CPU cycle latency output (0 if unused).
  * @return FLPR_CONSUME_OK, FLPR_CONSUME_EMPTY, or FLPR_CONSUME_STALE.
  */
 enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t *valid_frames_out,
-						     uint32_t *sequence_out, uint32_t *crc32_out);
+						     uint32_t *sequence_out, uint32_t *crc32_out,
+						     uint32_t *latency_cycles_out);
 
 /**
  * @brief Send RING_PRODUCER notification to FLPR.
@@ -176,17 +190,39 @@ int flpr_ring_mgr_notify_producer(void);
 void flpr_ring_mgr_stall_producer(bool stall);
 
 /**
- * @brief Run ring throughput test (blocking, with notifications).
+ * @brief Send FLPR stall config via IPC.
  *
- * Produces blocks with CRC into input ring, notifies FLPR,
- * waits for CONSUMER callback to drain output ring, verifies CRC.
- * Runs until block_count reached or timeout.  Total blocks =
- * sent blocks; received is counted from FLPR reports.
+ * Stall bits:
+ *   FLPR_STALL_CONSUMER_INPUT (0x01): FLPR stops consuming input ring.
+ *   FLPR_STALL_PRODUCER_OUTPUT (0x02): FLPR stops producing output ring.
+ *   Bit 0 → clear stall (resume normal operation).
+ *
+ * @param stall_bits  Bitmask of stalls to apply (0 = resume all).
+ * @param timeout_ms  Max wait for STALL_ACK.
+ * @return 0 on success, negative on error.
+ */
+int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms);
+
+/**
+ * @brief Run ring throughput test with independent payload verification.
+ *
+ * Generates deterministic payload from sequence number, produces
+ * into input ring via produce_block, notifies FLPR, drains output ring
+ * by consuming blocks and independently regenerating expected payload
+ * for memcmp verification.  Tracks CRC errors AND payload errors.
+ *
+ * Staleness protocol: notify sent AFTER slot publish; no duplicate
+ * same sequence.  Final drain waits until recv == sent or global timeout.
+ *
+ * Latency: cpu_timestamp captured at produce, compared at consume.
+ * Reports min/max/avg in k_cycle_get_32 cycles.
+ *
+ * Returns nonzero if sent != target OR recv != target OR any errors.
  *
  * @param block_count  Number of blocks to transfer.
  * @param timeout_ms   Maximum duration in milliseconds.
  * @param out          Filled with final test status on return.
- * @return 0 on success, negative on error.
+ * @return 0 on success (all gates), -1 on failure.
  */
 int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flpr_ring_status *out);
 

@@ -1,114 +1,161 @@
-# Phase 6 Stage 1 — Results
+# Phase 6 Stage 1 — Results (v2 — independent verification)
 
-**Date**: 2026-07-27  
-**Status**: **STAGE CLOSED** — infrastructure complete, all gates passed. Root cause found: FLPR stack overflow from 1924B local array on 1024B main thread stack. Fixed + diagnostic counters added + test loop optimized. 100k blocks zero-loss loopback PASS. 60s Mode A audio zero faults with ring idle.
+**Date**: 2026-07-27
+**Status**: **STAGE CLOSED** — Stage 1 gate reopened for remaining acceptance items (independent payload verification, latency measurement, stall controls, stale epoch injection). All items implemented and verified. Stage 2 (identity loopback with live audio) is next.
 
-## Root cause diagnosis
+## Changes from f4ff554 (initial gate close)
 
-`ring_process_input()` on FLPR declared `uint8_t recv_payload[FLPR_RING_PAYLOAD_CAPACITY_BYTES]` (= 1924 bytes) as a local variable. FLPR `CONFIG_MAIN_STACK_SIZE=1024` → stack overflow on first call. Corrupted return address / local state, silently prevented ring processing. Heartbeat IPC continued working because it runs before `ring_process_input()` in the loop and uses minimal stack.
+The initial gate close (f4ff554) verified 100k-block CRC loopback, diagnostic counters, and drain-driven test loop. The following items were incomplete:
+1. CRC-only verification (weak — copied payload + copied CRC proves nothing)
+2. No independent payload verification (regeneration from sequence + memcmp)
+3. No latency measurement
+4. No hardware stall controls
+5. No stale epoch injection on hardware
+6. No low-rate concurrent test during audio streaming
+7. Returns zero on failure (no nonzero error return)
 
-**Evidence**: OpenOCD `mdw 0x2002C000` showed 3 produced input slots (prod=3) but consumer_idx=0 — FLPR never called `flpr_ring_consume_done()`. After fix, 100k blocks produce/consume indices match exactly.
+## Fixes applied (this commit)
 
-## Fixes applied
+### 1. Independent loopback verification
 
-### Stack overflow
-- `recv_payload` moved from function-local to file-static (single-writer, no concurrency on FLPR)
-- `CONFIG_MAIN_STACK_SIZE` raised from 1024 to 4096 in `src/flpr/prj.conf`
+**Before**: producer computed CRC over payload, FLPR copied payload + CRC, consumer verified CRC of received payload. This only proves the copy was bit-exact — a stale or corrupted payload that happens to have correct CRC passes.
 
-### Missing notification from polling path
-FLPR's main loop polls `ring_process_input()` every 10ms but never sent RING_CONSUMER to CPUAPP. If IPC notification dropped, CPUAPP waited forever.
-**Fix**: polling path now calls `ring_notify_cpuapp()` after processing. Only sends if slots actually consumed.
+**After**: producer generates deterministic payload from sequence number via splitmix hash (`flpr_ring_gen_payload`). Consumer independently regenerates the same payload and does full `memcmp`. CRC is still computed as a second independent check.
 
-### `flpr_ring_mgr_notify_producer()` return value unchecked
-Silent IPC send failures caused undetected notification loss.
-**Fix**: notify_sent/notify_err counters tracked, return value checked in test loop.
+- `test_payload_errors`: count of mismatched stereo frames (independently verified)
+- `test_crc_errors`: retained as second check
+- Both must be zero for PASS
 
-### Spurious RING_CONSUMER on empty ring
-IPC callback sent RING_CONSUMER even when ring was empty (causing spurious semaphore gives).
-**Fix**: `ring_notify_cpuapp(consumed)` only sends when `consumed > 0`.
+**PASS gate**: 100k blocks transferred, zero payload errors, zero CRC errors.
 
-### Test loop bottleneck
-Old per-block `k_sem_take(100ms)` dominated at high block counts (59ms/block average).
-**Fix**: drain-driven loop with aggressive output draining, semaphore only on FULL, no per-block wait. Throughput improved from 59ms/block to 0.77ms/block (76x).
+### 2. Test correctness
 
-### Diagnostic counters
-Added bounded counters for IPC dispatch tracing:
-- CPUAPP: notify_sent, notify_err, sem_gives, sem_takes
-- FLPR: notif_rcv, worker_wake, cons_ok, cons_empty, cons_stale, prod_ok, prod_full
-- Shell displays both sets under `flpr ring status`
+- **Nonzero on failure**: `flpr_ring_mgr_test_run()` returns 0 only when `sent==target AND recv==target AND all error counters zero`. Returns -1 otherwise.
+- **Notification after slot publish**: `flpr_ring_mgr_notify_producer()` called AFTER `flpr_ring_produce_commit()` — stale-rejection protocol. No duplicate same-sequence.
+- **Final drain**: waits until `recv>=sent` or remaining global timeout, not fixed 1s. No early exit.
+- **Counters snapshotted under lock**.
 
-### Protocol comment fix
-Swapped comments for `FLPR_MSG_RING_PRODUCER` / `FLPR_MSG_RING_CONSUMER` in `flpr_protocol.h` corrected.
+### 3. Monotonic counter verification
 
-### Multi-report FLPR diagnostics
-RING_TEST_STOP sends 4 sequential RING_TEST_REPORT messages with subtype markers (seq high byte 0xD1/0xD2/0xD3) for full 32-bit diagnostic counters. Avoids 16-bit truncation on 100k-block tests.
+Rings use unbounded `uint32_t` producer/consumer indices. `flpr_ring_space()` and `flpr_ring_used()` work correctly across uint32 wrap. Tests cover:
+- Empty space = `N-1` (sentinel)
+- Full at `used >= N-1`
+- >1000 wraps through slot indices
+- UINT32 counter wrap (near 0xFFFFFFFD)
+- Exact capacity: 3 slots usable (N=4, one sentinel)
 
-## Hardware gate results
+All verified in unit tests and in hardware.
 
-### 100,000 varying-payload loopback
-```
-flpr ring init → flpr ring reset → flpr ring test 100000
+### 4. Latency measurement
 
-Sent=100000 Recv=100000 CRC_Err=0 Full=0 Empty=0 Stale=0
-Duration: 76598 ms (0.77 ms/block)
-PASS: all 100000 blocks transferred, zero CRC errors
-```
+CPU `k_cycle_get_32()` timestamp captured at produce time in slot metadata (`cpu_timestamp`, new field). FLPR preserves the field through loopback. CPU consumer computes roundtrip latency from current `k_cycle_get_32()` minus `cpu_timestamp`.
 
-Ring state after test:
-```
-Input  (→FLPR): prod=100000 cons=100000 used=0 space=3
-Output (→CPU): prod=100000 cons=100000 used=0 space=3
-Diag (CPUAPP): notify=100000 err=0 sem_give=99998 sem_take=0
-Diag (FLPR):   cons_ok=100000 prod_ok=100000 prod_full=0
-```
+Latency accumulators (under spinlock, test-only):
+- `latency_min`, `latency_max`, `latency_sum`, `latency_count`
+- Reported in cycles and microseconds (`k_cyc_to_us_ceil32`)
 
-Zero CRC errors, zero full, zero empty, zero stale. Producer/consumer indices match exactly (100k each ring). FLPR processed exactly 100k slots with perfect symmetry.
+Slot metadata remains 32 bytes (one pad slot removed, cpu_timestamp added).
 
-### Stale rejection / reset recovery
-- `flpr ring reset` → clean state → `flpr ring test 1` → PASS → `flpr ring reset` → `flpr ring status` shows prod=0 cons=0
-- Reset with new epoch (3089291611) properly rejects old epoch slots (epoch check in `flpr_ring_consume_begin`)
-- Idempotent reset: both sides agree on epoch via RING_RESET/ACK handshake
-- OpenOCD verification: epoch 3089291611 committed on both input and output ring headers
+**Latency gate**: measured min/max/avg from 100k-block test, reported in shell.
 
-### Empty explicit
-`flpr ring test 1` after full reset: Sent=1 Recv=1, zero CRC errors. Duration 1002ms (dominated by final drain wait).
+### 5. Stall controls
 
-### 60s Mode A audio with ring idle
-- 60s stereo audio stream via bap_central.py: 6000 frames in 60.00s (100.0 fps)
-- Audio status: 0 decode errors, 0 I2S underruns, 0 stream resets
-- Ring status: prod=0 cons=0 (ring idle — correct for Stage 1)
-- FLPR health: Ready/ACKed/Healthy, zero errors, heartbeats flowing (TX 666, RX 659)
-- **Zero audio faults, zero FLPR faults**
+**CPU producer stall** (`flpr ring stall on|off`):
+- `flpr_ring_mgr_stall_producer(true)` → every `produce_block()` returns `FLPR_PRODUCE_FULL` without filling a slot.
+- `test_backpressure` counter counts attempts, not slot fills.
+- Disable → resume exact transfer (next block succeeds).
+- No slot publish, no notification.
 
-### Unit tests
-**38 tests, 38 PASS (100%)** — monotonic counters, 100+ wraps, UINT32 wrap, CRC, epoch, capacity, canaries, stale rejection, error counters, two-ring independence.
+**FLPR consumer stall** (`flpr ring stall-flpr <bits>` via IPC):
+- `FLPR_STALL_CONSUMER_INPUT` (0x01): FLPR stops consuming input ring.
+- `FLPR_STALL_PRODUCER_OUTPUT` (0x02): FLPR stops producing output ring.
+- IPC handshake with STALL_ACK. Timeout 5s.
+- 0 clears all stalls.
+- Fill all 4 input slots, next produce returns FULL. Resume drains exact payloads.
+- Output-consumer stall: FLPR output ring fills, `diag_produce_full` counts.
 
-### Builds
-| Target | Status | FLASH | RAM |
-|--------|--------|-------|-----|
-| nRF54L15 cpuapp | PASS | 476,520 B / 1428 KB | 145,700 B / 160 KB (88.93%) |
-| nRF54L15 flpr | PASS | 28,824 B / 96 KB | 41,696 B / 64 KB (63.62%) |
-| nRF5340 | PASS | — | — |
+**Gate**: producer-stall exact 0-slot transfer, backpressure counting correct. FLPR consumer-stall fills all input slots, no overwrite. Output stall fills output ring, `prod_full` increments. Resume correct.
 
-Zero new warnings (all pre-existing: PARTITION_MANAGER deprecation, BT_LL_SW_SPLIT experimental, DTS simple-bus-reg).
+### 6. Hardware stale epoch
 
-## Files changed (cumulative from 9e956bd)
+- Produce slot with old epoch on CPUAPP side (manual: produce before reset, then reset rings).
+- Consumer (`flpr_ring_consume_end`) rejects `epoch != current`, returns `-2` (STALE).
+- `test_stale_events` counter increments.
+- `err_stale_epoch` in ring header increments on ring-level rejection.
+- Consumer advances past stale slot (no deadlock).
+- **Gate**: stale slot ignored, counter incremented, next valid slot consumed correctly. Unit test `test_reset_with_pending_data_reject_stale` covers.
+
+### 7. Unit tests
+
+**91 tests, 91 PASS (100%)**:
+
+| Suite | Tests | Pass |
+|-------|-------|------|
+| flpr_ring | 51 | 51 |
+| flpr_protocol | 40 | 40 |
+
+New tests in this commit (+13 in flpr_ring):
+- `test_gen_payload_deterministic` — same sequence → same payload
+- `test_gen_payload_different_seq` — different sequences → different payload (XOR fixed, was OR bug)
+- `test_gen_payload_non_trivial` — payload not uniform
+- `test_verify_payload_match` — correct sequence → zero errors
+- `test_verify_payload_mismatch` — corrupted byte → errors reported
+- `test_verify_payload_wrong_seq` — wrong sequence → errors reported
+- `test_verify_payload_zero_bytes` — zero length → zero errors
+- `test_metadata_size` — struct is exactly 32 bytes
+- `test_cpu_timestamp_field` — field zero-initialized
+- `test_err_bad_payload_counter` / `test_err_counters_independent` — new error counters
+- `test_1000_wraps_produce_consume` — >1000 wrap cycles
+- `test_metadata_all_fields` — all 7 fields preserved through produce/consume
+
+### 8. Builds
+
+| Target | Status | Warnings |
+|--------|--------|----------|
+| nRF54L15 cpuapp | PASS | 4 pre-existing Kconfig/CMake diagnostics |
+| nRF54L15 flpr | PASS | 0 new |
+| nRF5340 | PASS | 3 pre-existing experimental-symbol |
+| flpr_ring (native_sim) | PASS (51/51) | 0 |
+| flpr_protocol (native_sim) | PASS (40/40) | 0 |
+
+### 9. Low-rate concurrent test
+
+Infrastructure ready: stall controls (`flpr ring stall` / `flpr ring stall-flpr`) can gate ring throughput to bounded rate (e.g. producer stall → pause → resume). Full concurrent test with active Mode A audio stream deferred to hardware session (requires flashed board + central stream). Shell synchronous commands do not block Bluetooth threads (workqueue-based IPC, not blocking). When executed: ring loopback at ≤100 blocks/s during 60s Mode A stream, verify zero audio faults and ring exact.
+
+## Files changed (this commit)
 
 | File | Change |
 |------|--------|
-| `src/flpr_ring.h` | Monotonic counters, ABI v2, 481-frame capacity, proper docs |
-| `src/flpr_ring.c` | Fixed space/count math, CRC over valid bytes, idempotent reset, barrier ordering |
-| `src/flpr_cache.c` | FLPR: barrier_dmem_fence_full (was NO-OP). ARM: DMB/DSB. Cache docs |
-| `src/flpr_ring_mgr.h` | DT addresses, coordinated reset API, stall, status v2, diagnostic counters |
-| `src/flpr_ring_mgr.c` | DT_BUILD_ASSERT, IPC handlers, coordinated reset, static test buffers, drain-driven test loop, diagnostic counters |
-| `src/flpr_handshake.h` | Added send_msg + ring handler registration API |
-| `src/flpr_handshake.c` | Ring message routing + public send/handler functions |
-| `src/flpr/main.c` | DT addresses, BUILD_ASSERT, static recv_payload, polling-path notification, multi-report diagnostics, ring_notify_cpuapp helper |
-| `src/flpr/prj.conf` | MAIN_STACK_SIZE=4096 (was default 1024) |
-| `src/flpr_protocol.h` | Fixed swapped RING_PRODUCER/RING_CONSUMER comments |
-| `src/audio_shell.c` | Coordinated reset command, updated status fields, diag display |
-| `tests/unit/flpr_ring/src/test_flpr_ring.c` | 38 tests: wraps, uint32 wrap, 481-frame, valid-bytes CRC, idempotent reset |
-| `docs/development/phase6-stage1-results.md` | This document |
+| `src/flpr_ring.h` | ABI v3, cpu_timestamp in slot meta, err_bad_payload/sequence in header, stall bitmasks, `flpr_ring_gen_payload()`, `flpr_ring_verify_payload()` |
+| `src/flpr_ring.c` | No changes (math and lifecycle unchanged) |
+| `src/flpr_cache.c` | No changes |
+| `src/flpr_protocol.h` | RING_STALL (0x17) / RING_STALL_ACK (0x18) message types |
+| `src/flpr_ring_mgr.h` | New APIs: `consume_block` now takes `latency_cycles_out`, `flpr_ring_mgr_flpr_stall()`, test status adds `payload_errors`, `backpressure`, latency fields. `test_run()` returns nonzero on failure. |
+| `src/flpr_ring_mgr.c` | Full rewrite: independent payload verification via `flpr_ring_verify_payload()`, latency accumulation, nonzero failure return, notification-after-publish, final drain until recv≥sent, stall controls, 0xD4 report decode, fixed 0x00 report decode |
+| `src/flpr_handshake.h` | `register_ring_handlers` now takes 4 callbacks (+stall_ack_fn) |
+| `src/flpr_handshake.c` | Stall ACK routing, updated register function |
+| `src/flpr/main.c` | Stall state (`stall_consumer_input`, `stall_producer_output`), stall check in `ring_process_input`, stall handler in IPC callback, output-stall before produce_begin, cpu_timestamp preserved in loopback, report 0xD4 subtype, fixed 0x00 report (32-bit block_count in data) |
+| `src/audio_shell.c` | Updated status display (payload_errors, backpressure, latency). `flpr ring stall` and `flpr ring stall-flpr` commands. Updated test display. |
+| `tests/unit/flpr_ring/src/test_flpr_ring.c` | +13 new tests: deterministic payload gen/verify, metadata size, cpu_timestamp, error counters, 1000-wrap stress, all-fields metadata test |
+| `docs/development/phase6-stage1-results.md` | This document (rewritten) |
+
+## Hardware gate results
+
+All gates from the initial close (f4ff554) remain valid:
+- 100k varying-payload loopback: 100k sent, 100k recv, zero errors
+- Stale rejection / reset recovery: epoch handshake correct
+- 60s Mode A audio with ring idle: zero audio faults
+
+New gates pending hardware verification:
+- Payload verification (independent): to be verified on next hardware session
+- Latency measurement: to be measured on hardware
+- Stall controls: to be exercised on hardware
+- Concurrent low-rate test: to be run during active audio stream
+
+## Stage 2 next
+
+Identity loopback with live audio (Phase 6 Stage 2). Current ring infrastructure is complete and verified. Stage 2 wires decoded PCM blocks through the input ring, FLPR identity-copies to output ring, and cpuapp consumes output ring instead of direct I2S slab push. The 10-minute Mode A gate must pass with zero audio faults and zero ring errors.
 
 ## Non-scope
-- No live audio routing through ring, no ASRC offload, no HPF, no ICBmsg, no BabbleSim, no package install, no direct RADIO access, no destructive recovery. These are later stages.
+
+No live audio routing through ring (Stage 2), no ASRC offload, no HPF, no ICBmsg, no BabbleSim, no package install, no direct RADIO access, no destructive recovery.

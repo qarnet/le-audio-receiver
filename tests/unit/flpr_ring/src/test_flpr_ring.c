@@ -23,6 +23,10 @@
  *   - Stall injection: produce-full, consume-empty counters
  *   - Produce with valid_frames = 480 (max input), verify CRC range
  *   - 481-frame forward-compat capacity
+ *   - Metadata size and epoch validation
+ *   - Deterministic payload generation and verification
+ *   - CPU timestamp in slot metadata
+ *   - New error counters: err_bad_payload, err_bad_sequence
  */
 
 #include <zephyr/ztest.h>
@@ -652,6 +656,191 @@ ZTEST(flpr_ring, test_reset_with_pending_data_reject_stale)
 	struct flpr_ring_slot_meta *cm;
 	ret = flpr_ring_consume_begin(test_ring, 20, &cs, &cm);
 	zassert_equal(ret, -2, "stale epoch rejected (slot=10, ring=20)");
+}
+
+/* ── Metadata size / epoch validation ──────────────────────────── */
+
+ZTEST(flpr_ring, test_metadata_size)
+{
+	zassert_equal(sizeof(struct flpr_ring_slot_meta), FLPR_RING_SLOT_METADATA_SZ,
+		      "slot metadata size = 32 bytes");
+}
+
+ZTEST(flpr_ring, test_cpu_timestamp_field)
+{
+	/* Verify cpu_timestamp offset preserves 32-byte alignment. */
+	struct flpr_ring_slot_meta meta;
+	memset(&meta, 0, sizeof(meta));
+	zassert_equal(sizeof(meta), 32, "metadata must be exactly 32 bytes");
+	zassert_equal(meta.cpu_timestamp, 0, "cpu_timestamp initializes to 0");
+}
+
+/* ── Deterministic payload generation ───────────────────────────── */
+
+ZTEST(flpr_ring, test_gen_payload_deterministic)
+{
+	uint8_t a[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+	uint8_t b[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+
+	flpr_ring_gen_payload(a, sizeof(a), 42);
+	flpr_ring_gen_payload(b, sizeof(b), 42);
+	zassert_mem_equal(a, b, sizeof(a), "same sequence → same payload");
+}
+
+ZTEST(flpr_ring, test_gen_payload_different_seq)
+{
+	uint8_t a[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+	uint8_t b[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+
+	flpr_ring_gen_payload(a, sizeof(a), 0);
+	flpr_ring_gen_payload(b, sizeof(b), 1);
+	zassert_true(memcmp(a, b, sizeof(a)) != 0, "different sequences → different payload");
+}
+
+ZTEST(flpr_ring, test_gen_payload_non_trivial)
+{
+	/* Payload should not be all zeros or all same byte. */
+	uint8_t buf[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+	flpr_ring_gen_payload(buf, sizeof(buf), 100);
+
+	bool all_same = true;
+	for (size_t i = 1; i < sizeof(buf); i++) {
+		if (buf[i] != buf[0]) {
+			all_same = false;
+			break;
+		}
+	}
+	zassert_false(all_same, "payload should not be uniform");
+}
+
+/* ── Deterministic payload verification ─────────────────────────── */
+
+ZTEST(flpr_ring, test_verify_payload_match)
+{
+	uint8_t buf[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+	flpr_ring_gen_payload(buf, sizeof(buf), 777);
+	uint32_t errs = flpr_ring_verify_payload(buf, sizeof(buf), 777);
+	zassert_equal(errs, 0, "verified payload should have zero errors");
+}
+
+ZTEST(flpr_ring, test_verify_payload_mismatch)
+{
+	uint8_t buf[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+	flpr_ring_gen_payload(buf, sizeof(buf), 888);
+	buf[0] ^= 0xFFU; /* corrupt first byte */
+	uint32_t errs = flpr_ring_verify_payload(buf, sizeof(buf), 888);
+	zassert_true(errs > 0, "corrupted payload should report errors");
+	zassert_true(errs <= (sizeof(buf) + 3) / 4, "frame errors bounded by total frames");
+}
+
+ZTEST(flpr_ring, test_verify_payload_wrong_seq)
+{
+	uint8_t buf[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+	flpr_ring_gen_payload(buf, sizeof(buf), 0);
+	uint32_t errs = flpr_ring_verify_payload(buf, sizeof(buf), 1);
+	zassert_true(errs > 0, "wrong sequence should produce errors");
+}
+
+ZTEST(flpr_ring, test_verify_payload_zero_bytes)
+{
+	uint32_t errs = flpr_ring_verify_payload(NULL, 0, 0);
+	zassert_equal(errs, 0, "zero valid bytes = zero errors");
+}
+
+/* ── New error counters ─────────────────────────────────────────── */
+
+ZTEST(flpr_ring, test_err_bad_payload_counter)
+{
+	/* Verify the counter is at expected offset and initially zero. */
+	struct flpr_ring_header *hdr = (struct flpr_ring_header *)test_ring;
+	flpr_ring_init(test_ring, FLPR_RING_CPUAPP_TO_FLPR);
+	zassert_equal(hdr->err_bad_payload, 0, "err_bad_payload starts at 0");
+	zassert_equal(hdr->err_bad_sequence, 0, "err_bad_sequence starts at 0");
+}
+
+ZTEST(flpr_ring, test_err_counters_independent)
+{
+	struct flpr_ring_header *hdr = (struct flpr_ring_header *)test_ring;
+	flpr_ring_init(test_ring, FLPR_RING_CPUAPP_TO_FLPR);
+	hdr->err_bad_payload = 5;
+	hdr->err_bad_sequence = 10;
+	zassert_equal(hdr->err_bad_payload, 5, "payload counter retains value");
+	zassert_equal(hdr->err_bad_sequence, 10, "sequence counter retains value");
+}
+
+/* ── 1000+ wraps stress test ────────────────────────────────────── */
+
+ZTEST(flpr_ring, test_1000_wraps_produce_consume)
+{
+	uint32_t idx;
+	int ret;
+
+	flpr_ring_reset_epoch(test_ring, 1);
+
+	for (uint32_t i = 0; i < 1000; i++) {
+		ret = flpr_ring_produce_begin(test_ring, &idx);
+		zassert_equal(ret, 0, "produce %u should succeed", i);
+
+		uint8_t *slot = flpr_ring_slot_base(test_ring, idx);
+		struct flpr_ring_slot_meta *meta = flpr_ring_slot_meta_ptr(slot);
+		meta->epoch = 1;
+		meta->sequence = i;
+		meta->valid_frames = FLPR_RING_PAYLOAD_MAX_INPUT;
+		meta->flags = FLPR_SLOT_FLAG_VALID;
+		meta->cpu_timestamp = i; /* test: use sequence as timestamp */
+		memset(flpr_ring_slot_payload(slot), (uint8_t)i, FLPR_RING_PAYLOAD_CAPACITY_BYTES);
+
+		flpr_ring_produce_commit(test_ring, idx);
+
+		/* Consume immediately. */
+		uint8_t *cs;
+		struct flpr_ring_slot_meta *cm;
+		ret = flpr_ring_consume_begin(test_ring, 1, &cs, &cm);
+		zassert_equal(ret, 0, "consume %u should succeed", i);
+		zassert_equal(cm->sequence, i, "seq match on wrap %u", i);
+		zassert_equal(cm->cpu_timestamp, i, "cpu_timestamp preserved on wrap %u", i);
+		flpr_ring_consume_done(test_ring);
+	}
+}
+
+/* ── Slot metadata fields preserved through produce/consume ─────── */
+
+ZTEST(flpr_ring, test_metadata_all_fields)
+{
+	uint32_t idx;
+	int ret;
+
+	flpr_ring_reset_epoch(test_ring, 99);
+
+	ret = flpr_ring_produce_begin(test_ring, &idx);
+	zassert_equal(ret, 0, "produce_begin ok");
+
+	uint8_t *slot = flpr_ring_slot_base(test_ring, idx);
+	struct flpr_ring_slot_meta *meta = flpr_ring_slot_meta_ptr(slot);
+	meta->sequence = 12345;
+	meta->epoch = 99;
+	meta->valid_frames = 240;
+	meta->flags = FLPR_SLOT_FLAG_VALID;
+	meta->correction_ppm = -123;
+	meta->crc32 = 0xDEADBEEFU;
+	meta->cpu_timestamp = 0xABCDEF01U;
+	memset(flpr_ring_slot_payload(slot), 0x5A, 240U * 4U);
+	flpr_ring_produce_commit(test_ring, idx);
+
+	uint8_t *cs;
+	struct flpr_ring_slot_meta *cm;
+	ret = flpr_ring_consume_begin(test_ring, 99, &cs, &cm);
+	zassert_equal(ret, 0, "consume_begin ok");
+
+	zassert_equal(cm->sequence, 12345, "sequence preserved");
+	zassert_equal(cm->epoch, 99, "epoch preserved");
+	zassert_equal(cm->valid_frames, 240, "valid_frames preserved");
+	zassert_equal(cm->flags, FLPR_SLOT_FLAG_VALID, "flags preserved");
+	zassert_equal(cm->correction_ppm, -123, "correction_ppm preserved");
+	zassert_equal(cm->crc32, 0xDEADBEEFU, "crc32 preserved");
+	zassert_equal(cm->cpu_timestamp, 0xABCDEF01U, "cpu_timestamp preserved");
+
+	flpr_ring_consume_done(test_ring);
 }
 
 /* ── Test suite ─────────────────────────────────────────────── */

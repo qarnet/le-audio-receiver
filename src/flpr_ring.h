@@ -37,7 +37,7 @@ extern "C" {
 /* ── Constants ─────────────────────────────────────────────────── */
 
 #define FLPR_RING_MAGIC       0x52494E47U /* "RING" */
-#define FLPR_RING_ABI_VERSION 2U          /* v2: monotonic counters, 481-frame capacity */
+#define FLPR_RING_ABI_VERSION 3U          /* v3: cpu timestamp, payload/seq error counters */
 
 #define FLPR_RING_SLOT_COUNT 4U
 
@@ -94,9 +94,11 @@ struct flpr_ring_header {
 	uint32_t err_producer_full;  /* writer: producer */
 	uint32_t err_consumer_empty; /* writer: consumer */
 	uint32_t err_stale_epoch;    /* writer: consumer */
+	uint32_t err_bad_payload;    /* writer: consumer (independent memcmp) */
+	uint32_t err_bad_sequence;   /* writer: consumer (seq gap/dup/ooo) */
 
 	/* Padding to 128 bytes. */
-	uint32_t _pad[14];
+	uint32_t _pad[12];
 };
 
 /* Compile-time size check. */
@@ -115,7 +117,8 @@ struct flpr_ring_slot_meta {
 	uint16_t flags;         /* FLPR_SLOT_FLAG_* */
 	int32_t correction_ppm; /* drift correction at time of capture */
 	uint32_t crc32;         /* CRC-32 of valid payload bytes (0 = unused) */
-	uint32_t _pad[3];       /* 32-byte alignment */
+	uint32_t cpu_timestamp; /* k_cycle_get_32() at produce time (latency) */
+	uint32_t _pad[2];       /* 32-byte alignment */
 };
 
 _Static_assert(sizeof(struct flpr_ring_slot_meta) == FLPR_RING_SLOT_METADATA_SZ,
@@ -125,6 +128,10 @@ _Static_assert(sizeof(struct flpr_ring_slot_meta) == FLPR_RING_SLOT_METADATA_SZ,
 #define FLPR_SLOT_FLAG_VALID  0x0001U /* payload contains valid data */
 #define FLPR_SLOT_FLAG_CRC_OK 0x0002U /* CRC verified (consumer sets) */
 #define FLPR_SLOT_FLAG_STALL  0x0004U /* producer injected stall */
+
+/* Stall control bitmask (passed via RING_STALL message data). */
+#define FLPR_STALL_CONSUMER_INPUT  0x01U /* FLPR stops consuming input ring */
+#define FLPR_STALL_PRODUCER_OUTPUT 0x02U /* FLPR stops producing output ring */
 
 /* ── Ring direction ─────────────────────────────────────────────── */
 
@@ -353,6 +360,54 @@ static inline uint32_t flpr_ring_epoch(const uint8_t *base)
 {
 	const struct flpr_ring_header *hdr = (const struct flpr_ring_header *)base;
 	return hdr->stream_epoch;
+}
+
+/* ── Deterministic payload generation (test verification) ─────────
+ *
+ * Generates a full payload from sequence number so both sides can
+ * independently verify content without copying CRC.  Each byte
+ * depends on sequence + offset, deterministic across builds.
+ *
+ * Output: CAPACITY_BYTES filled with test pattern.
+ */
+static inline void flpr_ring_gen_payload(uint8_t *buf, size_t cap_bytes, uint32_t sequence)
+{
+	/* 64-bit splitmix variant: produces non-trivial byte pattern
+	 * that varies with sequence and offset. */
+	uint64_t state = ((uint64_t)sequence << 32) ^ 0x9E3779B97F4A7C15ULL;
+
+	for (size_t i = 0; i < cap_bytes; i++) {
+		state += i;
+		state = (state ^ (state >> 30)) * 0xBF58476D1CE4E5B9ULL;
+		state = (state ^ (state >> 27)) * 0x94D049BB133111EBULL;
+		state = state ^ (state >> 31);
+		buf[i] = (uint8_t)(state & 0xFFU);
+	}
+}
+
+/** Compare payload bytes against regenerated expected pattern.
+ *  Returns number of mismatched frames (one stereo frame = 4 bytes). */
+static inline uint32_t flpr_ring_verify_payload(const uint8_t *actual, size_t valid_bytes,
+						uint32_t sequence)
+{
+	uint32_t frame_errors = 0;
+	uint64_t state = ((uint64_t)sequence << 32) ^ 0x9E3779B97F4A7C15ULL;
+
+	for (size_t i = 0; i < valid_bytes; i++) {
+		state += i;
+		state = (state ^ (state >> 30)) * 0xBF58476D1CE4E5B9ULL;
+		state = (state ^ (state >> 27)) * 0x94D049BB133111EBULL;
+		state = state ^ (state >> 31);
+
+		if (actual[i] != (uint8_t)(state & 0xFFU)) {
+			/* Count one frame error per 4-byte group (stereo frame). */
+			if ((i & 3U) == 0) {
+				frame_errors++;
+			}
+		}
+	}
+
+	return frame_errors;
 }
 
 #ifdef __cplusplus

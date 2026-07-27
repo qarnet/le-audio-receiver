@@ -95,20 +95,22 @@ typedef void (*flpr_handshake_ring_handler_t)(const struct flpr_msg *msg, void *
 /**
  * @brief Register handlers for ring-control IPC messages.
  *
- * When FLPR sends RING_RESET_ACK, RING_CONSUMER, or RING_TEST_REPORT,
- * the registered callbacks are invoked from the IPC receive callback
- * (under spinlock).
+ * When FLPR sends RING_RESET_ACK, RING_CONSUMER, RING_TEST_REPORT,
+ * or RING_STALL_ACK, the registered callbacks are invoked from
+ * the IPC receive callback (under spinlock).
  *
  * Call with NULL to unregister.
  *
  * @param reset_ack_fn   Handler for FLPR_MSG_RING_RESET_ACK.
  * @param consumer_fn    Handler for FLPR_MSG_RING_CONSUMER.
  * @param report_fn      Handler for FLPR_MSG_RING_TEST_REPORT.
+ * @param stall_ack_fn   Handler for FLPR_MSG_RING_STALL_ACK.
  * @param user_data      Opaque pointer passed to each handler.
  */
 void flpr_handshake_register_ring_handlers(flpr_handshake_ring_handler_t reset_ack_fn,
 					   flpr_handshake_ring_handler_t consumer_fn,
 					   flpr_handshake_ring_handler_t report_fn,
+					   flpr_handshake_ring_handler_t stall_ack_fn,
 					   void *user_data);
 
 #ifdef __cplusplus

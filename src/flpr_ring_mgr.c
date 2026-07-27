@@ -77,8 +77,10 @@ static bool test_active;
 static uint32_t test_blocks_sent;
 static uint32_t test_blocks_recv;
 static uint32_t test_crc_errors;
+static uint32_t test_payload_errors;
 static uint32_t test_seq_gaps;
 static uint32_t test_full_events;
+static uint32_t test_backpressure;
 static uint32_t test_empty_events;
 static uint32_t test_stale_events;
 static uint32_t test_flpr_blocks;  /* blocks FLPR reports processing */
@@ -94,6 +96,12 @@ static uint32_t test_flpr_consume_stale;
 static uint32_t test_flpr_produce_ok;
 static uint32_t test_flpr_produce_full;
 
+/* Latency accumulators (protected by ring_lock). */
+static uint32_t latency_min;
+static uint32_t latency_max;
+static uint64_t latency_sum;
+static uint32_t latency_count;
+
 /* Test control. */
 static bool stall_producer_enabled;
 
@@ -107,6 +115,10 @@ static struct k_sem reset_ack_sem;
 
 static uint32_t reset_ack_epoch; /* epoch received in ACK, 0 = failure */
 static bool reset_ack_received;
+
+/* ── FLPR stall control ─────────────────────────────────────────── */
+
+static struct k_sem stall_ack_sem;
 
 /* ── IPC handlers (called from flpr_handshake receive context) ───── */
 
@@ -136,18 +148,19 @@ static void on_ring_test_report(const struct flpr_msg *msg, void *user_data)
 	(void)user_data;
 	k_spinlock_key_t key = k_spin_lock(&ring_lock);
 
-	/* Report subtype is encoded in seq high byte:
-	 *   0x00 → block_count (seq lo 16) + crc_errors (data)
+	/* Subtype encoded in seq high byte:
+	 *   0x00 → block_count + crc_errors
 	 *   0xD1 → consume_ok (full 32-bit in data)
 	 *   0xD2 → produce_ok (full 32-bit in data)
-	 *   0xD3 → notify_rcv(seq lo 8) + worker_wake(data lo 16) +
-	 *           produce_full(data hi 16) */
+	 *   0xD3 → notify_rcv + worker_wake + produce_full
+	 *   0xD4 → cons_empty + cons_stale (data lo/hi 16-bit) */
 	uint8_t subtype = (uint8_t)(msg->seq >> 8);
 
 	switch (subtype) {
 	case 0x00:
-		test_flpr_blocks = (uint32_t)msg->seq;
-		test_flpr_crc_err = msg->data;
+		/* FLPR: seq lo 16 = crc_errors, data = block_count */
+		test_flpr_crc_err = (uint32_t)(msg->seq & 0xFFFFU);
+		test_flpr_blocks = msg->data;
 		break;
 	case 0xD1:
 		test_flpr_consume_ok = msg->data;
@@ -160,10 +173,21 @@ static void on_ring_test_report(const struct flpr_msg *msg, void *user_data)
 		test_flpr_worker_wake = (uint32_t)(msg->data & 0xFFFFU);
 		test_flpr_produce_full = (uint32_t)((msg->data >> 16) & 0xFFFFU);
 		break;
+	case 0xD4:
+		test_flpr_consume_empty = (uint32_t)(msg->data & 0xFFFFU);
+		test_flpr_consume_stale = (uint32_t)((msg->data >> 16) & 0xFFFFU);
+		break;
 	default:
 		break;
 	}
 	k_spin_unlock(&ring_lock, key);
+}
+
+static void on_ring_stall_ack(const struct flpr_msg *msg, void *user_data)
+{
+	(void)msg;
+	(void)user_data;
+	k_sem_give(&stall_ack_sem);
 }
 
 /* ── Notification ────────────────────────────────────────────────── */
@@ -203,10 +227,11 @@ int flpr_ring_mgr_init(void)
 	/* Initialize semaphores. */
 	k_sem_init(&consume_sem, 0, 1000001);
 	k_sem_init(&reset_ack_sem, 0, 1);
+	k_sem_init(&stall_ack_sem, 0, 1);
 
 	/* Register IPC handlers for ring messages. */
 	flpr_handshake_register_ring_handlers(on_ring_reset_ack, on_ring_consumer,
-					      on_ring_test_report, NULL);
+					      on_ring_test_report, on_ring_stall_ack, NULL);
 
 	/* Initialize both rings in shared memory. */
 	flpr_ring_init(RING_INPUT_BASE, FLPR_RING_CPUAPP_TO_FLPR);
@@ -227,9 +252,6 @@ void flpr_ring_mgr_set_consume_cb(flpr_ring_consume_cb_t cb, void *user_data)
 {
 	(void)cb;
 	(void)user_data;
-	/* Consumer callbacks are now handled via the semaphore pattern.
-	 * This function is retained for API compatibility; the semaphore
-	 * suffices for the ring test loop. */
 }
 
 int flpr_ring_mgr_coordinated_reset(uint32_t new_epoch, uint32_t timeout_ms)
@@ -269,11 +291,9 @@ int flpr_ring_mgr_coordinated_reset(uint32_t new_epoch, uint32_t timeout_ms)
 		LOG_ERR("RING_RESET send failed: %d", ret);
 		return -EIO;
 	}
-	LOG_INF("RING_RESET sent, waiting for ACK...");
 
 	/* Wait for RING_RESET_ACK. */
 	ret = k_sem_take(&reset_ack_sem, K_MSEC(timeout_ms));
-	LOG_INF("RING_RESET_ACK wait returned: %d", ret);
 	if (ret != 0) {
 		LOG_WRN("RING_RESET_ACK timeout (%u ms)", timeout_ms);
 		return -ETIMEDOUT;
@@ -319,8 +339,10 @@ int flpr_ring_mgr_reset(uint32_t new_epoch)
 	test_blocks_sent = 0;
 	test_blocks_recv = 0;
 	test_crc_errors = 0;
+	test_payload_errors = 0;
 	test_seq_gaps = 0;
 	test_full_events = 0;
+	test_backpressure = 0;
 	test_empty_events = 0;
 	test_stale_events = 0;
 	test_flpr_blocks = 0;
@@ -329,7 +351,14 @@ int flpr_ring_mgr_reset(uint32_t new_epoch)
 	test_flpr_notify_rcv = 0;
 	test_flpr_worker_wake = 0;
 	test_flpr_consume_ok = 0;
+	test_flpr_consume_empty = 0;
+	test_flpr_consume_stale = 0;
 	test_flpr_produce_ok = 0;
+	test_flpr_produce_full = 0;
+	latency_min = UINT32_MAX;
+	latency_max = 0;
+	latency_sum = 0;
+	latency_count = 0;
 	stall_producer_enabled = false;
 	k_spin_unlock(&ring_lock, key);
 
@@ -372,8 +401,10 @@ void flpr_ring_mgr_get_status(struct flpr_ring_status *status)
 	status->test_blocks_sent = test_blocks_sent;
 	status->test_blocks_recv = test_blocks_recv;
 	status->test_crc_errors = test_crc_errors;
+	status->test_payload_errors = test_payload_errors;
 	status->test_seq_gaps = test_seq_gaps;
 	status->test_full_events = test_full_events;
+	status->test_backpressure = test_backpressure;
 	status->test_empty_events = test_empty_events;
 	status->test_stale_events = test_stale_events;
 	status->test_producer_blocks = test_flpr_blocks;
@@ -386,6 +417,11 @@ void flpr_ring_mgr_get_status(struct flpr_ring_status *status)
 	status->flpr_consume_stale = test_flpr_consume_stale;
 	status->flpr_produce_ok = test_flpr_produce_ok;
 	status->flpr_produce_full = test_flpr_produce_full;
+
+	status->latency_min = latency_min;
+	status->latency_max = latency_max;
+	status->latency_sum = latency_sum;
+	status->latency_count = latency_count;
 
 	k_spin_unlock(&ring_lock, key);
 }
@@ -405,7 +441,7 @@ enum flpr_produce_result flpr_ring_mgr_produce_block(const uint8_t *pcm_data, ui
 	{
 		k_spinlock_key_t key = k_spin_lock(&ring_lock);
 		if (stall_producer_enabled) {
-			test_full_events++;
+			test_backpressure++;
 			k_spin_unlock(&ring_lock, key);
 			return FLPR_PRODUCE_FULL;
 		}
@@ -429,6 +465,7 @@ enum flpr_produce_result flpr_ring_mgr_produce_block(const uint8_t *pcm_data, ui
 	meta->valid_frames = valid_frames;
 	meta->flags = FLPR_SLOT_FLAG_VALID;
 	meta->correction_ppm = correction_ppm;
+	meta->cpu_timestamp = k_cycle_get_32();
 
 	/* Fill payload.  Copy only valid bytes; zero remainder. */
 	size_t copy_bytes = (size_t)valid_frames * 4U; /* stereo 16-bit */
@@ -451,7 +488,8 @@ enum flpr_produce_result flpr_ring_mgr_produce_block(const uint8_t *pcm_data, ui
 }
 
 enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t *valid_frames_out,
-						     uint32_t *sequence_out, uint32_t *crc32_out)
+						     uint32_t *sequence_out, uint32_t *crc32_out,
+						     uint32_t *latency_cycles_out)
 {
 	uint8_t *slot_base;
 	struct flpr_ring_slot_meta *meta;
@@ -483,6 +521,31 @@ enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t 
 		*crc32_out = meta->crc32;
 	}
 
+	/* Compute roundtrip latency from cpu_timestamp. */
+	if (latency_cycles_out) {
+		uint32_t now = k_cycle_get_32();
+		uint32_t latency = now - meta->cpu_timestamp;
+		if (latency > 0) {
+			*latency_cycles_out = latency;
+		} else {
+			*latency_cycles_out = 0;
+		}
+
+		/* Track min/max/avg. */
+		if (latency > 0 && test_active) {
+			k_spinlock_key_t key = k_spin_lock(&ring_lock);
+			if (latency < latency_min) {
+				latency_min = latency;
+			}
+			if (latency > latency_max) {
+				latency_max = latency;
+			}
+			latency_sum += latency;
+			latency_count++;
+			k_spin_unlock(&ring_lock, key);
+		}
+	}
+
 	/* Read payload. */
 	if (pcm_out) {
 		memcpy(pcm_out, flpr_ring_slot_payload(slot_base), vf > 0 ? (size_t)vf * 4U : 0);
@@ -495,6 +558,18 @@ enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t 
 		if (computed != meta->crc32) {
 			k_spinlock_key_t key = k_spin_lock(&ring_lock);
 			test_crc_errors++;
+			k_spin_unlock(&ring_lock, key);
+		}
+	}
+
+	/* Independent payload verification: regenerate from sequence
+	 * and memcmp. */
+	if (test_active && vf > 0) {
+		uint32_t frame_errs = flpr_ring_verify_payload(flpr_ring_slot_payload(slot_base),
+							       (size_t)vf * 4U, meta->sequence);
+		if (frame_errs > 0) {
+			k_spinlock_key_t key = k_spin_lock(&ring_lock);
+			test_payload_errors += frame_errs;
 			k_spin_unlock(&ring_lock, key);
 		}
 	}
@@ -515,6 +590,30 @@ void flpr_ring_mgr_stall_producer(bool stall)
 	k_spin_unlock(&ring_lock, key);
 }
 
+int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms)
+{
+	/* Drain stale semaphore. */
+	while (k_sem_take(&stall_ack_sem, K_NO_WAIT) == 0) {
+	}
+
+	struct flpr_msg stall_msg = {
+		.type = FLPR_MSG_RING_STALL,
+		.version = FLPR_PROTOCOL_VERSION,
+		.seq = 0,
+		.data = stall_bits,
+	};
+	int ret = flpr_handshake_send_msg(&stall_msg);
+	if (ret < 0) {
+		return ret;
+	}
+
+	ret = k_sem_take(&stall_ack_sem, K_MSEC(timeout_ms));
+	if (ret != 0) {
+		return -ETIMEDOUT;
+	}
+	return 0;
+}
+
 /* ── Ring test ──────────────────────────────────────────────────── */
 /* Static buffers for ring test — too large for shell thread stack.
  * Single-writer: only used by the blocking test loop one at a time. */
@@ -526,6 +625,8 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 	int ret;
 	uint32_t sent = 0;
 	uint32_t start = k_uptime_get_32();
+	uint32_t last_seq = 0;
+	bool any_error = false;
 
 	{
 		k_spinlock_key_t key = k_spin_lock(&ring_lock);
@@ -548,8 +649,10 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 		test_blocks_sent = 0;
 		test_blocks_recv = 0;
 		test_crc_errors = 0;
+		test_payload_errors = 0;
 		test_seq_gaps = 0;
 		test_full_events = 0;
+		test_backpressure = 0;
 		test_empty_events = 0;
 		test_stale_events = 0;
 		test_flpr_blocks = 0;
@@ -558,7 +661,14 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 		test_flpr_notify_rcv = 0;
 		test_flpr_worker_wake = 0;
 		test_flpr_consume_ok = 0;
+		test_flpr_consume_empty = 0;
+		test_flpr_consume_stale = 0;
 		test_flpr_produce_ok = 0;
+		test_flpr_produce_full = 0;
+		latency_min = UINT32_MAX;
+		latency_max = 0;
+		latency_sum = 0;
+		latency_count = 0;
 		k_spin_unlock(&ring_lock, key);
 	}
 
@@ -579,42 +689,55 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 
 	LOG_INF("Ring test: sending %u blocks...", block_count);
 
-	/* Drain-driven loop: produce blocks rapidly, drain output ring
-	 * to keep FLPR slots free.  Only block on semaphore when input
-	 * ring is full (FLPR hasn't consumed yet). */
+	/* Drain-driven loop with independent payload generation.
+	 *
+	 * For each block:
+	 *   1. Generate deterministic payload from sequence
+	 *   2. Produce into input ring
+	 *   3. Notify FLPR AFTER slot publish (never before)
+	 *   4. Drain output, verify payload independently from sequence
+	 *
+	 * Notification sent after slot publish — no duplicate same seq.
+	 * On FULL: drain output + wait semaphore, retry (never skip). */
 	while (sent < block_count) {
 		uint32_t elapsed = k_uptime_get_32() - start;
 		if (elapsed > timeout_ms) {
 			LOG_WRN("Ring test timeout at %u/%u blocks (%u ms)", sent, block_count,
 				elapsed);
+			any_error = true;
 			break;
 		}
 
-		/* Aggressively drain output ring — keep FLPR producing. */
+		/* Aggressively drain output ring — keep FLPR slot-space free. */
 		{
 			enum flpr_consume_result cr;
-			while ((cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, NULL,
-								 NULL)) != FLPR_CONSUME_EMPTY) {
-				/* OK: consumed, STALE: advanced past, both fine. */
+			uint32_t seq_out;
+			uint32_t latency;
+			while ((cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, &seq_out,
+								 NULL, &latency)) !=
+			       FLPR_CONSUME_EMPTY) {
+				/* Independent payload verification done inside
+				 * consume_block when test_active is true. */
 				(void)cr;
+				(void)seq_out;
+				(void)latency;
 			}
 		}
 
-		/* Fill varying payload pattern. */
-		*(uint32_t *)test_pattern = sent;
-		for (size_t i = 4; i < sizeof(test_pattern); i++) {
-			test_pattern[i] = (uint8_t)(sent + i);
-		}
+		/* Generate deterministic payload from sequence. */
+		flpr_ring_gen_payload(test_pattern, sizeof(test_pattern), sent);
 
-		/* Produce block. If full, drain output + wait briefly. */
+		/* Produce block. */
 		enum flpr_produce_result pr = flpr_ring_mgr_produce_block(
 			test_pattern, FLPR_RING_PAYLOAD_MAX_INPUT, sent, 0, true);
 		if (pr == FLPR_PRODUCE_FULL) {
-			/* Drain output to free producer slots, then wait semaphore. */
+			/* Check if stall_producer is active (backpressure counting). */
 			{
 				enum flpr_consume_result cr;
-				while ((cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, NULL,
-									 NULL)) !=
+				uint32_t seq_out;
+				uint32_t latency;
+				while ((cr = flpr_ring_mgr_consume_block(
+						test_recv_buf, NULL, &seq_out, NULL, &latency)) !=
 				       FLPR_CONSUME_EMPTY) {
 				}
 			}
@@ -628,43 +751,73 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 			continue;
 		}
 
-		/* Notify FLPR that data is available. */
+		/* Notify FLPR AFTER slot publish (stale-rejection protocol). */
 		if (flpr_ring_mgr_notify_producer() < 0) {
-			/* Send failed — throttle and retry. */
+			/* Send failed — throttle and retry (never skip block). */
 			k_msleep(1);
 			continue;
 		}
 
+		/* Track sequence gaps. */
+		if (sent > 0 && sent != last_seq + 1) {
+			k_spinlock_key_t key = k_spin_lock(&ring_lock);
+			test_seq_gaps++;
+			k_spin_unlock(&ring_lock, key);
+		}
+		last_seq = sent;
 		sent++;
+
 		{
 			k_spinlock_key_t key = k_spin_lock(&ring_lock);
 			test_blocks_sent = sent;
 			k_spin_unlock(&ring_lock, key);
 		}
 
-		/* Quick check: drain output again (FLPR may have already
-		 * processed this block if polling caught it). */
+		/* Quick drain again. */
 		{
 			enum flpr_consume_result cr;
-			while ((cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, NULL,
-								 NULL)) != FLPR_CONSUME_EMPTY) {
+			uint32_t seq_out;
+			uint32_t latency;
+			while ((cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, &seq_out,
+								 NULL, &latency)) !=
+			       FLPR_CONSUME_EMPTY) {
 			}
 		}
 	}
 
-	/* Final drain: process remaining output + any late notifications. */
+	/* Final drain: wait until recv == sent or global timeout. */
 	{
 		uint32_t drain_start = k_uptime_get_32();
-		while ((k_uptime_get_32() - drain_start) < 1000) {
+		uint32_t remaining = timeout_ms - (drain_start - start);
+		if (remaining > timeout_ms) {
+			remaining = 100; /* guard */
+		}
+
+		while ((k_uptime_get_32() - drain_start) < remaining) {
 			enum flpr_consume_result cr;
+			uint32_t seq_out;
+			uint32_t latency;
 			bool drained = false;
-			while ((cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, NULL,
-								 NULL)) != FLPR_CONSUME_EMPTY) {
+			while ((cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, &seq_out,
+								 NULL, &latency)) !=
+			       FLPR_CONSUME_EMPTY) {
 				drained = true;
 			}
+
+			{
+				k_spinlock_key_t key = k_spin_lock(&ring_lock);
+				uint32_t recv_now = test_blocks_recv;
+				k_spin_unlock(&ring_lock, key);
+
+				if (recv_now >= sent) {
+					/* All blocks received. */
+					break;
+				}
+			}
+
 			if (!drained) {
 				/* Wait briefly for FLPR final output. */
-				k_sem_take(&consume_sem, K_MSEC(100));
+				k_sem_take(&consume_sem, K_MSEC(50));
 			}
 		}
 	}
@@ -688,6 +841,19 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 
 	if (out) {
 		flpr_ring_mgr_get_status(out);
+	}
+
+	/* Return nonzero if ANY failure. */
+	{
+		k_spinlock_key_t key = k_spin_lock(&ring_lock);
+		bool has_error = (sent != block_count) || (test_blocks_recv != block_count) ||
+				 (test_crc_errors > 0) || (test_payload_errors > 0) ||
+				 (test_stale_events > 0) || any_error;
+		k_spin_unlock(&ring_lock, key);
+
+		if (has_error) {
+			return -1;
+		}
 	}
 
 	return 0;

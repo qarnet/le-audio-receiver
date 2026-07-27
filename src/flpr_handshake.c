@@ -59,6 +59,7 @@ static uint32_t stress_err_send; /* protected by flpr_lock */
 static flpr_handshake_ring_handler_t ring_reset_ack_fn;
 static flpr_handshake_ring_handler_t ring_consumer_fn;
 static flpr_handshake_ring_handler_t ring_report_fn;
+static flpr_handshake_ring_handler_t ring_stall_ack_fn;
 static void *ring_handler_user_data;
 
 /* ── Helpers ────────────────────────────────────────────────────── */
@@ -305,6 +306,11 @@ static void ep_received(const void *data, size_t len, void *priv)
 			ring_report_fn(msg, ring_handler_user_data);
 		}
 		break;
+	case FLPR_MSG_RING_STALL_ACK:
+		if (ring_stall_ack_fn) {
+			ring_stall_ack_fn(msg, ring_handler_user_data);
+		}
+		break;
 
 	default: {
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
@@ -537,13 +543,16 @@ int flpr_handshake_send_msg(const struct flpr_msg *msg)
 
 void flpr_handshake_register_ring_handlers(flpr_handshake_ring_handler_t reset_ack_fn,
 					   flpr_handshake_ring_handler_t consumer_fn,
-					   flpr_handshake_ring_handler_t report_fn, void *user_data)
+					   flpr_handshake_ring_handler_t report_fn,
+					   flpr_handshake_ring_handler_t stall_ack_fn,
+					   void *user_data)
 {
 	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 
 	ring_reset_ack_fn = reset_ack_fn;
 	ring_consumer_fn = consumer_fn;
 	ring_report_fn = report_fn;
+	ring_stall_ack_fn = stall_ack_fn;
 	ring_handler_user_data = user_data;
 
 	k_spin_unlock(&flpr_lock, key);

@@ -74,6 +74,10 @@ static bool rings_initialized;
 
 static uint32_t ring_stream_epoch; /* current ring epoch after reset */
 
+/* Stall control flags (written by IPC RING_STALL, read by poll + callback). */
+static bool stall_consumer_input;
+static bool stall_producer_output;
+
 /* ── Helpers ────────────────────────────────────────────────────── */
 
 static int send_msg(const struct flpr_msg *msg)
@@ -87,7 +91,8 @@ static int send_msg(const struct flpr_msg *msg)
 static uint8_t recv_payload[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
 
 /** Drain all pending input ring slots: verify CRC over valid bytes,
- *  copy bit-exact to output, publish.  Returns number of slots consumed. */
+ *  copy bit-exact to output, publish.  Returns number of slots consumed.
+ *  Respects stall_consumer_input flag. */
 static uint32_t ring_process_input(void)
 {
 	uint32_t consumed = 0;
@@ -95,6 +100,11 @@ static uint32_t ring_process_input(void)
 	diag_worker_wake++;
 
 	while (1) {
+		/* Respect consumer-input stall: stop draining input. */
+		if (stall_consumer_input) {
+			break;
+		}
+
 		uint8_t *slot_base;
 		struct flpr_ring_slot_meta *meta;
 		int ret;
@@ -136,6 +146,15 @@ static uint32_t ring_process_input(void)
 
 		/* Try to produce into output ring. */
 		uint32_t out_idx;
+		if (stall_producer_output) {
+			/* Output stall active: consumer-done the input slot
+			 * (we consumed it) but do NOT produce output. */
+			ring_test_output_full++;
+			diag_produce_full++;
+			flpr_ring_consume_done(RING_INPUT_BASE);
+			break;
+		}
+
 		ret = flpr_ring_produce_begin(RING_OUTPUT_BASE, &out_idx);
 		if (ret != 0) {
 			/* Output full — stop consuming input to avoid
@@ -323,13 +342,14 @@ static void ep_received(const void *data, size_t len, void *priv)
 		 *   0xD3: notify_rcv(lo 8) + worker_wake(hi 8 of data)
 		 *          produce_full(lo 16) in seq */
 
-		/* Report 1: block_count + crc_errors. */
+		/* Report 1: block_count (32-bit) + crc_errors.
+		 *   seq lo 16 = crc_errors, data = block_count. */
 		{
 			struct flpr_msg r0 = {
 				.type = FLPR_MSG_RING_TEST_REPORT,
 				.version = FLPR_PROTOCOL_VERSION,
-				.seq = (uint16_t)(ring_test_block_count & 0xFFFFU),
-				.data = ring_test_crc_errors,
+				.seq = (uint16_t)(ring_test_crc_errors & 0xFFFFU),
+				.data = ring_test_block_count,
 			};
 			(void)send_msg(&r0);
 		}
@@ -365,6 +385,17 @@ static void ep_received(const void *data, size_t len, void *priv)
 			};
 			(void)send_msg(&r3);
 		}
+		/* Report 5: cons_empty + cons_stale (full 32-bit each). */
+		{
+			struct flpr_msg r4 = {
+				.type = FLPR_MSG_RING_TEST_REPORT,
+				.version = FLPR_PROTOCOL_VERSION,
+				.seq = (uint16_t)(0xD400U),
+				.data = (diag_consume_empty & 0xFFFFU) |
+					((diag_consume_stale & 0xFFFFU) << 16),
+			};
+			(void)send_msg(&r4);
+		}
 		break;
 	}
 
@@ -376,6 +407,25 @@ static void ep_received(const void *data, size_t len, void *priv)
 			ring_notify_cpuapp(consumed);
 		}
 		break;
+
+	case FLPR_MSG_RING_STALL: {
+		/* Apply stall config from CPUAPP.
+		 * data bitmask:
+		 *   FLPR_STALL_CONSUMER_INPUT (0x01)
+		 *   FLPR_STALL_PRODUCER_OUTPUT (0x02) */
+		uint8_t bits = (uint8_t)(msg->data & 0xFFU);
+		stall_consumer_input = (bits & FLPR_STALL_CONSUMER_INPUT) != 0;
+		stall_producer_output = (bits & FLPR_STALL_PRODUCER_OUTPUT) != 0;
+
+		struct flpr_msg ack = {
+			.type = FLPR_MSG_RING_STALL_ACK,
+			.version = FLPR_PROTOCOL_VERSION,
+			.seq = 0,
+			.data = bits,
+		};
+		(void)send_msg(&ack);
+		break;
+	}
 
 	default:
 		cpuapp.err_unknown++;
