@@ -12,12 +12,13 @@
  * and independently recomputed on consume; payload is memcmp'd against
  * original input for bit-exact identity verification.
  *
- * Dedicated offload worker thread (own stack, priority) handles all
- * long-running or blocking operations: initial ring preparation and
+ * Dedicated offload work queue (own stack via k_work_queue_start) handles
+ * all long-running or blocking operations: initial ring preparation and
  * post-fault recovery.  stream_start() only sets PREPARING + bumps
  * generation + schedules prep work, returns immediately.  Recovery
  * runs on same worker.  Neither can stall system workqueue or BT
- * threads.
+ * threads.  The work queue thread is created once in audio_offload_init();
+ * no K_THREAD_DEFINE wrapper, no duplicate stack/TCS.
  *
  * Concurrency:
  *   - g_lock spinlock protects all shared state
@@ -26,8 +27,11 @@
  *     output copy.  Late output after stop/recovery is rejected
  *     untouched, counting stale+fallback.
  *   - record_latency, audio_offload_is_healthy under spinlock
- *   - No kernel schedule/cancel under spinlock; compute action then
- *     invoke outside lock.
+ *   - No k_work_cancel_delayable under spinlock; update state under
+ *     lock, unlock, then cancel pending work.
+ *   - No kernel schedule under spinlock; compute action under lock,
+ *     capture delay as local, then invoke outside lock.
+ *   - All backoff/tries read/write under g_lock only.
  *
  * Accounting:
  *   - submit_count: every valid call (inc PREPARING/RECOVERING/FALLBACK)
@@ -36,6 +40,12 @@
  *   - Recovery NEVER clears fault/fallback/RTT evidence
  *   - New stream_start resets per-stream counters
  *   - recovery_count, recovery_fail_count are lifetime
+ *
+ * Lifecycle safety (Stage 2 fix #4):
+ *   - After ANY blocking/waiting operation, before calling record_fault,
+ *     re-check captured state/generation/epoch.  If stop/restart occurred
+ *     during the block, count ONE stale+fallback and NEVER change
+ *     STOPPED/PREPARING into RECOVERING.
  */
 
 #include "audio_offload.h"
@@ -52,7 +62,7 @@ LOG_MODULE_REGISTER(audio_offload, LOG_LEVEL_INF);
 
 /* ── nRF54L15: FLPR transport ───────────────────────────────────── */
 
-#if defined(CONFIG_SOC_NRF54L15)
+#ifdef CONFIG_SOC_NRF54L15
 
 #include "flpr_ring.h"
 #include "flpr_ring_mgr.h"
@@ -89,16 +99,19 @@ static int16_t g_scratch_output[OFFLOAD_EXPECTED_SAMPLES] __attribute__((aligned
 
 BUILD_ASSERT(sizeof(g_scratch_output) == OFFLOAD_EXPECTED_BYTES, "scratch output size mismatch");
 
-/* ── Dedicated offload worker thread ─────────────────────────────── */
+/* ── Dedicated offload work queue ──────────────────────────────────
+ *
+ * Single thread created in audio_offload_init() via k_work_queue_start.
+ * No K_THREAD_DEFINE wrapper — saves one stack + TCB.
+ * All prep and recovery work is scheduled ONLY on this queue via
+ * k_work_schedule_for_queue().  Never use k_work_schedule (system WQ). */
 
 #define OFFLOAD_THREAD_STACK_SIZE 1536
 #define OFFLOAD_THREAD_PRIORITY   5
 
 static K_THREAD_STACK_DEFINE(g_offload_stack, OFFLOAD_THREAD_STACK_SIZE);
 
-/* Work items for the dedicated thread's work queue
- * NOT static — exposed for unit test access via test helpers.
- * g_prep_work is delayable so prep retries can use backoff scheduling. */
+/* Work queue and items — exposed for unit test access. */
 struct k_work_q g_offload_wq;
 struct k_work_delayable g_prep_work;
 struct k_work_delayable g_recovery_work;
@@ -117,13 +130,12 @@ static bool g_rings_ready;
 static uint32_t g_stream_epoch;
 static uint32_t g_generation; /* bumped on start + recovery */
 static enum audio_offload_state g_state;
-static bool g_healthy; /* shadow: true when ACTIVE */
 
-/* Prep recovery state (only accessed from offload worker / under lock). */
+/* Prep recovery state — only accessed under g_lock. */
 static uint32_t g_prep_tries;
 static uint32_t g_prep_backoff_ms;
 
-/* Recovery state (only accessed from offload worker / under lock). */
+/* Recovery state — only accessed under g_lock. */
 static uint32_t g_recovery_backoff_ms;
 static uint32_t g_recovery_tries;
 
@@ -156,8 +168,8 @@ static void record_latency(uint32_t cycles)
  * Sets state to RECOVERING, poisons healthy.
  *
  * Note: does NOT schedule recovery here (compute-release pattern).
- * Caller must check g_state == RECOVERING after releasing lock
- * and schedule recovery if appropriate.
+ * Caller must capture schedule_recov decision under lock, release,
+ * then schedule outside lock.
  */
 static void record_fault(uint32_t *category_counter, int error, uint32_t seq)
 {
@@ -169,92 +181,96 @@ static void record_fault(uint32_t *category_counter, int error, uint32_t seq)
 	g_status.last_error_seq = seq;
 	g_state = AUDIO_OFFLOAD_RECOVERING;
 	g_status.state = g_state;
-	g_healthy = false;
 	g_status.healthy = false;
 }
 
 /*
- * Returns true if recovery work needs to be scheduled.
- * Call under g_lock; compute the decision, release lock, then
- * invoke schedule outside lock.  Never call k_work_schedule under spinlock.
+ * Lifecycle safety: check if state/generation/epoch changed during
+ * a blocking operation.  Must be called under g_lock.
+ *
+ * If changed (stop/restart occurred), count ONE stale + ONE fallback
+ * and return false.  Caller MUST NOT call record_fault.
+ *
+ * If unchanged, return true — caller should proceed with record_fault.
  */
-static bool should_schedule_recovery_locked(void)
+static bool lifecycle_check_before_fault(enum audio_offload_state captured_state,
+					 uint32_t captured_gen, uint32_t captured_epoch,
+					 uint32_t sequence)
 {
-	if (g_state != AUDIO_OFFLOAD_RECOVERING) {
+	if (g_state != captured_state || g_generation != captured_gen ||
+	    g_stream_epoch != captured_epoch) {
+		/* Stop/restart during blocking operation.
+		 * Count ONE stale + ONE fallback.  Do NOT change state. */
+		g_status.stale_count++;
+		g_status.fallback_count++;
+		g_status.last_error = -ESTALE;
+		g_status.last_error_seq = sequence;
 		return false;
 	}
 	return true;
 }
 
 /*
- * Schedule the recovery delayable work on the dedicated offload work queue.
- * Must be called OUTSIDE spinlock.
+ * Capture schedule_recov decision + delay under lock for use outside lock.
+ * Returns true if recovery should be scheduled; sets *delay_ms if so.
  */
-static void schedule_recovery(void)
+static bool should_schedule_recovery_locked(uint32_t *delay_ms)
 {
-	k_work_schedule(&g_recovery_work, K_MSEC(g_recovery_backoff_ms));
+	if (g_state != AUDIO_OFFLOAD_RECOVERING) {
+		return false;
+	}
+	*delay_ms = g_recovery_backoff_ms;
+	return true;
 }
 
 /*
- * Schedule the prep work on the dedicated offload work queue.
+ * Schedule the recovery delayable work on the DEDICATED offload work queue.
+ * Must be called OUTSIDE spinlock with the delay captured under lock.
+ */
+static void schedule_recovery(uint32_t delay_ms)
+{
+	k_work_schedule_for_queue(&g_offload_wq, &g_recovery_work, K_MSEC(delay_ms));
+}
+
+/*
+ * Schedule the prep work on the DEDICATED offload work queue.
  * Must be called OUTSIDE spinlock.
  */
-static void schedule_prep(void)
+static void schedule_prep(k_timeout_t delay)
 {
-	k_work_schedule(&g_prep_work, K_NO_WAIT);
+	k_work_schedule_for_queue(&g_offload_wq, &g_prep_work, delay);
 }
-
-/* ── Offload worker thread entry ────────────────────────────────────
- * Runs its own work queue to process prep and recovery items
- * without blocking system workqueue or BT threads. */
-
-static void offload_thread_fn(void *a, void *b, void *c)
-{
-	ARG_UNUSED(a);
-	ARG_UNUSED(b);
-	ARG_UNUSED(c);
-
-	k_work_queue_start(&g_offload_wq, g_offload_stack, K_THREAD_STACK_SIZEOF(g_offload_stack),
-			   OFFLOAD_THREAD_PRIORITY, NULL);
-
-	/*
-	 * The thread parks in the work queue loop.  It wakes when
-	 * prep or recovery work is submitted.  We never return from
-	 * this function unless the work queue is explicitly stopped
-	 * (which we don't).
-	 */
-}
-
-K_THREAD_DEFINE(g_offload_thread, OFFLOAD_THREAD_STACK_SIZE, offload_thread_fn, NULL, NULL, NULL,
-		OFFLOAD_THREAD_PRIORITY, 0, 0);
 
 /* ── Prep work ──────────────────────────────────────────────────────
  * Runs on dedicated offload work queue.
  * Tries ring_init + coordinated_reset.  Retries with backoff on
  * failure.  Transitions to ACTIVE on success or FALLBACK on max
- * retries exhausted. */
+ * retries exhausted.
+ *
+ * Captures generation at entry; re-verifies against current generation
+ * before transitioning to ACTIVE to guard against stop→start races. */
 
 void prep_work_fn(struct k_work *work)
 {
 	(void)work;
 
+	uint32_t start_gen;
 	bool retry = false;
 
-	/* ── Check state before expensive IPC ──────────────────── */
+	/* ── Entry: check state + capture generation ──────────── */
 	{
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
 		if (g_state != AUDIO_OFFLOAD_PREPARING) {
-			/* Stream was stopped or recovery took over. */
 			k_spin_unlock(&g_lock, key);
 			return;
 		}
+		start_gen = g_generation;
 		if (g_prep_tries >= OFFLOAD_PREP_MAX_TRIES) {
 			LOG_ERR("offload prep: max tries (%u) exhausted, FALLBACK",
 				OFFLOAD_PREP_MAX_TRIES);
 			g_status.recovery_fail_count++;
 			g_state = AUDIO_OFFLOAD_FALLBACK;
 			g_status.state = g_state;
-			g_healthy = false;
 			g_status.healthy = false;
 			k_spin_unlock(&g_lock, key);
 			return;
@@ -290,21 +306,20 @@ void prep_work_fn(struct k_work *work)
 			goto prep_retry;
 		}
 
-		/* Success — transition to ACTIVE. */
+		/* Success — transition to ACTIVE under lock, with
+		 * generation guard against stop→start race. */
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
 
-		/* Re-verify state wasn't cancelled while IPC was running. */
-		if (g_state != AUDIO_OFFLOAD_PREPARING) {
+		if (g_state != AUDIO_OFFLOAD_PREPARING || g_generation != start_gen) {
 			k_spin_unlock(&g_lock, key);
 			return;
 		}
 
 		g_stream_epoch = epoch;
-		g_generation++; /* Second bump: first in stream_start, second here */
+		g_generation++;
 		g_status.epoch = epoch;
 		g_status.generation = g_generation;
 		g_status.healthy = true;
-		g_healthy = true;
 
 		/* Reset per-stream counters for new stream. */
 		g_status.submit_count = 0;
@@ -317,7 +332,8 @@ void prep_work_fn(struct k_work *work)
 		g_status.crc_fault_count = 0;
 		g_status.payload_fault_count = 0;
 		g_status.fallback_count = 0;
-		/* Keep: recovery_count, recovery_fail_count (lifetime) */
+		g_status.busy_count = 0;
+		/* Lifetime counters preserved: recovery_count, recovery_fail_count */
 		g_status.rtt_min_cycles = 0;
 		g_status.rtt_max_cycles = 0;
 		g_status.rtt_sum_cycles = 0;
@@ -337,18 +353,19 @@ void prep_work_fn(struct k_work *work)
 		LOG_INF("offload prep OK: epoch=%u gen=%u state=ACTIVE", epoch, g_generation);
 		return;
 	}
-prep_retry: {
-	g_prep_backoff_ms *= 2U;
-	if (g_prep_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
-		g_prep_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
-	}
 
+prep_retry: {
+	/* Compute backoff + bump tries under lock, schedule outside. */
 	k_spinlock_key_t key = k_spin_lock(&g_lock);
-	if (g_state == AUDIO_OFFLOAD_PREPARING) {
+	if (g_state == AUDIO_OFFLOAD_PREPARING && g_generation == start_gen) {
 		g_prep_tries++;
+		g_prep_backoff_ms *= 2U;
+		if (g_prep_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
+			g_prep_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
+		}
+		uint32_t delay_ms = g_prep_backoff_ms;
 		k_spin_unlock(&g_lock, key);
-		/* Schedule prep retry with backoff. */
-		k_work_schedule(&g_prep_work, K_MSEC(g_prep_backoff_ms));
+		schedule_prep(K_MSEC(delay_ms));
 	} else {
 		k_spin_unlock(&g_lock, key);
 	}
@@ -366,40 +383,46 @@ void recovery_work_fn(struct k_work *work)
 {
 	(void)work;
 
-	k_spinlock_key_t key = k_spin_lock(&g_lock);
+	uint32_t start_gen;
+	bool schedule = false;
 
-	/* State may have changed while work was queued. */
-	if (g_state != AUDIO_OFFLOAD_RECOVERING) {
+	/* ── Entry: check state + capture generation ──────────── */
+	{
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+
+		/* State may have changed while work was queued. */
+		if (g_state != AUDIO_OFFLOAD_RECOVERING) {
+			k_spin_unlock(&g_lock, key);
+			return;
+		}
+		start_gen = g_generation;
+
+		if (g_recovery_tries >= OFFLOAD_RECOVERY_MAX_TRIES) {
+			LOG_ERR("offload recovery: max tries (%u) exhausted, staying in FALLBACK",
+				OFFLOAD_RECOVERY_MAX_TRIES);
+			g_status.recovery_fail_count++;
+			g_state = AUDIO_OFFLOAD_FALLBACK;
+			g_status.state = g_state;
+			k_spin_unlock(&g_lock, key);
+			return;
+		}
+
 		k_spin_unlock(&g_lock, key);
-		return;
 	}
-
-	if (g_recovery_tries >= OFFLOAD_RECOVERY_MAX_TRIES) {
-		LOG_ERR("offload recovery: max tries (%u) exhausted, staying in FALLBACK",
-			OFFLOAD_RECOVERY_MAX_TRIES);
-		g_status.recovery_fail_count++;
-		g_state = AUDIO_OFFLOAD_FALLBACK;
-		g_status.state = g_state;
-		k_spin_unlock(&g_lock, key);
-		return;
-	}
-
-	k_spin_unlock(&g_lock, key);
 
 	/* ── Step 1: Confirm FLPR is healthy ──────────────────── */
 	if (!check_flpr_healthy()) {
-		g_recovery_backoff_ms *= 2U;
-		if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
-			g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
-		}
-		LOG_WRN("offload recovery: FLPR not healthy, retry in %u ms",
-			g_recovery_backoff_ms);
-
-		key = k_spin_lock(&g_lock);
-		if (g_state == AUDIO_OFFLOAD_RECOVERING) {
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (g_state == AUDIO_OFFLOAD_RECOVERING && g_generation == start_gen) {
 			g_recovery_tries++;
+			g_recovery_backoff_ms *= 2U;
+			if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
+				g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
+			}
+			uint32_t delay_ms = g_recovery_backoff_ms;
+			LOG_WRN("offload recovery: FLPR not healthy, retry in %u ms", delay_ms);
 			k_spin_unlock(&g_lock, key);
-			schedule_recovery();
+			schedule_recovery(delay_ms);
 		} else {
 			k_spin_unlock(&g_lock, key);
 		}
@@ -415,51 +438,52 @@ void recovery_work_fn(struct k_work *work)
 
 	int ret = flpr_ring_mgr_coordinated_reset(new_epoch, 5000);
 	if (ret < 0) {
-		g_recovery_backoff_ms *= 2U;
-		if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
-			g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
-		}
-		LOG_WRN("offload recovery: coordinated reset failed: %d, retry in %u ms", ret,
-			g_recovery_backoff_ms);
-
-		key = k_spin_lock(&g_lock);
-		if (g_state == AUDIO_OFFLOAD_RECOVERING) {
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (g_state == AUDIO_OFFLOAD_RECOVERING && g_generation == start_gen) {
 			g_recovery_tries++;
+			g_recovery_backoff_ms *= 2U;
+			if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
+				g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
+			}
+			uint32_t delay_ms = g_recovery_backoff_ms;
+			LOG_WRN("offload recovery: coordinated reset failed: %d, retry in %u ms",
+				ret, delay_ms);
 			k_spin_unlock(&g_lock, key);
-			schedule_recovery();
+			schedule_recovery(delay_ms);
 		} else {
 			k_spin_unlock(&g_lock, key);
 		}
 		return;
 	}
 
-	/* ── Step 3: Bump generation, preserve counters, re-enable ── */
-	key = k_spin_lock(&g_lock);
+	/* ── Step 3: Transition to ACTIVE ─────────────────────── */
+	{
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
 
-	/* Re-verify state wasn't cancelled while we were doing IPC. */
-	if (g_state != AUDIO_OFFLOAD_RECOVERING) {
+		/* Re-verify state + generation wasn't changed during IPC. */
+		if (g_state != AUDIO_OFFLOAD_RECOVERING || g_generation != start_gen) {
+			k_spin_unlock(&g_lock, key);
+			return;
+		}
+
+		g_stream_epoch = new_epoch;
+		g_generation++;
+		g_status.epoch = new_epoch;
+		g_status.generation = g_generation;
+		g_status.recovery_count++;
+		g_status.healthy = true;
+
+		/* Recovery NEVER clears per-stream fault/fallback/RTT counters.
+		 * Only new stream_start resets per-stream counters. */
+		g_state = AUDIO_OFFLOAD_ACTIVE;
+		g_status.state = g_state;
+		g_recovery_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
+		g_recovery_tries = 0;
+
 		k_spin_unlock(&g_lock, key);
-		return;
+
+		LOG_INF("offload recovery OK: epoch=%u gen=%u", new_epoch, g_generation);
 	}
-
-	g_stream_epoch = new_epoch;
-	g_generation++;
-	g_status.epoch = new_epoch;
-	g_status.generation = g_generation;
-	g_status.recovery_count++;
-	g_status.healthy = true;
-	g_healthy = true;
-
-	/* Recovery NEVER clears per-stream fault/fallback/RTT counters.
-	 * Only new stream_start resets per-stream counters. */
-	g_state = AUDIO_OFFLOAD_ACTIVE;
-	g_status.state = g_state;
-	g_recovery_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
-	g_recovery_tries = 0;
-
-	k_spin_unlock(&g_lock, key);
-
-	LOG_INF("offload recovery OK: epoch=%u gen=%u", new_epoch, g_generation);
 }
 
 /* ── Public API ──────────────────────────────────────────────────── */
@@ -476,6 +500,11 @@ int audio_offload_init(void)
 	k_work_init_delayable(&g_prep_work, prep_work_fn);
 	k_work_init_delayable(&g_recovery_work, recovery_work_fn);
 
+	/* Start the dedicated work queue thread directly — no K_THREAD_DEFINE
+	 * wrapper.  This creates ONE thread with its own stack and TCB. */
+	k_work_queue_start(&g_offload_wq, g_offload_stack, K_THREAD_STACK_SIZEOF(g_offload_stack),
+			   OFFLOAD_THREAD_PRIORITY, NULL);
+
 	/* Try to init rings early.  FLPR may not be ready yet —
 	 * that's fine, prep will retry. */
 	int ret = flpr_ring_mgr_init();
@@ -489,7 +518,6 @@ int audio_offload_init(void)
 	g_state = AUDIO_OFFLOAD_STOPPED;
 	g_status.state = g_state;
 	g_status.healthy = false;
-	g_healthy = false;
 	g_status.initialized = true;
 	g_initialized = true;
 	g_stream_epoch = 0;
@@ -509,21 +537,28 @@ void audio_offload_stream_start(void)
 		return;
 	}
 
-	k_spinlock_key_t key = k_spin_lock(&g_lock);
+	/*
+	 * Order matters for locking correctness:
+	 * 1. Cancel pending work OUTSIDE spinlock (k_work_cancel_delayable can block).
+	 * 2. Update state + generation UNDER spinlock.
+	 * 3. Schedule new prep work OUTSIDE spinlock (k_work_schedule_for_queue safe).
+	 *
+	 * The cancel-before-lock order means a just-started work item may
+	 * slip through.  The generation guard in prep_work_fn (start_gen
+	 * captured at entry, re-verified at ACTIVE transition) handles
+	 * this race.
+	 */
 
-	/* Cancel any in-flight recovery work.  Safe under spinlock
-	 * because k_work_cancel_delayable only modifies work state;
-	 * the actual work callback won't run during spinlock. */
+	/* Cancel any in-flight pending work (may block briefly). */
 	(void)k_work_cancel_delayable(&g_recovery_work);
-
-	/* Cancel any pending prep work. */
 	(void)k_work_cancel_delayable(&g_prep_work);
+
+	k_spinlock_key_t key = k_spin_lock(&g_lock);
 
 	/* Set PREPARING, bump generation, reset prep state. */
 	g_state = AUDIO_OFFLOAD_PREPARING;
 	g_status.state = g_state;
 	g_status.healthy = false;
-	g_healthy = false;
 	g_generation++; /* Invalidate any pending submits from prior epoch */
 	g_status.generation = g_generation;
 	g_prep_tries = 0;
@@ -533,10 +568,10 @@ void audio_offload_stream_start(void)
 
 	k_spin_unlock(&g_lock, key);
 
-	/* Schedule prep work on dedicated offload thread.
+	/* Schedule prep work on dedicated offload work queue.
 	 * Returns immediately — caller (stream_started callback)
 	 * is not blocked. */
-	schedule_prep();
+	schedule_prep(K_NO_WAIT);
 
 	LOG_INF("offload stream start: gen=%u state=PREPARING (prep scheduled)", g_generation);
 }
@@ -547,11 +582,14 @@ void audio_offload_stream_stop(void)
 		return;
 	}
 
-	k_spinlock_key_t key = k_spin_lock(&g_lock);
-
-	/* Cancel all pending work on the offload WQ. */
+	/*
+	 * Cancel OUTSIDE spinlock, update state UNDER spinlock.
+	 * Same ordering rationale as stream_start.
+	 */
 	(void)k_work_cancel_delayable(&g_recovery_work);
 	(void)k_work_cancel_delayable(&g_prep_work);
+
+	k_spinlock_key_t key = k_spin_lock(&g_lock);
 
 	/* Increment generation so any late output from prior epoch
 	 * is rejected by the generation check in submit. */
@@ -561,7 +599,6 @@ void audio_offload_stream_stop(void)
 	g_state = AUDIO_OFFLOAD_STOPPED;
 	g_status.state = g_state;
 	g_status.healthy = false;
-	g_healthy = false;
 	g_stream_epoch = 0;
 	g_status.epoch = 0;
 	g_prep_tries = 0;
@@ -576,14 +613,12 @@ void audio_offload_stream_stop(void)
 
 bool audio_offload_is_healthy(void)
 {
-	bool result;
-
 	if (!g_initialized) {
 		return false;
 	}
 
 	k_spinlock_key_t key = k_spin_lock(&g_lock);
-	result = (g_state == AUDIO_OFFLOAD_ACTIVE);
+	bool result = (g_state == AUDIO_OFFLOAD_ACTIVE);
 	k_spin_unlock(&g_lock, key);
 
 	return result;
@@ -605,7 +640,7 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 	uint32_t captured_epoch;
 	enum audio_offload_state captured_state;
 	bool need_fallback = false;
-	bool schedule_recov = false;
+	uint32_t recovery_delay_ms;
 
 	/* ── Pre-check under spinlock ──────────────────────────────── */
 	{
@@ -625,7 +660,7 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 
 		if (g_state != AUDIO_OFFLOAD_ACTIVE) {
 			/* PREPARING, FALLBACK, RECOVERING → fallback.
-			 * Increment fallback_count exactly once per nonzero submit. */
+			 * Exactly one fallback increment per valid submit. */
 			g_status.fallback_count++;
 			need_fallback = true;
 		}
@@ -640,16 +675,24 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 	/* ── Serialise submit — one block in-flight at a time ─────── */
 	if (k_mutex_lock(&g_submit_lock, K_MSEC(OFFLOAD_DEADLINE_MS)) != 0) {
 		/* Mutex timeout — another submit is stuck.
-		 * Count busy + fallback, don't block BT callback. */
+		 * Re-check lifecycle first: stop may have happened while waiting. */
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
+
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			/* Stop/restart occurred — already counted stale+fallback.
+			 * Do NOT transition to RECOVERING. */
+			k_spin_unlock(&g_lock, key);
+			return -EAGAIN;
+		}
+
 		g_status.busy_count++;
-		g_status.fallback_count++;
 		record_fault(NULL, -EBUSY, sequence);
-		schedule_recov = should_schedule_recovery_locked();
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
 		k_spin_unlock(&g_lock, key);
 
-		if (schedule_recov) {
-			schedule_recovery();
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
 		}
 
 		return -EAGAIN;
@@ -661,6 +704,12 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
 
 		if (g_state != AUDIO_OFFLOAD_ACTIVE) {
+			/* State changed before we got the mutex.
+			 * Count ONE fallback (not already counted by pre-check
+			 * because state WAS ACTIVE at that point). */
+			g_status.fallback_count++;
+			g_status.last_error = -EAGAIN;
+			g_status.last_error_seq = sequence;
 			k_spin_unlock(&g_lock, key);
 			k_mutex_unlock(&g_submit_lock);
 			return -EAGAIN;
@@ -682,23 +731,35 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 
 	if (pr == FLPR_PRODUCE_FULL) {
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
 		record_fault(&g_status.full_count, -ENOSPC, sequence);
-		schedule_recov = should_schedule_recovery_locked();
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
 		k_spin_unlock(&g_lock, key);
 		k_mutex_unlock(&g_submit_lock);
-		if (schedule_recov) {
-			schedule_recovery();
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
 		}
 		return -EAGAIN;
 	}
 	if (pr != FLPR_PRODUCE_OK) {
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
 		record_fault(NULL, -EIO, sequence);
-		schedule_recov = should_schedule_recovery_locked();
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
 		k_spin_unlock(&g_lock, key);
 		k_mutex_unlock(&g_submit_lock);
-		if (schedule_recov) {
-			schedule_recovery();
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
 		}
 		return -EAGAIN;
 	}
@@ -708,28 +769,43 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 		int notify_ret = flpr_ring_mgr_notify_producer();
 		if (notify_ret < 0) {
 			k_spinlock_key_t key = k_spin_lock(&g_lock);
+			if (!lifecycle_check_before_fault(captured_state, captured_generation,
+							  captured_epoch, sequence)) {
+				k_spin_unlock(&g_lock, key);
+				k_mutex_unlock(&g_submit_lock);
+				return -EAGAIN;
+			}
 			record_fault(NULL, notify_ret, sequence);
-			schedule_recov = should_schedule_recovery_locked();
+			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
 			k_spin_unlock(&g_lock, key);
 			k_mutex_unlock(&g_submit_lock);
-			if (schedule_recov) {
-				schedule_recovery();
+			if (sched) {
+				schedule_recovery(recovery_delay_ms);
 			}
 			return -EAGAIN;
 		}
 	}
 
-	/* ── Wait for FLPR to produce output ──────────────────────── */
+	/* ── Wait for FLPR to produce output ────────────────────────
+	 * THIS IS A BLOCKING OPERATION (~0-8ms).
+	 * Stop/restart may occur during this wait. */
 	{
 		int wait_ret = flpr_ring_mgr_wait_consume(OFFLOAD_DEADLINE_MS);
 		if (wait_ret != 0) {
 			k_spinlock_key_t key = k_spin_lock(&g_lock);
+			if (!lifecycle_check_before_fault(captured_state, captured_generation,
+							  captured_epoch, sequence)) {
+				/* Stop/restart during wait — already counted stale+fallback. */
+				k_spin_unlock(&g_lock, key);
+				k_mutex_unlock(&g_submit_lock);
+				return -EAGAIN;
+			}
 			record_fault(&g_status.timeout_count, -ETIMEDOUT, sequence);
-			schedule_recov = should_schedule_recovery_locked();
+			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
 			k_spin_unlock(&g_lock, key);
 			k_mutex_unlock(&g_submit_lock);
-			if (schedule_recov) {
-				schedule_recovery();
+			if (sched) {
+				schedule_recovery(recovery_delay_ms);
 			}
 			return -EAGAIN;
 		}
@@ -743,7 +819,7 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 
 		if (g_state != captured_state || g_generation != captured_generation ||
 		    g_stream_epoch != captured_epoch) {
-			/* Lifecycle changed during submit.  Output discarded. */
+			/* Lifecycle changed during wait.  Output discarded. */
 			g_status.stale_count++;
 			g_status.fallback_count++;
 			g_status.last_error = -ESTALE;
@@ -766,41 +842,57 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 
 	if (cr == FLPR_CONSUME_EMPTY) {
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
 		record_fault(NULL, -ENOENT, sequence);
-		schedule_recov = should_schedule_recovery_locked();
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
 		k_spin_unlock(&g_lock, key);
 		k_mutex_unlock(&g_submit_lock);
-		if (schedule_recov) {
-			schedule_recovery();
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
 		}
 		return -EAGAIN;
 	}
 	if (cr == FLPR_CONSUME_STALE) {
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
 		record_fault(&g_status.stale_count, -ESTALE, sequence);
-		schedule_recov = should_schedule_recovery_locked();
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
 		k_spin_unlock(&g_lock, key);
 		k_mutex_unlock(&g_submit_lock);
-		if (schedule_recov) {
-			schedule_recovery();
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
 		}
 		return -EAGAIN;
 	}
 	if (cr != FLPR_CONSUME_OK) {
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
 		record_fault(NULL, -EIO, sequence);
-		schedule_recov = should_schedule_recovery_locked();
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
 		k_spin_unlock(&g_lock, key);
 		k_mutex_unlock(&g_submit_lock);
-		if (schedule_recov) {
-			schedule_recovery();
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
 		}
 		return -EAGAIN;
 	}
 
-	/* ── Re-check lifecycle before output copy ────────────────────
-	 * Second checkpoint: stop/restart/recovery may have happened
-	 * during consume.  Reject late output untouched. */
+	/* ── Re-check lifecycle before output copy ──────────────────── */
 	{
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
 
@@ -824,12 +916,18 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 	/* Frame count check. */
 	if (vf != OFFLOAD_EXPECTED_FRAMES) {
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
 		record_fault(&g_status.frame_fault_count, -EFAULT, sequence);
-		schedule_recov = should_schedule_recovery_locked();
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
 		k_spin_unlock(&g_lock, key);
 		k_mutex_unlock(&g_submit_lock);
-		if (schedule_recov) {
-			schedule_recovery();
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
 		}
 		return -EAGAIN;
 	}
@@ -837,12 +935,18 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 	/* Sequence check. */
 	if (out_seq != sequence) {
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
 		record_fault(&g_status.seq_fault_count, -EFAULT, sequence);
-		schedule_recov = should_schedule_recovery_locked();
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
 		k_spin_unlock(&g_lock, key);
 		k_mutex_unlock(&g_submit_lock);
-		if (schedule_recov) {
-			schedule_recovery();
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
 		}
 		return -EAGAIN;
 	}
@@ -853,12 +957,18 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 			flpr_ring_crc32((const uint8_t *)g_scratch_output, OFFLOAD_EXPECTED_BYTES);
 		if (computed_crc != crc_metadata) {
 			k_spinlock_key_t key = k_spin_lock(&g_lock);
+			if (!lifecycle_check_before_fault(captured_state, captured_generation,
+							  captured_epoch, sequence)) {
+				k_spin_unlock(&g_lock, key);
+				k_mutex_unlock(&g_submit_lock);
+				return -EAGAIN;
+			}
 			record_fault(&g_status.crc_fault_count, -EFAULT, sequence);
-			schedule_recov = should_schedule_recovery_locked();
+			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
 			k_spin_unlock(&g_lock, key);
 			k_mutex_unlock(&g_submit_lock);
-			if (schedule_recov) {
-				schedule_recovery();
+			if (sched) {
+				schedule_recovery(recovery_delay_ms);
 			}
 			return -EAGAIN;
 		}
@@ -869,12 +979,18 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 		int cmp = memcmp(g_scratch_output, input, OFFLOAD_EXPECTED_BYTES);
 		if (cmp != 0) {
 			k_spinlock_key_t key = k_spin_lock(&g_lock);
+			if (!lifecycle_check_before_fault(captured_state, captured_generation,
+							  captured_epoch, sequence)) {
+				k_spin_unlock(&g_lock, key);
+				k_mutex_unlock(&g_submit_lock);
+				return -EAGAIN;
+			}
 			record_fault(&g_status.payload_fault_count, -EFAULT, sequence);
-			schedule_recov = should_schedule_recovery_locked();
+			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
 			k_spin_unlock(&g_lock, key);
 			k_mutex_unlock(&g_submit_lock);
-			if (schedule_recov) {
-				schedule_recovery();
+			if (sched) {
+				schedule_recovery(recovery_delay_ms);
 			}
 			return -EAGAIN;
 		}
@@ -906,8 +1022,7 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 		/* Final lifecycle recheck AFTER output copy.
 		 * If generation changed, the output was already copied
 		 * but the caller won't use it because return is -EAGAIN.
-		 * This is a design choice: copy first, then check, to
-		 * minimise the window where a stop can invalidate the
+		 * This minimises the window where a stop can invalidate
 		 * output between copy and count. */
 		if (g_state != captured_state || g_generation != captured_generation ||
 		    g_stream_epoch != captured_epoch) {
