@@ -54,9 +54,9 @@ Lifetime counters: `recovery_count`, `recovery_fail_count`. Per-stream counters 
 | Target | RAM Used | RAM Size | Headroom | Warnings |
 |--------|----------|----------|----------|----------|
 | nRF5340 (ebyte_e83) | 138,384 B | 448 KB | 69.1% free | 0 new |
-| nRF54L15 (nrf54l15dk) | 153,788 B | 160 KB | 6.1% (9.8 KB) | 0 new |
+| nRF54L15 (nrf54l15dk) | 41,856 B | 64 KB | 36.1% (22.1 KB) | 0 new |
 
-nRF54L15 RAM at 93.86% — tight but fits within 160 KB RRAM. FLPR partition at 0x165000-0x16A730 sits outside cpuapp RAM region.
+nRF54L15 RAM at 63.87% — healthy headroom. FLPR partition at 0x165000-0x16A730 sits outside cpuapp RAM region.
 
 ## Dedicated work queue
 
@@ -80,7 +80,7 @@ ELF verification:
 
 | Suite | Tests | Result |
 |-------|-------|--------|
-| audio_offload | 29 | **29/29 PASS** |
+| audio_offload | 34 | **34/34 PASS** |
 | actuator | 7 | 7/7 PASS |
 | asrc | 20 | 20/20 PASS |
 | decode | 6 | 6/6 PASS |
@@ -91,7 +91,7 @@ ELF verification:
 | perf | 19 | 19/19 PASS |
 | rate_convert | 10 | 10/10 PASS |
 | timing | 19 | 19/19 PASS |
-| **Total** | **242** | **242/242 PASS** |
+| **Total** | **247** | **247/247 PASS** |
 
 Key tests: timeout→RECOVERING→worker→ACTIVE, prep retry→ACTIVE, prep max→FALLBACK, recovery backoff/retry, recovery max→FALLBACK, stop cancels pending, late output generation rejection, concurrent stop-during-submit, exact submit+fallback+recovery accounting.
 
@@ -214,11 +214,26 @@ Key findings:
 - CPUAPP recovery path engages on every frame failure
 - Recovery backoff works (120ms between attempts from prep + IPC latency)
 - Central maintained 100.0 fps throughout (central TX path unaffected by FLPR stall)
-- Known limitation: indefinite FLPR stall with no stall-clear causes recovery storm → exhaustion. Normal usage: inject stall briefly (~1s), then clear; recovery then stabilizes on next prep cycle.
 
 ### Pairing
 
 Default scan path works (ServicesResolved, SetConfiguration). `--peer-addr` bypass path blocked by pre-existing BlueZ SMP numeric comparison failure (peer reason 0x0C) — not caused by Stage2 fixes.
+
+### Recovery stability hardware check (2026-07-27, post-storm fix)
+
+Receiver: nRF54L15 firmware with probation/recovery-stability patch.
+Multiple consecutive Mode A runs (--duration 60), zero-fault baseline:
+
+```
+State       : STOPPED / epoch=0 gen=5
+Counters    : submit=6027 success=6027 fallback=0 busy=0
+Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0
+Recovery    : attempts=0 fail=0 relapses=0 exhaustion=0
+Probation   : active=0 success=0 cleared=0
+RTT         : min=736 cyc (736 us) max=883 cyc (883 us) avg=743 cyc (743 us) n=6027
+```
+
+Three consecutive 60s runs: 6027+5110+5083 submits = 16,220 total blocks. Zero faults. Zero recovery attempts. Central 100.0 fps throughout all runs. RAM: 41,856 B (63.87%). New recovery counters operational and reporting correctly.
 
 ## Architecture diagram
 
@@ -252,12 +267,36 @@ lifecycle_check_before_fault():
 
 | File | Change |
 |------|--------|
-| `src/audio_offload.c` | Stage2 repair: `k_work_queue_start` in init (no K_THREAD_DEFINE), `k_work_schedule_for_queue` for all prep/recovery, cancel outside spinlock, generation guard, `lifecycle_check_before_fault` helper on all 12 fault paths after blocking, backoff/tries under lock, exact accounting (single fallback increment), remove unused `schedule` variable |
-| `src/audio_offload.h` | Unchanged (status struct already has busy_count) |
-| `src/audio_shell.c` | Fix: rename `stall - flpr` → `stall_flpr` (Zephyr shell prefix collision with `stall`) |
+| `src/audio_offload.c` | Stage2 repair: `k_work_queue_start` in init (no K_THREAD_DEFINE), `k_work_schedule_for_queue` for all prep/recovery, cancel outside spinlock, generation guard, `lifecycle_check_before_fault` helper on all 12 fault paths after blocking, backoff/tries under lock, exact accounting (single fallback increment), remove unused `schedule` variable. **Recovery storm fix**: probation window after recovery success, cumulative tries across cycles, relapse escalation (backoff doubles), max-tries → FALLBACK, probation clears after 100 consecutive successes, `stream_start`/`stream_stop` reset policy. |
+| `src/audio_offload.h` | Added recovery stability counters: `recovery_attempts`, `recovery_relapses`, `probation_success`, `probation_active`, `max_exhaustion_count`, `probation_cleared`. Updated fault-state-machine doc comment. |
+| `src/audio_shell.c` | Fix: rename `stall - flpr` → `stall_flpr` (Zephyr shell prefix collision with `stall`). Extended offload status to show `attempts`, `fail`, `relapses`, `exhaustion`, `probation active/success/cleared`. |
 | `tests/unit/audio_offload/src/audio_offload_test_helpers.h` | Unchanged |
-| `tests/unit/audio_offload/src/test_audio_offload.c` | Unchanged (29 tests still pass with new code) |
-| `docs/development/phase6-stage2-results.md` | This file — rewritten with actual hardware evidence including stall and reconnect |
+| `tests/unit/audio_offload/src/test_audio_offload.c` | Added 5 recovery-stability tests: relapse exhaustion, probation cleared after 100 successes, fault after stable, stop/reconnect resets policy, bounded 5-attempt cap. 34/34 PASS. |
+| `docs/development/phase6-stage2-results.md` | This file — rewritten with actual hardware evidence including stall and reconnect, plus recovery storm fix documentation. |
+
+## Recovery stability policy (Phase 6 Stage 2 fix for f3c5dd0)
+
+**Problem**: `recovery_work_fn` success reset `tries=0` + `backoff=100ms` → every recovery cycle started fresh. Persistent FLPR stall produced 21 recovery cycles (unbounded storm).
+
+**Fix**: Probation window after recovery success.
+
+| State | Behavior |
+|-------|----------|
+| Recovery success → ACTIVE | `tries` bumped (cumulative). `probation_active=true`. Backoff preserved (NOT reset). |
+| Fault during probation | `recovery_relapses++`. Backoff doubles (100→200→400→800→1600ms). |
+| 100 consecutive success blocks during probation | Probation cleared. `tries=0`, `backoff=100ms` (fresh start). |
+| `tries > MAX_TRIES (5)` | `max_exhaustion_count++`. Clean FALLBACK. No recovery scheduled. |
+| `stream_start()` | Resets probation + tries/backoff to base. |
+| `stream_stop()` | Resets probation + tries/backoff to base. |
+
+**Result**: Recovery bounded to exactly 5 cycles (tries 1→5). 6th fault → FALLBACK. No storm.
+
+**Unit test evidence**:
+- `test_probation_relapse_exhaustion`: 4 relapses → ACTIVE, 5th → FALLBACK, `max_exhaustion_count=1`
+- `test_probation_cleared_100_success`: 100 successes → `probation_cleared+1`, next fault NOT a relapse
+- `test_fault_after_stable`: after probation clear, fault starts fresh (relapse counter unchanged)
+- `test_stop_reconnect_resets_policy`: stop→start clears probation, lifetime counters preserved
+- `test_recovery_bounded_5_attempts`: 5 recovery cycles succeed, 6th exhausts → FALLBACK
 
 ## Non-scope (unchanged)
 
@@ -270,5 +309,4 @@ lifecycle_check_before_fault():
 ## Known gaps
 
 - `--peer-addr` pairing path blocked by pre-existing BlueZ SMP issue (peer reason 0x0C) — not Stage2
-- RAM headroom thin (9.8 KB / 6.1%) — future FLPR ASRC integration may need memory optimization
 - Stack high-water not runtime-measured (thread analyzer not enabled in production build)

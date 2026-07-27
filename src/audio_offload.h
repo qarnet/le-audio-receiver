@@ -17,6 +17,10 @@
  * Fault state machine: ANY timeout / CRC / payload / seq / frame / empty /
  * stale fault marks offload unhealthy immediately.  Bounded recovery
  * work (k_work_delayable) runs outside BT callback with backoff.
+ * Recovery success starts a probation window; faults during probation
+ * escalate backoff and count as relapses.  Only after 100 consecutive
+ * successes does probation clear and escalation reset.  Max tries
+ * enters FALLBACK cleanly — a fresh stream_start resets the policy.
  * While recovering, submits return -EAGAIN and caller uses CPUAPP ASRC.
  * Stream stop cancels recovery and resets generation.
  *
@@ -63,10 +67,15 @@ struct audio_offload_status {
 	uint32_t seq_fault_count;
 	uint32_t frame_fault_count;
 	uint32_t crc_fault_count;
-	uint32_t payload_fault_count; /* memcmp mismatch */
-	uint32_t recovery_count;
-	uint32_t recovery_fail_count; /* recovery attempts that failed */
-	uint32_t busy_count;          /* mutex-timeout rejections */
+	uint32_t payload_fault_count;  /* memcmp mismatch */
+	uint32_t recovery_attempts;    /* lifetime: total recovery cycles attempted */
+	uint32_t recovery_fail_count;  /* recoveries that failed / retried out */
+	uint32_t recovery_relapses;    /* faults occurring during probation window */
+	uint32_t probation_success;    /* consecutive successes since last recovery */
+	bool probation_active;         /* true while probation window open */
+	uint32_t max_exhaustion_count; /* times MAX_TRIES boundary was reached */
+	uint32_t probation_cleared;    /* times probation completed (100+ consecutive) */
+	uint32_t busy_count;           /* mutex-timeout rejections */
 
 	/* Latency (k_cycle_get_32 cycles). */
 	uint32_t rtt_min_cycles;

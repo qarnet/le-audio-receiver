@@ -218,8 +218,8 @@ ZTEST(audio_offload, test_timeout_triggers_recovery)
 	zassert_equal(ret, -EAGAIN, "should return -EAGAIN while recovering");
 	assert_output_untouched((int16_t)0xABAB);
 
-	/* Record recovery_count before running recovery. */
-	uint32_t recov_before = s.recovery_count;
+	/* Record recovery_attempts before running recovery. */
+	uint32_t recov_before = s.recovery_attempts;
 
 	/* Run the recovery worker directly. */
 	run_recovery_work();
@@ -232,7 +232,7 @@ ZTEST(audio_offload, test_timeout_triggers_recovery)
 	zassert_equal(s.timeout_count, 1, "timeout preserved across recovery");
 	zassert_equal(s.fallback_count, 2, "fallback preserved (1 fault + 1 recovery-pass)");
 	zassert_equal(s.submit_count, 2, "submit_count=2");
-	zassert_equal(s.recovery_count, recov_before + 1, "recovery_count incremented");
+	zassert_equal(s.recovery_attempts, recov_before + 1, "recovery_count incremented");
 
 	/* Next submit must succeed. */
 	mock_wait_result = 0;
@@ -402,8 +402,8 @@ ZTEST(audio_offload, test_recovery_success)
 	zassert_equal(s.timeout_count, 1, "timeout=1");
 	zassert_equal(s.fallback_count, 1, "fallback=1");
 
-	/* Record recovery_count before running recovery. */
-	uint32_t recov_before_rs = s.recovery_count;
+	/* Record recovery_attempts before running recovery. */
+	uint32_t recov_before_rs = s.recovery_attempts;
 
 	/* Run actual recovery worker (not stream_start as before). */
 	mock_wait_result = 0;
@@ -412,7 +412,7 @@ ZTEST(audio_offload, test_recovery_success)
 	audio_offload_get_status(&s);
 	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after recovery");
 	zassert_true(s.healthy, "healthy");
-	zassert_equal(s.recovery_count, recov_before_rs + 1, "recovery_count incremented");
+	zassert_equal(s.recovery_attempts, recov_before_rs + 1, "recovery_count incremented");
 
 	/* Counters preserved: timeout=1, fallback=1 (not reset by recovery). */
 	zassert_equal(s.timeout_count, 1, "timeout preserved");
@@ -438,7 +438,7 @@ ZTEST(audio_offload, test_recovery_backoff)
 	struct audio_offload_status s;
 	audio_offload_get_status(&s);
 	zassert_equal(s.state, AUDIO_OFFLOAD_RECOVERING, "RECOVERING");
-	uint32_t recov_before = s.recovery_count;
+	uint32_t recov_before = s.recovery_attempts;
 
 	/* Make reset fail on first recovery attempt. */
 	mock_reset_fails = true;
@@ -447,7 +447,7 @@ ZTEST(audio_offload, test_recovery_backoff)
 	/* Should still be RECOVERING. */
 	audio_offload_get_status(&s);
 	zassert_equal(s.state, AUDIO_OFFLOAD_RECOVERING, "still RECOVERING after reset fail");
-	zassert_equal(s.recovery_count, recov_before, "recovery_count unchanged (reset failed)");
+	zassert_equal(s.recovery_attempts, recov_before, "recovery_count unchanged (reset failed)");
 
 	/* Second attempt: reset succeeds. */
 	mock_reset_fails = false;
@@ -455,7 +455,7 @@ ZTEST(audio_offload, test_recovery_backoff)
 
 	audio_offload_get_status(&s);
 	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after retry");
-	zassert_equal(s.recovery_count, recov_before + 1, "recovery_count incremented");
+	zassert_equal(s.recovery_attempts, recov_before + 1, "recovery_count incremented");
 }
 
 /* ── Test: stop cancels pending recovery ────────────────────────── */
@@ -740,7 +740,7 @@ ZTEST(audio_offload, test_counters_preserved_across_recovery)
 	zassert_equal(s.success_count, 2, "success preserved");
 	zassert_equal(s.crc_fault_count, 1, "crc preserved");
 	zassert_equal(s.fallback_count, 1, "fallback preserved");
-	zassert_equal(s.recovery_count, 1, "recovery=1");
+	zassert_equal(s.recovery_attempts, 1, "recovery=1");
 
 	/* Submit after recovery. */
 	mock_consume_sequence = 100;
@@ -767,7 +767,7 @@ ZTEST(audio_offload, test_new_stream_resets_counters)
 	zassert_equal(s.submit_count, 2, "submit=2");
 	zassert_equal(s.success_count, 1, "success=1");
 	zassert_equal(s.fallback_count, 1, "fallback=1");
-	uint32_t prev_recovery = s.recovery_count;
+	uint32_t prev_recovery = s.recovery_attempts;
 
 	/* Stop and start new stream. */
 	audio_offload_stream_stop();
@@ -784,7 +784,7 @@ ZTEST(audio_offload, test_new_stream_resets_counters)
 	zassert_equal(s.fallback_count, 0, "fallback reset");
 
 	/* Lifetime counters preserved. */
-	zassert_equal(s.recovery_count, prev_recovery, "recovery_count lifetime");
+	zassert_equal(s.recovery_attempts, prev_recovery, "recovery_count lifetime");
 }
 
 /* ── Test: output untouched on all failure paths ─────────────────── */
@@ -940,7 +940,7 @@ ZTEST(audio_offload, test_exact_accounting)
 
 	/* Record recovery_count before recovery. */
 	audio_offload_get_status(&s);
-	uint32_t recov_before_ea = s.recovery_count;
+	uint32_t recov_before_ea = s.recovery_attempts;
 
 	/* Recover preserves counters. */
 	run_recovery_work();
@@ -950,7 +950,7 @@ ZTEST(audio_offload, test_exact_accounting)
 	zassert_equal(s.success_count, 2, "success=2 after recovery");
 	zassert_equal(s.fallback_count, 2, "fallback=2 after recovery");
 	zassert_equal(s.timeout_count, 1, "timeout=1 after recovery");
-	zassert_equal(s.recovery_count, recov_before_ea + 1, "recovery_count incremented");
+	zassert_equal(s.recovery_attempts, recov_before_ea + 1, "recovery_count incremented");
 
 	/* More good submits after recovery. */
 	mock_wait_result = 0;
@@ -964,6 +964,240 @@ ZTEST(audio_offload, test_exact_accounting)
 	zassert_equal(s.submit_count, 6, "submit=6");
 	zassert_equal(s.success_count, 4, "success=4");
 	zassert_equal(s.fallback_count, 2, "fallback still 2");
+}
+
+/* ── Recovery stability policy tests (Phase 6 Stage 2 probation) ─── */
+
+/* Trigger a fault and run recovery to completion.
+ * Returns the updated status. */
+static struct audio_offload_status fault_and_recover(void)
+{
+	struct audio_offload_status s;
+	mock_wait_result = -EAGAIN;
+	audio_offload_submit(test_input, TEST_BLOCK_SAMPLES, 1, 0, test_output);
+	mock_wait_result = 0;
+	run_recovery_work();
+	audio_offload_get_status(&s);
+	return s;
+}
+
+/* Helper: submit N successful blocks.  Sets mock consume seq to start_seq
+ * and increments per call. */
+static void submit_successes(uint32_t start_seq, uint32_t count)
+{
+	mock_wait_result = 0;
+	mock_consume_corrupt_crc = false;
+	mock_consume_corrupt_payload = false;
+	for (uint32_t i = 0; i < count; i++) {
+		mock_consume_sequence = start_seq + i;
+		mock_consume_crc = flpr_ring_crc32((const uint8_t *)test_input, TEST_BLOCK_BYTES);
+		audio_offload_submit(test_input, TEST_BLOCK_SAMPLES, start_seq + i, 0, test_output);
+	}
+}
+
+/* ── Test 1: repeated reset-success → submit-fault escalates and exhausts ── */
+
+ZTEST(audio_offload, test_probation_relapse_exhaustion)
+{
+	struct audio_offload_status s, baseline;
+
+	/* Capture lifetime counters before test (carry-over from prior tests). */
+	audio_offload_get_status(&baseline);
+	uint32_t base_attempts = baseline.recovery_attempts;
+	uint32_t base_relapses = baseline.recovery_relapses;
+
+	/* Initial fault + recovery: probation starts. */
+	s = fault_and_recover();
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after first recovery");
+	zassert_true(s.probation_active, "probation active");
+	zassert_equal(s.probation_success, 0, "probation_success=0");
+	zassert_equal(s.recovery_attempts, base_attempts + 1, "recovery_attempts+1");
+	zassert_equal(s.recovery_relapses, base_relapses + 0, "no relapses yet");
+
+	/* Relapse 1: fault during probation. */
+	s = fault_and_recover();
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after relapse 1");
+	zassert_equal(s.recovery_relapses, base_relapses + 1, "relapse+1");
+	zassert_equal(s.recovery_attempts, base_attempts + 2, "recovery_attempts+2");
+
+	/* Relapse 2. */
+	s = fault_and_recover();
+	zassert_equal(s.recovery_relapses, base_relapses + 2, "relapse+2");
+	zassert_equal(s.recovery_attempts, base_attempts + 3, "recovery_attempts+3");
+
+	/* Relapse 3. */
+	s = fault_and_recover();
+	zassert_equal(s.recovery_relapses, base_relapses + 3, "relapse+3");
+	zassert_equal(s.recovery_attempts, base_attempts + 4, "recovery_attempts+4");
+
+	/* Relapse 4. */
+	s = fault_and_recover();
+	zassert_equal(s.recovery_relapses, base_relapses + 4, "relapse+4");
+	zassert_equal(s.recovery_attempts, base_attempts + 5, "recovery_attempts+5");
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after 4 relapses");
+
+	/* Relapse 5: max tries exhausted → FALLBACK. */
+	mock_wait_result = -EAGAIN;
+	audio_offload_submit(test_input, TEST_BLOCK_SAMPLES, 10, 0, test_output);
+	mock_wait_result = 0;
+	run_recovery_work();
+
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_FALLBACK, "FALLBACK after max exhaustion");
+	zassert_equal(s.max_exhaustion_count, baseline.max_exhaustion_count + 1,
+		      "max_exhaustion+1");
+	zassert_equal(s.recovery_relapses, base_relapses + 5, "relapse+5");
+	zassert_equal(s.recovery_attempts, base_attempts + 5, "5 successful recoveries");
+
+	/* Submit in FALLBACK returns -EAGAIN. */
+	int ret = audio_offload_submit(test_input, TEST_BLOCK_SAMPLES, 20, 0, test_output);
+	zassert_equal(ret, -EAGAIN, "FALLBACK submit returns -EAGAIN");
+}
+
+/* ── Test 2: 100 consecutive successes clear probation ────────────── */
+
+ZTEST(audio_offload, test_probation_cleared_100_success)
+{
+	struct audio_offload_status s, baseline;
+
+	/* Capture lifetime counter baseline. */
+	audio_offload_get_status(&baseline);
+	uint32_t base_cleared = baseline.probation_cleared;
+	uint32_t base_attempts = baseline.recovery_attempts;
+
+	/* Trigger fault + recovery → probation. */
+	fault_and_recover();
+	audio_offload_get_status(&s);
+	zassert_true(s.probation_active, "probation active after recovery");
+
+	/* Submit 99 successes — probation still active. */
+	submit_successes(1000, 99);
+	audio_offload_get_status(&s);
+	zassert_true(s.probation_active, "probation still active at 99");
+	zassert_equal(s.probation_success, 99, "probation_success=99");
+
+	/* Submit 100th success — clears probation. */
+	submit_successes(1099, 1);
+	audio_offload_get_status(&s);
+	zassert_false(s.probation_active, "probation cleared at 100");
+	zassert_equal(s.probation_cleared, base_cleared + 1, "probation_cleared+1");
+
+	/* After probation clear, a new fault should start fresh (no relapse). */
+	uint32_t prev_relapses = s.recovery_relapses;
+	s = fault_and_recover();
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after fresh fault");
+	zassert_true(s.probation_active, "probation active again");
+	zassert_equal(s.recovery_relapses, prev_relapses,
+		      "relapses unchanged (fresh start after clear, not relapse)");
+	zassert_equal(s.recovery_attempts, base_attempts + 2, "recovery_attempts+2");
+}
+
+/* ── Test 3: fault after stable (probation cleared) starts base delay ── */
+
+ZTEST(audio_offload, test_fault_after_stable)
+{
+	struct audio_offload_status s, baseline;
+
+	audio_offload_get_status(&baseline);
+	uint32_t base_attempts = baseline.recovery_attempts;
+
+	/* First fault + recovery. */
+	fault_and_recover();
+	audio_offload_get_status(&s);
+	zassert_true(s.probation_active, "probation active");
+
+	/* Clear probation by submitting 100 successes. */
+	uint32_t prev_relapses = s.recovery_relapses;
+	submit_successes(2000, 100);
+	audio_offload_get_status(&s);
+	zassert_false(s.probation_active, "probation cleared");
+
+	/* New fault: should NOT be counted as relapse (probation was cleared). */
+	s = fault_and_recover();
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after fresh fault");
+	zassert_equal(s.recovery_relapses, prev_relapses,
+		      "relapses unchanged — fault after stable is NOT a relapse");
+	zassert_equal(s.recovery_attempts, base_attempts + 2, "recovery_attempts+2");
+	zassert_true(s.probation_active, "probation active for new recovery");
+}
+
+/* ── Test 4: stop/reconnect resets recovery policy ────────────────── */
+
+ZTEST(audio_offload, test_stop_reconnect_resets_policy)
+{
+	struct audio_offload_status s, baseline;
+
+	audio_offload_get_status(&baseline);
+	uint32_t base_attempts = baseline.recovery_attempts;
+	uint32_t base_relapses = baseline.recovery_relapses;
+
+	/* Build up probation state with relapse. */
+	fault_and_recover();
+	audio_offload_get_status(&s);
+	zassert_true(s.probation_active, "probation active");
+	zassert_equal(s.recovery_relapses, base_relapses, "initial no relapse");
+
+	/* One relapse. */
+	fault_and_recover();
+	audio_offload_get_status(&s);
+	zassert_equal(s.recovery_relapses, base_relapses + 1, "relapse+1");
+
+	/* Stop + reconnect (fresh stream). */
+	audio_offload_stream_stop();
+	audio_offload_stream_start();
+	run_prep_work();
+
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after reconnect");
+	zassert_false(s.probation_active, "probation cleared by reconnect");
+	zassert_equal(s.probation_success, 0, "probation_success=0");
+	/* Lifetime counters preserved across reconnect. */
+	zassert_equal(s.recovery_relapses, base_relapses + 1, "relapses preserved (lifetime)");
+	zassert_equal(s.recovery_attempts, base_attempts + 2,
+		      "recovery_attempts preserved (lifetime)");
+
+	/* New fault after reconnect starts fresh (not a relapse, tries=0). */
+	s = fault_and_recover();
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after fresh fault");
+	zassert_true(s.probation_active, "probation active for new cycle");
+	/* relapses unchanged — fault after reconnect is NOT counted as relapse
+	 * because probation was cleared. */
+	zassert_equal(s.recovery_relapses, base_relapses + 1,
+		      "relapses unchanged (not a new relapse)");
+	zassert_equal(s.recovery_attempts, base_attempts + 3, "recovery_attempts+3");
+}
+
+/* ── Test 5: bound verification — exactly 5 recovery attempts cap ─── */
+
+ZTEST(audio_offload, test_recovery_bounded_5_attempts)
+{
+	struct audio_offload_status s, baseline;
+
+	audio_offload_get_status(&baseline);
+	uint32_t base_attempts = baseline.recovery_attempts;
+
+	/* Run 5 relapse cycles — should stay within budget (tries 1..5). */
+	for (int i = 0; i < 5; i++) {
+		fault_and_recover();
+	}
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after 5 relapse cycles (tries=5)");
+	zassert_equal(s.recovery_attempts, base_attempts + 5, "recovery_attempts+5 (5 successful)");
+	zassert_false(s.max_exhaustion_count > baseline.max_exhaustion_count, "not exhausted yet");
+
+	/* 6th fault during probation → exhaustion (tries 5→6 > MAX). */
+	mock_wait_result = -EAGAIN;
+	audio_offload_submit(test_input, TEST_BLOCK_SAMPLES, 50, 0, test_output);
+	mock_wait_result = 0;
+	run_recovery_work();
+
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_FALLBACK,
+		      "FALLBACK on 6th recovery entry (exhausted)");
+	zassert_equal(s.max_exhaustion_count, baseline.max_exhaustion_count + 1,
+		      "max_exhaustion+1");
+	/* 5 recoveries succeeded, the 6th was blocked. */
+	zassert_equal(s.recovery_attempts, base_attempts + 5, "still 5 successful recoveries");
 }
 
 /* ── Test suite registration ─────────────────────────────────────── */

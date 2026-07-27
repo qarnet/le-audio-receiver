@@ -809,8 +809,11 @@ static int cmd_offload_status(const struct shell *sh, size_t argc, char **argv)
 		    "  Faults      : timeout=%u full=%u stale=%u seq=%u frame=%u crc=%u payload=%u",
 		    s.timeout_count, s.full_count, s.stale_count, s.seq_fault_count,
 		    s.frame_fault_count, s.crc_fault_count, s.payload_fault_count);
-	shell_print(sh, "  Recovery    : success=%u fail=%u", s.recovery_count,
-		    s.recovery_fail_count);
+	shell_print(sh, "  Recovery    : attempts=%u fail=%u relapses=%u exhaustion=%u",
+		    s.recovery_attempts, s.recovery_fail_count, s.recovery_relapses,
+		    s.max_exhaustion_count);
+	shell_print(sh, "  Probation   : active=%u success=%u cleared=%u",
+		    (unsigned)s.probation_active, s.probation_success, s.probation_cleared);
 
 	if (s.rtt_count > 0) {
 		uint32_t avg_cyc = (uint32_t)(s.rtt_sum_cycles / s.rtt_count);

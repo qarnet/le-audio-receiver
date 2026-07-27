@@ -39,7 +39,8 @@
  *   - Invalid args count nothing
  *   - Recovery NEVER clears fault/fallback/RTT evidence
  *   - New stream_start resets per-stream counters
- *   - recovery_count, recovery_fail_count are lifetime
+ *   - recovery_attempts, recovery_fail_count, recovery_relapses,
+ *     max_exhaustion_count, probation_cleared are lifetime
  *
  * Lifecycle safety (Stage 2 fix #4):
  *   - After ANY blocking/waiting operation, before calling record_fault,
@@ -139,6 +140,17 @@ static uint32_t g_prep_backoff_ms;
 static uint32_t g_recovery_backoff_ms;
 static uint32_t g_recovery_tries;
 
+/* Probation state — prevent recovery storm across cycles.
+ * After coordinated reset success → ACTIVE, probation is active.
+ * Faults during probation escalate backoff (doubles) and count
+ * as relapses.  Only after PROBATION_SUCCESS_THRESHOLD (100)
+ * consecutive successful submits do we clear probation + reset
+ * tries/backoff to base. */
+#define PROBATION_SUCCESS_THRESHOLD 100U
+
+static bool g_probation_active;
+static uint32_t g_probation_success;
+
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
 static bool check_flpr_healthy(void)
@@ -179,6 +191,19 @@ static void record_fault(uint32_t *category_counter, int error, uint32_t seq)
 	}
 	g_status.last_error = error;
 	g_status.last_error_seq = seq;
+
+	/* Probation relapse: a fault during the probation window escalates
+	 * backoff exponentially so the recovery storm does not re-arm
+	 * at the base delay.  Relapses are countable; max_exhaustion
+	 * is logged when the boundary is crossed. */
+	if (g_probation_active) {
+		g_status.recovery_relapses++;
+		g_recovery_backoff_ms *= 2U;
+		if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
+			g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
+		}
+	}
+
 	g_state = AUDIO_OFFLOAD_RECOVERING;
 	g_status.state = g_state;
 	g_status.healthy = false;
@@ -333,7 +358,8 @@ void prep_work_fn(struct k_work *work)
 		g_status.payload_fault_count = 0;
 		g_status.fallback_count = 0;
 		g_status.busy_count = 0;
-		/* Lifetime counters preserved: recovery_count, recovery_fail_count */
+		/* Lifetime counters preserved: recovery_attempts, recovery_fail_count,
+		 * recovery_relapses, max_exhaustion_count, probation_cleared */
 		g_status.rtt_min_cycles = 0;
 		g_status.rtt_max_cycles = 0;
 		g_status.rtt_sum_cycles = 0;
@@ -347,6 +373,10 @@ void prep_work_fn(struct k_work *work)
 		g_prep_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
 		g_recovery_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
 		g_recovery_tries = 0;
+		g_probation_active = false;
+		g_probation_success = 0;
+		g_status.probation_active = false;
+		g_status.probation_success = 0;
 
 		k_spin_unlock(&g_lock, key);
 
@@ -396,9 +426,17 @@ void recovery_work_fn(struct k_work *work)
 		}
 		start_gen = g_generation;
 
-		if (g_recovery_tries >= OFFLOAD_RECOVERY_MAX_TRIES) {
+		/* Bump tries BEFORE the check — each recovery cycle
+		 * consumes one attempt.  This prevents the recovery storm:
+		 * successful recovery no longer resets tries to 0, so
+		 * repeated fault→recover→fault cycles eventually exhaust
+		 * the budget and enter FALLBACK. */
+		g_recovery_tries++;
+
+		if (g_recovery_tries > OFFLOAD_RECOVERY_MAX_TRIES) {
 			LOG_ERR("offload recovery: max tries (%u) exhausted, staying in FALLBACK",
 				OFFLOAD_RECOVERY_MAX_TRIES);
+			g_status.max_exhaustion_count++;
 			g_status.recovery_fail_count++;
 			g_state = AUDIO_OFFLOAD_FALLBACK;
 			g_status.state = g_state;
@@ -413,7 +451,8 @@ void recovery_work_fn(struct k_work *work)
 	if (!check_flpr_healthy()) {
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
 		if (g_state == AUDIO_OFFLOAD_RECOVERING && g_generation == start_gen) {
-			g_recovery_tries++;
+			/* tries already bumped at entry — escalate backoff for
+			 * within-cycle retry delay. */
 			g_recovery_backoff_ms *= 2U;
 			if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
 				g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
@@ -439,7 +478,8 @@ void recovery_work_fn(struct k_work *work)
 	if (ret < 0) {
 		k_spinlock_key_t key = k_spin_lock(&g_lock);
 		if (g_state == AUDIO_OFFLOAD_RECOVERING && g_generation == start_gen) {
-			g_recovery_tries++;
+			/* tries already bumped at entry — escalate backoff for
+			 * within-cycle retry delay. */
 			g_recovery_backoff_ms *= 2U;
 			if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
 				g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
@@ -469,19 +509,32 @@ void recovery_work_fn(struct k_work *work)
 		g_generation++;
 		g_status.epoch = new_epoch;
 		g_status.generation = g_generation;
-		g_status.recovery_count++;
+		g_status.recovery_attempts++;
 		g_status.healthy = true;
 
-		/* Recovery NEVER clears per-stream fault/fallback/RTT counters.
+		/* Start probation window: faults during probation
+		 * escalate backoff (relapse counting).  After
+		 * PROBATION_SUCCESS_THRESHOLD consecutive successes
+		 * we clear the escalation state. */
+		g_probation_active = true;
+		g_probation_success = 0;
+		g_status.probation_active = true;
+		g_status.probation_success = 0;
+
+		/* Recovery NEVER resets per-stream fault/fallback/RTT counters.
 		 * Only new stream_start resets per-stream counters. */
+
+		/* Do NOT reset recovery_backoff_ms or recovery_tries here.
+		 * The escalation state persists across recovery cycles until
+		 * probation is cleared.  This prevents the recovery storm. */
+
 		g_state = AUDIO_OFFLOAD_ACTIVE;
 		g_status.state = g_state;
-		g_recovery_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
-		g_recovery_tries = 0;
 
 		k_spin_unlock(&g_lock, key);
 
-		LOG_INF("offload recovery OK: epoch=%u gen=%u", new_epoch, g_generation);
+		LOG_INF("offload recovery OK: epoch=%u gen=%u tries=%u backoff=%u ms", new_epoch,
+			g_generation, g_recovery_tries, g_recovery_backoff_ms);
 	}
 }
 
@@ -525,6 +578,8 @@ int audio_offload_init(void)
 	g_prep_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
 	g_recovery_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
 	g_recovery_tries = 0;
+	g_probation_active = false;
+	g_probation_success = 0;
 
 	return 0;
 }
@@ -564,6 +619,10 @@ void audio_offload_stream_start(void)
 	g_prep_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
 	g_recovery_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
 	g_recovery_tries = 0;
+	g_probation_active = false;
+	g_probation_success = 0;
+	g_status.probation_active = false;
+	g_status.probation_success = 0;
 
 	k_spin_unlock(&g_lock, key);
 
@@ -604,6 +663,10 @@ void audio_offload_stream_stop(void)
 	g_prep_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
 	g_recovery_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
 	g_recovery_tries = 0;
+	g_probation_active = false;
+	g_probation_success = 0;
+	g_status.probation_active = false;
+	g_status.probation_success = 0;
 
 	k_spin_unlock(&g_lock, key);
 
@@ -1036,6 +1099,26 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 
 		g_status.success_count++;
 		g_status.last_error = 0;
+
+		/* Probation success tracking: each consecutive success
+		 * during probation window counts toward the clearance
+		 * threshold.  Once crossed, escalation state resets to
+		 * base so the next fault starts fresh. */
+		if (g_probation_active) {
+			g_probation_success++;
+			g_status.probation_success = g_probation_success;
+
+			if (g_probation_success >= PROBATION_SUCCESS_THRESHOLD) {
+				g_probation_active = false;
+				g_status.probation_active = false;
+				g_recovery_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
+				g_recovery_tries = 0;
+				g_status.probation_cleared++;
+				LOG_INF("offload probation cleared after %u consecutive successes",
+					g_probation_success);
+			}
+		}
+
 		record_latency(latency_cycles);
 		k_spin_unlock(&g_lock, key);
 	}
@@ -1057,6 +1140,8 @@ void audio_offload_get_status(struct audio_offload_status *status)
 	status->epoch = g_stream_epoch;
 	status->generation = g_generation;
 	status->state = g_state;
+	status->probation_active = g_probation_active;
+	status->probation_success = g_probation_success;
 	k_spin_unlock(&g_lock, key);
 }
 
