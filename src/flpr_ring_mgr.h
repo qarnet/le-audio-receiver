@@ -21,6 +21,28 @@
 extern "C" {
 #endif
 
+/**
+ * @brief Pure pacing calculation: target elapsed ms for N blocks at given rate.
+ *
+ * Returns @p blocks_sent * 1000 / @p rate_per_sec.  Uses 64-bit multiply
+ * to avoid overflow at high block counts; safe for up to 2^32 blocks.
+ *
+ * Unit-testable with no kernel/hardware dependency.  The return can be
+ * compared against an actual uptime delta to decide whether to sleep.
+ *
+ * Example:
+ *   100 blk @ 100/s  →   100 * 1000 / 100 = 1000 ms
+ *   6000 blk @ 100/s →  6000 * 1000 / 100 = 60000 ms
+ *   100000 blk @ 100/s → 100000 * 1000 / 100 = 1000000 ms
+ */
+static inline uint64_t flpr_rate_limit_target_ms(uint64_t blocks_sent, uint32_t rate_per_sec)
+{
+	if (rate_per_sec == 0) {
+		return 0;
+	}
+	return (blocks_sent * 1000ULL) / (uint64_t)rate_per_sec;
+}
+
 /* Outcome of a produce attempt (for test use).
  * Uses POSIX errno values for consistency. */
 enum flpr_produce_result {

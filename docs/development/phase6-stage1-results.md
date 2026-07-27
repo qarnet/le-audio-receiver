@@ -22,11 +22,21 @@ flpr ring acceptance 100000
 
 **Throughput**: 461 blk/s (216.7 s for 100k blocks). Each block is 480 stereo PCM frames (1920 bytes valid payload).
 
-## Concurrent Mode A + rate-limited ring test
+## Concurrent Mode A + rate-limited ring test (corrected 2026-07-27)
 
-- **Audio**: central connected (`C0:AA:BB:CC:DD:EE`), ACL encrypted, BlueZ awaiting SetConfiguration (known limitation — auto-config not completing)
-- **Ring test**: `flpr ring test 6000 100` → 6,000 blocks, 100 blk/s target, 13,030 ms elapsed, sent=recv=6,000, zero errors
-- **Note**: rate limiting bug found and fixed (see §Redesign below); concurrent test PASS despite BAP auto-config stall
+**Setup**: `bap_central.py --duration 90` (normal discovery, 1000 Hz sine) + `flpr ring test 6000 100` (100 blk/s rate-limited) started via serial shell during active streaming.  Central ran 9000 LC3 frames, ring test 6000 PCM blocks — both spanned ~60 s of overlapping operation.
+
+| Metric | Value |
+|--------|-------|
+| Central frames | 9,000 in 90.00 s (100.0 fps), zero drop |
+| Ring blocks sent/recv | 6,000 / 6,000 |
+| Ring duration | 59,970 ms (target 60,000 ms, 0.05 % error) |
+| Ring errors (CRC/payload/full/empty/stale) | 0 / 0 / 0 / 0 / 0 |
+| Ring latency | min=3,339 µs, max=43,409 µs, avg=34,797 µs |
+| Audio PCLK (during ring test) | 1,400–1,600 ppm (normal range) |
+| FLPR errors | 0 (healthy, zero lost/dup/ooo) |
+
+**Note**: prior result (13,030 ms) was a measurement artifact from the old per-second-window rate limiter that allowed first-second burst.  The corrected average-pacing limiter delivers 59,970 ms for 6,000 blocks at 100 blk/s — within 0.05 % of the 60 s target.
 
 ## Redesign changes from 56789af
 
@@ -57,18 +67,25 @@ This ensures no stale stall state from a previous gate interferes.
 
 Original code retried `produce_block` in a `do-while` loop when FLPR output-stalled. Since FLPR preserves input on output-stall (does not consume), the input ring stays full and `consume_sem` never fires — infinite 10 ms timeout loop. Fixed: produce without retry (count OK vs FULL), then drain after stall clear.
 
-### Rate limiting bug fix
+### Rate limiting — final correction
 
-Original `batch_sent == 0` trigger reset the rate period prematurely, defeating throttle. Fixed: only check rate on `period_elapsed >= 1000` (1-second accounting).
+Original per-second-window approach (`period_elapsed >= 1000` + reset) allowed an unlimited first-second burst and created a burst-pause pattern at high rates.  The `13,030 ms` measurement in the prior concurrent result (5cb748a) was a direct consequence: first second burst ~460 blocks, then throttled to 100/s thereafter.
+
+**Corrected**: absolute pacing from test start time.
+
+- `flpr_rate_limit_target_ms(blocks_sent, rate_per_sec)` — pure static-inline 64-bit calculation: `sent × 1000 / rate`.  Unit-tested for first block (10 ms), 100 blocks (1,000 ms), 6,000 blocks (60,000 ms), overflow-safe to 4M+ blocks.
+- Sleep check runs BEFORE production in the loop — `target_elapsed > actual_elapsed` → `k_msleep(deficit)`.  Deficit capped at 5,000 ms to prevent the thread from sleeping through the remaining timeout budget.
+- No periodic reset, no `rate_period_start`/`rate_period_sent` bookkeeping.  The test-start time (`k_uptime_get_32()`) is the sole reference.
 
 ## Files changed (since 56789af)
 
 | File | Change |
 |------|--------|
 | `src/flpr/main.c` | Semaphore-driven wake (`ring_wake_sem`), IPC callback signals only |
-| `src/flpr_ring_mgr.c` | Event-driven `test_run`, rate-limited `test_run_rate`, `wait_consume` helper |
-| `src/flpr_ring_mgr.h` | `flpr_ring_mgr_test_run_rate()`, `flpr_ring_mgr_wait_consume()`, fix doc comment |
+| `src/flpr_ring_mgr.c` | Event-driven `test_run`, rate-limited `test_run_rate` (corrected absolute pacing), `wait_consume` helper |
+| `src/flpr_ring_mgr.h` | `flpr_ring_mgr_test_run_rate()`, `flpr_ring_mgr_wait_consume()`, `flpr_rate_limit_target_ms()` static inline |
 | `src/audio_shell.c` | Reworked acceptance (clean resets, throughput timeouts, Gate 4 fix), rate arg in `test` command |
+| `tests/unit/flpr_protocol/src/test_flpr_protocol.c` | +10 pacing calculation unit tests (first block, 100 blocks, 6k blocks, overflow, truncation, zero cases) |
 
 ## Build verification
 
@@ -81,11 +98,11 @@ Original `batch_sent == 0` trigger reset the rate period prematurely, defeating 
 
 | Suite | Tests | Pass |
 |-------|-------|------|
-| flpr_ring | 52 | 52 |
-| flpr_protocol | 25 | 25 |
-| **Total** | **77** | **77** |
+| flpr_ring | 51 | 51 |
+| flpr_protocol | 50 | 50 |
+| **Total** | **101** | **101** |
 
-Tests run on native_sim (`west build -b native_sim`). All 77 PASS.
+Tests run on native_sim (`west build -b native_sim`). All 101 PASS.  Includes 10 new pure pacing calculation tests in `flpr_protocol` (first block, 100 blocks, 6,000 blocks, 100k overflow, integer truncation, zero-rate, zero-blocks, different rates).
 
 ## What Stage 1 delivers
 

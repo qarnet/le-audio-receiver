@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "flpr_protocol.h"
+#include "flpr_ring_mgr.h" /* for flpr_rate_limit_target_ms */
 
 /* ── Wire message struct ────────────────────────────────────────── */
 
@@ -633,6 +634,82 @@ ZTEST(flpr_protocol, test_message_type_values)
 	zassert_equal(FLPR_MSG_HEARTBEAT_ACK, 0x04U);
 	zassert_equal(FLPR_MSG_STRESS_PING, 0x05U);
 	zassert_equal(FLPR_MSG_STRESS_PONG, 0x06U);
+}
+
+/* ── Rate limit pacing calculation ───────────────────────────────── */
+/* Pure function, zero hardware/kernel deps.  Tests the calculation
+ * used by flpr_ring_mgr_test_run_rate to pace production from the
+ * test start time.  No per-second windows, no periodic reset. */
+
+ZTEST(flpr_protocol, test_rate_target_first_block)
+{
+	/* First block at 100 blk/s → target 10 ms. */
+	zassert_equal(flpr_rate_limit_target_ms(1, 100), 10ULL);
+}
+
+ZTEST(flpr_protocol, test_rate_target_10ms_per_block)
+{
+	/* 100 blk/s = 10 ms per block. */
+	zassert_equal(flpr_rate_limit_target_ms(10, 100), 100ULL);
+	zassert_equal(flpr_rate_limit_target_ms(50, 100), 500ULL);
+}
+
+ZTEST(flpr_protocol, test_rate_target_100_blocks)
+{
+	/* 100 blocks at 100/s → 1000 ms = 1 second. */
+	zassert_equal(flpr_rate_limit_target_ms(100, 100), 1000ULL);
+}
+
+ZTEST(flpr_protocol, test_rate_target_6000_blocks)
+{
+	/* 6000 blocks at 100/s → 60000 ms = 60 seconds. */
+	zassert_equal(flpr_rate_limit_target_ms(6000, 100), 60000ULL);
+}
+
+ZTEST(flpr_protocol, test_rate_target_100k_blocks)
+{
+	/* High count: 100000 blocks at 100/s → 1,000,000 ms (~16.7 min).
+	 * Must NOT overflow 32-bit. */
+	zassert_equal(flpr_rate_limit_target_ms(100000, 100), 1000000ULL);
+}
+
+ZTEST(flpr_protocol, test_rate_target_high_count_overflow_safe)
+{
+	/* Near 32-bit max: 4,000,000 blocks at 100/s.
+	 * sent * 1000 = 4e9 fits in 64-bit. */
+	zassert_equal(flpr_rate_limit_target_ms(4000000, 100), 40000000ULL);
+}
+
+ZTEST(flpr_protocol, test_rate_target_different_rates)
+{
+	/* 200 blk/s → 5 ms per block. */
+	zassert_equal(flpr_rate_limit_target_ms(200, 200), 1000ULL);
+	/* 50 blk/s → 20 ms per block. */
+	zassert_equal(flpr_rate_limit_target_ms(50, 50), 1000ULL);
+	/* 10 blk/s → 100 ms per block. */
+	zassert_equal(flpr_rate_limit_target_ms(10, 10), 1000ULL);
+}
+
+ZTEST(flpr_protocol, test_rate_target_zero_rate)
+{
+	/* rate_per_sec == 0 → no pacing, returns 0. */
+	zassert_equal(flpr_rate_limit_target_ms(100, 0), 0ULL);
+}
+
+ZTEST(flpr_protocol, test_rate_target_zero_blocks)
+{
+	/* No blocks sent → 0 ms target. */
+	zassert_equal(flpr_rate_limit_target_ms(0, 100), 0ULL);
+}
+
+ZTEST(flpr_protocol, test_rate_target_integer_truncation)
+{
+	/* 1 block at 3 blk/s → floor(1*1000/3) = 333 ms (not 334). */
+	zassert_equal(flpr_rate_limit_target_ms(1, 3), 333ULL);
+	/* 2 blocks at 3 blk/s → floor(2*1000/3) = 666 ms. */
+	zassert_equal(flpr_rate_limit_target_ms(2, 3), 666ULL);
+	/* 3 blocks at 3 blk/s → floor(3*1000/3) = 1000 ms exactly. */
+	zassert_equal(flpr_rate_limit_target_ms(3, 3), 1000ULL);
 }
 
 ZTEST_SUITE(flpr_protocol, NULL, NULL, NULL, NULL, NULL);

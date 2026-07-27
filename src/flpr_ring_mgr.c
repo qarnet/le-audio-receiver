@@ -711,9 +711,6 @@ int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint3
 	 * a worst-case deadline — notifications are immediate via the IPC
 	 * callback. */
 #define BATCH_MAX 4
-	/* Rate limiting: track sent count and period start. */
-	uint32_t rate_period_start = start;
-	uint32_t rate_period_sent = 0;
 
 	while (sent < block_count) {
 		uint32_t elapsed = k_uptime_get_32() - start;
@@ -722,6 +719,26 @@ int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint3
 				elapsed);
 			any_error = true;
 			break;
+		}
+
+		/* Rate limiting before production: sleep if ahead of schedule.
+		 * Pure average pacing from test start time — no per-second
+		 * windows, no initial burst, no reset.  64-bit multiply
+		 * avoids overflow at high block counts.
+		 *
+		 * Sleep cap at 5000 ms prevents the test thread from sleeping
+		 * through the entire remaining budget; long sleeps are split
+		 * across multiple iterations. */
+		if (rate_per_sec > 0) {
+			uint64_t target = flpr_rate_limit_target_ms(sent, rate_per_sec);
+			uint64_t actual = (uint64_t)k_uptime_get_32() - (uint64_t)start;
+			if (target > actual) {
+				uint64_t deficit = target - actual;
+				if (deficit > 5000) {
+					deficit = 5000;
+				}
+				k_msleep((uint32_t)deficit);
+			}
 		}
 
 		/* Drain any available output first. */
@@ -757,7 +774,6 @@ int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint3
 			last_seq = sent;
 			sent++;
 			batch_sent++;
-			rate_period_sent++;
 
 			k_spinlock_key_t key = k_spin_lock(&ring_lock);
 			test_blocks_sent = sent;
@@ -777,26 +793,6 @@ int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint3
 		 * consume_sem when output data is available. */
 		if (sent < block_count) {
 			k_sem_take(&consume_sem, K_MSEC(10));
-		}
-
-		/* Rate limiting: ensure we don't exceed rate_per_sec blk/s.
-		 * Accumulate blocks, then sleep if period completes too fast. */
-		if (rate_per_sec > 0) {
-			uint32_t now = k_uptime_get_32();
-			uint32_t period_elapsed = now - rate_period_start;
-
-			if (period_elapsed >= 1000) {
-				uint32_t target_elapsed = rate_period_sent * 1000U / rate_per_sec;
-				if (period_elapsed < target_elapsed) {
-					uint32_t sleep_ms = target_elapsed - period_elapsed;
-					if (sleep_ms > 0 && sleep_ms < 2000) {
-						k_msleep(sleep_ms);
-					}
-				}
-				/* Reset period. */
-				rate_period_start = k_uptime_get_32();
-				rate_period_sent = 0;
-			}
 		}
 	}
 #undef BATCH_MAX
