@@ -4,13 +4,17 @@
  *
  * Stateful cross-block fixed-point linear-interpolation stereo ASRC.
  *
- * Continuous source-phase accumulator and previous-frame sample
- * history carried across calls.  Common phase for L/R, 64-bit
- * intermediate arithmetic.  No heap, no float, no Zephyr dependency.
+ * Extended-sequence coordinate model:
+ *   ext[0] = previous block's last frame (prev)
+ *   ext[j] = input[j−1]  for j = 1 … input_frames
  *
- * source_step = input_rate / output_rate * (1 + ppm / 1_000_000)
- * Positive ppm → consume source faster → fewer output frames.
- * Controller output sign preserved unchanged.
+ * Phase (Q32.32) is the source position within ext[].  The first
+ * block starts at phase = 1·2³² (ext[1] = input[0]); every
+ * subsequent block inherits the carry-over phase (0 ≤ phase < 2³²
+ * for fractional boundaries, or exactly 2³² for identity).
+ *
+ * source_step = input_rate / output_rate · (1 + ppm / 10⁶)
+ * Positive ppm → consume faster → fewer output frames.
  */
 
 #ifndef AUDIO_ASRC_H
@@ -23,23 +27,16 @@
 /** Maximum absolute ppm accepted by audio_asrc_process. */
 #define ASRC_MAX_PPM 3000
 
+/** Minimum / maximum input / output rate (Hz). */
+#define ASRC_RATE_MIN 1
+#define ASRC_RATE_MAX 192000
+
 struct audio_asrc {
-	/** Q32.32 fractional source position relative to the current
-	 *  input block.  0 ≤ phase < input_frames · 2³².
-	 */
+	/** Q32.32 phase within the extended sequence [0, input_frames·2³²]. */
 	uint64_t phase;
 
 	/** Q32.32 nominal source_step (at 0 ppm), set at init. */
 	uint64_t step_base;
-
-	/** Last L/R sample from the *consumed* portion of the previous
-	 *  block — used as s[−1] in the extended sequence.
-	 */
-	int16_t prev_l;
-	int16_t prev_r;
-
-	/** True after at least one input frame has been fully consumed. */
-	bool prev_valid;
 };
 
 /**
@@ -49,46 +46,42 @@ struct audio_asrc {
  * @param input_rate_hz  Decoder output rate (48 000).
  * @param output_rate_hz Physical I2S output rate (47 619 on nRF54L15).
  *
- * @retval  0   Success.
- * @retval -EINVAL  Null ctx, zero rate, or rate overflow.
+ * @retval  0   Success.  ctx->phase seeded to 1·2³².
+ * @retval  −EINVAL  Null ctx, rate out of [ASRC_RATE_MIN, ASRC_RATE_MAX],
+ *                   or step underflow.
  */
 int audio_asrc_init(struct audio_asrc *ctx, uint32_t input_rate_hz, uint32_t output_rate_hz);
 
 /**
- * @brief Process one block of input through the resampler.
+ * @brief Process one block through the resampler.
  *
- * Resampled interleaved int16_t stereo output is written to @p output.
- * The per-block @p correction_ppm changes the effective source_step.
+ * On success all @p input_frames are consumed and @p output_produced > 0.
+ * State is updated only on full success (transactional).
  *
- * On success (return 0) all @p input_frames are consumed and
- * @p output_produced > 0.  Phase and prev samples are updated only
- * on a fully successful call; on any failure the context is unchanged
- * (transactional).
- *
- * @param ctx             ASRC state (updated in-place only on success).
+ * @param ctx             ASRC context.
  * @param input           Interleaved stereo input [L,R,…].
  * @param input_frames    Stereo input frames.
- * @param output          Output buffer, interleaved stereo.
- * @param output_capacity Max stereo frames that fit in @p output.
+ * @param output          Output buffer.
+ * @param output_capacity Max stereo output frames.
  * @param correction_ppm  Drift-controller ppm (−3000 … +3000).
- * @param input_consumed  [out] Stereo frames consumed (0 on non-zero ret).
+ * @param prev_l          Previous block's last L sample.
+ * @param prev_r          Previous block's last R sample.
+ * @param prev_valid      true after the first block has been processed.
+ * @param input_consumed  [out] Stereo frames consumed.
  * @param output_produced [out] Stereo frames written.
+ * @param next_prev_l     [out] Next-block prev L (= input[consumed−1]).
+ * @param next_prev_r     [out] Next-block prev R.
  *
  * @retval  0   All input consumed, output_produced > 0.
- * @retval  1   Output capacity exhausted before all input consumed;
- *              context unchanged.  input_consumed / output_produced
- *              report what WOULD have been consumed/produced.
- * @retval -EINVAL  Null pointer or |ppm| > ASRC_MAX_PPM.
+ * @retval  1   Output capacity exhausted (state unchanged).
+ * @retval  −EINVAL  Invalid argument.
  */
 int audio_asrc_process(struct audio_asrc *ctx, const int16_t *input, size_t input_frames,
 		       int16_t *output, size_t output_capacity, int32_t correction_ppm,
-		       size_t *input_consumed, size_t *output_produced);
+		       int16_t prev_l, int16_t prev_r, bool prev_valid, size_t *input_consumed,
+		       size_t *output_produced, int16_t *next_prev_l, int16_t *next_prev_r);
 
-/**
- * @brief Reset ASRC state (phase, history).
- *
- * Call on stream stop / disconnect.
- */
+/** Reset phase to 1·2³² (first-block state). */
 void audio_asrc_reset(struct audio_asrc *ctx);
 
 #endif /* AUDIO_ASRC_H */
