@@ -853,46 +853,78 @@ def main():
     )
 
     if args.peer_addr is not None:
-        # --peer-addr path: raw HCI to create BlueZ device, then Pair().
-        # NOTE: With all-zero-FICR dongle firmware, LE scanning is broken.
-        # Pair() can create a bond, but ServicesResolved/GATT discovery
-        # fails because BlueZ can't perform GATT service browsing without
-        # scanning support.  Full fix: rebuild dongle firmware with a
-        # programmed FICR DEVICEADDR.
-        print("[main] Creating BlueZ device via brief raw HCI connect...")
+        # --peer-addr path: persistent raw HCI direct connect + Pair().
+        #
+        # BlueZ scanning is broken on this controller (nRF5340 SW Split LL
+        # delivers no advertising reports when accept-list filter is active),
+        # so BlueZ Connect/Pair cannot discover the peer.  We create the ACL
+        # link directly via raw HCI and keep the socket open for the lifetime
+        # of the stream — closing it tears down the ACL.
+        #
+        # Uses --addr-type public because the dongle has a compile-time
+        # public BD_ADDR (bt_ctlr_set_public_addr in hci_ipc netcore).
         addr = args.peer_addr
-        brief_proc = subprocess.Popen(
-            ["sudo", "-n", "python3", RAW_CONNECT_HELPER, addr, "5"],
+        hold_secs = args.duration + 120
+        print(
+            "[main] Creating persistent ACL via raw HCI (hold={:.0f}s)...".format(
+                hold_secs
+            )
+        )
+        raw_connect_proc = subprocess.Popen(
+            [
+                "sudo",
+                "-n",
+                "python3",
+                RAW_CONNECT_HELPER,
+                addr,
+                str(hold_secs),
+                "--addr-type",
+                "public",
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        time.sleep(2)
-        # Terminate the raw HCI helper (device persists in BlueZ).
-        brief_proc.terminate()
-        try:
-            brief_proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            brief_proc.kill()
+        # Wait for the Device1 Connected property (up to 10 s).
+        dev_props0 = _dbus.Interface(
+            bus.get_object("org.bluez", dev_path),
+            "org.freedesktop.DBus.Properties",
+        )
+        conn_deadline = time.monotonic() + 10
+        connected = False
+        while time.monotonic() < conn_deadline:
+            try:
+                if bool(dev_props0.Get("org.bluez.Device1", "Connected")):
+                    connected = True
+                    break
+            except _dbus.exceptions.DBusException:
+                pass
+            _GLib.MainContext.default().iteration(False)
+            time.sleep(0.1)
+        if not connected:
+            print("[error] Raw HCI connect failed (link not up in 10 s)")
+            raw_connect_proc.terminate()
+            sys.exit(1)
+        print("[main] ACL link up")
 
-        # Pre-trust and pair.
+        # Trust + Pair over the existing raw-HCI ACL.
         try:
             dev_props.Set("org.bluez.Device1", "Trusted", _dbus.Boolean(True))
+            print("[main] Trusted, pairing over existing ACL...")
         except _dbus.exceptions.DBusException as e:
-            print("[main] Trust set error (device may have disappeared): {}".format(e))
+            print("[main] Trust set error: {}".format(e))
 
-        print("[main] Calling Pair() to connect + encrypt...")
         try:
-            device.Pair(timeout=60)
+            device.Pair(timeout=30)
             print("[main] Pair() returned OK")
         except _dbus.exceptions.DBusException as e:
-            print("[main] Pair() error: {}".format(e))
+            print("[main] Pair() returned: {}".format(e))
 
         # Check resulting state.
         try:
             paired = bool(dev_props.Get("org.bluez.Device1", "Paired"))
-            connected = bool(dev_props.Get("org.bluez.Device1", "Connected"))
+            connected2 = bool(dev_props.Get("org.bluez.Device1", "Connected"))
             print(
-                "[main] After Pair: Paired={}, Connected={}".format(paired, connected)
+                "[main] After Pair: Paired={}, Connected={}".format(paired, connected2)
             )
         except _dbus.exceptions.DBusException:
             print("[main] Could not read device state after Pair")
@@ -904,7 +936,16 @@ def main():
             print("[main] Bringing ACL link up via raw HCI (direct connect)...")
             hold_secs = args.duration + 120
             raw_connect_proc = subprocess.Popen(
-                ["sudo", "-n", "python3", RAW_CONNECT_HELPER, addr, str(hold_secs)],
+                [
+                    "sudo",
+                    "-n",
+                    "python3",
+                    RAW_CONNECT_HELPER,
+                    addr,
+                    str(hold_secs),
+                    "--addr-type",
+                    "public",
+                ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
