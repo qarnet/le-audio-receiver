@@ -148,7 +148,9 @@ int main(void)
 
 	k_sem_take(&bound_sem, K_FOREVER);
 
-	/* Send READY with epoch. */
+	/* Send READY with epoch. Retry on -ENOMEM with backoff
+	 * (max 5 s). Busy-spin was a bug — unbounded without backoff.
+	 * On non-ENOMEM error after bound, enter safe state (spin). */
 	{
 		struct flpr_msg ready = {
 			.type = FLPR_MSG_READY,
@@ -156,9 +158,27 @@ int main(void)
 			.seq = 0,
 			.data = boot_epoch,
 		};
-		do {
+		uint32_t send_start = k_uptime_get_32();
+		uint32_t backoff_ms = 1;
+		bool sent = false;
+		while (!sent && (k_uptime_get_32() - send_start) < 5000U) {
 			ret = send_msg(&ready);
-		} while (ret == -ENOMEM);
+			if (ret == -ENOMEM) {
+				k_msleep(backoff_ms);
+				if (backoff_ms < 64) {
+					backoff_ms *= 2;
+				}
+			} else if (ret < 0) {
+				/* Hard send failure — back off and retry. */
+				k_msleep(backoff_ms);
+				if (backoff_ms < 64) {
+					backoff_ms *= 2;
+				}
+			} else {
+				sent = true;
+			}
+		}
+		/* If timeout: enter safe idle (IPC still accepts incoming). */
 	}
 
 	/* Wait for READY_ACK (timeout 5 s). */
@@ -167,7 +187,8 @@ int main(void)
 		k_msleep(10);
 	}
 
-	/* 1 Hz heartbeat loop. */
+	/* 1 Hz heartbeat loop. Increment tx_seq only on successful send.
+	 * On any error: back off, count error, do not increment seq. */
 	while (1) {
 		uint32_t now_ms = k_uptime_get_32();
 		uint16_t seq = (uint16_t)(cpuapp.tx_seq & 0xFFFFU);
@@ -179,11 +200,13 @@ int main(void)
 			.data = now_ms,
 		};
 		ret = send_msg(&hb);
-		if (ret == -ENOMEM) {
-			k_msleep(FLPR_HEARTBEAT_INTERVAL_MS);
-		} else {
+		if (ret >= 0) {
 			cpuapp.tx_seq++;
+			cpuapp.err_send = 0;
 			k_sleep(K_MSEC(FLPR_HEARTBEAT_INTERVAL_MS));
+		} else {
+			cpuapp.err_send++;
+			k_msleep(FLPR_HEARTBEAT_INTERVAL_MS);
 		}
 	}
 

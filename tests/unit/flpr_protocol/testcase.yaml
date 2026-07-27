@@ -1,0 +1,4 @@
+tests:
+  unit.flpr_protocol:
+    platform_allow: native_sim/native/64
+    tags: flpr protocol unit

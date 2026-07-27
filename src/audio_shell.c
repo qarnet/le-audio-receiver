@@ -142,23 +142,25 @@ static int cmd_flpr_status(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "  Ready        : %s", s.ready ? "yes" : "no");
 	shell_print(sh, "  ACKed        : %s", s.acked ? "yes" : "no");
 	shell_print(sh, "  Healthy      : %s", s.healthy ? "yes" : "no");
-	shell_print(sh, "  Epoch        : %u", s.epoch);
-	shell_print(sh, "  Ready count  : %u", s.ready_count);
+	shell_print(sh, "  Epoch        : %u (count=%u)", s.epoch, s.ready_count);
 	shell_print(sh, "  Errors       : len=%u ver=%u unk=%u send=%u", s.err_len, s.err_version,
 		    s.err_unknown, s.err_send);
 	shell_print(sh, "  TX seq       : %u (acked=%u)", s.tx_seq, s.tx_acked_seq);
-	shell_print(sh, "  RX seq       : %u (last=%u ms, consec_missed=%u)", s.rx_seq,
-		    s.rx_last_ms, s.rx_consec_missed);
+	shell_print(sh, "  RX seq       : %u (last=%u ms)", s.rx_seq, s.rx_last_ms);
 	shell_print(sh, "  RX lost      : %u", s.rx_lost);
 	shell_print(sh, "  RX dup       : %u", s.rx_dup);
 	shell_print(sh, "  RX ooo       : %u", s.rx_ooo);
+	shell_print(sh, "  RX missed    : %u", s.rx_missed_total);
 
 	if (s.stress_active) {
-		shell_print(sh, "  Stress (active): count=%u sent=%u recv=%u timeouts=%u",
+		shell_print(sh, "  Stress (ACTIVE): count=%u sent=%u recv=%u timeout=%u",
 			    s.stress_count, s.stress_sent, s.stress_recv, s.stress_timeouts);
 	} else if (s.stress_count > 0) {
-		shell_print(sh, "  Stress (done):  count=%u sent=%u recv=%u timeouts=%u",
-			    s.stress_count, s.stress_sent, s.stress_recv, s.stress_timeouts);
+		shell_print(sh,
+			    "  Stress (done):  count=%u sent=%u recv=%u timeout=%u "
+			    "stale=%u mismatch=%u errsend=%u",
+			    s.stress_count, s.stress_sent, s.stress_recv, s.stress_timeouts,
+			    s.stress_stale, s.stress_mismatch, s.stress_err_send);
 	}
 
 	return 0;
@@ -172,11 +174,28 @@ static int cmd_flpr_stress(const struct shell *sh, size_t argc, char **argv)
 		count = (uint32_t)shell_strtoul(argv[1], 0, NULL);
 	}
 
+	/* Quick pre-check: reject if not ready or acked. */
+	struct flpr_status pre;
+	flpr_handshake_get_status(&pre);
+	if (!pre.ready || !pre.acked) {
+		shell_error(sh, "FLPR not ready/acked — stress rejected");
+		return -EAGAIN;
+	}
+	if (pre.stress_active) {
+		shell_error(sh, "Stress already in progress");
+		return -EBUSY;
+	}
+
+	shell_print(sh, "Starting %u ping/pong stress...", count);
+
 	struct flpr_status s;
 	flpr_handshake_stress(count, &s);
 
-	shell_print(sh, "Stress complete: sent=%u recv=%u timeouts=%u (of %u)", s.stress_sent,
-		    s.stress_recv, s.stress_timeouts, count);
+	shell_print(sh,
+		    "Sent=%u Recv=%u Timeout=%u Stale=%u Mismatch=%u ErrSend=%u "
+		    "(of %u requested)",
+		    s.stress_sent, s.stress_recv, s.stress_timeouts, s.stress_stale,
+		    s.stress_mismatch, s.stress_err_send, count);
 
 	return 0;
 }

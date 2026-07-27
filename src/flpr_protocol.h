@@ -100,12 +100,12 @@ struct flpr_peer {
 	uint32_t ready_count; /* total READY received */
 
 	/* Remote → local sequence tracking (heartbeats we receive). */
-	uint32_t rx_seq;           /* last seq received from remote */
-	uint32_t rx_lost;          /* cumulative gaps */
-	uint32_t rx_dup;           /* duplicate heartbeats */
-	uint32_t rx_ooo;           /* out-of-order (wrapped/backward) */
-	uint32_t rx_last_ms;       /* last rx uptime for staleness */
-	uint32_t rx_consec_missed; /* consecutive misses (resets on rx) */
+	uint32_t rx_seq;          /* last seq received (32-bit, wraps at 16-bit) */
+	uint32_t rx_lost;         /* cumulative gaps counted */
+	uint32_t rx_dup;          /* duplicate heartbeats */
+	uint32_t rx_ooo;          /* out-of-order (backward delta, counted) */
+	uint32_t rx_last_ms;      /* last rx uptime for staleness */
+	uint32_t rx_missed_total; /* cumulative heartbeat check failures */
 
 	/* Local → remote tracking (heartbeats we send). */
 	uint32_t tx_seq;       /* last seq we sent */
@@ -137,7 +137,7 @@ static inline bool flpr_msg_validate(const struct flpr_msg *msg, size_t len, str
 
 /* ── Sequence tracking ───────────────────────────────────────────
  * Process a received sequence number from the remote peer.
- * Updates rx_seq, rx_lost, rx_dup, rx_ooo, rx_consec_missed.
+ * Updates rx_seq, rx_lost, rx_dup, rx_ooo.
  * Call AFTER msg_validate().
  */
 static inline void flpr_peer_rx_seq(struct flpr_peer *peer, uint16_t seq, uint32_t now_ms)
@@ -145,7 +145,6 @@ static inline void flpr_peer_rx_seq(struct flpr_peer *peer, uint16_t seq, uint32
 	if (peer->rx_seq == 0 && peer->rx_last_ms == 0) {
 		/* First heartbeat ever received. */
 		peer->rx_seq = seq;
-		peer->rx_consec_missed = 0;
 		peer->rx_last_ms = now_ms;
 		return;
 	}
@@ -158,21 +157,20 @@ static inline void flpr_peer_rx_seq(struct flpr_peer *peer, uint16_t seq, uint32
 			peer->rx_lost += (uint16_t)(diff - 1);
 		}
 		peer->rx_seq = seq;
-		peer->rx_consec_missed = 0;
 	} else if (diff == 0) {
 		/* Duplicate. */
 		peer->rx_dup++;
 	} else {
-		/* Out of order (wrap or delayed). Treat as reset. */
+		/* Out of order (backward delta — delayed/reordered). */
 		peer->rx_ooo++;
 		peer->rx_seq = seq;
-		peer->rx_consec_missed = 0;
 	}
 	peer->rx_last_ms = now_ms;
 }
 
 /* ── Health check ────────────────────────────────────────────────
  * Call periodically. Returns true if heartbeat is current.
+ * Updates rx_missed_total when check fails.
  */
 static inline bool flpr_peer_check_health(struct flpr_peer *peer, uint32_t now_ms)
 {
@@ -181,6 +179,7 @@ static inline bool flpr_peer_check_health(struct flpr_peer *peer, uint32_t now_m
 	}
 	uint32_t elapsed = now_ms - peer->rx_last_ms;
 	if (elapsed > FLPR_HEARTBEAT_MISS_MAX * FLPR_HEARTBEAT_INTERVAL_MS) {
+		peer->rx_missed_total++;
 		return false;
 	}
 	return true;

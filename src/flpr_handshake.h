@@ -39,7 +39,7 @@ struct flpr_status {
 	uint32_t rx_dup;
 	uint32_t rx_ooo;
 	uint32_t rx_last_ms;
-	uint32_t rx_consec_missed;
+	uint32_t rx_missed_total;
 
 	/* Stress test */
 	bool stress_active;
@@ -47,6 +47,9 @@ struct flpr_status {
 	uint32_t stress_sent;
 	uint32_t stress_recv;
 	uint32_t stress_timeouts;
+	uint32_t stress_stale;    /* PONG with stale cookie (before this run) */
+	uint32_t stress_mismatch; /* PONG with unknown/future cookie */
+	uint32_t stress_err_send; /* IPC send failures during stress */
 };
 
 /**
