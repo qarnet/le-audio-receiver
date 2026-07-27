@@ -92,7 +92,12 @@ static uint8_t recv_payload[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
 
 /** Drain all pending input ring slots: verify CRC over valid bytes,
  *  copy bit-exact to output, publish.  Returns number of slots consumed.
- *  Respects stall_consumer_input flag. */
+ *  Respects stall_consumer_input / stall_producer_output flags.
+ *
+ *  Safety: output stall/full MUST NOT drop input.  Before consuming
+ *  an input slot, check that output ring has space and output is not
+ *  stalled.  If output cannot accept, leave input consumer unchanged
+ *  so the producer retries on next poll/wake.  No input loss. */
 static uint32_t ring_process_input(void)
 {
 	uint32_t consumed = 0;
@@ -105,19 +110,36 @@ static uint32_t ring_process_input(void)
 			break;
 		}
 
+		/* Check output capacity BEFORE consuming input.
+		 * If output ring is full or stalled, stop here —
+		 * do NOT consume input (no loss). */
+		if (stall_producer_output) {
+			break;
+		}
+		{
+			struct flpr_ring_header *hdr_out =
+				(struct flpr_ring_header *)RING_OUTPUT_BASE;
+			if (flpr_ring_space(hdr_out->producer_idx, hdr_out->consumer_idx) == 0) {
+				/* Output ring full — backpressure. Producer must
+				 * drain before we can forward more input. */
+				diag_produce_full++;
+				break;
+			}
+		}
+
 		uint8_t *slot_base;
 		struct flpr_ring_slot_meta *meta;
 		int ret;
 
 		ret = flpr_ring_consume_begin(RING_INPUT_BASE, ring_stream_epoch, &slot_base,
 					      &meta);
-		if (ret == -1) {
+		if (ret == -ENOENT) {
 			/* Empty — stop draining. */
 			ring_test_empty_polls++;
 			diag_consume_empty++;
 			break;
 		}
-		if (ret == -2) {
+		if (ret == -ESTALE) {
 			/* Stale epoch — skip, already advanced by consume_begin. */
 			ring_test_epoch_stale++;
 			diag_consume_stale++;
@@ -144,29 +166,18 @@ static uint32_t ring_process_input(void)
 			}
 		}
 
-		/* Try to produce into output ring. */
+		/* Output-capacity check was done above — this produce_begin
+		 * MUST succeed (space was reserved before consuming input). */
 		uint32_t out_idx;
-		if (stall_producer_output) {
-			/* Output stall active: consumer-done the input slot
-			 * (we consumed it) but do NOT produce output. */
-			ring_test_output_full++;
-			diag_produce_full++;
-			flpr_ring_consume_done(RING_INPUT_BASE);
-			break;
-		}
-
 		ret = flpr_ring_produce_begin(RING_OUTPUT_BASE, &out_idx);
 		if (ret != 0) {
-			/* Output full — stop consuming input to avoid
-			 * dropping blocks. Consumer will drain output
-			 * and we'll come back on next poll. */
+			/* Should never happen: we checked space before consuming.
+			 * If it does, keep input unconsumed by NOT calling
+			 * consume_done.  The slot stays pending; next poll
+			 * re-processes it.  Count the anomaly. */
 			ring_test_output_full++;
 			diag_produce_full++;
-			/* Release input slot (we consumed it but can't
-			 * forward it — drop is allowed in test; counter
-			 * records the event). */
-			flpr_ring_consume_done(RING_INPUT_BASE);
-			break;
+			break; /* leave input index unchanged */
 		}
 
 		diag_produce_ok++;
@@ -181,15 +192,14 @@ static uint32_t ring_process_input(void)
 		memset(flpr_ring_slot_payload(out_slot), 0, FLPR_RING_PAYLOAD_CAPACITY_BYTES);
 		memcpy(flpr_ring_slot_payload(out_slot), recv_payload, valid_bytes);
 
-		/* Recompute CRC over valid bytes for the output copy
-		 * (verifies the copy was bit-exact). */
-		out_meta->crc32 = meta->crc32; /* forward original CRC */
+		/* Forward original CRC. */
+		out_meta->crc32 = meta->crc32;
 		out_meta->valid_frames = valid_frames;
 
 		/* Publish output slot. */
 		flpr_ring_produce_commit(RING_OUTPUT_BASE, out_idx);
 
-		/* Release input slot. */
+		/* Release input slot (only after successful output publish). */
 		flpr_ring_consume_done(RING_INPUT_BASE);
 
 		ring_test_block_count++;

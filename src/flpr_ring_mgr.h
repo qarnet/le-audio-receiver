@@ -21,17 +21,20 @@
 extern "C" {
 #endif
 
-/* Outcome of a produce attempt (for test use). */
+/* Outcome of a produce attempt (for test use).
+ * Uses POSIX errno values for consistency. */
 enum flpr_produce_result {
-	FLPR_PRODUCE_OK = 0,
-	FLPR_PRODUCE_FULL = -1,
+	FLPR_PRODUCE_OK = 0,        /* success */
+	FLPR_PRODUCE_FULL = -28,    /* -ENOSPC: ring full */
+	FLPR_PRODUCE_INVALID = -22, /* -EINVAL: bad params (valid_frames, flags) */
 };
 
 /* Outcome of a consume attempt. */
 enum flpr_consume_result {
-	FLPR_CONSUME_OK = 0,
-	FLPR_CONSUME_EMPTY = -1,
-	FLPR_CONSUME_STALE = -2,
+	FLPR_CONSUME_OK = 0,        /* success */
+	FLPR_CONSUME_EMPTY = -2,    /* -ENOENT: ring empty */
+	FLPR_CONSUME_STALE = -116,  /* -ESTALE: stale epoch */
+	FLPR_CONSUME_INVALID = -22, /* -EINVAL: bad slot metadata */
 };
 
 /** Snapshot of ring and test status for shell display. */
@@ -222,9 +225,24 @@ int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms);
  * @param block_count  Number of blocks to transfer.
  * @param timeout_ms   Maximum duration in milliseconds.
  * @param out          Filled with final test status on return.
+/** Return nonzero if sent == target AND recv == target AND all error counters zero.
+ *
+ * @param block_count  Number of blocks to transfer.
+ * @param timeout_ms   Maximum duration in milliseconds.
+ * @param out          Filled with final test status on return.
  * @return 0 on success (all gates), -1 on failure.
  */
 int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flpr_ring_status *out);
+
+/**
+ * @brief Probe: produce a slot with stale epoch directly into the OUTPUT ring.
+ * Bypasses normal epoch validation so consumer will see ESTALE.
+ * Test-use only — not for production data paths.
+ *
+ * @param stale_epoch  An epoch value that does NOT match the current epoch.
+ * @return 0 on success, negative on error.
+ */
+int flpr_ring_mgr_produce_stale_test(uint32_t stale_epoch);
 
 #ifdef __cplusplus
 }

@@ -433,8 +433,9 @@ enum flpr_produce_result flpr_ring_mgr_produce_block(const uint8_t *pcm_data, ui
 	uint32_t idx;
 	int ret;
 
+	/* Reject invalid frame counts instead of silently clamping. */
 	if (valid_frames > FLPR_RING_PAYLOAD_MAX_INPUT) {
-		valid_frames = FLPR_RING_PAYLOAD_MAX_INPUT;
+		return FLPR_PRODUCE_INVALID;
 	}
 
 	/* Stall injection. */
@@ -449,11 +450,14 @@ enum flpr_produce_result flpr_ring_mgr_produce_block(const uint8_t *pcm_data, ui
 	}
 
 	ret = flpr_ring_produce_begin(RING_INPUT_BASE, &idx);
-	if (ret != 0) {
+	if (ret == -ENOSPC) {
 		k_spinlock_key_t key = k_spin_lock(&ring_lock);
 		test_full_events++;
 		k_spin_unlock(&ring_lock, key);
 		return FLPR_PRODUCE_FULL;
+	}
+	if (ret != 0) {
+		return FLPR_PRODUCE_INVALID;
 	}
 
 	uint8_t *slot = flpr_ring_slot_base(RING_INPUT_BASE, idx);
@@ -496,10 +500,10 @@ enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t 
 	int ret;
 
 	ret = flpr_ring_consume_begin(RING_OUTPUT_BASE, ring_stream_epoch, &slot_base, &meta);
-	if (ret == -1) {
+	if (ret == -ENOENT) {
 		return FLPR_CONSUME_EMPTY;
 	}
-	if (ret == -2) {
+	if (ret == -ESTALE) {
 		k_spinlock_key_t key = k_spin_lock(&ring_lock);
 		test_stale_events++;
 		k_spin_unlock(&ring_lock, key);
@@ -508,8 +512,10 @@ enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t 
 
 	/* Read metadata. */
 	uint16_t vf = meta->valid_frames;
+	/* Reject invalid frame counts instead of silently clamping. */
 	if (vf > FLPR_RING_PAYLOAD_CAPACITY_FRAMES) {
-		vf = FLPR_RING_PAYLOAD_CAPACITY_FRAMES;
+		flpr_ring_consume_done(RING_OUTPUT_BASE);
+		return FLPR_CONSUME_INVALID;
 	}
 	if (valid_frames_out) {
 		*valid_frames_out = vf;
@@ -713,14 +719,9 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 			enum flpr_consume_result cr;
 			uint32_t seq_out;
 			uint32_t latency;
-			while ((cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, &seq_out,
-								 NULL, &latency)) !=
-			       FLPR_CONSUME_EMPTY) {
-				/* Independent payload verification done inside
-				 * consume_block when test_active is true. */
-				(void)cr;
-				(void)seq_out;
-				(void)latency;
+			while ((int)cr != FLPR_CONSUME_EMPTY) {
+				cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, &seq_out,
+								 NULL, &latency);
 			}
 		}
 
@@ -736,9 +737,9 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 				enum flpr_consume_result cr;
 				uint32_t seq_out;
 				uint32_t latency;
-				while ((cr = flpr_ring_mgr_consume_block(
-						test_recv_buf, NULL, &seq_out, NULL, &latency)) !=
-				       FLPR_CONSUME_EMPTY) {
+				while ((int)cr != FLPR_CONSUME_EMPTY) {
+					cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL,
+									 &seq_out, NULL, &latency);
 				}
 			}
 			ret = k_sem_take(&consume_sem, K_MSEC(10));
@@ -778,9 +779,9 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 			enum flpr_consume_result cr;
 			uint32_t seq_out;
 			uint32_t latency;
-			while ((cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, &seq_out,
-								 NULL, &latency)) !=
-			       FLPR_CONSUME_EMPTY) {
+			while ((int)cr != FLPR_CONSUME_EMPTY) {
+				cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, &seq_out,
+								 NULL, &latency);
 			}
 		}
 	}
@@ -798,10 +799,12 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 			uint32_t seq_out;
 			uint32_t latency;
 			bool drained = false;
-			while ((cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, &seq_out,
-								 NULL, &latency)) !=
-			       FLPR_CONSUME_EMPTY) {
-				drained = true;
+			while ((int)cr != FLPR_CONSUME_EMPTY) {
+				cr = flpr_ring_mgr_consume_block(test_recv_buf, NULL, &seq_out,
+								 NULL, &latency);
+				if ((int)cr != FLPR_CONSUME_EMPTY) {
+					drained = true;
+				}
 			}
 
 			{
@@ -856,5 +859,38 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 		}
 	}
 
+	return 0;
+}
+
+/* ── Test helpers (stale injection) ─────────────────────────────── */
+
+int flpr_ring_mgr_produce_stale_test(uint32_t stale_epoch)
+{
+	uint32_t idx;
+	int ret;
+
+	if (!rings_initialized) {
+		return -EAGAIN;
+	}
+	if (stale_epoch == 0) {
+		return -EINVAL;
+	}
+
+	/* Allocate slot in OUTPUT ring directly (FLPR→CPUAPP). */
+	ret = flpr_ring_produce_begin(RING_OUTPUT_BASE, &idx);
+	if (ret != 0) {
+		return ret;
+	}
+
+	uint8_t *slot = flpr_ring_slot_base(RING_OUTPUT_BASE, idx);
+	struct flpr_ring_slot_meta *meta = flpr_ring_slot_meta_ptr(slot);
+
+	/* Fill with stale epoch — consumer will reject. */
+	memset(slot, 0, FLPR_RING_SLOT_STRIDE);
+	meta->epoch = stale_epoch;
+	meta->flags = FLPR_SLOT_FLAG_VALID;
+	meta->valid_frames = 0;
+
+	flpr_ring_produce_commit(RING_OUTPUT_BASE, idx);
 	return 0;
 }

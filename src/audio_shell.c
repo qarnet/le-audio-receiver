@@ -12,6 +12,7 @@
 #if defined(CONFIG_SOC_NRF54L15)
 #include "flpr_handshake.h"
 #include "flpr_ring_mgr.h"
+#include "flpr_ring.h"
 #endif
 
 #include <inttypes.h>
@@ -405,12 +406,299 @@ static int cmd_flpr_ring_stall_flpr(const struct shell *sh, size_t argc, char **
 	return ret;
 }
 
+/* Static scratch for acceptance test — too large for shell thread stack. */
+static uint8_t acceptance_buf[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+static struct flpr_ring_status acceptance_rs;
+
+/* Gate helpers use pointer to static struct to avoid stack copies. */
+#define ACCEPT_STATUS() (&acceptance_rs)
+#define ACCEPT_BUF()    (acceptance_buf)
+
+static int cmd_flpr_ring_acceptance(const struct shell *sh, size_t argc, char **argv)
+{
+	uint32_t count = 100000;
+	if (argc >= 2) {
+		count = (uint32_t)shell_strtoul(argv[1], 0, NULL);
+	}
+	if (count == 0 || count > 10000000) {
+		shell_error(sh, "Block count must be 1–10,000,000");
+		return -EINVAL;
+	}
+
+	struct flpr_ring_status pre;
+	flpr_ring_mgr_get_status(&pre);
+	if (!pre.initialized) {
+		shell_error(
+			sh,
+			"Rings not initialized — 'flpr ring init' then 'flpr ring reset' first");
+		return -EAGAIN;
+	}
+	if (pre.epoch == 0) {
+		int r = flpr_ring_mgr_coordinated_reset(0, 5000);
+		if (r != 0) {
+			shell_error(sh, "Coordinated reset failed: %d", r);
+			return r;
+		}
+	}
+	bool any_fail = false;
+
+#define GATE_HEADER(n, desc) shell_print(sh, "--- Gate %d: %s ---", n, desc)
+
+	/* Gate 1: normal loopback. */
+	GATE_HEADER(1, "normal loopback");
+	{
+		uint32_t start = k_uptime_get_32();
+		uint32_t timeout = count * 5;
+		if (timeout < 30000) {
+			timeout = 30000;
+		}
+		struct flpr_ring_status *s = ACCEPT_STATUS();
+		int r = flpr_ring_mgr_test_run(count, timeout, s);
+		uint32_t elapsed = k_uptime_get_32() - start;
+		shell_print(sh, "Sent=%u Recv=%u CRC_Err=%u Pay_Err=%u Stale=%u BP=%u",
+			    s->test_blocks_sent, s->test_blocks_recv, s->test_crc_errors,
+			    s->test_payload_errors, s->test_stale_events, s->test_backpressure);
+		if (s->latency_count > 0) {
+			uint32_t avg = (uint32_t)(s->latency_sum / s->latency_count);
+			uint32_t tput = (s->latency_count * 1000U) / (elapsed ? elapsed : 1);
+			shell_print(
+				sh,
+				"Latency: min=%u us max=%u us avg=%u us N=%u  Throughput: %u blk/s",
+				k_cyc_to_us_ceil32(s->latency_min),
+				k_cyc_to_us_ceil32(s->latency_max), k_cyc_to_us_ceil32(avg),
+				s->latency_count, tput);
+		}
+		if (r == 0 && s->test_blocks_sent == count && s->test_payload_errors == 0 &&
+		    s->test_crc_errors == 0 && s->test_stale_events == 0 &&
+		    s->test_backpressure == 0) {
+			shell_print(sh, "GATE 1 PASS: %u blocks in %u ms", count, elapsed);
+		} else {
+			shell_error(
+				sh,
+				"GATE 1 FAIL: sent=%u recv=%u crc=%u pay=%u stale=%u bp=%u rc=%d",
+				s->test_blocks_sent, s->test_blocks_recv, s->test_crc_errors,
+				s->test_payload_errors, s->test_stale_events, s->test_backpressure,
+				r);
+			any_fail = true;
+		}
+	}
+
+	/* Gate 2: CPU producer stall → resume exact. */
+	GATE_HEADER(2, "CPU producer stall / resume");
+	{
+		flpr_ring_mgr_stall_producer(true);
+		uint32_t full_cnt = 0;
+		for (uint32_t i = 0; i < 10; i++) {
+			flpr_ring_gen_payload(ACCEPT_BUF(), sizeof(acceptance_buf), i);
+			if (flpr_ring_mgr_produce_block(ACCEPT_BUF(), FLPR_RING_PAYLOAD_MAX_INPUT,
+							i, 0, false) == FLPR_PRODUCE_FULL) {
+				full_cnt++;
+			}
+		}
+		flpr_ring_mgr_stall_producer(false);
+		struct flpr_ring_status *s = ACCEPT_STATUS();
+		flpr_ring_mgr_get_status(s);
+		shell_print(sh, "Stall FULL count: %u (expect 10)  Backpressure: %u", full_cnt,
+			    s->test_backpressure);
+		if (s->test_blocks_sent > 0 || full_cnt != 10) {
+			shell_error(sh, "GATE 2 FAIL: sent=%u full=%u", s->test_blocks_sent,
+				    full_cnt);
+			any_fail = true;
+		} else {
+			struct flpr_ring_status *s2 = ACCEPT_STATUS();
+			int r2 = flpr_ring_mgr_test_run(100, 10000, s2);
+			if (r2 == 0 && s2->test_blocks_recv == 100 &&
+			    s2->test_payload_errors == 0) {
+				shell_print(sh, "GATE 2 PASS");
+			} else {
+				shell_error(sh, "GATE 2 FAIL: resume rc=%d recv=%u", r2,
+					    s2->test_blocks_recv);
+				any_fail = true;
+			}
+		}
+	}
+
+	/* Gate 3: FLPR input-consumer stall — fill exactly 4, backpressure, resume exact. */
+	GATE_HEADER(3, "FLPR input-consumer stall");
+	{
+		int r = flpr_ring_mgr_coordinated_reset(0, 5000);
+		if (r != 0) {
+			shell_error(sh, "reset fail: %d", r);
+			any_fail = true;
+		} else {
+			r = flpr_ring_mgr_flpr_stall(FLPR_STALL_CONSUMER_INPUT, 5000);
+			if (r != 0) {
+				shell_error(sh, "stall fail: %d", r);
+				any_fail = true;
+			} else {
+				uint32_t ok = 0, full_after = 0;
+				for (uint32_t i = 0; i < 10; i++) {
+					flpr_ring_gen_payload(ACCEPT_BUF(), sizeof(acceptance_buf),
+							      i);
+					enum flpr_produce_result pr = flpr_ring_mgr_produce_block(
+						ACCEPT_BUF(), FLPR_RING_PAYLOAD_MAX_INPUT, i, 0,
+						false);
+					if (i < 4 && pr == FLPR_PRODUCE_OK) {
+						ok++;
+					} else if (i >= 4 && pr == FLPR_PRODUCE_FULL) {
+						full_after++;
+					}
+					k_msleep(10);
+				}
+				shell_print(sh, "Filled: %u (expect 4)  Full-after: %u (expect 6)",
+					    ok, full_after);
+				if (ok != 4 || full_after < 1) {
+					shell_error(sh, "GATE 3 FAIL");
+					any_fail = true;
+				}
+				flpr_ring_mgr_flpr_stall(0, 5000);
+				k_msleep(200);
+				uint32_t recv = 0;
+				for (int n = 0; n < 20; n++) {
+					enum flpr_consume_result cr = flpr_ring_mgr_consume_block(
+						NULL, NULL, NULL, NULL, NULL);
+					if ((int)cr != FLPR_CONSUME_EMPTY) {
+						recv++;
+					} else {
+						break;
+					}
+				}
+				shell_print(sh, "Resume: recv %u (expect 4)", recv);
+				if (recv == 4) {
+					shell_print(sh, "GATE 3 PASS");
+				} else {
+					shell_error(sh, "GATE 3 FAIL: recv=%u", recv);
+					any_fail = true;
+				}
+			}
+		}
+	}
+
+	/* Gate 4: FLPR output-producer stall — output fills, no input loss, resume exact. */
+	GATE_HEADER(4, "FLPR output-producer stall");
+	{
+		int r = flpr_ring_mgr_coordinated_reset(0, 5000);
+		if (r != 0) {
+			shell_error(sh, "reset fail: %d", r);
+			any_fail = true;
+		} else {
+			r = flpr_ring_mgr_flpr_stall(FLPR_STALL_PRODUCER_OUTPUT, 5000);
+			if (r != 0) {
+				shell_error(sh, "stall fail: %d", r);
+				any_fail = true;
+			} else {
+				for (uint32_t i = 0; i < 10; i++) {
+					flpr_ring_gen_payload(ACCEPT_BUF(), sizeof(acceptance_buf),
+							      i);
+					while (flpr_ring_mgr_produce_block(
+						       ACCEPT_BUF(), FLPR_RING_PAYLOAD_MAX_INPUT, i,
+						       0, false) != FLPR_PRODUCE_OK) {
+						k_msleep(10);
+					}
+					flpr_ring_mgr_notify_producer();
+				}
+				k_msleep(200);
+				struct flpr_ring_status *s = ACCEPT_STATUS();
+				flpr_ring_mgr_get_status(s);
+				shell_print(sh, "Output-full FLPR-side: %u (expect >0)",
+					    s->test_output_full);
+				flpr_ring_mgr_flpr_stall(0, 5000);
+				k_msleep(200);
+				uint32_t recv = 0;
+				for (int n = 0; n < 30; n++) {
+					enum flpr_consume_result cr = flpr_ring_mgr_consume_block(
+						NULL, NULL, NULL, NULL, NULL);
+					if ((int)cr != FLPR_CONSUME_EMPTY) {
+						recv++;
+					} else {
+						break;
+					}
+				}
+				shell_print(sh, "Resume: recv %u", recv);
+				if (s->test_output_full > 0 && recv >= 10) {
+					shell_print(sh, "GATE 4 PASS");
+				} else {
+					shell_error(sh, "GATE 4 FAIL: full=%u recv=%u",
+						    s->test_output_full, recv);
+					any_fail = true;
+				}
+			}
+		}
+	}
+
+	/* Gate 5: stale epoch injection, reject, recovery. */
+	GATE_HEADER(5, "stale epoch injection");
+	{
+		int r = flpr_ring_mgr_coordinated_reset(0, 5000);
+		if (r != 0) {
+			shell_error(sh, "reset fail: %d", r);
+			any_fail = true;
+		} else {
+			struct flpr_ring_status *s = ACCEPT_STATUS();
+			flpr_ring_mgr_get_status(s);
+			uint32_t stale_epoch = s->epoch + 31337;
+			if (flpr_ring_mgr_produce_stale_test(stale_epoch) != 0) {
+				shell_error(sh, "stale injection fail");
+				any_fail = true;
+			} else {
+				flpr_ring_mgr_consume_block(NULL, NULL, NULL, NULL, NULL);
+				k_msleep(50);
+				struct flpr_ring_status *s5 = ACCEPT_STATUS();
+				flpr_ring_mgr_get_status(s5);
+				shell_print(sh, "Stale events: %u (expect 1)",
+					    s5->test_stale_events);
+				if (s5->test_stale_events == 1) {
+					struct flpr_ring_status *s5r = ACCEPT_STATUS();
+					int r5r = flpr_ring_mgr_test_run(100, 5000, s5r);
+					if (r5r == 0 && s5r->test_blocks_recv == 100) {
+						shell_print(sh, "GATE 5 PASS");
+					} else {
+						shell_error(sh,
+							    "GATE 5 FAIL recovery: rc=%d recv=%u",
+							    r5r, s5r->test_blocks_recv);
+						any_fail = true;
+					}
+				} else {
+					shell_error(sh, "GATE 5 FAIL: stale=%u",
+						    s5->test_stale_events);
+					any_fail = true;
+				}
+			}
+		}
+	}
+
+	/* Gate 6: explicit empty. */
+	GATE_HEADER(6, "explicit empty");
+	{
+		struct flpr_ring_status *s = ACCEPT_STATUS();
+		flpr_ring_mgr_get_status(s);
+		shell_print(sh, "In used=%u  Out used=%u", s->in_used, s->out_used);
+		if (s->in_used == 0 && s->out_used == 0) {
+			shell_print(sh, "GATE 6 PASS");
+		} else {
+			shell_error(sh, "GATE 6 FAIL");
+			any_fail = true;
+		}
+	}
+
+#undef GATE_HEADER
+
+	if (any_fail) {
+		shell_print(sh, "ACCEPTANCE FAILED");
+		return -1;
+	}
+	shell_print(sh, "ACCEPTANCE PASSED — all gates clear");
+	return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	flpr_ring_cmds, SHELL_CMD_ARG(status, NULL, "PCM ring status.", cmd_flpr_ring_status, 1, 0),
 	SHELL_CMD_ARG(init, NULL, "Initialize PCM rings.", cmd_flpr_ring_init, 1, 0),
 	SHELL_CMD_ARG(reset, NULL, "Reset PCM rings with new epoch.", cmd_flpr_ring_reset, 1, 0),
 	SHELL_CMD_ARG(test, NULL, "Run ring throughput test (default 10k blocks).",
 		      cmd_flpr_ring_test, 1, 1),
+	SHELL_CMD_ARG(acceptance, NULL, "Run full acceptance: loopback, stalls, stale, empty.",
+		      cmd_flpr_ring_acceptance, 1, 1),
 	SHELL_CMD_ARG(stall, NULL, "CPU-side producer stall: on|off. Blocks produce_block as FULL.",
 		      cmd_flpr_ring_stall_producer, 1, 1),
 	SHELL_CMD_ARG(stall - flpr, NULL,

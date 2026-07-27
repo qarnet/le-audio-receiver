@@ -62,8 +62,9 @@ extern "C" {
 #define FLPR_RING_DATA_OFFSET   128U
 #define FLPR_RING_TOTAL_SIZE    8192U /* must match DT reservation */
 
-/* Maximum slot fill level (sentinel: one slot always kept empty). */
-#define FLPR_RING_MAX_USED (FLPR_RING_SLOT_COUNT - 1U)
+/* Maximum slot fill level. Monotonic counters remove empty/full ambiguity
+ * — all SLOT_COUNT slots are usable. Full when used >= SLOT_COUNT. */
+#define FLPR_RING_MAX_USED (FLPR_RING_SLOT_COUNT)
 
 /* ── Ring header (128 bytes, at base of each ring) ──────────────── */
 
@@ -157,15 +158,15 @@ static inline uint32_t flpr_ring_used(uint32_t producer, uint32_t consumer)
 }
 
 /** Number of free slots for the producer to fill.
- *  Always ≤ slot_count - 1 (sentinel discipline). */
+ *  All SLOT_COUNT slots are usable; full when used >= SLOT_COUNT. */
 static inline uint32_t flpr_ring_space(uint32_t producer, uint32_t consumer)
 {
 	uint32_t used = producer - consumer;
 
-	if (used >= FLPR_RING_MAX_USED) {
+	if (used >= FLPR_RING_SLOT_COUNT) {
 		return 0U;
 	}
-	return FLPR_RING_MAX_USED - used;
+	return FLPR_RING_SLOT_COUNT - used;
 }
 
 /** Number of slots available to the consumer. Same as flpr_ring_used. */
@@ -181,7 +182,7 @@ static inline bool flpr_ring_is_empty(uint32_t producer, uint32_t consumer)
 
 static inline bool flpr_ring_is_full(uint32_t producer, uint32_t consumer)
 {
-	return (producer - consumer) >= FLPR_RING_MAX_USED;
+	return (producer - consumer) >= FLPR_RING_SLOT_COUNT;
 }
 
 /* ── Payload pointer helpers ────────────────────────────────────── */
@@ -284,7 +285,7 @@ bool flpr_ring_validate(const uint8_t *base);
  *
  * @param base          Ring base address.
  * @param slot_idx_out  Output: allocated monotonic index.
- * @return 0 on success, -1 if ring full.
+ * @return 0 on success, -ENOSPC if ring full.
  */
 int flpr_ring_produce_begin(uint8_t *base, uint32_t *slot_idx_out);
 
@@ -307,13 +308,13 @@ void flpr_ring_produce_commit(uint8_t *base, uint32_t slot_idx);
  *
  * Acquire fence after observing producer_idx.  Validates epoch and
  * returns pointer to slot.  On stale epoch the consumer advances
- * past the slot (no deadlock) and returns -2.
+ * past the slot (no deadlock) and returns -ESTALE.
  *
  * @param base           Ring base address.
  * @param current_epoch  Stream epoch expected by consumer (0 = no check).
  * @param slot_base_out  Output: pointer to slot base.
  * @param meta_out       Output: pointer to validated slot metadata.
- * @return 0 on success, -1 if ring empty, -2 if stale epoch.
+ * @return 0 on success, -ENOENT if ring empty, -ESTALE if stale epoch.
  */
 int flpr_ring_consume_begin(uint8_t *base, uint32_t current_epoch, uint8_t **slot_base_out,
 			    struct flpr_ring_slot_meta **meta_out);

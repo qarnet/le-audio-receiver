@@ -31,6 +31,7 @@
 
 #include <zephyr/ztest.h>
 #include <string.h>
+#include <errno.h>
 
 #include "flpr_ring.h"
 
@@ -108,48 +109,48 @@ ZTEST(flpr_ring, test_validate_bad_capacity)
 
 ZTEST(flpr_ring, test_space_empty)
 {
-	zassert_equal(flpr_ring_space(0, 0), FLPR_RING_MAX_USED, "empty ring = max space (N-1)");
+	zassert_equal(flpr_ring_space(0, 0), FLPR_RING_SLOT_COUNT, "empty ring = all slots (4)");
 	zassert_equal(flpr_ring_used(0, 0), 0, "empty ring used = 0");
 }
 
 ZTEST(flpr_ring, test_space_one_used)
 {
-	/* Producer at 1, consumer at 0: used=1, space=N-2. */
-	zassert_equal(flpr_ring_space(1, 0), FLPR_RING_MAX_USED - 1, "one used gives N-2 space");
+	/* Producer at 1, consumer at 0: used=1, space=3. */
+	zassert_equal(flpr_ring_space(1, 0), FLPR_RING_SLOT_COUNT - 1, "one used = 3 space");
 	zassert_equal(flpr_ring_used(1, 0), 1, "used = 1");
 }
 
 ZTEST(flpr_ring, test_space_full)
 {
-	/* Producer at N-1, consumer at 0: used=N-1 = full. */
-	uint32_t prod = FLPR_RING_MAX_USED;
+	/* Producer at 4, consumer at 0: used=4 = full. */
+	uint32_t prod = FLPR_RING_SLOT_COUNT;
 	zassert_equal(flpr_ring_space(prod, 0), 0, "full ring space = 0");
-	zassert_equal(flpr_ring_used(prod, 0), FLPR_RING_MAX_USED, "full ring used = N-1");
+	zassert_equal(flpr_ring_used(prod, 0), FLPR_RING_SLOT_COUNT, "full ring used = 4");
 }
 
 ZTEST(flpr_ring, test_space_wrap)
 {
 	/* Simulate wrap: producer=0xFFFFFFF0, consumer=0xFFFFFFF0.
-	 * used=0, space=3 (all N-1). */
+	 * used=0, space=4 (all slots). */
 	uint32_t base = 0xFFFFFFF0U;
-	zassert_equal(flpr_ring_space(base, base), FLPR_RING_MAX_USED, "wrapped empty = max space");
+	zassert_equal(flpr_ring_space(base, base), FLPR_RING_SLOT_COUNT, "wrapped empty = 4 space");
 	zassert_equal(flpr_ring_used(base, base), 0, "wrapped empty used = 0");
 }
 
 ZTEST(flpr_ring, test_space_one_used_wrap)
 {
 	uint32_t base = 0xFFFFFFF0U;
-	zassert_equal(flpr_ring_space(base + 1, base), FLPR_RING_MAX_USED - 1,
-		      "wrapped one used space");
+	zassert_equal(flpr_ring_space(base + 1, base), FLPR_RING_SLOT_COUNT - 1,
+		      "wrapped one used space = 3");
 	zassert_equal(flpr_ring_used(base + 1, base), 1, "wrapped used = 1");
 }
 
 ZTEST(flpr_ring, test_space_full_wrap)
 {
 	uint32_t base = 0xFFFFFFF0U;
-	uint32_t prod = base + FLPR_RING_MAX_USED;
+	uint32_t prod = base + FLPR_RING_SLOT_COUNT;
 	zassert_equal(flpr_ring_space(prod, base), 0, "wrapped full = 0 space");
-	zassert_equal(flpr_ring_used(prod, base), FLPR_RING_MAX_USED, "wrapped full used = N-1");
+	zassert_equal(flpr_ring_used(prod, base), FLPR_RING_SLOT_COUNT, "wrapped full = 4 used");
 }
 
 ZTEST(flpr_ring, test_count_equals_used)
@@ -166,11 +167,12 @@ ZTEST(flpr_ring, test_is_empty)
 
 ZTEST(flpr_ring, test_is_full)
 {
-	/* Full = used >= max_used (N-1). */
+	/* Full = used >= slot_count (4). */
 	zassert_false(flpr_ring_is_full(1, 0), "1 used → not full");
-	zassert_false(flpr_ring_is_full(2, 0), "2 used → not full (N=4)");
-	zassert_true(flpr_ring_is_full(3, 0), "3 used → full");
-	zassert_true(flpr_ring_is_full(10, 0), "used >= 3 → full");
+	zassert_false(flpr_ring_is_full(2, 0), "2 used → not full");
+	zassert_false(flpr_ring_is_full(3, 0), "3 used → not full (N=4, full at 4)");
+	zassert_true(flpr_ring_is_full(4, 0), "4 used → full");
+	zassert_true(flpr_ring_is_full(10, 0), "used >= 4 → full");
 }
 
 /* ── 100+ wraps through slot indices ────────────────────────────── */
@@ -224,14 +226,14 @@ ZTEST(flpr_ring, test_uint32_counter_wrap)
 	hdr->producer_idx = near_end;
 	hdr->consumer_idx = near_end;
 
-	/* Space should still be N-1 (empty ring at high counter). */
-	zassert_equal(flpr_ring_space(hdr->producer_idx, hdr->consumer_idx), FLPR_RING_MAX_USED,
+	/* Verify space correct near wrap. */
+	zassert_equal(flpr_ring_space(hdr->producer_idx, hdr->consumer_idx), FLPR_RING_SLOT_COUNT,
 		      "space correct near UINT32_MAX");
 
-	/* Produce 3 slots (fill to full). */
-	for (uint32_t i = 0; i < FLPR_RING_MAX_USED; i++) {
+	/* Produce 4 slots (fill to full). */
+	for (uint32_t i = 0; i < FLPR_RING_SLOT_COUNT; i++) {
 		ret = flpr_ring_produce_begin(test_ring, &idx);
-		if (i < FLPR_RING_MAX_USED) {
+		if (i < FLPR_RING_SLOT_COUNT) {
 			zassert_equal(ret, 0, "produce %u should succeed near wrap", i);
 		} else {
 			zassert_equal(ret, -1, "produce %u should fail (full)", i);
@@ -250,7 +252,7 @@ ZTEST(flpr_ring, test_uint32_counter_wrap)
 		     "should be full near UINT32_MAX");
 
 	/* Consume all. */
-	for (uint32_t i = 0; i < FLPR_RING_MAX_USED; i++) {
+	for (uint32_t i = 0; i < FLPR_RING_SLOT_COUNT; i++) {
 		uint8_t *cs;
 		struct flpr_ring_slot_meta *cm;
 		ret = flpr_ring_consume_begin(test_ring, 1, &cs, &cm);
@@ -315,8 +317,8 @@ ZTEST(flpr_ring, test_produce_full)
 	uint32_t idx;
 	int ret;
 
-	/* Fill to capacity: N-1 slots (3 for N=4). */
-	for (uint32_t i = 0; i < FLPR_RING_MAX_USED; i++) {
+	/* Fill to capacity: all 4 slots. */
+	for (uint32_t i = 0; i < FLPR_RING_SLOT_COUNT; i++) {
 		ret = flpr_ring_produce_begin(test_ring, &idx);
 		zassert_equal(ret, 0, "produce %u should succeed", i);
 		uint8_t *slot = flpr_ring_slot_base(test_ring, idx);
@@ -324,9 +326,9 @@ ZTEST(flpr_ring, test_produce_full)
 		flpr_ring_produce_commit(test_ring, idx);
 	}
 
-	/* Next produce must fail. */
+	/* 5th produce must fail. */
 	ret = flpr_ring_produce_begin(test_ring, &idx);
-	zassert_equal(ret, -1, "produce N should fail (full)");
+	zassert_equal(ret, -ENOSPC, "produce 5th should fail (full)");
 }
 
 ZTEST(flpr_ring, test_consume_empty)
@@ -334,7 +336,7 @@ ZTEST(flpr_ring, test_consume_empty)
 	uint8_t *slot;
 	struct flpr_ring_slot_meta *meta;
 	int ret = flpr_ring_consume_begin(test_ring, 1, &slot, &meta);
-	zassert_equal(ret, -1, "consume on empty ring should fail");
+	zassert_equal(ret, -ENOENT, "consume on empty ring should fail");
 }
 
 ZTEST(flpr_ring, test_consume_stale_epoch)
@@ -353,7 +355,7 @@ ZTEST(flpr_ring, test_consume_stale_epoch)
 	uint8_t *cs;
 	struct flpr_ring_slot_meta *cm;
 	int ret = flpr_ring_consume_begin(test_ring, 99, &cs, &cm);
-	zassert_equal(ret, -2, "stale epoch should return -2");
+	zassert_equal(ret, -ESTALE, "stale epoch should return -ESTALE");
 
 	/* Consumer should have advanced past the stale slot. */
 	zassert_equal(flpr_ring_consumer(test_ring), 1, "consumer should advance past stale");
@@ -528,13 +530,13 @@ ZTEST(flpr_ring, test_producer_full_counter)
 	uint32_t idx;
 	struct flpr_ring_header *hdr = (struct flpr_ring_header *)test_ring;
 
-	/* Fill ring to capacity. */
-	for (uint32_t i = 0; i < FLPR_RING_MAX_USED; i++) {
+	/* Fill ring to capacity (4 slots). */
+	for (uint32_t i = 0; i < FLPR_RING_SLOT_COUNT; i++) {
 		flpr_ring_produce_begin(test_ring, &idx);
 		flpr_ring_produce_commit(test_ring, idx);
 	}
 
-	/* Next attempt increments err_producer_full. */
+	/* 5th attempt increments err_producer_full. */
 	uint32_t before = hdr->err_producer_full;
 	flpr_ring_produce_begin(test_ring, &idx);
 	zassert_equal(hdr->err_producer_full, before + 1, "err_producer_full incremented");
@@ -655,7 +657,7 @@ ZTEST(flpr_ring, test_reset_with_pending_data_reject_stale)
 	uint8_t *cs;
 	struct flpr_ring_slot_meta *cm;
 	ret = flpr_ring_consume_begin(test_ring, 20, &cs, &cm);
-	zassert_equal(ret, -2, "stale epoch rejected (slot=10, ring=20)");
+	zassert_equal(ret, -ESTALE, "stale epoch rejected (slot=10, ring=20)");
 }
 
 /* ── Metadata size / epoch validation ──────────────────────────── */

@@ -24,6 +24,7 @@
 
 #include "flpr_ring.h"
 #include <string.h>
+#include <errno.h>
 
 /* ── CRC-32 (Ethernet/gzip polynomial, init=0xFFFFFFFF) ──────────── */
 
@@ -168,7 +169,7 @@ int flpr_ring_produce_begin(uint8_t *base, uint32_t *slot_idx_out)
 	space = flpr_ring_space(producer, consumer);
 	if (space == 0) {
 		hdr->err_producer_full++;
-		return -1; /* -ENOSPC */
+		return -ENOSPC;
 	}
 
 	*slot_idx_out = producer;
@@ -214,7 +215,7 @@ int flpr_ring_consume_begin(uint8_t *base, uint32_t current_epoch, uint8_t **slo
 	used = flpr_ring_used(producer, consumer);
 
 	if (used == 0) {
-		return -1; /* -ENOENT — empty */
+		return -ENOENT; /* empty */
 	}
 
 	slot_idx = consumer;
@@ -233,7 +234,7 @@ int flpr_ring_consume_begin(uint8_t *base, uint32_t current_epoch, uint8_t **slo
 		consumer++;
 		hdr->consumer_idx = consumer;
 		flpr_cache_full_barrier();
-		return -2; /* -ESTALE */
+		return -ESTALE;
 	}
 
 	*slot_base_out = (uint8_t *)meta; /* slot base == metadata pointer */
