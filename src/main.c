@@ -22,6 +22,10 @@
 #include "audio_volume.h"
 #include "bt_bap.h"
 
+#if defined(CONFIG_SOC_NRF54L15)
+#include "flpr_handshake.h"
+#endif
+
 #if defined(CONFIG_WATCHDOG)
 #include <zephyr/drivers/watchdog.h>
 #endif
@@ -129,6 +133,13 @@ int main(void)
 		sys_reboot(SYS_REBOOT_COLD);
 	}
 
+#if defined(CONFIG_SOC_NRF54L15)
+	/* FLPR handshake: non-blocking, non-fatal if FLPR absent.
+	 * VPR launcher has already released FLPR from reset at this point
+	 * (NORDIC_VPR_LAUNCHER init at POST_KERNEL level). */
+	flpr_handshake_init();
+#endif
+
 	err = bt_bap_restart_advertising();
 	if (err) {
 		LOG_ERR("Adv start failed: %d", err);
@@ -138,6 +149,9 @@ int main(void)
 	LOG_INF("Advertising as \"%s\"", CONFIG_BT_DEVICE_NAME);
 
 	while (true) {
+#if defined(CONFIG_SOC_NRF54L15)
+		flpr_handshake_heartbeat();
+#endif
 		bt_bap_wait_disconnect();
 		LOG_INF("Restarting advertising...");
 
