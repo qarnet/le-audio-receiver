@@ -672,6 +672,14 @@ def main():
     args = parser.parse_args()
     hci_path = "/org/bluez/" + args.adapter
 
+    # Extract HCI device index from adapter name (e.g. "hci1" -> 1).
+    hci_dev = 0
+    if args.adapter.startswith("hci"):
+        try:
+            hci_dev = int(args.adapter[3:])
+        except ValueError:
+            pass
+
     # Late-import D-Bus bindings so --help works without dbus-python.
     _dbus, _dbus_service, _GLib = _import_dbus()
 
@@ -880,6 +888,8 @@ def main():
                 str(hold_secs),
                 "--addr-type",
                 "public",
+                "--device",
+                str(hci_dev),
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -945,6 +955,8 @@ def main():
                     str(hold_secs),
                     "--addr-type",
                     "public",
+                    "--device",
+                    str(hci_dev),
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

@@ -72,6 +72,12 @@ def main():
         default=DEFAULT_OWN_ADDR,
         help=f"Own random address (used only with --addr-type random; default: {DEFAULT_OWN_ADDR})",
     )
+    parser.add_argument(
+        "--device",
+        type=int,
+        default=0,
+        help="HCI device index (default: 0)",
+    )
     args = parser.parse_args()
 
     peer_str = args.peer
@@ -82,7 +88,7 @@ def main():
     peer = bytes.fromhex(peer_str.replace(":", ""))[::-1]  # LE-first on the wire
 
     s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW, socket.BTPROTO_HCI)
-    s.bind((0,))
+    s.bind((args.device,))
 
     own_addr_type = OWN_ADDR_PUBLIC
     if addr_type == "random":
