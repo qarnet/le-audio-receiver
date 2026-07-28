@@ -37,7 +37,7 @@ extern "C" {
 /* ── Constants ─────────────────────────────────────────────────── */
 
 #define FLPR_RING_MAGIC       0x52494E47U /* "RING" */
-#define FLPR_RING_ABI_VERSION 3U          /* v3: cpu timestamp, payload/seq error counters */
+#define FLPR_RING_ABI_VERSION 4U          /* v4: asrc_state + processing_cycles/status */
 
 #define FLPR_RING_SLOT_COUNT 4U
 
@@ -52,8 +52,8 @@ extern "C" {
 
 /* Slot layout (all 32-byte cache-line aligned). */
 #define FLPR_RING_SLOT_ALIGN       32U
-#define FLPR_RING_SLOT_METADATA_SZ 32U
-#define FLPR_RING_SLOT_PAYLOAD_OFF 32U
+#define FLPR_RING_SLOT_METADATA_SZ 64U
+#define FLPR_RING_SLOT_PAYLOAD_OFF 64U
 #define FLPR_RING_SLOT_STRIDE      2016U /* padded to multiple of 32 */
 
 /* Total ring size: header (128) + 4 × stride (2016) = 8192 = 8 KiB */
@@ -109,7 +109,15 @@ _Static_assert(sizeof(struct flpr_ring_header) <= FLPR_RING_HEADER_SIZE,
 	       "ring header exceeds reserved size");
 #endif
 
-/* ── Slot metadata (32 bytes, before payload in each slot) ──────── */
+/* ── Slot metadata (64 bytes, before payload in each slot) ──────── */
+
+/* Forward-declare the ASRC state struct so we don't pull in audio_asrc.h
+ * into every file that includes flpr_ring.h.  The actual definition is
+ * in audio_asrc.h; wire consumers include both. */
+#ifndef AUDIO_ASRC_STATE_DEFINED
+#define AUDIO_ASRC_STATE_DEFINED
+struct audio_asrc_state;
+#endif
 
 struct flpr_ring_slot_meta {
 	uint32_t sequence;      /* monotonic frame sequence from stream */
@@ -119,16 +127,42 @@ struct flpr_ring_slot_meta {
 	int32_t correction_ppm; /* drift correction at time of capture */
 	uint32_t crc32;         /* CRC-32 of valid payload bytes (0 = unused) */
 	uint32_t cpu_timestamp; /* k_cycle_get_32() at produce time (latency) */
-	uint32_t _pad[2];       /* 32-byte alignment */
+	uint32_t _pad[2];       /* 32-byte boundary (fields 0..31) */
+
+	/* ── Extended metadata added in ABI v4 ────────────────────────
+	 * Fields at offsets 32..63. */
+	uint64_t asrc_raw[3];       /* struct audio_asrc_state (24 bytes) at offset 32 */
+	uint32_t processing_cycles; /* FLPR: k_cycle_get_32() elapsed during process */
+	int32_t processing_status;  /* 0 = success, <0 = error; CPUAPP: always 0 */
 };
 
 _Static_assert(sizeof(struct flpr_ring_slot_meta) == FLPR_RING_SLOT_METADATA_SZ,
 	       "slot metadata size");
 
 /* Slot flags. */
-#define FLPR_SLOT_FLAG_VALID  0x0001U /* payload contains valid data */
-#define FLPR_SLOT_FLAG_CRC_OK 0x0002U /* CRC verified (consumer sets) */
-#define FLPR_SLOT_FLAG_STALL  0x0004U /* producer injected stall */
+#define FLPR_SLOT_FLAG_VALID       0x0001U /* payload contains valid data */
+#define FLPR_SLOT_FLAG_CRC_OK      0x0002U /* CRC verified (consumer sets) */
+#define FLPR_SLOT_FLAG_STALL       0x0004U /* producer injected stall */
+#define FLPR_SLOT_FLAG_ASRC_LINEAR 0x0008U /* ASRC linear-interpolation processing */
+
+/* Compile-time stride consistency check.
+ *   metadata(64) + payload_cap(1924) = 1988
+ *   stride(2016) - 1988 = 28 pad bytes → multiple of 32 ✓
+ *   stride matches header field size. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(FLPR_RING_SLOT_STRIDE > FLPR_RING_SLOT_PAYLOAD_OFF,
+	       "slot stride must exceed payload offset");
+_Static_assert(FLPR_RING_SLOT_STRIDE >=
+		       FLPR_RING_SLOT_PAYLOAD_OFF + FLPR_RING_PAYLOAD_CAPACITY_BYTES,
+	       "slot stride must fit metadata + payload");
+_Static_assert((FLPR_RING_SLOT_STRIDE % FLPR_RING_SLOT_ALIGN) == 0,
+	       "slot stride must be cache-aligned");
+_Static_assert(FLPR_RING_SLOT_PAYLOAD_OFF == FLPR_RING_SLOT_METADATA_SZ,
+	       "payload offset must equal metadata size");
+_Static_assert(FLPR_RING_TOTAL_SIZE ==
+		       FLPR_RING_HEADER_SIZE + FLPR_RING_SLOT_COUNT * FLPR_RING_SLOT_STRIDE,
+	       "ring total size = header + slots");
+#endif
 
 /* Stall control bitmask (passed via RING_STALL message data). */
 #define FLPR_STALL_CONSUMER_INPUT  0x01U /* FLPR stops consuming input ring */
@@ -197,6 +231,20 @@ static inline uint8_t *flpr_ring_slot_payload(uint8_t *slot_base)
 static inline struct flpr_ring_slot_meta *flpr_ring_slot_meta_ptr(uint8_t *slot_base)
 {
 	return (struct flpr_ring_slot_meta *)slot_base;
+}
+
+/** Get pointer to ASRC state within slot metadata (offset 32). */
+static inline void *flpr_ring_slot_asrc_state(struct flpr_ring_slot_meta *meta)
+{
+	return &meta->asrc_raw[0];
+}
+
+/** Set processing cycles and status in output metadata. */
+static inline void flpr_ring_slot_set_processing(struct flpr_ring_slot_meta *meta, uint32_t cycles,
+						 int32_t status)
+{
+	meta->processing_cycles = cycles;
+	meta->processing_status = status;
 }
 
 /** Get pointer to the base of a slot given ring base + monotonic index.

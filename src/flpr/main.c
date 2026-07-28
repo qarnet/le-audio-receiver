@@ -24,6 +24,7 @@
 
 #include "flpr_protocol.h"
 #include "flpr_ring.h"
+#include "flpr_audio_process.h"
 
 /* ── Devicetree resolved addresses ───────────────────────────────── */
 
@@ -172,55 +173,75 @@ static uint32_t ring_process_input(void)
 		diag_consume_ok++;
 		consumed++;
 
-		uint16_t valid_frames = meta->valid_frames;
-		if (valid_frames > FLPR_RING_PAYLOAD_CAPACITY_FRAMES) {
-			valid_frames = FLPR_RING_PAYLOAD_CAPACITY_FRAMES;
-		}
-		size_t valid_bytes = (size_t)valid_frames * 4U;
+		/* ── Stage 3A: audio processing ────────────────────────
+		 * Measure processor cycles with k_cycle_get_32(),
+		 * call flpr_audio_process(), store delta + status
+		 * in output metadata.  Failed processing increments
+		 * diagnostic and emits error output.
+		 *
+		 * CRC verification moved into processor for test mode. */
+		{
+			uint32_t out_idx;
+			uint32_t t0;
+			uint32_t t1;
+			int proc_ret;
 
-		/* Copy payload for verification. */
-		memcpy(recv_payload, flpr_ring_slot_payload(slot_base), valid_bytes);
-
-		/* Verify CRC over valid bytes if test mode and CRC was set. */
-		if (ring_test_active && meta->crc32 != 0) {
-			uint32_t computed = flpr_ring_crc32(recv_payload, valid_bytes);
-			if (computed != meta->crc32) {
-				ring_test_crc_errors++;
+			/* Allocate output slot BEFORE calling processor. */
+			ret = flpr_ring_produce_begin(RING_OUTPUT_BASE, &out_idx);
+			if (ret != 0) {
+				ring_test_output_full++;
+				diag_produce_full++;
+				break; /* leave input index unchanged */
 			}
+
+			uint8_t *out_slot = flpr_ring_slot_base(RING_OUTPUT_BASE, out_idx);
+			struct flpr_ring_slot_meta *out_meta =
+				(struct flpr_ring_slot_meta *)out_slot;
+
+			/* Verify CRC over input if test mode and CRC was set.
+			 * Read payload direct from ring — zero copy. */
+			if (ring_test_active && meta->crc32 != 0) {
+				uint16_t vf = meta->valid_frames;
+				if (vf > FLPR_RING_PAYLOAD_CAPACITY_FRAMES) {
+					vf = FLPR_RING_PAYLOAD_CAPACITY_FRAMES;
+				}
+				uint32_t computed = flpr_ring_crc32(
+					flpr_ring_slot_payload(slot_base), (size_t)vf * 4U);
+				if (computed != meta->crc32) {
+					ring_test_crc_errors++;
+				}
+			}
+
+			t0 = k_cycle_get_32();
+			proc_ret = flpr_audio_process(meta, flpr_ring_slot_payload(slot_base),
+						      FLPR_RING_PAYLOAD_CAPACITY_BYTES, out_meta,
+						      flpr_ring_slot_payload(out_slot),
+						      FLPR_RING_PAYLOAD_CAPACITY_BYTES);
+			t1 = k_cycle_get_32();
+
+			flpr_ring_slot_set_processing(out_meta, t1 - t0,
+						      proc_ret == 0 ? 0 : proc_ret);
+
+			if (proc_ret != 0) {
+				/* Processing failed — emit explicit error output.
+				 * Zero valid_frames, negative status, VALID flag
+				 * + ASRC flag if input had it. */
+				memset(out_meta, 0, sizeof(*out_meta));
+				out_meta->sequence = meta->sequence;
+				out_meta->epoch = meta->epoch;
+				out_meta->valid_frames = 0;
+				out_meta->flags = FLPR_SLOT_FLAG_VALID;
+				if (meta->flags & FLPR_SLOT_FLAG_ASRC_LINEAR) {
+					out_meta->flags |= FLPR_SLOT_FLAG_ASRC_LINEAR;
+				}
+				out_meta->processing_status = proc_ret;
+			}
+
+			diag_produce_ok++;
+
+			/* Publish output slot. */
+			flpr_ring_produce_commit(RING_OUTPUT_BASE, out_idx);
 		}
-
-		/* Output-capacity check was done above — this produce_begin
-		 * MUST succeed (space was reserved before consuming input). */
-		uint32_t out_idx;
-		ret = flpr_ring_produce_begin(RING_OUTPUT_BASE, &out_idx);
-		if (ret != 0) {
-			/* Should never happen: we checked space before consuming.
-			 * If it does, keep input unconsumed by NOT calling
-			 * consume_done.  The slot stays pending; next poll
-			 * re-processes it.  Count the anomaly. */
-			ring_test_output_full++;
-			diag_produce_full++;
-			break; /* leave input index unchanged */
-		}
-
-		diag_produce_ok++;
-
-		/* Copy metadata into output slot. */
-		uint8_t *out_slot = flpr_ring_slot_base(RING_OUTPUT_BASE, out_idx);
-		struct flpr_ring_slot_meta *out_meta = (struct flpr_ring_slot_meta *)out_slot;
-		memcpy(out_meta, meta, sizeof(*meta));
-		out_meta->flags |= FLPR_SLOT_FLAG_VALID;
-
-		/* Copy valid payload bytes bit-exact; zero remainder. */
-		memset(flpr_ring_slot_payload(out_slot), 0, FLPR_RING_PAYLOAD_CAPACITY_BYTES);
-		memcpy(flpr_ring_slot_payload(out_slot), recv_payload, valid_bytes);
-
-		/* Forward original CRC. */
-		out_meta->crc32 = meta->crc32;
-		out_meta->valid_frames = valid_frames;
-
-		/* Publish output slot. */
-		flpr_ring_produce_commit(RING_OUTPUT_BASE, out_idx);
 
 		/* Release input slot (only after successful output publish). */
 		flpr_ring_consume_done(RING_INPUT_BASE);

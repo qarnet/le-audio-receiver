@@ -25,6 +25,7 @@
  */
 
 #include "audio_asrc.h"
+#include <string.h>
 #include <errno.h>
 
 #define Q32_FRAC_MASK 0xFFFFFFFFULL
@@ -241,4 +242,54 @@ void audio_asrc_reset(struct audio_asrc *ctx)
 		return;
 	}
 	ctx->phase = Q32_ONE;
+}
+
+/* ── State export / import ───────────────────────────────────────── */
+
+void audio_asrc_state_export(const struct audio_asrc *ctx, int16_t prev_l, int16_t prev_r,
+			     bool prev_valid, struct audio_asrc_state *dst)
+{
+	if (!ctx || !dst) {
+		return;
+	}
+	memset(dst, 0, sizeof(*dst));
+	dst->phase = ctx->phase;
+	dst->step_base = ctx->step_base;
+	dst->prev_l = prev_l;
+	dst->prev_r = prev_r;
+	dst->prev_valid = prev_valid ? 1U : 0U;
+	/* reserved[] already zeroed by memset */
+}
+
+int audio_asrc_state_import(struct audio_asrc *ctx, const struct audio_asrc_state *src,
+			    int16_t *prev_l_out, int16_t *prev_r_out, bool *prev_valid_out)
+{
+	if (!ctx || !src) {
+		return -EINVAL;
+	}
+	if (src->step_base == 0) {
+		return -EINVAL;
+	}
+	if (src->prev_valid > 1U) {
+		return -EINVAL;
+	}
+	if (src->reserved[0] != 0 || src->reserved[1] != 0 || src->reserved[2] != 0) {
+		return -EINVAL;
+	}
+
+	/* All validations passed — commit. */
+	ctx->phase = src->phase;
+	ctx->step_base = src->step_base;
+
+	if (prev_l_out) {
+		*prev_l_out = src->prev_l;
+	}
+	if (prev_r_out) {
+		*prev_r_out = src->prev_r;
+	}
+	if (prev_valid_out) {
+		*prev_valid_out = (src->prev_valid != 0);
+	}
+
+	return 0;
 }

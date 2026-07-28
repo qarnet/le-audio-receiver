@@ -18,4 +18,6 @@ target_sources(app PRIVATE
   main.c
   ../flpr_ring.c
   ../flpr_cache.c
+  ../flpr_audio_process.c
+  ../audio_asrc.c
 )
