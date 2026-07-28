@@ -270,3 +270,31 @@ void flpr_ring_mgr_get_status(struct flpr_ring_status *status)
 		memset(status, 0, sizeof(*status));
 	}
 }
+
+/* ── Stage 3B: ASRC typed produce/consume stubs ──────────────────────
+ * These are needed because audio_offload.c now references them but
+ * existing identity-submit tests don't exercise them. */
+
+enum flpr_produce_result flpr_ring_mgr_produce_asrc(const int16_t *pcm_data, uint16_t valid_frames,
+						    uint32_t sequence, int32_t correction_ppm,
+						    const struct audio_asrc_state *pre_state)
+{
+	(void)pcm_data;
+	(void)valid_frames;
+	(void)sequence;
+	(void)correction_ppm;
+	(void)pre_state;
+	return FLPR_PRODUCE_OK;
+}
+
+enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
+							   uint16_t output_capacity,
+							   struct flpr_consume_asrc_result *result)
+{
+	(void)pcm_out;
+	(void)output_capacity;
+	if (result) {
+		memset(result, 0, sizeof(*result));
+	}
+	return FLPR_CONSUME_OK;
+}

@@ -9,6 +9,7 @@
 #include "audio_clock_actuator.h"
 #include "audio_rate_convert.h"
 #include "audio_asrc.h"
+#include "audio_offload.h"
 #include "audio_stats.h"
 #include "audio_perf.h"
 
@@ -70,6 +71,7 @@ static struct audio_asrc asrc_ctx;
 static int16_t asrc_prev_l;
 static int16_t asrc_prev_r;
 static bool asrc_prev_valid;
+static uint32_t offload_sequence; /* monotonic per-stereo-block counter */
 #endif
 
 static void drift_reset(void)
@@ -79,6 +81,7 @@ static void drift_reset(void)
 #if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
 	audio_asrc_reset(&asrc_ctx);
 	asrc_prev_valid = false;
+	offload_sequence = 0;
 #endif
 	audio_rate_converter_init(&rate_ctx, 48000, CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ);
 }
@@ -189,29 +192,76 @@ static int fill_block_asrc(const int16_t *stereo_data, int32_t ppm, void **block
 
 	memset(*block, 0, BLOCK_SIZE);
 
-	size_t consumed, produced;
-	int16_t next_l, next_r;
-	uint32_t t_asrc = audio_perf_cycle_start();
-	int asrc_ret = audio_asrc_process(&asrc_ctx, stereo_data, INPUT_FRAMES, (int16_t *)*block,
-					  MAX_OUTPUT_FRAMES, ppm, asrc_prev_l, asrc_prev_r,
-					  asrc_prev_valid, &consumed, &produced, &next_l, &next_r);
-	audio_perf_cycle_end(t_asrc, AUDIO_PERF_PATH_ASRC);
+	/* ── Export current CPU ASRC state for offload ─────────── */
+	struct audio_asrc_state cpu_state;
+	audio_asrc_state_export(&asrc_ctx, asrc_prev_l, asrc_prev_r, asrc_prev_valid, &cpu_state);
 
-	if (asrc_ret != 0) {
-		if (asrc_ret == 1) {
-			LOG_WRN("ASRC capacity exceeded");
-			audio_perf_asrc_capacity_failure();
+	bool used_offload = false;
+	size_t produced = 0;
+	int16_t next_l = 0, next_r = 0;
+
+#if defined(CONFIG_AUDIO_OFFLOAD_ASRC)
+	/* ── Try FLPR ASRC offload ──────────────────────────────── */
+	struct audio_offload_asrc_result off_result;
+	memset(&off_result, 0, sizeof(off_result));
+
+	int off_ret = audio_offload_process_asrc(stereo_data, INPUT_FRAMES, offload_sequence, ppm,
+						 &cpu_state, (int16_t *)*block, MAX_OUTPUT_FRAMES,
+						 &off_result);
+
+	if (off_ret == 0) {
+		/* Success — output_frames in [1, 481]. */
+		produced = off_result.output_frames;
+
+		/* Transactionally import post-state into temp context. */
+		struct audio_asrc temp_ctx;
+		int16_t tmp_prev_l, tmp_prev_r;
+		bool tmp_prev_valid;
+		int imp_ret = audio_asrc_state_import(&temp_ctx, &off_result.post_state,
+						      &tmp_prev_l, &tmp_prev_r, &tmp_prev_valid);
+
+		if (imp_ret == 0) {
+			/* Commit: overwrite asrc_ctx + prev from offload result. */
+			memcpy(&asrc_ctx, &temp_ctx, sizeof(asrc_ctx));
+			asrc_prev_l = tmp_prev_l;
+			asrc_prev_r = tmp_prev_r;
+			asrc_prev_valid = tmp_prev_valid;
+			used_offload = true;
 		} else {
-			LOG_WRN("ASRC error %d", asrc_ret);
+			/* Post-state import rejected — fall through to cpu ASRC. */
+			LOG_WRN("ASRC offload post-state import rejected, falling back to cpu");
 		}
-		k_mem_slab_free(&i2s_slab, *block);
-		return (asrc_ret == 1) ? -ENOSPC : -EIO;
+	}
+	/* Any offload fault (EAGAIN/EINVAL/etc.) falls through to cpu ASRC. */
+#endif /* CONFIG_AUDIO_OFFLOAD_ASRC */
+
+	if (!used_offload) {
+		/* ── CPU fallback: run ASRC from unchanged pre-state ── */
+		size_t consumed;
+		uint32_t t_asrc = audio_perf_cycle_start();
+		int asrc_ret =
+			audio_asrc_process(&asrc_ctx, stereo_data, INPUT_FRAMES, (int16_t *)*block,
+					   MAX_OUTPUT_FRAMES, ppm, asrc_prev_l, asrc_prev_r,
+					   asrc_prev_valid, &consumed, &produced, &next_l, &next_r);
+		audio_perf_cycle_end(t_asrc, AUDIO_PERF_PATH_ASRC);
+
+		if (asrc_ret != 0) {
+			if (asrc_ret == 1) {
+				LOG_WRN("ASRC capacity exceeded");
+				audio_perf_asrc_capacity_failure();
+			} else {
+				LOG_WRN("ASRC error %d", asrc_ret);
+			}
+			k_mem_slab_free(&i2s_slab, *block);
+			return (asrc_ret == 1) ? -ENOSPC : -EIO;
+		}
+
+		asrc_prev_l = next_l;
+		asrc_prev_r = next_r;
+		asrc_prev_valid = true;
 	}
 
-	asrc_prev_l = next_l;
-	asrc_prev_r = next_r;
-	asrc_prev_valid = true;
-
+	offload_sequence++;
 	*output_frames = produced;
 	return 0;
 }

@@ -35,6 +35,8 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#include "audio_asrc.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -170,6 +172,75 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
  * @brief Get a snapshot of offload status/instrumentation.
  */
 void audio_offload_get_status(struct audio_offload_status *status);
+
+/* ── Stage 3B: ASRC offload ──────────────────────────────────────── */
+
+/** Typed result from FLPR ASRC processing. */
+struct audio_offload_asrc_result {
+	uint16_t output_frames;             /* 1..481 if ok, 0 on error */
+	struct audio_asrc_state post_state; /* post-process continuity state */
+	uint32_t processing_cycles;         /* FLPR k_cycle_get_32 elapsed */
+};
+
+/**
+ * @brief Route decoded PCM through FLPR ASRC offload.
+ *
+ * nRF54L15 only (compile-time guarded by CONFIG_AUDIO_OFFLOAD_ASRC).
+ * On nRF5340: compile-time stub returns -ENOSYS.
+ *
+ * Produces 480 stereo frames with typed ASRC pre-state and drift ppm,
+ * waits for FLPR to process, consumes typed result including variable
+ * output frame count, post-process ASRC state, and processing cycles.
+ *
+ * Validates sequence, status=0, ASRC flag, frame range 1..481,
+ * correction echo, output payload CRC, typed post-state import,
+ * unchanged step_base, and reserved bytes.  On any fault, output
+ * and result are untouched.
+ *
+ * Error output from FLPR (status < 0, frames=0) is a valid transport
+ * response returned as success with result.output_frames=0.
+ *
+ * @param input           Input PCM (interleaved stereo 16-bit, 960 samples).
+ * @param input_frames    Must equal 480.
+ * @param sequence        Monotonic stream frame counter.
+ * @param correction_ppm  Current drift correction.
+ * @param pre_state       ASRC continuity state at submission time.
+ * @param output          Output buffer (≥ 481 × 4 = 1924 bytes).
+ * @param output_capacity Capacity in stereo frames (≥ 481).
+ * @param result          On success: output_frames, post_state, processing_cycles.
+ *                        On failure: untouched.
+ * @return 0 on success, negative errno on any fault.
+ */
+int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint32_t sequence,
+			       int32_t correction_ppm, const struct audio_asrc_state *pre_state,
+			       int16_t *output, uint16_t output_capacity,
+			       struct audio_offload_asrc_result *result);
+
+/** ASRC-specific statistics (supplemental to audio_offload_status). */
+struct audio_offload_asrc_stats {
+	uint32_t submit_count;   /* ASRC produce calls */
+	uint32_t success_count;  /* successful ASRC round-trips */
+	uint32_t fallback_count; /* faults that fell back to cpu ASRC */
+	uint32_t timeout_count;
+	uint32_t full_count;
+	uint32_t stale_count;
+	uint32_t seq_fault_count;
+	uint32_t frame_fault_count; /* frames out of range */
+	uint32_t crc_fault_count;
+	uint32_t state_fault_count;  /* post-state import rejected */
+	uint32_t verify_fault_count; /* shadow-verify mismatch detected */
+	uint32_t rtt_min_cycles;
+	uint32_t rtt_max_cycles;
+	uint64_t rtt_sum_cycles;
+	uint32_t rtt_count;
+	uint32_t cycles_min; /* FLPR processing_cycles */
+	uint32_t cycles_max;
+	uint64_t cycles_sum;
+	uint32_t cycles_count;
+};
+
+/** Get ASRC-specific offload statistics. */
+void audio_offload_get_asrc_stats(struct audio_offload_asrc_stats *s);
 
 #ifdef __cplusplus
 }

@@ -113,10 +113,8 @@ static const struct bt_data ad[] = {
 static int16_t l_buf[SAMPLES_PER_CHANNEL_MAX];
 static int16_t r_buf[SAMPLES_PER_CHANNEL_MAX];
 static int16_t stereo_out[STEREO_OUT_MAX];
-static int16_t offload_out[STEREO_OUT_MAX];
 static bool l_received;
 static bool r_received;
-static uint32_t stereo_block_seq; /* monotonic per-stereo-block counter */
 
 #endif /* CONFIG_LIBLC3 */
 
@@ -395,17 +393,7 @@ static void push_stereo(void)
 		audio_decode_interleave(l_buf, r_buf, stereo_out, n);
 		audio_volume_apply(stereo_out, n * 2);
 
-		/* Phase 6 Stage 2: route through offload identity transport.
-		 * On success, offload_out has FLPR-identity output.
-		 * On failure, fall back to original stereo_out (no-drop). */
-		int16_t *push_data = stereo_out;
-		int off_ret =
-			audio_offload_submit(stereo_out, n * 2, stereo_block_seq++, 0, offload_out);
-		if (off_ret == 0) {
-			push_data = offload_out;
-		}
-
-		if (audio_sink_push(push_data, n * 2) < 0) {
+		if (audio_sink_push(stereo_out, n * 2) < 0) {
 			audio_perf_push_failure();
 		}
 		l_received = false;
@@ -481,15 +469,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 				 stereo_out);
 		audio_volume_apply(stereo_out, spc * 2);
 
-		/* Phase 6 Stage 2: FLPR identity transport. */
-		int16_t *push_data = stereo_out;
-		int off_ret = audio_offload_submit(stereo_out, spc * 2, stereo_block_seq++, 0,
-						   offload_out);
-		if (off_ret == 0) {
-			push_data = offload_out;
-		}
-
-		if (audio_sink_push(push_data, spc * 2) < 0) {
+		if (audio_sink_push(stereo_out, spc * 2) < 0) {
 			audio_perf_push_failure();
 		}
 	} else if (num_sink_ase >= 2) {
@@ -529,15 +509,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 				 stereo_out);
 		audio_volume_apply(stereo_out, spc * 2);
 
-		/* Phase 6 Stage 2: FLPR identity transport. */
-		int16_t *push_data = stereo_out;
-		int off_ret = audio_offload_submit(stereo_out, spc * 2, stereo_block_seq++, 0,
-						   offload_out);
-		if (off_ret == 0) {
-			push_data = offload_out;
-		}
-
-		if (audio_sink_push(push_data, spc * 2) < 0) {
+		if (audio_sink_push(stereo_out, spc * 2) < 0) {
 			audio_perf_push_failure();
 		}
 	}
@@ -610,7 +582,6 @@ static void stream_started(struct bt_bap_stream *s)
 		audio_perf_reset();
 
 		/* Phase 6 Stage 2: start offload pipeline for new stream. */
-		stereo_block_seq = 0;
 		audio_offload_stream_start();
 	}
 }

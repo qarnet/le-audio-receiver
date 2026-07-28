@@ -1001,3 +1001,165 @@ int flpr_ring_mgr_wait_consume(uint32_t timeout_ms)
 {
 	return k_sem_take(&consume_sem, K_MSEC(timeout_ms));
 }
+
+/* ── Typed ASRC produce / consume ─────────────────────────────────── */
+
+enum flpr_produce_result flpr_ring_mgr_produce_asrc(const int16_t *pcm_data, uint16_t valid_frames,
+						    uint32_t sequence, int32_t correction_ppm,
+						    const struct audio_asrc_state *pre_state)
+{
+	uint32_t idx;
+	int ret;
+
+	if (valid_frames != FLPR_RING_PAYLOAD_MAX_INPUT || !pre_state) {
+		return FLPR_PRODUCE_INVALID;
+	}
+
+	/* Stall injection. */
+	{
+		k_spinlock_key_t key = k_spin_lock(&ring_lock);
+		if (stall_producer_enabled) {
+			test_backpressure++;
+			k_spin_unlock(&ring_lock, key);
+			return FLPR_PRODUCE_FULL;
+		}
+		k_spin_unlock(&ring_lock, key);
+	}
+
+	ret = flpr_ring_produce_begin(RING_INPUT_BASE, &idx);
+	if (ret == -ENOSPC) {
+		k_spinlock_key_t key = k_spin_lock(&ring_lock);
+		test_full_events++;
+		k_spin_unlock(&ring_lock, key);
+		return FLPR_PRODUCE_FULL;
+	}
+	if (ret != 0) {
+		return FLPR_PRODUCE_INVALID;
+	}
+
+	uint8_t *slot = flpr_ring_slot_base(RING_INPUT_BASE, idx);
+	struct flpr_ring_slot_meta *meta = flpr_ring_slot_meta_ptr(slot);
+
+	/* Fill metadata — ASRC flag set. */
+	meta->sequence = sequence;
+	meta->epoch = ring_stream_epoch;
+	meta->valid_frames = valid_frames;
+	meta->flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR;
+	meta->correction_ppm = correction_ppm;
+	meta->cpu_timestamp = k_cycle_get_32();
+
+	/* Copy typed ASRC pre-state. */
+	memcpy(&meta->asrc_state, pre_state, sizeof(*pre_state));
+
+	/* Fill payload. */
+	size_t copy_bytes = (size_t)valid_frames * 4U;
+	memset(flpr_ring_slot_payload(slot), 0, FLPR_RING_PAYLOAD_CAPACITY_BYTES);
+	if (pcm_data && copy_bytes > 0) {
+		memcpy(flpr_ring_slot_payload(slot), pcm_data, copy_bytes);
+	}
+
+	/* CRC over valid payload — always enabled. */
+	meta->crc32 = flpr_ring_crc32(flpr_ring_slot_payload(slot), copy_bytes);
+
+	/* Publish. */
+	flpr_ring_produce_commit(RING_INPUT_BASE, idx);
+
+	return FLPR_PRODUCE_OK;
+}
+
+enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
+							   uint16_t output_capacity,
+							   struct flpr_consume_asrc_result *result)
+{
+	uint8_t *slot_base;
+	struct flpr_ring_slot_meta *meta;
+	int ret;
+
+	if (!pcm_out || !result || output_capacity < FLPR_RING_PAYLOAD_CAPACITY_FRAMES) {
+		return FLPR_CONSUME_INVALID;
+	}
+
+	/* Zero result output_frames before anything — "untouched on failure"
+	 * means the caller sees output_frames=0 on error. */
+	result->output_frames = 0;
+
+	ret = flpr_ring_consume_begin(RING_OUTPUT_BASE, ring_stream_epoch, &slot_base, &meta);
+	if (ret == -ENOENT) {
+		return FLPR_CONSUME_EMPTY;
+	}
+	if (ret == -ESTALE) {
+		k_spinlock_key_t key = k_spin_lock(&ring_lock);
+		test_stale_events++;
+		k_spin_unlock(&ring_lock, key);
+		return FLPR_CONSUME_STALE;
+	}
+	if (ret != 0) {
+		return FLPR_CONSUME_INVALID;
+	}
+
+	/* Validate ASRC flag is set. */
+	if (!(meta->flags & FLPR_SLOT_FLAG_ASRC_LINEAR)) {
+		flpr_ring_consume_done(RING_OUTPUT_BASE);
+		return FLPR_CONSUME_INVALID;
+	}
+
+	/* Validate frame range: 1..481 for normal output.
+	 * Error output from FLPR (processing_status < 0, valid_frames=0)
+	 * is a valid transport response — we return it as CONSUME_OK with
+	 * output_frames=0 so caller can distinguish from EMPTY/STALE. */
+	uint16_t vf = meta->valid_frames;
+	if (vf > FLPR_RING_PAYLOAD_CAPACITY_FRAMES) {
+		flpr_ring_consume_done(RING_OUTPUT_BASE);
+		return FLPR_CONSUME_INVALID;
+	}
+
+	/* Error output: valid_frames=0, processing_status<0 is valid. */
+	if (vf == 0 && meta->processing_status >= 0) {
+		flpr_ring_consume_done(RING_OUTPUT_BASE);
+		return FLPR_CONSUME_INVALID;
+	}
+
+	/* Validate reserved bytes in asrc_state are zero. */
+	{
+		const uint8_t *res = meta->asrc_state.reserved;
+		if (res[0] != 0 || res[1] != 0 || res[2] != 0) {
+			flpr_ring_consume_done(RING_OUTPUT_BASE);
+			return FLPR_CONSUME_INVALID;
+		}
+	}
+
+	/* Read payload if valid_frames > 0. */
+	if (vf > 0) {
+		size_t copy_bytes = (size_t)vf * 4U;
+		memcpy(pcm_out, flpr_ring_slot_payload(slot_base), copy_bytes);
+	}
+
+	/* Verify payload CRC (recompute) if vf > 0 and CRC nonzero. */
+	if (vf > 0 && meta->crc32 != 0) {
+		uint32_t computed =
+			flpr_ring_crc32(flpr_ring_slot_payload(slot_base), (size_t)vf * 4U);
+		if (computed != meta->crc32) {
+			flpr_ring_consume_done(RING_OUTPUT_BASE);
+			return FLPR_CONSUME_INVALID;
+		}
+	}
+
+	/* Fill result — snapshot before consume_done. */
+	result->output_frames = vf;
+	memcpy(&result->post_state, &meta->asrc_state, sizeof(result->post_state));
+	result->processing_cycles = meta->processing_cycles;
+	result->processing_status = meta->processing_status;
+
+	/* RTT from cpu_timestamp. */
+	uint32_t now = k_cycle_get_32();
+	uint32_t latency = now - meta->cpu_timestamp;
+	result->rtt_cycles = (latency > 0) ? latency : 0;
+
+	flpr_ring_consume_done(RING_OUTPUT_BASE);
+
+	k_spinlock_key_t key = k_spin_lock(&ring_lock);
+	test_blocks_recv++;
+	k_spin_unlock(&ring_lock, key);
+
+	return FLPR_CONSUME_OK;
+}

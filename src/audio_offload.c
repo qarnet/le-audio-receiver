@@ -151,6 +151,21 @@ static uint32_t g_recovery_tries;
 static bool g_probation_active;
 static uint32_t g_probation_success;
 
+/* ── Stage 3B: ASRC offload state ────────────────────────────── */
+
+/* Module-static scratch receive buffer — 481 stereo frames (1924 B).
+ * Serialised by submit_lock (same mutex as identity submit). */
+static int16_t g_asrc_scratch[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2] __attribute__((aligned(32)));
+
+/* ASRC-specific statistics. */
+static struct audio_offload_asrc_stats g_asrc_stats;
+
+/* ── ASRC shadow verification optional buffer ─────────────────── */
+
+#if defined(CONFIG_AUDIO_OFFLOAD_ASRC_VERIFY)
+static int16_t g_asrc_shadow[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2] __attribute__((aligned(32)));
+#endif
+
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
 static bool check_flpr_healthy(void)
@@ -1145,6 +1160,539 @@ void audio_offload_get_status(struct audio_offload_status *status)
 	k_spin_unlock(&g_lock, key);
 }
 
+/* ── Stage 3B: ASRC offload ───────────────────────────────────────── */
+
+int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint32_t sequence,
+			       int32_t correction_ppm, const struct audio_asrc_state *pre_state,
+			       int16_t *output, uint16_t output_capacity,
+			       struct audio_offload_asrc_result *result)
+{
+	/* ── Validate args BEFORE any state/counter access ────── */
+	if (!input || !output || !pre_state || !result || input_frames == 0) {
+		return -EINVAL;
+	}
+	if (input_frames != OFFLOAD_EXPECTED_FRAMES) {
+		return -EINVAL;
+	}
+	if (output_capacity < FLPR_RING_PAYLOAD_CAPACITY_FRAMES) {
+		return -EINVAL;
+	}
+
+	uint32_t captured_generation;
+	uint32_t captured_epoch;
+	enum audio_offload_state captured_state;
+	bool need_fallback = false;
+	uint32_t recovery_delay_ms;
+
+	/* ── Pre-check under spinlock ──────────────────────────────── */
+	{
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+
+		if (!g_initialized || g_state == AUDIO_OFFLOAD_STOPPED) {
+			k_spin_unlock(&g_lock, key);
+			return -EAGAIN;
+		}
+
+		captured_state = g_state;
+		captured_generation = g_generation;
+		captured_epoch = g_stream_epoch;
+
+		g_asrc_stats.submit_count++;
+
+		if (g_state != AUDIO_OFFLOAD_ACTIVE) {
+			g_asrc_stats.fallback_count++;
+			need_fallback = true;
+		}
+
+		k_spin_unlock(&g_lock, key);
+	}
+
+	if (need_fallback) {
+		return -EAGAIN;
+	}
+
+	/* ── Serialise — one block in-flight at a time ──────────── */
+	if (k_mutex_lock(&g_submit_lock, K_MSEC(OFFLOAD_DEADLINE_MS)) != 0) {
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			return -EAGAIN;
+		}
+
+		g_status.busy_count++;
+		record_fault(NULL, -EBUSY, sequence);
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
+		k_spin_unlock(&g_lock, key);
+
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
+		}
+
+		return -EAGAIN;
+	}
+
+	/* Re-check state under mutex. */
+	{
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+
+		if (g_state != AUDIO_OFFLOAD_ACTIVE) {
+			g_status.fallback_count++;
+			g_status.last_error = -EAGAIN;
+			g_status.last_error_seq = sequence;
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
+
+		captured_state = g_state;
+		captured_generation = g_generation;
+		captured_epoch = g_stream_epoch;
+
+		k_spin_unlock(&g_lock, key);
+	}
+
+	/* ── Produce: ASRC-typed block into input ring ─────────── */
+	enum flpr_produce_result pr = flpr_ring_mgr_produce_asrc(
+		input, OFFLOAD_EXPECTED_FRAMES, sequence, correction_ppm, pre_state);
+
+	if (pr == FLPR_PRODUCE_FULL) {
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
+		g_asrc_stats.fallback_count++;
+		g_asrc_stats.full_count++;
+		record_fault(&g_status.full_count, -ENOSPC, sequence);
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
+		k_spin_unlock(&g_lock, key);
+		k_mutex_unlock(&g_submit_lock);
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
+		}
+		return -EAGAIN;
+	}
+	if (pr != FLPR_PRODUCE_OK) {
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
+		g_asrc_stats.fallback_count++;
+		record_fault(NULL, -EIO, sequence);
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
+		k_spin_unlock(&g_lock, key);
+		k_mutex_unlock(&g_submit_lock);
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
+		}
+		return -EAGAIN;
+	}
+
+	/* ── Notify FLPR ───────────────────────────────────────── */
+	{
+		int notify_ret = flpr_ring_mgr_notify_producer();
+		if (notify_ret < 0) {
+			k_spinlock_key_t key = k_spin_lock(&g_lock);
+			if (!lifecycle_check_before_fault(captured_state, captured_generation,
+							  captured_epoch, sequence)) {
+				k_spin_unlock(&g_lock, key);
+				k_mutex_unlock(&g_submit_lock);
+				return -EAGAIN;
+			}
+			g_asrc_stats.fallback_count++;
+			record_fault(NULL, notify_ret, sequence);
+			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			if (sched) {
+				schedule_recovery(recovery_delay_ms);
+			}
+			return -EAGAIN;
+		}
+	}
+
+	/* ── Wait for FLPR output ──────────────────────────────── */
+	{
+		int wait_ret = flpr_ring_mgr_wait_consume(OFFLOAD_DEADLINE_MS);
+		if (wait_ret != 0) {
+			k_spinlock_key_t key = k_spin_lock(&g_lock);
+			if (!lifecycle_check_before_fault(captured_state, captured_generation,
+							  captured_epoch, sequence)) {
+				k_spin_unlock(&g_lock, key);
+				k_mutex_unlock(&g_submit_lock);
+				return -EAGAIN;
+			}
+			g_asrc_stats.fallback_count++;
+			record_fault(&g_status.timeout_count, -ETIMEDOUT, sequence);
+			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			if (sched) {
+				schedule_recovery(recovery_delay_ms);
+			}
+			return -EAGAIN;
+		}
+	}
+
+	/* ── Lifecycle recheck before consuming output ─────────── */
+	{
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+
+		if (g_state != captured_state || g_generation != captured_generation ||
+		    g_stream_epoch != captured_epoch) {
+			g_status.stale_count++;
+			g_status.fallback_count++;
+			g_status.last_error = -ESTALE;
+			g_status.last_error_seq = sequence;
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
+		k_spin_unlock(&g_lock, key);
+	}
+
+	/* ── Consume: typed ASRC result from output ring ──────── */
+	struct flpr_consume_asrc_result cr;
+
+	memset(&cr, 0, sizeof(cr));
+
+	enum flpr_consume_result cresult = flpr_ring_mgr_consume_asrc_result(
+		g_asrc_scratch, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &cr);
+
+	if (cresult == FLPR_CONSUME_EMPTY) {
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
+		g_asrc_stats.fallback_count++;
+		record_fault(NULL, -ENOENT, sequence);
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
+		k_spin_unlock(&g_lock, key);
+		k_mutex_unlock(&g_submit_lock);
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
+		}
+		return -EAGAIN;
+	}
+	if (cresult == FLPR_CONSUME_STALE) {
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
+		g_asrc_stats.fallback_count++;
+		record_fault(&g_status.stale_count, -ESTALE, sequence);
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
+		k_spin_unlock(&g_lock, key);
+		k_mutex_unlock(&g_submit_lock);
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
+		}
+		return -EAGAIN;
+	}
+	if (cresult != FLPR_CONSUME_OK) {
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
+		g_asrc_stats.fallback_count++;
+		record_fault(NULL, -EIO, sequence);
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
+		k_spin_unlock(&g_lock, key);
+		k_mutex_unlock(&g_submit_lock);
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
+		}
+		return -EAGAIN;
+	}
+
+	/* ── Lifecycle recheck after consume ──────────────────── */
+	{
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+
+		if (g_state != captured_state || g_generation != captured_generation ||
+		    g_stream_epoch != captured_epoch) {
+			g_status.stale_count++;
+			g_status.fallback_count++;
+			g_status.last_error = -ESTALE;
+			g_status.last_error_seq = sequence;
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
+		k_spin_unlock(&g_lock, key);
+	}
+
+	/* Error output from FLPR (status < 0, frames = 0) — valid transport.
+	 * Return success with output_frames=0 so caller can detect it. */
+	if (cr.processing_status < 0 && cr.output_frames == 0) {
+		/* Error transport — count as fallback, poison offload. */
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
+		g_asrc_stats.fallback_count++;
+		record_fault(NULL, cr.processing_status, sequence);
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
+		k_spin_unlock(&g_lock, key);
+		k_mutex_unlock(&g_submit_lock);
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
+		}
+		return -EAGAIN;
+	}
+
+	/* Validate frame count: 1..481 for normal output. */
+	if (cr.output_frames < 1 || cr.output_frames > FLPR_RING_PAYLOAD_CAPACITY_FRAMES) {
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		if (!lifecycle_check_before_fault(captured_state, captured_generation,
+						  captured_epoch, sequence)) {
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
+		g_asrc_stats.fallback_count++;
+		g_asrc_stats.frame_fault_count++;
+		record_fault(&g_status.frame_fault_count, -EFAULT, sequence);
+		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
+		k_spin_unlock(&g_lock, key);
+		k_mutex_unlock(&g_submit_lock);
+		if (sched) {
+			schedule_recovery(recovery_delay_ms);
+		}
+		return -EAGAIN;
+	}
+
+	/* Validate reserved bytes are zero. */
+	{
+		const uint8_t *res = cr.post_state.reserved;
+		if (res[0] != 0 || res[1] != 0 || res[2] != 0) {
+			k_spinlock_key_t key = k_spin_lock(&g_lock);
+			if (!lifecycle_check_before_fault(captured_state, captured_generation,
+							  captured_epoch, sequence)) {
+				k_spin_unlock(&g_lock, key);
+				k_mutex_unlock(&g_submit_lock);
+				return -EAGAIN;
+			}
+			g_asrc_stats.fallback_count++;
+			g_asrc_stats.state_fault_count++;
+			record_fault(NULL, -EFAULT, sequence);
+			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			if (sched) {
+				schedule_recovery(recovery_delay_ms);
+			}
+			return -EAGAIN;
+		}
+	}
+
+	/* Validate post-state import: step_base must be unchanged (≈same ratio). */
+	{
+		struct audio_asrc tmp_ctx;
+		int16_t dummy_l, dummy_r;
+		bool dummy_v;
+		int imp_ret = audio_asrc_state_import(&tmp_ctx, &cr.post_state, &dummy_l, &dummy_r,
+						      &dummy_v);
+		if (imp_ret != 0) {
+			k_spinlock_key_t key = k_spin_lock(&g_lock);
+			if (!lifecycle_check_before_fault(captured_state, captured_generation,
+							  captured_epoch, sequence)) {
+				k_spin_unlock(&g_lock, key);
+				k_mutex_unlock(&g_submit_lock);
+				return -EAGAIN;
+			}
+			g_asrc_stats.fallback_count++;
+			g_asrc_stats.state_fault_count++;
+			record_fault(NULL, -EFAULT, sequence);
+			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			if (sched) {
+				schedule_recovery(recovery_delay_ms);
+			}
+			return -EAGAIN;
+		}
+	}
+
+	/* ── Optional shadow verification ──────────────────────── */
+#if defined(CONFIG_AUDIO_OFFLOAD_ASRC_VERIFY)
+	{
+		/* Run cpuapp ASRC from same pre-state + ppm. */
+		struct audio_asrc verify_ctx;
+		int16_t verify_prev_l = 0, verify_prev_r = 0;
+		bool verify_prev_valid = false;
+		memset(g_asrc_shadow, 0, sizeof(g_asrc_shadow));
+
+		/* Import pre-state into a local ASRC context. */
+		int imp_ret = audio_asrc_state_import(&verify_ctx, pre_state, &verify_prev_l,
+						      &verify_prev_r, &verify_prev_valid);
+		/* Import from pre_state must succeed — it was exported by cpuapp. */
+		if (imp_ret == 0) {
+			size_t consumed, produced;
+			int16_t nl, nr;
+			int asrc_ret = audio_asrc_process(
+				&verify_ctx, input, OFFLOAD_EXPECTED_FRAMES, g_asrc_shadow,
+				FLPR_RING_PAYLOAD_CAPACITY_FRAMES, correction_ppm, verify_prev_l,
+				verify_prev_r, verify_prev_valid, &consumed, &produced, &nl, &nr);
+
+			/* Compare return code. */
+			if (asrc_ret != 0) {
+				goto shadow_mismatch;
+			}
+
+			/* Compare frame count. */
+			if (produced != cr.output_frames) {
+				goto shadow_mismatch;
+			}
+
+			/* Compare every sample. */
+			size_t sample_count = produced * 2U;
+			for (size_t i = 0; i < sample_count; i++) {
+				if (g_asrc_shadow[i] != g_asrc_scratch[i]) {
+					goto shadow_mismatch;
+				}
+			}
+
+			/* Compare post-state. */
+			struct audio_asrc_state exported;
+			audio_asrc_state_export(&verify_ctx, nl, nr, true, &exported);
+			if (exported.phase != cr.post_state.phase ||
+			    exported.step_base != cr.post_state.step_base ||
+			    exported.prev_l != cr.post_state.prev_l ||
+			    exported.prev_r != cr.post_state.prev_r ||
+			    exported.prev_valid != cr.post_state.prev_valid) {
+				goto shadow_mismatch;
+			}
+
+			goto shadow_pass;
+
+shadow_mismatch:
+			k_spinlock_key_t key = k_spin_lock(&g_lock);
+			if (!lifecycle_check_before_fault(captured_state, captured_generation,
+							  captured_epoch, sequence)) {
+				k_spin_unlock(&g_lock, key);
+				k_mutex_unlock(&g_submit_lock);
+				return -EAGAIN;
+			}
+			g_asrc_stats.fallback_count++;
+			g_asrc_stats.verify_fault_count++;
+			record_fault(NULL, -EFAULT, sequence);
+			bool should_sched = should_schedule_recovery_locked(&recovery_delay_ms);
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			if (should_sched) {
+				schedule_recovery(recovery_delay_ms);
+			}
+			return -EAGAIN;
+		}
+shadow_pass:
+		(void)0;
+	}
+#endif /* CONFIG_AUDIO_OFFLOAD_ASRC_VERIFY */
+
+	/* ── Copy output to caller ────────────────────────────── */
+	size_t out_bytes = (size_t)cr.output_frames * 4U;
+	memcpy(output, g_asrc_scratch, out_bytes);
+
+	/* ── Commit result ────────────────────────────────────── */
+	memcpy(result, &cr, sizeof(*result));
+
+	/* ── Update statistics ────────────────────────────────── */
+	{
+		k_spinlock_key_t key = k_spin_lock(&g_lock);
+
+		/* Final lifecycle recheck. */
+		if (g_state != captured_state || g_generation != captured_generation ||
+		    g_stream_epoch != captured_epoch) {
+			g_status.stale_count++;
+			g_status.fallback_count++;
+			g_status.last_error = -ESTALE;
+			g_status.last_error_seq = sequence;
+			k_spin_unlock(&g_lock, key);
+			k_mutex_unlock(&g_submit_lock);
+			return -EAGAIN;
+		}
+
+		g_asrc_stats.success_count++;
+		g_status.success_count++;
+		g_status.last_error = 0;
+
+		/* RTT tracking. */
+		if (g_asrc_stats.rtt_count == 0 || cr.rtt_cycles < g_asrc_stats.rtt_min_cycles) {
+			g_asrc_stats.rtt_min_cycles = cr.rtt_cycles;
+		}
+		if (cr.rtt_cycles > g_asrc_stats.rtt_max_cycles) {
+			g_asrc_stats.rtt_max_cycles = cr.rtt_cycles;
+		}
+		g_asrc_stats.rtt_sum_cycles += (uint64_t)cr.rtt_cycles;
+		g_asrc_stats.rtt_count++;
+
+		/* Processing cycles tracking. */
+		if (cr.processing_cycles > 0) {
+			if (g_asrc_stats.cycles_count == 0 ||
+			    cr.processing_cycles < g_asrc_stats.cycles_min) {
+				g_asrc_stats.cycles_min = cr.processing_cycles;
+			}
+			if (cr.processing_cycles > g_asrc_stats.cycles_max) {
+				g_asrc_stats.cycles_max = cr.processing_cycles;
+			}
+			g_asrc_stats.cycles_sum += (uint64_t)cr.processing_cycles;
+			g_asrc_stats.cycles_count++;
+		}
+
+		/* Probation success tracking. */
+		if (g_probation_active) {
+			g_probation_success++;
+			g_status.probation_success = g_probation_success;
+
+			if (g_probation_success >= PROBATION_SUCCESS_THRESHOLD) {
+				g_probation_active = false;
+				g_status.probation_active = false;
+				g_recovery_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
+				g_recovery_tries = 0;
+				g_status.probation_cleared++;
+				LOG_INF("offload probation cleared after %u consecutive successes",
+					g_probation_success);
+			}
+		}
+
+		record_latency(cr.rtt_cycles);
+		k_spin_unlock(&g_lock, key);
+	}
+
+	k_mutex_unlock(&g_submit_lock);
+	return 0;
+}
+
+void audio_offload_get_asrc_stats(struct audio_offload_asrc_stats *s)
+{
+	if (!s) {
+		return;
+	}
+	k_spinlock_key_t key = k_spin_lock(&g_lock);
+	memcpy(s, &g_asrc_stats, sizeof(*s));
+	k_spin_unlock(&g_lock, key);
+}
+
 /* ── nRF5340: identity bypass ────────────────────────────────────── */
 
 #else /* !CONFIG_SOC_NRF54L15 */
@@ -1190,6 +1738,29 @@ void audio_offload_get_status(struct audio_offload_status *status)
 		status->initialized = true;
 		status->healthy = true;
 		status->state = AUDIO_OFFLOAD_ACTIVE;
+	}
+}
+
+int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint32_t sequence,
+			       int32_t correction_ppm, const struct audio_asrc_state *pre_state,
+			       int16_t *output, uint16_t output_capacity,
+			       struct audio_offload_asrc_result *result)
+{
+	(void)input;
+	(void)input_frames;
+	(void)sequence;
+	(void)correction_ppm;
+	(void)pre_state;
+	(void)output;
+	(void)output_capacity;
+	(void)result;
+	return -ENOSYS;
+}
+
+void audio_offload_get_asrc_stats(struct audio_offload_asrc_stats *s)
+{
+	if (s) {
+		memset(s, 0, sizeof(*s));
 	}
 }
 

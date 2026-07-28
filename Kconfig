@@ -106,4 +106,36 @@ config AUDIO_PERF_DEADLINE_US
 	  at runtime via k_us_to_cyc_ceil32().  Default 10000 us = 10 ms.
 	  Works correctly across all platforms and native_sim.
 
+# ── Stage 3B: FLPR ASRC offload ─────────────────────────────────────
+
+config AUDIO_OFFLOAD_ASRC
+	bool "FLPR ASRC offload (nRF54L15 only)"
+	default y
+	depends on AUDIO_RESAMPLER_ASRC_LINEAR && SOC_NRF54L15
+	help
+	  Route decoded PCM through FLPR ASRC processing.  On success the
+	  FLPR-processed output replaces the cpuapp ASRC; on any fault
+	  the cpuapp ASRC runs as fallback with no audio drop.
+
+	  Requires CONFIG_SOC_NRF54L15 + AUDIO_RESAMPLER_ASRC_LINEAR.
+	  Compiles out on nRF5340.
+
+config AUDIO_OFFLOAD_ASRC_VERIFY
+	bool "Shadow-verify FLPR ASRC against cpuapp ASRC"
+	default n
+	depends on AUDIO_OFFLOAD_ASRC
+	help
+	  After every FLPR ASRC round trip, run the identical cpuapp
+	  ASRC from the same pre-state and ppm input into a static
+	  481-frame buffer, then compare return code, frame count,
+	  every sample, and post-state.
+
+	  Mismatch records a verify fault, poisons offload, and returns
+	  error with caller output untouched.  This adds ~1924 bytes of
+	  static buffer and one cpuapp ASRC call per 10 ms block (≈13 klx
+	  of fixed-point arithmetic).
+
+	  Production builds must disable this option.  Development and
+	  acceptance testing enable it for cross-validation.
+
 source "Kconfig.zephyr"

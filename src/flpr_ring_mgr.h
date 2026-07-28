@@ -17,6 +17,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "audio_asrc.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -309,6 +311,61 @@ int flpr_ring_mgr_produce_stale_test(uint32_t stale_epoch);
  * @return 0 on semaphore acquired, nonzero on timeout.
  */
 int flpr_ring_mgr_wait_consume(uint32_t timeout_ms);
+
+/* ── Typed ASRC produce / consume ───────────────────────────────────
+ *
+ * Stage 3B: type-safe wrappers that embed struct audio_asrc_state into
+ * slot metadata and read it back post-process.  These preserve the
+ * existing produce_block / consume_block transport and tests.
+ */
+
+/**
+ * @brief Produce a PCM block with typed ASRC pre-state.
+ *
+ * Wraps flpr_ring_mgr_produce_block() with FLPR_SLOT_FLAG_ASRC_LINEAR
+ * set, copies @p pre_state into the slot metadata, and always computes
+ * CRC.
+ *
+ * @param pcm_data        Interleaved stereo 16-bit PCM (480 frames).
+ * @param valid_frames    Must equal 480.
+ * @param sequence        Monotonic frame counter.
+ * @param correction_ppm  Drift correction at capture time.
+ * @param pre_state       ASRC continuity state snapshot (24 bytes).
+ * @return FLPR_PRODUCE_OK or FLPR_PRODUCE_FULL.
+ */
+enum flpr_produce_result flpr_ring_mgr_produce_asrc(const int16_t *pcm_data, uint16_t valid_frames,
+						    uint32_t sequence, int32_t correction_ppm,
+						    const struct audio_asrc_state *pre_state);
+
+/** Typed result from an ASRC consume. */
+struct flpr_consume_asrc_result {
+	uint16_t output_frames;             /* 1..481 if ok, 0 on error */
+	struct audio_asrc_state post_state; /* post-process continuity state */
+	uint32_t processing_cycles;         /* FLPR k_cycle_get_32 elapsed */
+	int32_t processing_status;          /* 0 = success, <0 = error */
+	uint32_t rtt_cycles;                /* round-trip k_cycle_get_32 latency */
+};
+
+/**
+ * @brief Consume a PCM block from the output ring with typed ASRC metadata.
+ *
+ * Validates status=0, ASRC flag, sequence, frame range (1..481).
+ * Copies payload, post-state, cycles, RTT into @p result.
+ *
+ * On any validation failure the caller output and result are UNTOUCHED
+ * (except output_frames zeroed).  Error output (status < 0, frames=0)
+ * from FLPR is a VALID transport response; error output (status < 0)
+ * is returned as CONSUME_OK with result->output_frames = 0 so the
+ * caller sees the error distinct from EMPTY/STALE.
+ *
+ * @param pcm_out          Output buffer for PCM payload (1924 B capacity).
+ * @param output_capacity  Capacity in stereo frames (must be ≥ 481).
+ * @param result           Filled with typed ASRC result fields.
+ * @return FLPR_CONSUME_OK, EMPTY, STALE, or INVALID.
+ */
+enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
+							   uint16_t output_capacity,
+							   struct flpr_consume_asrc_result *result);
 
 #ifdef __cplusplus
 }
