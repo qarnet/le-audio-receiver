@@ -478,3 +478,86 @@ Diag (CPUAPP): notify=1 err=0 sem_give=1 sem_take=0
 **Mitigation**: The gate can be automated by sending stall_off immediately after the first recovery event is detected on serial, with <100ms round-trip (stall_on → observe recovery → stall_off ≤ 1.2s). This requires a script that polls serial and sends stall_off on the first recovery log line. For this test session, the serial-MCP polling loop with ~500ms reads could not clear the stall before try 3 fired (at ~1.48s).
 
 **Policy correctness verified**: All 8 structural gates pass identically to bbb1051 validation. The probation-cleared path requires stall clear within ~1.2s of stall_on; achievable only with automated serial dispatch, not manual/semi-automated interaction.
+
+---
+
+## Automated stall gate (2026-07-28)
+
+**Status**: **BLOCKED** — SC pairing interop between nRF54L15 (SDC/CRACEN) and nRF5340DK hci_uart (SW Split LL) prevents streaming. Gate script, unit tests, and config mechanically complete; live 90s validation held on pairing path.
+
+### Script: `scripts/flpr_stall_gate.py`
+
+pyserial-based single-process automation that owns `/dev/ttyACM0` for the entire injection round-trip. Implements the handoff algorithm:
+
+1. Poll `flpr offload` until State=ACTIVE
+2. Send `flpr ring stall_flpr 1`
+3. Wait for stall ACK `cons_in=1`
+4. Wait for first `offload recovery OK` log line
+5. Immediately send `flpr ring stall_flpr 0` (same process, no sleep)
+6. Require clear ACK `cons_in=0`
+7. Monitor until probation_cleared ≥ 1, probation_active = 0, max_exhaustion = 0, recovery_attempts ≥ 1, Δsuccess ≥ 100
+8. Final status dump, exit 0 on success
+
+Transport-abstracted (`GateRunner` + `Transport` interface):
+- `RealSerial`: pyserial backend for hardware
+- `FakeSerial`: index-based line replay for unit tests
+
+Regex matching against current shell output (last-match semantics, not fixed offsets). Uses `re.finditer` for accumulated-text safety; `_clear_text()` between polls to avoid stale first-match problems.
+
+### Unit tests: `tests/unit/flpr_stall_gate/test_flpr_stall_gate.py`
+
+18 tests, all PASS (unittest, no external deps):
+
+| Test class | Tests | Coverage |
+|-----------|-------|----------|
+| `TestRegexParsing` | 10 | Regex matches against current shell output |
+| `TestFakeSerial` | 2 | Index-based line delivery, write recording |
+| `TestGateSuccess` | 1 | Full success: stall → recovery → clear → probation_cleared |
+| `TestGateMissingStallAck` | 1 | Timeout on missing `cons_in=1` ACK |
+| `TestGateMissingRecovery` | 1 | Timeout on missing recovery OK log |
+| `TestGateExhaustion` | 1 | Fail on `max_exhaustion_count > 0` |
+| `TestGateClearTooSlow` | 1 | Fail when recovery→clear > 1200 ms |
+| `TestGateTimeout` | 1 | Total deadline exhaustion |
+| `TestGateNotActiveAtStart` | 1 | Retries until ACTIVE appears |
+
+All 18 pass: `Ran 18 tests in 0.005s — OK`.
+
+### Builds (SC_PAIR_ONLY=y, CONFIG_BT_SMP_SC_PAIR_ONLY=n removed)
+
+| Target | RAM | FLASH |
+|--------|-----|-------|
+| nRF5340 CPUAPP | 138,384 B (30.17%) | 364,164 B (35.28%) |
+| nRF54L15 CPUAPP | 153,812 B (93.88%) | 490,784 B (33.56%) |
+| nRF54L15 FLPR | 41,856 B (63.87%) | — |
+
+Both targets build clean, no new warnings.
+
+### SC pairing blocker
+
+Hardware evidence (2026-07-28):
+```
+[main] Pair() async error: org.bluez.Error.AuthenticationFailed: Authentication Failed
+[main] After Pair: Paired=False, Connected=True
+```
+
+BlueZ daemon returns `AuthenticationFailed` on async `Device.Pair()` when both sides negotiate SC (auth req 0x09). Root cause: CRACEN-accelerated ECDH on nRF54L15 (SDC backend) does not interoperate with Linux kernel SMP through nRF5340DK hci_uart SW Split LL transport. This is the same interop gap documented in 4605874 and ead0ae8.
+
+Without `CONFIG_BT_SMP_SC_PAIR_ONLY=n`, legacy Just Works fallback is unavailable, and no pairing/encryption/streaming path exists between these specific hardware stacks. The 2dacc3e evidence claiming SC pairing success could not be reproduced with a clean build from this tree.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `boards/nrf54l15dk_nrf54l15_cpuapp.conf` | Removed `CONFIG_BT_SMP_SC_PAIR_ONLY=n` (revert ead0ae8) |
+| `scripts/flpr_stall_gate.py` | New: pyserial gate automation with transport abstraction |
+| `tests/unit/flpr_stall_gate/__init__.py` | New: test package init |
+| `tests/unit/flpr_stall_gate/test_flpr_stall_gate.py` | New: 18 unit tests (all PASS) |
+| `docs/development/phase6-stage2-results.md` | This section — blocker documentation |
+| `docs/development/phase6-stage2-automated-stall-handoff.md` | Handoff document (reference) |
+
+### Recommended follow-up
+
+1. Resolve SC pairing interop gap OR accept `SC_PAIR_ONLY=n` as necessary workaround for this hardware combination
+2. With working pairing: run `scripts/flpr_stall_gate.py --timeout 40` concurrent with 90s Mode A central
+3. Gate script has built-in 1.2s stall-to-clear deadline — if hardware pairing works, probation gate will pass automatically
+4. If SC pairing not resolvable: restore `SC_PAIR_ONLY=n`, run gate with legacy Just Works, document as known-gap workaround
