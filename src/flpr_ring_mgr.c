@@ -1144,8 +1144,21 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 		}
 	}
 
-	/* Fill result — snapshot before consume_done. */
+	/* Fill result — snapshot metadata BEFORE consume_done.
+	 * Recompute payload CRC for defense in depth. */
 	result->output_frames = vf;
+	result->sequence = meta->sequence;
+	result->flags = meta->flags;
+	result->correction_ppm = meta->correction_ppm;
+
+	/* Recompute payload CRC independently. */
+	if (vf > 0) {
+		result->payload_crc =
+			flpr_ring_crc32(flpr_ring_slot_payload(slot_base), (size_t)vf * 4U);
+	} else {
+		result->payload_crc = 0;
+	}
+
 	memcpy(&result->post_state, &meta->asrc_state, sizeof(result->post_state));
 	result->processing_cycles = meta->processing_cycles;
 	result->processing_status = meta->processing_status;

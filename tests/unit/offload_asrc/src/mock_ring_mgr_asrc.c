@@ -44,6 +44,10 @@ bool mock_consume_bad_post_state;                /* corrupt post-state reserved 
 int32_t mock_consume_status;                     /* processing_status value */
 uint32_t mock_consume_cycles;                    /* processing_cycles value */
 struct audio_asrc_state mock_consume_post_state; /* override post-state */
+bool mock_consume_step_base_mismatch;            /* return step_base != request */
+bool mock_consume_corrupt_correction;            /* return correction_ppm != request */
+bool mock_consume_seq_wrong;                     /* return sequence != request */
+uint32_t mock_consume_corrupt_seq;               /* wrong sequence to return */
 
 /* ASRC produce: recorded params */
 int mock_produce_asrc_calls;
@@ -262,6 +266,17 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 
 	/* Fill result. */
 	result->output_frames = vf;
+	result->sequence =
+		mock_consume_seq_wrong ? mock_consume_corrupt_seq : mock_consume_sequence;
+	result->flags = flags;
+	result->correction_ppm = mock_consume_corrupt_correction ? (mock_produce_asrc_ppm + 1)
+								 : mock_produce_asrc_ppm;
+	/* Recompute CRC over output payload (defense-in-depth). */
+	if (vf > 0 && pcm_out) {
+		result->payload_crc = flpr_ring_crc32((const uint8_t *)pcm_out, (size_t)vf * 4U);
+	} else {
+		result->payload_crc = 0;
+	}
 	result->processing_cycles = mock_consume_cycles;
 	result->processing_status = mock_consume_status;
 	result->rtt_cycles = mock_consume_latency;
@@ -271,6 +286,10 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 		/* Corrupt a reserved byte. */
 		memcpy(&result->post_state, &mock_consume_post_state, sizeof(result->post_state));
 		result->post_state.reserved[1] = 0xCC;
+	} else if (mock_consume_step_base_mismatch) {
+		/* Return same post_state but with step_base flipped. */
+		memcpy(&result->post_state, &mock_consume_post_state, sizeof(result->post_state));
+		result->post_state.step_base ^= 0xFFFFU;
 	} else {
 		memcpy(&result->post_state, &mock_consume_post_state, sizeof(result->post_state));
 	}

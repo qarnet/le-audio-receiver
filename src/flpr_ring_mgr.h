@@ -340,6 +340,10 @@ enum flpr_produce_result flpr_ring_mgr_produce_asrc(const int16_t *pcm_data, uin
 /** Typed result from an ASRC consume. */
 struct flpr_consume_asrc_result {
 	uint16_t output_frames;             /* 1..481 if ok, 0 on error */
+	uint32_t sequence;                  /* echoed sequence number */
+	uint16_t flags;                     /* slot flags snapshot */
+	int32_t correction_ppm;             /* echoed correction ppm */
+	uint32_t payload_crc;               /* recomputed CRC over valid payload */
 	struct audio_asrc_state post_state; /* post-process continuity state */
 	uint32_t processing_cycles;         /* FLPR k_cycle_get_32 elapsed */
 	int32_t processing_status;          /* 0 = success, <0 = error */

@@ -878,6 +878,37 @@ static int cmd_offload_status(const struct shell *sh, size_t argc, char **argv)
 		shell_print(sh, "  Last err    : %d at seq %u", s.last_error, s.last_error_seq);
 	}
 
+	/* ── ASRC stats ─────────────────────────────────────────── */
+#if defined(CONFIG_AUDIO_OFFLOAD_ASRC)
+	{
+		struct audio_offload_asrc_stats as;
+		audio_offload_get_asrc_stats(&as);
+		shell_print(sh, "  ── ASRC offload ──");
+		shell_print(sh, "    Counters : submit=%u success=%u fallback=%u", as.submit_count,
+			    as.success_count, as.fallback_count);
+		shell_print(sh,
+			    "    Faults   : timeout=%u full=%u stale=%u seq=%u frame=%u crc=%u "
+			    "state=%u verify=%u",
+			    as.timeout_count, as.full_count, as.stale_count, as.seq_fault_count,
+			    as.frame_fault_count, as.crc_fault_count, as.state_fault_count,
+			    as.verify_fault_count);
+		if (as.rtt_count > 0) {
+			uint32_t avg_cyc = (uint32_t)(as.rtt_sum_cycles / as.rtt_count);
+			shell_print(sh,
+				    "    RTT      : min=%u cyc (%u us) max=%u cyc (%u us) avg=%u "
+				    "cyc (%u us) n=%u",
+				    as.rtt_min_cycles, k_cyc_to_us_ceil32(as.rtt_min_cycles),
+				    as.rtt_max_cycles, k_cyc_to_us_ceil32(as.rtt_max_cycles),
+				    avg_cyc, k_cyc_to_us_ceil32(avg_cyc), as.rtt_count);
+		}
+		if (as.cycles_count > 0) {
+			uint32_t avg_cyc = (uint32_t)(as.cycles_sum / as.cycles_count);
+			shell_print(sh, "    FLPR cyc : min=%u cyc max=%u cyc avg=%u cyc n=%u",
+				    as.cycles_min, as.cycles_max, avg_cyc, as.cycles_count);
+		}
+	}
+#endif
+
 	return 0;
 }
 
