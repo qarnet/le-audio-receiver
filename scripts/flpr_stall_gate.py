@@ -373,11 +373,13 @@ class GateRunner:
                     time.sleep(self._status_interval)
                     continue
 
-                # Zero-fault check: no I2S/decode/push/ASRC faults.
+                # Integrity-fault rejection: stale, seq, frame, crc, payload.
+                # timeout and full are expected transport fault evidence of
+                # stall — they do NOT gate-fail (acceptance requires
+                # timeout/fallback >= 1).
                 if (
-                    st["fault_timeout"] > 0
-                    or st["fault_full"] > 0
-                    or st["fault_stale"] > 0
+                    st["fault_stale"] > 0
+                    or st["fault_seq"] > 0
                     or st["fault_frame"] > 0
                     or st["fault_crc"] > 0
                     or st["fault_payload"] > 0

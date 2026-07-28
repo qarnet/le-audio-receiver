@@ -276,6 +276,171 @@ def test_timed_ack_wrong_duration_rejected():
     print("  PASS: wrong duration rejected")
 
 
+def test_timeout_full_pass_gate():
+    """timeout=1 + full=1 are valid stall evidence; gate must NOT reject them."""
+    s = GateRunner.parse_offload(
+        "Faults      : timeout=1 full=1 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+    )
+    assert s["fault_timeout"] == 1
+    assert s["fault_full"] == 1
+    # Integrity check: only stale/seq/frame/crc/payload trigger rejection
+    integrity_faults = (
+        s["fault_stale"]
+        or s["fault_seq"]
+        or s["fault_frame"]
+        or s["fault_crc"]
+        or s["fault_payload"]
+    )
+    assert not integrity_faults, "timeout/full must not be rejected as integrity faults"
+    print("  PASS: timeout+full accepted as stall evidence (not integrity faults)")
+
+
+def test_integrity_faults_rejected():
+    """Each integrity fault (stale, seq, frame, crc, payload) must be rejected."""
+    checks = [
+        (
+            "stale=1",
+            "Faults      : timeout=0 full=0 stale=1 seq=0 frame=0 crc=0 payload=0\n",
+        ),
+        (
+            "seq=1",
+            "Faults      : timeout=0 full=0 stale=0 seq=1 frame=0 crc=0 payload=0\n",
+        ),
+        (
+            "frame=1",
+            "Faults      : timeout=0 full=0 stale=0 seq=0 frame=1 crc=0 payload=0\n",
+        ),
+        (
+            "crc=1",
+            "Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=1 payload=0\n",
+        ),
+        (
+            "payload=1",
+            "Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=1\n",
+        ),
+    ]
+    for label, text in checks:
+        s = GateRunner.parse_offload(text)
+        integrity = (
+            s["fault_stale"]
+            or s["fault_seq"]
+            or s["fault_frame"]
+            or s["fault_crc"]
+            or s["fault_payload"]
+        )
+        assert integrity, f"{label} must be detected as integrity fault"
+    print("  PASS: all 5 integrity faults (stale/seq/frame/crc/payload) rejected")
+
+
+def test_gate_success_with_timeout_fault():
+    """Full gate run passes even with timeout=1 (expected stall evidence)."""
+
+    class TimeoutFaultTransport(FakeSerial):
+        def __init__(self):
+            super().__init__({})
+            self._idx = 0
+
+        def read_all(self) -> bytes:
+            self._idx += 1
+            if self._idx <= 2:
+                return (
+                    "State       : ACTIVE / epoch=1 gen=1\n"
+                    "Counters    : submit=1000 success=600 fallback=0 busy=0\n"
+                    "Recovery    : attempts=0 fail=0 relapses=0 exhaustion=0\n"
+                    "Probation   : active=0 success=0 cleared=0\n"
+                    "Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+                ).encode("utf-8")
+            elif self._idx == 3:
+                return (
+                    "FLPR timed stall applied: bits=0x01 duration=60 ms (cons_in=1 prod_out=0)\n"
+                ).encode("utf-8")
+            elif self._idx == 4:
+                return (
+                    "State       : ACTIVE / epoch=1 gen=1\n"
+                    "Counters    : submit=1000 success=600 fallback=5 busy=0\n"
+                    "Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+                    "Probation   : active=0 success=0 cleared=0\n"
+                ).encode("utf-8")
+            else:
+                return (
+                    "State       : ACTIVE / epoch=1 gen=1\n"
+                    "Counters    : submit=1200 success=750 fallback=5 busy=0\n"
+                    "Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+                    "Probation   : active=0 success=100 cleared=1\n"
+                    "Faults      : timeout=1 full=0 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+                ).encode("utf-8")
+
+    tr = TimeoutFaultTransport()
+    runner = GateRunner(tr, total_timeout=5.0, status_interval=0.05)
+    result = runner.run()
+    assert result.passed, f"Gate must PASS with timeout=1: {result.error}"
+    print("  PASS: gate success path with timeout=1 (expected stall evidence)")
+
+
+def test_seq_fault_fails_gate():
+    """Gate must fail when seq=1 (integrity fault)."""
+
+    class SeqFaultTransport(FakeSerial):
+        def __init__(self):
+            super().__init__({})
+            self._idx = 0
+
+        def read_all(self) -> bytes:
+            self._idx += 1
+            if self._idx <= 2:
+                return (
+                    "State       : ACTIVE / epoch=1 gen=1\n"
+                    "Counters    : submit=1000 success=600 fallback=0 busy=0\n"
+                    "Recovery    : attempts=0 fail=0 relapses=0 exhaustion=0\n"
+                    "Probation   : active=0 success=0 cleared=0\n"
+                    "Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+                ).encode("utf-8")
+            elif self._idx == 3:
+                return (
+                    "FLPR timed stall applied: bits=0x01 duration=60 ms (cons_in=1 prod_out=0)\n"
+                ).encode("utf-8")
+            elif self._idx == 4:
+                return (
+                    "State       : ACTIVE / epoch=1 gen=1\n"
+                    "Counters    : submit=1000 success=600 fallback=5 busy=0\n"
+                    "Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+                    "Probation   : active=0 success=0 cleared=0\n"
+                ).encode("utf-8")
+            else:
+                return (
+                    "State       : ACTIVE / epoch=1 gen=1\n"
+                    "Counters    : submit=1200 success=750 fallback=5 busy=0\n"
+                    "Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+                    "Probation   : active=0 success=100 cleared=1\n"
+                    "Faults      : timeout=0 full=0 stale=0 seq=1 frame=0 crc=0 payload=0\n"
+                ).encode("utf-8")
+
+    tr = SeqFaultTransport()
+    runner = GateRunner(tr, total_timeout=2.0, status_interval=0.05)
+    result = runner.run()
+    assert not result.passed, "Gate must FAIL with seq=1 integrity fault"
+    print("  PASS: gate fails on seq=1 integrity fault")
+
+
+def test_only_integrity_faults_rejected():
+    """Comprehensive: timeout=1 full=1 must PASS; stale/seq/frame/crc/payload fail."""
+    # Already tested above; this documents the complete matrix
+    s = GateRunner.parse_offload(
+        "Faults      : timeout=1 full=1 stale=0 seq=1 frame=1 crc=1 payload=1\n"
+    )
+    # timeout+full are fine
+    # stale=0 but seq/frame/crc/payload=1 → integrity rejection
+    integrity = (
+        s["fault_stale"]
+        or s["fault_seq"]
+        or s["fault_frame"]
+        or s["fault_crc"]
+        or s["fault_payload"]
+    )
+    assert integrity, "seq/frame/crc/payload all=1 must trigger rejection"
+    print("  PASS: comprehensive integrity-fault coverage matrix")
+
+
 def run_tests():
     tests = [
         test_parse_offload_active,
@@ -290,6 +455,11 @@ def run_tests():
         test_gate_success_path,
         test_gate_no_fallback_fails,
         test_timed_ack_wrong_duration_rejected,
+        test_timeout_full_pass_gate,
+        test_integrity_faults_rejected,
+        test_gate_success_with_timeout_fault,
+        test_seq_fault_fails_gate,
+        test_only_integrity_faults_rejected,
     ]
 
     failures = 0
