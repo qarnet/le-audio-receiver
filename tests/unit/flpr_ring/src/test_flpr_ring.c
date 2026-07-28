@@ -673,7 +673,7 @@ ZTEST(flpr_ring, test_cpu_timestamp_field)
 	/* Verify cpu_timestamp offset preserves 32-byte alignment. */
 	struct flpr_ring_slot_meta meta;
 	memset(&meta, 0, sizeof(meta));
-	zassert_equal(sizeof(meta), 32, "metadata must be exactly 32 bytes");
+	zassert_equal(sizeof(meta), 64, "metadata v4 = 64 bytes");
 	zassert_equal(meta.cpu_timestamp, 0, "cpu_timestamp initializes to 0");
 }
 

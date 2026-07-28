@@ -61,6 +61,15 @@ static int validate_input(const struct flpr_ring_slot_meta *meta, const uint8_t 
 		}
 	}
 
+	/* CRC validation: if producer supplied a nonzero CRC, verify payload
+	 * before any processing (identity copy or ASRC).  Zero CRC = no check. */
+	if (meta->crc32 != 0) {
+		uint32_t computed = flpr_ring_crc32(payload, need);
+		if (computed != meta->crc32) {
+			return FLPR_AUDIO_ERR_BAD_CRC;
+		}
+	}
+
 	return 0;
 }
 
@@ -84,11 +93,11 @@ static int process_identity(const struct flpr_ring_slot_meta *input_meta,
 	output_meta->sequence = input_meta->sequence;
 	output_meta->epoch = input_meta->epoch;
 	output_meta->valid_frames = valid_frames;
-	output_meta->flags = FLPR_SLOT_FLAG_VALID;
+	output_meta->flags = input_meta->flags | FLPR_SLOT_FLAG_VALID;
 	output_meta->correction_ppm = input_meta->correction_ppm;
 	output_meta->crc32 = input_meta->crc32;
 	output_meta->cpu_timestamp = input_meta->cpu_timestamp;
-	/* asrc_raw, processing_cycles, processing_status already zeroed. */
+	/* asrc_state, processing_cycles, processing_status already zeroed. */
 
 	/* Bit-exact payload copy. */
 	memcpy(output_payload, input_payload, copy_bytes);
@@ -125,8 +134,7 @@ static int process_asrc(const struct flpr_ring_slot_meta *input_meta, const uint
 	bool prev_valid;
 	int ret;
 
-	ret = audio_asrc_state_import(&ctx, (const struct audio_asrc_state *)input_meta->asrc_raw,
-				      &prev_l, &prev_r, &prev_valid);
+	ret = audio_asrc_state_import(&ctx, &input_meta->asrc_state, &prev_l, &prev_r, &prev_valid);
 	if (ret != 0) {
 		return FLPR_AUDIO_ERR_STATE;
 	}
@@ -134,14 +142,29 @@ static int process_asrc(const struct flpr_ring_slot_meta *input_meta, const uint
 	/* Call the accepted ASRC processor. */
 	const int16_t *input_s16 = (const int16_t *)input_payload;
 	int16_t *output_s16 = (int16_t *)output_payload;
-	size_t input_consumed;
-	size_t output_produced;
-	int16_t next_prev_l, next_prev_r;
+	size_t input_consumed = 0;
+	size_t output_produced = 0;
+	int16_t next_prev_l = 0;
+	int16_t next_prev_r = 0;
 
 	ret = audio_asrc_process(&ctx, input_s16, (size_t)FLPR_RING_PAYLOAD_MAX_INPUT, output_s16,
 				 (size_t)FLPR_RING_PAYLOAD_CAPACITY_FRAMES,
 				 input_meta->correction_ppm, prev_l, prev_r, prev_valid,
 				 &input_consumed, &output_produced, &next_prev_l, &next_prev_r);
+
+	/* Check return before trusting output parameters.
+	 * ret == 0: success, consumed/produced valid.
+	 * ret == 1: output capacity exhausted (state unchanged), consumed may be partial.
+	 * ret  < 0: invalid argument, outputs not set.
+	 */
+	if (ret < 0) {
+		return FLPR_AUDIO_ERR_STATE;
+	}
+	if (ret == 1) {
+		/* Capacity exhausted — state unchanged, partial consumption.
+		 * Treat as production range error (shouldn't happen with 481 cap). */
+		return FLPR_AUDIO_ERR_CAPACITY;
+	}
 
 	/* Must consume exactly 480 input frames. */
 	if (input_consumed != FLPR_RING_PAYLOAD_MAX_INPUT) {
@@ -172,7 +195,7 @@ static int process_asrc(const struct flpr_ring_slot_meta *input_meta, const uint
 	/* Export post-process state (MUST be AFTER memset). */
 	audio_asrc_state_export(&ctx, next_prev_l, next_prev_r,
 				true, /* always valid after first block */
-				(struct audio_asrc_state *)output_meta->asrc_raw);
+				&output_meta->asrc_state);
 
 	/* Zero remainder of payload. */
 	if (output_payload_bytes > produced_bytes) {
@@ -197,18 +220,53 @@ int flpr_audio_process(const struct flpr_ring_slot_meta *input_meta, const uint8
 	/* Zero output metadata before filling (safety). */
 	memset(output_meta, 0, sizeof(*output_meta));
 
+	/* Snapshot cycle count at entry (FLPR will overwrite this
+	 * via flpr_ring_slot_set_processing after either path). */
+	/* cycles_start is a placeholder — FLPR main loop owns the
+	 * actual cycle measurement.  The processor only constructs the
+	 * metadata shape. */
+
 	/* Validate input. */
 	ret = validate_input(input_meta, input_payload, input_payload_bytes);
 	if (ret != 0) {
-		return ret;
+		goto error;
 	}
 
 	/* Dispatch by flag. */
 	if (input_meta->flags & FLPR_SLOT_FLAG_ASRC_LINEAR) {
-		return process_asrc(input_meta, input_payload, input_payload_bytes, output_meta,
-				    output_payload, output_payload_bytes);
+		ret = process_asrc(input_meta, input_payload, input_payload_bytes, output_meta,
+				   output_payload, output_payload_bytes);
+	} else {
+		ret = process_identity(input_meta, input_payload, input_payload_bytes, output_meta,
+				       output_payload, output_payload_bytes);
 	}
 
-	return process_identity(input_meta, input_payload, input_payload_bytes, output_meta,
-				output_payload, output_payload_bytes);
+	if (ret != 0) {
+		goto error;
+	}
+
+	return FLPR_AUDIO_OK;
+
+error:
+	/* Construct error output metadata: preserve input fields,
+	 * zero valid_frames, set negative status.  FLPR main loop
+	 * sets processing_cycles LAST via flpr_ring_slot_set_processing(). */
+	memset(output_meta, 0, sizeof(*output_meta));
+	if (input_meta) {
+		output_meta->sequence = input_meta->sequence;
+		output_meta->epoch = input_meta->epoch;
+		output_meta->valid_frames = 0;
+		output_meta->flags = (input_meta->flags & FLPR_SLOT_FLAG_ASRC_LINEAR);
+		output_meta->correction_ppm = input_meta->correction_ppm;
+		output_meta->cpu_timestamp = input_meta->cpu_timestamp;
+	}
+	/* processing_cycles and processing_status set by FLPR main loop
+	 * via flpr_ring_slot_set_processing(meta, cycles, ret) after
+	 * this function returns — the setter is called LAST so cycles
+	 * reflect the full processing span including error path. */
+
+	/* Zero output payload on error. */
+	memset(output_payload, 0, output_payload_bytes);
+
+	return ret;
 }

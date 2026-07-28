@@ -227,9 +227,9 @@ ZTEST(flpr_audio_process, test_stride_fits_metadata_plus_payload)
 
 ZTEST(flpr_audio_process, test_asrc_state_offset_in_meta)
 {
-	/* asrc_raw[3] starts at offset 32 in metadata. */
-	size_t off = offsetof(struct flpr_ring_slot_meta, asrc_raw);
-	zassert_equal(off, 32, "asrc_raw at offset 32");
+	/* asrc_state starts at offset 32 in metadata. */
+	size_t off = offsetof(struct flpr_ring_slot_meta, asrc_state);
+	zassert_equal(off, 32, "asrc_state at offset 32");
 }
 
 ZTEST(flpr_audio_process, test_processing_fields_offset)
@@ -256,7 +256,7 @@ ZTEST(flpr_audio_process, test_identity_bit_exact)
 	input_meta.flags = FLPR_SLOT_FLAG_VALID;
 	input_meta.correction_ppm = 0;
 	input_meta.cpu_timestamp = 0xABCD0001;
-	input_meta.crc32 = 0xDEADBEEF;
+	input_meta.crc32 = 0;
 
 	/* Fill input with pattern. */
 	fill_input_ramp(1000);
@@ -269,9 +269,10 @@ ZTEST(flpr_audio_process, test_identity_bit_exact)
 	zassert_equal(output_meta.epoch, 7, "epoch preserved");
 	zassert_equal(output_meta.valid_frames, FLPR_RING_PAYLOAD_MAX_INPUT,
 		      "valid_frames preserved");
-	zassert_equal(output_meta.flags, FLPR_SLOT_FLAG_VALID, "flags = VALID only");
+	zassert_equal(output_meta.flags, input_meta.flags | FLPR_SLOT_FLAG_VALID,
+		      "flags preserved | VALID");
 	zassert_equal(output_meta.correction_ppm, 0, "ppm preserved");
-	zassert_equal(output_meta.crc32, 0xDEADBEEF, "CRC preserved");
+	zassert_equal(output_meta.crc32, 0, "CRC preserved (zero)");
 	zassert_equal(output_meta.cpu_timestamp, 0xABCD0001, "timestamp preserved");
 	zassert_equal(output_meta.processing_status, 0, "status = 0");
 
@@ -280,9 +281,8 @@ ZTEST(flpr_audio_process, test_identity_bit_exact)
 			  "payload bit-exact");
 
 	/* Extended metadata zeroed. */
-	zassert_equal(output_meta.asrc_raw[0], 0, "asrc_raw[0] zero");
-	zassert_equal(output_meta.asrc_raw[1], 0, "asrc_raw[1] zero");
-	zassert_equal(output_meta.asrc_raw[2], 0, "asrc_raw[2] zero");
+	zassert_equal(output_meta.asrc_state.phase, 0, "asrc_state.phase zero");
+	zassert_equal(output_meta.asrc_state.step_base, 0, "asrc_state.step_base zero");
 	zassert_equal(output_meta.processing_cycles, 0, "cycles zero (unit test)");
 }
 
@@ -294,7 +294,7 @@ ZTEST(flpr_audio_process, test_identity_different_valid_frames)
 	input_meta.valid_frames = 240;
 	input_meta.flags = FLPR_SLOT_FLAG_VALID;
 	input_meta.correction_ppm = 0;
-	input_meta.crc32 = 0x12345678;
+	input_meta.crc32 = 0;
 
 	fill_input_ramp(0);
 
@@ -325,8 +325,7 @@ static void setup_asrc_input(uint32_t seq, int32_t ppm)
 	/* Initialize ASRC state in input metadata. */
 	struct audio_asrc init_ctx;
 	audio_asrc_init(&init_ctx, 48000, 48000);
-	audio_asrc_state_export(&init_ctx, 0, 0, false,
-				(struct audio_asrc_state *)input_meta.asrc_raw);
+	audio_asrc_state_export(&init_ctx, 0, 0, false, &input_meta.asrc_state);
 }
 
 ZTEST(flpr_audio_process, test_asrc_single_block_identity_ppm0)
@@ -384,7 +383,7 @@ ZTEST(flpr_audio_process, test_asrc_multi_block_continuity)
 
 	for (uint32_t blk = 0; blk < 3; blk++) {
 		fill_input_ramp(blk * 480);
-		memcpy(input_meta.asrc_raw, &state, sizeof(state));
+		input_meta.asrc_state = state;
 		input_meta.sequence = blk;
 		input_meta.valid_frames = FLPR_RING_PAYLOAD_MAX_INPUT;
 		input_meta.flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR;
@@ -400,7 +399,7 @@ ZTEST(flpr_audio_process, test_asrc_multi_block_continuity)
 		zassert_true(output_meta.valid_frames > 0, "produced frames > 0");
 
 		/* Carry state forward. */
-		memcpy(&state, output_meta.asrc_raw, sizeof(state));
+		state = output_meta.asrc_state;
 	}
 }
 
@@ -431,7 +430,7 @@ ZTEST(flpr_audio_process, test_asrc_post_state_exact_match_reference)
 
 		/* FLPR helper process. */
 		audio_asrc_state_export(&flpr_ctx, flpr_pl, flpr_pr, flpr_pv, &state);
-		memcpy(input_meta.asrc_raw, &state, sizeof(state));
+		input_meta.asrc_state = state;
 		input_meta.sequence = blk;
 		input_meta.valid_frames = FLPR_RING_PAYLOAD_MAX_INPUT;
 		input_meta.flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR;
@@ -454,9 +453,8 @@ ZTEST(flpr_audio_process, test_asrc_post_state_exact_match_reference)
 				  "block %u: payload bytes match direct", blk);
 
 		/* Reload FLPR ASRC state from output. */
-		int import_ret = audio_asrc_state_import(
-			&flpr_ctx, (const struct audio_asrc_state *)output_meta.asrc_raw, &flpr_pl,
-			&flpr_pr, &flpr_pv);
+		int import_ret = audio_asrc_state_import(&flpr_ctx, &output_meta.asrc_state,
+							 &flpr_pl, &flpr_pr, &flpr_pv);
 		zassert_equal(import_ret, 0, "state import block %u", blk);
 
 		/* Post-state should match direct state. */
@@ -492,7 +490,7 @@ ZTEST(flpr_audio_process, test_fallback_continuity)
 	{
 		fill_input_ramp(0);
 		audio_asrc_state_export(&fallback_ctx, fb_pl, fb_pr, fb_pv, &state);
-		memcpy(input_meta.asrc_raw, &state, sizeof(state));
+		input_meta.asrc_state = state;
 		input_meta.sequence = 0;
 		input_meta.valid_frames = FLPR_RING_PAYLOAD_MAX_INPUT;
 		input_meta.flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR;
@@ -504,9 +502,8 @@ ZTEST(flpr_audio_process, test_fallback_continuity)
 					     &output_meta, output_payload, sizeof(output_payload));
 		zassert_equal(ret, FLPR_AUDIO_OK, "fallback block 0 FLPR OK");
 
-		audio_asrc_state_import(&fallback_ctx,
-					(const struct audio_asrc_state *)output_meta.asrc_raw,
-					&fb_pl, &fb_pr, &fb_pv);
+		audio_asrc_state_import(&fallback_ctx, &output_meta.asrc_state, &fb_pl, &fb_pr,
+					&fb_pv);
 	}
 
 	/* Block 1: Direct cpuapp. */
@@ -524,7 +521,7 @@ ZTEST(flpr_audio_process, test_fallback_continuity)
 	{
 		fill_input_ramp(960);
 		audio_asrc_state_export(&fallback_ctx, fb_pl, fb_pr, fb_pv, &state);
-		memcpy(input_meta.asrc_raw, &state, sizeof(state));
+		input_meta.asrc_state = state;
 		input_meta.sequence = 2;
 		input_meta.valid_frames = FLPR_RING_PAYLOAD_MAX_INPUT;
 		input_meta.flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR;
@@ -536,9 +533,8 @@ ZTEST(flpr_audio_process, test_fallback_continuity)
 					     &output_meta, output_payload, sizeof(output_payload));
 		zassert_equal(ret, FLPR_AUDIO_OK, "fallback block 2 FLPR OK");
 
-		audio_asrc_state_import(&fallback_ctx,
-					(const struct audio_asrc_state *)output_meta.asrc_raw,
-					&fb_pl, &fb_pr, &fb_pv);
+		audio_asrc_state_import(&fallback_ctx, &output_meta.asrc_state, &fb_pl, &fb_pr,
+					&fb_pv);
 	}
 
 	/* Compare against uninterrupted direct reference. */
@@ -617,8 +613,7 @@ ZTEST(flpr_audio_process, test_reject_asrc_wrong_frames)
 
 	struct audio_asrc init_ctx;
 	audio_asrc_init(&init_ctx, 48000, 48000);
-	audio_asrc_state_export(&init_ctx, 0, 0, false,
-				(struct audio_asrc_state *)input_meta.asrc_raw);
+	audio_asrc_state_export(&init_ctx, 0, 0, false, &input_meta.asrc_state);
 
 	fill_input_ramp(0);
 
@@ -677,9 +672,6 @@ ZTEST(flpr_audio_process, test_error_output_metadata_shape)
 }
 
 /* ── Test: 60K block cumulative count matches Phase 5 reference ──── */
-/* Phase 5 reference: 60,000 blocks at 0 ppm produced exactly 60,000 × 480
- * output frames with linear ASRC.  We verify the cumulative count after
- * many blocks. */
 
 ZTEST(flpr_audio_process, test_cumulative_60k_blocks_ppm_zero_count)
 {
@@ -692,9 +684,9 @@ ZTEST(flpr_audio_process, test_cumulative_60k_blocks_ppm_zero_count)
 	audio_asrc_init(&init_ctx, 48000, 48000);
 	audio_asrc_state_export(&init_ctx, 0, 0, false, &state);
 
-	for (uint32_t blk = 0; blk < 1000; blk++) {
+	for (uint32_t blk = 0; blk < 60000; blk++) {
 		fill_input_ramp(blk * 480);
-		memcpy(input_meta.asrc_raw, &state, sizeof(state));
+		input_meta.asrc_state = state;
 		input_meta.sequence = blk;
 		input_meta.valid_frames = FLPR_RING_PAYLOAD_MAX_INPUT;
 		input_meta.flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR;
@@ -705,18 +697,65 @@ ZTEST(flpr_audio_process, test_cumulative_60k_blocks_ppm_zero_count)
 		int ret = flpr_audio_process(&input_meta, input_payload, sizeof(input_payload),
 					     &output_meta, output_payload, sizeof(output_payload));
 		zassert_equal(ret, FLPR_AUDIO_OK, "60k block %u OK", blk);
+		zassert_equal(output_meta.valid_frames, 480, "block %u: 480 frames", blk);
 
 		total_produced += output_meta.valid_frames;
 
 		/* Carry state forward. */
-		memcpy(&state, output_meta.asrc_raw, sizeof(state));
-		pl = (int16_t)(output_meta.asrc_raw[0] & 0xFFFF);
-		pr = (int16_t)((output_meta.asrc_raw[0] >> 16) & 0xFFFF);
+		state = output_meta.asrc_state;
+		pl = output_meta.asrc_state.prev_l;
+		pr = output_meta.asrc_state.prev_r;
 		pv = true;
 	}
 
-	/* At 0 ppm with 48000→48000, every block produces exactly 480 frames. */
-	zassert_equal(total_produced, 1000ULL * 480ULL, "cumulative count = 480K");
+	/* At 0 ppm with 48000→48000, every block produces exactly 480 frames.
+	 * Cumulative ideal: 60000 × 480 = 28800000, one-frame bound = exact. */
+	zassert_equal(total_produced, 60000ULL * 480ULL, "cumulative count = 28,800,000 (exact)");
+}
+
+/* 60K blocks at nRF54L15 actual rate (48000→47619, ppm=0).
+ * Documented one-frame cumulative ideal bound: total within ±1 of the
+ * continuous ideal (60000*480*47619/48000 = 28542000). */
+ZTEST(flpr_audio_process, test_cumulative_60k_blocks_47619_rate_count)
+{
+	struct audio_asrc_state state;
+	int16_t pl = 0, pr = 0;
+	bool pv = false;
+	uint64_t total_produced = 0;
+
+	struct audio_asrc init_ctx;
+	audio_asrc_init(&init_ctx, 48000, 47619);
+	audio_asrc_state_export(&init_ctx, 0, 0, false, &state);
+
+	for (uint32_t blk = 0; blk < 60000; blk++) {
+		fill_input_ramp(blk * 480);
+		input_meta.asrc_state = state;
+		input_meta.sequence = blk;
+		input_meta.valid_frames = FLPR_RING_PAYLOAD_MAX_INPUT;
+		input_meta.flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR;
+		input_meta.correction_ppm = 0;
+
+		memset(&output_meta, 0, sizeof(output_meta));
+		memset(output_payload, 0, sizeof(output_payload));
+		int ret = flpr_audio_process(&input_meta, input_payload, sizeof(input_payload),
+					     &output_meta, output_payload, sizeof(output_payload));
+		zassert_equal(ret, FLPR_AUDIO_OK, "47619 block %u OK", blk);
+		zassert_true(output_meta.valid_frames >= 475 && output_meta.valid_frames <= 477,
+			     "block %u: %u frames in [475,477]", blk, output_meta.valid_frames);
+
+		total_produced += output_meta.valid_frames;
+
+		state = output_meta.asrc_state;
+		pl = output_meta.asrc_state.prev_l;
+		pr = output_meta.asrc_state.prev_r;
+		pv = true;
+	}
+
+	/* Continuous ideal: 60000 * 480 * 47619 / 48000 = 28571400.
+	 * Documented one-frame cumulative ideal bound: ±1. */
+	size_t ideal = 28571400;
+	zassert_true(total_produced >= ideal - 1 && total_produced <= ideal + 1,
+		     "cumulative %llu within ±1 of %zu", (unsigned long long)total_produced, ideal);
 }
 
 ZTEST(flpr_audio_process, test_ppm_sign_changing_sequence)
@@ -734,7 +773,7 @@ ZTEST(flpr_audio_process, test_ppm_sign_changing_sequence)
 
 	for (int i = 0; i < 5; i++) {
 		fill_input_ramp(i * 480);
-		memcpy(input_meta.asrc_raw, &state, sizeof(state));
+		input_meta.asrc_state = state;
 		input_meta.sequence = i;
 		input_meta.valid_frames = FLPR_RING_PAYLOAD_MAX_INPUT;
 		input_meta.flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR;
@@ -748,9 +787,9 @@ ZTEST(flpr_audio_process, test_ppm_sign_changing_sequence)
 		zassert_equal(ret, FLPR_AUDIO_OK, "sign-change block %d ppm=%d OK", i, ppm_seq[i]);
 		zassert_true(output_meta.valid_frames > 0, "block %d produced frames", i);
 
-		memcpy(&state, output_meta.asrc_raw, sizeof(state));
-		pl = (int16_t)(output_meta.asrc_raw[0] & 0xFFFF);
-		pr = (int16_t)((output_meta.asrc_raw[0] >> 16) & 0xFFFF);
+		state = output_meta.asrc_state;
+		pl = output_meta.asrc_state.prev_l;
+		pr = output_meta.asrc_state.prev_r;
 		pv = true;
 	}
 }
@@ -817,6 +856,126 @@ ZTEST(flpr_audio_process, test_identity_no_asrc_flag_on_output)
 	zassert_equal(output_meta.flags & FLPR_SLOT_FLAG_ASRC_LINEAR, 0,
 		      "no ASRC flag on identity output");
 	zassert_equal(output_meta.processing_status, 0, "status = 0");
+}
+
+/* ── Stage 3A review: new tests ──────────────────────────────────── */
+
+ZTEST(flpr_audio_process, test_identity_rejects_bad_crc)
+{
+	input_meta.sequence = 0;
+	input_meta.epoch = 1;
+	input_meta.valid_frames = 480;
+	input_meta.flags = FLPR_SLOT_FLAG_VALID;
+	input_meta.correction_ppm = 0;
+	input_meta.crc32 = 0x12345678; /* nonzero → CRC verified */
+	fill_input_ramp(0);
+
+	int ret = flpr_audio_process(&input_meta, input_payload, sizeof(input_payload),
+				     &output_meta, output_payload, sizeof(output_payload));
+	zassert_equal(ret, FLPR_AUDIO_ERR_BAD_CRC, "identity rejects bad CRC");
+
+	/* Verify error metadata shape. */
+	zassert_equal(output_meta.valid_frames, 0, "error valid_frames = 0");
+	zassert_equal(output_meta.sequence, 0, "error preserves sequence");
+	zassert_equal(output_meta.correction_ppm, 0, "error preserves ppm");
+}
+
+ZTEST(flpr_audio_process, test_identity_passes_good_crc)
+{
+	input_meta.sequence = 1;
+	input_meta.epoch = 1;
+	input_meta.valid_frames = 480;
+	input_meta.flags = FLPR_SLOT_FLAG_VALID;
+	input_meta.correction_ppm = 0;
+	fill_input_ramp(0);
+	input_meta.crc32 = flpr_ring_crc32(input_payload, 480 * 4);
+
+	int ret = flpr_audio_process(&input_meta, input_payload, sizeof(input_payload),
+				     &output_meta, output_payload, sizeof(output_payload));
+	zassert_equal(ret, FLPR_AUDIO_OK, "identity passes good CRC");
+	zassert_mem_equal(output_payload, input_payload, 480 * 4, "payload bit-exact");
+}
+
+ZTEST(flpr_audio_process, test_asrc_rejects_bad_crc)
+{
+	setup_asrc_input(0, 0);
+	input_meta.crc32 = 0xDEADBEEF; /* nonzero → CRC verified */
+
+	int ret = flpr_audio_process(&input_meta, input_payload, sizeof(input_payload),
+				     &output_meta, output_payload, sizeof(output_payload));
+	zassert_equal(ret, FLPR_AUDIO_ERR_BAD_CRC, "ASRC rejects bad CRC");
+	zassert_equal(output_meta.valid_frames, 0, "error valid_frames = 0");
+}
+
+ZTEST(flpr_audio_process, test_asrc_passes_good_crc)
+{
+	setup_asrc_input(0, 0);
+	input_meta.crc32 = flpr_ring_crc32(input_payload, 480 * 4);
+
+	int ret = flpr_audio_process(&input_meta, input_payload, sizeof(input_payload),
+				     &output_meta, output_payload, sizeof(output_payload));
+	zassert_equal(ret, FLPR_AUDIO_OK, "ASRC passes good CRC");
+}
+
+ZTEST(flpr_audio_process, test_error_metadata_preserves_fields)
+{
+	/* Trigger CRC error and check error metadata preserves key fields. */
+	input_meta.sequence = 42;
+	input_meta.epoch = 5;
+	input_meta.valid_frames = 480;
+	input_meta.flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR;
+	input_meta.correction_ppm = -100;
+	input_meta.cpu_timestamp = 0xCAFE0001;
+	input_meta.crc32 = 0xBAD00001; /* corrupt */
+	fill_input_ramp(0);
+
+	int ret = flpr_audio_process(&input_meta, input_payload, sizeof(input_payload),
+				     &output_meta, output_payload, sizeof(output_payload));
+	zassert_equal(ret, FLPR_AUDIO_ERR_BAD_CRC, "CRC error");
+
+	/* Error metadata preserves input fields, valid_frames = 0. */
+	zassert_equal(output_meta.valid_frames, 0, "error: valid_frames = 0");
+	zassert_equal(output_meta.sequence, 42, "error: sequence preserved");
+	zassert_equal(output_meta.epoch, 5, "error: epoch preserved");
+	zassert_equal(output_meta.correction_ppm, -100, "error: ppm preserved");
+	zassert_equal(output_meta.cpu_timestamp, 0xCAFE0001, "error: timestamp preserved");
+	zassert_equal(output_meta.flags & FLPR_SLOT_FLAG_ASRC_LINEAR, FLPR_SLOT_FLAG_ASRC_LINEAR,
+		      "error: ASRC flag preserved");
+
+	/* processing_cycles and processing_status will be set by FLPR main loop
+	 * via flpr_ring_slot_set_processing() LAST.  Here they are zero. */
+}
+
+ZTEST(flpr_audio_process, test_identity_preserves_input_flags)
+{
+	/* Input with CRC_OK flag should appear on output. */
+	input_meta.sequence = 0;
+	input_meta.epoch = 1;
+	input_meta.valid_frames = 240;
+	input_meta.flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_CRC_OK;
+	input_meta.correction_ppm = 0;
+	input_meta.crc32 = 0;
+	fill_input_ramp(0);
+
+	int ret = flpr_audio_process(&input_meta, input_payload, sizeof(input_payload),
+				     &output_meta, output_payload, sizeof(output_payload));
+	zassert_equal(ret, FLPR_AUDIO_OK, "identity OK");
+	zassert_equal(output_meta.flags, FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_CRC_OK,
+		      "identity preserves CRC_OK flag");
+}
+
+ZTEST(flpr_audio_process, test_typed_state_offsets)
+{
+	/* asrc_state is a typed struct at offset 32, 24 bytes. */
+	size_t off = offsetof(struct flpr_ring_slot_meta, asrc_state);
+	zassert_equal(off, 32, "asrc_state at offset 32");
+	zassert_equal(sizeof(struct audio_asrc_state), 24, "asrc_state = 24 bytes");
+
+	/* processing_cycles at 56, processing_status at 60. */
+	zassert_equal(offsetof(struct flpr_ring_slot_meta, processing_cycles), 56,
+		      "processing_cycles at offset 56");
+	zassert_equal(offsetof(struct flpr_ring_slot_meta, processing_status), 60,
+		      "processing_status at offset 60");
 }
 
 /* ── Test suite ──────────────────────────────────────────────────── */

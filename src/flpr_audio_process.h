@@ -34,6 +34,7 @@ enum flpr_audio_process_result {
 	FLPR_AUDIO_ERR_CAPACITY = -5,   /* output capacity too small */
 	FLPR_AUDIO_ERR_PROD_RANGE = -6, /* produced frames out of expected range */
 	FLPR_AUDIO_ERR_STATE = -7,      /* ASRC state import rejected */
+	FLPR_AUDIO_ERR_BAD_CRC = -8,    /* input payload CRC mismatch */
 };
 
 /* ── Forward declarations ────────────────────────────────────────── */

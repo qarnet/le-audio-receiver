@@ -31,6 +31,9 @@
 #define ASRC_RATE_MIN 1
 #define ASRC_RATE_MAX 192000
 
+/** Q32.32 one (2³²).  Phase identity boundary; phase > Q32_ONE is invalid. */
+#define ASRC_Q32_ONE (1ULL << 32)
+
 struct audio_asrc {
 	/** Q32.32 phase within the extended sequence [0, input_frames·2³²]. */
 	uint64_t phase;

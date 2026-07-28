@@ -29,7 +29,9 @@
 #include <errno.h>
 
 #define Q32_FRAC_MASK 0xFFFFFFFFULL
-#define Q32_ONE       (1ULL << 32)
+
+/* Use public symbol from header. */
+#define Q32_ONE ASRC_Q32_ONE
 
 /* ── interp_s16 ────────────────────────────────────────────────────
  *
