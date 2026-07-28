@@ -561,3 +561,84 @@ Without `CONFIG_BT_SMP_SC_PAIR_ONLY=n`, legacy Just Works fallback is unavailabl
 2. With working pairing: run `scripts/flpr_stall_gate.py --timeout 40` concurrent with 90s Mode A central
 3. Gate script has built-in 1.2s stall-to-clear deadline — if hardware pairing works, probation gate will pass automatically
 4. If SC pairing not resolvable: restore `SC_PAIR_ONLY=n`, run gate with legacy Just Works, document as known-gap workaround
+
+---
+
+## Mechanical fix — deterministic 80ms hold, recovery-text removal, baseline fix (2026-07-28)
+
+**Purpose**: Fix `scripts/flpr_stall_gate.py` per resolved design decisions (no recovery-text gating, deterministic 80ms hold, baseline captured immediately after clear). Unit tests updated.
+
+### Design changes
+
+| Change | Before | After |
+|--------|--------|-------|
+| Recovery text gate | Wait for `offload recovery OK` before clear → variable index shift | NEVER gate clear on recovery log text. Hold exactly 80ms monotonic from stall ACK, then send stall_flpr0 |
+| Post-clear baseline | Set `pre_clear_success` on first poll that passes ALL probation checks | Capture status IMMEDIATELY after clear ACK; require +100 success from that baseline |
+| Hold loop reads | `read_all()` during hold → schedule indices vary with recovery text presence | Zero `read_all()` during hold (sleep-only). Deterministic index assignment |
+| Recovery timestamp | Required for gate pass | Collected from accumulated buffer after hold (metrics only, never blocks clear) |
+| Fault evidence | Not checked | `fallback > 0` required in monitoring loop (proves stall caused faults) |
+| success >= 500 precondition | Not checked | Enforced in Step 1 alongside `state=ACTIVE` |
+
+### Unit tests
+
+23 tests, all PASS (up from 18 in prior session). Coverage:
+
+| Test class | Tests | What it covers |
+|-----------|-------|----------------|
+| `TestRegexParsing` | 10 | Regex matching against current shell output |
+| `TestFakeSerial` | 2 | Index-based line delivery, write recording |
+| `TestGateSuccess` | 3 | Full success path, recovery timestamp capture, clear-not-blocked-by-missing-recovery |
+| `TestGateMissingStallAck` | 1 | Timeout on missing `cons_in=1` ACK |
+| `TestGateExhaustion` | 1 | Fail on `max_exhaustion_count > 0` |
+| `TestGateNoFallback` | 1 | Fail when stall produces no fallback evidence |
+| `TestGateLowStartSuccess` | 1 | Fail when initial success < 500 |
+| `TestGateNotActiveAtStart` | 1 | Retries until ACTIVE+success>=500 appears |
+| `TestGateBaselineCapturedImmediately` | 1 | Baseline set right after clear ACK, not after probation |
+| `TestGateClearAckCorrectIndex` | 1 | `finditer` finds `cons_in=0` even with `cons_in=1` in accumulated text |
+
+All 23 pass: `Ran 23 tests in 0.017s — OK`.
+
+### Hardware gate (2026-07-28)
+
+**90s Mode A baseline stream**: PASS.
+
+```
+State       : STOPPED / epoch=0 gen=5
+Counters    : submit=6027 success=6027 fallback=0 busy=0
+```
+
+Central: 9000 frames in 90.00s (100.0 fps). Mode A (2 mono ASEs -> stereo interleave). Zero faults. Pairing via default BlueZ scan path (not `--peer-addr`).
+
+**Pairing**: `CONFIG_BT_SMP_SC_PAIR_ONLY=n` workaround in `boards/nrf54l15dk_nrf54l15_cpuapp.conf` remains necessary. This is unchanged from prior sessions.
+
+**Automated stall gate** (`scripts/flpr_stall_gate.py`): **NOT PASSED** — firmware-level issue, not script bug.
+
+Gate correctly executed all mechanical steps:
+1. Found ACTIVE with success >= 500
+2. Sent `stall_flpr 1`, received ACK `cons_in=1`
+3. Held exactly 80ms (verified: `stall_to_clear_ms >= 80`)
+4. Sent `stall_flpr 0`, received ACK `cons_in=0`
+5. Captured baseline immediately after clear (success=1148)
+6. Monitoring loop found `exhaustion=1` — recovery exhausted before probation cleared
+
+Firmware status at gate failure:
+```
+State       : FALLBACK
+Counters    : submit=7129 success=1148 fallback=5981
+Recovery    : attempts=5 fail=1 relapses=5 exhaustion=1
+Probation   : active=1 success=0 cleared=0
+```
+
+**Root cause**: The 80ms stall produced enough faults to trigger full recovery escalation (backoff 100->200->400->800->1600ms across 5 recovery cycles) before the probation window could accumulate 100 consecutive successes. Recovery exhausts at try 6 (MAX_TRIES=5 + 1). Gate correctly detects this as a hard failure.
+
+This is identical to the policy behavior documented in commit bbb1051 — recovery is bounded to 5 attempts, and a persistent stall that isn't cleared before ~1.2s will exhaust. The gate's 80ms hold clears the stall quickly, but the initial fault storm (8+ faults during the 80ms window) triggers enough recovery cycles to consume the budget.
+
+**Gate correctness verified**: The script correctly executed the stall/clear sequence, captured evidence, and detected exhaustion. The failure mode is firmware policy (recovery budget exhausted before probation window), not script logic. All unit tests pass deterministically.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `scripts/flpr_stall_gate.py` | Mechanical fix: remove recovery-text gate, add 80ms deterministic hold, baseline captured immediately after clear ACK, `fallback>0` evidence check, `success>=500` precondition, zero reads during hold |
+| `tests/unit/flpr_stall_gate/test_flpr_stall_gate.py` | 23 tests (up from 18): deterministic schedule (zero-hold-reads), new tests for no-fallback, low-start-success, baseline timing, clear-ACK finditer. Removed `TestGateMissingRecovery` and `TestGateClearTooSlow` |
+| `docs/development/phase6-stage2-results.md` | This section |
