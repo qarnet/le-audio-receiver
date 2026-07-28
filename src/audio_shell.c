@@ -241,8 +241,10 @@ static int cmd_flpr_ring_status(const struct shell *sh, size_t argc, char **argv
 	shell_print(sh, "  Output (→CPU): prod=%u cons=%u epoch=%u used=%u space=%u",
 		    s.out_producer, s.out_consumer, s.out_epoch, s.out_used, s.out_space);
 
-	shell_print(sh, "  Diag (CPUAPP): notify=%u err=%u sem_give=%u sem_take=%u", s.notify_sent,
-		    s.notify_err, s.sem_gives, s.sem_takes);
+	shell_print(sh,
+		    "  Diag (CPUAPP): notify=%u err=%u sem_give=%u sem_take=%u stale=%u drained=%u",
+		    s.notify_sent, s.notify_err, s.sem_gives, s.sem_takes, s.stale_notify,
+		    s.sem_drained);
 
 	if (s.flpr_notify_rcv > 0 || s.flpr_worker_wake > 0) {
 		shell_print(sh,

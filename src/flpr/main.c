@@ -275,7 +275,11 @@ static int ring_reset_with_epoch(uint32_t epoch)
 }
 
 /** Send RING_CONSUMER notification + diagnostic counters to CPUAPP.
- *  Called from IPC callback and polling path when data was consumed. */
+ *  Called from IPC callback and polling path when data was consumed.
+ *
+ *  Stage 2 fix: data carries current ring_stream_epoch (non-zero) for
+ *  stale-notification rejection.  Consumed count is not needed for wake
+ *  semantics; diagnostic block count retained in seq. */
 static void ring_notify_cpuapp(uint32_t consumed)
 {
 	if (consumed == 0) {
@@ -286,8 +290,8 @@ static void ring_notify_cpuapp(uint32_t consumed)
 	struct flpr_msg notify = {
 		.type = FLPR_MSG_RING_CONSUMER,
 		.version = FLPR_PROTOCOL_VERSION,
-		.seq = (uint16_t)(ring_test_block_count & 0xFFFFU),
-		.data = (uint32_t)consumed, /* slots consumed this wake */
+		.seq = (uint16_t)(consumed & 0xFFFFU),
+		.data = ring_stream_epoch,
 	};
 	(void)send_msg(&notify);
 }

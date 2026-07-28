@@ -83,6 +83,8 @@ struct flpr_ring_status {
 	uint32_t notify_err;
 	uint32_t sem_gives; /* from FLPR → CPUAPP ring consumer notifications */
 	uint32_t sem_takes;
+	uint32_t stale_notify; /* Stage 2: notifications with wrong epoch rejected */
+	uint32_t sem_drained;  /* Stage 2: consume_sem tokens drained at reset */
 
 	/* Test */
 	bool test_active;

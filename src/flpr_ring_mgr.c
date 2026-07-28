@@ -71,6 +71,8 @@ static uint32_t diag_notify_sent;
 static uint32_t diag_notify_err;
 static uint32_t diag_sem_gives;
 static uint32_t diag_sem_takes;
+static uint32_t diag_stale_notify; /* Stage 2: consumer notifications with wrong epoch */
+static uint32_t diag_sem_drained;  /* Stage 2: consume_sem tokens drained at reset */
 
 /* Test counters (protected by ring_lock). */
 static bool test_active;
@@ -137,13 +139,27 @@ static void on_ring_reset_ack(const struct flpr_msg *msg, void *user_data)
 static void on_ring_consumer(const struct flpr_msg *msg, void *user_data)
 {
 	(void)user_data;
-	/* Update FLPR-reported block count. */
+	/* Stage 2: data now carries ring_stream_epoch from FLPR.
+	 * Compare against local ring_stream_epoch to reject stale
+	 * notifications from before a reset.  Only matching-epoch
+	 * notifications give the consume semaphore.
+	 *
+	 * Stale rejections are counted for diagnostics; they never
+	 * wake the consumer path (no ENOENT from submit against
+	 * an empty reset output ring). */
 	k_spinlock_key_t key = k_spin_lock(&ring_lock);
+
+	if (msg->data != ring_stream_epoch) {
+		diag_stale_notify++;
+		k_spin_unlock(&ring_lock, key);
+		return; /* stale: do NOT give semaphore */
+	}
+
+	/* Matching epoch: update FLPR-reported block count, give sem. */
 	test_flpr_blocks = (uint32_t)msg->seq;
 	diag_sem_gives++;
 	k_spin_unlock(&ring_lock, key);
 
-	/* Wake the test loop. */
 	k_sem_give(&consume_sem);
 }
 
@@ -334,12 +350,28 @@ int flpr_ring_mgr_reset(uint32_t new_epoch)
 		return -EINVAL;
 	}
 
+	/* Stage 2: drain stale consume_sem tokens BEFORE publishing the
+	 * new ring_stream_epoch.  Any token that was in-flight from a
+	 * previous epoch would wake submit against an empty reset output
+	 * ring, producing -ENOENT.  K_NO_WAIT — never block here. */
+	{
+		uint32_t drained = 0;
+		while (k_sem_take(&consume_sem, K_NO_WAIT) == 0) {
+			drained++;
+		}
+		if (drained > 0) {
+			diag_sem_drained += drained;
+		}
+	}
+
 	k_spinlock_key_t key = k_spin_lock(&ring_lock);
 	ring_stream_epoch = new_epoch;
 	diag_notify_sent = 0;
 	diag_notify_err = 0;
 	diag_sem_gives = 0;
 	diag_sem_takes = 0;
+	diag_stale_notify = 0;
+	diag_sem_drained = 0;
 	test_active = false;
 	test_blocks_sent = 0;
 	test_blocks_recv = 0;
@@ -387,6 +419,8 @@ void flpr_ring_mgr_get_status(struct flpr_ring_status *status)
 	status->notify_err = diag_notify_err;
 	status->sem_gives = diag_sem_gives;
 	status->sem_takes = diag_sem_takes;
+	status->stale_notify = diag_stale_notify;
+	status->sem_drained = diag_sem_drained;
 
 	if (rings_initialized) {
 		status->in_producer = flpr_ring_producer(RING_INPUT_BASE);
