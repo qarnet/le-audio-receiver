@@ -139,10 +139,14 @@ static void on_ring_reset_ack(const struct flpr_msg *msg, void *user_data)
 static void on_ring_consumer(const struct flpr_msg *msg, void *user_data)
 {
 	(void)user_data;
-	/* Stage 2: data now carries ring_stream_epoch from FLPR.
-	 * Compare against local ring_stream_epoch to reject stale
-	 * notifications from before a reset.  Only matching-epoch
-	 * notifications give the consume semaphore.
+	/* RING_CONSUMER wire contract (FLPR_PROTOCOL_VERSION ≥ 3):
+	 *   seq  = (uint16_t)(ring_test_block_count & 0xffff)
+	 *   data = ring_stream_epoch (the FLPR-side epoch at produce time)
+	 *
+	 * Match against local ring_stream_epoch to reject stale
+	 * notifications from before a reset / during invalidation window
+	 * (epoch=0).  Only matching-epoch notifications give the consume
+	 * semaphore.
 	 *
 	 * Stale rejections are counted for diagnostics; they never
 	 * wake the consumer path (no ENOENT from submit against
@@ -343,6 +347,18 @@ int flpr_ring_mgr_reset(uint32_t new_epoch)
 		return -EINVAL;
 	}
 
+	/* Step 1: invalidate in-flight notifications BEFORE touching
+	 * shared rings.  Set ring_stream_epoch=0 under lock so any
+	 * notification arriving between now and the final publish
+	 * is rejected as stale (epoch mismatch). */
+	{
+		k_spinlock_key_t key = k_spin_lock(&ring_lock);
+		ring_stream_epoch = 0;
+		k_spin_unlock(&ring_lock, key);
+	}
+
+	/* Step 2: reset shared rings.  On failure leave epoch invalid
+	 * (already 0) and return error — no partial state. */
 	int ret_in = flpr_ring_reset_epoch(RING_INPUT_BASE, new_epoch);
 	int ret_out = flpr_ring_reset_epoch(RING_OUTPUT_BASE, new_epoch);
 
@@ -350,57 +366,57 @@ int flpr_ring_mgr_reset(uint32_t new_epoch)
 		return -EINVAL;
 	}
 
-	/* Stage 2: drain stale consume_sem tokens BEFORE publishing the
-	 * new ring_stream_epoch.  Any token that was in-flight from a
-	 * previous epoch would wake submit against an empty reset output
-	 * ring, producing -ENOENT.  K_NO_WAIT — never block here. */
-	{
-		uint32_t drained = 0;
-		while (k_sem_take(&consume_sem, K_NO_WAIT) == 0) {
-			drained++;
-		}
-		if (drained > 0) {
-			diag_sem_drained += drained;
-		}
+	/* Step 3: drain stale consume_sem tokens into a local accumulator.
+	 * Any token in-flight from a previous epoch would wake submit
+	 * against an empty reset output ring, producing -ENOENT.
+	 * K_NO_WAIT — never block here. */
+	uint32_t drained = 0;
+	while (k_sem_take(&consume_sem, K_NO_WAIT) == 0) {
+		drained++;
 	}
 
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-	ring_stream_epoch = new_epoch;
-	diag_notify_sent = 0;
-	diag_notify_err = 0;
-	diag_sem_gives = 0;
-	diag_sem_takes = 0;
-	diag_stale_notify = 0;
-	diag_sem_drained = 0;
-	test_active = false;
-	test_blocks_sent = 0;
-	test_blocks_recv = 0;
-	test_crc_errors = 0;
-	test_payload_errors = 0;
-	test_seq_gaps = 0;
-	test_full_events = 0;
-	test_backpressure = 0;
-	test_empty_events = 0;
-	test_stale_events = 0;
-	test_flpr_blocks = 0;
-	test_flpr_crc_err = 0;
-	test_output_full = 0;
-	test_flpr_notify_rcv = 0;
-	test_flpr_worker_wake = 0;
-	test_flpr_consume_ok = 0;
-	test_flpr_consume_empty = 0;
-	test_flpr_consume_stale = 0;
-	test_flpr_produce_ok = 0;
-	test_flpr_produce_full = 0;
-	latency_min = UINT32_MAX;
-	latency_max = 0;
-	latency_sum = 0;
-	latency_count = 0;
-	stall_producer_enabled = false;
-	k_spin_unlock(&ring_lock, key);
+	/* Step 4: publish new epoch + reset diagnostics under lock.
+	 * diag_sem_drained set to drained (NOT zeroed) so callers can
+	 * observe how many tokens were flushed. */
+	{
+		k_spinlock_key_t key = k_spin_lock(&ring_lock);
+		ring_stream_epoch = new_epoch;
+		diag_notify_sent = 0;
+		diag_notify_err = 0;
+		diag_sem_gives = 0;
+		diag_sem_takes = 0;
+		diag_stale_notify = 0;
+		diag_sem_drained = drained;
+		test_active = false;
+		test_blocks_sent = 0;
+		test_blocks_recv = 0;
+		test_crc_errors = 0;
+		test_payload_errors = 0;
+		test_seq_gaps = 0;
+		test_full_events = 0;
+		test_backpressure = 0;
+		test_empty_events = 0;
+		test_stale_events = 0;
+		test_flpr_blocks = 0;
+		test_flpr_crc_err = 0;
+		test_output_full = 0;
+		test_flpr_notify_rcv = 0;
+		test_flpr_worker_wake = 0;
+		test_flpr_consume_ok = 0;
+		test_flpr_consume_empty = 0;
+		test_flpr_consume_stale = 0;
+		test_flpr_produce_ok = 0;
+		test_flpr_produce_full = 0;
+		latency_min = UINT32_MAX;
+		latency_max = 0;
+		latency_sum = 0;
+		latency_count = 0;
+		stall_producer_enabled = false;
+		k_spin_unlock(&ring_lock, key);
 
-	LOG_INF("PCM rings reset: epoch=%u", new_epoch);
-	return 0;
+		LOG_INF("PCM rings reset: epoch=%u", new_epoch);
+		return 0;
+	}
 }
 
 void flpr_ring_mgr_get_status(struct flpr_ring_status *status)

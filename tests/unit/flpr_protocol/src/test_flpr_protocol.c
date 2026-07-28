@@ -621,7 +621,7 @@ ZTEST(flpr_protocol, test_error_counters_independent)
 
 ZTEST(flpr_protocol, test_protocol_version_constant)
 {
-	zassert_equal(FLPR_PROTOCOL_VERSION, 2U);
+	zassert_equal(FLPR_PROTOCOL_VERSION, 3U);
 }
 
 /* ── Message type constants ──────────────────────────────────────── */

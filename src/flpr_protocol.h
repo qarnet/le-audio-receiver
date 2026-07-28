@@ -25,7 +25,7 @@ extern "C" {
 
 /* ── Protocol version ──────────────────────────────────────────── */
 
-#define FLPR_PROTOCOL_VERSION 2U
+#define FLPR_PROTOCOL_VERSION 3U
 
 /* ── Message types ─────────────────────────────────────────────── */
 
