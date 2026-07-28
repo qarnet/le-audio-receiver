@@ -19,6 +19,7 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/ipc/ipc_service.h>
 #include <zephyr/sys/__assert.h>
+#include <zephyr/sys/atomic.h>
 #include <string.h>
 
 #include "flpr_protocol.h"
@@ -79,9 +80,23 @@ static bool rings_initialized;
 
 static uint32_t ring_stream_epoch; /* current ring epoch after reset */
 
-/* Stall control flags (written by IPC RING_STALL, read by poll + callback). */
-static bool stall_consumer_input;
-static bool stall_producer_output;
+/* Stall control: atomic bitmask (replaces two plain bools for Stage 2).
+ * Written by IPC RING_STALL handler, read by poll + callback.
+ * Bits: FLPR_STALL_CONSUMER_INPUT (0x01), FLPR_STALL_PRODUCER_OUTPUT (0x02).
+ *
+ * Timed stall (duration > 0): timer expiry atomically clears all bits
+ * and kicks ring_wake_sem so queued input drains even without a later
+ * producer notification. */
+static atomic_t stall_flags = ATOMIC_INIT(0);
+
+static void stall_timer_expiry(struct k_timer *timer);
+
+/* One-shot timer for timed-stall auto-clear. */
+static K_TIMER_DEFINE(stall_timer, stall_timer_expiry, NULL);
+
+/* Diagnostics (no lock — single-threaded FLPR). */
+static uint32_t diag_timed_stall_start_count;
+static uint32_t diag_timed_stall_expiry_count;
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 
@@ -109,16 +124,19 @@ static uint32_t ring_process_input(void)
 
 	diag_worker_wake++;
 
+	/* One atomic snapshot per decision — consistent view. */
+	atomic_val_t sf = atomic_get(&stall_flags);
+
 	while (1) {
 		/* Respect consumer-input stall: stop draining input. */
-		if (stall_consumer_input) {
+		if (sf & FLPR_STALL_CONSUMER_INPUT) {
 			break;
 		}
 
 		/* Check output capacity BEFORE consuming input.
 		 * If output ring is full or stalled, stop here —
 		 * do NOT consume input (no loss). */
-		if (stall_producer_output) {
+		if (sf & FLPR_STALL_PRODUCER_OUTPUT) {
 			break;
 		}
 		{
@@ -229,6 +247,12 @@ static int ring_reset_with_epoch(uint32_t epoch)
 	}
 	ring_stream_epoch = epoch;
 
+	/* Clear any active stall on ring reset. */
+	k_timer_stop(&stall_timer);
+	atomic_clear(&stall_flags);
+	diag_timed_stall_start_count = 0;
+	diag_timed_stall_expiry_count = 0;
+
 	/* Reset test counters on ring reset. */
 	ring_test_active = false;
 	ring_test_block_count = 0;
@@ -266,6 +290,19 @@ static void ring_notify_cpuapp(uint32_t consumed)
 		.data = (uint32_t)consumed, /* slots consumed this wake */
 	};
 	(void)send_msg(&notify);
+}
+
+/* ── Stall timer expiry callback ────────────────────────────────────
+ * Only fires for timed stalls (duration > 0).  Atomically clears
+ * all stall bits and kicks ring_wake_sem so queued input drains
+ * even without a later producer notification.
+ * ISR context: no logging, no blocking calls. */
+static void stall_timer_expiry(struct k_timer *timer)
+{
+	(void)timer;
+	atomic_clear(&stall_flags);
+	diag_timed_stall_expiry_count++;
+	k_sem_give(&ring_wake_sem);
 }
 
 /* ── IPC callbacks ──────────────────────────────────────────────── */
@@ -423,19 +460,29 @@ static void ep_received(const void *data, size_t len, void *priv)
 		break;
 
 	case FLPR_MSG_RING_STALL: {
-		/* Apply stall config from CPUAPP.
-		 * data bitmask:
-		 *   FLPR_STALL_CONSUMER_INPUT (0x01)
-		 *   FLPR_STALL_PRODUCER_OUTPUT (0x02) */
-		uint8_t bits = (uint8_t)(msg->data & 0xFFU);
-		stall_consumer_input = (bits & FLPR_STALL_CONSUMER_INPUT) != 0;
-		stall_producer_output = (bits & FLPR_STALL_PRODUCER_OUTPUT) != 0;
+		/* Stage 2 packed stall: data[7:0]=mask, data[31:8]=duration_ms.
+		 * Duration zero = persistent (stops any prior timer). */
+		uint8_t bits = FLPR_STALL_MASK(msg->data);
+		uint32_t duration_ms = FLPR_STALL_DURATION(msg->data);
 
+		/* Stop any prior timed stall. */
+		k_timer_stop(&stall_timer);
+
+		/* Atomically apply the new mask. */
+		atomic_set(&stall_flags, (atomic_val_t)bits);
+
+		if (duration_ms > 0) {
+			/* Timed stall: start one-shot timer. */
+			k_timer_start(&stall_timer, K_MSEC(duration_ms), K_NO_WAIT);
+			diag_timed_stall_start_count++;
+		}
+
+		/* ACK with packed value (exact echo). */
 		struct flpr_msg ack = {
 			.type = FLPR_MSG_RING_STALL_ACK,
 			.version = FLPR_PROTOCOL_VERSION,
 			.seq = 0,
-			.data = bits,
+			.data = msg->data, /* echo packed mask+duration */
 		};
 		(void)send_msg(&ack);
 		break;

@@ -278,6 +278,19 @@ static int cmd_flpr_ring_status(const struct shell *sh, size_t argc, char **argv
 			    s.latency_count);
 	}
 
+	/* Timed stall diagnostics (Stage 2). */
+	{
+		uint32_t acked = flpr_ring_mgr_flpr_stall_acked();
+		uint8_t mask = FLPR_STALL_MASK(acked);
+		uint32_t dur = FLPR_STALL_DURATION(acked);
+		if (mask != 0 || dur > 0) {
+			shell_print(sh,
+				    "  Stall (last): mask=0x%02x (cons_in=%d prod_out=%d) "
+				    "duration=%u ms",
+				    mask, (mask & 0x01) ? 1 : 0, (mask & 0x02) ? 1 : 0, dur);
+		}
+	}
+
 	return 0;
 }
 
@@ -421,6 +434,38 @@ static int cmd_flpr_ring_stall_flpr(const struct shell *sh, size_t argc, char **
 			    (bits & 0x01) ? 1 : 0, (bits & 0x02) ? 1 : 0);
 	} else {
 		shell_error(sh, "FLPR stall failed: %d", ret);
+	}
+	return ret;
+}
+
+static int cmd_flpr_ring_stall_flpr_ms(const struct shell *sh, size_t argc, char **argv)
+{
+	if (argc < 3) {
+		shell_error(sh, "Usage: flpr ring stall_flpr_ms <bits> <duration_ms>");
+		return -EINVAL;
+	}
+
+	uint8_t bits = (uint8_t)shell_strtoul(argv[1], 0, NULL);
+	uint32_t duration_ms = (uint32_t)shell_strtoul(argv[2], 0, NULL);
+
+	if (bits == 0 && duration_ms > 0) {
+		shell_error(sh, "Timed stall with zero mask rejected");
+		return -EINVAL;
+	}
+	if (duration_ms > 0x00FFFFFFUL) {
+		shell_error(sh, "Duration %u exceeds max %u ms", duration_ms,
+			    (unsigned)0x00FFFFFFUL);
+		return -EINVAL;
+	}
+
+	int ret = flpr_ring_mgr_flpr_stall_timed(bits, duration_ms, 5000);
+	if (ret == 0) {
+		shell_print(sh,
+			    "FLPR timed stall applied: bits=0x%02x duration=%u ms "
+			    "(cons_in=%d prod_out=%d)",
+			    bits, duration_ms, (bits & 0x01) ? 1 : 0, (bits & 0x02) ? 1 : 0);
+	} else {
+		shell_error(sh, "FLPR timed stall failed: %d", ret);
 	}
 	return ret;
 }
@@ -846,6 +891,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
 	SHELL_CMD_ARG(stall_flpr, NULL,
 		      "FLPR-side stall: <bits> (0x01=cons_input 0x02=prod_output 0=clear).",
 		      cmd_flpr_ring_stall_flpr, 1, 1),
+	SHELL_CMD_ARG(stall_flpr_ms, NULL,
+		      "FLPR timed stall: <bits> <duration_ms> (auto-clear after duration).",
+		      cmd_flpr_ring_stall_flpr_ms, 2, 1),
 	SHELL_SUBCMD_SET_END);
 
 SHELL_STATIC_SUBCMD_SET_CREATE(

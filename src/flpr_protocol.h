@@ -46,8 +46,36 @@ extern "C" {
 #define FLPR_MSG_RING_CONSUMER    0x16U /* FLPR → CPUAPP: output data available */
 
 /* Stage 1: stall controls */
-#define FLPR_MSG_RING_STALL     0x17U /* CPUAPP → FLPR: stall config (data: bitmask) */
+#define FLPR_MSG_RING_STALL     0x17U /* CPUAPP → FLPR: stall config (data: packed mask+duration) */
 #define FLPR_MSG_RING_STALL_ACK 0x18U /* FLPR → CPUAPP: stall config applied */
+
+/* ── Stall data packing (Stage 2) ───────────────────────────────────
+ * data[7:0]   = stall mask (FLPR_STALL_CONSUMER_INPUT, etc.)
+ * data[31:8]  = duration milliseconds (0 = persistent)
+ *
+ * Maximum duration 0x00FFFFFF ms (~4.7 hours).  Zero bits in mask
+ * with nonzero duration is rejected by pack macro (zero-bits mask is
+ * a clear command, which must always be persistent).
+ */
+#define FLPR_STALL_DURATION_MAX 0x00FFFFFFU
+
+/* Pack mask + duration: mask in low 8 bits, duration in upper 24 bits. */
+#define FLPR_STALL_PACK(mask, duration_ms)                                                         \
+	(((uint32_t)(duration_ms) << 8) | ((uint32_t)(mask) & 0xFFU))
+
+/* Unpack mask: low 8 bits. */
+#define FLPR_STALL_MASK(data) ((uint8_t)((data) & 0xFFU))
+
+/* Unpack duration: upper 24 bits. */
+#define FLPR_STALL_DURATION(data) ((uint32_t)(((data) >> 8) & 0x00FFFFFFU))
+
+/* Compile-time assertions. */
+BUILD_ASSERT(FLPR_STALL_PACK(0x01, 0) == 0x00000001U,
+	     "FLPR_STALL_PACK(0x01,0) must equal 0x00000001 (persistent)");
+BUILD_ASSERT(FLPR_STALL_PACK(0x02, 60) == ((60U << 8) | 0x02U),
+	     "FLPR_STALL_PACK(0x02,60) must pack duration at bits 31:8");
+BUILD_ASSERT(FLPR_STALL_PACK(0xFF, 0x00FFFFFFU) == ((0xFFFFFF00U) | 0x000000FFU),
+	     "FLPR_STALL_PACK(0xFF, max duration) boundary check");
 
 /* ── Timing ────────────────────────────────────────────────────── */
 

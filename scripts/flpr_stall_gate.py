@@ -1,31 +1,20 @@
 #!/usr/bin/env nix-shell
 #!nix-shell -i python3 -p "python3Packages.pyserial"
 """
-flpr_stall_gate.py — Automated FLPR stall gate for nRF54L15.
+flpr_stall_gate.py — Automated FLPR timed-stall gate for nRF54L15.
 
 Single pyserial process owns UART for entire injection round-trip.
 No serial-MCP polling latency.
 
-Algorithm (v2 — deterministic 80ms hold, no recovery-text gating):
+Algorithm (v3 — timed 60ms auto-clear, no external on/wait/off):
   1. Open configured console, preserve raw log to file.
   2. Send `flpr offload`; wait until State=ACTIVE AND success >= 500.
-  3. Send `flpr ring stall_flpr 1`.
-  4. Read until ACK: `FLPR stall applied: 0x01 (cons_in=1 prod_out=0)`.
-  5. Hold exactly 80ms monotonic from stall ACK time.
-     Collect logs during hold (for recovery timestamp) but NEVER gate
-     clear on recovery log text — UART logs can buffer.
-  6. Send `flpr ring stall_flpr 0`.
-  7. Require clear ACK: `FLPR stall applied: 0x00 (cons_in=0 prod_out=0)`.
-  8. Capture baseline success count IMMEDIATELY after clear ACK.
-  9. Periodically send `flpr offload`, read until:
-     - State ACTIVE
-     - recovery_attempts >= 1
-     - exhaustion = 0
-     - probation_cleared >= 1
-     - probation_active = 0
-     - fallback > 0  (evidence stall caused faults)
-     - success_count increased by >= 100 after clear baseline
- 10. Send final status commands, close port.
+  3. Send `flpr ring stall_flpr_ms 1 60`.
+  4. Require exact ACK: bits=0x01 duration=60.
+  5. Read until at least one fault/fallback detected.
+  6. Monitor status until ACTIVE, recovery>=1, exhaustion=0, probation_cleared>=1,
+     success increased by >=100 after injection, 0 I2S/decode/push/ASRC faults.
+  7. Send final status commands, close port.
      Exit 0 on success, nonzero on timeout or missing predicate.
 
 Testability: GateRunner class accepts a Transport interface.
@@ -52,8 +41,14 @@ RE_PROBATION = re.compile(
     r"Probation\s*:\s*active=(\d+)\s+success=(\d+)\s+cleared=(\d+)"
 )
 
-RE_STALL_ACK = re.compile(
-    r"FLPR stall applied:\s*0x([0-9a-fA-F]+)\s*\(cons_in=(\d+)\s+prod_out=(\d+)\)"
+# Stage 2 timed stall ACK: "FLPR timed stall applied: bits=0x01 duration=60 ms"
+RE_STALL_TIMED_ACK = re.compile(
+    r"FLPR timed stall applied:\s*bits=0x([0-9a-fA-F]+)\s+duration=(\d+)\s+ms"
+)
+
+# Fault counters (must be zero at end).
+RE_FAULTS = re.compile(
+    r"Faults\s*:\s*timeout=(\d+)\s+full=(\d+)\s+stale=(\d+)\s+seq=(\d+)\s+frame=(\d+)\s+crc=(\d+)\s+payload=(\d+)"
 )
 
 RE_RECOVERY_OK = re.compile(r"offload recovery OK:")
@@ -69,10 +64,9 @@ class GateResult:
     def __init__(self):
         self.passed: bool = False
         self.error: str = ""
-        self.stall_ack_time: float = 0.0
-        self.first_recovery_time: float = 0.0
-        self.clear_time: float = 0.0
-        self.stall_to_clear_ms: int = 0
+        self.injection_time: float = 0.0
+        self.ack_time: float = 0.0
+        self.first_fallback_time: float = 0.0
         self.baseline_success: int = -1
         self.final_status: dict = {}
         self.full_log: str = ""
@@ -206,6 +200,13 @@ class GateRunner:
             "probation_active": -1,
             "probation_success": -1,
             "probation_cleared": -1,
+            "fault_timeout": -1,
+            "fault_full": -1,
+            "fault_stale": -1,
+            "fault_seq": -1,
+            "fault_frame": -1,
+            "fault_crc": -1,
+            "fault_payload": -1,
         }
         m = RE_STATE_LINE.search(text)
         if m:
@@ -227,6 +228,15 @@ class GateRunner:
             result["probation_active"] = int(m.group(1))
             result["probation_success"] = int(m.group(2))
             result["probation_cleared"] = int(m.group(3))
+        m = RE_FAULTS.search(text)
+        if m:
+            result["fault_timeout"] = int(m.group(1))
+            result["fault_full"] = int(m.group(2))
+            result["fault_stale"] = int(m.group(3))
+            result["fault_seq"] = int(m.group(4))
+            result["fault_frame"] = int(m.group(5))
+            result["fault_crc"] = int(m.group(6))
+            result["fault_payload"] = int(m.group(7))
         return result
 
     def __init__(
@@ -265,6 +275,7 @@ class GateRunner:
 
             # ── Step 1: Wait for State=ACTIVE and success >= 500 ──
             st = None
+            pre_stall_fallback = 0
             while time.monotonic() < total_deadline:
                 self._send_cmd("flpr offload")
                 time.sleep(0.1)
@@ -272,6 +283,7 @@ class GateRunner:
                 self._read_all()
                 st = self.parse_offload(self._all_text())
                 if st["state"] == "ACTIVE" and st["success"] >= 500:
+                    pre_stall_fallback = st["fallback"]
                     break
                 time.sleep(0.4)
             else:
@@ -281,61 +293,32 @@ class GateRunner:
                     f"success={st['success'] if st else -1})"
                 )
 
-            # ── Step 2: Send stall_flpr 1 ──────────────────────────
-            self._send_cmd("flpr ring stall_flpr 1")
+            # ── Step 2: Inject timed stall (60ms auto-clear) ───────
+            result.injection_time = time.monotonic()
+            self._send_cmd("flpr ring stall_flpr_ms 1 60")
 
-            # ── Step 3: Wait for stall ACK (cons_in=1) ─────────────
+            # ── Step 3: Wait for exact timed stall ACK ─────────────
             time.sleep(0.05)
-            stall_seen = False
+            ack_seen = False
             while time.monotonic() < total_deadline:
                 self._read_all()
                 text = self._all_text()
-                m = RE_STALL_ACK.search(text)
-                if m and int(m.group(2)) == 1:
-                    result.stall_ack_time = time.monotonic()
-                    stall_seen = True
-                    break
-                time.sleep(0.05)
-            if not stall_seen:
-                raise StallGateError("Timeout waiting for stall ACK (cons_in=1)")
-
-            # ── Step 4: Hold exactly 80ms monotonic ───────────────
-            # Accumulated log buffer from Step 3 may already contain
-            # recovery OK text. No read_all() during hold — keeps
-            # schedule indices deterministic.
-            clear_deadline = result.stall_ack_time + 0.080
-            while time.monotonic() < clear_deadline:
-                time.sleep(0.01)
-
-            # Scan accumulated text for recovery OK timestamp (metrics only).
-            if RE_RECOVERY_OK.search(self._all_text()):
-                result.first_recovery_time = time.monotonic()
-
-            # ── Step 5: Send stall_flpr 0 (clear) ─────────────────
-            result.clear_time = time.monotonic()
-            stall_to_clear = (result.clear_time - result.stall_ack_time) * 1000
-            result.stall_to_clear_ms = int(stall_to_clear)
-            self._send_cmd("flpr ring stall_flpr 0")
-
-            # ── Step 6: Wait for clear ACK (cons_in=0) ─────────────
-            # Use finditer to check ALL matches (first may be stall-on ACK).
-            time.sleep(0.05)
-            clear_ack_seen = False
-            while time.monotonic() < total_deadline:
-                self._read_all()
-                text = self._all_text()
-                for m in RE_STALL_ACK.finditer(text):
-                    if int(m.group(2)) == 0:
-                        clear_ack_seen = True
+                for m in RE_STALL_TIMED_ACK.finditer(text):
+                    mask_val = int(m.group(1), 16)
+                    dur_val = int(m.group(2))
+                    if mask_val == 0x01 and dur_val == 60:
+                        result.ack_time = time.monotonic()
+                        ack_seen = True
                         break
-                if clear_ack_seen:
+                if ack_seen:
                     break
                 time.sleep(0.05)
-            if not clear_ack_seen:
-                raise StallGateError("Timeout waiting for stall clear ACK (cons_in=0)")
+            if not ack_seen:
+                raise StallGateError(
+                    "Timeout waiting for timed stall ACK (bits=0x01 duration=60)"
+                )
 
-            # ── Step 7: Capture baseline success IMMEDIATELY ───────
-            # (not after probation conditions already met)
+            # ── Step 4: Capture baseline success BEFORE monitoring ──
             self._send_cmd("flpr offload")
             time.sleep(0.05)
             self._clear_text()
@@ -344,7 +327,21 @@ class GateRunner:
             result.baseline_success = st["success"]
             result.final_status = st
 
-            # ── Step 8: Monitor until all evidence predicates met ──
+            # ── Step 5: Wait until fallback evidence appears ───────
+            # (stall injection causes faults → fallback count increases)
+            while time.monotonic() < total_deadline:
+                self._read_all()
+                self._send_cmd("flpr offload")
+                time.sleep(0.05)
+                self._clear_text()
+                self._read_all()
+                st = self.parse_offload(self._all_text())
+                if st["fallback"] > pre_stall_fallback:
+                    result.first_fallback_time = time.monotonic()
+                    break
+                time.sleep(self._status_interval)
+
+            # ── Step 6: Monitor until all evidence predicates met ──
             gate_passed = False
             while time.monotonic() < total_deadline:
                 self._read_all()
@@ -376,6 +373,18 @@ class GateRunner:
                     time.sleep(self._status_interval)
                     continue
 
+                # Zero-fault check: no I2S/decode/push/ASRC faults.
+                if (
+                    st["fault_timeout"] > 0
+                    or st["fault_full"] > 0
+                    or st["fault_stale"] > 0
+                    or st["fault_frame"] > 0
+                    or st["fault_crc"] > 0
+                    or st["fault_payload"] > 0
+                ):
+                    time.sleep(self._status_interval)
+                    continue
+
                 gate_passed = True
                 break
 
@@ -386,7 +395,7 @@ class GateRunner:
                     f"Last status: {result.final_status}"
                 )
 
-            # ── Step 9: Final status dump ──────────────────────────────
+            # ── Step 7: Final status dump ──────────────────────────────
             for cmd in (
                 "flpr offload",
                 "flpr ring status",
@@ -414,7 +423,9 @@ class GateRunner:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="FLPR stall gate automation")
+    parser = argparse.ArgumentParser(
+        description="FLPR timed-stall gate automation (Stage 2)"
+    )
     parser.add_argument("--port", default="/dev/ttyACM0")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--timeout", type=float, default=30.0)
@@ -432,8 +443,9 @@ def main():
     transport.close()
 
     if result.passed:
-        print(f"\n[gate] GATE PASSED")
-        print(f"[gate]   Stall→Clear: {result.stall_to_clear_ms}ms")
+        print(f"\n[gate] GATE PASSED (timed 60ms)")
+        print(f"[gate]   injection_time: {result.injection_time}")
+        print(f"[gate]   ack_time: {result.ack_time}")
         print(f"[gate]   baseline_success: {result.baseline_success}")
         print(f"[gate]   Log: {args.log}")
         return 0

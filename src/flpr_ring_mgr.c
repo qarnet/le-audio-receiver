@@ -120,6 +120,10 @@ static bool reset_ack_received;
 
 static struct k_sem stall_ack_sem;
 
+/* ACK echo of last packed stall value (mask + duration). */
+static uint32_t stall_ack_data;
+static bool stall_ack_received;
+
 /* ── IPC handlers (called from flpr_handshake receive context) ───── */
 
 static void on_ring_reset_ack(const struct flpr_msg *msg, void *user_data)
@@ -185,8 +189,9 @@ static void on_ring_test_report(const struct flpr_msg *msg, void *user_data)
 
 static void on_ring_stall_ack(const struct flpr_msg *msg, void *user_data)
 {
-	(void)msg;
 	(void)user_data;
+	stall_ack_data = msg->data;
+	stall_ack_received = true;
 	k_sem_give(&stall_ack_sem);
 }
 
@@ -596,17 +601,23 @@ void flpr_ring_mgr_stall_producer(bool stall)
 	k_spin_unlock(&ring_lock, key);
 }
 
-int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms)
+/* Shared stall helper: sends packed mask+duration, waits for exact ACK echo. */
+static int flpr_ring_mgr_stall_internal(uint8_t stall_bits, uint32_t duration_ms,
+					uint32_t timeout_ms)
 {
 	/* Drain stale semaphore. */
 	while (k_sem_take(&stall_ack_sem, K_NO_WAIT) == 0) {
 	}
+	stall_ack_received = false;
+	stall_ack_data = 0;
+
+	uint32_t packed = FLPR_STALL_PACK(stall_bits, duration_ms);
 
 	struct flpr_msg stall_msg = {
 		.type = FLPR_MSG_RING_STALL,
 		.version = FLPR_PROTOCOL_VERSION,
 		.seq = 0,
-		.data = stall_bits,
+		.data = packed,
 	};
 	int ret = flpr_handshake_send_msg(&stall_msg);
 	if (ret < 0) {
@@ -617,7 +628,43 @@ int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms)
 	if (ret != 0) {
 		return -ETIMEDOUT;
 	}
+
+	/* Verify exact packed value echoed. */
+	if (!stall_ack_received || stall_ack_data != packed) {
+		LOG_ERR("Stall ACK mismatch: expected 0x%08x, got 0x%08x", packed, stall_ack_data);
+		return -EIO;
+	}
+
 	return 0;
+}
+
+int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms)
+{
+	/* Persistent: duration = 0. */
+	return flpr_ring_mgr_stall_internal(stall_bits, 0, timeout_ms);
+}
+
+int flpr_ring_mgr_flpr_stall_timed(uint8_t stall_bits, uint32_t duration_ms, uint32_t timeout_ms)
+{
+	if (stall_bits == 0) {
+		/* Zero-bits mask with nonzero duration is ambiguous:
+		 * is it "clear stall but also timed"?  Reject it.
+		 * A timed-duration clear makes no sense — persistent only. */
+		if (duration_ms > 0) {
+			LOG_ERR("Timed stall with zero mask rejected");
+			return -EINVAL;
+		}
+	}
+	if (duration_ms > FLPR_STALL_DURATION_MAX) {
+		LOG_ERR("Duration %u exceeds max %u", duration_ms, FLPR_STALL_DURATION_MAX);
+		return -EINVAL;
+	}
+	return flpr_ring_mgr_stall_internal(stall_bits, duration_ms, timeout_ms);
+}
+
+uint32_t flpr_ring_mgr_flpr_stall_acked(void)
+{
+	return stall_ack_data;
 }
 
 /* ── Ring test ──────────────────────────────────────────────────── */

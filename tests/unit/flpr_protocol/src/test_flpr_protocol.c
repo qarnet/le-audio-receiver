@@ -712,4 +712,85 @@ ZTEST(flpr_protocol, test_rate_target_integer_truncation)
 	zassert_equal(flpr_rate_limit_target_ms(3, 3), 1000ULL);
 }
 
+/* ── Stage 2: stall pack/unpack ──────────────────────────────────── */
+
+ZTEST(flpr_protocol, test_stall_pack_persistent)
+{
+	/* Duration zero = persistent. */
+	uint32_t packed = FLPR_STALL_PACK(0x01, 0);
+	zassert_equal(packed, 0x00000001U, "persistent stall: mask in lo 8 bits");
+	zassert_equal(FLPR_STALL_MASK(packed), 0x01);
+	zassert_equal(FLPR_STALL_DURATION(packed), 0U);
+}
+
+ZTEST(flpr_protocol, test_stall_pack_timed)
+{
+	uint32_t packed = FLPR_STALL_PACK(0x02, 60);
+	zassert_equal(FLPR_STALL_MASK(packed), 0x02);
+	zassert_equal(FLPR_STALL_DURATION(packed), 60U);
+	/* Verify packing: duration<<8 | mask. */
+	zassert_equal(packed, (60U << 8) | 0x02U);
+}
+
+ZTEST(flpr_protocol, test_stall_pack_max_duration)
+{
+	uint32_t packed = FLPR_STALL_PACK(0xFF, 0x00FFFFFFU);
+	zassert_equal(FLPR_STALL_MASK(packed), 0xFF);
+	zassert_equal(FLPR_STALL_DURATION(packed), 0x00FFFFFFU);
+}
+
+ZTEST(flpr_protocol, test_stall_pack_multiple_bits)
+{
+	/* Both consumer and producer stall with timed duration. */
+	uint32_t packed = FLPR_STALL_PACK(0x03, 5000);
+	zassert_equal(FLPR_STALL_MASK(packed), 0x03);
+	zassert_equal(FLPR_STALL_DURATION(packed), 5000U);
+}
+
+ZTEST(flpr_protocol, test_stall_pack_clear)
+{
+	/* Clear all stalls (persistent). */
+	uint32_t packed = FLPR_STALL_PACK(0x00, 0);
+	zassert_equal(FLPR_STALL_MASK(packed), 0x00);
+	zassert_equal(FLPR_STALL_DURATION(packed), 0U);
+	zassert_equal(packed, 0x00000000U);
+}
+
+ZTEST(flpr_protocol, test_stall_pack_mask_capped)
+{
+	/* Mask beyond 8 bits is capped to low 8. */
+	uint32_t packed = FLPR_STALL_PACK(0x1FF, 0);
+	zassert_equal(FLPR_STALL_MASK(packed), 0xFF);
+	zassert_equal(FLPR_STALL_DURATION(packed), 0U);
+}
+
+ZTEST(flpr_protocol, test_stall_pack_duration_max_constant)
+{
+	zassert_equal(FLPR_STALL_DURATION_MAX, 0x00FFFFFFU);
+}
+
+ZTEST(flpr_protocol, test_stall_unpack_boundary)
+{
+	/* Verify mask and duration don't overlap. */
+	uint32_t packed = FLPR_STALL_PACK(0xAA, 0xBBCCDD);
+	uint32_t extracted_mask = FLPR_STALL_MASK(packed);
+	uint32_t extracted_dur = FLPR_STALL_DURATION(packed);
+
+	/* Mask: low 8, no overlap into duration bits. */
+	zassert_equal(extracted_mask, 0xAA);
+	/* Duration: upper 24 bits, masked to 0x00FFFFFF. */
+	uint32_t expected_dur = 0xBBCCDD & 0x00FFFFFFU;
+	zassert_equal(extracted_dur, expected_dur);
+}
+
+ZTEST(flpr_protocol, test_stall_pack_roundtrip)
+{
+	/* Pack then unpack to verify no data loss. */
+	uint32_t packed = FLPR_STALL_PACK(0x55, 12345);
+	zassert_equal(FLPR_STALL_MASK(packed), 0x55);
+	zassert_equal(FLPR_STALL_DURATION(packed), 12345U);
+	zassert_equal(FLPR_STALL_MASK(packed), (uint8_t)(packed & 0xFFU));
+	zassert_equal(FLPR_STALL_DURATION(packed), (packed >> 8) & 0x00FFFFFFU);
+}
+
 ZTEST_SUITE(flpr_protocol, NULL, NULL, NULL, NULL, NULL);

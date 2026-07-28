@@ -251,6 +251,19 @@ int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms)
 	return 0;
 }
 
+int flpr_ring_mgr_flpr_stall_timed(uint8_t stall_bits, uint32_t duration_ms, uint32_t timeout_ms)
+{
+	(void)stall_bits;
+	(void)duration_ms;
+	(void)timeout_ms;
+	return 0;
+}
+
+uint32_t flpr_ring_mgr_flpr_stall_acked(void)
+{
+	return 0;
+}
+
 void flpr_ring_mgr_get_status(struct flpr_ring_status *status)
 {
 	if (status) {

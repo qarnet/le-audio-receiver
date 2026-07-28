@@ -217,16 +217,39 @@ void flpr_ring_mgr_stall_producer(bool stall);
 /**
  * @brief Send FLPR stall config via IPC.
  *
+ * Packed data: bits[7:0]=mask, bits[31:8]=duration_ms.
+ * Duration zero means persistent (stops any prior timed stall).
+ *
  * Stall bits:
  *   FLPR_STALL_CONSUMER_INPUT (0x01): FLPR stops consuming input ring.
  *   FLPR_STALL_PRODUCER_OUTPUT (0x02): FLPR stops producing output ring.
  *   Bit 0 → clear stall (resume normal operation).
  *
- * @param stall_bits  Bitmask of stalls to apply (0 = resume all).
+ * @param stall_bits  Bitmask of stalls to apply (persistent, duration=0).
  * @param timeout_ms  Max wait for STALL_ACK.
  * @return 0 on success, negative on error.
  */
 int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms);
+
+/**
+ * @brief Send timed FLPR stall config via IPC (Stage 2).
+ *
+ * Same as flpr_ring_mgr_flpr_stall but with an auto-clear duration.
+ * After the FLPR receives this command, the stall is applied immediately
+ * and automatically cleared after @p duration_ms by the FLPR timer.
+ * The ACK echoes the exact packed value; caller can verify.
+ *
+ * @param stall_bits  Bitmask of stalls to apply (must be nonzero).
+ * @param duration_ms Auto-clear duration in milliseconds (1 .. 0x00FFFFFF).
+ * @param timeout_ms  Max wait for STALL_ACK from FLPR.
+ * @return 0 on success, negative on error.
+ */
+int flpr_ring_mgr_flpr_stall_timed(uint8_t stall_bits, uint32_t duration_ms, uint32_t timeout_ms);
+
+/**
+ * @brief Get last acked FLPR stall packed value for diagnostics.
+ */
+uint32_t flpr_ring_mgr_flpr_stall_acked(void);
 
 /**
  * @brief Run ring throughput test with independent payload verification.
