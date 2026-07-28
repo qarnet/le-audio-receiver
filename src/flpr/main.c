@@ -221,21 +221,10 @@ static uint32_t ring_process_input(void)
 
 			flpr_ring_slot_set_processing(out_meta, t1 - t0,
 						      proc_ret == 0 ? 0 : proc_ret);
-
-			if (proc_ret != 0) {
-				/* Processing failed — emit explicit error output.
-				 * Zero valid_frames, negative status, VALID flag
-				 * + ASRC flag if input had it. */
-				memset(out_meta, 0, sizeof(*out_meta));
-				out_meta->sequence = meta->sequence;
-				out_meta->epoch = meta->epoch;
-				out_meta->valid_frames = 0;
-				out_meta->flags = FLPR_SLOT_FLAG_VALID;
-				if (meta->flags & FLPR_SLOT_FLAG_ASRC_LINEAR) {
-					out_meta->flags |= FLPR_SLOT_FLAG_ASRC_LINEAR;
-				}
-				out_meta->processing_status = proc_ret;
-			}
+			/* processor already constructs error metadata
+			 * (sequence/epoch/ppm/timestamp/flags/status);
+			 * set_processing is the final metadata mutation
+			 * before publish — no field rebuild here. */
 
 			diag_produce_ok++;
 

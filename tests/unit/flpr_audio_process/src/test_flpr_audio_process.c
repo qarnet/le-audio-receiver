@@ -946,6 +946,41 @@ ZTEST(flpr_audio_process, test_error_metadata_preserves_fields)
 	 * via flpr_ring_slot_set_processing() LAST.  Here they are zero. */
 }
 
+ZTEST(flpr_audio_process, test_error_output_with_setter)
+{
+	/* Chain processor error path + flpr_ring_slot_set_processing.
+	 * Prove all metadata fields survive the setter: sequence, epoch,
+	 * correction_ppm, cpu_timestamp, ASRC flag, valid_frames=0,
+	 * nonzero processing_cycles, negative processing_status. */
+	input_meta.sequence = 77;
+	input_meta.epoch = 3;
+	input_meta.valid_frames = 480;
+	input_meta.flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR;
+	input_meta.correction_ppm = -50;
+	input_meta.cpu_timestamp = 0xC0DE0002;
+	input_meta.crc32 = 0xFA11DEAD; /* corrupt */
+	fill_input_ramp(0);
+
+	int ret = flpr_audio_process(&input_meta, input_payload, sizeof(input_payload),
+				     &output_meta, output_payload, sizeof(output_payload));
+	zassert_equal(ret, FLPR_AUDIO_ERR_BAD_CRC, "CRC error");
+
+	/* Simulate main-loop setter with nonzero cycles. */
+	flpr_ring_slot_set_processing(&output_meta, 12345U, ret);
+
+	zassert_equal(output_meta.valid_frames, 0, "valid_frames = 0");
+	zassert_equal(output_meta.sequence, 77, "sequence survived setter");
+	zassert_equal(output_meta.epoch, 3, "epoch survived setter");
+	zassert_equal(output_meta.correction_ppm, -50, "ppm survived setter");
+	zassert_equal(output_meta.cpu_timestamp, 0xC0DE0002, "timestamp survived setter");
+	zassert_equal(output_meta.flags & FLPR_SLOT_FLAG_ASRC_LINEAR, FLPR_SLOT_FLAG_ASRC_LINEAR,
+		      "ASRC flag survived setter");
+	zassert_equal(output_meta.flags & FLPR_SLOT_FLAG_VALID, 0, "no VALID on error");
+	zassert_equal(output_meta.processing_cycles, 12345U, "cycles survived setter");
+	zassert_not_equal(output_meta.processing_status, 0, "status nonzero");
+	zassert_true(output_meta.processing_status < 0, "status negative");
+}
+
 ZTEST(flpr_audio_process, test_identity_preserves_input_flags)
 {
 	/* Input with CRC_OK flag should appear on output. */

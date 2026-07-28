@@ -12,6 +12,15 @@ Agent: Executor (caveman mode)
 
 ### audio_asrc.c — State export/import implementation
 - `audio_asrc_state_export`: memset → set phase/step_base/prev_l/prev_r/prev_valid
+
+### Phase Q32 upper bound removed
+- `audio_asrc_state_import()` does NOT reject phase > Q32_ONE.
+  After processing, carry-over phase can be up to source_step
+  (step_base ± ppm delta).  Phase zero through large values are valid;
+  only step_base==0 is an import-time rejection.  See audio_asrc.c
+  `audio_asrc_state_import()` — committed without phase ceiling.
+
+
 - `audio_asrc_state_import`: validate null, step_base≠0, prev_valid≤1, reserved=0; write only on success
 - Added `#include <string.h>` for memset
 
