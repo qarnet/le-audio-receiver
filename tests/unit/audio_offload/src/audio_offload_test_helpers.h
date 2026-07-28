@@ -23,6 +23,9 @@ extern struct k_work_q g_offload_wq;
 extern struct k_work_delayable g_prep_work;
 extern struct k_work_delayable g_recovery_work;
 
+/* Submit mutex — exposed for busy/timeout tests. */
+extern struct k_mutex g_submit_lock;
+
 #ifdef __cplusplus
 }
 #endif

@@ -7,6 +7,7 @@ target_sources(app PRIVATE
   src/mock_ring_mgr.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/audio_offload.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/flpr_ring.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/audio_asrc.c
 )
 
 target_include_directories(app PRIVATE

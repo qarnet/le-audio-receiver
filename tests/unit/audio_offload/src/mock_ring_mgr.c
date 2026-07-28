@@ -63,6 +63,8 @@ const uint8_t *mock_last_pcm; /* last PCM ptr passed to produce */
 bool mock_last_crc;           /* was crc computed */
 
 /* Reset everything to defaults. */
+static void mock_asrc_reset(void);
+
 static void mock_reset(void)
 {
 	mock_init_fails = false;
@@ -92,6 +94,7 @@ static void mock_reset(void)
 	mock_last_pcm = NULL;
 	mock_last_crc = false;
 	memset(mock_consume_payload, 0, sizeof(mock_consume_payload));
+	mock_asrc_reset();
 }
 
 /* ── flpr_handshake mock ─────────────────────────────────────────── */
@@ -272,8 +275,24 @@ void flpr_ring_mgr_get_status(struct flpr_ring_status *status)
 }
 
 /* ── Stage 3B: ASRC typed produce/consume stubs ──────────────────────
- * These are needed because audio_offload.c now references them but
- * existing identity-submit tests don't exercise them. */
+ * produce_asrc uses mock_produce_result (shared), notify/wait use shared
+ * mock variables.  Only consume_asrc_result has its own mock data. */
+
+enum flpr_consume_result mock_asrc_consume_result;
+struct flpr_consume_asrc_result mock_asrc_consume_data;
+int mock_asrc_consume_calls;
+
+static void mock_asrc_reset(void)
+{
+	mock_asrc_consume_result = FLPR_CONSUME_OK;
+	memset(&mock_asrc_consume_data, 0, sizeof(mock_asrc_consume_data));
+	mock_asrc_consume_data.output_frames = 480;
+	mock_asrc_consume_data.flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR;
+	mock_asrc_consume_data.processing_status = 0;
+	mock_asrc_consume_data.rtt_cycles = 500;
+	mock_asrc_consume_data.processing_cycles = 300;
+	mock_asrc_consume_calls = 0;
+}
 
 enum flpr_produce_result flpr_ring_mgr_produce_asrc(const int16_t *pcm_data, uint16_t valid_frames,
 						    uint32_t sequence, int32_t correction_ppm,
@@ -284,17 +303,22 @@ enum flpr_produce_result flpr_ring_mgr_produce_asrc(const int16_t *pcm_data, uin
 	(void)sequence;
 	(void)correction_ppm;
 	(void)pre_state;
-	return FLPR_PRODUCE_OK;
+	mock_produce_calls++;
+	return mock_produce_result;
 }
 
 enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 							   uint16_t output_capacity,
 							   struct flpr_consume_asrc_result *result)
 {
-	(void)pcm_out;
 	(void)output_capacity;
+	mock_asrc_consume_calls++;
 	if (result) {
-		memset(result, 0, sizeof(*result));
+		memcpy(result, &mock_asrc_consume_data, sizeof(*result));
 	}
-	return FLPR_CONSUME_OK;
+	if (pcm_out && mock_asrc_consume_result == FLPR_CONSUME_OK &&
+	    mock_asrc_consume_data.output_frames > 0) {
+		memset(pcm_out, 0xAB, (size_t)mock_asrc_consume_data.output_frames * 4U);
+	}
+	return mock_asrc_consume_result;
 }
