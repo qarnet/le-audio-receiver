@@ -44,5 +44,6 @@ zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_handshake.c)
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_ring.c)
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_cache.c)
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_ring_mgr.c)
+zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_runtime.c)
 
 zephyr_library_include_directories(${ZEPHYR_BASE}/samples/bluetooth)

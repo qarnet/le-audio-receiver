@@ -27,13 +27,16 @@ LOG_MODULE_REGISTER(flpr_hs, LOG_LEVEL_INF);
 
 /* ── IPC ────────────────────────────────────────────────────────── */
 
+static const struct device *ipc_dev; /* stored after init */
 static struct ipc_ept flpr_ep;
 static K_SEM_DEFINE(bound_sem, 0, 1);
+static K_SEM_DEFINE(new_ready_sem, 0, 1);
 static struct k_spinlock flpr_lock;
 
 /* ── State (all protected by flpr_lock) ──────────────────────────── */
 
-static struct flpr_peer flpr; /* tracks FLPR (remote) */
+static struct flpr_peer flpr;  /* tracks FLPR (remote) */
+static bool session_available; /* false between disconnect / reconnect */
 
 /* ── Delayed work for heartbeat ─────────────────────────────────── */
 
@@ -88,7 +91,7 @@ static void hb_work_fn(struct k_work *work)
 
 	{
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		should_send = flpr.acked;
+		should_send = flpr.acked && session_available;
 		seq = (uint16_t)(flpr.tx_seq & 0xFFFFU);
 		k_spin_unlock(&flpr_lock, key);
 	}
@@ -140,8 +143,33 @@ static void ep_unbound(void *priv)
 	ARG_UNUSED(priv);
 	LOG_WRN("FLPR IPC unbound");
 	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-	flpr_peer_reset(&flpr);
+
+	/* Preserve lifetime counters: ready_count, reboot_count, err_*,
+	 * rx_missed_total, and last remote epoch.  Clear bound/ready/
+	 * acked/healthy, session sequences and timestamps. */
+	uint32_t saved_ready_count = flpr.ready_count;
+	uint32_t saved_reboot_count = flpr.reboot_count;
+	uint32_t saved_err_len = flpr.err_len;
+	uint32_t saved_err_version = flpr.err_version;
+	uint32_t saved_err_unknown = flpr.err_unknown;
+	uint32_t saved_err_send = flpr.err_send;
+	uint32_t saved_rx_missed_total = flpr.rx_missed_total;
+	uint32_t saved_epoch = flpr.epoch;
+
+	memset(&flpr, 0, sizeof(flpr));
+
+	flpr.ready_count = saved_ready_count;
+	flpr.reboot_count = saved_reboot_count;
+	flpr.err_len = saved_err_len;
+	flpr.err_version = saved_err_version;
+	flpr.err_unknown = saved_err_unknown;
+	flpr.err_send = saved_err_send;
+	flpr.rx_missed_total = saved_rx_missed_total;
+	flpr.epoch = saved_epoch;
+
 	hb_started = false;
+	session_available = false;
+	k_sem_reset(&new_ready_sem);
 	k_spin_unlock(&flpr_lock, key);
 }
 
@@ -163,13 +191,18 @@ static void ep_received(const void *data, size_t len, void *priv)
 		uint32_t epoch = msg->data;
 		bool is_new_epoch;
 		bool start_hb_now = false;
+		bool give_new_ready = false;
 
 		{
 			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 			is_new_epoch = flpr_peer_handle_ready(&flpr, epoch);
-			if (!hb_started) {
+			if (session_available && !hb_started) {
 				hb_started = true;
 				start_hb_now = true;
+			}
+			/* New epoch → give new_ready_sem (for runtime restart). */
+			if (is_new_epoch && session_available) {
+				give_new_ready = true;
 			}
 			k_spin_unlock(&flpr_lock, key);
 		}
@@ -196,6 +229,10 @@ static void ep_received(const void *data, size_t len, void *priv)
 				flpr.acked = true;
 				k_spin_unlock(&flpr_lock, key);
 				LOG_INF("FLPR READY_ACK sent");
+				/* Give new_ready_sem AFTER ACK succeeds. */
+				if (give_new_ready) {
+					k_sem_give(&new_ready_sem);
+				}
 			}
 		}
 
@@ -341,7 +378,7 @@ static const struct ipc_ept_cfg flpr_ep_cfg = {
 
 int flpr_handshake_init(void)
 {
-	const struct device *ipc_dev;
+	const struct device *dev;
 	int ret;
 
 	k_work_init_delayable(&hb_work, hb_work_fn);
@@ -351,22 +388,25 @@ int flpr_handshake_init(void)
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 		flpr_peer_reset(&flpr);
 		hb_started = false;
+		session_available = true;
+		k_sem_reset(&new_ready_sem);
 		k_spin_unlock(&flpr_lock, key);
 	}
 
-	ipc_dev = DEVICE_DT_GET(DT_NODELABEL(ipc0));
-	if (!device_is_ready(ipc_dev)) {
+	dev = DEVICE_DT_GET(DT_NODELABEL(ipc0));
+	if (!device_is_ready(dev)) {
 		LOG_ERR("FLPR IPC device not ready");
 		return -ENODEV;
 	}
+	ipc_dev = dev;
 
-	ret = ipc_service_open_instance(ipc_dev);
+	ret = ipc_service_open_instance(dev);
 	if (ret < 0 && ret != -EALREADY) {
 		LOG_ERR("FLPR ipc_service_open_instance failed: %d", ret);
 		return ret;
 	}
 
-	ret = ipc_service_register_endpoint(ipc_dev, &flpr_ep, &flpr_ep_cfg);
+	ret = ipc_service_register_endpoint(dev, &flpr_ep, &flpr_ep_cfg);
 	if (ret < 0) {
 		LOG_ERR("FLPR ipc_service_register_endpoint failed: %d", ret);
 		return ret;
@@ -529,6 +569,101 @@ void flpr_handshake_stress(uint32_t count, struct flpr_status *out)
 	if (out) {
 		flpr_handshake_get_status(out);
 	}
+}
+
+/* ── Runtime restart API ──────────────────────────────────────────── */
+
+int flpr_handshake_disconnect(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+	session_available = false;
+	k_sem_reset(&new_ready_sem);
+	k_spin_unlock(&flpr_lock, key);
+
+	/* Drain bound semaphore (any pending give from prior bound). */
+	while (k_sem_take(&bound_sem, K_NO_WAIT) == 0) {
+	}
+
+	/* Cancel heartbeat work (no send while disconnected). */
+	(void)k_work_cancel_delayable(&hb_work);
+
+	/* Deregister endpoint. */
+	int ret = ipc_service_deregister_endpoint(&flpr_ep);
+	if (ret < 0) {
+		LOG_ERR("FLPR ipc_service_deregister_endpoint failed: %d", ret);
+		return ret;
+	}
+
+	LOG_INF("FLPR handshake disconnected");
+	return 0;
+}
+
+int flpr_handshake_reconnect(void)
+{
+	int ret;
+
+	/* Drain bound semaphore (any stale event). */
+	while (k_sem_take(&bound_sem, K_NO_WAIT) == 0) {
+	}
+
+	/* Re-drain new_ready_sem. */
+	while (k_sem_take(&new_ready_sem, K_NO_WAIT) == 0) {
+	}
+
+	ret = ipc_service_register_endpoint(ipc_dev, &flpr_ep, &flpr_ep_cfg);
+	if (ret < 0) {
+		LOG_ERR("FLPR ipc_service_register_endpoint re-register failed: %d", ret);
+		return ret;
+	}
+
+	{
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+		session_available = true;
+		k_spin_unlock(&flpr_lock, key);
+	}
+
+	LOG_INF("FLPR handshake reconnected");
+	return 0;
+}
+
+int flpr_handshake_wait_bound(k_timeout_t timeout)
+{
+	int ret = k_sem_take(&bound_sem, timeout);
+	if (ret == 0) {
+		/* Re-post so future waiters also see it. */
+		k_sem_give(&bound_sem);
+	}
+	return ret;
+}
+
+int flpr_handshake_wait_new_ready(uint32_t previous_epoch, k_timeout_t timeout)
+{
+	int ret;
+
+	{
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+		if (!session_available) {
+			k_spin_unlock(&flpr_lock, key);
+			return -ECANCELED;
+		}
+		/* If epoch already different from previous, sem already given? */
+		if (flpr.ready && flpr.epoch != previous_epoch) {
+			/* Epoch already new — drain sem and succeed. */
+			k_spin_unlock(&flpr_lock, key);
+			while (k_sem_take(&new_ready_sem, K_NO_WAIT) == 0) {
+			}
+			return 0;
+		}
+		k_spin_unlock(&flpr_lock, key);
+	}
+
+	ret = k_sem_take(&new_ready_sem, timeout);
+	if (ret == 0) {
+		/* Drain any extra post (edge case). */
+		while (k_sem_take(&new_ready_sem, K_NO_WAIT) == 0) {
+		}
+	}
+	return ret;
 }
 
 /* ── Ring control IPC helpers ─────────────────────────────────────── */

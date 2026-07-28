@@ -717,6 +717,19 @@ bool audio_offload_is_healthy(void)
 	return result;
 }
 
+bool audio_offload_is_stopped(void)
+{
+	if (!g_initialized) {
+		return true;
+	}
+
+	k_spinlock_key_t key = k_spin_lock(&g_lock);
+	bool result = (g_state == AUDIO_OFFLOAD_STOPPED);
+	k_spin_unlock(&g_lock, key);
+
+	return result;
+}
+
 int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence,
 			 int32_t correction_ppm, int16_t *output)
 {
@@ -1867,6 +1880,11 @@ void audio_offload_stream_stop(void)
 }
 
 bool audio_offload_is_healthy(void)
+{
+	return true;
+}
+
+bool audio_offload_is_stopped(void)
 {
 	return true;
 }

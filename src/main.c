@@ -25,6 +25,7 @@
 
 #if defined(CONFIG_SOC_NRF54L15)
 #include "flpr_handshake.h"
+#include "flpr_runtime.h"
 #endif
 
 #if defined(CONFIG_WATCHDOG)
@@ -143,6 +144,10 @@ int main(void)
 	/* Phase 6 Stage 2: init audio offload (FLPR ring transport).
 	 * Non-blocking — may defer ring init if FLPR not ready yet. */
 	audio_offload_init();
+
+	/* Phase 6 Stage 4A: init FLPR runtime restart manager.
+	 * Derives DT addresses, non-blocking. */
+	flpr_runtime_init();
 #endif
 
 	err = bt_bap_restart_advertising();

@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <zephyr/kernel.h>
 #include "flpr_protocol.h"
 
 #ifdef __cplusplus
@@ -65,6 +66,50 @@ int flpr_handshake_init(void);
 
 /** Race-safe snapshot of current status. */
 void flpr_handshake_get_status(struct flpr_status *status);
+
+/**
+ * @brief Disconnect from FLPR: drain semaphores, deregister IPC endpoint.
+ *
+ * Marks session unavailable. Preserves lifetime counters (ready_count,
+ * reboot_count, err_*, rx_missed_total) and last remote epoch.
+ * Clears bound/ready/acked/healthy, session sequence/timestamps.
+ * Heartbeat work stops sending until new reconnect.
+ *
+ * @return 0 on success, negative errno on failure.
+ */
+int flpr_handshake_disconnect(void);
+
+/**
+ * @brief Reconnect to FLPR: re-register the same endpoint/config.
+ *
+ * After this call, the FLPR session is available again. Caller should
+ * wait for flpr_handshake_wait_bound() and then
+ * flpr_handshake_wait_new_ready() with the previous epoch.
+ *
+ * @return 0 on success, negative errno on failure.
+ */
+int flpr_handshake_reconnect(void);
+
+/**
+ * @brief Wait for the IPC endpoint to become bound.
+ *
+ * @param timeout  Maximum time to wait.
+ * @return 0 on success, -EAGAIN on timeout.
+ */
+int flpr_handshake_wait_bound(k_timeout_t timeout);
+
+/**
+ * @brief Wait for a new READY with a different epoch from previous_epoch.
+ *
+ * The semaphore is given only after READY_ACK send succeeds and the
+ * FLPR epoch differs from @p previous_epoch.  Duplicate same-epoch
+ * READY does NOT give this semaphore.
+ *
+ * @param previous_epoch  The last known epoch (from disconnect snapshot).
+ * @param timeout         Maximum time to wait.
+ * @return 0 on success, -EAGAIN on timeout, -ECANCELED if unbound.
+ */
+int flpr_handshake_wait_new_ready(uint32_t previous_epoch, k_timeout_t timeout);
 
 /**
  * @brief Start stress test: send STRESS_PING messages, count PONG replies.

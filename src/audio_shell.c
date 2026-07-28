@@ -14,6 +14,7 @@
 #include "flpr_ring_mgr.h"
 #include "flpr_ring.h"
 #include "audio_offload.h"
+#include "flpr_runtime.h"
 #endif
 
 #include <inttypes.h>
@@ -912,6 +913,58 @@ static int cmd_offload_status(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
+/* ── FLPR runtime status command ──────────────────── */
+
+static int cmd_flpr_runtime_status(const struct shell *sh, size_t argc, char **argv)
+{
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+
+	static const char *state_str[] = {
+		[FLPR_RUNTIME_IDLE] = "IDLE",
+		[FLPR_RUNTIME_BUSY] = "BUSY",
+		[FLPR_RUNTIME_UNAVAILABLE] = "UNAVAILABLE",
+	};
+
+	shell_print(sh, "--- FLPR runtime ---");
+	shell_print(sh, "  State          : %s", state_str[s.state]);
+	shell_print(sh, "  Requests       : %u", s.requests);
+	shell_print(sh, "  Success        : %u", s.success_count);
+	shell_print(sh, "  Failed         : %u", s.fail_count);
+	shell_print(sh, "  Busy reject    : %u", s.busy_reject);
+	shell_print(sh, "  Epoch          : prev=%u new=%u", s.previous_epoch, s.new_epoch);
+	shell_print(sh, "  Reload bytes   : %u", s.reload_bytes);
+	shell_print(sh, "  CRC            : src=0x%08x exec=0x%08x", s.source_crc, s.execution_crc);
+	shell_print(sh, "  Last errno     : %d", s.last_errno);
+	shell_print(sh, "  Duration       : total=%u ms max=%u ms", s.total_duration_ms,
+		    s.max_duration_ms);
+
+	return 0;
+}
+
+static int cmd_flpr_restart(const struct shell *sh, size_t argc, char **argv)
+{
+	uint32_t timeout_ms = 10000; /* default 10 s */
+
+	if (argc >= 2) {
+		timeout_ms = (uint32_t)shell_strtoul(argv[1], 0, NULL);
+	}
+
+	shell_print(sh, "FLPR restart: requesting (timeout=%u ms)...", timeout_ms);
+
+	int ret = flpr_runtime_restart(timeout_ms);
+	if (ret == 0) {
+		struct flpr_runtime_status s;
+		flpr_runtime_get_status(&s);
+		shell_print(sh, "FLPR restart OK: epoch %u→%u crc=0x%08x duration=total %u ms",
+			    s.previous_epoch, s.new_epoch, s.execution_crc, s.total_duration_ms);
+	} else {
+		shell_error(sh, "FLPR restart FAILED: %d", ret);
+	}
+
+	return ret;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	flpr_ring_cmds, SHELL_CMD_ARG(status, NULL, "PCM ring status.", cmd_flpr_ring_status, 1, 0),
 	SHELL_CMD_ARG(init, NULL, "Initialize PCM rings.", cmd_flpr_ring_init, 1, 0),
@@ -937,6 +990,10 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
 	SHELL_CMD(ring, &flpr_ring_cmds, "PCM ring transport commands.", NULL),
 	SHELL_CMD_ARG(offload, NULL, "Audio offload status (Phase 6 Stage 2).", cmd_offload_status,
 		      1, 0),
+	SHELL_CMD_ARG(runtime, NULL, "FLPR runtime restart manager status.",
+		      cmd_flpr_runtime_status, 1, 0),
+	SHELL_CMD_ARG(restart, NULL, "Restart FLPR co-processor. [timeout_ms default 10000].",
+		      cmd_flpr_restart, 1, 1),
 	SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(flpr, &flpr_cmds, "FLPR co-processor commands.", NULL);

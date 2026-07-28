@@ -131,6 +131,14 @@ void audio_offload_stream_stop(void);
 bool audio_offload_is_healthy(void);
 
 /**
+ * @brief Check whether the offload path is fully stopped (no stream, no prep).
+ *
+ * nRF54L15: true when state == STOPPED.
+ * nRF5340: always true.
+ */
+bool audio_offload_is_stopped(void);
+
+/**
  * @brief Submit a stereo PCM block through the offload pipeline.
  *
  * Mutex-serialised — only one block in-flight at a time.
