@@ -2,36 +2,16 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * Audio offload — nRF54L15: FLPR identity loopback transport.
+ * Audio offload — nRF54L15: FLPR ASRC offload transport.
  *
- * Wires decoded PCM through the Stage 1 SPSC rings:
- *   CPUAPP input ring → FLPR identity-copies → CPUAPP output ring
- *
- * Submit is mutex-serialised.  Scratch output buffer is module-static
- * (no stack allocation in BT callback).  CRC-32 is computed on produce
- * and independently recomputed on consume; payload is memcmp'd against
- * original input for bit-exact identity verification.
+ * Routes decoded PCM through FLPR for asynchronous sample rate
+ * conversion.  CPUAPP produces input blocks with typed ASRC pre-state
+ * and drift correction ppm; FLPR processes and returns typed output
+ * with variable frame count and post-process ASRC state.
  *
  * Dedicated offload work queue (own stack via k_work_queue_start) handles
  * all long-running or blocking operations: initial ring preparation and
  * post-fault recovery.  stream_start() only sets PREPARING + bumps
- * generation + schedules prep work, returns immediately.  Recovery
- * runs on same worker.  Neither can stall system workqueue or BT
- * threads.  The work queue thread is created once in audio_offload_init();
- * no K_THREAD_DEFINE wrapper, no duplicate stack/TCS.
- *
- * Concurrency:
- *   - g_lock spinlock protects all shared state
- *   - g_submit_lock mutex serialises submits
- *   - submit captures gen/epoch/state AFTER mutex; rechecks BEFORE
- *     output copy.  Late output after stop/recovery is rejected
- *     untouched, counting stale+fallback.
- *   - record_latency, audio_offload_is_healthy under spinlock
- *   - No k_work_cancel_delayable under spinlock; update state under
- *     lock, unlock, then cancel pending work.
- *   - No kernel schedule under spinlock; compute action under lock,
- *     capture delay as local, then invoke outside lock.
- *   - All backoff/tries read/write under g_lock only.
  *
  * Accounting:
  *   - submit_count: every valid call (inc PREPARING/RECOVERING/FALLBACK)
@@ -76,9 +56,7 @@ LOG_MODULE_REGISTER(audio_offload, LOG_LEVEL_INF);
 #define OFFLOAD_DEADLINE_MS 8U
 
 /* 480 stereo frames = 960 samples = 1920 bytes. */
-#define OFFLOAD_EXPECTED_FRAMES  FLPR_RING_PAYLOAD_MAX_INPUT
-#define OFFLOAD_EXPECTED_SAMPLES ((size_t)OFFLOAD_EXPECTED_FRAMES * 2U)
-#define OFFLOAD_EXPECTED_BYTES   ((size_t)OFFLOAD_EXPECTED_FRAMES * 4U)
+#define OFFLOAD_EXPECTED_FRAMES FLPR_RING_PAYLOAD_MAX_INPUT
 
 /* Recovery backoff: starts at 100 ms, doubles each attempt, caps at 5 s. */
 #define OFFLOAD_RECOVERY_BASE_MS   100U
@@ -90,16 +68,6 @@ LOG_MODULE_REGISTER(audio_offload, LOG_LEVEL_INF);
 
 BUILD_ASSERT(OFFLOAD_DEADLINE_MS > 0 && OFFLOAD_DEADLINE_MS < 10,
 	     "deadline must be in range (1..9) ms");
-BUILD_ASSERT(OFFLOAD_EXPECTED_BYTES <= 2048, "scratch output buffer size");
-
-/* ── Module-static scratch output ──────────────────────────────────
- *
- * Serialised by submit_lock — only one block in-flight.
- * No stack allocation in BT callback path.
- * 32-byte aligned for cache-line cleanliness on shared memory access. */
-static int16_t g_scratch_output[OFFLOAD_EXPECTED_SAMPLES] __attribute__((aligned(32)));
-
-BUILD_ASSERT(sizeof(g_scratch_output) == OFFLOAD_EXPECTED_BYTES, "scratch output size mismatch");
 
 /* ── Dedicated offload work queue ──────────────────────────────────
  *
@@ -932,397 +900,6 @@ bool audio_offload_is_stopped(void)
 	return result;
 }
 
-int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence,
-			 int32_t correction_ppm, int16_t *output)
-{
-	/* ── Validate args BEFORE any state/counter access ────── */
-	if (!input || !output || samples == 0) {
-		return -EINVAL;
-	}
-
-	if (samples != OFFLOAD_EXPECTED_SAMPLES) {
-		return -EINVAL;
-	}
-
-	uint32_t captured_generation;
-	uint32_t captured_epoch;
-	enum audio_offload_state captured_state;
-	bool need_fallback = false;
-
-	/* ── Pre-check under spinlock ──────────────────────────────── */
-	{
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-
-		if (!g_initialized || g_state == AUDIO_OFFLOAD_STOPPED) {
-			k_spin_unlock(&g_lock, key);
-			return -EAGAIN;
-		}
-
-		captured_state = g_state;
-		captured_generation = g_generation;
-		captured_epoch = g_stream_epoch;
-
-		/* Increment submit_count for EVERY valid call. */
-		g_status.submit_count++;
-
-		if (g_state != AUDIO_OFFLOAD_ACTIVE) {
-			/* PREPARING, FALLBACK, RECOVERING → fallback.
-			 * Exactly one fallback increment per valid submit. */
-			g_status.fallback_count++;
-			need_fallback = true;
-		}
-
-		k_spin_unlock(&g_lock, key);
-	}
-
-	if (need_fallback) {
-		return -EAGAIN;
-	}
-
-	/* ── Serialise submit — one block in-flight at a time ─────── */
-	if (k_mutex_lock(&g_submit_lock, K_MSEC(OFFLOAD_DEADLINE_MS)) != 0) {
-		/* Mutex timeout — another submit is stuck.
-		 * Re-check lifecycle first: stop may have happened while waiting. */
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-
-		if (!lifecycle_check_before_fault(captured_state, captured_generation,
-						  captured_epoch, sequence)) {
-			/* Stop/restart occurred — already counted stale+fallback.
-			 * Do NOT transition to RECOVERING. */
-			k_spin_unlock(&g_lock, key);
-			return -EAGAIN;
-		}
-
-		g_status.busy_count++;
-		record_fault(NULL, -EBUSY, sequence);
-		recovery_try_schedule_unlock(key);
-
-		return -EAGAIN;
-	}
-
-	/* ── Re-check state under mutex (race: state change between
-	 *     spinlock release and mutex acquire) ─────────────────── */
-	{
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-
-		if (g_state != AUDIO_OFFLOAD_ACTIVE) {
-			/* State changed before we got the mutex.
-			 * Count ONE fallback (not already counted by pre-check
-			 * because state WAS ACTIVE at that point). */
-			g_status.fallback_count++;
-			g_status.last_error = -EAGAIN;
-			g_status.last_error_seq = sequence;
-			k_spin_unlock(&g_lock, key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-
-		/* Re-capture under mutex protection for late output
-		 * invalidation check after wait/consume. */
-		captured_state = g_state;
-		captured_generation = g_generation;
-		captured_epoch = g_stream_epoch;
-
-		k_spin_unlock(&g_lock, key);
-	}
-
-	/* ── Produce: write input PCM to input ring WITH CRC ──────── */
-	enum flpr_produce_result pr =
-		flpr_ring_mgr_produce_block((const uint8_t *)input, OFFLOAD_EXPECTED_FRAMES,
-					    sequence, correction_ppm, true /* compute_crc */);
-
-	if (pr == FLPR_PRODUCE_FULL) {
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-		if (!lifecycle_check_before_fault(captured_state, captured_generation,
-						  captured_epoch, sequence)) {
-			k_spin_unlock(&g_lock, key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-		record_fault(&g_status.full_count, -ENOSPC, sequence);
-		recovery_try_schedule_unlock(key);
-		k_mutex_unlock(&g_submit_lock);
-		return -EAGAIN;
-	}
-	if (pr != FLPR_PRODUCE_OK) {
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-		if (!lifecycle_check_before_fault(captured_state, captured_generation,
-						  captured_epoch, sequence)) {
-			k_spin_unlock(&g_lock, key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-		record_fault(NULL, -EIO, sequence);
-		recovery_try_schedule_unlock(key);
-		k_mutex_unlock(&g_submit_lock);
-		return -EAGAIN;
-	}
-
-	/* ── Notify FLPR ──────────────────────────────────────────── */
-	{
-		int notify_ret = flpr_ring_mgr_notify_producer();
-		if (notify_ret < 0) {
-			k_spinlock_key_t key = k_spin_lock(&g_lock);
-			if (!lifecycle_check_before_fault(captured_state, captured_generation,
-							  captured_epoch, sequence)) {
-				k_spin_unlock(&g_lock, key);
-				k_mutex_unlock(&g_submit_lock);
-				return -EAGAIN;
-			}
-			record_fault(NULL, notify_ret, sequence);
-			recovery_try_schedule_unlock(key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-	}
-
-	/* ── Wait for FLPR to produce output ────────────────────────
-	 * THIS IS A BLOCKING OPERATION (~0-8ms).
-	 * Stop/restart may occur during this wait. */
-	{
-		int wait_ret = flpr_ring_mgr_wait_consume(OFFLOAD_DEADLINE_MS);
-		if (wait_ret != 0) {
-			k_spinlock_key_t key = k_spin_lock(&g_lock);
-			if (!lifecycle_check_before_fault(captured_state, captured_generation,
-							  captured_epoch, sequence)) {
-				/* Stop/restart during wait — already counted stale+fallback. */
-				k_spin_unlock(&g_lock, key);
-				k_mutex_unlock(&g_submit_lock);
-				return -EAGAIN;
-			}
-			record_fault(&g_status.timeout_count, -ETIMEDOUT, sequence);
-			recovery_try_schedule_unlock(key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-	}
-
-	/* ── BEFORE touching output: recheck generation/state/epoch ───
-	 * If stop/restart/recovery happened during wait, reject output
-	 * untouched and count stale. */
-	{
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-
-		if (g_state != captured_state || g_generation != captured_generation ||
-		    g_stream_epoch != captured_epoch) {
-			/* Lifecycle changed during wait.  Output discarded. */
-			g_status.stale_count++;
-			g_status.fallback_count++;
-			g_status.last_error = -ESTALE;
-			g_status.last_error_seq = sequence;
-			k_spin_unlock(&g_lock, key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-		k_spin_unlock(&g_lock, key);
-	}
-
-	/* ── Consume: read FLPR output into scratch buffer ─────────── */
-	uint16_t vf = 0;
-	uint32_t out_seq = 0;
-	uint32_t crc_metadata = 0;
-	uint32_t latency_cycles = 0;
-
-	enum flpr_consume_result cr = flpr_ring_mgr_consume_block(
-		(uint8_t *)g_scratch_output, &vf, &out_seq, &crc_metadata, &latency_cycles);
-
-	if (cr == FLPR_CONSUME_EMPTY) {
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-		if (!lifecycle_check_before_fault(captured_state, captured_generation,
-						  captured_epoch, sequence)) {
-			k_spin_unlock(&g_lock, key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-		record_fault(NULL, -ENOENT, sequence);
-		recovery_try_schedule_unlock(key);
-		k_mutex_unlock(&g_submit_lock);
-		return -EAGAIN;
-	}
-	if (cr == FLPR_CONSUME_STALE) {
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-		if (!lifecycle_check_before_fault(captured_state, captured_generation,
-						  captured_epoch, sequence)) {
-			k_spin_unlock(&g_lock, key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-		record_fault(&g_status.stale_count, -ESTALE, sequence);
-		recovery_try_schedule_unlock(key);
-		k_mutex_unlock(&g_submit_lock);
-		return -EAGAIN;
-	}
-	if (cr != FLPR_CONSUME_OK) {
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-		if (!lifecycle_check_before_fault(captured_state, captured_generation,
-						  captured_epoch, sequence)) {
-			k_spin_unlock(&g_lock, key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-		record_fault(NULL, -EIO, sequence);
-		recovery_try_schedule_unlock(key);
-		k_mutex_unlock(&g_submit_lock);
-		return -EAGAIN;
-	}
-
-	/* ── Re-check lifecycle before output copy ──────────────────── */
-	{
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-
-		if (g_state != captured_state || g_generation != captured_generation ||
-		    g_stream_epoch != captured_epoch) {
-			g_status.stale_count++;
-			g_status.fallback_count++;
-			g_status.last_error = -ESTALE;
-			g_status.last_error_seq = sequence;
-			k_spin_unlock(&g_lock, key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-		k_spin_unlock(&g_lock, key);
-	}
-
-	/* ── Validate output identity ────────────────────────────────
-	 * All checks happen BEFORE output is touched.
-	 * Any fault here → output buffer stays UNTOUCHED. */
-
-	/* Frame count check. */
-	if (vf != OFFLOAD_EXPECTED_FRAMES) {
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-		if (!lifecycle_check_before_fault(captured_state, captured_generation,
-						  captured_epoch, sequence)) {
-			k_spin_unlock(&g_lock, key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-		record_fault(&g_status.frame_fault_count, -EFAULT, sequence);
-		recovery_try_schedule_unlock(key);
-		k_mutex_unlock(&g_submit_lock);
-		return -EAGAIN;
-	}
-
-	/* Sequence check. */
-	if (out_seq != sequence) {
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-		if (!lifecycle_check_before_fault(captured_state, captured_generation,
-						  captured_epoch, sequence)) {
-			k_spin_unlock(&g_lock, key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-		record_fault(&g_status.seq_fault_count, -EFAULT, sequence);
-		recovery_try_schedule_unlock(key);
-		k_mutex_unlock(&g_submit_lock);
-		return -EAGAIN;
-	}
-
-	/* CRC check: recompute over received payload, compare to metadata. */
-	{
-		uint32_t computed_crc =
-			flpr_ring_crc32((const uint8_t *)g_scratch_output, OFFLOAD_EXPECTED_BYTES);
-		if (computed_crc != crc_metadata) {
-			k_spinlock_key_t key = k_spin_lock(&g_lock);
-			if (!lifecycle_check_before_fault(captured_state, captured_generation,
-							  captured_epoch, sequence)) {
-				k_spin_unlock(&g_lock, key);
-				k_mutex_unlock(&g_submit_lock);
-				return -EAGAIN;
-			}
-			record_fault(&g_status.crc_fault_count, -EFAULT, sequence);
-			recovery_try_schedule_unlock(key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-	}
-
-	/* Payload identity check: memcmp output against original input. */
-	{
-		int cmp = memcmp(g_scratch_output, input, OFFLOAD_EXPECTED_BYTES);
-		if (cmp != 0) {
-			k_spinlock_key_t key = k_spin_lock(&g_lock);
-			if (!lifecycle_check_before_fault(captured_state, captured_generation,
-							  captured_epoch, sequence)) {
-				k_spin_unlock(&g_lock, key);
-				k_mutex_unlock(&g_submit_lock);
-				return -EAGAIN;
-			}
-			record_fault(&g_status.payload_fault_count, -EFAULT, sequence);
-			recovery_try_schedule_unlock(key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-	}
-
-	/* ── Final lifecycle check before output copy ──────────────── */
-	{
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-
-		if (g_state != captured_state || g_generation != captured_generation ||
-		    g_stream_epoch != captured_epoch) {
-			g_status.stale_count++;
-			g_status.fallback_count++;
-			g_status.last_error = -ESTALE;
-			g_status.last_error_seq = sequence;
-			k_spin_unlock(&g_lock, key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-		k_spin_unlock(&g_lock, key);
-	}
-
-	/* ── All checks passed — copy output, record latency ───────── */
-	memcpy(output, g_scratch_output, OFFLOAD_EXPECTED_BYTES);
-
-	{
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-
-		/* Final lifecycle recheck AFTER output copy.
-		 * If generation changed, the output was already copied
-		 * but the caller won't use it because return is -EAGAIN.
-		 * This minimises the window where a stop can invalidate
-		 * output between copy and count. */
-		if (g_state != captured_state || g_generation != captured_generation ||
-		    g_stream_epoch != captured_epoch) {
-			g_status.stale_count++;
-			g_status.fallback_count++;
-			g_status.last_error = -ESTALE;
-			g_status.last_error_seq = sequence;
-			k_spin_unlock(&g_lock, key);
-			k_mutex_unlock(&g_submit_lock);
-			return -EAGAIN;
-		}
-
-		g_status.success_count++;
-		g_status.last_error = 0;
-
-		/* Probation success tracking: each consecutive success
-		 * during probation window counts toward the clearance
-		 * threshold.  Once crossed, escalation state resets to
-		 * base so the next fault starts fresh. */
-		if (g_probation_active) {
-			g_probation_success++;
-			g_status.probation_success = g_probation_success;
-
-			if (g_probation_success >= PROBATION_SUCCESS_THRESHOLD) {
-				g_probation_active = false;
-				g_status.probation_active = false;
-				g_recovery_backoff_ms = OFFLOAD_RECOVERY_BASE_MS;
-				g_recovery_tries = 0;
-				g_status.probation_cleared++;
-				LOG_INF("offload probation cleared after %u consecutive successes",
-					g_probation_success);
-			}
-		}
-
-		record_latency(latency_cycles);
-		k_spin_unlock(&g_lock, key);
-	}
-
-	k_mutex_unlock(&g_submit_lock);
-	return 0;
-}
-
 void audio_offload_get_status(struct audio_offload_status *status)
 {
 	if (!status) {
@@ -1948,7 +1525,7 @@ void audio_offload_get_asrc_stats(struct audio_offload_asrc_stats *s)
 	k_spin_unlock(&g_lock, key);
 }
 
-/* ── nRF5340: identity bypass ────────────────────────────────────── */
+/* ── nRF5340: no-op stubs ────────────────────────────────────────── */
 
 #else /* !CONFIG_SOC_NRF54L15 */
 
@@ -1973,22 +1550,6 @@ bool audio_offload_is_healthy(void)
 bool audio_offload_is_stopped(void)
 {
 	return true;
-}
-
-int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence,
-			 int32_t correction_ppm, int16_t *output)
-{
-	(void)sequence;
-	(void)correction_ppm;
-
-	if (!input || !output || samples == 0) {
-		return -EINVAL;
-	}
-
-	size_t bytes = samples * sizeof(int16_t);
-	memcpy(output, input, bytes);
-
-	return 0;
 }
 
 void audio_offload_get_status(struct audio_offload_status *status)

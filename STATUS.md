@@ -1,4 +1,4 @@
-# STATUS — le-audio-receiver — 2026-07-27
+# STATUS — le-audio-receiver — 2026-07-29
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
@@ -193,10 +193,13 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
  4. ~~**Phase 5** — ASRC quality upgrade~~ → ACCEPTED (2026-07-27).
     Mode A + Mode B 600 s, zero faults. See
     `docs/development/phase5-hardware-acceptance-results.md`.
- 5. **Phase 6** — FLPR offload (intended implementation work). Move accepted
-    ASRC from cpuapp to FLPR. Staged: handshake/rings → identity loopback →
-    ASRC port → reset/fault/fallback → optimize. See `docs/design.md` Phase 6.
- 6. **BabbleSim** — cross-cutting verification track (research + implementation).
+  5. ~~**Phase 6** — FLPR offload~~ → COMPLETE (2026-07-29). Stages 0–5 accepted.
+     FLPR ASRC offload with cpuapp fallback. Stage 5: removed dead identity
+     submit API + 1920 B scratch buffer, migrated lifecycle/recovery tests to
+     ASRC, 276 unit tests pass, nRF54L15 CPUAPP FLASH 502904 B / RAM 152244 B.
+     Hardware: Mode A 120 s + Mode B 120 s at 100 fps, zero faults.
+     See `docs/development/phase6-stage5-optimize-close-handoff.md`.
+  6. **BabbleSim** — cross-cutting verification track (research + implementation).
     Provision environment, fix sysbuild/harness, build smallest-useful
     nRF5340bsim dual-core scenario. See `docs/design.md` BabbleSim section.
 

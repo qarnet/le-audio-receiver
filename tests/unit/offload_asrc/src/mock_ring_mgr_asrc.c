@@ -296,3 +296,36 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 
 	return FLPR_CONSUME_OK;
 }
+
+/* ── Stage 4B recovery stubs ─────────────────────────────────────── */
+
+#include "flpr_runtime.h"
+
+void flpr_handshake_register_health_cb(flpr_health_transition_cb_t cb, void *user_data)
+{
+	(void)cb;
+	(void)user_data;
+}
+
+int flpr_runtime_init(void)
+{
+	return 0;
+}
+
+int flpr_runtime_restart(uint32_t timeout_ms)
+{
+	(void)timeout_ms;
+	return 0;
+}
+
+void flpr_runtime_get_status(struct flpr_runtime_status *out)
+{
+	if (out) {
+		memset(out, 0, sizeof(*out));
+	}
+}
+
+int flpr_ring_mgr_remote_restarted(void)
+{
+	return 0;
+}

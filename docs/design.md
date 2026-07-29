@@ -1,6 +1,6 @@
 # LE Audio Receiver — Design Document
 
-Status: **revised 2026-07-27** (Phase 5 closed — cpuapp ASRC accepted, Mode A+B 600s zero faults; Phase 6 FLPR offload is next intended implementation). Earlier history: accepted 2026-07-05.
+Status: **revised 2026-07-29** (Phase 5 closed — cpuapp ASRC accepted, Mode A+B 600s zero faults; Phase 6 FLPR offload Stages 0–5 complete). Earlier history: accepted 2026-07-05.
 
 This is the consolidated design doc for the firmware supporting both **nRF5340**
 and **nRF54L15**. It records current state, findings (historical), target
@@ -654,13 +654,22 @@ official ASRC framework exists for it. Stages build incrementally.
 - Verify: FLPR forced reset during streaming, fallback path engages, FLPR
   recovery and re-offload, nRF5340 unaffected.
 
-### Stage 5 — Optimize and compare
+### Stage 5 — Optimize and compare ✅ COMPLETE (2026-07-29)
 
-- From Stage 3 measurements: compare ICBmsg vs raw VEVIF signaling latency.
-- Evaluate HPF (High-Performance Framework) only if measured SRAM contention or
-  deadline pressure justifies it — HPF is experimental, not assumed.
-- Tune ring sizes, block scheduling, and deadline margins from real
-  Mode A/B data.
+**Decisions**:
+- Keep ICMsg over VEVIF. Measured production max: FLPR ASRC 1.052 ms, RTT
+  2.148 ms against 8 ms deadline (5.852 ms headroom). Raw VEVIF complexity
+  not justified.
+- Do not adopt experimental HPF. No SRAM/contention/deadline evidence.
+- Keep four-slot 8 KiB rings and 8 ms deadline; proven fault margin.
+- Remove dead Stage 2 identity submit API + 1920 B scratch buffer.
+  Live production uses ASRC API only.
+- Actuator set remains APLL (nRF5340) / NONE (nRF54L15).
+
+**Results**: 276 unit tests pass, nRF54L15 CPUAPP FLASH 502904 B /
+RAM 152244 B. Hardware: Mode A 120 s + true Mode B 120 s at 100 fps zero
+faults, Mode A 180 s zero faults. See
+`docs/development/phase6-stage5-optimize-close-handoff.md`.
 
 ### Gate criteria per stage
 

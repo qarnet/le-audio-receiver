@@ -2,17 +2,16 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * Audio offload interface — transport decoded PCM through FLPR identity
- * loopback (nRF54L15) or direct bypass (nRF5340).
+ * Audio offload interface — routes decoded PCM through FLPR ASRC
+ * offload (nRF54L15) or cpuapp ASRC fallback (nRF5340).
  *
- * On nRF54L15, submits a stereo PCM block to the FLPR input ring, waits
- * for the identity-copied output, and validates it (CRC + payload memcmp).
- * On any fault the call returns an error, the output buffer is UNTOUCHED,
- * and the caller falls back to the original PCM.
+ * On nRF54L15, produces a stereo PCM block with typed ASRC pre-state
+ * and drift correction ppm into the FLPR input ring, waits for FLPR
+ * to process, and consumes the typed ASRC result.  On any fault the
+ * call returns an error, the output buffer is UNTOUCHED, and the
+ * caller falls back to cpuapp ASRC.
  *
  * Submit is serialised by a mutex — only one block in-flight at a time.
- * Scratch output buffer is module-static (no stack allocation).  BT
- * callback stack headroom verified via build-time map analysis.
  *
  * Fault state machine: ANY timeout / CRC / payload / seq / frame / empty /
  * stale fault marks offload unhealthy immediately.  Bounded recovery
@@ -156,44 +155,6 @@ bool audio_offload_is_healthy(void);
  * nRF5340: always true.
  */
 bool audio_offload_is_stopped(void);
-
-/**
- * @brief Submit a stereo PCM block through the offload pipeline.
- *
- * Mutex-serialised — only one block in-flight at a time.
- *
- * nRF54L15 path:
- *   1. Validate args (null, sample count, state)
- *   2. Produce block into input ring WITH CRC
- *   3. Notify FLPR
- *   4. Wait synchronously for output (deadline 8 ms)
- *   5. Consume output, validate epoch + sequence + frame count + CRC (recomputed)
- *   6. memcmp output payload against original input — bit-exact identity
- *   7. On all checks pass: copy verified payload to output, count success
- *   8. On ANY fault: poison healthy, schedule recovery, return error,
- *      output buffer UNTOUCHED
- *
- * On any fault the function returns a negative errno.  The caller
- * MUST use the original @p input PCM as fallback — do not discard audio.
- *
- * On nRF5340 (bypass): copies input to output unchanged, returns 0.
- *
- * @param input           Input PCM (interleaved stereo 16-bit).
- * @param samples         Number of int16_t samples (must be even, 960).
- * @param sequence        Monotonic stream frame counter.
- * @param correction_ppm  Current drift correction (metadata only).
- * @param output          Output buffer (same size as input).  On success
- *                        contains the FLPR-identity-copied PCM.
- *                        On failure the buffer is UNTOUCHED.
- * @return 0 on success,
- *         -ETIMEDOUT if FLPR did not respond within deadline,
- *         -ENOSPC if input ring is full,
- *         -ESTALE if stale epoch,
- *         -EFAULT if sequence/frame/CRC/payload mismatch,
- *         -EAGAIN if offload unhealthy/recovering/preparing (fallback).
- */
-int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence,
-			 int32_t correction_ppm, int16_t *output);
 
 /**
  * @brief Get a snapshot of offload status/instrumentation.
