@@ -74,19 +74,22 @@ This is not a BabbleSim environment issue — the simulator, PHY, nRF HW
 models, and BAP stack all work correctly through the entire streaming
 phase. The failure is in the test script's teardown ordering.
 
-### Gate — bap_unicast_audio.sh (accepted baseline)
+### Gate — bap_unicast_audio.sh (accepted baseline — PARTIAL)
+
+**Status: PARTIAL.** Environment and streaming path proven (100 SDUs
+sent/received end-to-end through ACL, encryption, discovery, codec config,
+QoS config, CIS). Official teardown and ACL-disconnect scenarios fail in
+pinned NCS v3.3.0 — never labelled PASS.
 
 The full-lifecycle test passes all substantive phases (ACL, encryption,
 discovery, codec config, QoS config, CIS, 100 SDUs sent/received in both
 directions). The only failure is the known teardown disable-race in the
-test script — documented above, not a stack defect. Ran `bash
-scripts/bsim-official-smoke.sh` twice with unique simulation IDs; both
-runs complete full streaming before the expected teardown failure.
+test script — documented above, not a stack defect.
 
-| Run | Simulation ID | Streaming | Teardown | PHY exit | Result |
-|-----|--------------|-----------|----------|----------|--------|
-| 1 | bsim_smoke_unicast_audio_* | 100 SDUs ok | disable race | 0 | PASS |
-| 2 | bsim_smoke_unicast_audio_* | 100 SDUs ok | disable race | 0 | PASS |
+| Run | Simulation ID | Streaming | Teardown | PHY exit | Overall |
+|-----|--------------|-----------|----------|----------|---------|
+| 1 | bsim_smoke_unicast_audio_* | 100 SDUs ok | disable race (exit≠0) | 0 | PARTIAL |
+| 2 | bsim_smoke_unicast_audio_* | 100 SDUs ok | disable race (exit≠0) | 0 | PARTIAL |
 
 ### ACL-disconnect sub-test — host-side ENOMEM
 

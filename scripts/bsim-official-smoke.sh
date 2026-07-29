@@ -119,9 +119,15 @@ echo ""
 echo "Simulation ID: $SIMULATION_ID"
 echo "Full lifecycle test exit code: $_smoke_rc (expected non-zero: known disable-race)"
 
-if [ "$_smoke_rc" -eq 0 ]; then
-    echo "=== Test PASSED (clean exit — unexpected but valid) ==="
-else
-    echo "=== Test completed (teardown disable-race — documented, not a stack defect) ==="
+echo ""
+echo "Simulation ID: $SIMULATION_ID"
+echo "Full lifecycle test exit code: $_smoke_rc (expected non-zero: known disable-race)"
+echo ""
+
+if [ "$_smoke_rc" -ne 0 ]; then
+    echo "=== Baseline PARTIAL — teardown disable-race (documented, NCS v3.3.0) ==="
+    echo "Environment/streaming proven; official teardown + ACL-disconnect fail in pinned NCS."
     echo "See docs/development/bsim-stage0-results.md for details."
 fi
+
+exit $_smoke_rc
