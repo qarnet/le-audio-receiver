@@ -78,11 +78,15 @@ diagnostics", not tolerated as warnings.
 supporting both nRF5340 and nRF54L15. Read it before structural changes.
 Current status: **Phase 5 landed and closed** — cpuapp fixed-point linear ASRC
 accepted (Mode A + Mode B, each 600 s, zero faults). Actuators reduced to two:
-APLL (nRF5340) and NONE (nRF54L15, ASRC consumes ppm). Phase 6 (FLPR offload)
-is next intended implementation. A BabbleSim cross-cutting verification track
-runs in parallel; not a release blocker.
+APLL (nRF5340) and NONE (nRF54L15, ASRC consumes ppm). **Phase 6 (FLPR
+offload) complete** — Stages 0–5 accepted, 276 unit tests pass, nRF54L15
+hardware Mode A + Mode B 120 s at 100 fps zero faults. **BabbleSim Stage 1
+accepted as regular local gate** — sink-only scenario, strict PCM oracle with
+local startup counters, fully deterministic across runs (hash=0xFE0D4245).
+Official upstream smoke remains PARTIAL. Scope stops here: reconnect/Mode A/B
+under BabbleSim duplicate hardware coverage.
 See `docs/design.md` for full staged plans and `docs/development/phase5-hardware-acceptance-results.md`
-for acceptance evidence.
+for Phase 5 acceptance evidence.
 
 Consequences for work in this repo today:
 

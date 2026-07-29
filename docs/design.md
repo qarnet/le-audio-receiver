@@ -737,29 +737,36 @@ never substitutes, native unit tests and real-hardware central-driven tests.
   with 48_4_1 preset override and send-counter wrapper.  Both binaries build via
   `scripts/bsim-stage1-run.sh`.
 - **Audio sink stub** (`audio_sink_stub.c`): startup-zero/PLC oracle with ordered
-  FNV-1a hash.  Validates `plc == startup_plc`, `total == pushes + startup_zero`,
-  zero errors, nonzero hash, deterministic energy across runs.  CONFIG_TEST decode
-  bypass removed — BSIM path identical to production hardware.
+  FNV-1a hash.  Startup accounting uses local counters (sink stub only); no
+  test fields in production `audio_stats`.  Validates `plc == startup_plc`,
+  `total == pushes + startup_zero`, zero errors, nonzero hash, deterministic
+  energy across runs.  CONFIG_TEST decode bypass removed — BSIM path identical
+  to production hardware.
 - **Runner** (`scripts/bsim-stage1-run.sh`): compile + run with per-process log
   capture, exit-code validation, PASS-marker parsing with invariant checks.
 - **Official smoke** (`scripts/bsim-official-smoke.sh`): compiles upstream
   BAP unicast audio test, exits nonzero on known teardown disable-race → Baseline
   PARTIAL.
 
-### Stage 1 acceptance (2026-07-29)
+### Stage 1 acceptance + cleanup (2026-07-29)
 
 - Advertising → pairing → PACS/ASCS → one sink ASE → CIS start → valid LC3
   fixture (48 kHz, 48_4_1 preset) → 104 client sends → 100 nonzero receiver pushes.
 - `startup_zero=8`, `startup_plc=7`, `plc=7`, `total=108`, `hash=0xFE0D4245`,
   `energy=12480` — fully deterministic across two consecutive runs.
+- Production `audio_stats.h/.c` cleaned: startup fields and functions removed;
+  startup accounting is local to sink stub only.
+- Client `ASE_SRC_COUNT=2` (min viable per upstream BUILD_ASSERT + stream_tx.c
+  array sizing).
 - Both real-target builds clean (nRF5340, nRF54L15).
+- Stage 1 accepted as regular local gate.  Official upstream smoke remains PARTIAL.
 - Results: `docs/development/bsim-stage1-results.md`.
 
 ### Planned beyond Stage 1
 
-- Mode A / Mode B / reconnect / error injection.
-- CI revival (build matrix for both boards + unit tests + bsim).
-- nRF54L15 bsim target (cpuapp supported, FLPR unsupported by NCS).
+Scope stops here.  Reconnect, Mode A/B, and error injection duplicate hardware
+coverage and add low value under unmodeled I2S/FLPR.  No further BSIM scenario
+expansion planned.
 
 BabbleSim cannot validate ASRC quality, I2S behaviour, SDC realism, FLPR
 offload, or hardware stability — those remain hardware-only gates. It is

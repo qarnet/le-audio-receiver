@@ -5,7 +5,7 @@
  * BSIM audio sink stub — strict PCM oracle with startup-zero/PLC accounting.
  *
  * Startup phase (before first nonzero PCM):
- *   - Zero-energy push → counts as startup_zero, snapshots current PLC count.
+ *   - Zero-energy push → increment local startup_zero, snapshot current PLC count.
  *   - Non-zero-energy push → ends startup, begins counting nonzero pushes.
  *
  * Stream phase (after first nonzero PCM):
@@ -21,6 +21,7 @@
  *   - Energy min/max positive and deterministic.
  *
  * Reports startup_zero, startup_plc, final PLC, total, hash, energy.
+ * Startup accounting is local to this stub; no test fields in production stats.
  */
 
 #include "audio_sink.h"
@@ -43,6 +44,10 @@ static atomic_int startup_push_count; /* total pushes observed (nonzero + zero s
 static atomic_int malformed_count;
 static atomic_int pushes_after_stop;
 static atomic_bool stopped;
+
+/* Startup accounting — local to sink stub, not in production audio_stats */
+static uint32_t local_startup_zero;
+static uint32_t local_startup_plc;
 
 /* Tracks whether the first nonzero-energy push has been seen.
  * Transitions false→true once and stays true.  After transition,
@@ -120,11 +125,11 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 			     atomic_load(&push_count));
 			return -EINVAL;
 		}
-		/* Startup zero: count and snapshot PLC state.
+		/* Startup zero: count locally and snapshot PLC state.
 		 * audio_stats has already been updated for this frame
 		 * by the decode path in bt_bap.c. */
-		audio_stats_startup_zero();
-		audio_stats_startup_plc_snapshot();
+		local_startup_zero++;
+		local_startup_plc = audio_stats_get().plc_frames;
 		atomic_fetch_add(&startup_push_count, 1);
 		return 0;
 	}
@@ -158,8 +163,8 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 	if (cnt == PASS_FRAME_COUNT) {
 		struct audio_stats stats;
 		const int nonzero_pushes = cnt;
-		const uint32_t szero = audio_stats_get().startup_zero;
-		const uint32_t splc = audio_stats_get().startup_plc;
+		const uint32_t szero = local_startup_zero;
+		const uint32_t splc = local_startup_plc;
 
 		/* Atomically snapshot final state before PASS */
 		stats = audio_stats_get();

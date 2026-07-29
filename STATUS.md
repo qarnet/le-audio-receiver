@@ -23,10 +23,11 @@ repeat fb=0, ASRC cap fail=0. Zero warnings, zero assertions, zero faults.
 
 See `docs/development/phase6-stage0-results.md` for full verification evidence.
 
-## BSIM Stage 1 — PASS (2026-07-29)
+## BSIM Stage 1 — PASS + CLEANUP (2026-07-29)
 
 CONFIG_TEST decode bypass removed from `bt_bap.c`. BSIM now executes same
-PLC/decode path as hardware.  Startup-zero/PLC oracle in `audio_sink_stub.c`:
+PLC/decode path as hardware.  Startup-zero/PLC oracle in `audio_sink_stub.c`
+with local counters (not production `audio_stats`):
 8 startup-zero pushes, 7 PLC frames (all before first nonzero PCM).  100
 nonzero pushes, 104 client sends.  Fully deterministic across two runs:
 
@@ -36,11 +37,15 @@ nonzero pushes, 104 client sends.  Fully deterministic across two runs:
 - `hash=0xFE0D4245`, `energy=12480` (identical both runs)
 - `errors=0`, `malformed=0`, `after_stop=0`, `nonzero=1`
 
-`audio_stats` extended with `startup_zero`, `startup_plc` fields.
-Client `ASE_SRC_COUNT=0` incompatible with NCS v3.3.0 (breaks TX stream
-creation); kept at 2.  Official smoke exits non-zero → **Baseline PARTIAL**
-(upstream teardown disable-race).  Both real-target builds clean (nRF5340,
-nRF54L15).  See `docs/development/bsim-stage1-results.md`.
+Production `audio_stats` cleaned — `startup_zero`/`startup_plc` fields and
+functions removed; startup accounting is local to sink stub.  Real-target
+public API restored to pre-BSim shape.  Client `ASE_SRC_COUNT=2` (min viable;
+upstream BUILD_ASSERT rejects 1; 0 compiles but `stream_tx_register` returns
+-ENOMEM on zero-element `tx_streams[]`).  Official smoke exits non-zero →
+**Baseline PARTIAL** (upstream teardown disable-race).  Both real-target builds
+clean (nRF5340, nRF54L15).  Stage1 accepted as regular local gate; official
+smoke remains PARTIAL.  Scope stops here: reconnect/Mode A/B/error injection
+duplicate hardware coverage.  See `docs/development/bsim-stage1-results.md`.
 
 ## Phase 5 — COMPLETE (2026-07-27)
 
@@ -218,22 +223,18 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
      ASRC, 276 unit tests pass, nRF54L15 CPUAPP FLASH 502904 B / RAM 152244 B.
      Hardware: Mode A 120 s + Mode B 120 s at 100 fps, zero faults.
      See `docs/development/phase6-stage5-optimize-close-handoff.md`.
-  6. **BabbleSim** — cross-cutting verification track (research + implementation).
-     Provision environment, fix sysbuild/harness, build smallest-useful
-     nRF5340bsim dual-core scenario. See `docs/design.md` BabbleSim section.
-  7. **BabbleSim Stage 1** — REVIEW FIXES ACCEPTED (2026-07-29). Sink-only
-      rear architecture restored — production source PAC removed, client
-      simplified to one remote sink / one TX stream / one tx_param pair.
-      Strict PCM oracle: FNV-1a ordered hash (nonzero 0xFE0D4245), zero-energy
-      skip startup then immediate FAIL, energy min=12480 max=12480. All checks:
-      decode_errors=0, plc_frames=0, total_frames=101, malformed=0,
-      pushes_after_stop=0, hash nonzero not seed, client TX 104. Two consecutive
-      runs (bsim_stage1_38368, bsim_stage1_41814), each receiver/client/PHY
-      exit 0 with correct PASS markers. Runner captures per-process logs to
-      /tmp, validates markers even when exits zero. Official smoke propagates
-      nonzero upstream result, Stage0 remains PARTIAL.
-      See `docs/development/bsim-stage1-review-fix-handoff.md` and
-      `docs/development/bsim-stage1-results.md`.
+   6. **BabbleSim** — cross-cutting verification track (research + implementation).
+      Provision environment, fix sysbuild/harness, build smallest-useful
+      nRF5340bsim dual-core scenario. See `docs/design.md` BabbleSim section.
+   7. **BabbleSim Stage 1** — ACCEPTED as regular local gate (2026-07-29).
+      Production cleanup: startup accounting moved to local sink-stub counters;
+      audio_stats.h/.c restored to pre-BSim shape.  Sink-only scenario, strict
+      PCM oracle, hash=0xFE0D4245 deterministic across runs.  Client ASE_SRC_COUNT=2
+      (min viable per upstream BUILD_ASSERT + stream_tx.c array sizing).  Official
+      smoke remains PARTIAL.  Scope stops here: reconnect/Mode A/B/error injection
+      duplicate hardware coverage under unmodeled I2S/FLPR.
+      See `docs/development/bsim-stage1-results.md`.
+   8. **Phase 5 Final Gate (FLPR + cpuapp fallback)** — PENDING.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 
