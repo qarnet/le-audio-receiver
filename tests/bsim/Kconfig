@@ -38,12 +38,4 @@ config AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
 	int "Phase integral clamp (±ppm)"
 	default 500
 
-config REGISTER_SRC_PAC
-	bool "Register source PACS for bsim bidir groups"
-	default y
-	help
-	  BSIM requires bidirectional unicast groups.  Enables
-	  source PACS registration so the receiver advertises source
-	  capabilities and the client can create paired CIS groups.
-
 source "Kconfig.zephyr"

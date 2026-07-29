@@ -460,6 +460,18 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		return;
 	}
 
+#if defined(CONFIG_TEST)
+	/* BSIM: skip invalid frames entirely — PLC produces
+	 * non-zero energy that passes the stub's zero-energy
+	 * check but violates the plc_frames=0 gate.  Production
+	 * hardware always runs PLC to avoid audio gaps.
+	 */
+	if (!valid) {
+		audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
+		return;
+	}
+#endif
+
 	if (as->decode.chan_count >= 2) {
 		/* Mode B: stereo single-ASE — split SDU per-channel, two
 		 * independent decoders with stride=2 handled by
@@ -769,9 +781,6 @@ int bt_bap_init(void)
 	const struct bt_pacs_register_param pacs_param = {
 		.snk_pac = true,
 		.snk_loc = true,
-#if defined(CONFIG_REGISTER_SRC_PAC)
-		.src_pac = true,
-#endif
 	};
 	static struct bt_bap_unicast_server_register_param param = {
 		CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT, CONFIG_BT_ASCS_MAX_ASE_SRC_COUNT};

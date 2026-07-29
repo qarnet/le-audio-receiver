@@ -128,6 +128,8 @@ if [ "$_smoke_rc" -ne 0 ]; then
     echo "=== Baseline PARTIAL — teardown disable-race (documented, NCS v3.3.0) ==="
     echo "Environment/streaming proven; official teardown + ACL-disconnect fail in pinned NCS."
     echo "See docs/development/bsim-stage0-results.md for details."
+    exit $_smoke_rc
 fi
 
-exit $_smoke_rc
+echo "=== Baseline PASS — all processes exit 0 ==="
+exit 0

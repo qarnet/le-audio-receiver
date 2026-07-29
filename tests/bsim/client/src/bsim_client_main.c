@@ -2,10 +2,9 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * BSIM valid-LC3 client — BT init, scan, connect, discover, configure,
- * unicast group, QoS, enable, start, poll send counter.
+ * BSIM valid-LC3 client — sink-only.  Discovers one remote sink ASE,
+ * configures one TX stream with tx_param, sends LC3 frames, polls counter.
  *
- * Pattern: mirrors upstream bap_unicast_client_test.c test_main.
  * Reuses upstream stream_tx.c / stream_lc3.c for real LC3 encoding.
  * bt_bap_stream_send wrapper (preset_override.h) atomically counts
  * successful sends via bsim_client_tx_count.
@@ -54,9 +53,8 @@ static K_SEM_DEFINE(sem_connected, 0, 1);
 static K_SEM_DEFINE(sem_mtu_exchanged, 0, 1);
 static K_SEM_DEFINE(sem_security_updated, 0, 1);
 static K_SEM_DEFINE(sem_sinks_discovered, 0, 1);
-static K_SEM_DEFINE(sem_sources_discovered, 0, 1);
 static K_SEM_DEFINE(sem_stream_configured, 0, 1);
-static K_SEM_DEFINE(sem_stream_qos, 0, 2); /* 2 streams = sink+source */
+static K_SEM_DEFINE(sem_stream_qos, 0, 1); /* one sink stream */
 static K_SEM_DEFINE(sem_stream_enabled, 0, 1);
 static K_SEM_DEFINE(sem_stream_started, 0, 1);
 static K_SEM_DEFINE(sem_stream_connected, 0, 1);
@@ -64,14 +62,12 @@ static K_SEM_DEFINE(sem_stream_connected, 0, 1);
 static struct bt_conn *default_conn;
 static struct bt_bap_unicast_group *unicast_group;
 
-/* Remote ASE endpoints discovered from server */
-static struct bt_bap_ep *g_sinks[2];   /* server SINK ASEs → client TX */
-static struct bt_bap_ep *g_sources[2]; /* server SOURCE ASEs → client RX */
+/* Remote ASE endpoints discovered from server — sink-only */
+static struct bt_bap_ep *g_sinks[1];
 
-#define TEST_STREAM_CNT (ARRAY_SIZE(g_sinks) + ARRAY_SIZE(g_sources))
+#define TEST_STREAM_CNT 1
 static struct bt_bap_stream test_streams[TEST_STREAM_CNT];
 static size_t configured_sink_stream_count;
-static size_t configured_source_stream_count;
 
 /* Preset: forced-include maps 16_2_1 → 48_4_1 */
 static struct bt_bap_lc3_preset preset_16_2_1 = BT_BAP_LC3_UNICAST_PRESET_16_2_1(
@@ -158,23 +154,12 @@ static void add_remote_sink(struct bt_bap_ep *ep)
 	}
 }
 
-static void add_remote_source(struct bt_bap_ep *ep)
-{
-	for (size_t i = 0U; i < ARRAY_SIZE(g_sources); i++) {
-		if (g_sources[i] == NULL) {
-			g_sources[i] = ep;
-			return;
-		}
-	}
-}
-
 static void endpoint_cb(struct bt_conn *conn, enum bt_audio_dir dir, struct bt_bap_ep *ep)
 {
 	if (dir == BT_AUDIO_DIR_SINK) {
 		add_remote_sink(ep);
-	} else if (dir == BT_AUDIO_DIR_SOURCE) {
-		add_remote_source(ep);
 	}
+	/* source direction: ignored (sink-only client) */
 }
 
 static struct bt_bap_unicast_client_cb unicast_client_cbs = {
@@ -184,11 +169,6 @@ static struct bt_bap_unicast_client_cb unicast_client_cbs = {
 static void discover_sinks_cb(struct bt_conn *conn, int err, enum bt_audio_dir dir)
 {
 	k_sem_give(&sem_sinks_discovered);
-}
-
-static void discover_sources_cb(struct bt_conn *conn, int err, enum bt_audio_dir dir)
-{
-	k_sem_give(&sem_sources_discovered);
 }
 
 /* ── Scanning ───────────────────────────────────────────────────── */
@@ -291,19 +271,6 @@ static int discover_sinks(void)
 	return k_sem_take(&sem_sinks_discovered, K_SECONDS(10));
 }
 
-static int discover_sources(void)
-{
-	unicast_client_cbs.discover = discover_sources_cb;
-
-	int err = bt_bap_unicast_client_discover(default_conn, BT_AUDIO_DIR_SOURCE);
-
-	if (err != 0) {
-		return err;
-	}
-
-	return k_sem_take(&sem_sources_discovered, K_SECONDS(10));
-}
-
 static int configure_stream(struct bt_bap_stream *stream, struct bt_bap_ep *ep)
 {
 	int err;
@@ -330,34 +297,20 @@ static int configure_streams(void)
 		}
 		configured_sink_stream_count++;
 	}
-	for (size_t i = 0; i < ARRAY_SIZE(g_sources); i++) {
-		if (g_sources[i] == NULL) {
-			continue;
-		}
-		int err = configure_stream(&test_streams[i + configured_sink_stream_count],
-					   g_sources[i]);
-		if (err != 0) {
-			printk("Could not configure source stream[%zu]: %d\n", i, err);
-			return err;
-		}
-		configured_source_stream_count++;
-	}
 	return 0;
 }
 
 static size_t create_unicast_group(struct bt_bap_unicast_group **out_group)
 {
 	struct bt_bap_unicast_group_stream_param stream_params[TEST_STREAM_CNT];
-	struct bt_bap_unicast_group_stream_pair_param
-		pair_params[MAX(ARRAY_SIZE(g_sinks), ARRAY_SIZE(g_sources))];
+	struct bt_bap_unicast_group_stream_pair_param pair_params[1];
 	struct bt_bap_unicast_group_param param;
 	size_t stream_cnt = 0;
-	size_t pair_cnt;
 
 	memset(stream_params, 0, sizeof(stream_params));
 	memset(pair_params, 0, sizeof(pair_params));
 
-	/* Pair each server sink (client TX direction) with one stream */
+	/* One server sink → one client TX stream */
 	for (size_t i = 0; i < ARRAY_SIZE(g_sinks); i++) {
 		if (g_sinks[i] == NULL) {
 			break;
@@ -368,31 +321,13 @@ static size_t create_unicast_group(struct bt_bap_unicast_group **out_group)
 		stream_cnt++;
 	}
 
-	/* Pair each server source (client RX direction) with one stream */
-	for (size_t i = 0; i < ARRAY_SIZE(g_sources); i++) {
-		if (g_sources[i] == NULL) {
-			break;
-		}
-		stream_params[stream_cnt].stream = &test_streams[stream_cnt];
-		stream_params[stream_cnt].qos = &preset_16_2_1.qos;
-		pair_params[i].rx_param = &stream_params[stream_cnt];
-		stream_cnt++;
-	}
-
-	for (pair_cnt = 0; pair_cnt < ARRAY_SIZE(pair_params); pair_cnt++) {
-		if (pair_params[pair_cnt].rx_param == NULL &&
-		    pair_params[pair_cnt].tx_param == NULL) {
-			break;
-		}
-	}
-
 	if (stream_cnt == 0) {
 		FAIL("valid_lc3_client: No streams in group\n");
 		return 0;
 	}
 
 	param.params = pair_params;
-	param.params_count = pair_cnt;
+	param.params_count = 1;
 	param.packing = BT_ISO_PACKING_SEQUENTIAL;
 
 	int err = bt_bap_unicast_group_create(&param, out_group);
@@ -415,7 +350,7 @@ static int set_stream_qos(void)
 	}
 
 	/* Wait for QoS callback for each configured stream */
-	for (size_t i = 0; i < configured_sink_stream_count + configured_source_stream_count; i++) {
+	for (size_t i = 0; i < configured_sink_stream_count; i++) {
 		err = k_sem_take(&sem_stream_qos, K_SECONDS(10));
 		if (err != 0) {
 			return err;
@@ -427,7 +362,7 @@ static int set_stream_qos(void)
 
 static int enable_streams(void)
 {
-	size_t total = configured_sink_stream_count + configured_source_stream_count;
+	size_t total = configured_sink_stream_count;
 
 	for (size_t i = 0; i < total; i++) {
 		int err = bt_bap_stream_enable(&test_streams[i], preset_16_2_1.codec_cfg.meta,
@@ -446,7 +381,7 @@ static int enable_streams(void)
 
 static int connect_streams(void)
 {
-	size_t total = configured_sink_stream_count + configured_source_stream_count;
+	size_t total = configured_sink_stream_count;
 
 	for (size_t i = 0; i < total; i++) {
 		int err = bt_bap_stream_connect(&test_streams[i]);
@@ -467,7 +402,7 @@ static int connect_streams(void)
 
 static int start_streams(void)
 {
-	size_t total = configured_sink_stream_count + configured_source_stream_count;
+	size_t total = configured_sink_stream_count;
 
 	for (size_t i = 0; i < total; i++) {
 		struct bt_bap_stream *stream = &test_streams[i];
@@ -538,12 +473,6 @@ static void test_main_f(void)
 
 	printk("Discovering sinks...\n");
 	err = discover_sinks();
-	if (err) {
-		return;
-	}
-
-	printk("Discovering sources...\n");
-	err = discover_sources();
 	if (err) {
 		return;
 	}

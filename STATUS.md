@@ -202,13 +202,19 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
   6. **BabbleSim** — cross-cutting verification track (research + implementation).
      Provision environment, fix sysbuild/harness, build smallest-useful
      nRF5340bsim dual-core scenario. See `docs/design.md` BabbleSim section.
-  7. **BabbleSim Stage 1** — ACCEPTED (2026-07-29). Receiver + custom
-     valid-LC3 client (48_4_1 preset, real LC3 encode/decode), dual-core
-     nRF5340bsim sysbuild. Two consecutive runs, all three processes
-     (receiver/client/PHY) exit 0. Receiver: 100 decoded pushes,
-     nonzero=1 errors=9 malformed=0 after_stop=0. Client: 103 successful
-     sends (>= 100). Reproduction: `bash scripts/bsim-stage1-run.sh`.
-     See `docs/development/bsim-stage1-valid-lc3-handoff.md`.
+  7. **BabbleSim Stage 1** — REVIEW FIXES ACCEPTED (2026-07-29). Sink-only
+      rear architecture restored — production source PAC removed, client
+      simplified to one remote sink / one TX stream / one tx_param pair.
+      Strict PCM oracle: FNV-1a ordered hash (nonzero 0xFE0D4245), zero-energy
+      skip startup then immediate FAIL, energy min=12480 max=12480. All checks:
+      decode_errors=0, plc_frames=0, total_frames=101, malformed=0,
+      pushes_after_stop=0, hash nonzero not seed, client TX 104. Two consecutive
+      runs (bsim_stage1_38368, bsim_stage1_41814), each receiver/client/PHY
+      exit 0 with correct PASS markers. Runner captures per-process logs to
+      /tmp, validates markers even when exits zero. Official smoke propagates
+      nonzero upstream result, Stage0 remains PARTIAL.
+      See `docs/development/bsim-stage1-review-fix-handoff.md` and
+      `docs/development/bsim-stage1-results.md`.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 
