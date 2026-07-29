@@ -926,8 +926,25 @@ static int cmd_flpr_runtime_status(const struct shell *sh, size_t argc, char **a
 		[FLPR_RUNTIME_UNAVAILABLE] = "UNAVAILABLE",
 	};
 
+	static const char *stage_str[] = {
+		[FLPR_STAGE_DISCONNECT] = "disconnect",
+		[FLPR_STAGE_STOP] = "stop",
+		[FLPR_STAGE_ASSERT_RESET] = "assert_reset",
+		[FLPR_STAGE_COPY] = "copy",
+		[FLPR_STAGE_FLUSH_BARRIER] = "flush_barrier",
+		[FLPR_STAGE_CRC_VERIFY] = "crc_verify",
+		[FLPR_STAGE_INITPC] = "initpc",
+		[FLPR_STAGE_RECONNECT] = "reconnect",
+		[FLPR_STAGE_START_CPURUN] = "start_cpurun",
+		[FLPR_STAGE_RELEASE_RESET] = "release_reset",
+		[FLPR_STAGE_WAIT_BOUND] = "wait_bound",
+		[FLPR_STAGE_WAIT_READY] = "wait_ready",
+		[FLPR_STAGE_SUCCESS] = "success",
+	};
+
 	shell_print(sh, "--- FLPR runtime ---");
 	shell_print(sh, "  State          : %s", state_str[s.state]);
+	shell_print(sh, "  Failed stage   : %s", stage_str[s.failed_stage]);
 	shell_print(sh, "  Requests       : %u", s.requests);
 	shell_print(sh, "  Success        : %u", s.success_count);
 	shell_print(sh, "  Failed         : %u", s.fail_count);
@@ -938,6 +955,14 @@ static int cmd_flpr_runtime_status(const struct shell *sh, size_t argc, char **a
 	shell_print(sh, "  Last errno     : %d", s.last_errno);
 	shell_print(sh, "  Duration       : total=%u ms max=%u ms", s.total_duration_ms,
 		    s.max_duration_ms);
+	shell_print(
+		sh,
+		"  DMCONTROL      : after_assert=0x%08x before_release=0x%08x after_release=0x%08x",
+		s.readbacks.dmcontrol_after_assert, s.readbacks.dmcontrol_before_release,
+		s.readbacks.dmcontrol_after_release);
+	shell_print(sh, "  INITPC         : after_set=0x%08x", s.readbacks.initpc_after_set);
+	shell_print(sh, "  CPURUN         : after_assert=%u after_set=%u",
+		    s.readbacks.cpurun_after_assert, s.readbacks.cpurun_after_set);
 
 	return 0;
 }

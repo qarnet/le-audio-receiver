@@ -12,19 +12,24 @@
  *   - source-memory phandle (FLPR code in RRAM at 0x165000)
  *   - execution-memory phandle (FLPR execution SRAM at 0x20030000)
  *
- * Exact restart sequence (matches handoff):
+ * Stage 4A reset-order fix: one-variable DMCONTROL mask.
+ * DMACTIVE stays Enabled through entire restart — never Disabled.
+ * Only NDMRESET toggles: assert for preparation, release as final launch edge.
+ *
+ * Exact restart sequence:
  *   1. Snapshot previous handshake epoch; mark manager busy.
  *   2. Deregister CPUAPP IPC endpoint.
- *   3. nrf_vpr_cpurun_set(vpr, false).
- *   4. Pulse NDMRESET via debugif DMCONTROL mask (sQSPI pattern).
- *   5. Copy exec-size bytes from source to execution SRAM.
- *   6. Flush copied range (sys_cache_data_flush_range) + full barrier.
- *   7. CRC-32 source + execution over copied bytes; require equality.
- *   8. Set INITPC to execution base (128-byte aligned).
- *   9. Re-register CPUAPP IPC endpoint before releasing core.
- *  10. nrf_vpr_cpurun_set(vpr, true).
- *  11. Wait bound, then READY+ACK with epoch different from snapshot.
- *  12. Return success; on failure leave FLPR unavailable/stopped,
+ *   3. nrf_vpr_cpurun_set(vpr, false) — stop VPR.
+ *   4. Assert NDMRESET+DMACTIVE (single mask, held).
+ *   5. Copy exec-size bytes from source to execution SRAM (reset held).
+ *   6. Flush copied range + full barrier (reset held).
+ *   7. CRC-32 execution vs source, require equality (reset held).
+ *   8. Set INITPC to execution base (reset held).
+ *   9. Re-register CPUAPP IPC endpoint (reset held).
+ *  10. Set CPURUN true (reset held).
+ *  11. Final launch: release NDMRESET (DMACTIVE still Enabled).
+ *  12. Wait bound, then READY+ACK with epoch different from snapshot.
+ *  13. Return success; on failure leave reset asserted/core stopped,
  *      report exact stage/error. Never reboot CPUAPP.
  *
  * No raw register writes — all through nrfx HAL.
@@ -77,17 +82,16 @@ BUILD_ASSERT(EXEC_BASE == 0x20030000 && EXEC_SIZE == 0x10000,
 BUILD_ASSERT((EXEC_BASE & 0x7F) == 0,
 	     "execution base must be 128-byte aligned (INITPC requirement)");
 
-/* DEBUGIF DMCONTROL mask values for NDMRESET pulse.
- * Matches nrfxlib sQSPI reset sequence:
- *   1. Set NDMRESET active, DMACTIVE enabled.
- *   2. Set NDMRESET inactive, DMACTIVE disabled. */
-#define DMCONTROL_NDMRESET_ACTIVE                                                                  \
+/* Stage 4A reset-order fix: one-variable DMCONTROL mask.
+ * DMACTIVE stays Enabled through entire restart — never Disabled.
+ * Only NDMRESET toggles: assert for preparation, release as final launch edge. */
+#define DMCONTROL_RESET_ASSERT                                                                     \
 	((VPR_DEBUGIF_DMCONTROL_NDMRESET_Active << VPR_DEBUGIF_DMCONTROL_NDMRESET_Pos) |           \
 	 (VPR_DEBUGIF_DMCONTROL_DMACTIVE_Enabled << VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos))
 
-#define DMCONTROL_NDMRESET_INACTIVE                                                                \
+#define DMCONTROL_RESET_RELEASE                                                                    \
 	((VPR_DEBUGIF_DMCONTROL_NDMRESET_Inactive << VPR_DEBUGIF_DMCONTROL_NDMRESET_Pos) |         \
-	 (VPR_DEBUGIF_DMCONTROL_DMACTIVE_Disabled << VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos))
+	 (VPR_DEBUGIF_DMCONTROL_DMACTIVE_Enabled << VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos))
 
 /* ── Static state ────────────────────────────────────────────────── */
 
@@ -171,26 +175,30 @@ int flpr_runtime_restart(uint32_t timeout_ms)
 	/* Wait for VPR pipeline to drain and bus activity to settle. */
 	k_busy_wait(1000);
 
-	/* ── Stage 4: Pulse NDMRESET (sQSPI pattern) ─────────
-	 * Resets the VPR core (RISC-V hart + internal state)
-	 * while leaving the VPR peripheral registers intact.
-	 * First apply reset, then release. */
-	nrf_vpr_debugif_dmcontrol_mask_set(vpr_reg, DMCONTROL_NDMRESET_ACTIVE);
-	k_busy_wait(1000);
-	nrf_vpr_debugif_dmcontrol_mask_set(vpr_reg, DMCONTROL_NDMRESET_INACTIVE);
-	/* Allow reset to propagate through the VPR subsystem. */
+	/* ── Stage 4: Assert NDMRESET+DMACTIVE (held) ─────────
+	 * One-variable mask: NDMRESET=Active, DMACTIVE=Enabled.
+	 * Reset is HELD through preparation — not yet released. */
+	g_rt_status.failed_stage = FLPR_STAGE_ASSERT_RESET;
+	nrf_vpr_debugif_dmcontrol_mask_set(vpr_reg, DMCONTROL_RESET_ASSERT);
 	k_busy_wait(1000);
 
-	/* ── Stage 5: Copy source → execution ──────────────── */
+	/* Readback after assert: record DMCONTROL and CPURUN state. */
+	g_rt_status.readbacks.dmcontrol_after_assert = vpr_reg->DEBUGIF.DMCONTROL;
+	g_rt_status.readbacks.cpurun_after_assert = nrf_vpr_cpurun_get(vpr_reg);
+
+	/* ── Stage 5: Copy source → execution (reset held) ─── */
+	g_rt_status.failed_stage = FLPR_STAGE_COPY;
 	memcpy((void *)(uintptr_t)EXEC_BASE, (const void *)(uintptr_t)SRC_BASE, (size_t)EXEC_SIZE);
 	g_rt_status.reload_bytes = EXEC_SIZE;
 
-	/* ── Stage 6: Cache flush + barrier ────────────────── */
+	/* ── Stage 6: Cache flush + barrier (reset held) ───── */
+	g_rt_status.failed_stage = FLPR_STAGE_FLUSH_BARRIER;
 	sys_cache_data_flush_range((void *)(uintptr_t)EXEC_BASE, (size_t)EXEC_SIZE);
 	__DSB(); /* full data synchronisation barrier */
 	__ISB(); /* instruction synchronisation barrier */
 
 	/* ── Stage 7: CRC-32 execution, verify against source ─ */
+	g_rt_status.failed_stage = FLPR_STAGE_CRC_VERIFY;
 	g_rt_status.execution_crc =
 		flpr_ring_crc32((const uint8_t *)(uintptr_t)EXEC_BASE, (size_t)EXEC_SIZE);
 
@@ -201,23 +209,39 @@ int flpr_runtime_restart(uint32_t timeout_ms)
 		goto fail;
 	}
 
-	/* ── Stage 8: Set INITPC ───────────────────────────── */
+	/* ── Stage 8: Set INITPC (reset held) ──────────────── */
+	g_rt_status.failed_stage = FLPR_STAGE_INITPC;
 	nrf_vpr_initpc_set(vpr_reg, EXEC_BASE);
+	g_rt_status.readbacks.initpc_after_set = nrf_vpr_initpc_get(vpr_reg);
 
-	/* ── Stage 9: Re-register IPC endpoint ─────────────── */
+	/* ── Stage 9: Re-register IPC endpoint (reset held) ── */
+	g_rt_status.failed_stage = FLPR_STAGE_RECONNECT;
 	ret = flpr_handshake_reconnect();
 	if (ret < 0) {
 		LOG_ERR("FLPR restart: reconnect failed: %d", ret);
 		goto fail;
 	}
 
-	/* ── Stage 10: Start VPR ───────────────────────────── */
+	/* ── Stage 10: Set CPURUN true (reset held) ──────────── */
+	g_rt_status.failed_stage = FLPR_STAGE_START_CPURUN;
 	nrf_vpr_cpurun_set(vpr_reg, true);
+	g_rt_status.readbacks.cpurun_after_set = nrf_vpr_cpurun_get(vpr_reg);
+
+	/* Readback before release: DMCONTROL with reset still asserted. */
+	g_rt_status.readbacks.dmcontrol_before_release = vpr_reg->DEBUGIF.DMCONTROL;
+
+	/* ── Stage 11: Release NDMRESET (DMACTIVE still Enabled) ─
+	 * This is the final launch edge.  DMACTIVE never written Disabled. */
+	g_rt_status.failed_stage = FLPR_STAGE_RELEASE_RESET;
+	nrf_vpr_debugif_dmcontrol_mask_set(vpr_reg, DMCONTROL_RESET_RELEASE);
+	k_busy_wait(1000);
+	g_rt_status.readbacks.dmcontrol_after_release = vpr_reg->DEBUGIF.DMCONTROL;
 
 	/* Give FLPR time to boot before waiting for bound. */
 	k_msleep(200);
 
-	/* ── Stage 11: Wait bound ──────────────────────────── */
+	/* ── Stage 12: Wait bound ────────────────────────────── */
+	g_rt_status.failed_stage = FLPR_STAGE_WAIT_BOUND;
 	ret = flpr_handshake_wait_bound(K_MSEC(timeout_ms / 2));
 	if (ret != 0) {
 		LOG_ERR("FLPR restart: wait bound timeout: %d", ret);
@@ -225,13 +249,15 @@ int flpr_runtime_restart(uint32_t timeout_ms)
 	}
 
 	/* Wait new READY with different epoch. */
+	g_rt_status.failed_stage = FLPR_STAGE_WAIT_READY;
 	ret = flpr_handshake_wait_new_ready(hs_before.epoch, K_MSEC(timeout_ms / 2));
 	if (ret != 0) {
 		LOG_ERR("FLPR restart: wait new ready timeout: %d", ret);
 		goto fail_stop;
 	}
 
-	/* ── Stage 12: Success ─────────────────────────────── */
+	/* ── Stage 13: Success ─────────────────────────────── */
+	g_rt_status.failed_stage = FLPR_STAGE_SUCCESS;
 	{
 		struct flpr_status hs_after;
 		flpr_handshake_get_status(&hs_after);
@@ -264,7 +290,8 @@ fail:
 	uint32_t f_dur = k_uptime_get_32() - start_ms;
 	g_rt_status.total_duration_ms += f_dur;
 
-	LOG_ERR("FLPR restart FAILED: stage err=%d duration=%u ms", ret, f_dur);
+	LOG_ERR("FLPR restart FAILED: stage=%d err=%d duration=%u ms",
+		(int)g_rt_status.failed_stage, ret, f_dur);
 	k_mutex_unlock(&runtime_lock);
 	return ret;
 }
