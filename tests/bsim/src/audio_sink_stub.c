@@ -2,23 +2,35 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * BSIM audio sink stub — strict PCM oracle.
+ * BSIM audio sink stub — strict PCM oracle with startup-zero/PLC accounting.
  *
- * Zero-energy push = immediate FAIL (no tolerated error counter).
- * Ordered FNV-1a hash — chained with prior hash and frame index
- * over all sample bytes so 100 identical sine blocks cannot cancel.
- * At PASS requires exactly 100 valid pushes, zero errors/PLC/malformed,
- * nonzero final hash, and reports energy min/max plus final hash.
+ * Startup phase (before first nonzero PCM):
+ *   - Zero-energy push → counts as startup_zero, snapshots current PLC count.
+ *   - Non-zero-energy push → ends startup, begins counting nonzero pushes.
+ *
+ * Stream phase (after first nonzero PCM):
+ *   - Zero-energy push → immediate FAIL (decoded audio must never be silent).
+ *   - Non-zero-energy push → increment push_count, update energy/hash.
+ *
+ * At 100 nonzero pushes (PASS):
+ *   - decode_errors=0, malformed=0, after_stop=0.
+ *   - All PLC frames occurred before first nonzero PCM
+ *     (final plc_frames == startup_plc snapshot).
+ *   - total_frames == nonzero_push_count + startup_zero (one-frame-per-SDU).
+ *   - Ordered FNV-1a hash nonzero and not initial seed.
+ *   - Energy min/max positive and deterministic.
+ *
+ * Reports startup_zero, startup_plc, final PLC, total, hash, energy.
  */
 
 #include "audio_sink.h"
 #include "audio_stats.h"
 #include "bsim_test_helpers.h"
 
+#include <limits.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <limits.h>
 #include <errno.h>
 
 #define REQUIRED_SAMPLES 960 /* 48 kHz × 10 ms × 2 channels */
@@ -27,11 +39,17 @@
 #define FNV_PRIME        0x01000193UL
 
 static atomic_int push_count;
+static atomic_int startup_push_count; /* total pushes observed (nonzero + zero startup) */
 static atomic_int malformed_count;
 static atomic_int pushes_after_stop;
 static atomic_bool stopped;
 
-/* Energy bounds tracked over ALL valid pushes */
+/* Tracks whether the first nonzero-energy push has been seen.
+ * Transitions false→true once and stays true.  After transition,
+ * zero-energy pushes are faults. */
+static bool first_nonzero_seen;
+
+/* Energy bounds tracked across nonzero pushes */
 static atomic_int energy_min = ATOMIC_VAR_INIT(INT32_MAX);
 static atomic_int energy_max;
 static int32_t running_energy_min = INT32_MAX;
@@ -39,7 +57,7 @@ static int32_t running_energy_max;
 
 /* Ordered FNV-1a hash across frame index and all sample bytes.
  * Initial seed = FNV_OFFSET_BASIS; chained: hash = FNV-1a(hash, idx, samples...).
- * Stored atomically at PASS time for the runner to read. */
+ * Hash is only updated for nonzero-energy pushes. */
 static uint32_t running_hash = FNV_OFFSET_BASIS;
 static atomic_uint final_hash;
 
@@ -92,23 +110,29 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 		energy += abs_val;
 	}
 
-	/* Zero-energy frame: skip during CIS startup (client may not have
-	 * queued first SDU yet).  After any nonzero push has been seen,
-	 * a zero-energy frame is an immediate failure — the audio stream
-	 * must never produce silence once established.
-	 */
+	/* ── Startup / stream energy oracle ──────────────────────────── */
 	if (energy == 0) {
-		if (atomic_load(&push_count) > 0) {
+		/* Zero-energy push */
+		if (first_nonzero_seen) {
+			/* Already streaming — silence is fault */
 			FAIL("le_audio_receiver: zero-energy push after audio started — "
 			     "push#%d immediate FAIL\n",
 			     atomic_load(&push_count));
 			return -EINVAL;
 		}
-		/* Startup transient: silently consume this push without counting */
+		/* Startup zero: count and snapshot PLC state.
+		 * audio_stats has already been updated for this frame
+		 * by the decode path in bt_bap.c. */
+		audio_stats_startup_zero();
+		audio_stats_startup_plc_snapshot();
+		atomic_fetch_add(&startup_push_count, 1);
 		return 0;
 	}
 
-	/* Track energy bounds */
+	/* ── Non-zero-energy push ───────────────────────────────────── */
+	first_nonzero_seen = true;
+
+	/* Track energy bounds (nonzero pushes only) */
 	if (energy < running_energy_min) {
 		running_energy_min = energy;
 	}
@@ -116,8 +140,9 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 		running_energy_max = energy;
 	}
 
-	/* Ordered FNV-1a: chain in frame index (4-byte LE) then all sample bytes */
+	/* Ordered FNV-1a: chain frame index then sample bytes */
 	cnt = atomic_fetch_add(&push_count, 1);
+	atomic_fetch_add(&startup_push_count, 1);
 	uint8_t idx_bytes[4];
 
 	idx_bytes[0] = cnt & 0xFF;
@@ -132,7 +157,9 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 
 	if (cnt == PASS_FRAME_COUNT) {
 		struct audio_stats stats;
-		int nonzero = (running_energy_max > 0) ? 1 : 0;
+		const int nonzero_pushes = cnt;
+		const uint32_t szero = audio_stats_get().startup_zero;
+		const uint32_t splc = audio_stats_get().startup_plc;
 
 		/* Atomically snapshot final state before PASS */
 		stats = audio_stats_get();
@@ -140,34 +167,38 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 		atomic_store(&energy_max, running_energy_max);
 		atomic_store(&final_hash, running_hash);
 
-		/* Enforce: hash must be nonzero and not initial seed */
+		/* ── Invariants ───────────────────────────────────────── */
+
+		/* Hash must be nonzero and not initial seed */
 		if (running_hash == FNV_OFFSET_BASIS) {
-			FAIL("le_audio_receiver: ordered hash unchanged from seed — "
-			     "possible all-zero or repeating identical blocks\n");
+			FAIL("le_audio_receiver: ordered hash unchanged from seed\n");
 			return -EIO;
 		}
 
-		/* Enforce: zero decode errors */
+		/* Zero decode errors */
 		if (stats.decode_errors != 0) {
 			FAIL("le_audio_receiver: decode_errors=%" PRIu32 " != 0\n",
 			     stats.decode_errors);
 			return -EIO;
 		}
 
-		/* Enforce: zero PLC frames */
-		if (stats.plc_frames != 0) {
-			FAIL("le_audio_receiver: plc_frames=%" PRIu32 " != 0\n", stats.plc_frames);
+		/* All PLC frames occurred before first nonzero PCM */
+		if (stats.plc_frames != splc) {
+			FAIL("le_audio_receiver: plc_frames=%" PRIu32 " != startup_plc=%" PRIu32
+			     " (PLC after first nonzero PCM)\n",
+			     stats.plc_frames, splc);
 			return -EIO;
 		}
 
-		/* Enforce: >= 100 total frames */
-		if (stats.total_frames < PASS_FRAME_COUNT) {
-			FAIL("le_audio_receiver: total_frames=%" PRIu32 " < %d\n",
-			     stats.total_frames, PASS_FRAME_COUNT);
+		/* total_frames == nonzero_push_count + startup_zero */
+		if (stats.total_frames != (uint32_t)nonzero_pushes + szero) {
+			FAIL("le_audio_receiver: total_frames=%" PRIu32
+			     " != pushes=%d + startup_zero=%" PRIu32 "\n",
+			     stats.total_frames, nonzero_pushes, szero);
 			return -EIO;
 		}
 
-		/* Enforce: zero malformed and zero pushes after stop */
+		/* Zero malformed, zero pushes after stop */
 		if (atomic_load(&malformed_count) != 0) {
 			FAIL("le_audio_receiver: malformed_count=%d != 0\n",
 			     atomic_load(&malformed_count));
@@ -182,10 +213,12 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 		PASS("le_audio_receiver: %d pushes — "
 		     "nonzero=%d errors=%" PRIu32 " plc=%" PRIu32 " total=%" PRIu32
 		     " malformed=%d after_stop=%d "
+		     "startup_zero=%" PRIu32 " startup_plc=%" PRIu32 " "
 		     "energy_min=%" PRId32 " energy_max=%" PRId32 " hash=0x%08" PRIX32 "\n",
-		     cnt, nonzero, stats.decode_errors, stats.plc_frames, stats.total_frames,
-		     atomic_load(&malformed_count), atomic_load(&pushes_after_stop),
-		     running_energy_min, running_energy_max, running_hash);
+		     nonzero_pushes, (running_energy_max > 0) ? 1 : 0, stats.decode_errors,
+		     stats.plc_frames, stats.total_frames, atomic_load(&malformed_count),
+		     atomic_load(&pushes_after_stop), szero, splc, running_energy_min,
+		     running_energy_max, running_hash);
 	}
 
 	return 0;

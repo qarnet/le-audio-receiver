@@ -23,7 +23,6 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 # Source BSIM environment (derives BSIM_OUT_PATH, BOARD defaults)
 source "${SCRIPT_DIR}/bsim-env.sh"
 
-NCS_ROOT="$(dirname "$(dirname "$ZEPHYR_BASE")")"
 BOARD_TS="${BOARD//\//_}"
 
 # --- Toolchain ---
@@ -177,7 +176,8 @@ echo "All three processes exited 0."
 _fail_markers=0
 
 # Receiver must contain:
-#   "INFO: le_audio_receiver:" with "pushes" and correct counters
+#   "INFO: le_audio_receiver:" with pushes and correct counters.
+#   PLC frames are permitted during startup only (plc == startup_plc).
 _grep_pass="INFO: le_audio_receiver:"
 if ! grep -q "$_grep_pass" "$RECV_LOG" 2>/dev/null; then
     echo "FAIL: Receiver log missing PASS marker" >&2
@@ -189,10 +189,6 @@ else
 
     if ! echo "$_pass_line" | grep -q "errors=0"; then
         echo "FAIL: Receiver decode_errors != 0" >&2
-        _fail_markers=1
-    fi
-    if ! echo "$_pass_line" | grep -q "plc=0"; then
-        echo "FAIL: Receiver plc_frames != 0" >&2
         _fail_markers=1
     fi
     if ! echo "$_pass_line" | grep -q "malformed=0"; then
@@ -207,12 +203,36 @@ else
         echo "FAIL: Receiver no nonzero samples" >&2
         _fail_markers=1
     fi
-    # energy_max > 0 (positive integer)
+
+    # PLC invariant: plc == startup_plc (all PLC in startup phase)
+    _plc=$(echo "$_pass_line" | grep -oP 'plc=\K\d+' | head -1)
+    _splc=$(echo "$_pass_line" | grep -oP 'startup_plc=\K\d+' | head -1)
+    if [ -n "$_plc" ] && [ -n "$_splc" ]; then
+        if [ "$_plc" -ne "$_splc" ]; then
+            echo "FAIL: Receiver plc=$_plc != startup_plc=$_splc (PLC after first nonzero PCM)" >&2
+            _fail_markers=1
+        fi
+    fi
+
+    # total_frames invariant: total == pushes + startup_zero
+    _total=$(echo "$_pass_line" | grep -oP 'total=\K\d+' | head -1)
+    _pushes=$(echo "$_pass_line" | grep -oP '[0-9]+ pushes' | grep -oP '\d+' | head -1)
+    _szero=$(echo "$_pass_line" | grep -oP 'startup_zero=\K\d+' | head -1)
+    if [ -n "$_total" ] && [ -n "$_pushes" ] && [ -n "$_szero" ]; then
+        _expected_total=$((_pushes + _szero))
+        if [ "$_total" -ne "$_expected_total" ]; then
+            echo "FAIL: Receiver total=$_total != pushes=$_pushes + startup_zero=$_szero (= $_expected_total)" >&2
+            _fail_markers=1
+        fi
+    fi
+
+    # energy_max > 0
     _emax=$(echo "$_pass_line" | grep -oP 'energy_max=\K\d+')
     if [ -z "$_emax" ] || [ "$_emax" -le 0 ]; then
         echo "FAIL: Receiver energy_max is zero or missing" >&2
         _fail_markers=1
     fi
+
     # Hash must be nonzero and not 0x811C9DC5 (FNV seed)
     _hash=$(echo "$_pass_line" | grep -oP 'hash=0x[0-9A-Fa-f]+' | head -1)
     if [ -z "$_hash" ]; then

@@ -730,33 +730,36 @@ never substitutes, native unit tests and real-hardware central-driven tests.
 - Official group-filter/update/build requirements from the BabbleSim
   documentation.
 
-### Current scaffold audit (`tests/bsim/`)
+### Current scaffold audit (`tests/bsim/`) — Stage 0/1 COMPLETE
 
-- `CMakeLists.txt`: builds receiver sources against `nrf5340bsim`; stub
-  audio sink (`audio_sink_stub.c`) counts pushes, not real LC3; no
-  dual-core sysbuild controller.
-- `test_scripts/le_audio_receiver.sh`: launches receiver + upstream
-  Zephyr `unicast_client` via `sh_common.source`. Upstream client sends
-  mock bytes, not valid LC3 — useless for decode/ASRC validation.
-- `testcase.yaml`: `build_only: false` but scenario is incomplete.
+- **Sysbuild** (`CMakeLists.txt`, `Kconfig.sysbuild`, `sysbuild.cmake`): dual-core
+  nRF5340bsim receiver + SW Split cpunet.  Custom BAP client in `tests/bsim/client/`
+  with 48_4_1 preset override and send-counter wrapper.  Both binaries build via
+  `scripts/bsim-stage1-run.sh`.
+- **Audio sink stub** (`audio_sink_stub.c`): startup-zero/PLC oracle with ordered
+  FNV-1a hash.  Validates `plc == startup_plc`, `total == pushes + startup_zero`,
+  zero errors, nonzero hash, deterministic energy across runs.  CONFIG_TEST decode
+  bypass removed — BSIM path identical to production hardware.
+- **Runner** (`scripts/bsim-stage1-run.sh`): compile + run with per-process log
+  capture, exit-code validation, PASS-marker parsing with invariant checks.
+- **Official smoke** (`scripts/bsim-official-smoke.sh`): compiles upstream
+  BAP unicast audio test, exits nonzero on known teardown disable-race → Baseline
+  PARTIAL.
 
-### Smallest useful scenario (planned)
+### Stage 1 acceptance (2026-07-29)
 
-1. Fix sysbuild: nRF5340bsim receiver + custom BAP client + SW Split
-   cpunet in a single BabbleSim simulation.
-2. Advertising → pairing → PACS/ASCS → one ASE → CIS start → valid LC3
-   fixture (pre-encoded, constant quality, known PCM output).
-3. Sequence-number and timestamp validation, zero decode errors, PCM hash
-   and sample-value bounds.
-4. Lifecycle: stop, disconnect, no late push.
-5. Later: Mode A / Mode B / reconnect / error injection.
+- Advertising → pairing → PACS/ASCS → one sink ASE → CIS start → valid LC3
+  fixture (48 kHz, 48_4_1 preset) → 104 client sends → 100 nonzero receiver pushes.
+- `startup_zero=8`, `startup_plc=7`, `plc=7`, `total=108`, `hash=0xFE0D4245`,
+  `energy=12480` — fully deterministic across two consecutive runs.
+- Both real-target builds clean (nRF5340, nRF54L15).
+- Results: `docs/development/bsim-stage1-results.md`.
 
-### Exit criteria for acceptance into regular gate
+### Planned beyond Stage 1
 
-- Environment provisioned, script verified.
-- Dual-core sysbuild simulation runs reliably (Twister or manual).
-- Smallest-useful scenario passes repeatably.
-- Results documented as complement to, not replacement for, hardware tests.
+- Mode A / Mode B / reconnect / error injection.
+- CI revival (build matrix for both boards + unit tests + bsim).
+- nRF54L15 bsim target (cpuapp supported, FLPR unsupported by NCS).
 
 BabbleSim cannot validate ASRC quality, I2S behaviour, SDC realism, FLPR
 offload, or hardware stability — those remain hardware-only gates. It is

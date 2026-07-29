@@ -31,7 +31,6 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 # Source BSIM environment (also validates PHY binary)
 source "${SCRIPT_DIR}/bsim-env.sh"
 
-NCS_ROOT="$(dirname "$(dirname "$ZEPHYR_BASE")")"
 BOARD_TS="${BOARD//\//_}"
 
 # --- Toolchain: require nrfutil in PATH, check command succeeds ---
@@ -114,10 +113,6 @@ _smoke_rc=0
 for _pid in $_process_ids; do
     wait $_pid || _smoke_rc=$?
 done
-
-echo ""
-echo "Simulation ID: $SIMULATION_ID"
-echo "Full lifecycle test exit code: $_smoke_rc (expected non-zero: known disable-race)"
 
 echo ""
 echo "Simulation ID: $SIMULATION_ID"

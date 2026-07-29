@@ -23,6 +23,25 @@ repeat fb=0, ASRC cap fail=0. Zero warnings, zero assertions, zero faults.
 
 See `docs/development/phase6-stage0-results.md` for full verification evidence.
 
+## BSIM Stage 1 — PASS (2026-07-29)
+
+CONFIG_TEST decode bypass removed from `bt_bap.c`. BSIM now executes same
+PLC/decode path as hardware.  Startup-zero/PLC oracle in `audio_sink_stub.c`:
+8 startup-zero pushes, 7 PLC frames (all before first nonzero PCM).  100
+nonzero pushes, 104 client sends.  Fully deterministic across two runs:
+
+- `startup_zero=8`, `startup_plc=7`, `plc=7`, `total=108`
+- `total == pushes + startup_zero` (108 = 100 + 8)
+- `plc == startup_plc` (7 = 7, all PLC in startup)
+- `hash=0xFE0D4245`, `energy=12480` (identical both runs)
+- `errors=0`, `malformed=0`, `after_stop=0`, `nonzero=1`
+
+`audio_stats` extended with `startup_zero`, `startup_plc` fields.
+Client `ASE_SRC_COUNT=0` incompatible with NCS v3.3.0 (breaks TX stream
+creation); kept at 2.  Official smoke exits non-zero → **Baseline PARTIAL**
+(upstream teardown disable-race).  Both real-target builds clean (nRF5340,
+nRF54L15).  See `docs/development/bsim-stage1-results.md`.
+
 ## Phase 5 — COMPLETE (2026-07-27)
 
 cpuapp fixed-point linear stereo ASRC accepted. Mode A (two mono ASEs) +
