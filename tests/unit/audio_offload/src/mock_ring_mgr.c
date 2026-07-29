@@ -13,6 +13,7 @@
 #include "flpr_ring_mgr.h"
 #include "flpr_handshake.h"
 #include "flpr_ring.h"
+#include "flpr_runtime.h"
 
 #include <string.h>
 #include <zephyr/kernel.h>
@@ -64,6 +65,7 @@ bool mock_last_crc;           /* was crc computed */
 
 /* Reset everything to defaults. */
 static void mock_asrc_reset(void);
+static void mock_recovery_reset(void);
 
 static void mock_reset(void)
 {
@@ -95,6 +97,7 @@ static void mock_reset(void)
 	mock_last_crc = false;
 	memset(mock_consume_payload, 0, sizeof(mock_consume_payload));
 	mock_asrc_reset();
+	mock_recovery_reset();
 }
 
 /* ── flpr_handshake mock ─────────────────────────────────────────── */
@@ -272,6 +275,63 @@ void flpr_ring_mgr_get_status(struct flpr_ring_status *status)
 	if (status) {
 		memset(status, 0, sizeof(*status));
 	}
+}
+
+/* ── Stage 4B recovery mocks ───────────────────────────────────── */
+
+/* Mock control variables for runtime restart and remote reinit. */
+int mock_runtime_restart_result;
+uint32_t mock_runtime_restart_calls;
+bool mock_runtime_restart_called;
+uint32_t mock_runtime_new_epoch;
+
+int mock_remote_restarted_result;
+uint32_t mock_remote_restarted_calls;
+
+/* Reset mock recovery state (called from mock_reset via setup). */
+static void mock_recovery_reset(void)
+{
+	mock_runtime_restart_result = 0;
+	mock_runtime_restart_calls = 0;
+	mock_runtime_restart_called = false;
+	mock_runtime_new_epoch = 0xABCD0001;
+	mock_remote_restarted_result = 0;
+	mock_remote_restarted_calls = 0;
+}
+
+void flpr_handshake_register_health_cb(flpr_health_transition_cb_t cb, void *user_data)
+{
+	(void)cb;
+	(void)user_data;
+	/* Stub: callback registered, never fired in tests unless explicitly called. */
+}
+
+int flpr_runtime_init(void)
+{
+	return 0;
+}
+
+int flpr_runtime_restart(uint32_t timeout_ms)
+{
+	(void)timeout_ms;
+	mock_runtime_restart_calls++;
+	mock_runtime_restart_called = true;
+	return mock_runtime_restart_result;
+}
+
+void flpr_runtime_get_status(struct flpr_runtime_status *out)
+{
+	if (out) {
+		memset(out, 0, sizeof(*out));
+		out->new_epoch = mock_runtime_new_epoch;
+		out->state = FLPR_RUNTIME_IDLE;
+	}
+}
+
+int flpr_ring_mgr_remote_restarted(void)
+{
+	mock_remote_restarted_calls++;
+	return mock_remote_restarted_result;
 }
 
 /* ── Stage 3B: ASRC typed produce/consume stubs ──────────────────────

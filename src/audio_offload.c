@@ -262,25 +262,43 @@ static bool lifecycle_check_before_fault(enum audio_offload_state captured_state
 }
 
 /*
- * Capture schedule_recov decision + delay under lock for use outside lock.
- * Returns true if recovery should be scheduled; sets *delay_ms if so.
+ * Central authoritative recovery scheduling helper.
+ * Must be called UNDER g_lock with the key held.
+ *
+ * Contract (per handoff Stage 4B review):
+ *   - Only schedules if state is RECOVERING AND g_recovery_scheduled is false.
+ *   - Sets g_recovery_scheduled true exactly once — the scheduling decision.
+ *   - Recovery work keeps it true while running and across delayed retries.
+ *   - Only terminal ACTIVE/FALLBACK/STOPPED/cancel paths clear it.
+ *   - On k_work_schedule_for_queue failure: clears flag under lock, counts error.
+ *
+ * Replaces all ad-hoc should_schedule_recovery_locked / schedule_recovery
+ * pairs throughout the submit and ASRC paths.
  */
-static bool should_schedule_recovery_locked(uint32_t *delay_ms)
+static void recovery_try_schedule_unlock(k_spinlock_key_t key)
 {
-	if (g_state != AUDIO_OFFLOAD_RECOVERING) {
-		return false;
-	}
-	*delay_ms = g_recovery_backoff_ms;
-	return true;
-}
+	uint32_t delay_ms;
+	bool should_sched = false;
 
-/*
- * Schedule the recovery delayable work on the DEDICATED offload work queue.
- * Must be called OUTSIDE spinlock with the delay captured under lock.
- */
-static void schedule_recovery(uint32_t delay_ms)
-{
-	k_work_schedule_for_queue(&g_offload_wq, &g_recovery_work, K_MSEC(delay_ms));
+	if (g_state == AUDIO_OFFLOAD_RECOVERING && !g_recovery_scheduled) {
+		g_recovery_scheduled = true;
+		delay_ms = g_recovery_backoff_ms;
+		should_sched = true;
+	}
+
+	k_spin_unlock(&g_lock, key);
+
+	if (should_sched) {
+		int ret = k_work_schedule_for_queue(&g_offload_wq, &g_recovery_work,
+						    K_MSEC(delay_ms));
+		if (ret < 0) {
+			k_spinlock_key_t k = k_spin_lock(&g_lock);
+			g_recovery_scheduled = false;
+			g_status.recovery_schedule_fail_count++;
+			k_spin_unlock(&g_lock, k);
+			LOG_ERR("offload: recovery schedule failed: %d", ret);
+		}
+	}
 }
 
 /*
@@ -311,47 +329,46 @@ static void offload_health_transition_cb(void *user_data)
 	switch (g_state) {
 	case AUDIO_OFFLOAD_ACTIVE:
 	case AUDIO_OFFLOAD_PREPARING:
-		/* Active or preparing — transition to RECOVERING and schedule. */
-		if (g_state != AUDIO_OFFLOAD_RECOVERING) {
-			g_state = AUDIO_OFFLOAD_RECOVERING;
-			g_status.state = g_state;
-			g_status.healthy = false;
-			LOG_WRN("offload: heartbeat supervisor → RECOVERING");
-		} else {
-			/* Already recovering (output timeout got here first) — dedup. */
-			g_heartbeat_dedup_count++;
-			g_status.heartbeat_dedup_count = g_heartbeat_dedup_count;
-		}
-		break;
+		/* Active or preparing: transition to RECOVERING once, schedule. */
+		g_state = AUDIO_OFFLOAD_RECOVERING;
+		g_status.state = g_state;
+		g_status.healthy = false;
+		LOG_WRN("offload: heartbeat supervisor → RECOVERING");
+		/* Fall through to schedule. */
+		recovery_try_schedule_unlock(key);
+		return;
 	case AUDIO_OFFLOAD_RECOVERING:
-		/* Already in recovery — dedup, do not schedule second restart. */
+		/* Already in recovery — dedup, never schedule another. */
 		g_heartbeat_dedup_count++;
 		g_status.heartbeat_dedup_count = g_heartbeat_dedup_count;
 		k_spin_unlock(&g_lock, key);
-		return; /* no schedule */
+		return;
 	case AUDIO_OFFLOAD_STOPPED:
 		/* Stopped: FLPR hung while idle — restart directly.
-		 * Blocks heartbeat work (~300ms) — acceptable for rare fault. */
+		 * Blocks heartbeat work (~300ms) — acceptable for rare fault.
+		 * After restart, reinit ring manager so stale epoch/semaphores
+		 * cannot enter next stream. */
 		LOG_WRN("offload: heartbeat supervisor → idle restart");
 		k_spin_unlock(&g_lock, key);
-		(void)flpr_runtime_restart(1500);
+		{
+			int rr = flpr_runtime_restart(1500);
+			if (rr == 0) {
+				int ri = flpr_ring_mgr_remote_restarted();
+				if (ri != 0) {
+					LOG_ERR("offload: idle ring reinit failed: %d", ri);
+				}
+			} else {
+				LOG_ERR("offload: idle runtime restart failed: %d", rr);
+			}
+		}
 		return;
 	case AUDIO_OFFLOAD_FALLBACK:
-		/* Stopped/fallback — do nothing, no stream to recover. */
+		/* Fallback — do nothing, no stream to recover. */
 		k_spin_unlock(&g_lock, key);
 		return;
 	}
 
-	/* Schedule recovery if not already scheduled. */
-	bool should_sched = !g_recovery_scheduled;
-	if (should_sched) {
-		g_recovery_scheduled = true;
-	}
 	k_spin_unlock(&g_lock, key);
-
-	if (should_sched) {
-		schedule_recovery(OFFLOAD_RECOVERY_BASE_MS);
-	}
 }
 
 void audio_offload_remote_unavailable(void)
@@ -527,6 +544,7 @@ void recovery_work_fn(struct k_work *work)
 
 	uint32_t start_gen;
 	bool tried_runtime = false;
+	uint32_t new_epoch = 0; /* carried into transition_active, committed under lock */
 
 	/* ── Entry: check state + capture generation ──────────── */
 	{
@@ -572,7 +590,9 @@ void recovery_work_fn(struct k_work *work)
 
 			int ret = flpr_ring_mgr_coordinated_reset(epoch, 100);
 			if (ret == 0) {
-				/* Short ring reset succeeded — transition to ACTIVE. */
+				/* Short ring reset succeeded — carry epoch into
+				 * transition_active where it is committed under lock. */
+				new_epoch = epoch;
 				goto transition_active;
 			}
 
@@ -612,10 +632,15 @@ void recovery_work_fn(struct k_work *work)
 				if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
 					g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
 				}
-				uint32_t delay_ms = g_recovery_backoff_ms;
+				/* Use authoritative helper — it sets g_recovery_scheduled
+				 * if not already set, unlocks, and schedules.  Do NOT
+				 * clear g_recovery_scheduled here; the helper owns it. */
 				g_recovery_scheduled = false;
 				k_spin_unlock(&g_lock, key);
-				schedule_recovery(delay_ms);
+				/* Re-schedule via helper pattern — but we already
+				 * unlocked.  Direct schedule with backoff. */
+				k_work_schedule_for_queue(&g_offload_wq, &g_recovery_work,
+							  K_MSEC(g_recovery_backoff_ms));
 			} else {
 				g_recovery_scheduled = false;
 				k_spin_unlock(&g_lock, key);
@@ -647,7 +672,8 @@ void recovery_work_fn(struct k_work *work)
 		}
 	}
 
-	/* ── Stage 4: Coordinated reset with 100 ms timeout ────── */
+	/* ── Stage 4: Coordinated reset with 100 ms timeout ──────
+	 * Epoch generated here; committed under lock at transition_active. */
 	{
 		uint32_t epoch = k_cycle_get_32();
 		if (epoch == 0) {
@@ -661,11 +687,11 @@ void recovery_work_fn(struct k_work *work)
 			goto recovery_retry;
 		}
 
-		/* Store the new epoch for transition. */
-		g_stream_epoch = epoch;
+		new_epoch = epoch;
 	}
 
-	/* ── Stage 5: Transition to ACTIVE ─────────────────────── */
+	/* ── Stage 5: Transition to ACTIVE ───────────────────────
+	 * g_stream_epoch committed under lock — never written outside lock. */
 transition_active: {
 	k_spinlock_key_t key = k_spin_lock(&g_lock);
 
@@ -675,6 +701,9 @@ transition_active: {
 		k_spin_unlock(&g_lock, key);
 		return;
 	}
+
+	/* Commit new epoch under lock. */
+	g_stream_epoch = new_epoch;
 
 	g_generation++;
 	g_status.epoch = g_stream_epoch;
@@ -714,10 +743,11 @@ recovery_retry: {
 		if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
 			g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
 		}
-		uint32_t delay_ms = g_recovery_backoff_ms;
+		/* Clear flag so authoritative helper will set it again. */
 		g_recovery_scheduled = false;
 		k_spin_unlock(&g_lock, key);
-		schedule_recovery(delay_ms);
+		k_work_schedule_for_queue(&g_offload_wq, &g_recovery_work,
+					  K_MSEC(g_recovery_backoff_ms));
 	} else {
 		g_recovery_scheduled = false;
 		k_spin_unlock(&g_lock, key);
@@ -918,7 +948,6 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 	uint32_t captured_epoch;
 	enum audio_offload_state captured_state;
 	bool need_fallback = false;
-	uint32_t recovery_delay_ms;
 
 	/* ── Pre-check under spinlock ──────────────────────────────── */
 	{
@@ -966,12 +995,7 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 
 		g_status.busy_count++;
 		record_fault(NULL, -EBUSY, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
-
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
+		recovery_try_schedule_unlock(key);
 
 		return -EAGAIN;
 	}
@@ -1016,12 +1040,8 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 			return -EAGAIN;
 		}
 		record_fault(&g_status.full_count, -ENOSPC, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 	if (pr != FLPR_PRODUCE_OK) {
@@ -1033,12 +1053,8 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 			return -EAGAIN;
 		}
 		record_fault(NULL, -EIO, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 
@@ -1054,12 +1070,8 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 				return -EAGAIN;
 			}
 			record_fault(NULL, notify_ret, sequence);
-			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-			k_spin_unlock(&g_lock, key);
+			recovery_try_schedule_unlock(key);
 			k_mutex_unlock(&g_submit_lock);
-			if (sched) {
-				schedule_recovery(recovery_delay_ms);
-			}
 			return -EAGAIN;
 		}
 	}
@@ -1079,12 +1091,8 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 				return -EAGAIN;
 			}
 			record_fault(&g_status.timeout_count, -ETIMEDOUT, sequence);
-			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-			k_spin_unlock(&g_lock, key);
+			recovery_try_schedule_unlock(key);
 			k_mutex_unlock(&g_submit_lock);
-			if (sched) {
-				schedule_recovery(recovery_delay_ms);
-			}
 			return -EAGAIN;
 		}
 	}
@@ -1127,12 +1135,8 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 			return -EAGAIN;
 		}
 		record_fault(NULL, -ENOENT, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 	if (cr == FLPR_CONSUME_STALE) {
@@ -1144,12 +1148,8 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 			return -EAGAIN;
 		}
 		record_fault(&g_status.stale_count, -ESTALE, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 	if (cr != FLPR_CONSUME_OK) {
@@ -1161,12 +1161,8 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 			return -EAGAIN;
 		}
 		record_fault(NULL, -EIO, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 
@@ -1201,12 +1197,8 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 			return -EAGAIN;
 		}
 		record_fault(&g_status.frame_fault_count, -EFAULT, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 
@@ -1220,12 +1212,8 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 			return -EAGAIN;
 		}
 		record_fault(&g_status.seq_fault_count, -EFAULT, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 
@@ -1242,12 +1230,8 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 				return -EAGAIN;
 			}
 			record_fault(&g_status.crc_fault_count, -EFAULT, sequence);
-			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-			k_spin_unlock(&g_lock, key);
+			recovery_try_schedule_unlock(key);
 			k_mutex_unlock(&g_submit_lock);
-			if (sched) {
-				schedule_recovery(recovery_delay_ms);
-			}
 			return -EAGAIN;
 		}
 	}
@@ -1264,12 +1248,8 @@ int audio_offload_submit(const int16_t *input, size_t samples, uint32_t sequence
 				return -EAGAIN;
 			}
 			record_fault(&g_status.payload_fault_count, -EFAULT, sequence);
-			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-			k_spin_unlock(&g_lock, key);
+			recovery_try_schedule_unlock(key);
 			k_mutex_unlock(&g_submit_lock);
-			if (sched) {
-				schedule_recovery(recovery_delay_ms);
-			}
 			return -EAGAIN;
 		}
 	}
@@ -1408,7 +1388,6 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 	uint32_t captured_epoch;
 	enum audio_offload_state captured_state;
 	bool need_fallback = false;
-	uint32_t recovery_delay_ms;
 
 	/* ── Pre-check under spinlock ──────────────────────────────── */
 	{
@@ -1452,12 +1431,7 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 		g_asrc_stats.fallback_count++;
 		g_status.busy_count++;
 		record_fault(NULL, -EBUSY, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
-
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
+		recovery_try_schedule_unlock(key);
 
 		return -EAGAIN;
 	}
@@ -1498,12 +1472,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 		g_asrc_stats.fallback_count++;
 		g_asrc_stats.full_count++;
 		record_fault(&g_status.full_count, -ENOSPC, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 	if (pr != FLPR_PRODUCE_OK) {
@@ -1516,12 +1486,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 		}
 		g_asrc_stats.fallback_count++;
 		record_fault(NULL, -EIO, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 
@@ -1538,12 +1504,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 			}
 			g_asrc_stats.fallback_count++;
 			record_fault(NULL, notify_ret, sequence);
-			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-			k_spin_unlock(&g_lock, key);
+			recovery_try_schedule_unlock(key);
 			k_mutex_unlock(&g_submit_lock);
-			if (sched) {
-				schedule_recovery(recovery_delay_ms);
-			}
 			return -EAGAIN;
 		}
 	}
@@ -1562,12 +1524,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 			g_asrc_stats.fallback_count++;
 			g_asrc_stats.timeout_count++;
 			record_fault(&g_status.timeout_count, -ETIMEDOUT, sequence);
-			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-			k_spin_unlock(&g_lock, key);
+			recovery_try_schedule_unlock(key);
 			k_mutex_unlock(&g_submit_lock);
-			if (sched) {
-				schedule_recovery(recovery_delay_ms);
-			}
 			return -EAGAIN;
 		}
 	}
@@ -1605,12 +1563,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 		}
 		g_asrc_stats.fallback_count++;
 		record_fault(NULL, -ENOENT, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 	if (cresult == FLPR_CONSUME_STALE) {
@@ -1624,12 +1578,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 		g_asrc_stats.fallback_count++;
 		g_asrc_stats.stale_count++;
 		record_fault(&g_status.stale_count, -ESTALE, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 	if (cresult != FLPR_CONSUME_OK) {
@@ -1642,12 +1592,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 		}
 		g_asrc_stats.fallback_count++;
 		record_fault(NULL, -EIO, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 
@@ -1681,12 +1627,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 		}
 		g_asrc_stats.fallback_count++;
 		record_fault(NULL, cr.processing_status, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 
@@ -1702,12 +1644,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 		g_asrc_stats.fallback_count++;
 		g_asrc_stats.frame_fault_count++;
 		record_fault(&g_status.frame_fault_count, -EFAULT, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 
@@ -1722,12 +1660,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 		}
 		g_asrc_stats.fallback_count++;
 		record_fault(NULL, -EFAULT, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 
@@ -1744,12 +1678,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 			}
 			g_asrc_stats.fallback_count++;
 			record_fault(NULL, -EFAULT, sequence);
-			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-			k_spin_unlock(&g_lock, key);
+			recovery_try_schedule_unlock(key);
 			k_mutex_unlock(&g_submit_lock);
-			if (sched) {
-				schedule_recovery(recovery_delay_ms);
-			}
 			return -EAGAIN;
 		}
 	}
@@ -1766,12 +1696,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 		g_asrc_stats.fallback_count++;
 		g_asrc_stats.seq_fault_count++;
 		record_fault(&g_status.seq_fault_count, -EFAULT, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 
@@ -1786,12 +1712,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 		}
 		g_asrc_stats.fallback_count++;
 		record_fault(NULL, -EFAULT, sequence);
-		bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-		k_spin_unlock(&g_lock, key);
+		recovery_try_schedule_unlock(key);
 		k_mutex_unlock(&g_submit_lock);
-		if (sched) {
-			schedule_recovery(recovery_delay_ms);
-		}
 		return -EAGAIN;
 	}
 
@@ -1809,12 +1731,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 			g_asrc_stats.fallback_count++;
 			g_asrc_stats.state_fault_count++;
 			record_fault(NULL, -EFAULT, sequence);
-			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-			k_spin_unlock(&g_lock, key);
+			recovery_try_schedule_unlock(key);
 			k_mutex_unlock(&g_submit_lock);
-			if (sched) {
-				schedule_recovery(recovery_delay_ms);
-			}
 			return -EAGAIN;
 		}
 	}
@@ -1837,12 +1755,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 			g_asrc_stats.fallback_count++;
 			g_asrc_stats.state_fault_count++;
 			record_fault(NULL, -EFAULT, sequence);
-			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-			k_spin_unlock(&g_lock, key);
+			recovery_try_schedule_unlock(key);
 			k_mutex_unlock(&g_submit_lock);
-			if (sched) {
-				schedule_recovery(recovery_delay_ms);
-			}
 			return -EAGAIN;
 		}
 
@@ -1858,12 +1772,8 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 			g_asrc_stats.fallback_count++;
 			g_asrc_stats.state_fault_count++;
 			record_fault(NULL, -EFAULT, sequence);
-			bool sched = should_schedule_recovery_locked(&recovery_delay_ms);
-			k_spin_unlock(&g_lock, key);
+			recovery_try_schedule_unlock(key);
 			k_mutex_unlock(&g_submit_lock);
-			if (sched) {
-				schedule_recovery(recovery_delay_ms);
-			}
 			return -EAGAIN;
 		}
 	}
@@ -1936,12 +1846,8 @@ shadow_mismatch:
 			g_asrc_stats.fallback_count++;
 			g_asrc_stats.verify_fault_count++;
 			record_fault(NULL, -EFAULT, sequence);
-			bool should_sched = should_schedule_recovery_locked(&recovery_delay_ms);
-			k_spin_unlock(&g_lock, key);
+			recovery_try_schedule_unlock(key);
 			k_mutex_unlock(&g_submit_lock);
-			if (should_sched) {
-				schedule_recovery(recovery_delay_ms);
-			}
 			return -EAGAIN;
 		}
 shadow_pass:

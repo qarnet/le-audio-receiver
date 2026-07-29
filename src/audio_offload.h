@@ -80,11 +80,12 @@ struct audio_offload_status {
 	uint32_t busy_count;           /* mutex-timeout rejections */
 
 	/* Stage 4B: runtime restart + heartbeat supervisor */
-	uint32_t runtime_restart_count; /* times FLPR was runtime-restarted */
-	uint32_t runtime_restart_fail;  /* restart failures */
-	uint32_t runtime_restart_ms;    /* last restart duration */
-	uint32_t remote_epoch;          /* epoch after last remote restart */
-	uint32_t heartbeat_dedup_count; /* duplicate heartbeat→unhealthy skipped */
+	uint32_t runtime_restart_count;        /* times FLPR was runtime-restarted */
+	uint32_t runtime_restart_fail;         /* restart failures */
+	uint32_t runtime_restart_ms;           /* last restart duration */
+	uint32_t remote_epoch;                 /* epoch after last remote restart */
+	uint32_t heartbeat_dedup_count;        /* duplicate heartbeat→unhealthy skipped */
+	uint32_t recovery_schedule_fail_count; /* k_work_schedule_for_queue failures */
 
 	/* Latency (k_cycle_get_32 cycles). */
 	uint32_t rtt_min_cycles;

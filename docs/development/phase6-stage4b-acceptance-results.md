@@ -1,8 +1,10 @@
 # Phase 6 Stage 4B — Fault recovery acceptance results
 
+**Status: PARTIAL** (2026-07-29 review-fix — recovery state machine corrections, tests, counter verification done; omitted Mode B 180s and production shadow-n 300s gates pending hardware re-run)
+
 ## Date
 
-2026-07-29
+2026-07-29 (review-fix update — see `phase6-stage4b-review-fix-handoff.md`)
 
 ## Build targets
 

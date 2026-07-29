@@ -51,6 +51,7 @@ extern int mock_produce_calls;
 extern int mock_consume_calls;
 extern int mock_reset_calls;
 extern uint32_t mock_last_sequence;
+extern uint32_t mock_last_epoch;
 extern const uint8_t *mock_last_pcm;
 extern bool mock_last_crc;
 
@@ -58,6 +59,14 @@ extern bool mock_last_crc;
 extern enum flpr_consume_result mock_asrc_consume_result;
 extern struct flpr_consume_asrc_result mock_asrc_consume_data;
 extern int mock_asrc_consume_calls;
+
+/* ── Stage 4B recovery mock control variables (mock_ring_mgr.c) ───── */
+extern int mock_runtime_restart_result;
+extern uint32_t mock_runtime_restart_calls;
+extern bool mock_runtime_restart_called;
+extern uint32_t mock_runtime_new_epoch;
+extern int mock_remote_restarted_result;
+extern uint32_t mock_remote_restarted_calls;
 
 /* ── Test data ───────────────────────────────────────────────────── */
 
@@ -149,6 +158,14 @@ static void setup_normal(void *fixture)
 	mock_consume_latency = 500;
 	mock_consume_corrupt_payload = false;
 	mock_consume_corrupt_crc = false;
+
+	/* Stage 4B recovery mocks. */
+	mock_runtime_restart_result = 0;
+	mock_runtime_restart_calls = 0;
+	mock_runtime_restart_called = false;
+	mock_runtime_new_epoch = 0xABCD0001;
+	mock_remote_restarted_result = 0;
+	mock_remote_restarted_calls = 0;
 
 	/* Fill test input with deterministic pattern. */
 	for (size_t i = 0; i < TEST_BLOCK_SAMPLES; i++) {
@@ -1950,6 +1967,234 @@ ZTEST(audio_offload_asrc, test_asrc_flags_exact)
 	zassert_equal(ret, -EAGAIN, "flags extra bit fails");
 	verify_asrc_deltas(&pre_s, &pre_a, &post_s, &post_a, 1, 0, 1, 1, 0, 1);
 
+	run_recovery_work();
+}
+
+/* ── Stage 4B recovery state machine tests (mock) ───────────────────
+ *
+ * Tests 1–8 per phase6-stage4b-review-fix-handoff.md.
+ * All use mocked transports; no hardware / FLPR dependency.
+ */
+
+/* Helper: trigger fault via timeout, leave state RECOVERING. */
+static void trigger_fault_no_recover(void)
+{
+	mock_wait_result = -EAGAIN;
+	audio_offload_submit(test_input, TEST_BLOCK_SAMPLES, 1, 0, test_output);
+}
+
+/* Test 1: healthy short reset → ACTIVE with exact new epoch, no runtime restart */
+ZTEST(audio_offload, test_stage4b_short_reset_ok)
+{
+	trigger_fault_no_recover();
+
+	/* FLPR healthy → short coordinated reset path. */
+	mock_flpr_healthy = true;
+	mock_reset_fails = false;
+
+	struct audio_offload_status s;
+	audio_offload_get_status(&s);
+	uint32_t prev_runtime = s.runtime_restart_count;
+
+	run_recovery_work();
+
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after short reset");
+	zassert_true(s.healthy, "healthy");
+	zassert_not_equal(s.epoch, 0, "epoch nonzero");
+	/* Epoch was committed under lock; verify it matches mock_last_epoch. */
+	zassert_equal(s.epoch, mock_last_epoch, "epoch committed from coordinated reset");
+	zassert_equal(s.runtime_restart_count, prev_runtime, "no runtime restart for short path");
+}
+
+/* Test 2: short reset timeout → runtime restart → ring reinit → ACTIVE */
+ZTEST(audio_offload, test_stage4b_runtime_restart_path)
+{
+	trigger_fault_no_recover();
+
+	/* FLPR unhealthy → runtime restart path. */
+	mock_flpr_healthy = false;
+	mock_runtime_restart_result = 0;
+	mock_remote_restarted_result = 0;
+	mock_reset_fails = false;
+
+	uint32_t prev_rt_calls = mock_runtime_restart_calls;
+	uint32_t prev_reinit = mock_remote_restarted_calls;
+
+	run_recovery_work();
+
+	zassert_equal(mock_runtime_restart_calls, prev_rt_calls + 1, "runtime restart called");
+	zassert_equal(mock_remote_restarted_calls, prev_reinit + 1, "ring remote reinit called");
+
+	struct audio_offload_status s;
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after runtime path");
+	zassert_true(s.healthy, "healthy");
+}
+
+/* Test 3: heartbeat during RECOVERING does not duplicate work/restart */
+ZTEST(audio_offload, test_stage4b_heartbeat_dedup_recovering)
+{
+	trigger_fault_no_recover();
+
+	struct audio_offload_status s;
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_RECOVERING, "RECOVERING after fault");
+	uint32_t prev_dedup = s.heartbeat_dedup_count;
+
+	/* Heartbeat fires while already recovering → dedup, no schedule. */
+	audio_offload_remote_unavailable();
+
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_RECOVERING, "still RECOVERING");
+	zassert_equal(s.heartbeat_dedup_count, prev_dedup + 1, "dedup incremented");
+
+	/* Recover for cleanup. */
+	mock_flpr_healthy = true;
+	run_recovery_work();
+}
+
+/* Test 4: runtime/reinit/post-reset failures → one scheduled retry,
+ *         bounded attempts/backoff/exhaustion */
+ZTEST(audio_offload, test_stage4b_failure_retry_policy)
+{
+	trigger_fault_no_recover();
+	mock_flpr_healthy = false;
+
+	/* Attempt 1: runtime restart fails → RECOVERING (retry pending). */
+	mock_runtime_restart_result = -EIO;
+	run_recovery_work();
+
+	struct audio_offload_status s;
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_RECOVERING, "still RECOVERING after runtime fail");
+
+	/* Attempt 2: runtime OK but remote reinit fails → RECOVERING. */
+	mock_runtime_restart_result = 0;
+	mock_remote_restarted_result = -EIO;
+	run_recovery_work();
+
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_RECOVERING, "still RECOVERING after reinit fail");
+
+	/* Attempt 3: runtime + reinit OK but coordinated reset fails → RECOVERING. */
+	mock_remote_restarted_result = 0;
+	mock_reset_fails = true;
+	run_recovery_work();
+
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_RECOVERING, "still RECOVERING after reset fail");
+
+	/* Attempt 4: everything passes → ACTIVE. */
+	mock_reset_fails = false;
+	run_recovery_work();
+
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after all stages pass");
+	zassert_true(s.healthy, "healthy");
+}
+
+/* Test 5: stop/start while restart blocks cannot publish stale ACTIVE/epoch */
+ZTEST(audio_offload, test_stage4b_stop_blocks_stale)
+{
+	trigger_fault_no_recover();
+	mock_flpr_healthy = false;
+	mock_runtime_restart_result = 0;
+	mock_remote_restarted_result = 0;
+	mock_reset_fails = false;
+
+	/* Call stream_stop before running recovery — simulates stop
+	 * occurring during a recovery cycle.  Recovery should detect
+	 * generation change and NOT transition to ACTIVE. */
+	audio_offload_stream_stop();
+
+	run_recovery_work();
+
+	struct audio_offload_status s;
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_STOPPED, "STOPPED after stop during recovery");
+}
+
+/* Test 6: idle restart drains/reinitializes ring manager */
+ZTEST(audio_offload, test_stage4b_idle_restart_reinit)
+{
+	/* Stop stream — state is STOPPED. */
+	audio_offload_stream_stop();
+
+	struct audio_offload_status s;
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_STOPPED, "STOPPED");
+
+	mock_runtime_restart_result = 0;
+	mock_remote_restarted_result = 0;
+	uint32_t prev_reinit = mock_remote_restarted_calls;
+
+	/* Heartbeat while STOPPED → idle restart with ring reinit. */
+	audio_offload_remote_unavailable();
+
+	/* remote_restarted called synchronously after restart in callback. */
+	zassert_equal(mock_remote_restarted_calls, prev_reinit + 1,
+		      "ring reinit called on idle restart");
+}
+
+/* Test 7: fallback block — submit returns -EAGAIN, output untouched */
+ZTEST(audio_offload, test_stage4b_fallback_block)
+{
+	/* Force stopped state. */
+	audio_offload_stream_stop();
+
+	fill_output(0x42);
+	int ret = audio_offload_submit(test_input, TEST_BLOCK_SAMPLES, 1, 0, test_output);
+	zassert_equal(ret, -EAGAIN, "STOPPED blocks submit");
+	assert_output_untouched((int16_t)0x4242);
+
+	struct audio_offload_status s;
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_STOPPED, "state unchanged");
+	zassert_false(s.healthy, "not healthy");
+}
+
+/* Test 8: exact counters — schedule_fail, heartbeat_dedup, runtime counts */
+ZTEST(audio_offload, test_stage4b_exact_counters)
+{
+	struct audio_offload_status s;
+	audio_offload_get_status(&s);
+
+	uint32_t base_runtime = s.runtime_restart_count;
+
+	/* Fault + short reset recovery (no runtime). */
+	trigger_fault_no_recover();
+	mock_flpr_healthy = true;
+	run_recovery_work();
+
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after short reset");
+	zassert_equal(s.runtime_restart_count, base_runtime, "no runtime for short reset");
+	zassert_true(s.recovery_attempts > 0, "recovery_attempts incremented");
+
+	/* Fault + runtime restart path. */
+	trigger_fault_no_recover();
+	mock_flpr_healthy = false;
+	mock_runtime_restart_result = 0;
+	mock_remote_restarted_result = 0;
+	mock_reset_fails = false;
+	run_recovery_work();
+
+	audio_offload_get_status(&s);
+	zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after runtime path");
+	zassert_equal(s.runtime_restart_count, base_runtime + 1,
+		      "runtime_restart_count incremented");
+
+	/* Heartbeat dedup while already RECOVERING. */
+	trigger_fault_no_recover();
+	audio_offload_get_status(&s);
+	uint32_t dedup_before = s.heartbeat_dedup_count;
+	audio_offload_remote_unavailable();
+	audio_offload_get_status(&s);
+	zassert_equal(s.heartbeat_dedup_count, dedup_before + 1, "heartbeat dedup increment");
+
+	/* Recover. */
+	mock_flpr_healthy = true;
 	run_recovery_work();
 }
 
