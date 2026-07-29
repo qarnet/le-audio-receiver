@@ -200,8 +200,15 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
      Hardware: Mode A 120 s + Mode B 120 s at 100 fps, zero faults.
      See `docs/development/phase6-stage5-optimize-close-handoff.md`.
   6. **BabbleSim** — cross-cutting verification track (research + implementation).
-    Provision environment, fix sysbuild/harness, build smallest-useful
-    nRF5340bsim dual-core scenario. See `docs/design.md` BabbleSim section.
+     Provision environment, fix sysbuild/harness, build smallest-useful
+     nRF5340bsim dual-core scenario. See `docs/design.md` BabbleSim section.
+  7. **BabbleSim Stage 1** — ACCEPTED (2026-07-29). Receiver + custom
+     valid-LC3 client (48_4_1 preset, real LC3 encode/decode), dual-core
+     nRF5340bsim sysbuild. Two consecutive runs, all three processes
+     (receiver/client/PHY) exit 0. Receiver: 100 decoded pushes,
+     nonzero=1 errors=9 malformed=0 after_stop=0. Client: 103 successful
+     sends (>= 100). Reproduction: `bash scripts/bsim-stage1-run.sh`.
+     See `docs/development/bsim-stage1-valid-lc3-handoff.md`.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 

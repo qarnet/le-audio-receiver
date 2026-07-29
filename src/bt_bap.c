@@ -769,6 +769,9 @@ int bt_bap_init(void)
 	const struct bt_pacs_register_param pacs_param = {
 		.snk_pac = true,
 		.snk_loc = true,
+#if defined(CONFIG_REGISTER_SRC_PAC)
+		.src_pac = true,
+#endif
 	};
 	static struct bt_bap_unicast_server_register_param param = {
 		CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT, CONFIG_BT_ASCS_MAX_ASE_SRC_COUNT};
