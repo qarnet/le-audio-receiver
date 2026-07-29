@@ -180,6 +180,32 @@ to this machine). No code changes affect nRF5340 — all Stage 4B code is `#ifde
 | `src/audio_shell.c` | `flpr hang`, offload runtime stats, shell restart guard |
 | `scripts/flpr_hang_gate.py` | Automated hang gate runner (Mode A/B, any duration)
 
+## Phase 6 final regression (Stage 5 close, 2026-07-29)
+
+Commit `e36a629` (`feat(offload): Phase 6 Stage 5 — remove dead identity API, migrate tests to ASRC`).
+Production build: `CONFIG_AUDIO_OFFLOAD_ASRC_VERIFY` unset (confirmed via resolved `.config`).
+One gate run: `flpr_hang_gate.py --duration 180`, Mode A mono, normal BlueZ discovery.
+
+**All 16 checks pass:**
+```
+[gate] RESULT: PASSED
+[gate] bap_central: Done: 18000 frames in 180.00 s (100.0 fps)
+[gate] Injection → ACK: 150 ms, Injection → ACTIVE: 851 ms
+Final: submit=18030 success=17985 fallback=45
+Faults: timeout=1 crc=0 seq=0 frame=0
+Recovery: attempts=1 fail=0 exhaustion=0 relapses=0
+Probation: cleared=1 active=0
+Runtime: restarts=1 fails=0
+ASRC: verify=0 state=0 crc=0 seq=0 frame=0
+```
+
+Criteria: 18000/180s/100fps exact, FAULT_HANG_ACK received, exactly one runtime
+restart, fallback=45, ACTIVE during stream, probation cleared, resumed success
+to end, zero integrity/audio/exhaustion/duplicate faults.
+
+**Phase 6 CLOSED — PASS.** No code edits, no config changes, no mass erase.
+Full evidence in `docs/development/phase6-stage5-results.md`.
+
 ## Known gaps
 
 - nRF5340 doesn't have FLPR, confirms build-only
