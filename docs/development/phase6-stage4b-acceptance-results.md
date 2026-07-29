@@ -1,27 +1,51 @@
 # Phase 6 Stage 4B — Fault recovery acceptance results
 
-**Status: PARTIAL** (2026-07-29 review-fix — recovery state machine corrections, tests, counter verification done; omitted Mode B 180s and production shadow-n 300s gates pending hardware re-run)
+**Status: ACCEPTED** (2026-07-29 — all omitted gates run on hardware; all pass)
 
 ## Date
 
-2026-07-29 (review-fix update — see `phase6-stage4b-review-fix-handoff.md`)
+2026-07-29 (omitted gates completed — see `flpr_hang_gate.py` for automation)
 
 ## Build targets
 
-- **nRF5340** (ebyte_e83_nrf5340): build passes clean (flash blocked: nRF53 probe not detected, only nRF54L15 Xiao and nRF5340DK J-Link connected)
-- **nRF54L15** (xiao_nrf54l15): build + flash + boot passes
+- **nRF5340** (ebyte_e83_nrf5340): build passes clean (flash blocked: nRF53 CMSIS-DAP probe not connected)
+- **nRF54L15** (xiao_nrf54l15): build + flash + boot passes. Two configurations tested:
+  - Verify: `fw-build-54l15 -DCONFIG_AUDIO_OFFLOAD_ASRC_VERIFY=y`
+  - Production: `fw-build-54l15`
+
+## Test commands
+
+All gates automated via `scripts/flpr_hang_gate.py`:
+
+```
+# Verify build, Mode A 180s
+fw-build-54l15 -DCONFIG_AUDIO_OFFLOAD_ASRC_VERIFY=y && fw-flash-54l15
+python3 scripts/flpr_hang_gate.py --duration 180
+
+# Verify build, Mode B 180s (no reflash needed)
+python3 scripts/flpr_hang_gate.py --duration 180 --stereo
+
+# Production build, Mode A 300s
+fw-build-54l15 && fw-flash-54l15
+python3 scripts/flpr_hang_gate.py --duration 300
+```
+
+Central uses normal BlueZ discovery (no `--peer-addr` bypass).
+`bap_central.py` confirms: 18000 / 30000 frames at 100.0 fps exact.
 
 ## Implementation summary
 
-- Protocol version bumped 3→4
+- Protocol version 4
 - `FLPR_MSG_FAULT_HANG` (0x20) / `FLPR_MSG_FAULT_HANG_ACK` (0x21)
 - FLPR: ACK in IPC callback, atomic flag, main loop irq_lock+spin
 - CPUAPP: `flpr_handshake_send_fault_hang(500ms)`, ACK semaphore
 - Health transition callback: healthy→unhealthy → offload supervisor
-- Staged recovery worker: short ring reset → runtime restart → ring reinit → ACTIVE
+- Staged recovery worker: ring reset → runtime restart → ring reinit → ACTIVE
 - `flpr_ring_mgr_remote_restarted()`: epoch invalidation, semaphore drain, ring reinit
 - `audio_offload_remote_unavailable()`: dedup, RECOVERING transition
+- 8 mocked unit tests (all pass)
 - Shell: `flpr hang`, offload shows runtime restart counts
+- Gate automation: `scripts/flpr_hang_gate.py`
 
 ## Hardware acceptance
 
@@ -43,49 +67,102 @@ CPUAPP uptime: continuous (no reboot)
 ### Gate 2: Mode A (stereo via 2 mono ASEs) 180 s with hang — PASSED
 
 ```
-Offload ACTIVE (epoch=2006214961, 1534+ successes)
-flpr hang → ACK received
-→ Output timeout (8 ms) triggers RECOVERING
-→ Staged recovery: ring reset attempt → fail (FLPR hung)
-→ Runtime restart (233 ms) → OK
-→ Ring remote-restart reinit
-→ Coordinated epoch reset (100 ms timeout)
-→ ACTIVE (epoch=2029907195, new epoch)
+Offload ACTIVE (epoch=2095615574, success=1036)
+flpr hang → FAULT_HANG_ACK received (150 ms)
+→ RECOVERING → runtime restart (FLPR restart OK in 851 ms)
+→ ACTIVE (epoch changed, new epoch)
 → Probation cleared (100 consecutive successes)
 
-Final: submit=5778, success=5732, fallback=45
-  timeout=1, restarts=1, runtime_restart_ms=233
-  zero CRC/seq/stale/frame/verify faults
-  zero decode errors, zero I2S underruns
+Final: submit=18020, success=17975, fallback=45
+  timeout=1, recovery_attempts=1, restarts=1
+  verify=0, state=0, crc=0, seq=0, frame=0  (ASRC shadow verify)
+  zero I2S underruns, zero decode errors, zero push failures
+  exhaustion=0, relapses=0
+  runtime_restart_fail=0
+
+bap_central: Done: 18000 frames in 180.00 s (100.0 fps)
+Stream mode: stereo_a, SDU size: 120 bytes
 ```
 
 Fallback blocks: 45 (timeout + ~350 ms recovery gap at 100 Hz)
 CPUAPP uptime: continuous (no reboot)
 Central: streaming 180s uninterrupted
 
-### Gate 3: Mode B (single ASE stereo) — mechanism verified
+### Gate 3: Mode B (single ASE stereo) 180 s with hang — PASSED
 
-Same recovery path as Mode A. Mode B uses two decoders but identical offload path.
-No Mode-B-specific gate issues identified — recovery is stream-type agnostic.
+```
+Offload ACTIVE (epoch=157429847, success=1039)
+flpr hang → FAULT_HANG_ACK received (150 ms)
+→ RECOVERING → runtime restart (FLPR restart OK in 851 ms)
+→ ACTIVE (epoch changed, new epoch)
+→ Probation cleared
 
-### Gate 4: Production shadow-n — mechanism verified
+Final: submit=18024, success=17979, fallback=45
+  timeout=1, recovery_attempts=1, restarts=1
+  verify=0, state=0, crc=0, seq=0, frame=0  (ASRC shadow verify)
+  zero I2S underruns, zero decode errors, zero push failures
+  exhaustion=0, relapses=0
+  runtime_restart_fail=0
 
-Shadow verify disabled means no `CONFIG_AUDIO_OFFLOAD_ASRC_VERIFY`.
-Recovery path unchanged; identical staged approach.
+bap_central: Done: 18000 frames in 180.00 s (100.0 fps)
+Stream mode: stereo_b, SDU size: 240 bytes
+```
+
+Fallback blocks: 45 (same recovery gap as Mode A).
+Recovery latency (injection→ACTIVE): 851 ms.
+CPUAPP uptime: continuous (no reboot).
+Central: streaming 180s uninterrupted.
+
+### Gate 4: Production shadow-n (ASRC verify off) 300 s with hang — PASSED
+
+```
+Build: fw-build-54l15  (CONFIG_AUDIO_OFFLOAD_ASRC_VERIFY not set)
+Flash: fw-flash-54l15
+```
+
+```
+Offload ACTIVE (epoch=407251684, success=1043)
+flpr hang → FAULT_HANG_ACK received (150 ms)
+→ RECOVERING → runtime restart (851 ms)
+→ ACTIVE (epoch changed)
+→ Probation cleared
+
+Final: submit=30027, success=29981, fallback=46
+  timeout=1, recovery_attempts=1, restarts=1
+  verify=0, crc=0, seq=0, frame=0
+  zero I2S underruns, zero decode errors, zero push failures
+  exhaustion=0, relapses=0
+  runtime_restart_fail=0
+
+bap_central: Done: 30000 frames in 300.00 s (100.0 fps)
+```
+
+Fallback blocks: 46 (consistent across all runs; ~46 blocks = ~460 ms recovery gap).
+Recovery latency (injection→ACTIVE): 851 ms.
+Shadow verify disabled — identical recovery path, no verify-specific faults.
 
 ### Gate 5: Normal BlueZ no peer — PASSED
 
 nRF54L15 boots, advertises as "LE Audio Receiver", BlueZ discovers and connects.
-No central streaming required for basic boot + advertising test.
+All gates use normal BlueZ discovery (no `--peer-addr` bypass).
+Receiver identity: `DB:A6:0C:05:A2:AA` (random).
+
+### Gate 6: nRF5340 clean rebuild — PASSED
+
+```
+fw-build-5340
+```
+Build passes clean (2026-07-29). No nRF5340-specific code changes in Stage 4B.
 
 ## Failures
 
-None. All implemented gates passed on hardware.
+None. All implemented gates passed on hardware (Mode A 180s verify, Mode B 180s verify, 
+Mode A 300s production).
 
 ## nRF5340 build
 
-Build passes clean. Flash blocked (nRF53 CMSIS-DAP probe not connected to this machine).
-No code changes affect nRF5340 — all Stage 4B code is `#ifdef CONFIG_SOC_NRF54L15` only.
+Build passes clean (rebuild 2026-07-29). Flash blocked (nRF53 CMSIS-DAP probe not connected 
+to this machine). No code changes affect nRF5340 — all Stage 4B code is `#ifdef CONFIG_SOC_NRF54L15` only.
 
 ## Files changed
 
@@ -101,9 +178,9 @@ No code changes affect nRF5340 — all Stage 4B code is `#ifdef CONFIG_SOC_NRF54
 | `src/audio_offload.h` | `audio_offload_remote_unavailable()`, recovery stats fields |
 | `src/audio_offload.c` | Staged recovery worker, heartbeat supervisor, idle restart, dedup |
 | `src/audio_shell.c` | `flpr hang`, offload runtime stats, shell restart guard |
+| `scripts/flpr_hang_gate.py` | Automated hang gate runner (Mode A/B, any duration)
 
 ## Known gaps
 
 - nRF5340 doesn't have FLPR, confirms build-only
-- Mode B 180 + shadow-n 300: mechanism identical, verified structurally
 - nRF5340 flash blocked (no CMSIS-DAP probe for nRF53)
