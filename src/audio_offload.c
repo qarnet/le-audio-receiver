@@ -68,6 +68,7 @@ LOG_MODULE_REGISTER(audio_offload, LOG_LEVEL_INF);
 #include "flpr_ring.h"
 #include "flpr_ring_mgr.h"
 #include "flpr_handshake.h"
+#include "flpr_runtime.h"
 
 /* Synchronous wait deadline.
  * Stage 1 measured max RTT ~5.3 ms → 8 ms leaves 2.7 ms margin.
@@ -150,6 +151,14 @@ static uint32_t g_recovery_tries;
 
 static bool g_probation_active;
 static uint32_t g_probation_success;
+
+/* Stage 4B: runtime restart + heartbeat supervisor state */
+static uint32_t g_runtime_restart_count;
+static uint32_t g_runtime_restart_fail;
+static uint32_t g_runtime_restart_ms;
+static uint32_t g_remote_epoch;
+static uint32_t g_heartbeat_dedup_count;
+static bool g_recovery_scheduled; /* prevent duplicate recovery scheduling */
 
 /* ── Stage 3B: ASRC offload state ────────────────────────────── */
 
@@ -281,6 +290,73 @@ static void schedule_recovery(uint32_t delay_ms)
 static void schedule_prep(k_timeout_t delay)
 {
 	k_work_schedule_for_queue(&g_offload_wq, &g_prep_work, delay);
+}
+
+/* ── Heartbeat supervisor (Stage 4B) ───────────────────────────────
+ * Invoked from flpr_handshake heartbeat work context (outside spinlock)
+ * on healthy→unhealthy transition.  Dedup: only fires once per transition
+ * episode.  The first timeout (8ms output deadline) normally detects a
+ * live hang before the 5 s heartbeat threshold, so the state is already
+ * RECOVERING when this fires — skip duplicate scheduling.
+ *
+ * If offload is STOPPED, FLPR crash is treated as idle restart.
+ */
+
+static void offload_health_transition_cb(void *user_data)
+{
+	(void)user_data;
+
+	k_spinlock_key_t key = k_spin_lock(&g_lock);
+
+	switch (g_state) {
+	case AUDIO_OFFLOAD_ACTIVE:
+	case AUDIO_OFFLOAD_PREPARING:
+		/* Active or preparing — transition to RECOVERING and schedule. */
+		if (g_state != AUDIO_OFFLOAD_RECOVERING) {
+			g_state = AUDIO_OFFLOAD_RECOVERING;
+			g_status.state = g_state;
+			g_status.healthy = false;
+			LOG_WRN("offload: heartbeat supervisor → RECOVERING");
+		} else {
+			/* Already recovering (output timeout got here first) — dedup. */
+			g_heartbeat_dedup_count++;
+			g_status.heartbeat_dedup_count = g_heartbeat_dedup_count;
+		}
+		break;
+	case AUDIO_OFFLOAD_RECOVERING:
+		/* Already in recovery — dedup, do not schedule second restart. */
+		g_heartbeat_dedup_count++;
+		g_status.heartbeat_dedup_count = g_heartbeat_dedup_count;
+		k_spin_unlock(&g_lock, key);
+		return; /* no schedule */
+	case AUDIO_OFFLOAD_STOPPED:
+		/* Stopped: FLPR hung while idle — restart directly.
+		 * Blocks heartbeat work (~300ms) — acceptable for rare fault. */
+		LOG_WRN("offload: heartbeat supervisor → idle restart");
+		k_spin_unlock(&g_lock, key);
+		(void)flpr_runtime_restart(1500);
+		return;
+	case AUDIO_OFFLOAD_FALLBACK:
+		/* Stopped/fallback — do nothing, no stream to recover. */
+		k_spin_unlock(&g_lock, key);
+		return;
+	}
+
+	/* Schedule recovery if not already scheduled. */
+	bool should_sched = !g_recovery_scheduled;
+	if (should_sched) {
+		g_recovery_scheduled = true;
+	}
+	k_spin_unlock(&g_lock, key);
+
+	if (should_sched) {
+		schedule_recovery(OFFLOAD_RECOVERY_BASE_MS);
+	}
+}
+
+void audio_offload_remote_unavailable(void)
+{
+	offload_health_transition_cb(NULL);
 }
 
 /* ── Prep work ──────────────────────────────────────────────────────
@@ -432,18 +508,25 @@ prep_retry: {
 }
 }
 
-/* ── Recovery work ─────────────────────────────────────────────────
+/* ── Recovery work (Stage 4B: staged approach) ─────────────────────
  * Runs on dedicated offload work queue — NEVER in BT callback.
- * Confirms FLPR healthy, performs coordinated epoch reset, then
- * re-enables offload.  On failure, schedules retry with backoff.
  *
- * Recovery does NOT clear fault/fallback/RTT evidence. */
+ * Staged algorithm:
+ *   1. If handshake healthy, try coordinated ring reset with 100 ms ACK timeout.
+ *   2. On unhealthy handshake or reset timeout/error, call runtime restart with
+ *      1500 ms bound/READY budget.
+ *   3. After restart success: ring remote-restart reinit, then coordinated reset
+ *      with 100 ms timeout.
+ *   4. Transition ACTIVE + probation only after all steps pass.
+ *   5. Existing cumulative five-attempt/backoff/exhaustion policy remains.
+ */
 
 void recovery_work_fn(struct k_work *work)
 {
 	(void)work;
 
 	uint32_t start_gen;
+	bool tried_runtime = false;
 
 	/* ── Entry: check state + capture generation ──────────── */
 	{
@@ -451,16 +534,14 @@ void recovery_work_fn(struct k_work *work)
 
 		/* State may have changed while work was queued. */
 		if (g_state != AUDIO_OFFLOAD_RECOVERING) {
+			g_recovery_scheduled = false;
 			k_spin_unlock(&g_lock, key);
 			return;
 		}
 		start_gen = g_generation;
 
 		/* Bump tries BEFORE the check — each recovery cycle
-		 * consumes one attempt.  This prevents the recovery storm:
-		 * successful recovery no longer resets tries to 0, so
-		 * repeated fault→recover→fault cycles eventually exhaust
-		 * the budget and enter FALLBACK. */
+		 * consumes one attempt. */
 		g_recovery_tries++;
 
 		if (g_recovery_tries > OFFLOAD_RECOVERY_MAX_TRIES) {
@@ -470,6 +551,7 @@ void recovery_work_fn(struct k_work *work)
 			g_status.recovery_fail_count++;
 			g_state = AUDIO_OFFLOAD_FALLBACK;
 			g_status.state = g_state;
+			g_recovery_scheduled = false;
 			k_spin_unlock(&g_lock, key);
 			return;
 		}
@@ -477,95 +559,170 @@ void recovery_work_fn(struct k_work *work)
 		k_spin_unlock(&g_lock, key);
 	}
 
-	/* ── Step 1: Confirm FLPR is healthy ──────────────────── */
-	if (!check_flpr_healthy()) {
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-		if (g_state == AUDIO_OFFLOAD_RECOVERING && g_generation == start_gen) {
-			/* tries already bumped at entry — escalate backoff for
-			 * within-cycle retry delay. */
-			g_recovery_backoff_ms *= 2U;
-			if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
-				g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
-			}
-			uint32_t delay_ms = g_recovery_backoff_ms;
-			LOG_WRN("offload recovery: FLPR not healthy, retry in %u ms", delay_ms);
-			k_spin_unlock(&g_lock, key);
-			schedule_recovery(delay_ms);
-		} else {
-			k_spin_unlock(&g_lock, key);
-		}
-		return;
-	}
-
-	/* ── Step 2: Coordinated new epoch reset ──────────────── */
-	uint32_t new_epoch = k_cycle_get_32();
-	if (new_epoch == 0) {
-		new_epoch = 1;
-	}
-	new_epoch &= 0x7FFFFFFFU;
-
-	int ret = flpr_ring_mgr_coordinated_reset(new_epoch, 5000);
-	if (ret < 0) {
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
-		if (g_state == AUDIO_OFFLOAD_RECOVERING && g_generation == start_gen) {
-			/* tries already bumped at entry — escalate backoff for
-			 * within-cycle retry delay. */
-			g_recovery_backoff_ms *= 2U;
-			if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
-				g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
-			}
-			uint32_t delay_ms = g_recovery_backoff_ms;
-			LOG_WRN("offload recovery: coordinated reset failed: %d, retry in %u ms",
-				ret, delay_ms);
-			k_spin_unlock(&g_lock, key);
-			schedule_recovery(delay_ms);
-		} else {
-			k_spin_unlock(&g_lock, key);
-		}
-		return;
-	}
-
-	/* ── Step 3: Transition to ACTIVE ─────────────────────── */
+	/* ── Stage 1: Try coordinated ring reset if healthy ───── */
 	{
-		k_spinlock_key_t key = k_spin_lock(&g_lock);
+		bool handshake_healthy = check_flpr_healthy();
 
-		/* Re-verify state + generation wasn't changed during IPC. */
-		if (g_state != AUDIO_OFFLOAD_RECOVERING || g_generation != start_gen) {
+		if (handshake_healthy) {
+			uint32_t epoch = k_cycle_get_32();
+			if (epoch == 0) {
+				epoch = 1;
+			}
+			epoch &= 0x7FFFFFFFU;
+
+			int ret = flpr_ring_mgr_coordinated_reset(epoch, 100);
+			if (ret == 0) {
+				/* Short ring reset succeeded — transition to ACTIVE. */
+				goto transition_active;
+			}
+
+			LOG_WRN("offload recovery: short ring reset failed (%d), "
+				"escalating to runtime restart",
+				ret);
+		} else {
+			LOG_WRN("offload recovery: handshake unhealthy, escalating to runtime "
+				"restart");
+		}
+	}
+
+	/* ── Stage 2: Runtime restart ──────────────────────────── */
+	{
+		/* Re-verify state + generation before runtime restart. */
+		{
+			k_spinlock_key_t key = k_spin_lock(&g_lock);
+			if (g_state != AUDIO_OFFLOAD_RECOVERING || g_generation != start_gen) {
+				g_recovery_scheduled = false;
+				k_spin_unlock(&g_lock, key);
+				return;
+			}
 			k_spin_unlock(&g_lock, key);
+		}
+
+		uint32_t restart_start = k_uptime_get_32();
+		int ret = flpr_runtime_restart(1500);
+
+		if (ret != 0) {
+			LOG_ERR("offload recovery: runtime restart failed: %d", ret);
+
+			k_spinlock_key_t key = k_spin_lock(&g_lock);
+			if (g_state == AUDIO_OFFLOAD_RECOVERING && g_generation == start_gen) {
+				g_runtime_restart_fail++;
+				g_status.runtime_restart_fail = g_runtime_restart_fail;
+				g_recovery_backoff_ms *= 2U;
+				if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
+					g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
+				}
+				uint32_t delay_ms = g_recovery_backoff_ms;
+				g_recovery_scheduled = false;
+				k_spin_unlock(&g_lock, key);
+				schedule_recovery(delay_ms);
+			} else {
+				g_recovery_scheduled = false;
+				k_spin_unlock(&g_lock, key);
+			}
 			return;
 		}
 
-		g_stream_epoch = new_epoch;
-		g_generation++;
-		g_status.epoch = new_epoch;
-		g_status.generation = g_generation;
-		g_status.recovery_attempts++;
-		g_status.healthy = true;
+		g_runtime_restart_ms = k_uptime_get_32() - restart_start;
+		tried_runtime = true;
 
-		/* Start probation window: faults during probation
-		 * escalate backoff (relapse counting).  After
-		 * PROBATION_SUCCESS_THRESHOLD consecutive successes
-		 * we clear the escalation state. */
-		g_probation_active = true;
-		g_probation_success = 0;
-		g_status.probation_active = true;
-		g_status.probation_success = 0;
+		/* Get new remote epoch from runtime restart status. */
+		{
+			struct flpr_runtime_status rs;
+			flpr_runtime_get_status(&rs);
+			g_remote_epoch = rs.new_epoch;
+			g_status.remote_epoch = g_remote_epoch;
+		}
 
-		/* Recovery NEVER resets per-stream fault/fallback/RTT counters.
-		 * Only new stream_start resets per-stream counters. */
-
-		/* Do NOT reset recovery_backoff_ms or recovery_tries here.
-		 * The escalation state persists across recovery cycles until
-		 * probation is cleared.  This prevents the recovery storm. */
-
-		g_state = AUDIO_OFFLOAD_ACTIVE;
-		g_status.state = g_state;
-
-		k_spin_unlock(&g_lock, key);
-
-		LOG_INF("offload recovery OK: epoch=%u gen=%u tries=%u backoff=%u ms", new_epoch,
-			g_generation, g_recovery_tries, g_recovery_backoff_ms);
+		LOG_INF("offload recovery: runtime restart OK in %u ms, epoch=%u",
+			g_runtime_restart_ms, g_remote_epoch);
 	}
+
+	/* ── Stage 3: Ring remote-restart reinit ──────────────── */
+	{
+		int ret = flpr_ring_mgr_remote_restarted();
+		if (ret != 0) {
+			LOG_ERR("offload recovery: ring remote restart failed: %d", ret);
+			goto recovery_retry;
+		}
+	}
+
+	/* ── Stage 4: Coordinated reset with 100 ms timeout ────── */
+	{
+		uint32_t epoch = k_cycle_get_32();
+		if (epoch == 0) {
+			epoch = 1;
+		}
+		epoch &= 0x7FFFFFFFU;
+
+		int ret = flpr_ring_mgr_coordinated_reset(epoch, 100);
+		if (ret != 0) {
+			LOG_ERR("offload recovery: post-restart ring reset failed: %d", ret);
+			goto recovery_retry;
+		}
+
+		/* Store the new epoch for transition. */
+		g_stream_epoch = epoch;
+	}
+
+	/* ── Stage 5: Transition to ACTIVE ─────────────────────── */
+transition_active: {
+	k_spinlock_key_t key = k_spin_lock(&g_lock);
+
+	/* Re-verify state + generation wasn't changed during IPC. */
+	if (g_state != AUDIO_OFFLOAD_RECOVERING || g_generation != start_gen) {
+		g_recovery_scheduled = false;
+		k_spin_unlock(&g_lock, key);
+		return;
+	}
+
+	g_generation++;
+	g_status.epoch = g_stream_epoch;
+	g_status.generation = g_generation;
+	g_status.recovery_attempts++;
+	g_status.healthy = true;
+
+	if (tried_runtime) {
+		g_runtime_restart_count++;
+		g_status.runtime_restart_count = g_runtime_restart_count;
+		g_status.runtime_restart_ms = g_runtime_restart_ms;
+	}
+
+	/* Start probation window. */
+	g_probation_active = true;
+	g_probation_success = 0;
+	g_status.probation_active = true;
+	g_status.probation_success = 0;
+
+	g_state = AUDIO_OFFLOAD_ACTIVE;
+	g_status.state = g_state;
+
+	g_recovery_scheduled = false;
+
+	k_spin_unlock(&g_lock, key);
+
+	LOG_INF("offload recovery OK: epoch=%u gen=%u tries=%u backoff=%u ms runtime=%u",
+		g_stream_epoch, g_generation, g_recovery_tries, g_recovery_backoff_ms,
+		tried_runtime ? 1U : 0U);
+}
+	return;
+
+recovery_retry: {
+	k_spinlock_key_t key = k_spin_lock(&g_lock);
+	if (g_state == AUDIO_OFFLOAD_RECOVERING && g_generation == start_gen) {
+		g_recovery_backoff_ms *= 2U;
+		if (g_recovery_backoff_ms > OFFLOAD_RECOVERY_MAX_MS) {
+			g_recovery_backoff_ms = OFFLOAD_RECOVERY_MAX_MS;
+		}
+		uint32_t delay_ms = g_recovery_backoff_ms;
+		g_recovery_scheduled = false;
+		k_spin_unlock(&g_lock, key);
+		schedule_recovery(delay_ms);
+	} else {
+		g_recovery_scheduled = false;
+		k_spin_unlock(&g_lock, key);
+	}
+}
 }
 
 /* ── Public API ──────────────────────────────────────────────────── */
@@ -612,6 +769,17 @@ int audio_offload_init(void)
 	g_probation_active = false;
 	g_probation_success = 0;
 
+	/* Stage 4B: recovery state */
+	g_runtime_restart_count = 0;
+	g_runtime_restart_fail = 0;
+	g_runtime_restart_ms = 0;
+	g_remote_epoch = 0;
+	g_heartbeat_dedup_count = 0;
+	g_recovery_scheduled = false;
+
+	/* Register heartbeat health transition callback. */
+	flpr_handshake_register_health_cb(offload_health_transition_cb, NULL);
+
 	return 0;
 }
 
@@ -654,6 +822,8 @@ void audio_offload_stream_start(void)
 	g_probation_success = 0;
 	g_status.probation_active = false;
 	g_status.probation_success = 0;
+
+	g_recovery_scheduled = false;
 
 	k_spin_unlock(&g_lock, key);
 
@@ -698,6 +868,8 @@ void audio_offload_stream_stop(void)
 	g_probation_success = 0;
 	g_status.probation_active = false;
 	g_status.probation_success = 0;
+
+	g_recovery_scheduled = false;
 
 	k_spin_unlock(&g_lock, key);
 
@@ -1186,6 +1358,14 @@ void audio_offload_get_status(struct audio_offload_status *status)
 	status->state = g_state;
 	status->probation_active = g_probation_active;
 	status->probation_success = g_probation_success;
+
+	/* Stage 4B: runtime restart + heartbeat supervisor */
+	status->runtime_restart_count = g_runtime_restart_count;
+	status->runtime_restart_fail = g_runtime_restart_fail;
+	status->runtime_restart_ms = g_runtime_restart_ms;
+	status->remote_epoch = g_remote_epoch;
+	status->heartbeat_dedup_count = g_heartbeat_dedup_count;
+
 	k_spin_unlock(&g_lock, key);
 }
 

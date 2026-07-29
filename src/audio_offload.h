@@ -79,6 +79,13 @@ struct audio_offload_status {
 	uint32_t probation_cleared;    /* times probation completed (100+ consecutive) */
 	uint32_t busy_count;           /* mutex-timeout rejections */
 
+	/* Stage 4B: runtime restart + heartbeat supervisor */
+	uint32_t runtime_restart_count; /* times FLPR was runtime-restarted */
+	uint32_t runtime_restart_fail;  /* restart failures */
+	uint32_t runtime_restart_ms;    /* last restart duration */
+	uint32_t remote_epoch;          /* epoch after last remote restart */
+	uint32_t heartbeat_dedup_count; /* duplicate heartbeat→unhealthy skipped */
+
 	/* Latency (k_cycle_get_32 cycles). */
 	uint32_t rtt_min_cycles;
 	uint32_t rtt_max_cycles;
@@ -121,6 +128,17 @@ void audio_offload_stream_start(void);
  * nRF5340: no-op.
  */
 void audio_offload_stream_stop(void);
+
+/**
+ * @brief Notify offload that FLPR has become unavailable (heartbeat lost).
+ *
+ * Called by heartbeat supervisor when healthy→unhealthy transition detected.
+ * Atomically transitions to RECOVERING (once only) and schedules recovery.
+ * Safe to call from work context — uses non-blocking schedule.
+ *
+ * If offload is already RECOVERING or STOPPED, this is a no-op (dedup).
+ */
+void audio_offload_remote_unavailable(void);
 
 /**
  * @brief Check whether the offload path is healthy.

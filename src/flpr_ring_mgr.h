@@ -312,6 +312,18 @@ int flpr_ring_mgr_produce_stale_test(uint32_t stale_epoch);
  */
 int flpr_ring_mgr_wait_consume(uint32_t timeout_ms);
 
+/**
+ * @brief Reinitialize rings after FLPR remote restart.
+ *
+ * Callable only while offload is RECOVERING/stopped — no active submit
+ * may race this call.  Invalidates local epoch, drains consumer/reset/stall
+ * semaphores, reinitializes shared headers and handlers after new READY.
+ * Must be followed by flpr_ring_mgr_coordinated_reset() with nonzero epoch.
+ *
+ * @return 0 on success, negative errno on failure.
+ */
+int flpr_ring_mgr_remote_restarted(void);
+
 /* ── Typed ASRC produce / consume ───────────────────────────────────
  *
  * Stage 3B: type-safe wrappers that embed struct audio_asrc_state into

@@ -863,6 +863,16 @@ static int cmd_offload_status(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "  Probation   : active=%u success=%u cleared=%u",
 		    (unsigned)s.probation_active, s.probation_success, s.probation_cleared);
 
+	/* Stage 4B: runtime restart + heartbeat supervisor */
+	if (s.runtime_restart_count > 0 || s.runtime_restart_fail > 0) {
+		shell_print(sh, "  Runtime     : restarts=%u fails=%u last_ms=%u remote_epoch=%u",
+			    s.runtime_restart_count, s.runtime_restart_fail, s.runtime_restart_ms,
+			    s.remote_epoch);
+	}
+	if (s.heartbeat_dedup_count > 0) {
+		shell_print(sh, "  HB dedup    : %u", s.heartbeat_dedup_count);
+	}
+
 	if (s.rtt_count > 0) {
 		uint32_t avg_cyc = (uint32_t)(s.rtt_sum_cycles / s.rtt_count);
 		shell_print(sh,
@@ -975,6 +985,15 @@ static int cmd_flpr_restart(const struct shell *sh, size_t argc, char **argv)
 		timeout_ms = (uint32_t)shell_strtoul(argv[1], 0, NULL);
 	}
 
+	/* Shell retains audio-active guard externally.
+	 * Do not restart FLPR while audio stream is active — the recovery
+	 * worker handles active-stream FLPR faults. */
+	if (audio_offload_is_healthy()) {
+		shell_error(sh, "Offload is ACTIVE — cannot restart FLPR. "
+				"Use 'flpr hang' to inject a fault and trigger auto-recovery.");
+		return -EBUSY;
+	}
+
 	shell_print(sh, "FLPR restart: requesting (timeout=%u ms)...", timeout_ms);
 
 	int ret = flpr_runtime_restart(timeout_ms);
@@ -985,6 +1004,35 @@ static int cmd_flpr_restart(const struct shell *sh, size_t argc, char **argv)
 			    s.previous_epoch, s.new_epoch, s.execution_crc, s.total_duration_ms);
 	} else {
 		shell_error(sh, "FLPR restart FAILED: %d", ret);
+	}
+
+	return ret;
+}
+
+/* flpr hang — inject FLPR hang (test-only, local-UART). */
+static int cmd_flpr_hang(const struct shell *sh, size_t argc, char **argv)
+{
+	(void)argc;
+	(void)argv;
+
+	/* Quick pre-check: FLPR must be ready and acked. */
+	struct flpr_status pre;
+	flpr_handshake_get_status(&pre);
+	if (!pre.ready || !pre.acked) {
+		shell_error(sh, "FLPR not ready/acked — hang rejected");
+		return -EAGAIN;
+	}
+
+	shell_print(sh, "Sending FAULT_HANG to FLPR (timeout 500ms)...");
+
+	int ret = flpr_handshake_send_fault_hang(500);
+	if (ret == 0) {
+		shell_print(sh, "FAULT_HANG_ACK received — FLPR hang imminent.");
+		shell_print(sh, "FLPR has disabled IRQs and is spinning forever.");
+		shell_print(sh, "Heartbeat will go unhealthy within 5 s.");
+		shell_print(sh, "Recovery will auto-trigger via heartbeat supervisor.");
+	} else {
+		shell_error(sh, "FAULT_HANG failed: %d (no ACK)", ret);
 	}
 
 	return ret;
@@ -1019,6 +1067,11 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
 		      cmd_flpr_runtime_status, 1, 0),
 	SHELL_CMD_ARG(restart, NULL, "Restart FLPR co-processor. [timeout_ms default 10000].",
 		      cmd_flpr_restart, 1, 1),
+	SHELL_CMD_ARG(hang, NULL,
+		      "Inject FLPR hang (test-only). Sends FAULT_HANG, waits 500ms for ACK. "
+		      "FLPR ACKs then disables IRQs and spins — halts ring+heartbeat. "
+		      "Recovery via heartbeat supervisor + runtime restart.",
+		      cmd_flpr_hang, 1, 0),
 	SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(flpr, &flpr_cmds, "FLPR co-processor commands.", NULL);

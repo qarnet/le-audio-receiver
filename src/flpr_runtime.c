@@ -53,7 +53,6 @@
 
 #include "flpr_handshake.h"
 #include "flpr_ring.h" /* for flpr_ring_crc32 */
-#include "audio_offload.h"
 
 #include <hal/nrf_vpr.h>
 
@@ -130,13 +129,6 @@ int flpr_runtime_restart(uint32_t timeout_ms)
 {
 	if (!g_initialized) {
 		return -ENODEV;
-	}
-
-	/* ── Guard: reject if offload stream active ─────────── */
-	if (audio_offload_is_healthy()) {
-		g_rt_status.busy_reject++;
-		LOG_WRN("FLPR restart rejected: offload stream active");
-		return -EBUSY;
 	}
 
 	/* ── Serialise via mutex ────────────────────────────── */

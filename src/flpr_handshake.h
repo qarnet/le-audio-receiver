@@ -158,6 +158,32 @@ void flpr_handshake_register_ring_handlers(flpr_handshake_ring_handler_t reset_a
 					   flpr_handshake_ring_handler_t stall_ack_fn,
 					   void *user_data);
 
+/**
+ * @brief Callback type for health transition (healthy → unhealthy).
+ * Invoked outside spinlock, from heartbeat work context.
+ * Only called on transition — not on every health poll.
+ */
+typedef void (*flpr_health_transition_cb_t)(void *user_data);
+
+/**
+ * @brief Register callback for healthy→unhealthy transitions.
+ * Called once per transition episode from heartbeat work context.
+ * Pass NULL to unregister.
+ */
+void flpr_handshake_register_health_cb(flpr_health_transition_cb_t cb, void *user_data);
+
+/**
+ * @brief Send a fault-hang request to FLPR and wait for ACK.
+ *
+ * Blocks up to @p timeout_ms for FAULT_HANG_ACK from FLPR.
+ * After ACK, FLPR disables interrupts and spins forever —
+ * ring and heartbeat stop, health transitions to unhealthy.
+ *
+ * @param timeout_ms  Maximum wait for ACK (typically 500 ms).
+ * @return 0 on ACK received, -ETIMEDOUT on timeout, -EIO on send failure.
+ */
+int flpr_handshake_send_fault_hang(uint32_t timeout_ms);
+
 #ifdef __cplusplus
 }
 #endif

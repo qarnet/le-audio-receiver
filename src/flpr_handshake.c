@@ -65,6 +65,16 @@ static flpr_handshake_ring_handler_t ring_report_fn;
 static flpr_handshake_ring_handler_t ring_stall_ack_fn;
 static void *ring_handler_user_data;
 
+/* ── Health transition callback ────────────────────────────────── */
+
+static flpr_health_transition_cb_t health_cb;
+static void *health_cb_user_data;
+
+/* ── Fault hang ACK ───────────────────────────────────────────── */
+
+static struct k_sem hang_ack_sem;
+static bool hang_ack_received;
+
 /* ── Helpers ────────────────────────────────────────────────────── */
 
 /* Send a message. Returns 0 on success, negative errno on failure.
@@ -87,12 +97,14 @@ static void hb_work_fn(struct k_work *work)
 	ARG_UNUSED(work);
 
 	bool should_send;
+	bool was_healthy;
 	uint16_t seq;
 
 	{
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 		should_send = flpr.acked && session_available;
 		seq = (uint16_t)(flpr.tx_seq & 0xFFFFU);
+		was_healthy = flpr.healthy;
 		k_spin_unlock(&flpr_lock, key);
 	}
 
@@ -112,11 +124,19 @@ static void hb_work_fn(struct k_work *work)
 
 		int ret = send_msg(&msg);
 		if (ret >= 0) {
+			bool now_unhealthy = false;
+
 			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 			flpr.tx_seq++;
 			/* Periodic health check of remote (FLPR) heartbeats. */
 			(void)flpr_peer_check_health(&flpr, now_ms);
+			now_unhealthy = !flpr.healthy;
 			k_spin_unlock(&flpr_lock, key);
+
+			/* Invoke health transition callback OUTSIDE lock. */
+			if (was_healthy && now_unhealthy && health_cb) {
+				health_cb(health_cb_user_data);
+			}
 		}
 		/* On send error: tx_seq not incremented, counted in err_send.
 		 * Back off to next interval — no busy retry. */
@@ -349,6 +369,12 @@ static void ep_received(const void *data, size_t len, void *priv)
 		}
 		break;
 
+	/* ── Stage 4B: fault hang ACK ───────────────────────── */
+	case FLPR_MSG_FAULT_HANG_ACK:
+		hang_ack_received = true;
+		k_sem_give(&hang_ack_sem);
+		break;
+
 	default: {
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 		flpr.err_unknown++;
@@ -383,6 +409,7 @@ int flpr_handshake_init(void)
 
 	k_work_init_delayable(&hb_work, hb_work_fn);
 	k_sem_init(&stress_sem, 0, FLPR_STRESS_MAX_COUNT + 1);
+	k_sem_init(&hang_ack_sem, 0, 1);
 
 	{
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
@@ -691,4 +718,53 @@ void flpr_handshake_register_ring_handlers(flpr_handshake_ring_handler_t reset_a
 	ring_handler_user_data = user_data;
 
 	k_spin_unlock(&flpr_lock, key);
+}
+
+/* ── Health transition callback registration ─────────────────────── */
+
+void flpr_handshake_register_health_cb(flpr_health_transition_cb_t cb, void *user_data)
+{
+	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+	health_cb = cb;
+	health_cb_user_data = user_data;
+	k_spin_unlock(&flpr_lock, key);
+}
+
+/* ── Fault hang injection ────────────────────────────────────────── */
+
+int flpr_handshake_send_fault_hang(uint32_t timeout_ms)
+{
+	/* Drain any stale semaphore give. */
+	while (k_sem_take(&hang_ack_sem, K_NO_WAIT) == 0) {
+	}
+	hang_ack_received = false;
+
+	struct flpr_msg hang_msg = {
+		.type = FLPR_MSG_FAULT_HANG,
+		.version = FLPR_PROTOCOL_VERSION,
+		.seq = 0,
+		.data = 0,
+	};
+	int ret = ipc_service_send(&flpr_ep, &hang_msg, sizeof(hang_msg));
+	if (ret < 0) {
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+		flpr.err_send++;
+		k_spin_unlock(&flpr_lock, key);
+		LOG_ERR("FAULT_HANG send failed: %d", ret);
+		return -EIO;
+	}
+
+	/* Wait for FAULT_HANG_ACK from FLPR. */
+	ret = k_sem_take(&hang_ack_sem, K_MSEC(timeout_ms));
+	if (ret != 0) {
+		LOG_WRN("FAULT_HANG_ACK timeout (%u ms)", timeout_ms);
+		return -ETIMEDOUT;
+	}
+
+	if (!hang_ack_received) {
+		return -EIO;
+	}
+
+	LOG_INF("FAULT_HANG_ACK received — FLPR hang imminent");
+	return 0;
 }

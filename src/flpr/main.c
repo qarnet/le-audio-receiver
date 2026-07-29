@@ -20,6 +20,7 @@
 #include <zephyr/ipc/ipc_service.h>
 #include <zephyr/sys/__assert.h>
 #include <zephyr/sys/atomic.h>
+#include <zephyr/irq.h>
 #include <string.h>
 
 #include "flpr_protocol.h"
@@ -89,6 +90,11 @@ static uint32_t ring_stream_epoch; /* current ring epoch after reset */
  * and kicks ring_wake_sem so queued input drains even without a later
  * producer notification. */
 static atomic_t stall_flags = ATOMIC_INIT(0);
+
+/* Fault hang: set by IPC callback on FAULT_HANG, checked by main loop.
+ * When true, main disables all interrupts and spins forever — halting
+ * ring processing, heartbeat, and all IPC activity after ACK was sent. */
+static atomic_t hang_pending = ATOMIC_INIT(0);
 
 static void stall_timer_expiry(struct k_timer *timer);
 
@@ -502,6 +508,25 @@ static void ep_received(const void *data, size_t len, void *priv)
 		break;
 	}
 
+	case FLPR_MSG_FAULT_HANG: {
+		/* Stage 4B: CPUAPP requests FLPR to hang.
+		 * 1. Send ACK immediately (from IPC callback, ISR context OK).
+		 * 2. Set atomic flag.
+		 * 3. Wake main loop — main loop sees flag, disables IRQs, spins.
+		 * After IRQ disable, no more heartbeats, no ring processing. */
+		struct flpr_msg ack = {
+			.type = FLPR_MSG_FAULT_HANG_ACK,
+			.version = FLPR_PROTOCOL_VERSION,
+			.seq = 0,
+			.data = 0,
+		};
+		(void)send_msg(&ack);
+
+		atomic_set(&hang_pending, 1);
+		k_sem_give(&ring_wake_sem);
+		break;
+	}
+
 	default:
 		cpuapp.err_unknown++;
 		break;
@@ -616,6 +641,19 @@ int main(void)
 		/* Wait for ring event (immediate via IPC callback) or
 		 * timeout (10 ms polling fallback). */
 		k_sem_take(&ring_wake_sem, K_MSEC(10));
+
+		/* Stage 4B: check fault hang flag.
+		 * ACK was already sent from IPC callback before setting this flag.
+		 * Disable all interrupts and spin forever — halts ring processing,
+		 * heartbeat transmission, and all further IPC activity. */
+		if (atomic_get(&hang_pending)) {
+			/* Brief busy-wait for ACK delivery to complete. */
+			k_busy_wait(1000);
+			irq_lock();
+			while (1) {
+				/* Nothing — spin forever. */
+			}
+		}
 
 		/* Process ALL pending input ring slots.
 		 * This is the ONLY place ring_process_input() runs —

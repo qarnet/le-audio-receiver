@@ -1002,6 +1002,99 @@ int flpr_ring_mgr_wait_consume(uint32_t timeout_ms)
 	return k_sem_take(&consume_sem, K_MSEC(timeout_ms));
 }
 
+/* ── Remote restart (Stage 4B) ──────────────────────────────────────
+ *
+ * Reinitialize rings after FLPR was reset by a remote restart.
+ * Callable only while offload is RECOVERING/stopped — no active submit
+ * may race this call.
+ *
+ * 1. Invalidate local epoch (ring_stream_epoch = 0).
+ * 2. Drain consumer/reset/stall semaphores.
+ * 3. Reinitialize shared headers and handlers (ring_init on both rings).
+ *
+ * Must be followed by flpr_ring_mgr_coordinated_reset() with nonzero epoch
+ * to establish the new stream epoch with the restarted FLPR.
+ */
+
+int flpr_ring_mgr_remote_restarted(void)
+{
+	/* Step 1: Invalidate local epoch.
+	 * Set ring_stream_epoch = 0 under lock so any notification arriving
+	 * between now and the next coordinated reset is rejected as stale. */
+	{
+		k_spinlock_key_t key = k_spin_lock(&ring_lock);
+		ring_stream_epoch = 0;
+		k_spin_unlock(&ring_lock, key);
+	}
+
+	/* Step 2: Drain consumer semaphore. */
+	{
+		uint32_t drained = 0;
+		while (k_sem_take(&consume_sem, K_NO_WAIT) == 0) {
+			drained++;
+		}
+		LOG_INF("ring remote restart: drained %u consume_sem tokens", drained);
+	}
+
+	/* Step 3: Drain reset ack semaphore. */
+	while (k_sem_take(&reset_ack_sem, K_NO_WAIT) == 0) {
+	}
+	reset_ack_received = false;
+	reset_ack_epoch = 0;
+
+	/* Step 4: Drain stall ack semaphore. */
+	while (k_sem_take(&stall_ack_sem, K_NO_WAIT) == 0) {
+	}
+	stall_ack_received = false;
+	stall_ack_data = 0;
+
+	/* Step 5: Reinitialize shared rings in shared memory.
+	 * The restarted FLPR already called ring_init on its side.
+	 * We re-init here so headers are consistent. */
+	flpr_ring_init(RING_INPUT_BASE, FLPR_RING_CPUAPP_TO_FLPR);
+	flpr_ring_init(RING_OUTPUT_BASE, FLPR_RING_FLPR_TO_CPUAPP);
+
+	/* Step 6: Reset test/diag counters and stall flag. */
+	{
+		k_spinlock_key_t key = k_spin_lock(&ring_lock);
+		diag_notify_sent = 0;
+		diag_notify_err = 0;
+		diag_sem_gives = 0;
+		diag_sem_takes = 0;
+		diag_stale_notify = 0;
+		diag_sem_drained = 0;
+		test_active = false;
+		test_blocks_sent = 0;
+		test_blocks_recv = 0;
+		test_crc_errors = 0;
+		test_payload_errors = 0;
+		test_seq_gaps = 0;
+		test_full_events = 0;
+		test_backpressure = 0;
+		test_empty_events = 0;
+		test_stale_events = 0;
+		test_flpr_blocks = 0;
+		test_flpr_crc_err = 0;
+		test_output_full = 0;
+		test_flpr_notify_rcv = 0;
+		test_flpr_worker_wake = 0;
+		test_flpr_consume_ok = 0;
+		test_flpr_consume_empty = 0;
+		test_flpr_consume_stale = 0;
+		test_flpr_produce_ok = 0;
+		test_flpr_produce_full = 0;
+		latency_min = UINT32_MAX;
+		latency_max = 0;
+		latency_sum = 0;
+		latency_count = 0;
+		stall_producer_enabled = false;
+		k_spin_unlock(&ring_lock, key);
+	}
+
+	LOG_INF("ring remote restart: reinitialized shared headers, epoch invalidated");
+	return 0;
+}
+
 /* ── Typed ASRC produce / consume ─────────────────────────────────── */
 
 enum flpr_produce_result flpr_ring_mgr_produce_asrc(const int16_t *pcm_data, uint16_t valid_frames,

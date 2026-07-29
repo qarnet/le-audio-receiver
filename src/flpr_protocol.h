@@ -25,7 +25,7 @@ extern "C" {
 
 /* ── Protocol version ──────────────────────────────────────────── */
 
-#define FLPR_PROTOCOL_VERSION 3U
+#define FLPR_PROTOCOL_VERSION 4U
 
 /* ── Message types ─────────────────────────────────────────────── */
 
@@ -48,6 +48,10 @@ extern "C" {
 /* Stage 1: stall controls */
 #define FLPR_MSG_RING_STALL     0x17U /* CPUAPP → FLPR: stall config (data: packed mask+duration) */
 #define FLPR_MSG_RING_STALL_ACK 0x18U /* FLPR → CPUAPP: stall config applied */
+
+/* Stage 4B: fault injection and hang recovery */
+#define FLPR_MSG_FAULT_HANG     0x20U /* CPUAPP → FLPR: request FLPR to hang (halt ring+heartbeat) */
+#define FLPR_MSG_FAULT_HANG_ACK 0x21U /* FLPR → CPUAPP: ACK received, hang imminent */
 
 /* ── Stall data packing (Stage 2) ───────────────────────────────────
  * data[7:0]   = stall mask (FLPR_STALL_CONSUMER_INPUT, etc.)
