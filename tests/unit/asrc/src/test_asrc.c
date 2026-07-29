@@ -388,7 +388,7 @@ ZTEST(asrc, test_capacity_overflow_state_unchanged)
 {
 	struct audio_asrc ctx;
 	size_t c, p;
-	int16_t ni, no, in[960], out[5];
+	int16_t ni, no, in[960], out[10];
 
 	memset(in, 0, sizeof(in));
 	zassert_equal(audio_asrc_init(&ctx, 48000, 47619), 0, "init");

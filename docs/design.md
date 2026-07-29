@@ -572,7 +572,7 @@ phase-design output, not frozen here):
   `consume_sample_adjustment()` path is already actuator-agnostic.
 - `tests/unit/asrc/` — new test suite.
 
-## Phase 6 — FLPR offload **(intended implementation work)**
+## Phase 6 — FLPR offload ✅ COMPLETE (2026-07-29)
 
 Phase 6 moves the accepted fixed-point ASRC from cpuapp to the nRF54L15
 FLPR (RISC-V VPR). Goal is implementation, not merely gated on

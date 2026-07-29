@@ -226,7 +226,7 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
    6. **BabbleSim** — cross-cutting verification track (research + implementation).
       Provision environment, fix sysbuild/harness, build smallest-useful
       nRF5340bsim dual-core scenario. See `docs/design.md` BabbleSim section.
-   7. **BabbleSim Stage 1** — ACCEPTED as regular local gate (2026-07-29).
+   7. ~~**BabbleSim Stage 1** — ACCEPTED as regular local gate (2026-07-29).~~
       Production cleanup: startup accounting moved to local sink-stub counters;
       audio_stats.h/.c restored to pre-BSim shape.  Sink-only scenario, strict
       PCM oracle, hash=0xFE0D4245 deterministic across runs.  Client ASE_SRC_COUNT=2
@@ -234,7 +234,8 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
       smoke remains PARTIAL.  Scope stops here: reconnect/Mode A/B/error injection
       duplicate hardware coverage under unmodeled I2S/FLPR.
       See `docs/development/bsim-stage1-results.md`.
-   8. **Phase 5 Final Gate (FLPR + cpuapp fallback)** — PENDING.
+   8. ~~**Phase 5 Final Gate (FLPR + cpuapp fallback)**~~ → COMPLETE (Phase 6 Stages 0–5).
+      All gates met; 276 unit tests pass; nRF54L15 Mode A/B hardware proven.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 
