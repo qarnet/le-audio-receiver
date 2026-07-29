@@ -11,7 +11,7 @@ set -ue
 
 : "${ZEPHYR_BASE:?ZEPHYR_BASE must be set to point to the zephyr root directory}"
 
-_NCS_ROOT="$(dirname "$(dirname "$ZEPHYR_BASE")")"
+_NCS_ROOT="$(realpath "$ZEPHYR_BASE/..")"
 
 BSIM_OUT_PATH="${BSIM_OUT_PATH:-${_NCS_ROOT}/tools/bsim}"
 BSIM_COMPONENTS_PATH="${BSIM_COMPONENTS_PATH:-${BSIM_OUT_PATH}/components}"
@@ -21,17 +21,9 @@ export BSIM_OUT_PATH
 export BSIM_COMPONENTS_PATH
 export BOARD
 
-# Verify BabbleSim component binaries exist
+# Verify PHY simulator binary (only component actually used by our tests)
 _BSIM_BINARIES=(
     "${BSIM_OUT_PATH}/bin/bs_2G4_phy_v1"
-    "${BSIM_OUT_PATH}/bin/bs_device_2G4_burst_interf"
-    "${BSIM_OUT_PATH}/bin/bs_device_2G4_playback"
-    "${BSIM_OUT_PATH}/bin/bs_device_2G4_playbackv2"
-    "${BSIM_OUT_PATH}/bin/bs_device_2G4_WLAN_actmod"
-    "${BSIM_OUT_PATH}/bin/bs_device_empty"
-    "${BSIM_OUT_PATH}/bin/bs_device_handbrake"
-    "${BSIM_OUT_PATH}/bin/bs_device_pause_simu"
-    "${BSIM_OUT_PATH}/bin/bs_device_time_monitor"
 )
 
 _MISSING=""

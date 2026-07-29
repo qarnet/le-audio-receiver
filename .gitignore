@@ -10,3 +10,6 @@ __pycache__/
 
 # Twister output
 twister-out*/
+
+# BabbleSim root-generated logs
+/flpr_hang_gate_*.log
