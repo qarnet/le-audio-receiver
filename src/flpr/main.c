@@ -5,8 +5,8 @@
  * FLPR application — Stage 1: shared PCM ring transport.
  * Handshake/heartbeat retained from Stage 0.
  *
- * Loopback consumer: polls input ring, validates metadata/CRC/seq,
- * copies bit-exact payload (valid bytes only) to output ring.
+ * Loopback consumer: polls input ring, passes each slot through
+ * flpr_audio_process() (identity/passthrough or ASRC), publishes output.
  * Ring addresses resolved from devicetree, not hardcoded.
  *
  * Epoch: hardware GRTC counter at boot start.
@@ -112,13 +112,9 @@ static int send_msg(const struct flpr_msg *msg)
 	return ipc_service_send(&ipc_ep, msg, sizeof(*msg));
 }
 
-/* Static buffer for ring_process_input — too large for FLPR main
- * thread stack (1924 bytes vs 1024-byte default).  Single-writer:
- * only one thread (FLPR main or IPC callback) runs at a time. */
-static uint8_t recv_payload[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
-
-/** Drain all pending input ring slots: verify CRC over valid bytes,
- *  copy bit-exact to output, publish.  Returns number of slots consumed.
+/** Drain all pending input ring slots: run flpr_audio_process()
+ *  (identity/passthrough or ASRC) on each slot, publish output.
+ *  Returns number of slots consumed.
  *  Respects stall_consumer_input / stall_producer_output flags.
  *
  *  Safety: output stall/full MUST NOT drop input.  Before consuming
