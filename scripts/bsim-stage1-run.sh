@@ -3,10 +3,14 @@
 #
 # Compiles repo receiver (sink stub) and custom 48_4_1 client (10 ms),
 # then runs dual-core simulations with real per-process log capture.
-# Both 10 ms (48_4_1) and 7.5 ms (48_3_1) frame durations tested;
-# deterministic hashes recorded separately.
-# All processes must exit 0 AND logs must contain expected
-# PASS markers with correct counters.
+# Both 10 ms (48_4_1) and 7.5 ms (48_3_1) frame durations tested,
+# each run twice.  Pairwise hash equality and known accepted values
+# enforced:
+#   - 10 ms: 0xFE0D4245
+#   - 7.5 ms: 0x5853F445
+#
+# All processes must exit 0 AND logs must contain expected PASS
+# markers with correct counters and deterministic hashes.
 #
 # Usage: bash scripts/bsim-stage1-run.sh
 #
@@ -25,6 +29,10 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 source "${SCRIPT_DIR}/bsim-env.sh"
 
 BOARD_TS="${BOARD//\//_}"
+
+# Known accepted hash values for each frame-duration scenario.
+KNOWN_HASH_10MS="0xFE0D4245"
+KNOWN_HASH_7MS="0x5853F445"
 
 # --- Toolchain ---
 if ! command -v nrfutil &>/dev/null; then
@@ -82,11 +90,17 @@ fi
 echo "Client: $CLIENT_BIN"
 
 # ---- Run one simulation with given client binary and label ----
+# Sets global BSIM_LAST_HASH to the extracted receiver hash (uppercase hex,
+# including 0x prefix) on success.  On failure, BSIM_LAST_HASH is empty
+# and function returns non-zero.
+#
 # Usage: run_sim <label> <client_bin> <client_testid>
 run_sim() {
     local _label="$1"
     local _client_bin="$2"
     local _client_testid="$3"
+
+    BSIM_LAST_HASH=""
 
     source "${ZEPHYR_BASE}/tests/bsim/sh_common.source"
 
@@ -234,7 +248,10 @@ run_sim() {
     echo "Simulation ID: $_sid"
 
     if [ "$_fail" -eq 0 ]; then
-        echo "=== ${_label} PASS ==="
+        # Export hash to global for pairwise/known-value checks
+        BSIM_LAST_HASH="${_hash_val:-}"
+        echo "=== ${_label} PASS  (hash=${BSIM_LAST_HASH}) ==="
+        echo "  Receiver log: $_RLOG"
         return 0
     else
         echo "=== ${_label} FAIL ==="
@@ -242,8 +259,66 @@ run_sim() {
     fi
 }
 
-# ---- Run 10 ms simulation ----
-run_sim "10ms" "$CLIENT_BIN" "valid_lc3_client" || exit $?
+# assert_hash <label> <run_number> <actual_hash> <known_hash>
+# Checks pairwise equality against previous run and known accepted value.
+# Uses global ASSERTS_FAILED counter.
+assert_hash() {
+    local _label="$1"
+    local _run="$2"
+    local _actual="$3"
+    local _known="$4"
+
+    if [ -z "$_actual" ]; then
+        echo "FAIL: ${_label} run ${_run} — no hash extracted" >&2
+        ASSERTS_FAILED=$((ASSERTS_FAILED + 1))
+        return 1
+    fi
+
+    # Known-value check
+    if [ "$_actual" != "$_known" ]; then
+        echo "FAIL: ${_label} run ${_run} — hash ${_actual} != known ${_known}" >&2
+        ASSERTS_FAILED=$((ASSERTS_FAILED + 1))
+        return 1
+    fi
+    echo "  ${_label} run ${_run} hash=${_actual} == known ${_known} ✓"
+
+    # Pairwise check (run > 1)
+    if [ "$_run" -gt 1 ]; then
+        local _prev_var="PREV_${_label//[^a-zA-Z0-9]/_}_HASH"
+        local _prev="${!_prev_var:-}"
+        if [ -n "$_prev" ]; then
+            if [ "$_actual" != "$_prev" ]; then
+                echo "FAIL: ${_label} run ${_run} — hash ${_actual} != run $((_run - 1)) hash ${_prev}" >&2
+                ASSERTS_FAILED=$((ASSERTS_FAILED + 1))
+                return 1
+            fi
+            echo "  ${_label} run ${_run} hash=${_actual} == run $((_run - 1)) hash=${_prev} ✓ (pairwise deterministic)"
+        fi
+    fi
+
+    # Store for next pairwise check
+    eval "PREV_${_label//[^a-zA-Z0-9]/_}_HASH=${_actual}"
+    return 0
+}
+
+# ---- Run 10 ms simulations (twice) ----
+ASSERTS_FAILED=0
+
+echo ""
+echo "══════════════════════════════════════════════════════════════════"
+echo "  10 ms (48_4_1) — Run 1 of 2"
+echo "══════════════════════════════════════════════════════════════════"
+run_sim "10ms-run1" "$CLIENT_BIN" "valid_lc3_client" || exit $?
+HASH_10MS_R1="$BSIM_LAST_HASH"
+assert_hash "10ms" 1 "$HASH_10MS_R1" "$KNOWN_HASH_10MS"
+
+echo ""
+echo "══════════════════════════════════════════════════════════════════"
+echo "  10 ms (48_4_1) — Run 2 of 2"
+echo "══════════════════════════════════════════════════════════════════"
+run_sim "10ms-run2" "$CLIENT_BIN" "valid_lc3_client" || exit $?
+HASH_10MS_R2="$BSIM_LAST_HASH"
+assert_hash "10ms" 2 "$HASH_10MS_R2" "$KNOWN_HASH_10MS"
 
 # ---- Compile 7.5 ms client ----
 echo ""
@@ -266,9 +341,42 @@ if [ ! -x "$CLIENT_7MS_BIN" ]; then
 fi
 echo "7.5ms Client: $CLIENT_7MS_BIN"
 
-# ---- Run 7.5 ms simulation ----
-run_sim "7.5ms" "$CLIENT_7MS_BIN" "valid_lc3_client" || exit $?
+# ---- Run 7.5 ms simulations (twice) ----
+echo ""
+echo "══════════════════════════════════════════════════════════════════"
+echo "  7.5 ms (48_3_1) — Run 1 of 2"
+echo "══════════════════════════════════════════════════════════════════"
+run_sim "7.5ms-run1" "$CLIENT_7MS_BIN" "valid_lc3_client" || exit $?
+HASH_7MS_R1="$BSIM_LAST_HASH"
+assert_hash "7.5ms" 1 "$HASH_7MS_R1" "$KNOWN_HASH_7MS"
 
 echo ""
-echo "=== STAGE1 PASS — both 10ms and 7.5ms simulations passed ==="
-exit 0
+echo "══════════════════════════════════════════════════════════════════"
+echo "  7.5 ms (48_3_1) — Run 2 of 2"
+echo "══════════════════════════════════════════════════════════════════"
+run_sim "7.5ms-run2" "$CLIENT_7MS_BIN" "valid_lc3_client" || exit $?
+HASH_7MS_R2="$BSIM_LAST_HASH"
+assert_hash "7.5ms" 2 "$HASH_7MS_R2" "$KNOWN_HASH_7MS"
+
+# ---- Final summary ----
+echo ""
+echo "══════════════════════════════════════════════════════════════════"
+echo "  STAGE 1 — REPEATED-RUN HASH SUMMARY"
+echo "══════════════════════════════════════════════════════════════════"
+echo ""
+echo "  10 ms  run 1:  $HASH_10MS_R1"
+echo "  10 ms  run 2:  $HASH_10MS_R2  (pairwise match: $([ "$HASH_10MS_R1" = "$HASH_10MS_R2" ] && echo YES || echo NO))"
+echo "  10 ms  known:  $KNOWN_HASH_10MS  (known match: $([ "$HASH_10MS_R1" = "$KNOWN_HASH_10MS" ] && echo YES || echo NO))"
+echo ""
+echo "  7.5 ms run 1:  $HASH_7MS_R1"
+echo "  7.5 ms run 2:  $HASH_7MS_R2  (pairwise match: $([ "$HASH_7MS_R1" = "$HASH_7MS_R2" ] && echo YES || echo NO))"
+echo "  7.5 ms known:  $KNOWN_HASH_7MS  (known match: $([ "$HASH_7MS_R1" = "$KNOWN_HASH_7MS" ] && echo YES || echo NO))"
+echo ""
+
+if [ "$ASSERTS_FAILED" -eq 0 ]; then
+    echo "=== STAGE1 PASS — 10ms+7.5ms repeated-run hash assertions all correct ==="
+    exit 0
+else
+    echo "=== STAGE1 FAIL — $ASSERTS_FAILED hash assertion(s) failed ==="
+    exit 1
+fi

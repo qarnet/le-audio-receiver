@@ -171,6 +171,22 @@ Independent review run 1293085 produced deterministic hashes:
 - 10 ms (48_4_1): `0xFE0D4245`
 - 7.5 ms (48_3_1): `0x5853F445`
 
+### Repeated-run verification (2026-07-31)
+
+Each scenario run twice with pairwise hash equality enforced and known
+accepted values asserted.  Four simulations — all passed:
+
+| Scenario | Run 1 | Run 2 | Pairwise | Known |
+|----------|-------|-------|----------|-------|
+| 10 ms (48_4_1) | `0xFE0D4245` | `0xFE0D4245` | ✓ | `0xFE0D4245` |
+| 7.5 ms (48_3_1) | `0x5853F445` | `0x5853F445` | ✓ | `0x5853F445` |
+
+Repeated-run gate script: `scripts/bsim-stage1-run.sh`.
+Per-run unique logs preserved at `/tmp/bsim_stage1_*_<pid>.log`.
+All hashes, counters (`startup_zero=8/11`, `startup_plc=7/10`),
+`total=108/111`, `energy=12480/9636480..9637920`) deterministic
+across repeated runs — zero variability.
+
 ### Gate suite summary
 
 | Suite | Tests | Status |

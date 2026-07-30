@@ -14,8 +14,9 @@ stock WirePlumber main-systemwide playback:
   stream_reset=0 (~125.41 s at 7.5 ms / 133.3 fps).
 - **Explicit runtime `I2S DMA started`** confirmed each run.
 - **Canonical gate**: 20/20 gate tests pass.
-- **BSim regression**: 10 ms hash `0xFE0D4245`, 7.5 ms hash `0x5853F445`
-  (run 1293085); both deterministic.
+- **BSim regression**: 10 ms hash `0xFE0D4245`, 7.5 ms hash `0x5853F445` —
+  each scenario run twice with pairwise hash equality enforced; both
+  fully deterministic across repeated runs.
 - **Corrective fixes**: 10 ms missing-frame-duration fallback removed;
   I2S slab block count raised 12→16 (startup transient headroom);
   `INPUT_FRAMES` made dynamic for 7.5 ms stock PipeWire config.
@@ -64,19 +65,30 @@ repeat fb=0, ASRC cap fail=0. Zero warnings, zero assertions, zero faults.
 
 See `docs/development/phase6-stage0-results.md` for full verification evidence.
 
-## BSIM Stage 1 — PASS + CLEANUP (2026-07-29)
+## BSIM Stage 1 — PASS + CLEANUP + REPEATED-RUN GATE (2026-07-31)
 
 CONFIG_TEST decode bypass removed from `bt_bap.c`. BSIM now executes same
 PLC/decode path as hardware.  Startup-zero/PLC oracle in `audio_sink_stub.c`
 with local counters (not production `audio_stats`):
 8 startup-zero pushes, 7 PLC frames (all before first nonzero PCM).  100
-nonzero pushes, 104 client sends.  Fully deterministic across two runs:
+nonzero pushes, 104 client sends.  Fully deterministic across repeated runs.
 
+10 ms (48_4_1) — two independent runs:
 - `startup_zero=8`, `startup_plc=7`, `plc=7`, `total=108`
 - `total == pushes + startup_zero` (108 = 100 + 8)
 - `plc == startup_plc` (7 = 7, all PLC in startup)
-- `hash=0xFE0D4245`, `energy=12480` (identical both runs)
-- `errors=0`, `malformed=0`, `after_stop=0`, `nonzero=1`
+- `hash=0xFE0D4245`, `energy=12480` (pairwise identical both runs)
+
+7.5 ms (48_3_1) — two independent runs:
+- `startup_zero=11`, `startup_plc=10`, `plc=10`, `total=111`
+- `total == pushes + startup_zero` (111 = 100 + 11)
+- `plc == startup_plc` (10 = 10, all PLC in startup)
+- `hash=0x5853F445`, `energy=9636480..9637920` (pairwise identical both runs)
+
+Repeated-run gate (`scripts/bsim-stage1-run.sh`): each scenario runs twice
+with pairwise hash equality enforced AND known accepted values asserted
+(10 ms → `0xFE0D4245`, 7.5 ms → `0x5853F445`).  Per-run unique logs with
+all artifact paths and hashes printed.
 
 Production `audio_stats` cleaned — `startup_zero`/`startup_plc` fields and
 functions removed; startup accounting is local to sink stub.  Real-target
