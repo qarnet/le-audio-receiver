@@ -35,8 +35,10 @@ Validation:
 
 Acceptance:
 - `src/bt_bap.c`: removed `bt_pacs_set_available_contexts(BT_AUDIO_DIR_SINK,
-  BT_AUDIO_CONTEXT_TYPE_NONE)` from `connected()` callback and context restore
-  from `disconnected()`. Available contexts persist from initial registration.
+  BT_AUDIO_CONTEXT_TYPE_NONE)` from `connected()` callback.  Available contexts
+  persist from initial registration because firmware no longer modifies them;
+  there is no disconnect-time "restore" — Zephyr never clears them in the first
+  place.
 - BSIM test: PACS assertion at PASS point verifies available sink contexts
   non-NONE after connection + 100-frame stream.
 - All existing tests pass; both nRF5340/nRF54L15 builds clean.
