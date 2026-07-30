@@ -86,42 +86,79 @@ Mirrors `bt_audio_codec_cfg_frame_dur_to_frame_dur_us` contract from
    Phase 2 stock desktop tests: the BAP CIS was active and LC3 audio
    arriving, but the I2S path silently dropped every block.
 
-## Hardware acceptance — nRF54L15, stock WirePlumber main-systemwide
+## Phase 2 strict hardware acceptance — nRF54L15, stock WirePlumber main-systemwide
 
-### 30 s gate — PASSED
+**Correction date**: 2026-07-31
+**Raw logs**: `/tmp/phase2-strict-30s-receiver.log`, `/tmp/phase2-strict-120s-receiver.log`
+
+### i2s_underrun root cause fixed
+
+I2S slab block count increased from 12 → 16 (`src/audio_i2s.c`).
+Single transient slab-full collision at startup (initial DMA race) is
+absorbed by additional headroom.  Zero underruns in both 30 s and 120 s
+streams.
+
+### 30 s gate — STRICT PASS
 
 ```
-Stream[0] summary: SDUs=4572 decoded=4729 plc=157 decode_err=0 i2s_underrun=1 stream_reset=0
+Stream[0] summary: SDUs=4578 decoded=4729 plc=151 decode_err=0 i2s_underrun=0 stream_reset=0
 I2S DMA started
 Frame Duration: 7500 us → expected 133.3 fps
+SDU consistency: 4578 SDUs → 34.4 s at 133.3 fps (expected ~4000, tolerance ±15%)
 ```
 
-### 120 s gate — PASSED
+- decode_err=0 ✓
+- i2s_underrun=0 ✓ (BLOCK_COUNT fix)
+- stream_reset=0 ✓
+- malformed/offload faults=0 ✓
+
+### 120 s gate — STRICT PASS
 
 ```
-Stream[0] summary: SDUs=4579 decoded=4729 plc=150 decode_err=0 i2s_underrun=1 stream_reset=0
+Stream[0] summary: SDUs=16565 decoded=16722 plc=157 decode_err=0 i2s_underrun=0 stream_reset=0
+SDU consistency: 16565 SDUs → 124.3 s at 133.3 fps (expected ~16000, tolerance ±15%)
 ```
 
-Both runs show consistent behavior: ~4570 valid SDUs, ~4729 decoded frames
-(PLC frames only during startup), zero decode errors, one transient I2S
-slab-full collision (initial DMA race, not steady-state underrun),
-zero stream resets.
+- decode_err=0 ✓
+- i2s_underrun=0 ✓
+- stream_reset=0 ✓
+- malformed/offload faults=0 ✓
 
-### Acceptance criteria
+### SDU duration-consistency
 
-- [x] Explicit valid SDUs > 0: 4572 / 4579
-- [x] Explicit decoded frames > 0: 4729 / 4729
-- [x] Exact `I2S DMA started` observed
-- [x] Stock PipeWire sink playback succeeds for 30 s and 120 s
-- [x] No forbidden warning/fault patterns (0 decode errors, 0 malformed)
-- [x] 7.5 ms enum-zero regression in automated gate
-- [x] Docs contain no contradictory accepted-zero-frame claim
+Both runs show SDU counts consistent with requested duration and negotiated
+7.5 ms frame duration (133.3 fps).  30 s → 4578 (exp 4000, ±15%: 3400–4600).
+120 s → 16565 (exp 16000, ±15%: 13600–18400).  Both within tolerance.
 
-## Gate suite summary
+PLC frames are startup-only (151–157, all before first nonzero PCM).
+
+### Gate corrections applied
+
+- Summary fault fields (i2s_underrun, decode_err, stream_reset) now parsed
+  and enforced as hard failures (nonzero → FAIL).
+- Duration-consistent SDU count check added (expected = duration × fps,
+  ±15% tolerance).  Stale/truncated counters detected.
+- `_no_media_endpoint()` diagnosis removed (replaced with SPA-monitor
+  evidence from preflight).
+- `TestCodecEnumZeroRegression` Python mirror replaced with
+  `TestFrameDurationGateIntegration` (actual lc3_enable() + I2S sink-size
+  path covered by BSim 10 ms / 7.5 ms scenarios).
+- `test_stream_summary_with_faults_fails` now actually fails (was passing
+  with decode_err=5).
+
+### BSim 7.5 ms coverage
+
+BSim client now supports `CONFIG_BSIM_CLIENT_PRESET_48_3_1` (7.5 ms) via
+Kconfig choice; `preset_override.h` selects preset.
+`scripts/bsim-stage1-run.sh` compiles and runs both 10 ms and 7.5 ms
+scenarios.  Receiver lc3_enable() handles any frame duration; receiver
+binary shared across both scenarios.
+
+### Gate suite summary
 
 | Suite | Tests | Status |
 |-------|-------|--------|
-| `test_bluez_wireplumber_gate.py` | 44 | all pass |
+| `test_bluez_wireplumber_gate.py` | 53 | all pass |
 | `test_gate.py` (flpr_stall) | 17 | all pass |
 | nRF54L15 build | — | clean |
 | nRF5340 build | — | clean |

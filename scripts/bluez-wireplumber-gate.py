@@ -886,20 +886,33 @@ class BluezWirePlumberGate:
                         f"  Frame duration: {frame_us} us → expected {expected_fps:.1f} fps"
                     )
 
-            # Parse stream summary for explicit SDUs/decoded counts
-            # Pattern: "Stream[0] summary: SDUs=123 decoded=456 plc=..."
+            # Parse stream summary for all fields including faults.
+            # Pattern: "Stream[0] summary: SDUs=123 decoded=456 plc=7 decode_err=0 i2s_underrun=0 stream_reset=0"
             m = re.search(
-                r"Stream\[\d+\]\s+summary:\s+SDUs=(\d+)\s+decoded=(\d+)",
+                r"Stream\[\d+\]\s+summary:\s+SDUs=(\d+)\s+decoded=(\d+)\s+plc=(\d+)\s+"
+                r"decode_err=(\d+)\s+i2s_underrun=(\d+)\s+stream_reset=(\d+)",
                 line,
             )
             if m:
                 sdu_val = int(m.group(1))
                 dec_val = int(m.group(2))
+                plc_val = int(m.group(3))
+                dec_err_val = int(m.group(4))
+                i2s_under_val = int(m.group(5))
+                sreset_val = int(m.group(6))
                 valid_sdus = max(valid_sdus, sdu_val)
                 decoded_frames = max(decoded_frames, dec_val)
                 summary_seen = True
+                result.receiver_counters["sdu_summary"] = sdu_val
+                result.receiver_counters["decoded_summary"] = dec_val
+                result.receiver_counters["plc_summary"] = plc_val
+                result.receiver_counters["decode_err_summary"] = dec_err_val
+                result.receiver_counters["i2s_underrun_summary"] = i2s_under_val
+                result.receiver_counters["stream_reset_summary"] = sreset_val
                 result.evidence.append(
-                    f"  Stream summary: SDUs={sdu_val} decoded={dec_val}: {line[:200]}"
+                    f"  Stream summary: SDUs={sdu_val} decoded={dec_val} plc={plc_val} "
+                    f"decode_err={dec_err_val} i2s_underrun={i2s_under_val} "
+                    f"stream_reset={sreset_val}"
                 )
 
             # Fatal firmware-side error patterns
@@ -1050,6 +1063,59 @@ class BluezWirePlumberGate:
             result.evidence.append(f"  FAIL: {offload_faults} offload faults")
             return False
 
+        # ── Summary fault-field checks (Phase 2 strict correction) ──
+        if summary_seen:
+            dec_err = result.receiver_counters.get("decode_err_summary", 0)
+            i2s_und = result.receiver_counters.get("i2s_underrun_summary", 0)
+            sreset = result.receiver_counters.get("stream_reset_summary", 0)
+
+            if dec_err != 0:
+                result.evidence.append(
+                    f"  FAIL: Summary decode_err={dec_err} (must be zero). "
+                    "Decode errors in stream summary are hard faults."
+                )
+                return False
+            if i2s_und != 0:
+                result.evidence.append(
+                    f"  FAIL: Summary i2s_underrun={i2s_und} (must be zero). "
+                    "I2S underruns in stream summary are hard faults."
+                )
+                return False
+            if sreset != 0:
+                result.evidence.append(
+                    f"  FAIL: Summary stream_reset={sreset} (must be zero). "
+                    "Stream resets in stream summary are hard faults."
+                )
+                return False
+
+        # ── Duration-consistent SDU count (Phase 2 strict correction) ──
+        if summary_seen and expected_fps > 0 and valid_sdus > 0:
+            expected_sdus = self.duration * expected_fps
+            # Allow ±15% tolerance for stream startup/teardown variance
+            lower = expected_sdus * 0.85
+            upper = expected_sdus * 1.15
+            if valid_sdus < lower:
+                result.evidence.append(
+                    f"  FAIL: SDU count {valid_sdus} too low for {self.duration}s "
+                    f"at {expected_fps:.1f} fps (expected ~{expected_sdus:.0f}, "
+                    f"lower bound {lower:.0f}). "
+                    "Playback did not produce duration-consistent audio — "
+                    "transport may have dropped early or log is stale."
+                )
+                return False
+            if valid_sdus > upper:
+                result.evidence.append(
+                    f"  FAIL: SDU count {valid_sdus} exceeds expected "
+                    f"{expected_sdus:.0f} (+15%). "
+                    "SDU counter may be stale from a prior run."
+                )
+                return False
+            result.evidence.append(
+                f"  SDU consistency: {valid_sdus} SDUs in {self.duration}s "
+                f"at {expected_fps:.1f} fps (expected ~{expected_sdus:.0f}, "
+                f"tolerance ±15%)"
+            )
+
         # Validate frame rate against negotiated duration
         if frames_per_sec > 0 and expected_fps > 0:
             if abs(frames_per_sec - expected_fps) > (expected_fps * 0.2):
@@ -1111,30 +1177,13 @@ class BluezWirePlumberGate:
         result.evidence.append("=== PipeWire Object Poll ===")
         pw_ok = self.poll_pipewire_objects(result, self.poll_timeout)
 
-        # 5. Check for MediaEndpoint (diagnostic)
-        result.stage = "diagnostic"
-        result.evidence.append("=== Diagnostic: MediaEndpoint Registration ===")
-        self._check_media_endpoint(result)
-
         if not pw_ok:
             result.evidence.append(
-                "FAIL: No PipeWire bluetooth sink appeared within timeout"
+                "FAIL: No PipeWire bluetooth sink appeared within timeout. "
+                "Check SPA monitor status (bluez_spa_monitor in preflight) "
+                "and verify the LE Audio device is connected with all "
+                "required UUIDs (PACS/ASCS/VCS)."
             )
-            if self._no_media_endpoint():
-                result.evidence.append(
-                    "ROOT CAUSE: No MediaEndpoint registered with BlueZ. "
-                    "Stock WirePlumber 0.5.14 does not register a BAP "
-                    "MediaEndpoint; without it BlueZ cannot create BAP "
-                    "transports/profiles for LE Audio devices. The controller "
-                    "has PACS/ASCS UUIDs and cis-central, but no application "
-                    "tells BlueZ what codecs the host supports."
-                )
-                result.evidence.append(
-                    "BLOCKER: Stock desktop stack (BlueZ 5.86 + WirePlumber "
-                    "0.5.14 + PipeWire 1.6.5) does not auto-initiate BAP "
-                    "streams. A MediaEndpoint with LC3 codec capabilities "
-                    "must be registered on org.bluez.Media1."
-                )
             result.exit_code = EX_RECEIVER_FAIL
             return result
 
@@ -1166,54 +1215,6 @@ class BluezWirePlumberGate:
         result.evidence.append("=== PHASE 2 STREAM ACCEPTANCE PASSED ===")
         profile = result.evidence[0:0]  # no-op; profile recorded during preflight
         return result
-
-    @staticmethod
-    def _no_media_endpoint() -> bool:
-        """Return True if no MediaEndpoint is registered with BlueZ."""
-        try:
-            import dbus
-
-            bus = dbus.SystemBus()
-            root = bus.get_object(BLUEZ_SERVICE, BLUEZ_ROOT)
-            om_iface = dbus.Interface(root, "org.freedesktop.DBus.ObjectManager")
-            objects = om_iface.GetManagedObjects()
-            for path in objects:
-                if "MediaEndpoint" in str(path) or "MediaTransport" in str(path):
-                    return False
-            return True
-        except Exception:
-            return True
-
-    def _check_media_endpoint(self, result: GateResult) -> None:
-        """Diagnose MediaEndpoint state."""
-        try:
-            import dbus
-
-            bus = dbus.SystemBus()
-            root = bus.get_object(BLUEZ_SERVICE, BLUEZ_ROOT)
-            om_iface = dbus.Interface(root, "org.freedesktop.DBus.ObjectManager")
-            objects = om_iface.GetManagedObjects()
-
-            endpoints = []
-            transports = []
-            for path, ifaces in objects.items():
-                path_str = str(path)
-                if "MediaEndpoint" in path_str or "Endpoint" in path_str:
-                    endpoints.append(path_str)
-                if "MediaTransport" in path_str or "Transport" in path_str:
-                    transports.append(path_str)
-
-            result.evidence.append(f"  MediaEndpoints: {endpoints or 'NONE'}")
-            result.evidence.append(f"  MediaTransports: {transports or 'NONE'}")
-
-            if not endpoints and not transports:
-                result.evidence.append(
-                    "  DIAGNOSIS: No MediaEndpoint registered → BlueZ cannot "
-                    "create BAP transports. This is the stock desktop BAP gap."
-                )
-
-        except Exception as e:
-            result.evidence.append(f"  MediaEndpoint check error: {e}")
 
     def _find_sink_name(self) -> Optional[str]:
         """Find audio sink name from pw-dump for our receiver.

@@ -57,7 +57,7 @@ void audio_sink_set_input_frames(uint16_t frames)
  */
 #define MAX_OUTPUT_FRAMES 481
 #define BLOCK_SIZE        ((size_t)(MAX_OUTPUT_FRAMES) * CHANNELS * (BIT_WIDTH / 8))
-#define BLOCK_COUNT       12
+#define BLOCK_COUNT       16
 
 #define DRIFT_THRESHOLD (BLOCK_COUNT - 4)
 

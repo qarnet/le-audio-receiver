@@ -393,7 +393,7 @@ class TestParseReceiverLog(unittest.TestCase):
 
     def test_boot_i2s_ready_only_fails(self):
         """Boot 'I2S ready' must not substitute for runtime 'I2S DMA started'."""
-        content = """[00:00:01] audio_i2s: I2S ready (48 kHz, 16-bit, stereo, 12 blocks)
+        content = """[00:00:01] audio_i2s: I2S ready (48 kHz, 16-bit, stereo, 16 blocks)
 [00:00:10] ASCS: ASE configured
 [00:00:12] ASCS: stream started
 [00:00:30] Stream[0] summary: SDUs=100 decoded=100 plc=0 decode_err=0 i2s_underrun=0 stream_reset=0
@@ -458,7 +458,7 @@ class TestParseReceiverLog(unittest.TestCase):
         self.assertTrue(ok, f"Clean summary should pass: {result.evidence}")
 
     def test_stream_summary_with_faults_fails(self):
-        """Stream summary with decode errors must still fail on faults."""
+        """Stream summary with decode_err=5 must FAIL (Phase 2 strict correction)."""
         content = """[00:00:10] ASCS: ASE configured
 [00:00:12] ASCS: stream started
 [00:00:13] I2S DMA started
@@ -466,12 +466,150 @@ class TestParseReceiverLog(unittest.TestCase):
 """
         result = self._write_log(content)
         ok = self.gate.parse_receiver_log(result)
-        # Summary has SDUs>0 and decoded>0, but decode faults=5 from earlier log lines
-        # Without explicit fault lines, summary alone passes — this tests summary parsing
-        # is correct and fault detection still works via separate patterns.
-        # The summary shows decode_err=5 but the gate doesn't parse that field yet.
-        # This passes because no fault patterns appear in the log.
-        self.assertTrue(ok)
+        self.assertFalse(ok, f"Summary with decode_err=5 must FAIL: {result.evidence}")
+        evidence_str = "\n".join(result.evidence)
+        self.assertIn("decode_err=5", evidence_str)
+
+    # ── Phase 2 strict: summary fault fields are hard failures ───
+
+    def test_summary_decode_err_nonzero_fails(self):
+        """Summary with decode_err > 0 must fail."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=100 decoded=100 plc=0 decode_err=3 i2s_underrun=0 stream_reset=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertFalse(ok, f"decode_err=3 must fail: {result.evidence}")
+
+    def test_summary_i2s_underrun_nonzero_fails(self):
+        """Summary with i2s_underrun > 0 must fail."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=100 decoded=100 plc=0 decode_err=0 i2s_underrun=1 stream_reset=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertFalse(ok, f"i2s_underrun=1 must fail: {result.evidence}")
+
+    def test_summary_stream_reset_nonzero_fails(self):
+        """Summary with stream_reset > 0 must fail."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=100 decoded=100 plc=0 decode_err=0 i2s_underrun=0 stream_reset=1
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertFalse(ok, f"stream_reset=1 must fail: {result.evidence}")
+
+    def test_summary_all_faults_zero_passes(self):
+        """Summary with all fault fields zero must pass."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=100 decoded=100 plc=7 decode_err=0 i2s_underrun=0 stream_reset=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok, f"All-zero faults must pass: {result.evidence}")
+
+    # ── Phase 2 strict: duration-consistent SDU counts ────────────
+
+    def test_sdu_count_consistent_7_5ms_30s_passes(self):
+        """~4000 SDUs at 7.5ms for 30s must pass."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:11] LC3 decoder[0]: 48000 Hz 7500 us
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=4000 decoded=4100 plc=100 decode_err=0 i2s_underrun=0 stream_reset=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok, f"4000 SDUs at 7.5ms/30s must pass: {result.evidence}")
+
+    def test_sdu_count_too_low_for_duration_fails(self):
+        """500 SDUs at 7.5ms for 30s (~4000 expected) must fail."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:11] LC3 decoder[0]: 48000 Hz 7500 us
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=500 decoded=550 plc=50 decode_err=0 i2s_underrun=0 stream_reset=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertFalse(ok, f"500 SDUs vs ~4000 expected must fail: {result.evidence}")
+        evidence_str = "\n".join(result.evidence)
+        self.assertIn("too low", evidence_str.lower())
+
+    def test_sdu_count_too_high_for_duration_fails(self):
+        """50000 SDUs at 7.5ms for 30s (~4000 expected) must fail as stale."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:11] LC3 decoder[0]: 48000 Hz 7500 us
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=50000 decoded=51000 plc=1000 decode_err=0 i2s_underrun=0 stream_reset=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertFalse(
+            ok, f"50000 SDUs vs ~4000 expected must fail: {result.evidence}"
+        )
+
+    def test_sdu_count_10ms_30s_consistent_passes(self):
+        """~3000 SDUs at 10ms for 30s must pass."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:11] LC3 decoder[0]: 48000 Hz 10000 us
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=3000 decoded=3050 plc=50 decode_err=0 i2s_underrun=0 stream_reset=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok, f"3000 SDUs at 10ms/30s must pass: {result.evidence}")
+
+    def test_multiple_summaries_uses_last(self):
+        """If log has multiple summaries, last one should be the acceptance target."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:15] Stream[0] summary: SDUs=50 decoded=55 plc=5 decode_err=0 i2s_underrun=0 stream_reset=0
+[00:00:20] Stream[0] summary: SDUs=4000 decoded=4100 plc=100 decode_err=0 i2s_underrun=0 stream_reset=0
+"""
+        # This gate is duration=30, but no Frame Duration line so expected_fps=0.0
+        # → SDU check skipped. Both summaries non-zero → passes.
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok, f"Multiple summaries with valid counts: {result.evidence}")
+        self.assertEqual(result.receiver_counters.get("sdu_summary"), 4000)
+
+    # ── Phase 2 strict: log freshness / independent capture ──────
+
+    def test_no_duplicate_run_markers(self):
+        """Log with multiple 'BLE ready' markers should still parse correctly."""
+        content = """[00:00:00] BLE ready
+[00:00:02] Advertising as LE Audio Receiver
+[00:01:00] BLE ready
+[00:01:02] Advertising as LE Audio Receiver
+[00:01:10] ASCS: ASE configured
+[00:01:12] ASCS: stream started
+[00:01:13] I2S DMA started
+[00:01:30] Stream[0] summary: SDUs=4000 decoded=4100 plc=100 decode_err=0 i2s_underrun=0 stream_reset=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok, f"Log with multiple boot markers: {result.evidence}")
+
+    def test_binary_prefix_before_log_lines(self):
+        """Binary garbage before valid log lines should be handled."""
+        content = b"\x00\x01\x02\x03[00:00:10] ASCS: ASE configured\n[00:00:12] ASCS: stream started\n[00:00:13] I2S DMA started\n[00:00:30] Stream[0] summary: SDUs=3000 decoded=3050 plc=50 decode_err=0 i2s_underrun=0 stream_reset=0\n"
+        with open(self.gate.log_path, "wb") as f:
+            f.write(content)
+        result = GateResult()
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok, f"Log with binary prefix: {result.evidence}")
 
     def test_i2s_dma_started_exact_match_required(self):
         """Only exact 'I2S DMA started', not 'I2S clock started' or 'I2S ready'."""
@@ -576,83 +714,76 @@ class TestParsedCounters(unittest.TestCase):
             os.unlink(self.gate.log_path)
 
 
-class TestCodecEnumZeroRegression(unittest.TestCase):
-    """7.5 ms enum-zero regression — exercises lc3_enable frame-duration logic.
+class TestFrameDurationGateIntegration(unittest.TestCase):
+    """Gate-level tests for frame duration handling.
 
-    BT_AUDIO_CODEC_CFG_DURATION_7_5 = 0x00 is a valid enum value.
-    The correction commit must NOT reject it (ret < 0 check, not ret <= 0)
-    and must NOT fall back on missing Frame Duration LTV.
+    Actual lc3_enable() frame-duration logic is verified by BSIM:
+      - 10 ms scenario (48_4_1) via scripts/bsim-stage1-run.sh
+      - 7.5 ms scenario (48_3_1) via scripts/bsim-stage1-run.sh
+    Both scenarios exercise the full codec-config→decoder→I2S path
+    including audio_sink_set_input_frames() with dynamic frame counts.
+
+    These tests verify the gate correctly handles frame duration
+    information from receiver logs, not the C logic itself.
     """
 
-    # Mirror the SDK's bt_audio_codec_cfg_frame_dur_to_frame_dur_us contract:
-    #   switch (frame_dur) {
-    #     case BT_AUDIO_CODEC_CFG_DURATION_7_5: return 7500;
-    #     case BT_AUDIO_CODEC_CFG_DURATION_10:  return 10000;
-    #     default: return -EINVAL;
-    #   }
-    # Source: ncs/v3.3.0/zephyr/subsys/bluetooth/audio/codec.c:99-109
-
-    _FRAME_DUR_US = {
-        0x00: 7500,  # BT_AUDIO_CODEC_CFG_DURATION_7_5
-        0x01: 10000,  # BT_AUDIO_CODEC_CFG_DURATION_10
-    }
-
-    def _lc3_enable_frame_dur(self, getter_ret: int) -> tuple:
-        """Simulate the lc3_enable() frame-duration decision logic.
-
-        Returns (frame_us, is_error) where is_error=True means
-        the codec config should be rejected.
-        """
-        if getter_ret < 0:
-            # Missing Frame Duration LTV → error (no fallback)
-            return (0, True)
-        frame_us = self._FRAME_DUR_US.get(getter_ret, -1)
-        if frame_us < 0:
-            # Invalid enum value → error
-            return (0, True)
-        return (frame_us, False)
-
-    def test_7_5ms_enum_zero_valid(self):
-        """BT_AUDIO_CODEC_CFG_DURATION_7_5 = 0x00 → 7500 us, not rejected."""
-        frame_us, is_error = self._lc3_enable_frame_dur(0x00)
-        self.assertFalse(is_error, f"enum-zero 0x00 must NOT be rejected as an error")
-        self.assertEqual(
-            frame_us, 7500, f"enum-zero 0x00 must map to 7500 us, got {frame_us}"
+    def setUp(self):
+        self.gate = BluezWirePlumberGate(
+            receiver_name="LE Audio Receiver",
+            duration=30,
+            log_path="/tmp/test_framedur.log",
         )
 
-    def test_10ms_enum_one_valid(self):
-        """BT_AUDIO_CODEC_CFG_DURATION_10 = 0x01 → 10000 us, not rejected."""
-        frame_us, is_error = self._lc3_enable_frame_dur(0x01)
-        self.assertFalse(is_error, f"enum 0x01 must NOT be rejected as an error")
-        self.assertEqual(
-            frame_us, 10000, f"enum 0x01 must map to 10000 us, got {frame_us}"
-        )
+    def _write_log(self, content: str) -> GateResult:
+        with open(self.gate.log_path, "w") as f:
+            f.write(content)
+        return GateResult()
 
-    def test_negative_getter_returns_error(self):
-        """Missing Frame Duration LTV (getter returns < 0) → error, no fallback."""
-        for ret in [-2, -61, -61]:
-            frame_us, is_error = self._lc3_enable_frame_dur(ret)
-            self.assertTrue(
-                is_error, f"getter ret={ret} must be an error (no fallback)"
-            )
-            self.assertEqual(
-                frame_us, 0, f"error path must return frame_us=0, got {frame_us}"
-            )
+    def test_7_5ms_frame_duration_parsed(self):
+        """Gate must parse 7.5 ms frame duration from log."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:11] LC3 decoder[0]: 48000 Hz 7500 us
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=4000 decoded=4100 plc=100 decode_err=0 i2s_underrun=0 stream_reset=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok, f"7.5ms gate must pass: {result.evidence}")
+        evidence_str = "\n".join(result.evidence)
+        self.assertIn("7500 us", evidence_str)
+        self.assertIn("133.3 fps", evidence_str)
 
-    def test_invalid_enum_rejected(self):
-        """Invalid frame_dur enum values (e.g. 0xFF) → conversion error."""
-        for invalid in [0x02, 0xFF, 42, -1]:
-            frame_us, is_error = self._lc3_enable_frame_dur(invalid)
-            self.assertTrue(is_error, f"invalid enum 0x{invalid:02X} must be rejected")
+    def test_10ms_frame_duration_parsed(self):
+        """Gate must parse 10 ms frame duration from log."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:11] LC3 decoder[0]: 48000 Hz 10000 us
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=3000 decoded=3050 plc=50 decode_err=0 i2s_underrun=0 stream_reset=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok, f"10ms gate must pass: {result.evidence}")
+        evidence_str = "\n".join(result.evidence)
+        self.assertIn("10000 us", evidence_str)
+        self.assertIn("100.0 fps", evidence_str)
 
-    def test_all_valid_enums_covered(self):
-        """Only 0x00 and 0x01 are valid per the LC3 codec config spec."""
-        for val, expected_us in self._FRAME_DUR_US.items():
-            frame_us, is_error = self._lc3_enable_frame_dur(val)
-            self.assertFalse(is_error, f"valid enum 0x{val:02X} must pass")
-            self.assertEqual(
-                frame_us, expected_us, f"enum 0x{val:02X} must be {expected_us} us"
-            )
+    def test_frame_dur_not_set_still_fatal(self):
+        """Missing Frame Duration in log is still a fatal gate error."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:15] frame dur not set (ret=-61)
+[00:00:30] Stream[0] summary: SDUs=0 decoded=0 plc=0 decode_err=0 i2s_underrun=0 stream_reset=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertFalse(ok, f"frame dur not set must be fatal: {result.evidence}")
+
+    def tearDown(self):
+        if os.path.exists(self.gate.log_path):
+            os.unlink(self.gate.log_path)
 
 
 if __name__ == "__main__":

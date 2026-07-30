@@ -1,9 +1,28 @@
 # BSIM client Kconfig — minimal config for upstream sample sources.
-# The sample Kconfig defines INFO_REPORTING_INTERVAL.
 mainmenu "LE Audio Client — BSIM"
 
 config INFO_REPORTING_INTERVAL
 	int "Number of SDUs between log reports"
 	default 0
+
+choice
+	prompt "Frame duration preset"
+	default BSIM_CLIENT_PRESET_48_4_1
+	help
+	  Select the LC3 codec frame duration for the BSIM client.
+	  48_4_1 = 10 ms (480 samples @ 48 kHz)
+	  48_3_1 = 7.5 ms (360 samples @ 48 kHz)
+
+config BSIM_CLIENT_PRESET_48_4_1
+	bool "48_4_1 (10 ms)"
+	help
+	  48 kHz, 4 frames per SDU, 10 ms frame duration.
+
+config BSIM_CLIENT_PRESET_48_3_1
+	bool "48_3_1 (7.5 ms)"
+	help
+	  48 kHz, 3 frames per SDU, 7.5 ms frame duration.
+
+endchoice
 
 source "Kconfig.zephyr"

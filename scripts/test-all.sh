@@ -104,6 +104,9 @@ run_python_suites() {
     run_one "python: flpr_stall_gate" \
         env PYTHONPATH="$REPO_ROOT/scripts" \
         python3 "$REPO_ROOT/tests/unit/flpr_stall_gate/test_flpr_stall_gate.py" || true
+    run_one "python: bluez_wp_gate" \
+        env PYTHONPATH="$REPO_ROOT/scripts" \
+        python3 "$REPO_ROOT/scripts/test_bluez_wireplumber_gate.py" || true
 }
 
 # ---------- BSim Stage 1 ----------
