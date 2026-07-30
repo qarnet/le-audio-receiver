@@ -17,7 +17,7 @@ documents are written per phase when work on it starts.
 
 - **nRF5340 (Ebyte E83-2G4M03S module)**: BAP Unicast Server, sink-only,
   2 sink ASEs, LC3 decode (mono / stereo Mode A / stereo Mode B), VCP volume,
-  CAS, shell diagnostics, watchdog. Audio out via I2S to UDA1334A DAC.
+  shell diagnostics, watchdog. Audio out via I2S to UDA1334A DAC.
 - **Dual-core flash** via OpenOCD + CMSIS-DAP (Pico probe), single-session
   `west flash` for both cores (`boards/ebyte/e83_nrf5340/support/flash_nrf5340.tcl`,
   documented in `docs/flashing.md`).
@@ -30,9 +30,10 @@ documents are written per phase when work on it starts.
   initializes (`I2S ready`, `I2S DMA started`). GPIO mapping proven: D0=BCK
   toggles, D1/LRCK and D2/SDOUT toggle when DAC digital wires removed.
   Standalone I2S20 test ran 20 seconds, fed 2,016 blocks, zero EIO/underrun.
-  SAMPLE_ADJUST actuator wired. **Main receiver end-to-end audio: technical
-  PASS (Phase 4c, 10-minute stability gate); physical audibility UNAVAILABLE**
-  — see Phase 4 for completed sub-gates and evidence.
+  **Main receiver end-to-end audio: ACCEPTED** (Phase 5 cpuapp ASRC: Mode A +
+  Mode B 600 s zero faults; Phase 6 FLPR offload: Mode A + Mode B 120 s zero
+  faults). Physical audibility UNAVAILABLE — see Phase 4/5 for completed
+  measurable gates and evidence.
 - Clean small modules: `audio_stats`, `audio_volume`, `audio_shell`.
 
 ## Findings (historical — all resolved in Phases 0–4)
@@ -70,7 +71,7 @@ Single workflow: `nix-nrf-dev` flake → `mkNrfShell`. All helpers in
 `audio_drift.c` now implements a dual-term ppm-based PI controller:
 frequency term from PCLK-vs-GRTC measurement (nRF54L15) or ISO timestamps
 (nRF5340), plus phase term from I2S buffer fill. Output in ppm, routed to
-platform-specific actuators (APLL or SAMPLE_ADJUST). The packet-repeat
+platform-specific actuators (APLL or consumed by ASRC). The packet-repeat
 fallback no longer fires in steady state. See Part II §Clock recovery and
 `AGENTS.md` "Drift controller" for current production architecture.
 
@@ -144,21 +145,27 @@ The core insight: the "software PLL" separates into a platform-independent
   output = filtered feedforward + phase PI.
 - Output in **ppm** (not APLL register units).
 
-**Actuators** behind one interface, selected per platform via Kconfig choice
-(working names):
+**Actuators** behind one interface, selected per platform via Kconfig choice:
 
 | Kconfig | Platform | Mechanism |
 |---|---|---|
 | `AUDIO_CLOCK_ACTUATOR_APLL` | nRF5340 | ppm → HFCLKAUDIO register trim (true clock steering) |
-| `AUDIO_CLOCK_ACTUATOR_SAMPLE_ADJUST` | nRF54L15 (Phase 4) | single-sample insert/drop when accumulated phase > 1 sample (~20.8 µs @ 48 kHz) |
-| `AUDIO_CLOCK_ACTUATOR_ASRC` | nRF54L15 (Phase 5/6) | fixed-point fractional resampler; ratio = 1 + ppm·1e-6 |
-| *(future)* CS2200 | custom PCB | ppm → I²C register write to fractional-N clock chip |
+| `AUDIO_CLOCK_ACTUATOR_NONE` | nRF54L15 | no-op; ASRC consumes ppm directly in data path |
 
-Insert/drop **is** nearest-neighbor ASRC — the degenerate case. The evolution
-path is continuous: same controller, progressively better interpolation
-(drop/insert → linear → polyphase), and FLPR offload is purely a deployment
-decision if cpuapp runs out of budget. Nothing gets thrown away between
-phases.
+The nRF54L15 has no steerable audio clock. The PI controller output (ppm)
+goes directly into the fixed-point linear ASRC resampler ratio. NONE actuator
+is the production choice — no physical actuator on nRF54L15.
+
+The data-path ASRC is a stateful cross-block fixed-point linear-interpolation
+stereo resampler. Primary path runs on FLPR (RISC-V VPR); cpuapp ASRC is the
+identical fallback. Controller → correction → [APLL hardware trim (nRF5340)
+OR ASRC data-path resampler (nRF54L15)].
+
+Historical: SAMPLE_ADJUST (sample insert/drop) was Phase 4's actuator;
+retired after Phase 5 ASRC acceptance. Source retained for regression
+testing only. AUDIO_CLOCK_ACTUATOR_ASRC was an architectural
+placeholder — the ASRC is a data-path consumer of ppm, not a Kconfig
+actuator entry.
 
 The packet-repeat fallback in `audio_i2s.c` remains as an emergency path
 only; a converged loop must not trigger it in steady state.
@@ -290,7 +297,7 @@ streaming on nRF5340 (observable via `audio status` shell counters).
 ## Phase 4 — nRF54L15 audio bring-up — COMPLETE (2026-07-26)
 
 Phase 4 is closed on measurable exit criteria. Code landed (I2S20
-pinctrl fix, SAMPLE_ADJUST actuator, SDC-on-cpuapp buffer counts), boot +
+pinctrl fix, SDC-on-cpuapp buffer counts), boot +
 PACS/ASCS + BlueZ bonding verified. BLE CIS transport verified through
 nRF5340DK `hci_uart` central. GPIO mapping D0/D1/D2 (P1.4/P1.5/P1.6) proven.
 Standalone I2S20 DMA test completed (20 s, 2,016 blocks, no EIO). The old
@@ -298,279 +305,71 @@ DAC breakout held D1/LRCK high when unmuted — incompatible or defective
 assembly; replaced with known-good DAC. All sub-gates completed: rate
 conversion (4a.2), GRTC-driven PCLK feedforward + phase PI (4b.1/4b.2),
 and 10-minute stability gate (4c) — all PASS. External digital I2S gate
-PASS at DAC pins (BCK/LRCK ratio 31.999701). Physical audibility UNAVAILABLE
-by user — not failed, not blocking further measurable work.
-The sub-steps and their evidence are summarized below:
+PASS at DAC pins (BCK/LRCK ratio 31.999701). Physical audibility
+UNAVAILABLE by user — not failed, not blocking further measurable work.
 
-### Phase 4a — COMPLETED
+### Phase 4 sub-gates (all PASS — 2026-07-26)
 
-All sub-gates completed. Historical detail below; see Phase 4 opening
-for current closed status.
+- **4a — I2S20 hardware + DAC**: GPIO pin map confirmed (D0/D1/D2).
+  Standalone I2S20 DMA test: 20 s, 2,016 blocks, zero EIO. Old DAC
+  breakout defective (held LRCK high); replaced. New DAC: 60,000 frames /
+  600 s stream with zero faults. Rate converter (4a.2): bounded
+  nearest-neighbor maps 480 → 476/477 frames for PCLK32M mismatch.
+- **4b — Drift measurement + feedforward**: GRTC → GPPI → TIMER20
+  hardware capture (1 s intervals). PCLK frequency error fed into PI
+  controller. 4b.1 logged diagnostics; 4b.2 closed loop: 4,500 frames /
+  45 s, PCLK +1,500..+1,757 ppm, inserts dominate (186:1). I2S
+  FRAMESTART invalidated (fires at DMA boundaries, not LRCK edges).
+- **4c — Stability gate**: Technical PASS — 60,000 frames / 600 s, zero
+  faults, zero underruns. External I2S analyzer PASS: BCK/LRCK ratio
+  31.999701. Physical audibility UNAVAILABLE.
 
-- **4a.0 completed hardware characterization:**
-  - Correct Xiao pin map: D0/P1.4 = BCK, D1/P1.5 = LRCK, D2/P1.6 = SDOUT.
-  - Old DAC isolation result: with DAC digital wires connected and MUTE low,
-    D1/LRCK held high; with digital wires removed, D1 toggles. The old
-    breakout/wiring assembly is incompatible or defective.
-  - Standalone I2S20 evidence: 20.001 seconds, 2,016 blocks fed, zero
-    EIO/underrun, ENABLE=1, TASKS_START triggered, PSEL correct,
-    FRAMESTART firing. I2S20 hardware works.
-  - PCLK32M clock source works; `PCLK32M_HFXO` usage-fault is tracked
-    separately.
-- **4a.1 main-pipeline/new-DAC retest — COMPLETED (2026-07-26):**
-  - Technical stability gate PASS: 60,000 frames / 600.00 s (10 minutes),
-    zero disconnect, zero slab-full/underrun/warning/error/fault, clean
-    teardown. See `docs/development/phase4c-technical-results.md`.
-  - External digital I2S gate PASS at DAC pins: fx2lafw logic analyzer
-    captured active 30 s Mode A stream, BCK 1,525,637 Hz, LRCK 47,677 Hz,
-    BCK/LRCK ratio 31.999701 (expected 32), SDOUT nonconstant activity.
-    See `docs/development/phase4c-i2s-analyzer-results.md`.
-  - Physical audibility: UNAVAILABLE by user — not failed, not blocking
-    further measurable work. Analog audio quality is not claimed.
-  - Original acceptance criteria that required an audible report have
-    been superseded by the measurable technical gate above; the phase is
-    closed on measurable criteria and audibility is non-blocking.
-- **4a.2 rate conversion — COMPLETED (2026-07-26):**
-  - Root cause: PCLK32M clock source produces ~47,619 Hz LRCK, while decoder
-    output and I2S writes were fixed at 48,000 Hz / 480 frames per block.
-    Queue filled at ~100 blocks/s, drain at ~99.2 blocks/s → slab-full every
-    ~1.57 s.
-  - Fix: bounded nearest-neighbor rate converter (`src/audio_rate_convert.{c,h}`)
-    maps each 480-input-frame block to 476/477 output frames, averaging 47,619
-    output frames per 100 input blocks. Remainder accumulator ensures exact
-    total. nRF5340 stays at 48k→48k identity (default).
-  - Verified: 10/10 unit tests (native_sim), both builds pass, 35-second
-    Mode A stream with zero slab-full drops, zero DMA underruns.
-    See `docs/development/phase4a2-rate-conversion-results.md`.
-  - Residual: nearest-neighbor conversion removes about 381 frames/s at
-    nominal mismatch. Artifact audibility and character are unmeasured.
-    Peer-drift correction addressed by Phase 4b (GRTC feedforward + phase
-    PI, now complete). Phase 5 quality ASRC is planned implementation
-    work — see Phase 5 section.
-
-### Phase 4b — Supported ISO timestamp presentation scheduling — **4b.1 PASS, 4b.2 HARDWARE PASS (2026-07-26)**
-
-**Mandatory, not deferred.** With the fixed PCLK32M rate mismatch resolved
-by 4a.2, residual peer-drift between BLE controller clock and I2S clock still
-needs correction. The original plan to capture direct RADIO RX events via DPPI
-is unsupported — MPSL/SDC owns RADIO and forbids any direct RADIO register,
-event, IRQ, or DPPI access. Phase 4b is rewritten to use the Nordic
-ISO-time-sync pattern, documented at:
-
-`nrf/samples/bluetooth/iso_time_sync/`
-
-1. **ISO SDU reference time**: Validate `BT_ISO_FLAGS_TS` before consuming
-   `info->ts`. On nRF54 Series the ISO timestamp is controller-clock time;
-   treat it as the ISO SDU reference time — do not use callback arrival as
-   an RX timestamp.
-
-2. **Future GRTC presentation trigger**: Use the Nordic ISO-time-sync pattern:
-   schedule a GRTC compare/action at `info->ts + presentation_delay`.
-   GRTC + DPPI executes the final reference action independent of callback
-   wake latency. This is the supported, documented path (see Nordic ISO
-   time-sync sample and nRF Audio synchronization module as conceptual
-   references — the dual-core architecture of those samples is not directly
-   portable to this single-core application).
-
-3. **~~I2S LRCK frame counter~~** — **INVALIDATED (2026-07-26)**. Hardware
-   validation showed I2S20 `FRAMESTART` fires at DMA audio-buffer boundaries
-   (~100 Hz in this configuration), not every physical LRCK edge (~47,619 Hz).
-   Counting FRAMESTART cannot measure sample-clock frequency. The production
-   path is a PCLK-derived free-running TIMER (see step 4).
-
-4. **Drift estimate**: TIMER20 runs in TIMER mode (32-bit, prescaler 0,
-   PCLK-derived free-running ticks). GRTC compare at 1-second intervals
-   triggers TIMER20 `TASKS_CAPTURE[0]` via GPPI, hardware-snapshotting
-   the timer count. Nominal timer frequency is determined by the HAL
-   macro `NRF_TIMER_BASE_FREQUENCY_GET(timer_reg)` (16 MHz on TIMER20).
-   The GRTC ISR reads the captured count, computes unsigned delta and
-   elapsed GRTC microseconds, and derives integer ppm relative to the
-   nominal tick count for the elapsed interval. Since I2S derives from
-   `PCLK32M`, this ppm is the local PCLK frequency error relative to
-   controller/GRTC time — input for Phase 4b.2. Phase 4b.1 logs
-   diagnostics only — the output is not yet fed into the PI controller.
-
-5. **No direct RADIO access**: Direct RADIO RX `ADDRESS`/`END` captures are
-   forbidden with SDC/MPSL. There is no fallback direct-RADIO implementation
-   — the ISO-timestamp path (step 1) is the only supported input.
-
-6. **SDC Event Start Task**: `sdc_hci_cmd_vs_set_event_start_task()` is an
-   optional ACL timing-event diagnostic only. It is not a CIS RX/SDU timestamp
-   and is not an input to the PI controller.
-
-7. **Phase 4b.2 hardware PASS recorded** in `docs/development/phase4b2-results.md`:
-   4,500 frames / 45 s at 100 fps, PCLK diagnostics +1,500..+1,757 ppm,
-   closed-loop correction (insert-to-drop 186:1), channel-pair gate correct
-   (16 drops before first PCLK measurement, inserts only thereafter), clean
-   teardown, no slab-full/I2S underrun/warning/fault.
-
-### Phase 4c — Stability + artifact verification — **TECHNICAL PASS (2026-07-26)**
-
-With GRTC driving the controller and SAMPLE_ADJUST consuming its output,
-the technical stability gates have been verified. See
-`docs/development/phase4c-technical-results.md`.
-
-- **10-minute uninterrupted stream**: PASS — `Done: 60000 frames in 600.00 s
-  (100.0 fps)`. No disconnect, no slab exhaustion, no underrun storms.
-- PCLK diagnostics active for full run: roughly +1,523 to +2,058 ppm.
-- Sample correction overwhelmingly insert direction: startup settled at 13
-  drops, then inserts rose monotonically; last logged `ins=51487 drops=13
-  (total=51500)`, average ~86 inserts/s. This is expected for SAMPLE_ADJUST
-  at this PCLK/HFINT offset — it does NOT indicate controller non-convergence.
-- Sample adjustments are **not** rare at this clock offset; HFINT/PCLK
-  mismatch requires frequent inserts (~86/s), which is the expected behavior
-  for the SAMPLE_ADJUST actuator.
-- **External digital I2S gate**: PASS — fx2lafw logic analyzer capture at
-  DAC pins during active 30 s Mode A stream confirms valid I2S waveforms:
-  BCK 1,525,637 Hz, LRCK 47,677 Hz, BCK/LRCK ratio 31.999701 (expected 32),
-  SDOUT nonconstant activity (324,633 transitions, high duty 0.494).
-  See `docs/development/phase4c-i2s-analyzer-results.md`.
-- **Audible quality**: UNAVAILABLE — user did not provide listening report.
-  This is not a failure and does not block further measurable work. Analog
-  output quality is not claimed.
+Results consolidated in `docs/development/phase4-acceptance-results.md`.
 
 ### Phase 4 risks (tracked, not deferred)
 
 - **R-4.1 CPU budget on single core**: SDC radio ISR + BT host ISO RX +
-  LC3 decode (×2 for Mode B) + I2S DMA refill + sample_adjust memmove, all
-  on the 128 MHz cpuapp. nRF5340 splits this across two cores. If the
-  budget blows, ISO RX packet loss (audio gaps) or I2S underruns result.
-  Mitigation: measure recv_cnt vs. expected SDU rate during 4a; if drops
-  scale with LC3 complexity, advance Phase 6 (FLPR offload) from the already-planned
-  schedule. Phase 5.0 instrumentation gives CPU budget numbers.
-- **R-4.2 Central ISO/CIS quirks**: the nRF5340DK `hci_uart` central
-  is the proven transport (ISO verified at 3000 packets/15 s). Any
-  other central (USB dongle, built-in adapter) must be independently
-  verified for ISO/CIS support before debugging receiver issues.
-- **R-4.3 nRF5340DK fallback as truth source**: if nRF54L15 streaming
-  fails on both centrals, flash the nRF5340DK receiver via the J-Link
-  (udev-fixed, OpenOCD working) and stream to it — it is the known-good
-  target. If it also fails, the bug is in the central/test setup, not the
-  nRF54L15 firmware.
+  LC3 decode (×2 for Mode B) + I2S DMA + ASRC, all on 128 MHz cpuapp.
+  Mitigated by FLPR offload (Phase 6).
+- **R-4.2 Central ISO/CIS quirks**: nRF5340DK `hci_uart` central is the
+  verified transport. Other centrals need independent ISO/CIS verification.
+- **R-4.3 nRF5340DK fallback as truth source**: known-good nRF5340 target
+  for debugging central/test setup issues.
 
-**Exit criterion (whole phase)**: 4a + 4b + 4c all green. Stable
-indefinitely-running audio stream on the nRF54L15 (verified: 10 minutes,
-zero faults); external digital I2S gate PASS at DAC pins (verified:
-fx2lafw, 30 s stream, BCK/LRCK ratio 31.999701); GRTC drift measurement
-active. Physical audibility marked UNAVAILABLE by user — not failed, not
-blocking further measurable work.
+**Exit criterion (whole phase)**: All sub-gates green (4a, 4b, 4c).
+See `docs/development/phase4-acceptance-results.md`.
 
-## Phase 5 — ASRC quality upgrade **(intended implementation work)**
+## Phase 5 — ASRC quality upgrade ✅ COMPLETE (2026-07-27)
 
-Phase 4 proves stability — 10-minute stream, zero faults, controller
-converged. But at measured PCLK offsets (+1,523..+2,058 ppm),
-SAMPLE_ADJUST produced ~86 inserts/s (51500 insertions/13 drops over
-10 min). Each sample insert/drop is a temporal discontinuity in the PCM
-stream. Even without listening evidence, frequent discontinuous insertion
-at this rate is sufficient engineering risk to require a continuous ASRC
-(86 inserts/s → average interval ~12 ms between discontinuities; audibility
-is not claimed from this number).
+cpuapp fixed-point linear stereo ASRC accepted. Mode A (two mono ASEs) +
+Mode B (single stereo ASE) each ran 600 s autonomous central streams on
+nRF54L15 with zero faults. SAMPLE_ADJUST actuator removed from production
+Kconfig; two actuators remain: APLL (nRF5340) and NONE (nRF54L15, ASRC
+consumes ppm). All 20 ASRC unit tests pass (native_sim). nRF5340 builds
+unchanged.
 
-Phase 5 adds a stateful cross-block fixed-point linear-interpolation ASRC
-on cpuapp. The same PI controller feeds the resampler ratio. The ASRC is a
-data-path resampler, not a hardware actuator: it consumes the controller
-correction (ppm) through an explicit API separate from the actuator
-interface. APLL (nRF5340) remains the hardware clock-steering actuator
-unchanged. SAMPLE_ADJUST remains selectable during Phase 5 for A/B
-comparison and rollback; it is removed only after ASRC acceptance. The
-architectural contract is: controller → correction → [APLL hardware trim OR
-data-path resampler (SAMPLE_ADJUST today, ASRC after acceptance)]. Whether
-the ASRC adapter is implemented as an actuator-choice entry or wired
-directly into the data path is a phase-design decision, not frozen here.
+### Architecture
 
-### 5.0 — Instrumentation baseline
+Stateful cross-block stereo s16 linear interpolation with continuous phase
+accumulator and sample history (one previous sample per channel) carried
+across block boundaries. No heap allocation; stack/static only. Reset state
+on stream stop/disconnect.
 
-Before adding ASRC code, instrument the existing data path to capture the
-SAMPLE_ADJUST baseline: callback-deadline headroom for Mode A and Mode B,
-whole data-path CPU budget (SDC + BT host + LC3 decode + I2S DMA +
-SAMPLE_ADJUST memmove), slab-range statistics (min/max/mean free count),
-repeat/underrun/push-failure counters over 10-minute runs. This measures the
-current system with SAMPLE_ADJUST — ASRC-specific cycle counts are measured
-after implementation and compared against this baseline. The baseline also
-feeds the R-4.1 CPU-budget question with measured numbers, not estimates.
+Controller output feeds resampler ratio: `source_step = 1 + ppm·1e-6`.
+Positive ppm → consume source faster → fewer output samples (equivalent to
+drop). Negative ppm → consume source slower → more output samples (equivalent
+to insert).
 
-### 5.1 — Resampler semantics (controller-preserving)
+ASRC replaces the fixed-rate converter on nRF54L15 path. nRF5340 stays
+identity bypass.
 
-The source-step semantics preserve the existing controller output sign
-convention:
+### Acceptance evidence
 
-- `source_step = input_rate / physical_output_rate * (1 + correction_ppm / 1e6)`
-- positive ppm → source_step > 1.0 → consume source faster → equivalent
-  to sample drop over time.
-- negative ppm → source_step < 1.0 → consume source slower → equivalent
-  to sample insert over time.
-
-Controller output goes directly into the ratio calculation; no sign flip
-or ambiguous "speed up / slow down" wording. The ratio is exposed as a
-Q32.32 fixed-point `source_step` (or equivalently justified fixed-point
-format chosen during phase design).
-
-### 5.2 — ASRC implementation
-
-- Stateful cross-block stereo s16 linear interpolation.
-- Continuous phase accumulator and sample history (one previous sample per
-  channel) carried across block boundaries — no per-block reset.
-- No heap allocation; stack/static only. Bounded output capacity: worst-case
-  output frame count is determined by the configured minimum `source_step`
-  (most negative ppm correction → smallest step → most output frames), plus
-  interpolation history margin. Compile-time capacity proof against
-  `MAX_OUTPUT_FRAMES` (currently 481 stereo frames in `src/audio_i2s.c`,
-  sized for 48→47,619 Hz drain plus one SAMPLE_ADJUST insert headroom) and
-  runtime assertion are required for the configured ppm bounds. Frames and
-  interleaved samples are not conflated.
-- Reset state on stream stop/disconnect. Silence prefill (I2S preamble
-  blocks) must not consume source phase — the resampler only advances
-  phase against real decoded audio. Physical-rate frame scheduling and
-  silence prefill may use a separate remainder helper without involving
-  the ASRC source phase.
-- ASRC replaces the current fixed-rate converter (`src/audio_rate_convert.c`)
-  on the nRF54L15 path. It honors the actual decoded frame count
-  (`sample_count`) passed into `audio_sink_push()` — not an intermediate
-  rate-converter output. The nRF5340 path stays unchanged (identity).
-- Account for current slab allocation: `MAX_OUTPUT_FRAMES=481` stereo frames
-  per block (defined in `audio_i2s.c`); `CONFIG_I2S_NRFX_TX_BLOCK_COUNT=12`
-  determines the number of slab blocks in the pool. Both are relevant to
-  capacity planning.
-
-### 5.3 — Testing
-
-- **Unit tests** (ztest, native_sim): long-run frame totals, sign chain
-  (positive ppm → fewer output samples over time), block-boundary
-  phase continuity, chunking invariance (same output regardless of input
-  block sizes), stereo isolation (L and R independent), constant/ramp/
-  full-scale input patterns, output capacity/canary checks, abrupt ppm
-  changes, deterministic 60,000-block run, host-reference digital-quality
-  comparison against Python float64 reference.
-- **Hardware tests**: Mode A + Mode B 10-minute autonomous central streams
-  on nRF54L15; zero faults/underruns/repeats/capacity failures; measured
-  callback deadline margin with ASRC active; external I2S activity and
-  BCK/LRCK ratio; objective digital PCM comparison loopback if a
-  trustworthy digital capture path can be set up.
-- **Regression**: nRF5340 builds and streams unchanged (APLL actuator,
-  identity resampler or bypass).
-
-### 5.4 — Acceptance
-
-Both targets build. All unit tests pass. nRF5340 regression zero. nRF54L15
-Mode A + Mode B 10-minute streams with zero faults. Measured callback
-deadline margin. Audibility is optional observation only — never a gate.
-SAMPLE_ADJUST removed from Kconfig choice after acceptance.
-
-### 5.5 — Likely files
-
-Based on current repo truth, likely new/modified files (exact API is a
-phase-design output, not frozen here):
-
-- `src/audio_asrc.{c,h}` — resampler module (state, phase accumulator,
-  stereo s16 linear interp, takes ppm correction through explicit API;
-  wiring into the data path is a phase-design decision — adapter entry
-  in the actuator choice or direct consumer in the audio pipeline).
-- `Kconfig` — new config for source-step fixed-point format, ppm bounds
-  for compile-time capacity proof.
-- `src/audio_i2s.c` — ASRC wired into the push path (replaces rate
-  converter on nRF54L15, identity on nRF5340); the existing
-  `consume_sample_adjustment()` path is already actuator-agnostic.
-- `tests/unit/asrc/` — new test suite.
+- 20/20 unit tests PASS (native_sim)
+- Mode A 600 s: 60,000 frames, zero faults
+- Mode B 600 s: 60,000 frames, zero faults
+- nRF5340 builds (regression deferred — no E83 probe)
+- Results: `docs/development/phase5-hardware-acceptance-results.md`
 
 ## Phase 6 — FLPR offload ✅ COMPLETE (2026-07-29)
 
@@ -666,10 +465,10 @@ official ASRC framework exists for it. Stages build incrementally.
   Live production uses ASRC API only.
 - Actuator set remains APLL (nRF5340) / NONE (nRF54L15).
 
-**Results**: 276 unit tests pass, nRF54L15 CPUAPP FLASH 502904 B /
-RAM 152244 B. Hardware: Mode A 120 s + true Mode B 120 s at 100 fps zero
-faults, Mode A 180 s zero faults. See
-`docs/development/phase6-stage5-optimize-close-handoff.md`.
+**Results**: 432 unit tests pass (396 C + 36 Python), nRF54L15 CPUAPP FLASH
+502904 B / RAM 152244 B. Hardware: Mode A 120 s + true Mode B 120 s at 100
+fps zero faults, Mode A 180 s zero faults. See
+`docs/development/phase6-stage5-results.md`.
 
 ### Gate criteria per stage
 
@@ -795,11 +594,11 @@ Recorded here so they are not re-litigated.
 
 | Option | Disposition | Reason |
 |---|---|---|
-| A. ASRC on cpuapp | **Adopted** (Phase 5 — intended implementation) | Linear interpolation at 48 kHz stereo; continuous-phase cross-block; measured CPU budget from Phase 5.0 instrumentation replaces estimates |
-| B. ASRC on FLPR | **Adopted** (Phase 6 — intended implementation) | Zero cpuapp ASRC load; costs IPC + fixed-point port + ~10 ms latency; RV32E no-FPU required |
-| C. FLPR bit-banged BCLK/LRCK (I2S slave) | **Rejected** | Any FLPR stall (cache miss, IPC, VEVIF) becomes clock jitter → audible; burns the FLPR entirely; needs physical jumper wires. Only unique benefit was bit-perfect output — for 16-bit LC3-decoded audio, resampling error sits below the codec noise floor, so the benefit is inaudible here. |
+| A. ASRC on cpuapp | **Adopted** (Phase 5 — complete) | Linear interpolation at 48 kHz stereo; continuous-phase cross-block; 600 s Mode A+B zero faults |
+| B. ASRC on FLPR | **Adopted** (Phase 6 — complete) | Zero cpuapp ASRC load; IPC + fixed-point port; RV32E no-FPU; 120 s Mode A+B zero faults |
+| E. Single-sample insert/drop | **Adopted then retired** (Phase 4 only) | Degenerate ASRC; superseded by linear ASRC in Phase 5 |
+| C. FLPR bit-banged BCLK/LRCK (I2S slave) | **Rejected** | Any FLPR stall becomes clock jitter → audible; burns FLPR entirely |
 | D. PWM-generated I2S clock (slave) | **Rejected** | Same bit-perfect argument as C; limited frequency resolution (~PCLK/N steps); needs physical wires + DPPI choreography to keep LRCK = BCLK/64. |
-| E. Single-sample insert/drop | **Adopted** (Phase 4) | Degenerate ASRC; ~10⁴× smaller artifact than the 10 ms packet repeat; no hardware change. |
 | F. External fractional-N oscillator (CS2200 class) | **Deferred to backlog** | Not discarded — becomes just another actuator behind the same interface (ppm → I²C). Requires PCB; industry standard for network-audio clock recovery (<1 ppb resolution). |
 | G. Crossfade smoothing | **Deferred to backlog** | Not an alternative; cheap mitigation for the emergency fallback path regardless of actuator choice. |
 
@@ -826,7 +625,7 @@ Current evidence, not forward-looking plan. Separated by verification state.
   firing. I2S20 hardware works.
 - PCLK32M clock source works; `PCLK32M_HFXO` UsageFault is tracked separately
   (not an I2S issue). Frequency analysis completed in Phase 4c — see
-  `docs/development/phase4c-i2s-analyzer-results.md`.
+  `docs/development/phase4-acceptance-results.md`.
 
 ### Old DAC failure/isolation evidence
 
@@ -841,18 +640,17 @@ Current evidence, not forward-looking plan. Separated by verification state.
   during active 30 s Mode A stream. BCK 1,525,637 Hz, LRCK 47,677 Hz,
   BCK/LRCK ratio 31.999701 (expected 32), SDOUT nonconstant activity.
   Digital I2S gate PASS. See
-  `docs/development/phase4c-i2s-analyzer-results.md`.
+  `docs/development/phase4-acceptance-results.md`.
 - Raw capture file at `/tmp/opencode/phase4c-i2s.sr` (not committed).
 
 ### Pending: audible quality
 
 - Technical stability gate PASS (Phase 4c): 10-minute uninterrupted stream,
-  zero faults, controller converged. See `docs/development/phase4c-technical-results.md`.
+  zero faults, controller converged. See `docs/development/phase4-acceptance-results.md`.
 - External digital I2S gate PASS at DAC pins: fx2lafw analyzer confirmed
-  valid I2S waveforms (BCK/LRCK ratio 31.999701). See
-  `docs/development/phase4c-i2s-analyzer-results.md`.
+  valid I2S waveforms (BCK/LRCK ratio 31.999701).
 - Physical audibility of ~86/s sample inserts at ~+1,800 ppm PCLK offset
   marked UNAVAILABLE by user — not failed, not blocking.
-- Phase 5 (linear ASRC) is planned implementation work — engineering
-  risk from ~86 discontinuous sample inserts/s at ~+1,800 ppm PCLK offset
-  is sufficient rationale without physical listening evidence.
+- Phase 5 linear ASRC completed and accepted (Mode A+B 600 s zero faults),
+  Phase 6 FLPR offload completed (Mode A+B 120 s zero faults). Physical
+  audibility remains UNAVAILABLE; measurable gates all PASS.

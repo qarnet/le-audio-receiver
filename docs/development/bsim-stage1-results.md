@@ -5,8 +5,7 @@
 
 ## Changes applied
 
-Per `bsim-stage1-final-fidelity-handoff.md` and
-`bsim-stage1-production-cleanup-handoff.md`:
+Per Stage 1 acceptance and production cleanup:
 
 1. **CONFIG_TEST decode bypass removed** — `bt_bap.c` no longer skips invalid SDUs
    in BSIM builds.  Invalid frames flow through the same PLC/decode path as

@@ -82,13 +82,6 @@ static void run_prep_work(void)
 	prep_work_fn(NULL);
 }
 
-static void run_recovery_work(void)
-{
-	k_work_cancel_delayable(&g_recovery_work);
-	k_work_cancel_delayable(&g_prep_work);
-	recovery_work_fn(NULL);
-}
-
 /* Build a valid ASRC pre-state from scratch. */
 static void build_valid_pre_state(struct audio_asrc_state *state)
 {

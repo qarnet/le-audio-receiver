@@ -10,10 +10,12 @@ the **nRF54L15** (Seeed Xiao).
 - SoftDevice-free link layer: BT_LL_SW_SPLIT (Zephyr open-source controller,
   required for ISO) on nRF5340; SDC controller on nRF54L15
 - Dual-platform PI clock-recovery controller (ppm output) with platform-specific
-  actuators: HFCLKAUDIO APLL trim (nRF5340) and sample insert/drop (nRF54L15).
+  actuators: HFCLKAUDIO APLL trim (nRF5340) and NONE (nRF54L15, ASRC consumes
+  controller ppm directly).
   Feedforward from PCLK-vs-GRTC frequency measurement (nRF54L15) plus per-block
-  I2S buffer-phase PI. Rate conversion for PCLK32M fixed-rate mismatch.
-- VCP volume, CAS, shell diagnostics, watchdog
+  I2S buffer-phase PI. Fixed-point linear stereo ASRC runs primary on FLPR
+  (RISC-V VPR) with identical cpuapp fallback.
+- VCP volume, shell diagnostics, watchdog
 
 ---
 
@@ -133,6 +135,19 @@ CJMCU-1334 outputs **line level** (no headphone amp on the breakout). Connect:
 | **Rout** | right channel → line-in R / headphone R via amp |
 | **AGND** | sleeve / line ground (already tied to GND above) |
 
+## Testing
+
+```bash
+# Run full local gate (all C + Python unit tests + BSim Stage 1)
+./scripts/test-all.sh
+
+# Requires: NCS v3.3.0 dev shell (direnv allow / nix develop).
+# BabbleSim Stage 1 is mandatory. scripts/bsim-env.sh derives BSIM_OUT_PATH;
+# missing BabbleSim prerequisites fail the gate.
+# Production firmware and dongle builds are run separately:
+#   fw-build-5340 && fw-build-54l15 && fw-build-dongle
+```
+
 ### If using the PCM5102A instead
 
 Same D0/D1/D2 (nRF54L15) or P1.15/P1.13/P1.12 (nRF5340) → BCLK / DIN / LRCK
@@ -208,8 +223,12 @@ before reflashing — `west flash` does not erase the settings partition.
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA) — implements `audio_sink.h` |
 | `src/audio_drift.c` | PI clock-recovery controller (ppm output, dual-platform) |
 | `src/audio_drift.h` | Controller API + APLL register constants |
+| `src/audio_asrc.c` | Fixed-point linear stereo ASRC (cpuapp path, FLPR fallback) |
+| `src/audio_asrc.h` | ASRC public API |
 | `src/audio_rate_convert.c` | Nearest-neighbor rate converter (PCLK32M mismatch fix) |
 | `src/audio_rate_convert.h` | Rate converter public API |
+| `src/audio_offload.c` | FLPR offload manager (handshake, IPC routing, fallback) |
+| `src/audio_offload.h` | Offload manager public API |
 | `src/audio_timing.h` | Platform timing interface (frequency error, GRTC scheduling) |
 | `src/audio_timing_math.c` | Timing math shared across platforms |
 | `src/audio_timing_nrf54.c` | nRF54L15 TIMER20-vs-GRTC PCLK measurement |
@@ -217,15 +236,31 @@ before reflashing — `west flash` does not erase the settings partition.
 | `src/stream_lifecycle.c` | Stream start/stop lifecycle (unit-testable) |
 | `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset, consume_sample_adjustment) |
 | `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator |
-| `src/audio_clock_actuator_sample_adjust.c` | nRF54L15 sample insert/drop actuator |
-| `src/audio_clock_actuator_none.c` | No-op actuator (testing only) |
+| `src/audio_clock_actuator_none.c` | nRF54L15 no-op actuator (ASRC consumes ppm directly) |
+| `src/audio_clock_actuator_sample_adjust.c` | Historical sample insert/drop (regression testing only) |
+| `src/flpr/` | FLPR firmware (RISC-V VPR): ASRC offload, ICMsg/VEVIF IPC |
+| `src/flpr_handshake.{c,h}` | cpuapp↔FLPR boot handshake + VEVIF signalling |
+| `src/flpr_protocol.h` | Shared protocol constants (ring layout, commands) |
+| `src/flpr_ring.{c,h}` | SPSC ring buffer (shared SRAM) |
+| `src/flpr_ring_mgr.{c,h}` | Ring manager: paired input/output rings |
+| `src/flpr_runtime.{c,h}` | FLPR runtime: IPC submit, watchdog, fault detection |
+| `src/flpr_audio_process.{c,h}` | FLPR audio block wrapper (metadata + PCM) |
+| `src/flpr_cache.c` | Cache maintenance for shared SRAM (ARMv8-M / RISC-V) |
+| `src/audio_perf.{c,h}` | Data-path CPU budget instrumentation |
+| `src/audio_stats.{c,h}` | Streaming statistics (RX, decode, PLC, I2S) |
+| `src/audio_shell.c` | Shell diagnostics (`audio status`, `flpr status`) |
+| `src/audio_volume.{c,h}` | VCP volume control |
 | `boards/ebyte/e83_nrf5340/` | Custom nRF5340 board: I2S0 pins, ACLK 12.288 MHz, QSPI disabled |
-| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2 |
+| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2, FLPR IPC SRAM, TIMER20 reserved |
 | `prj.conf` | App Kconfig |
 | `sysbuild.cmake` | Applies SW Split DT + Kconfig overlays to `hci_ipc` |
-| `tests/` | Unit tests (drift, actuator, timing, lifecycle, decode, rate_convert) |
+| `tests/unit/` | 16 C test suites (396 tests) + 2 Python suites (36 tests) |
+| `tests/bsim/` | BabbleSim Stage 1: sink-only dual-core scenario |
+| `tests/hardware/` | Hardware validation scripts (I2S, GPIO, fault recovery) |
+| `scripts/test-all.sh` | Canonical full local gate (all C + Python + BSim Stage 1) |
 | `docs/design.md` | Accepted design doc + phased plan (Phases 0–6) |
 | `docs/flashing.md` | Dual-core flash workflow in depth |
+| `STATUS.md` | Current status, build diagnostics, test results, open issues |
 
 ---
 

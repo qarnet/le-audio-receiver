@@ -1,8 +1,7 @@
 """
 Unit tests for flpr_stall_gate.py — index-based fake serial streams.
 
-v2: deterministic 80ms hold (zero reads during hold — no index shift),
-    no recovery-text gate, baseline captured immediately after clear ACK.
+v3: timed 60ms auto-clear stall (single command, single ACK, no hold loop).
 """
 
 import sys
@@ -18,7 +17,7 @@ from flpr_stall_gate import (
     RE_COUNTERS,
     RE_RECOVERY,
     RE_PROBATION,
-    RE_STALL_ACK,
+    RE_STALL_TIMED_ACK,
     RE_RECOVERY_OK,
 )
 
@@ -46,16 +45,16 @@ OFFLOAD_START_LOW_SUCCESS = """\
   RTT         : min=736 cyc (736 us) max=883 cyc (883 us) avg=740 cyc (740 us) n=200
 """
 
-STALL_ACK_CONS1 = "FLPR stall applied: 0x01 (cons_in=1 prod_out=0)"
-STALL_ACK_CONS0 = "FLPR stall applied: 0x00 (cons_in=0 prod_out=0)"
+# v3 timed stall ACK format
+TIMED_STALL_ACK = "FLPR timed stall applied: bits=0x01 duration=60 ms"
 
 RECOVERY_OK_LINE = (
     "[00:22:37.451] audio_offload: offload recovery OK: "
     "epoch=1357451738 gen=5 tries=1 backoff=100 ms"
 )
 
-# Baseline captured immediately after clear ACK — fallback already > 0
-# (blocks that faulted during the 80ms stall window)
+# Baseline captured in Step 4 (immediately after timed stall ACK).
+# fallback already > 0 from blocks that faulted during the 60ms stall window.
 OFFLOAD_BASELINE = """\
 --- Audio offload ---
   State       : ACTIVE / epoch=1357451738 gen=6
@@ -138,15 +137,11 @@ class TestRegexParsing(unittest.TestCase):
         self.assertIsNotNone(m)
         self.assertEqual(int(m.group(3)), 0)
 
-    def test_stall_ack_cons1(self):
-        m = RE_STALL_ACK.search(STALL_ACK_CONS1)
+    def test_stall_timed_ack(self):
+        m = RE_STALL_TIMED_ACK.search(TIMED_STALL_ACK)
         self.assertIsNotNone(m)
-        self.assertEqual(int(m.group(2)), 1)
-
-    def test_stall_ack_cons0(self):
-        m = RE_STALL_ACK.search(STALL_ACK_CONS0)
-        self.assertIsNotNone(m)
-        self.assertEqual(int(m.group(2)), 0)
+        self.assertEqual(int(m.group(1), 16), 0x01)
+        self.assertEqual(int(m.group(2)), 60)
 
     def test_recovery_ok(self):
         self.assertTrue(RE_RECOVERY_OK.search(RECOVERY_OK_LINE))
@@ -184,33 +179,31 @@ class TestFakeSerial(unittest.TestCase):
     def test_write_recording(self):
         fs = FakeSerial({})
         fs.write(b"flpr offload\n")
-        fs.write(b"flpr ring stall_flpr 1\n")
+        fs.write(b"flpr ring stall_flpr_ms 1 60\n")
         self.assertIn("flpr offload", fs.written[0])
-        self.assertIn("stall_flpr 1", fs.written[1])
+        self.assertIn("stall_flpr_ms 1 60", fs.written[1])
 
 
 class TestGateSuccess(unittest.TestCase):
-    """Full success: ACTIVE+success≥500 → stall → 80ms hold → clear
-    → baseline → evidence (probation cleared, fallback>0, +100 success)."""
+    """Full success: ACTIVE+success>=500 → timed stall → ACK
+    → baseline → fallback evidence → probation cleared."""
 
     def _make_schedule(self):
-        """Deterministic schedule for v2 (zero reads during hold).
+        """Deterministic schedule for v3 timed stall.
 
-        read_all() calls:
+        read_all() calls (0-indexed schedule keys):
           #0: Step 1 → OFFLOAD_ACTIVE_START (ACTIVE, success=500) → break
-          #1: Step 3 iter 1 → RECOVERY_OK_LINE (no stall ACK)
-          #2: Step 3 iter 2 → STALL_ACK_CONS1 (stall ACK found! break)
-         Hold loop: zero reads.
-          #3: Step 6 iter 1 → STALL_ACK_CONS0 (clear ACK found! break)
-          #4: Step 7 → OFFLOAD_BASELINE (success=530, fallback=30)
-          #5: Step 8 drain → empty
-          #6: Step 8 status poll → OFFLOAD_EVIDENCE → GATE PASS
+          #1: Step 3 iter 1 → TIMED_STALL_ACK → break
+          #2: Step 4 → OFFLOAD_BASELINE (success=530, fallback=30)
+          #3: Step 5 first read → (empty / discard)
+          #4: Step 5 second read → OFFLOAD_BASELINE (fallback=30>0 → break)
+          #5: Step 6 first read → (empty / discard)
+          #6: Step 6 second read → OFFLOAD_EVIDENCE → GATE PASS
         """
         return {
             0: OFFLOAD_ACTIVE_START,
-            1: RECOVERY_OK_LINE,
-            2: STALL_ACK_CONS1,
-            3: STALL_ACK_CONS0,
+            1: TIMED_STALL_ACK,
+            2: OFFLOAD_BASELINE,
             4: OFFLOAD_BASELINE,
             6: OFFLOAD_EVIDENCE,
         }
@@ -228,13 +221,9 @@ class TestGateSuccess(unittest.TestCase):
 
         self.assertTrue(result.passed, f"Gate should pass: {result.error}")
         self.assertEqual(result.error, "")
-        self.assertGreaterEqual(
-            result.stall_to_clear_ms,
-            80,
-            f"stall→clear={result.stall_to_clear_ms}ms < 80ms",
-        )
-        self.assertIn("flpr ring stall_flpr 1", fake.written)
-        self.assertIn("flpr ring stall_flpr 0", fake.written)
+        self.assertGreater(result.ack_time, 0, "timed stall ACK timestamp captured")
+        self.assertGreater(result.first_fallback_time, 0, "fallback timestamp captured")
+        self.assertIn("flpr ring stall_flpr_ms 1 60", fake.written)
         self.assertEqual(result.final_status.get("state"), "ACTIVE")
         self.assertEqual(result.final_status.get("probation_cleared"), 1)
         self.assertEqual(result.final_status.get("fallback"), 30)
@@ -243,59 +232,9 @@ class TestGateSuccess(unittest.TestCase):
             result.final_status.get("success", -1), result.baseline_success + 100
         )
 
-    @patch("flpr_stall_gate.time.sleep")
-    @patch("flpr_stall_gate.time.monotonic")
-    def test_first_recovery_timestamp_captured(self, mock_mono, mock_sleep):
-        """Recovery OK text from accumulated buffer is captured after hold."""
-        mock_sleep.return_value = None
-        gen = _mono_steady(1000.0, 0.02)
-        mock_mono.side_effect = lambda: next(gen)
-
-        fake = FakeSerial(self._make_schedule())
-        runner = GateRunner(fake, total_timeout=10.0, status_interval=0.01)
-        result = runner.run()
-
-        self.assertTrue(result.passed)
-        self.assertGreater(
-            result.first_recovery_time,
-            0,
-            "Should capture recovery timestamp from accumulated buffer",
-        )
-        self.assertGreater(result.stall_to_clear_ms, 0)
-
-    @patch("flpr_stall_gate.time.sleep")
-    @patch("flpr_stall_gate.time.monotonic")
-    def test_clear_not_blocked_by_missing_recovery(self, mock_mono, mock_sleep):
-        """When recovery OK text never appears, clear still fires after
-        80ms hold — gate proceeds with evidence check."""
-        mock_sleep.return_value = None
-        gen = _mono_steady(1000.0, 0.02)
-        mock_mono.side_effect = lambda: next(gen)
-
-        # Schedule without RECOVERY_OK_LINE — stall ACK still at index 2
-        fake = FakeSerial(
-            {
-                0: OFFLOAD_ACTIVE_START,
-                2: STALL_ACK_CONS1,  # Step 3 finds stall ACK on second read
-                3: STALL_ACK_CONS0,
-                4: OFFLOAD_BASELINE,
-                6: OFFLOAD_EVIDENCE,
-            }
-        )
-        runner = GateRunner(fake, total_timeout=10.0, status_interval=0.01)
-        result = runner.run()
-
-        self.assertTrue(
-            result.passed, f"Should pass even without recovery text: {result.error}"
-        )
-        self.assertEqual(
-            result.first_recovery_time, 0.0, "No recovery timestamp when text missing"
-        )
-        self.assertGreaterEqual(result.stall_to_clear_ms, 80)
-
 
 class TestGateMissingStallAck(unittest.TestCase):
-    """Gate fails when stall ACK (cons_in=1) never arrives."""
+    """Gate fails when timed stall ACK never arrives."""
 
     @patch("flpr_stall_gate.time.sleep")
     @patch("flpr_stall_gate.time.monotonic")
@@ -309,11 +248,11 @@ class TestGateMissingStallAck(unittest.TestCase):
         result = runner.run()
 
         self.assertFalse(result.passed)
-        self.assertIn("stall ACK", result.error)
+        self.assertIn("timed stall ACK", result.error)
 
 
 class TestGateExhaustion(unittest.TestCase):
-    """Gate fails when max_exhaustion_count > 0."""
+    """Gate fails when max_exhaustion_count > 0 in Step 6 evidence poll."""
 
     @patch("flpr_stall_gate.time.sleep")
     @patch("flpr_stall_gate.time.monotonic")
@@ -325,11 +264,10 @@ class TestGateExhaustion(unittest.TestCase):
         fake = FakeSerial(
             {
                 0: OFFLOAD_ACTIVE_START,
-                1: RECOVERY_OK_LINE,
-                2: STALL_ACK_CONS1,
-                3: STALL_ACK_CONS0,
-                4: OFFLOAD_BASELINE,
-                6: OFFLOAD_ACTIVE_EXHAUSTION,  # exhaustion=1 → fail
+                1: TIMED_STALL_ACK,
+                2: OFFLOAD_BASELINE,  # Step 4 baseline
+                4: OFFLOAD_BASELINE,  # Step 5 fallback evidence
+                6: OFFLOAD_ACTIVE_EXHAUSTION,  # Step 6: exhaustion=1 → fail
             }
         )
         runner = GateRunner(fake, total_timeout=10.0, status_interval=0.01)
@@ -352,10 +290,8 @@ class TestGateNoFallback(unittest.TestCase):
         fake = FakeSerial(
             {
                 0: OFFLOAD_ACTIVE_START,
-                1: RECOVERY_OK_LINE,
-                2: STALL_ACK_CONS1,
-                3: STALL_ACK_CONS0,
-                4: OFFLOAD_BASELINE_NO_FALLBACK,  # fallback=0
+                1: TIMED_STALL_ACK,
+                2: OFFLOAD_BASELINE_NO_FALLBACK,  # fallback=0
                 # Polls keep returning no-fallback → timeout
             }
         )
@@ -385,7 +321,7 @@ class TestGateLowStartSuccess(unittest.TestCase):
 
 
 class TestGateNotActiveAtStart(unittest.TestCase):
-    """Gate retries until ACTIVE+success≥500 appears."""
+    """Gate retries until ACTIVE+success>=500 appears."""
 
     @patch("flpr_stall_gate.time.sleep")
     @patch("flpr_stall_gate.time.monotonic")
@@ -399,11 +335,10 @@ class TestGateNotActiveAtStart(unittest.TestCase):
                 0: OFFLOAD_PREPARING,
                 1: OFFLOAD_PREPARING,
                 2: OFFLOAD_ACTIVE_START,  # third poll: ACTIVE + success=500
-                3: RECOVERY_OK_LINE,
-                4: STALL_ACK_CONS1,
-                5: STALL_ACK_CONS0,
-                6: OFFLOAD_BASELINE,
-                8: OFFLOAD_EVIDENCE,
+                3: TIMED_STALL_ACK,  # Step 3 finds ACK on first try
+                4: OFFLOAD_BASELINE,  # Step 4 baseline
+                6: OFFLOAD_BASELINE,  # Step 5 fallback evidence
+                8: OFFLOAD_EVIDENCE,  # Step 6 evidence → pass
             }
         )
         runner = GateRunner(fake, total_timeout=10.0, status_interval=0.01)
@@ -415,7 +350,8 @@ class TestGateNotActiveAtStart(unittest.TestCase):
 
 
 class TestGateBaselineCapturedImmediately(unittest.TestCase):
-    """Baseline success captured right after clear ACK, not after probation."""
+    """Baseline success captured right after timed stall ACK (Step 4),
+    not after probation."""
 
     @patch("flpr_stall_gate.time.sleep")
     @patch("flpr_stall_gate.time.monotonic")
@@ -424,13 +360,14 @@ class TestGateBaselineCapturedImmediately(unittest.TestCase):
         gen = _mono_steady(1000.0, 0.02)
         mock_mono.side_effect = lambda: next(gen)
 
+        # Schedule OFFLOAD_BASELINE (fallback=30) at Step 4 baseline read,
+        # and OFFLOAD_EVIDENCE (success=700) at Step 6 evidence read.
         fake = FakeSerial(
             {
                 0: OFFLOAD_ACTIVE_START,
-                1: RECOVERY_OK_LINE,
-                2: STALL_ACK_CONS1,
-                3: STALL_ACK_CONS0,
-                4: OFFLOAD_BASELINE,  # baseline=530, fallback=30
+                1: TIMED_STALL_ACK,
+                2: OFFLOAD_BASELINE,  # baseline=530, fallback=30
+                4: OFFLOAD_BASELINE,  # Step 5 fallback evidence
                 6: OFFLOAD_EVIDENCE,  # success=700 >= 530+100
             }
         )
@@ -443,35 +380,6 @@ class TestGateBaselineCapturedImmediately(unittest.TestCase):
         )
         self.assertGreaterEqual(
             result.final_status.get("success", -1), result.baseline_success + 100
-        )
-
-
-class TestGateClearAckCorrectIndex(unittest.TestCase):
-    """Clear ACK searched via finditer — finds cons_in=0 even when
-    cons_in=1 ACK is also in accumulated text."""
-
-    @patch("flpr_stall_gate.time.sleep")
-    @patch("flpr_stall_gate.time.monotonic")
-    def test_clear_ack_found_after_stall_ack(self, mock_mono, mock_sleep):
-        mock_sleep.return_value = None
-        gen = _mono_steady(1000.0, 0.02)
-        mock_mono.side_effect = lambda: next(gen)
-
-        fake = FakeSerial(
-            {
-                0: OFFLOAD_ACTIVE_START,
-                1: RECOVERY_OK_LINE,
-                2: STALL_ACK_CONS1,
-                3: STALL_ACK_CONS0,  # both ACKs present in accumulated text
-                4: OFFLOAD_BASELINE,
-                6: OFFLOAD_EVIDENCE,
-            }
-        )
-        runner = GateRunner(fake, total_timeout=10.0, status_interval=0.01)
-        result = runner.run()
-
-        self.assertTrue(
-            result.passed, f"Should find clear ACK via finditer: {result.error}"
         )
 
 

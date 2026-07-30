@@ -22,11 +22,7 @@ static uint8_t output_payload[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
 static struct flpr_ring_slot_meta input_meta;
 static struct flpr_ring_slot_meta output_meta;
 
-/* Reference ASRC for fallback continuity tests. */
-static struct audio_asrc ref_asrc;
-static int16_t ref_prev_l, ref_prev_r;
-static bool ref_prev_valid;
-
+/* Reference output buffer for ASRC post-state comparison tests. */
 static uint8_t ref_output[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
 
 /* ── Setup ───────────────────────────────────────────────────────── */
@@ -38,14 +34,7 @@ static void test_setup(void *fixture)
 	memset(output_payload, 0, sizeof(output_payload));
 	memset(&input_meta, 0, sizeof(input_meta));
 	memset(&output_meta, 0, sizeof(output_meta));
-	memset(&ref_asrc, 0, sizeof(ref_asrc));
-	ref_prev_l = 0;
-	ref_prev_r = 0;
-	ref_prev_valid = false;
 	memset(ref_output, 0, sizeof(ref_output));
-
-	/* Initialize reference ASRC for continuity tests. */
-	audio_asrc_init(&ref_asrc, 48000, 48000);
 }
 
 /* ── Helper: fill input with deterministic stereo ramp ───────────── */
@@ -58,16 +47,6 @@ static void fill_input_ramp(uint32_t base_sample)
 		int32_t v = (int32_t)((base_sample * 2 + i) % 32767);
 		p[i] = (int16_t)v;
 	}
-}
-
-/* Helper: call reference ASRC directly for comparison. */
-static int ref_process_block(uint32_t input_frames, int32_t ppm, size_t *out_produced)
-{
-	size_t consumed;
-	return audio_asrc_process(&ref_asrc, (const int16_t *)input_payload, input_frames,
-				  (int16_t *)ref_output, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, ppm,
-				  ref_prev_l, ref_prev_r, ref_prev_valid, &consumed, out_produced,
-				  &ref_prev_l, &ref_prev_r);
 }
 
 /* ── Test 1: Generic state export/import roundtrip ───────────────── */

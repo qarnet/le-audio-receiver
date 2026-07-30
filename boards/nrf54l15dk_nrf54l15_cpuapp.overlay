@@ -80,7 +80,7 @@
 	 * and the TX slab filling with undelivered buffers.
 	 *
 	 * Clock accuracy/jitter is HFINT-grade (RC, ~±250 ppm), which is
-	 * fine for the sample-insert/drop drift actuator; an external
+	 * fine for the ASRC drift actuator; an external
 	 * low-jitter MCK is not wired on the Xiao.
 	 */
 	clock-source = "PCLK32M";

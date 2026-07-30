@@ -96,14 +96,8 @@ teardown.  Phase 4c (10-minute stability + listening test): **Technical
 PASS** (60,000 frames / 600.00 s, zero disconnect, zero
 slab-full/underrun/warning/error/fault, clean teardown).  Physical
 audibility UNAVAILABLE (user did not provide listening report) — not failed,
-not blocking further measurable work. Phase 5 ASRC is planned implementation
-work — see `docs/design.md` Phase 5.
-See `docs/development/phase4b1-results.md` for Phase 4b.1 hardware PASS
-evidence (3,000 frames / 30 s, +1,665..+1,884 ppm),
-`docs/development/phase4b2-results.md` for Phase 4b.2 hardware PASS
-evidence, and
-`docs/development/phase4c-technical-results.md` for Phase 4c technical
-PASS evidence.
+not blocking further measurable work. Phase 5 ASRC is complete (see below).
+Phase 4 evidence consolidated in `docs/development/phase4-acceptance-results.md`.
 
 | Test | Result |
 |------|--------|
@@ -116,20 +110,15 @@ PASS evidence.
 | lifecycle unit tests | PASS |
 | decode unit tests | PASS |
 | rate_convert unit tests | PASS |
+| flpr unit tests | PASS (6 suites: handshake, protocol, ring, ring_mgr, runtime, audio_process) |
+| audio_offload unit tests | PASS |
+| offload_asrc unit tests | PASS |
 | perf unit tests | PASS |
-| Mode A 600 s (nRF54L15) | PASS — 60000 frames, zero faults |
-| Mode B 600 s (nRF54L15) | PASS — 60000 frames, zero faults |
-3,500 frames at 100 fps, zero slab-full drops, zero DMA underruns,
-I2S DMA started cleanly, push_ret=0 consistently. Root cause was fixed
-PCLK32M hardware-rate mismatch (~47,619 Hz LRCK vs 48,000 Hz decoder output)
-plus fixed 480-frame writes — not PI controller gain. Fix: bounded
-nearest-neighbor rate converter maps 480 input → 476/477 output frames per
-block. See `docs/development/phase4a2-rate-conversion-results.md`. Phase 4b
-GRTC + PCLK feedforward + SAMPLE_ADJUST now operational (see Phase 4b.1/4b.2
-results above). Physical audibility UNAVAILABLE (user did not provide
-listening report); Phase 5 ASRC is planned implementation work.
+| Python gate tests | 36/36 PASS (gate + flpr_stall_gate) |
+| BSIM Stage 1 | PASS (hash=0xFE0D4245 deterministic) |
+| Total unit tests | 432 PASS (396 C + 36 Python) |
 
-### Build warning diagnostics (2026-07-27)
+### Build warning diagnostics (2026-07-30)
 
 Neither target produces compiler warnings in application or Zephyr source.
 All printed diagnostics are Kconfig/CMake configuration messages.
@@ -146,14 +135,15 @@ All printed diagnostics are Kconfig/CMake configuration messages.
 | Experimental `BT_CTLR_PERIPHERAL_ISO` | Required for ISO | Peripheral ISO support required |
 | `SB_CONFIG_PARTITION_MANAGER` sysbuild warning | Required sysbuild infrastructure | Partition manager required by NCS build system |
 
-**nRF54L15 (5 diagnostics):**
+**nRF54L15 configuration diagnostics:**
 
 | Diagnostic | Classification | Cannot remove because |
 |---|---|---|
-| Deprecated `PARTITION_MANAGER` / `_ENABLED` | NCS v3.3.0 SDK deprecation | Same as nRF5340 |
+| FLPR `UART_CONSOLE=y` resolves to `n` | Upstream cpuflpr board defconfig conflict | Board enables UART console; FLPR image deliberately disables `SERIAL` and `CONSOLE` because it has no UART |
+| FLPR/CPUAPP reserved-memory unit-address and `simple_bus_reg` warnings | Intentional downstream overlay of stock `nordic-flpr` memory nodes | Stock node names retain old unit addresses while repo overrides `reg` to reserve IPC and 64 KiB FLPR SRAM; resolved addresses and hardware operation are verified |
+| FLPR stock RRAM `avoid_unnecessary_addr_size` warning | Upstream nRF54L15 DTS structure | Emitted from stock `rram@165000`; repo does not define that node |
 | `__ASSERT()` statements globally ENABLED | Zephyr informational | Not a defect |
 | `drivers__watchdog`: No SOURCES given | Zephyr internal: `CONFIG_WATCHDOG=y` but no DT node on nRF54L15 board | WD disabled on nRF54L15 would change firmware behavior (watchdog is desired) and is out of scope for closeout; DT node is board-level, not repo |
-| `SB_CONFIG_PARTITION_MANAGER` sysbuild warning | Required sysbuild infrastructure | Same as nRF5340 |
 
 ## Hardware in use
 
@@ -205,9 +195,9 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
 | Standalone I2S20 tone test | 20.001 s, 2,016 blocks fed, zero EIO/underrun. ENABLE=1, PSEL correct, FRAMESTART firing. |
 | Old DAC digital wires connected, MUTE low | D1/LRCK held high — no toggling. Breakout/wiring incompatible or defective. |
 | Old DAC digital wires removed | D1/LRCK toggles. GPIO toggling confirmed. |
-| Main receiver with new DAC (Phase 4c) | **Technical PASS** — 60,000 frames / 600.00 s, zero disconnect, zero slab-full/underrun/warning/error/fault, clean teardown. See `docs/development/phase4c-technical-results.md`. |
-| External I2S analyzer | **PASS** — 24 MHz fx2lafw capture at DAC pins: BCK 1,525,637.347 Hz, LRCK 47,676.613 Hz, ratio 31.999701, SDOUT active. See `docs/development/phase4c-i2s-analyzer-results.md`. |
-| Phase 4a.2 rate conversion | **PASS** — 35 s stream, 0 slab-full, 0 underrun. Fixed-rate converter matches PCLK32M drain. See `docs/development/phase4a2-rate-conversion-results.md`. |
+| Main receiver with new DAC (Phase 4c) | **Technical PASS** — 60,000 frames / 600.00 s, zero disconnect, zero slab-full/underrun/warning/error/fault, clean teardown. See `docs/development/phase4-acceptance-results.md`. |
+| External I2S analyzer | **PASS** — 24 MHz fx2lafw capture at DAC pins: BCK 1,525,637.347 Hz, LRCK 47,676.613 Hz, ratio 31.999701, SDOUT active. See `docs/development/phase4-acceptance-results.md`. |
+| Phase 4a.2 rate conversion | **PASS** — 35 s stream, 0 slab-full, 0 underrun. Fixed-rate converter matches PCLK32M drain. See `docs/development/phase4-acceptance-results.md`. |
 
 ### Next actions (ordered)
 
@@ -220,9 +210,9 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
   5. ~~**Phase 6** — FLPR offload~~ → COMPLETE (2026-07-29). Stages 0–5 accepted.
      FLPR ASRC offload with cpuapp fallback. Stage 5: removed dead identity
      submit API + 1920 B scratch buffer, migrated lifecycle/recovery tests to
-     ASRC, 276 unit tests pass, nRF54L15 CPUAPP FLASH 502904 B / RAM 152244 B.
+     ASRC, 432 unit tests pass, nRF54L15 CPUAPP FLASH 502904 B / RAM 152244 B.
      Hardware: Mode A 120 s + Mode B 120 s at 100 fps, zero faults.
-     See `docs/development/phase6-stage5-optimize-close-handoff.md`.
+     See `docs/development/phase6-stage5-results.md`.
    6. **BabbleSim** — cross-cutting verification track (research + implementation).
       Provision environment, fix sysbuild/harness, build smallest-useful
       nRF5340bsim dual-core scenario. See `docs/design.md` BabbleSim section.
@@ -235,7 +225,7 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
       duplicate hardware coverage under unmodeled I2S/FLPR.
       See `docs/development/bsim-stage1-results.md`.
    8. ~~**Phase 5 Final Gate (FLPR + cpuapp fallback)**~~ → COMPLETE (Phase 6 Stages 0–5).
-      All gates met; 276 unit tests pass; nRF54L15 Mode A/B hardware proven.
+      All gates met; 432 unit tests pass; nRF54L15 Mode A/B hardware proven.
 
 ### hci_usb firmware cannot do ISO (settled — don't revisit)
 
@@ -292,7 +282,7 @@ sleep 3
 sudo btmgmt --index hci0 power on
 sudo btmgmt --index hci0 io-cap 3     # NINO — required for JustWorks receiver
 sudo btmgmt --index hci0 sc on        # receiver requires SC pairing
-# verify: settings should include "powered le secure-conn static-addr cis-central"
+# verify: settings should include "powered le secure-conn cis-central"
 ```
 
 If `btmgmt` reports no adapter, btattach isn't running or the DK
@@ -313,8 +303,8 @@ Expected: `ACL link up` → `ServicesResolved` → 2× SelectProperties →
 Receiver console (serial-mcp on `/dev/ttyACM0`) during a good run:
 `Pairing complete, bonded: 1`, 2× `ASE Config`, `LC3 decoder[0/1]`,
 `Stream[x] started`, `audio_i2s: I2S DMA started` — then steady-state
-streaming with sample-insert/drop corrections logged at startup and every
-500th adjustment; no slab-full or underrun events in steady state.
+streaming with ASRC correction active; no slab-full or underrun events
+in steady state.
 
 ### 4. Verify ISO actually crossed HCI (optional)
 
@@ -335,7 +325,7 @@ sudo btmon -i hci0 -r /tmp/btmon.btsnoop 2>/dev/null | grep -c "Number of Comple
 | 2 | Dongle netcore had no ISO / ext-adv / coded-PHY tuning | Netcore conf with `BT_ISO_CENTRAL=y`, `BT_MAX_CONN=2`, `CONN_ISO_STREAMS=2`, `BT_EXT_ADV=y`, `BT_CTLR_PHY_CODED=n`, `BT_CTLR_PRIVACY=n` |
 | 3 | Kernel LE connect uses accept-list filtered scan — broken on SDC (zero reports, even for legacy advertisers) | Raw-HCI direct `LE Extended Create Connection` via `scripts/hci_raw_connect.py`, wired into `bap_central.py` |
 | 4 | BlueZ demanded MITM; receiver is JustWorks-only (`CONFIG_BT_SMP_ENFORCE_MITM=n`) | NINO agent + `btmgmt io-cap 3` (adapter-level IO cap must also be NINO — kernel uses it for auto-security SMP) |
-| 5 | Kernel mgmt `Pair Device` on raw-created conn completes instantly (~6 µs) → BlueZ's `pair_device_complete` clears bonding early → auto-rejects the SMP User Confirmation (CVE-2020-26555: kernels always confirm JustWorks) | Script no longer calls `Pair()`; relies on BlueZ auto-security via GATT (encrypted access to PACS triggers kernel SMP directly). NINO agent's `RequestAuthorization` accepts the confirmation. |
+| 5 | Pairing on a raw-HCI-created connection raced BlueZ ownership and rejected SMP confirmation | Current flow gives BlueZ ownership first, then calls asynchronous `Device.Pair()` before PACS/ASCS access. NINO agent accepts Just Works authorization. |
 | 6 | Stale bond on PC vs wiped receiver keys → auth failure loop | Deleted `/var/lib/bluetooth/<adapter>/<receiver>/` bond dir, power-cycled hci0 (`btmgmt power off/on` flushes kernel key store — bluetoothd restart alone does not) |
 | 7 | Receiver kernel panic on disconnect after stream (nrfx_i2s ASSERT on de-initialized instance) | `audio_sink_stop()` sends `TRIGGER_PREPARE` before `TRIGGER_DROP` (`src/audio_i2s.c`) |
 | 8 | Zombie SDC connection slots on the dongle netcore after repeated raw-HCI connects without clean disconnect (`Connection Rejected 0x0d`) | `bap_central.py` cleanup now calls BlueZ `Device1.Disconnect()` (graceful HCI disconnect) then terminates the raw-HCI helper. Three consecutive runs with no DK reset. `fw-reset-dongle` helper for recovery. |
@@ -375,9 +365,11 @@ on close).
 | Audio pipeline | `audio_sink.h`, `audio_i2s.c`, `audio_decode.c` | Sink interface → I2S DMA (slab allocator), LC3 decode + channel routing |
 | Clock recovery | `audio_drift.c`, `audio_drift.h` | PI controller: PCLK feedforward + phase term, ppm output |
 | Actuators | `audio_clock_actuator_apll.c`, `audio_clock_actuator_none.c` | APLL (nRF5340) or NONE (nRF54L15, ASRC consumes ppm) |
+| ASRC | `audio_asrc.{c,h}` | Fixed-point linear stereo ASRC (cpuapp + FLPR fallback) |
+| Offload | `audio_offload.{c,h}`, `flpr_*.{c,h}`, `src/flpr/` | FLPR offload manager + firmware |
 | Rate conversion | `audio_rate_convert.c` | Nearest-neighbor, 480→476/477 frames/block for PCLK32M mismatch |
 | Timing (nRF54L15) | `audio_timing_nrf54.c` | TIMER20-vs-GRTC PCLK freq measurement, 1 s intervals |
-| Central driver | `scripts/bap_central.py`, `scripts/hci_raw_connect.py` | Raw-HCI direct connect, NINO agent, auto-security via GATT |
+| Central driver | `scripts/bap_central.py`, `scripts/hci_raw_connect.py` | Raw-HCI address bootstrap, BlueZ-owned connection, asynchronous `Device.Pair()`, NINO agent |
 | Dongle firmware | `dongle/hci_uart/{app,netcore}.conf`, `scripts/bin/fw-build-dongle`, `scripts/bin/fw-flash-dongle` | nRF5340DK hci_uart central, ISO capable |
 
 ## Gotchas to remember

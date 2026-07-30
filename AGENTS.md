@@ -79,12 +79,12 @@ supporting both nRF5340 and nRF54L15. Read it before structural changes.
 Current status: **Phase 5 landed and closed** — cpuapp fixed-point linear ASRC
 accepted (Mode A + Mode B, each 600 s, zero faults). Actuators reduced to two:
 APLL (nRF5340) and NONE (nRF54L15, ASRC consumes ppm). **Phase 6 (FLPR
-offload) complete** — Stages 0–5 accepted, 276 unit tests pass, nRF54L15
-hardware Mode A + Mode B 120 s at 100 fps zero faults. **BabbleSim Stage 1
-accepted as regular local gate** — sink-only scenario, strict PCM oracle with
-local startup counters, fully deterministic across runs (hash=0xFE0D4245).
-Official upstream smoke remains PARTIAL. Scope stops here: reconnect/Mode A/B
-under BabbleSim duplicate hardware coverage.
+offload) complete** — Stages 0–5 accepted, 432 unit tests pass (396 C + 36
+Python), nRF54L15 hardware Mode A + Mode B 120 s at 100 fps zero faults.
+**BabbleSim Stage 1 accepted as regular local gate** — sink-only scenario,
+strict PCM oracle with local startup counters, fully deterministic across
+runs (hash=0xFE0D4245). Official upstream smoke remains PARTIAL. Scope stops
+here: reconnect/Mode A/B under BabbleSim duplicate hardware coverage.
 See `docs/design.md` for full staged plans and `docs/development/phase5-hardware-acceptance-results.md`
 for Phase 5 acceptance evidence.
 
@@ -547,7 +547,8 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 
 - App: BAP Unicast Server sink-only, 2 sink ASEs, LC3 decode → I2S
 - Audio: `audio_sink.h` interface → `audio_i2s.c` (slab/DMA backend)
-- Clock recovery: `audio_drift.c` (PI controller, ppm output) → actuator interface (`audio_clock_actuator.h`) → `audio_clock_actuator_apll.c` (nRF5340 APLL) or `audio_clock_actuator_sample_adjust.c` (nRF54L15 sample insert/drop)
+- Clock recovery: `audio_drift.c` (PI controller, ppm output) → actuator interface (`audio_clock_actuator.h`) → `audio_clock_actuator_apll.c` (nRF5340 APLL) or `audio_clock_actuator_none.c` (nRF54L15, ASRC consumes ppm)
+- ASRC: `audio_asrc.c` (fixed-point linear stereo, cpuapp) + FLPR offload (`src/flpr/`, handshake/runtime/rings)
 - Decode: `audio_decode.c` (LC3 decode + channel routing, unit-testable)
 - Net (nRF5340): `hci_ipc` with `nrf5340_cpunet_iso_peripheral-bt_ll_sw_split.conf`
 - Link Layer: nRF5340 = BT_LL_SW_SPLIT (Zephyr open-source controller, ISO required); nRF54L15 = SDC (SoftDevice Controller, single-core)
@@ -573,10 +574,19 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 | `src/stream_lifecycle.c` | Stream start/stop lifecycle (unit-testable) |
 | `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset, consume_sample_adjustment) |
 | `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator (ppm → register trim) |
-| `src/audio_clock_actuator_sample_adjust.c` | nRF54L15 sample insert/drop actuator (ppm → ±1 sample) |
-| `src/audio_clock_actuator_none.c` | No-op actuator (testing only) |
+| `src/audio_clock_actuator_sample_adjust.c` | Historical sample insert/drop actuator (regression testing only) |
+| `src/audio_clock_actuator_none.c` | nRF54L15 no-op actuator (ASRC consumes ppm directly) |
+| `src/audio_asrc.c` | Fixed-point linear stereo ASRC (cpuapp + FLPR fallback) |
+| `src/audio_offload.c` | FLPR offload manager (handshake, IPC, fallback path) |
+| `src/flpr/` | FLPR firmware (RISC-V VPR): ASRC, ICMsg/VEVIF IPC |
+| `src/flpr_handshake.c` | cpuapp↔FLPR boot handshake + VEVIF |
+| `src/flpr_protocol.h` | Shared protocol constants (ring layout, commands) |
+| `src/flpr_ring.c` | SPSC ring buffer (shared SRAM, cache-safe) |
+| `src/flpr_ring_mgr.c` | Ring manager: paired input/output rings |
+| `src/flpr_runtime.c` | FLPR runtime: IPC submit, watchdog, fault detection |
+| `src/flpr_audio_process.c` | FLPR audio block wrapper (metadata + PCM) |
 | `boards/ebyte/e83_nrf5340/` | Custom board definition for Ebyte E83-2G4M03S: I2S0 pins, ACLK 12.288 MHz, QSPI disabled, i2s-audio alias, OpenOCD flash runner |
-| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2 (MCK on D3/P1.7 — peripheral-needed routing, DAC does not consume it; 3-wire no-MCK at the DAC), pdm20 disabled, TIMER20 reserved |
+| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2 (MCK on D3/P1.7 — peripheral-needed routing, DAC does not consume it; 3-wire no-MCK at the DAC), pdm20 disabled, TIMER20 reserved, FLPR IPC SRAM regions |
 | `prj.conf` | App Kconfig (ACL/ISO buffers, SMP, 2 ASEs, liblc3, FPU, ZMS) |
 | `sysbuild.cmake` | Applies SW Split DT overlay + Kconfig overlay to hci_ipc |
 | `Kconfig.sysbuild` | `NRF_DEFAULT_BLUETOOTH=y` conditional on nRF5340, gates netcore |
