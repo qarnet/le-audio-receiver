@@ -156,12 +156,12 @@ Build passes clean (2026-07-29). No nRF5340-specific code changes in Stage 4B.
 
 ## Failures
 
-None. All implemented gates passed on hardware (Mode A 180s verify, Mode B 180s verify, 
+None. All implemented gates passed on hardware (Mode A 180s verify, Mode B 180s verify,
 Mode A 300s production).
 
 ## nRF5340 build
 
-Build passes clean (rebuild 2026-07-29). Flash blocked (nRF53 CMSIS-DAP probe not connected 
+Build passes clean (rebuild 2026-07-29). Flash blocked (nRF53 CMSIS-DAP probe not connected
 to this machine). No code changes affect nRF5340 — all Stage 4B code is `#ifdef CONFIG_SOC_NRF54L15` only.
 
 ## Files changed
