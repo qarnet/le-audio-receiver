@@ -28,6 +28,9 @@
 #include "audio_stats.h"
 #include "bsim_test_helpers.h"
 
+#include <zephyr/bluetooth/audio/audio.h>
+#include <zephyr/bluetooth/audio/pacs.h>
+
 #include <limits.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -213,6 +216,21 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 			FAIL("le_audio_receiver: pushes_after_stop=%d != 0\n",
 			     atomic_load(&pushes_after_stop));
 			return -EIO;
+		}
+
+		/* Regression: available sink contexts must not be NONE
+		 * after ACL connection + stream setup.  Phase 1 fix
+		 * removed the connection-time clear that broke stock
+		 * desktop PACS discovery. */
+		{
+			enum bt_audio_context ctx;
+
+			ctx = bt_pacs_get_available_contexts(BT_AUDIO_DIR_SINK);
+			if (ctx == BT_AUDIO_CONTEXT_TYPE_NONE) {
+				FAIL("le_audio_receiver: available sink contexts NONE "
+				     "after connection + stream — Phase 1 regression\n");
+				return -EIO;
+			}
 		}
 
 		PASS("le_audio_receiver: %d pushes — "

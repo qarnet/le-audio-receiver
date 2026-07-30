@@ -1,7 +1,21 @@
-# STATUS — le-audio-receiver — 2026-07-29
+# STATUS — le-audio-receiver — 2026-07-30
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
+
+## Phase 1 — BlueZ/WirePlumber PACS availability — DONE (2026-07-30)
+
+Sink Available Audio Contexts no longer cleared to `BT_AUDIO_CONTEXT_TYPE_NONE`
+on ACL connect. ACL connection is not ASE ownership — stock desktop policy
+(BlueZ/WirePlumber) reads PACS during connection and needs truthful contexts
+to create audio devices. Regression test added to BSIM gate (PACS assertion
+at PASS point verifies contexts non-NONE after connection + 100-frame stream).
+
+Contexts persist from `bt_bap_init()` through connect/disconnect cycles.
+Zephyr PACS restores default on ACL disconnect per spec — no manual restore
+needed. See `docs/development/bluez-wireplumber-interoperability-plan.md` for
+full Phase 1–4 plan and `docs/development/bluez-wireplumber-phase1-handoff.md`
+for execution handoff.
 
 ## Stage 0 — PASS (2026-07-27)
 

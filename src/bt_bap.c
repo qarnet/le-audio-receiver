@@ -650,8 +650,9 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	LOG_INF("Connected: %s", a);
 	default_conn = bt_conn_ref(conn);
 
-	/* Signal no contexts available while this connection owns the ASEs */
-	bt_pacs_set_available_contexts(BT_AUDIO_DIR_SINK, BT_AUDIO_CONTEXT_TYPE_NONE);
+	/* Keep available contexts truthful — ACL connection is not ASE ownership.
+	 * Stock desktop policy (BlueZ/WirePlumber) reads PACS during connection
+	 * and needs to see the correct available contexts to create audio devices. */
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
@@ -691,9 +692,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	bt_conn_unref(default_conn);
 	default_conn = NULL;
 
-	/* Restore available contexts for the next client */
-	bt_pacs_set_available_contexts(BT_AUDIO_DIR_SINK, AVAILABLE_SINK_CONTEXT);
-
+	/* Available contexts persist from initial registration.
+	 * No restore needed — ACL disconnect does not alter the default. */
 	k_sem_give(&sem_disconnected);
 }
 
