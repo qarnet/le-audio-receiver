@@ -835,6 +835,9 @@ class BluezWirePlumberGate:
         decoder_not_ready = False
         frame_dur_not_set = False
         freq_not_set = False
+        valid_sdus = 0  # from stream summary
+        decoded_frames = 0  # from stream summary
+        summary_seen = False
 
         for line in lines:
             # --- ASCS / BAP codec configuration (any prefix) ---
@@ -868,13 +871,9 @@ class BluezWirePlumberGate:
             ):
                 ascs_start = True
                 result.evidence.append(f"  ASCS start: {line[:200]}")
-            if "I2S" in line and (
-                "start" in line.lower()
-                or "dma" in line.lower()
-                or "ready" in line.lower()
-            ):
+            if "I2S DMA started" in line:
                 i2s_start = True
-                result.evidence.append(f"  I2S start: {line[:200]}")
+                result.evidence.append(f"  I2S DMA: {line[:200]}")
 
             # Derive expected frame rate from negotiated frame duration
             # Patterns: "Frame Duration: 7500 us" or "LC3 decoder[0]: 48000 Hz 7500 us"
@@ -887,6 +886,22 @@ class BluezWirePlumberGate:
                         f"  Frame duration: {frame_us} us → expected {expected_fps:.1f} fps"
                     )
 
+            # Parse stream summary for explicit SDUs/decoded counts
+            # Pattern: "Stream[0] summary: SDUs=123 decoded=456 plc=..."
+            m = re.search(
+                r"Stream\[\d+\]\s+summary:\s+SDUs=(\d+)\s+decoded=(\d+)",
+                line,
+            )
+            if m:
+                sdu_val = int(m.group(1))
+                dec_val = int(m.group(2))
+                valid_sdus = max(valid_sdus, sdu_val)
+                decoded_frames = max(decoded_frames, dec_val)
+                summary_seen = True
+                result.evidence.append(
+                    f"  Stream summary: SDUs={sdu_val} decoded={dec_val}: {line[:200]}"
+                )
+
             # Fatal firmware-side error patterns
             if re.search(r"LC3 decoder not ready", line):
                 decoder_not_ready = True
@@ -897,45 +912,57 @@ class BluezWirePlumberGate:
             if re.search(r"freq not set", line):
                 freq_not_set = True
                 result.evidence.append(f"  FREQ NOT SET: {line[:200]}")
+            if re.search(r"frame dur not set", line):
+                frame_dur_not_set = True
+                result.evidence.append(f"  FRAME DUR NOT SET: {line[:200]}")
 
             # Look for frame counters (fps or decoded frames)
-            m = re.search(r"(\d+)\s*fps", line, re.IGNORECASE)
-            if m and not nonzero_frames:
-                val = int(m.group(1))
-                if val > 0:
-                    nonzero_frames = True
-                    frames_per_sec = float(val)
-                    result.evidence.append(f"  FPS: {line[:200]}")
+            # Skip summary lines — parsed separately above.
+            if "summary:" not in line:
+                m = re.search(r"(\d+)\s*fps", line, re.IGNORECASE)
+                if m and not nonzero_frames:
+                    val = int(m.group(1))
+                    if val > 0:
+                        nonzero_frames = True
+                        frames_per_sec = float(val)
+                        result.evidence.append(f"  FPS: {line[:200]}")
 
-            # Look for decoded count
-            m = re.search(r"decoded[=:\s]*(\d+)", line, re.IGNORECASE)
-            if m:
-                val = int(m.group(1))
-                if val > 0:
-                    nonzero_frames = True
-                    result.evidence.append(f"  Decoded count: {line[:200]}")
+                # Look for decoded count
+                m = re.search(r"decoded[=:\s]*(\d+)", line, re.IGNORECASE)
+                if m:
+                    val = int(m.group(1))
+                    if val > 0:
+                        nonzero_frames = True
+                        result.evidence.append(f"  Decoded count: {line[:200]}")
 
-            # Fault patterns
-            if re.search(r"malformed", line, re.IGNORECASE):
-                malformed_count += 1
-                result.evidence.append(f"  MALFORMED: {line[:200]}")
-            if re.search(r"decode.*(fault|fail|error)", line, re.IGNORECASE):
-                decode_faults += 1
-                result.evidence.append(f"  DECODE FAULT: {line[:200]}")
-            if (
-                re.search(r"i2s.*(fault|underrun|error|corrupt)", line, re.IGNORECASE)
-                and "dma corruption" not in line.lower()
-            ):
-                # Skip the AGENTS.md gotcha about double-write
-                i2s_faults += 1
-                result.evidence.append(f"  I2S FAULT: {line[:200]}")
-            if re.search(r"offload.*(fault|fail|error|stall)", line, re.IGNORECASE):
-                offload_faults += 1
-                result.evidence.append(f"  OFFLOAD FAULT: {line[:200]}")
+            # Fault patterns (skip stream summary lines)
+            if "summary:" not in line:
+                if re.search(r"malformed", line, re.IGNORECASE):
+                    malformed_count += 1
+                    result.evidence.append(f"  MALFORMED: {line[:200]}")
+                if re.search(r"decode.*(fault|fail|error)", line, re.IGNORECASE):
+                    decode_faults += 1
+                    result.evidence.append(f"  DECODE FAULT: {line[:200]}")
+                if (
+                    re.search(
+                        r"i2s.*(fault|underrun|error|corrupt)", line, re.IGNORECASE
+                    )
+                    and "dma corruption" not in line.lower()
+                ):
+                    # Skip the AGENTS.md gotcha about double-write
+                    i2s_faults += 1
+                    result.evidence.append(f"  I2S FAULT: {line[:200]}")
+                if re.search(r"offload.*(fault|fail|error|stall)", line, re.IGNORECASE):
+                    offload_faults += 1
+                    result.evidence.append(f"  OFFLOAD FAULT: {line[:200]}")
 
         result.evidence.append("")
         result.evidence.append(f"  ASCS configured: {ascs_config}")
         result.evidence.append(f"  ASCS streaming: {ascs_start}")
+        result.evidence.append(
+            f"  Valid SDUs (summary): {valid_sdus}  Decoded frames (summary): {decoded_frames}"
+        )
+        result.evidence.append(f"  Summary log seen: {summary_seen}")
         result.evidence.append(f"  Nonzero frames: {nonzero_frames}")
         result.evidence.append(f"  I2S DMA start: {i2s_start}")
         result.evidence.append(
@@ -953,7 +980,7 @@ class BluezWirePlumberGate:
         # Count lines for basic sanity
         result.evidence.append(f"  Total log lines: {len(lines)}")
 
-        # Determine acceptance — strict nonzero gate, no tolerance
+        # Determine acceptance — strict evidence gate
         if not ascs_config and not ascs_start:
             result.evidence.append(
                 "  FAIL: No ASCS configuration or streaming detected"
@@ -971,24 +998,42 @@ class BluezWirePlumberGate:
                 "  FAIL: Frequency not set — codec configuration rejected"
             )
             return False
+        if frame_dur_not_set:
+            result.evidence.append(
+                "  FAIL: Frame Duration LTV not set — codec configuration rejected. "
+                "Negotiated codec must include the Frame Duration codec configuration field."
+            )
+            return False
         if decoder_not_ready:
             result.evidence.append(
                 "  FAIL: LC3 decoder not ready — codec configuration incomplete"
             )
             return False
-        if not nonzero_frames:
-            if decoder_init and ascs_start and not decoder_not_ready:
+
+        # Require explicit nonzero SDU and decoded counts from stream summary.
+        # Decoder init + ASCS start is necessary evidence but never substitutes
+        # for actual frame counts.
+        if summary_seen:
+            if valid_sdus <= 0:
                 result.evidence.append(
-                    "  NOTE: No explicit fps/decoded counter in log, "
-                    "but LC3 decoder initialized and no faults."
-                )
-                nonzero_frames = True
-            else:
-                result.evidence.append(
-                    "  FAIL: Zero audio frames decoded/rendered. "
-                    "Expected nonzero decoded frames at negotiated frame rate."
+                    f"  FAIL: Zero valid SDUs reported (summary SDUs={valid_sdus}). "
+                    "Expected nonzero SDU count."
                 )
                 return False
+            if decoded_frames <= 0:
+                result.evidence.append(
+                    f"  FAIL: Zero decoded frames reported (summary decoded={decoded_frames}). "
+                    "Expected nonzero decoded frame count."
+                )
+                return False
+            nonzero_frames = True  # Explicit count satisfies the gate
+        elif not nonzero_frames:
+            result.evidence.append(
+                "  FAIL: No explicit SDU/decoded count (stream summary missing) AND "
+                "no fps/decoded counter found in log. "
+                "Expected stream summary with nonzero SDUs and decoded frames."
+            )
+            return False
         if not i2s_start:
             result.evidence.append("  FAIL: I2S DMA not started — no audio output path")
             return False

@@ -286,11 +286,10 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 	ret = bt_audio_codec_cfg_get_frame_dur(stream->codec_cfg);
 	int frame_us;
 	if (ret < 0) {
-		/* Stock PipeWire SPA bluez5 does not include Frame Duration LTV
-		 * in the Config QOS.  Fall back to 10 ms default to match.
-		 */
-		LOG_INF("frame dur not set, defaulting to 10 ms");
-		frame_us = 10000;
+		LOG_ERR("frame dur not set (ret=%d)", ret);
+		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
+				       BT_BAP_ASCS_REASON_CODEC_DATA);
+		return ret;
 	} else {
 		frame_us = bt_audio_codec_cfg_frame_dur_to_frame_dur_us(ret);
 		if (frame_us < 0) {
@@ -317,6 +316,11 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 		return ret;
 	}
 	LOG_INF("LC3 decoder[%zu]: %d Hz %d us ch=%d", idx, freq, frame_us, cc);
+
+	/* Tell the audio sink the expected stereo frames per push
+	 * (depends on frame duration: 360 for 7.5 ms, 480 for 10 ms).
+	 */
+	audio_sink_set_input_frames((uint16_t)sinks[idx].decode.samples_per_ch);
 #endif
 	return 0;
 }
@@ -637,6 +641,18 @@ static void stream_disabled_cb(struct bt_bap_stream *s)
 		l_received = false;
 		r_received = false;
 #endif
+	}
+
+	/*
+	 * Stream summary: log key counters before reset so the gate
+	 * can extract explicit SDUs/decoded/I2S evidence.
+	 */
+	{
+		struct audio_stats stats = audio_stats_get();
+		LOG_INF("Stream[%zu] summary: SDUs=%zu decoded=%u plc=%u "
+			"decode_err=%u i2s_underrun=%u stream_reset=%u",
+			idx, sinks[idx].recv_cnt, stats.total_frames, stats.plc_frames,
+			stats.decode_errors, stats.i2s_underruns, stats.stream_resets);
 	}
 
 	/*

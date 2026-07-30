@@ -37,16 +37,28 @@
 #include <stdint.h>
 #include <errno.h>
 
-#define REQUIRED_SAMPLES 960 /* 48 kHz × 10 ms × 2 channels */
-#define PASS_FRAME_COUNT 100
-#define FNV_OFFSET_BASIS 0x811c9dc5UL
-#define FNV_PRIME        0x01000193UL
+#define REQUIRED_SAMPLES_DEFAULT 960 /* 48 kHz × 10 ms × 2 channels */
+#define PASS_FRAME_COUNT         100
+#define FNV_OFFSET_BASIS         0x811c9dc5UL
+#define FNV_PRIME                0x01000193UL
 
 static atomic_int push_count;
 static atomic_int startup_push_count; /* total pushes observed (nonzero + zero startup) */
 static atomic_int malformed_count;
 static atomic_int pushes_after_stop;
 static atomic_bool stopped;
+
+/* Dynamic required samples — set by audio_sink_set_input_frames(),
+ * defaults to REQUIRED_SAMPLES_DEFAULT (10 ms). */
+static uint16_t required_samples = REQUIRED_SAMPLES_DEFAULT;
+
+void audio_sink_set_input_frames(uint16_t frames)
+{
+	required_samples = (uint16_t)(frames * 2); /* stereo: frames → samples */
+	if (required_samples == 0) {
+		required_samples = REQUIRED_SAMPLES_DEFAULT;
+	}
+}
 
 /* Startup accounting — local to sink stub, not in production audio_stats */
 static uint32_t local_startup_zero;
@@ -101,10 +113,10 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 	}
 
 	/* Validate sample count */
-	if (sample_count != REQUIRED_SAMPLES) {
+	if (sample_count != (size_t)required_samples) {
 		atomic_fetch_add(&malformed_count, 1);
-		FAIL("le_audio_receiver: malformed sample count — expected %d got %zu push#%d\n",
-		     REQUIRED_SAMPLES, sample_count, atomic_load(&push_count));
+		FAIL("le_audio_receiver: malformed sample count — expected %u got %zu push#%d\n",
+		     required_samples, sample_count, atomic_load(&push_count));
 		return -EINVAL;
 	}
 
