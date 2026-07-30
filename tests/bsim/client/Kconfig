@@ -10,18 +10,20 @@ choice
 	default BSIM_CLIENT_PRESET_48_4_1
 	help
 	  Select the LC3 codec frame duration for the BSIM client.
-	  48_4_1 = 10 ms (480 samples @ 48 kHz)
-	  48_3_1 = 7.5 ms (360 samples @ 48 kHz)
+	  Preset naming: 48_X_1 = 48 kHz, bitrate tier X,
+	  1 frame per SDU.
+	  48_4_1 = 10 ms, 120 octets/frame (480 samples @ 48 kHz)
+	  48_3_1 = 7.5 ms,  90 octets/frame (360 samples @ 48 kHz)
 
 config BSIM_CLIENT_PRESET_48_4_1
 	bool "48_4_1 (10 ms)"
 	help
-	  48 kHz, 4 frames per SDU, 10 ms frame duration.
+	  48 kHz, 10 ms, 120 octets/frame, 1 frame per SDU.
 
 config BSIM_CLIENT_PRESET_48_3_1
 	bool "48_3_1 (7.5 ms)"
 	help
-	  48 kHz, 3 frames per SDU, 7.5 ms frame duration.
+	  48 kHz, 7.5 ms, 90 octets/frame, 1 frame per SDU.
 
 endchoice
 

@@ -1,7 +1,34 @@
-# STATUS — le-audio-receiver — 2026-07-30
+# STATUS — le-audio-receiver — 2026-07-31
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
+
+## Phase 2 — BlueZ/WirePlumber stock desktop gate — ACCEPTED (2026-07-31)
+
+Phase 2 accepted with strict nonzero-audio/zero-fault evidence on nRF54L15,
+stock WirePlumber main-systemwide playback:
+
+- **30 s gate**: SDUs=4578, decoded=4729, decode_err=0, i2s_underrun=0,
+  stream_reset=0 (~35.47 s at 7.5 ms / 133.3 fps).
+- **120 s gate**: SDUs=16565, decoded=16722, decode_err=0, i2s_underrun=0,
+  stream_reset=0 (~125.41 s at 7.5 ms / 133.3 fps).
+- **Explicit runtime `I2S DMA started`** confirmed each run.
+- **Canonical gate**: 20/20 gate tests pass.
+- **BSim regression**: 10 ms hash `0xFE0D4245`, 7.5 ms hash `0x5853F445`
+  (run 1293085); both deterministic.
+- **Corrective fixes**: 10 ms missing-frame-duration fallback removed;
+  I2S slab block count raised 12→16 (startup transient headroom);
+  `INPUT_FRAMES` made dynamic for 7.5 ms stock PipeWire config.
+
+See `docs/development/phase2-stock-desktop-gate-results.md` for full evidence
+and `docs/development/bluez-wireplumber-interoperability-plan.md` for Phase
+1–4 plan.
+
+**Pending handoffs**:
+- `docs/development/bluez-wireplumber-phase2-strict-evidence-handoff.md`
+- `docs/development/bluez-wireplumber-phase2-duration-fault-fix-handoff.md`
+- `docs/development/bluez-wireplumber-phase2-review-cleanup-handoff.md` (this)
+- Phase 3 (pairing/reconnect lifecycle) is next open work.
 
 ## Phase 1 — BlueZ/WirePlumber PACS availability — DONE (2026-07-30)
 

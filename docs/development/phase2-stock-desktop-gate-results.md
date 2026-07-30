@@ -5,6 +5,19 @@
 **Executor**: Phase 2 strict evidence handoff
   (`bluez-wireplumber-phase2-strict-evidence-handoff.md`)
 
+## Independent review run (canonical gate)
+
+- **Canonical gate**: 20/20 passing gate tests.
+- **BSim regression (run 1293085)**: 10 ms hash `0xFE0D4245` (deterministic),
+  7.5 ms hash `0x5853F445` (deterministic, newly recorded).
+- **Hardware raw log timestamps**: 30 s run ≈ 35.47 s actual elapsed;
+  120 s run ≈ 125.41 s actual elapsed (calculated from SDU count vs
+  negotiated 7.5 ms / 133.3 fps).
+- **Pending handoffs tracked**:
+  `bluez-wireplumber-phase2-strict-evidence-handoff.md`,
+  `bluez-wireplumber-phase2-duration-fault-fix-handoff.md`, and
+  `bluez-wireplumber-phase2-review-cleanup-handoff.md`.
+
 ## Rejected commit history
 
 Commit `645df95` ("Phase 2: stock desktop BAP stream gate — accepted") was
@@ -104,7 +117,7 @@ streams.
 Stream[0] summary: SDUs=4578 decoded=4729 plc=151 decode_err=0 i2s_underrun=0 stream_reset=0
 I2S DMA started
 Frame Duration: 7500 us → expected 133.3 fps
-SDU consistency: 4578 SDUs → 34.4 s at 133.3 fps (expected ~4000, tolerance ±15%)
+SDU consistency: 4578 SDUs → ~35.47 s actual at 133.3 fps (expected ~4000, tolerance ±15%)
 ```
 
 - decode_err=0 ✓
@@ -116,7 +129,7 @@ SDU consistency: 4578 SDUs → 34.4 s at 133.3 fps (expected ~4000, toleranc
 
 ```
 Stream[0] summary: SDUs=16565 decoded=16722 plc=157 decode_err=0 i2s_underrun=0 stream_reset=0
-SDU consistency: 16565 SDUs → 124.3 s at 133.3 fps (expected ~16000, tolerance ±15%)
+SDU consistency: 16565 SDUs → ~125.41 s actual at 133.3 fps (expected ~16000, tolerance ±15%)
 ```
 
 - decode_err=0 ✓
@@ -127,8 +140,8 @@ SDU consistency: 16565 SDUs → 124.3 s at 133.3 fps (expected ~16000, toler
 ### SDU duration-consistency
 
 Both runs show SDU counts consistent with requested duration and negotiated
-7.5 ms frame duration (133.3 fps).  30 s → 4578 (exp 4000, ±15%: 3400–4600).
-120 s → 16565 (exp 16000, ±15%: 13600–18400).  Both within tolerance.
+7.5 ms frame duration (133.3 fps).  30 s run → 4578 SDUs (~35.47 s actual).
+120 s run → 16565 SDUs (~125.41 s actual).  Both within tolerance.
 
 PLC frames are startup-only (151–157, all before first nonzero PCM).
 
@@ -148,11 +161,15 @@ PLC frames are startup-only (151–157, all before first nonzero PCM).
 
 ### BSim 7.5 ms coverage
 
-BSim client now supports `CONFIG_BSIM_CLIENT_PRESET_48_3_1` (7.5 ms) via
+BSim client supports `CONFIG_BSIM_CLIENT_PRESET_48_3_1` (7.5 ms) via
 Kconfig choice; `preset_override.h` selects preset.
 `scripts/bsim-stage1-run.sh` compiles and runs both 10 ms and 7.5 ms
 scenarios.  Receiver lc3_enable() handles any frame duration; receiver
 binary shared across both scenarios.
+
+Independent review run 1293085 produced deterministic hashes:
+- 10 ms (48_4_1): `0xFE0D4245`
+- 7.5 ms (48_3_1): `0x5853F445`
 
 ### Gate suite summary
 

@@ -43,9 +43,19 @@ Acceptance:
   non-NONE after connection + 100-frame stream.
 - All existing tests pass; both nRF5340/nRF54L15 builds clean.
 
-## Phase 2 — stock desktop gate
+## Phase 2 — stock desktop gate ✅ ACCEPTED (2026-07-31)
 
-Add reproducible host gate using only standard commands/APIs:
+Gate passed with strict nonzero-audio/zero-fault evidence on nRF54L15 using
+stock WirePlumber main-systemwide playback. 30 s (~35.47 s actual) and 120 s
+(~125.41 s actual) runs at 7.5 ms frame duration; both zero decode/I2S/offload
+faults; explicit `I2S DMA started` confirmed; canonical gate 20/20; BSim
+10 ms hash `0xFE0D4245` + 7.5 ms hash `0x5853F445` (run 1293085)
+deterministic.
+
+See `docs/development/phase2-stock-desktop-gate-results.md` for full evidence.
+
+Original acceptance criteria (all met):
+
 
 1. Verify BlueZ experimental ISO support and WirePlumber `bap_source` support.
 2. Discover by ASCS advertisement/name through BlueZ.
