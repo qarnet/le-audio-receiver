@@ -119,3 +119,26 @@ ZTEST(actuator, test_clamp_prevents_burst)
 	zassert_equal(audio_clock_actuator_consume_sample_adjustment(), 0,
 		      "no more pending after clamped consume");
 }
+
+/* Phase 4b.2: sign chain verification.
+ * Measured local +1775 ppm (PCLK fast) → controller output ≈ -1775 ppm
+ * (negative correction) → actuator accumulates negative → eventual -1
+ * (insert).  This test proves negative ppm input produces insert, not drop.
+ */
+ZTEST(actuator, test_1775_negative_produces_insert)
+{
+	/*
+	 * -1775 ppm * 480 = -852,000 1e-6-sample units per block.
+	 * After 2 blocks: -1,704,000 → crosses -1,000,000 → insert (-1).
+	 */
+	audio_clock_actuator_apply_ppm(-1775);
+	zassert_equal(audio_clock_actuator_consume_sample_adjustment(), 0,
+		      "1st call: -0.852 samples, no crossing");
+
+	audio_clock_actuator_apply_ppm(-1775);
+	zassert_equal(audio_clock_actuator_consume_sample_adjustment(), -1,
+		      "2nd call: -1.704 samples, must return -1 (insert)");
+
+	zassert_equal(audio_clock_actuator_consume_sample_adjustment(), 0,
+		      "no pending after consume");
+}

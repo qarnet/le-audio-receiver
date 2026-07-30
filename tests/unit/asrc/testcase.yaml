@@ -1,0 +1,4 @@
+tests:
+  unit.asrc:
+    platform_allow: native_sim
+    tags: asrc

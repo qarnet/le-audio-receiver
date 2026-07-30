@@ -10,6 +10,10 @@
 # FLPR code partition is a RRAM slice at 0x165000 in the app core's
 # address space) — verified 2026-07-05.
 #
+# Phase 6 Stage 0: flashes BOTH cpuapp and flpr images. When build uses
+# partition manager, a single merged.hex is generated. Without partition
+# manager (multi-image sysbuild), two separate hex files are loaded.
+#
 # The probe is auto-detected by target identity (nrf-probes --find nrf54l).
 #
 # Build dir:  build/nrf54l15
@@ -25,14 +29,30 @@ _fw_require_env
 cd "$(_fw_repo_dir)"
 
 BUILD_DIR="$(_fw_repo_dir)/build/nrf54l15"
-HEX="$BUILD_DIR/merged.hex"
+MERGED_HEX="$BUILD_DIR/merged.hex"
+CPUAPP_HEX="$BUILD_DIR/le-audio-receiver/zephyr/zephyr.hex"
+FLPR_HEX="$BUILD_DIR/flpr/zephyr/zephyr.hex"
 OPENOCD_CFG="$ZEPHYR_BASE/boards/seeed/xiao_nrf54l15/support/openocd.cfg"
 
-if [ ! -f "$HEX" ]; then
-  printf 'No build artifacts found at %s\n' "$HEX" >&2
+# Stage 0 requires both cpuapp and flpr images. Fail if either missing.
+# merged.hex is from partition-manager builds (deprecated path); prefer
+# the sysbuild multi-image layout. Load each HEX at its encoded address.
+MISSING=""
+[ -f "$CPUAPP_HEX" ] || MISSING="$MISSING cpuapp ($CPUAPP_HEX)"
+[ -f "$FLPR_HEX"   ] || MISSING="$MISSING flpr ($FLPR_HEX)"
+if [ -n "$MISSING" ]; then
+  printf 'Missing build artifacts:%s\n' "$MISSING" >&2
   printf 'Build first: fw-build-54l15\n' >&2
   exit 1
 fi
+
+HEX_ARGS=(
+  -c "nrf54l-load $CPUAPP_HEX"
+  -c "verify_image $CPUAPP_HEX"
+  -c "nrf54l-load $FLPR_HEX"
+  -c "verify_image $FLPR_HEX"
+)
+printf 'Loading cpuapp + flpr hex images\n'
 
 SERIAL="$(nrf-probes --find nrf54l)"
 printf 'Probe %s (auto-detected: target identifies as nRF54L15)\n' "$SERIAL"
@@ -42,7 +62,6 @@ exec openocd \
   -f "$OPENOCD_CFG" \
   -c "init" \
   -c "reset halt" \
-  -c "nrf54l-load $HEX" \
-  -c "verify_image $HEX" \
+  "${HEX_ARGS[@]}" \
   -c "reset run" \
   -c "shutdown"

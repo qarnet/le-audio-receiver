@@ -46,9 +46,19 @@
 
 	i2s20_default: i2s20_default {
 		group1 {
+			/* SCK_M, LRCK_M, SDOUT on Xiao D0/D1/D2.
+			 * MCK routed to D3 (P1.7) even though the UDA1334A/PCM5102A
+			 * DAC doesn't use it (internal PLL from BCK). The nRF54L15
+			 * I2S peripheral needs a real MCK PSEL connected for the MCK
+			 * generator to run and derive SCK/LRCK — without an MCK pin
+			 * the master-mode transfer never progresses (DMA slab fills,
+			 * no SCK/LRCK on the pins). D3 is a free Xiao header pin on
+			 * the same GPIO port 1.
+			 */
 			psels = <NRF_PSEL(I2S_SCK_M,  1, 4)>,
 				<NRF_PSEL(I2S_LRCK_M, 1, 5)>,
-				<NRF_PSEL(I2S_SDOUT,  1, 6)>;
+				<NRF_PSEL(I2S_SDOUT,  1, 6)>,
+				<NRF_PSEL(I2S_MCK,    1, 7)>;
 		};
 	};
 };
@@ -61,10 +71,98 @@
 
 &i2s20 {
 	status = "okay";
+	/* nRF54L15 has no HFCLKAUDIO/APLL. The I2S MCK is derived from
+	 * PCLK32M. Use the internal 32 MHz RC (HFINT) directly rather than
+	 * PCLK32M_HFXO so the driver does not wait on an HFXO onoff
+	 * request before starting the transfer — that onoff path never
+	 * completes on this board (no LFCLK for the onoff manager before
+	 * SDC is up) and TASKS_START never fires, leaving SCK/LRCK flat
+	 * and the TX slab filling with undelivered buffers.
+	 *
+	 * Clock accuracy/jitter is HFINT-grade (RC, ~±250 ppm), which is
+	 * fine for the ASRC drift actuator; an external
+	 * low-jitter MCK is not wired on the Xiao.
+	 */
+	clock-source = "PCLK32M";
 	pinctrl-0 = <&i2s20_default>;
 	pinctrl-names = "default";
 };
 
 &pdm20 {
+	status = "disabled";
+};
+
+/* Xiao has no external SPI NOR flash. Disable the stock-DK &mx25r64 and
+ * its parent &spi00 (no other users) to silence the boot error:
+ *   <err> spi_nor: Device id 00 00 00 does not match config c2 28 17
+ *
+ * TIMER20 (&timer20, reg = <0xca000 0x1000>) is reserved for direct HAL
+ * use by audio_timing_nrf54.c: free-running PCLK timer, hardware-snapshotted
+ * by GRTC compare→GPPI→TASKS_CAPTURE at 1-second intervals. The base DTS
+ * defines it with status "disabled". Mark it "reserved" so no Zephyr counter
+ * driver binds to it, but it remains addressable via DT_NODELABEL(timer20) /
+ * DT_REG_ADDR for our HAL code.
+ */
+&timer20 {
+	status = "reserved";
+};
+
+&mx25r64 {
+	status = "disabled";
+};
+
+/*
+ * FLPR IPC: ICMsg over VEVIF for cpuapp↔FLPR handshake.
+ * Shared memory at 0x20028000..0x20030000 (32 KB between cpuapp and FLPR SRAM).
+ * rx = 8 KB at 0x20028000, tx = 8 KB at 0x2002A000.
+ * Must stay in sync with src/flpr/boards/*.overlay (swapped perspective).
+ */
+/ {
+	soc {
+		reserved-memory {
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			sram_rx: memory@20028000 {
+				reg = <0x20028000 0x2000>;
+			};
+
+			sram_tx: memory@2002A000 {
+				reg = <0x2002A000 0x2000>;
+			};
+
+			/* Stage 1 PCM rings: 16 KiB at 0x2002C000.
+			 * Split into two 8 KiB SPSC rings:
+			 *   cpuapp_to_flpr_ring: 0x2002C000
+			 *   flpr_to_cpuapp_ring: 0x2002E000
+			 */
+			pcm_ring: memory@2002C000 {
+				reg = <0x2002C000 0x4000>;
+			};
+		};
+	};
+
+	ipc {
+		ipc0: ipc0 {
+			compatible = "zephyr,ipc-icmsg";
+			dcache-alignment = <32>;
+			tx-region = <&sram_tx>;
+			rx-region = <&sram_rx>;
+			mboxes = <&cpuapp_vevif_rx 20>, <&cpuapp_vevif_tx 21>;
+			mbox-names = "rx", "tx";
+			status = "okay";
+		};
+	};
+};
+
+&cpuapp_vevif_rx {
+	status = "okay";
+};
+
+&cpuapp_vevif_tx {
+	status = "okay";
+};
+
+&spi00 {
 	status = "disabled";
 };

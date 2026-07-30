@@ -1,4 +1,4 @@
-mainmenu "LE Audio Receiver (nRF5340 + PCM5102A)"
+mainmenu "LE Audio Receiver"
 
 config INFO_REPORTING_INTERVAL
 	int "Number of SDUs between log reports"
@@ -15,6 +15,42 @@ config BT_AUDIO_VOL_DEFAULT
 	  Initial volume applied by the VCP Volume Renderer at startup.
 	  195 is approximately 76% of full scale.
 
+config AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ
+	int "Actual I2S output sample rate"
+	default 48000
+	range 1 192000
+	help
+	  Actual I2S LRCK frequency in Hz. The hardware divider may not
+	  produce exactly 48000 (e.g. PCLK32M gives ~47619). Set this to
+	  the measured hardware rate so the rate converter can match
+	  decoder output to drain rate. The I2S config frame_clk_freq
+	  stays at 48000 (the nominal requested rate).
+
+choice AUDIO_RESAMPLER
+	prompt "Audio resampler"
+	default AUDIO_RESAMPLER_IDENTITY
+	help
+	  Data-path resampler between decoder output (48 kHz) and I2S
+	  drain.  Must be paired with a compatible AUDIO_CLOCK_ACTUATOR:
+	    IDENTITY     → APLL  (nRF5340 production)
+	    ASRC_LINEAR  → NONE  (nRF54L15 production, ASRC consumes ppm)
+
+config AUDIO_RESAMPLER_IDENTITY
+	bool "Identity (memcpy passthrough)"
+	help
+	  memcpy pass-through.  On nRF5340 the APLL steers the audio
+	  clock so no data-path resampling is needed.
+
+config AUDIO_RESAMPLER_ASRC_LINEAR
+	bool "Linear ASRC"
+	help
+	  Stateful cross-block fixed-point linear-interpolation stereo
+	  ASRC.  Consumes drift-controller ppm as source_step correction.
+	  Production path for nRF54L15.  Must pair with
+	  AUDIO_CLOCK_ACTUATOR_NONE (ASRC handles the data path; no
+	  physical actuator exists on this platform).
+endchoice
+
 choice AUDIO_CLOCK_ACTUATOR
 	prompt "Audio clock actuator"
 	default AUDIO_CLOCK_ACTUATOR_APLL
@@ -22,21 +58,84 @@ choice AUDIO_CLOCK_ACTUATOR
 config AUDIO_CLOCK_ACTUATOR_APLL
 	bool "APLL (nRF5340 HFCLKAUDIO)"
 	help
-	  Use the nRF5340 HFCLKAUDIO APLL for clock steering.
-	  ppm → APLL register trim.
+	  HFCLKAUDIO APLL register trim.  ppm → register write.
+	  Pair with AUDIO_RESAMPLER_IDENTITY (nRF5340 production).
 
 config AUDIO_CLOCK_ACTUATOR_NONE
-	bool "None (no actuator)"
+	bool "None (data-path only)"
 	help
-	  No clock actuator. Controller runs but output is discarded.
-	  For testing on platforms without a clock steering mechanism.
-
-config AUDIO_CLOCK_ACTUATOR_SAMPLE_ADJUST
-	bool "Sample insert/drop (nRF54L15)"
-	help
-	  Compensate clock drift by inserting or dropping single PCM samples
-	  in the I2S output block. Degenerate ASRC (nearest-neighbor). For
-	  platforms without a steerable audio clock (nRF54L15).
+	  No physical clock actuator.  Controller ppm is consumed by the
+	  data-path resampler (ASRC_LINEAR).  Used on nRF54L15.
 endchoice
+
+config AUDIO_DRIFT_OUTPUT_CLAMP
+	int "Controller output clamp (±ppm)"
+	default 500
+	range 1 3000
+	help
+	  Maximum absolute ppm output from the PI clock recovery controller.
+	  Default 500 ppm for nRF5340 APLL (steps ≈3.3 ppm, range
+	  ≈±600 ppm around centre).  Set to 2000 on nRF54L15 (ASRC or
+	  SAMPLE_ADJUST; paired with AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
+	  for headroom around the measured PCLK offset).
+
+config AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
+	int "Phase integral clamp (±ppm)"
+	default 500
+	range 1 2000
+	help
+	  Maximum absolute ppm the phase integral term can contribute.
+	  Default 500 ppm preserves existing nRF5340 behaviour.
+	  Recommended 150–200 ppm on nRF54L15 so phase authority does not
+	  consume all headroom around the measured PCLK offset.
+
+config AUDIO_PERF_MEASUREMENT
+	bool "Audio performance instrumentation"
+	default n
+	help
+	  Low-overhead cycle and queue measurement for LC3 decode, volume,
+	  sink push, and ISO receive paths.  Compiles to static inline
+	  no-ops when disabled.  Exposed through "audio perf" shell command.
+
+config AUDIO_PERF_DEADLINE_US
+	int "Per-path deadline threshold in microseconds"
+	default 10000
+	depends on AUDIO_PERF_MEASUREMENT
+	help
+	  Deadline for per-path overrun counting.  Converted to CPU cycles
+	  at runtime via k_us_to_cyc_ceil32().  Default 10000 us = 10 ms.
+	  Works correctly across all platforms and native_sim.
+
+# ── Stage 3B: FLPR ASRC offload ─────────────────────────────────────
+
+config AUDIO_OFFLOAD_ASRC
+	bool "FLPR ASRC offload (nRF54L15 only)"
+	default y
+	depends on AUDIO_RESAMPLER_ASRC_LINEAR && SOC_NRF54L15
+	help
+	  Route decoded PCM through FLPR ASRC processing.  On success the
+	  FLPR-processed output replaces the cpuapp ASRC; on any fault
+	  the cpuapp ASRC runs as fallback with no audio drop.
+
+	  Requires CONFIG_SOC_NRF54L15 + AUDIO_RESAMPLER_ASRC_LINEAR.
+	  Compiles out on nRF5340.
+
+config AUDIO_OFFLOAD_ASRC_VERIFY
+	bool "Shadow-verify FLPR ASRC against cpuapp ASRC"
+	default n
+	depends on AUDIO_OFFLOAD_ASRC
+	help
+	  After every FLPR ASRC round trip, run the identical cpuapp
+	  ASRC from the same pre-state and ppm input into a static
+	  481-frame buffer, then compare return code, frame count,
+	  every sample, and post-state.
+
+	  Mismatch records a verify fault, poisons offload, and returns
+	  error with caller output untouched.  This adds ~1924 bytes of
+	  static buffer and one cpuapp ASRC call per 10 ms block (≈13 klx
+	  of fixed-point arithmetic).
+
+	  Production builds must disable this option.  Development and
+	  acceptance testing enable it for cross-validation.
 
 source "Kconfig.zephyr"

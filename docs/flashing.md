@@ -17,11 +17,12 @@ Project uses Zephyr sysbuild (multi-image). Two images built:
 
 | Domain | Target | Output |
 |--------|--------|--------|
-| `le-audio-receiver` | `ebyte_e83_nrf5340/nrf5340/cpuapp` | `build/merged.hex` |
-| `hci_ipc` | `ebyte_e83_nrf5340/nrf5340/cpunet` | `build/merged_CPUNET.hex` |
+| `le-audio-receiver` | `ebyte_e83_nrf5340/nrf5340/cpuapp` | `build/nrf5340/le-audio-receiver/zephyr/zephyr.{elf,hex}` |
+| `hci_ipc` | `ebyte_e83_nrf5340/nrf5340/cpunet` | `build/nrf5340/hci_ipc/zephyr/zephyr.{elf,hex}` |
 
-`build/merged.hex` = MCUboot + app image merged for app core.
-`build/merged_CPUNET.hex` = MCUboot + hci_ipc image merged for net core.
+Sysbuild produces top-level merged hexes at:
+- `build/nrf5340/merged.hex` — app core (app image only; no MCUboot)
+- `build/nrf5340/merged_CPUNET.hex` — net core (hci_ipc image only; no MCUboot)
 
 `hci_ipc` is marked `BUILD_ONLY TRUE` in `sysbuild.cmake` — excluded from `flash_order`,
 flashed by the app domain runner instead of by a separate west domain flash.

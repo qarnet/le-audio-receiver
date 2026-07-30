@@ -1,0 +1,64 @@
+/*
+ * Copyright (c) 2025
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * FLPR-side IPC overlay for nRF54L15 cpuflpr.
+ * ICMsg over VEVIF: tx=VEVIF event 20, rx=VEVIF task 21.
+ * Shared memory at 0x20028000..0x20030000 (32 KB between cpuapp and FLPR SRAM).
+ * rx = 8 KB at 0x2002A000 (cpuapp tx = this rx), tx = 8 KB at 0x20028000 (cpuapp rx = this tx).
+ * Swapped perspective from cpuapp overlay.
+ */
+
+/ {
+		soc {
+		reserved-memory {
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			sram_tx: memory@20028000 {
+				reg = <0x20028000 0x2000>;
+			};
+
+			sram_rx: memory@2002A000 {
+				reg = <0x2002A000 0x2000>;
+			};
+
+			/* Stage 1 PCM rings: 16 KiB at 0x2002C000.
+			 * Mirrors cpuapp overlay.
+			 */
+			pcm_ring: memory@2002C000 {
+				reg = <0x2002C000 0x4000>;
+			};
+		};
+	};
+
+	ipc {
+		ipc0: ipc0 {
+			compatible = "zephyr,ipc-icmsg";
+			dcache-alignment = <32>;
+			tx-region = <&sram_tx>;
+			rx-region = <&sram_rx>;
+			mboxes = <&cpuflpr_vevif_rx 21>, <&cpuflpr_vevif_tx 20>;
+			mbox-names = "rx", "tx";
+			status = "okay";
+		};
+	};
+};
+
+&cpuflpr_vevif_rx {
+	status = "okay";
+};
+
+&cpuflpr_vevif_tx {
+	status = "okay";
+};
+
+/*
+ * Override FLPR SRAM to 0x20030000 with 64 KB (was 96 KB at 0x20028000
+ * in stock board DTS). The 32 KB at 0x20028000 is now shared IPC memory.
+ * Must stay in sync with cpuapp VPR memory overlay's cpuflpr_sram_code_data.
+ */
+&cpuflpr_sram {
+	reg = <0x20030000 DT_SIZE_K(64)>;
+	ranges = <0x0 0x20030000 0x10000>;
+};

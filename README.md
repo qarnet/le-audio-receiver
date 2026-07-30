@@ -1,17 +1,21 @@
 # LE Audio Receiver
 
 Bluetooth LE Audio BAP Unicast Server — a sink-only receiver that decodes LC3
-audio from a phone and plays it out over I2S to an external DAC. Built on the
-nRF Connect SDK (Zephyr) for the **nRF5340** (Ebyte E83-2G4M03S module), with a
-secondary **nRF54L15** (Seeed Xiao) target in progress.
+audio from a BAP unicast source and plays it out over I2S to an external DAC. Built on the
+nRF Connect SDK (Zephyr) for the **nRF5340** (Ebyte E83-2G4M03S module) and
+the **nRF54L15** (Seeed Xiao).
 
 - 2 sink ASEs (mono / stereo Mode A / stereo Mode B)
 - LC3 decode via liblc3 → I2S 48 kHz stereo
 - SoftDevice-free link layer: BT_LL_SW_SPLIT (Zephyr open-source controller,
   required for ISO) on nRF5340; SDC controller on nRF54L15
-- PI clock-recovery controller steering the HFCLKAUDIO APLL from ISO timestamps
-  (nRF5340); sample insert/drop actuator on nRF54L15
-- VCP volume, CAS, shell diagnostics, watchdog
+- Dual-platform PI clock-recovery controller (ppm output) with platform-specific
+  actuators: HFCLKAUDIO APLL trim (nRF5340) and NONE (nRF54L15, ASRC consumes
+  controller ppm directly).
+  Feedforward from PCLK-vs-GRTC frequency measurement (nRF54L15) plus per-block
+  I2S buffer-phase PI. Fixed-point linear stereo ASRC runs primary on FLPR
+  (RISC-V VPR) with identical cpuapp fallback.
+- VCP volume, shell diagnostics, watchdog
 
 ---
 
@@ -37,14 +41,27 @@ dynamic range by a wide margin — the spec advantage is inaudible here.
 
 Practical differences when wiring to this project's 3-wire no-MCK topology:
 
-- **UDA1334A (CJMCU-1334 / Adafruit #3678):** drop-in. Format (SF0/SF1) and MUTE
-  are pre-pulled to GND on the Adafruit breakout — no config wires needed.
+- **UDA1334A (CJMCU-1334 / Adafruit #3678):** Format (SF0/SF1) and MUTE are
+  pre-pulled to GND on the Adafruit breakout — no config wires needed on that
+  specific board. Not all clones or assemblies are equivalent.
 - **PCM5102A (GY-PCM5102 and clones):** the **SCK pad must be solder-bridged to
   GND** to enable internal-PLL 3-wire mode. If the pad is open you get silence or
   hiss — the single most-reported PCM5102A "no sound" cause. Adafruit's own
   PCM5102 breakout (#6250) has this handled; cheap clones often don't.
 
-Use whichever you prefer. Pinout below is identical for both — 3 wires, no MCK.
+### Hardware validation before trusting a DAC breakout
+
+Before treating a new DAC breakout/wiring assembly as working, validate the I2S
+waveform with a standalone test (e.g. a tone loop that drives BCK/LRCK/SDOUT
+without the full BAP stack). An old CJMCU-1334-compatible breakout tested with
+this project **held LRCK high when unmuted** and is not suitable — the breakout
+or wiring assembly was incompatible or defective.
+
+**MUTE high mutes the analog output** (inverted logic — LOW = unmuted). Raising
+MUTE is a silence/diagnostic control, not a fix for an I2S-line anomaly.
+
+Use whichever DAC you prefer. Pinout below is identical for both — 3 wires, no
+MCK.
 
 ---
 
@@ -62,7 +79,8 @@ Verified against `boards/ebyte/e83_nrf5340/ebyte_e83_nrf5340_nrf5340_cpuapp.dts`
 | GND | — | — | **GND** + **AGND** (tie both) |
 
 No MCK — UDA1334A internal PLL locks to BCLK. Corresponds to
-`CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y` in `prj.conf`.
+`CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y` in
+`boards/ebyte_e83_nrf5340_nrf5340_cpuapp.conf` (board-specific; nRF5340 only).
 
 ## I2S wiring — nRF54L15 (Seeed Xiao)
 
@@ -78,6 +96,12 @@ not detect pinctrl overlaps, it silently corrupts the loser).
 | **D2** | P1.6 | SDOUT (DIN)  | **DIN**  |
 | 3V3 | — | — | **VIN** |
 | GND | — | — | **GND** + **AGND** (tie both) |
+
+**MCK note (nRF54L15):** the I2S20 peripheral needs an MCK PSEL routed even
+though the DAC doesn't consume it (3-wire no-MCK topology). The overlay routes
+MCK to **D3 (P1.7)** so the MCK generator can derive SCK/LRCK. D3 is occupied
+by a peripheral-driven MCK — do not use it for other signals. The DAC side
+stays 3-wire: BCK, LRCK, SDOUT only.
 
 ### CJMCU-1334 / UDA1334A config pins
 
@@ -110,6 +134,19 @@ CJMCU-1334 outputs **line level** (no headphone amp on the breakout). Connect:
 | **Lout** | left channel → line-in L / headphone L via amp |
 | **Rout** | right channel → line-in R / headphone R via amp |
 | **AGND** | sleeve / line ground (already tied to GND above) |
+
+## Testing
+
+```bash
+# Run full local gate (all C + Python unit tests + BSim Stage 1)
+./scripts/test-all.sh
+
+# Requires: NCS v3.3.0 dev shell (direnv allow / nix develop).
+# BabbleSim Stage 1 is mandatory. scripts/bsim-env.sh derives BSIM_OUT_PATH;
+# missing BabbleSim prerequisites fail the gate.
+# Production firmware and dongle builds are run separately:
+#   fw-build-5340 && fw-build-54l15 && fw-build-dongle
+```
 
 ### If using the PCM5102A instead
 
@@ -168,9 +205,9 @@ Use `--pristine` (the helpers already do) after any `prj.conf`, overlay, or
 ## Pairing
 
 Just Works — MITM enforcement is disabled (`CONFIG_BT_SMP_ENFORCE_MITM=n`) so
-phones that require a passkey UI can still pair. If a phone was previously
-bonded and now fails to pair after a firmware change, delete the device on the
-phone and re-scan, or mass-erase the chip (`nrf53_recover` via `openocd-master`)
+centrals that require a passkey UI can still pair. If a central was previously
+bonded and now fails to pair after a firmware change, delete the bond on the
+central and re-scan, or mass-erase the chip (`nrf53_recover` via `openocd-master`)
 before reflashing — `west flash` does not erase the settings partition.
 
 ---
@@ -184,15 +221,46 @@ before reflashing — `west flash` does not erase the settings partition.
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
 | `src/audio_sink.h` | Platform-neutral audio-sink interface |
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA) — implements `audio_sink.h` |
-| `src/audio_drift.c` | PI clock-recovery controller (ppm output) |
+| `src/audio_drift.c` | PI clock-recovery controller (ppm output, dual-platform) |
+| `src/audio_drift.h` | Controller API + APLL register constants |
+| `src/audio_asrc.c` | Fixed-point linear stereo ASRC (cpuapp path, FLPR fallback) |
+| `src/audio_asrc.h` | ASRC public API |
+| `src/audio_rate_convert.c` | Nearest-neighbor rate converter (PCLK32M mismatch fix) |
+| `src/audio_rate_convert.h` | Rate converter public API |
+| `src/audio_offload.c` | FLPR offload manager (handshake, IPC routing, fallback) |
+| `src/audio_offload.h` | Offload manager public API |
+| `src/audio_timing.h` | Platform timing interface (frequency error, GRTC scheduling) |
+| `src/audio_timing_math.c` | Timing math shared across platforms |
+| `src/audio_timing_nrf54.c` | nRF54L15 TIMER20-vs-GRTC PCLK measurement |
+| `src/audio_timing_none.c` | nRF5340 no-op timing (no GRTC/TIMER20) |
+| `src/stream_lifecycle.c` | Stream start/stop lifecycle (unit-testable) |
+| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset, consume_sample_adjustment) |
 | `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator |
+| `src/audio_clock_actuator_none.c` | nRF54L15 no-op actuator (ASRC consumes ppm directly) |
+| `src/audio_clock_actuator_sample_adjust.c` | Historical sample insert/drop (regression testing only) |
+| `src/flpr/` | FLPR firmware (RISC-V VPR): ASRC offload, ICMsg/VEVIF IPC |
+| `src/flpr_handshake.{c,h}` | cpuapp↔FLPR boot handshake + VEVIF signalling |
+| `src/flpr_protocol.h` | Shared protocol constants (ring layout, commands) |
+| `src/flpr_ring.{c,h}` | SPSC ring buffer (shared SRAM) |
+| `src/flpr_ring_mgr.{c,h}` | Ring manager: paired input/output rings |
+| `src/flpr_runtime.{c,h}` | FLPR runtime: IPC submit, watchdog, fault detection |
+| `src/flpr_audio_process.{c,h}` | FLPR audio block wrapper (metadata + PCM) |
+| `src/flpr_cache.c` | Cache maintenance for shared SRAM (ARMv8-M / RISC-V) |
+| `src/audio_perf.{c,h}` | Data-path CPU budget instrumentation |
+| `src/audio_stats.{c,h}` | Streaming statistics (RX, decode, PLC, I2S) |
+| `src/audio_shell.c` | Shell diagnostics (`audio status`, `flpr status`) |
+| `src/audio_volume.{c,h}` | VCP volume control |
 | `boards/ebyte/e83_nrf5340/` | Custom nRF5340 board: I2S0 pins, ACLK 12.288 MHz, QSPI disabled |
-| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2 |
+| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2, FLPR IPC SRAM, TIMER20 reserved |
 | `prj.conf` | App Kconfig |
 | `sysbuild.cmake` | Applies SW Split DT + Kconfig overlays to `hci_ipc` |
-| `tests/` | Unit (`drift`, `audio_decode`) and bsim tests |
+| `tests/unit/` | 16 C test suites (396 tests) + 2 Python suites (36 tests) |
+| `tests/bsim/` | BabbleSim Stage 1: sink-only dual-core scenario |
+| `tests/hardware/` | Hardware validation scripts (I2S, GPIO, fault recovery) |
+| `scripts/test-all.sh` | Canonical full local gate (all C + Python + BSim Stage 1) |
 | `docs/design.md` | Accepted design doc + phased plan (Phases 0–6) |
 | `docs/flashing.md` | Dual-core flash workflow in depth |
+| `STATUS.md` | Current status, build diagnostics, test results, open issues |
 
 ---
 

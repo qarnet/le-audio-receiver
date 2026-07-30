@@ -1,0 +1,9 @@
+# BSIM client Kconfig — minimal config for upstream sample sources.
+# The sample Kconfig defines INFO_REPORTING_INTERVAL.
+mainmenu "LE Audio Client — BSIM"
+
+config INFO_REPORTING_INTERVAL
+	int "Number of SDUs between log reports"
+	default 0
+
+source "Kconfig.zephyr"

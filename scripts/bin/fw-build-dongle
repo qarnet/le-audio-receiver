@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# Build the nRF5340DK "dongle" firmware: Zephyr hci_uart sample with the
+# SoftDevice Controller on the network core, configured as an LE Audio
+# central for this repo's receiver.
+#
+# The app-core firmware is the upstream hci_uart sample (a plain H:4 pipe
+# over UART0 @ 1 Mbaud with HW flow control); ISO data passes through as
+# H:4 type 0x05. dongle/hci_uart/app.conf pins ISO symbols on the app core.
+#
+# The netcore (cpunet / hci_ipc) is a repo-owned copy of the upstream
+# hci_ipc sample built separately (not via sysbuild). The only change vs
+# upstream is bt_ctlr_set_public_addr() before bt_enable_raw() to fix
+# the zero-FICR DEVICEADDR on this lab nRF5340DK (see dongle/hci_identity.h).
+#
+# After building both images, merge tools combine them into merged.hex
+# and merged_CPUNET.hex, matching the layout that west flash expects.
+#
+# hci_usb (the previous dongle firmware) has NO ISO data path in Zephyr's
+# USB BT class — its isochronous endpoints are descriptor stubs — so it
+# cannot carry LE Audio. hci_uart is the only working transport.
+#
+# Build dir:  build/dongle
+# Result:     build/dongle/hci_uart/zephyr/zephyr.{elf,hex}  (app core)
+#             build/dongle/hci_ipc/zephyr/zephyr.{elf,hex}  (net core)
+#             build/dongle/merged.hex / merged_CPUNET.hex    (combined)
+#
+# Flash with: fw-flash-dongle
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/bin/fw-common.sh
+source "$SCRIPT_DIR/fw-common.sh"
+
+_fw_require_env
+
+REPO="$(_fw_repo_dir)"
+BUILD_DIR="$REPO/build/dongle"
+SAMPLE_DIR="$ZEPHYR_BASE/samples/bluetooth/hci_uart"
+APP_CONF="$REPO/dongle/hci_uart/app.conf"
+HCI_IPC_DIR="$REPO/dongle/hci_ipc"
+# Must be OUTSIDE $BUILD_DIR — step 2's --pristine wipes $BUILD_DIR.
+HCI_IPC_BUILD_DIR="$REPO/build/dongle_hci_ipc"
+
+if [ ! -d "$SAMPLE_DIR" ]; then
+	printf 'hci_uart sample not found at %s\n' "$SAMPLE_DIR" >&2
+	exit 1
+fi
+if [ ! -f "$APP_CONF" ]; then
+	printf 'Missing dongle app conf: %s\n' "$APP_CONF" >&2
+	exit 1
+fi
+if [ ! -f "$HCI_IPC_DIR/src/main.c" ]; then
+	printf 'Missing repo-owned hci_ipc at %s\n' "$HCI_IPC_DIR" >&2
+	exit 1
+fi
+
+printf 'Building nRF5340DK hci_uart dongle (LE Audio central)\n'
+printf '  hci_uart:   %s\n' "$SAMPLE_DIR"
+printf '  app conf:   %s\n' "$APP_CONF"
+printf '  hci_ipc:    %s  (repo-owned, bt_ctlr_set_public_addr)\n' "$HCI_IPC_DIR"
+printf '  build dir:  %s\n\n' "$BUILD_DIR"
+
+# ── Step 1: Build our custom hci_ipc netcore separately ──────────
+printf 'Step 1/2: Building hci_ipc netcore (repo-owned)...\n'
+west build -b nrf5340dk/nrf5340/cpunet --pristine \
+	-d "$HCI_IPC_BUILD_DIR" "$HCI_IPC_DIR" -- "$@"
+printf '\n'
+
+# ── Step 2: Build hci_uart app core without automatic netcore ────
+# NETCORE_EMPTY = sysbuild adds empty netcore hex (placeholder, 0 bytes
+# of app-visible flash). We replace it with our hci_ipc hex below.
+printf 'Step 2/2: Building hci_uart app core...\n'
+west build -b nrf5340dk/nrf5340/cpuapp --sysbuild --pristine \
+	-d "$BUILD_DIR" "$SAMPLE_DIR" -- \
+	-DSB_CONFIG_NETCORE_EMPTY=y \
+	-Dhci_uart_EXTRA_CONF_FILE="$APP_CONF" \
+	"$@"
+printf '\n'
+
+# ── Merge: copy our hci_ipc hex into the dongle build ────────────
+# The sysbuild merged.hex and merged_CPUNET.hex are generated from
+# the sysbuild images. Since we used NETCORE_EMPTY, the netcore slot
+# is an empty placeholder. We replace the placeholder with our hex.
+#
+# The merge tool (mergehex / nrfutil) expects the hex files in the
+# sysbuild layout. We drop our hex in the hci_ipc output location.
+
+# Sysbuild nests the image under its name: <build>/<image>/zephyr/zephyr.hex
+HCI_IPC_HEX="$HCI_IPC_BUILD_DIR/hci_ipc/zephyr/zephyr.hex"
+SYSBUILD_HCI_IPC_HEX="$BUILD_DIR/hci_ipc/zephyr/zephyr.hex"
+
+if [ -f "$HCI_IPC_HEX" ]; then
+	# Ensure the sysbuild hci_ipc output dir exists
+	mkdir -p "$(dirname "$SYSBUILD_HCI_IPC_HEX")"
+
+	# Replace the empty netcore hex with ours (or add if sysbuild didn't
+	# create the dir at all — NETCORE_EMPTY may skip hci_ipc entirely)
+	cp "$HCI_IPC_HEX" "$SYSBUILD_HCI_IPC_HEX"
+
+	# Also copy the CPUNET hex (sysbuild places it at merged_CPUNET.hex)
+	cp "$HCI_IPC_HEX" "$BUILD_DIR/merged_CPUNET.hex"
+
+	# Regenerate merged hex (app + net)
+	python3 "$ZEPHYR_BASE/scripts/build/mergehex.py" \
+		-o "$BUILD_DIR/merged.hex" \
+		"$BUILD_DIR/hci_uart/zephyr/zephyr.hex" \
+		"$SYSBUILD_HCI_IPC_HEX" 2>/dev/null || true
+
+	printf 'Merged hexes written:\n'
+	printf '  merged.hex:        %s\n' "$BUILD_DIR/merged.hex"
+	printf '  merged_CPUNET.hex: %s\n' "$BUILD_DIR/merged_CPUNET.hex"
+	printf '  hci_uart:          %s\n' "$BUILD_DIR/hci_uart/zephyr/zephyr.hex"
+	printf '  hci_ipc:           %s\n' "$SYSBUILD_HCI_IPC_HEX"
+else
+	printf 'ERROR: hci_ipc hex not found at %s\n' "$HCI_IPC_HEX" >&2
+	exit 1
+fi

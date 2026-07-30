@@ -1,0 +1,41 @@
+# BSIM receiver Kconfig — minimal symbols repo needs for BSIM build.
+# Repo Kconfig cannot be sourced directly (repo lives outside ZEPHYR_BASE
+# which is the Kconfig srctree root).
+
+mainmenu "LE Audio Receiver — BSIM"
+
+config INFO_REPORTING_INTERVAL
+	int "Number of SDUs between log reports"
+	default 0
+
+choice AUDIO_RESAMPLER
+	prompt "Audio resampler"
+	default AUDIO_RESAMPLER_IDENTITY
+
+config AUDIO_RESAMPLER_IDENTITY
+	bool "Identity (memcpy passthrough)"
+
+config AUDIO_RESAMPLER_ASRC_LINEAR
+	bool "Linear ASRC"
+endchoice
+
+choice AUDIO_CLOCK_ACTUATOR
+	prompt "Audio clock actuator"
+	default AUDIO_CLOCK_ACTUATOR_NONE
+
+config AUDIO_CLOCK_ACTUATOR_APLL
+	bool "APLL (nRF5340 HFCLKAUDIO)"
+
+config AUDIO_CLOCK_ACTUATOR_NONE
+	bool "None (data-path only)"
+endchoice
+
+config AUDIO_DRIFT_OUTPUT_CLAMP
+	int "Controller output clamp (±ppm)"
+	default 500
+
+config AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
+	int "Phase integral clamp (±ppm)"
+	default 500
+
+source "Kconfig.zephyr"

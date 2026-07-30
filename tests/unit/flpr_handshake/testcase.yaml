@@ -1,0 +1,6 @@
+tests:
+  unit.flpr_handshake:
+    tags: flpr
+    platform_allow: native_sim
+    integration_platforms:
+      - native_sim

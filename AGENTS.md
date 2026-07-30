@@ -56,33 +56,102 @@ Nordic samples are the best learning resource:
 
 ## Policy — never ignore warnings
 
-Always attempt to fix build/boot warnings. Ignoring them lets real bugs hide
-in the noise — a warning that is "expected" today becomes the one you miss
-when it turns into a real failure. If a warning is genuinely unfixable in this
-build configuration, suppress it explicitly (Kconfig `default n` with a
-comment, or a targeted `#pragma`) — never just leave it printing.
+Compiler warnings and Kconfig "assigned value but got" warnings are hard errors:
+fix the source or suppress with a recorded reason. Boot-time `LOG_WRN` and
+openocd/flashing warnings are treated the same — don't normalize noise.
 
-This applies to: compiler warnings, Kconfig "assigned value but got" warnings,
-boot-time `LOG_WRN` lines, and openocd/flashing warnings. Fix the source, or
-suppress with a recorded reason. Do not normalize noise.
+NCS v3.3.0 emits diagnostics that are NOT actionable at repo level:
+deprecation notices (`PARTITION_MANAGER`, sysbuild), informational config
+messages (`__ASSERT()`), experimental-symbol notices required for ISO on
+nRF5340 (BT_LL_SW_SPLIT, PERIPHERAL_ISO), upstream Kconfig gaps (SW Split
+`CONN_ISO_LOW_LATENCY_POLICY` choice has no NONE fallback), and CMake
+"No SOURCES given" where a subsystem is enabled but no driver exists for
+a particular board (e.g. watchdog on nRF54L15 — wdt30/wdt31 are disabled
+in DT when SDC is active, so `CONFIG_WATCHDOG=y` from prj.conf creates an
+empty library; not fixable without an unsupported DT node or losing
+watchdog on nRF5340). These are documented in `STATUS.md` "Build warning
+diagnostics", not tolerated as warnings.
 
 ## Plan of record
 
 `docs/design.md` is the accepted design doc and phased plan (Phases 0–6) for
 supporting both nRF5340 and nRF54L15. Read it before structural changes.
-Current status: **Phase 4 landed** — PI clock recovery controller (dual-term,
-ppm output) + actuator interface with two actuators: APLL (nRF5340) and
-SAMPLE_ADJUST (nRF54L15, sample insert/drop). The nRF54L15 target now builds,
-flashes, and boots with I2S + BT working. Phase 5 (ASRC on cpuapp) and
-Phase 6 (FLPR offload) remain.
+Current status: **Phase 5 landed and closed** — cpuapp fixed-point linear ASRC
+accepted (Mode A + Mode B, each 600 s, zero faults). Actuators reduced to two:
+APLL (nRF5340) and NONE (nRF54L15, ASRC consumes ppm). **Phase 6 (FLPR
+offload) complete** — Stages 0–5 accepted, 432 unit tests pass (396 C + 36
+Python), nRF54L15 hardware Mode A + Mode B 120 s at 100 fps zero faults.
+**BabbleSim Stage 1 accepted as regular local gate** — sink-only scenario,
+strict PCM oracle with local startup counters, fully deterministic across
+runs (hash=0xFE0D4245). Official upstream smoke remains PARTIAL. Scope stops
+here: reconnect/Mode A/B under BabbleSim duplicate hardware coverage.
+See `docs/design.md` for full staged plans and `docs/development/phase5-hardware-acceptance-results.md`
+for Phase 5 acceptance evidence.
 
 Consequences for work in this repo today:
 
-- `docs/nrf54l15-drift-compensation.md` is superseded — reference only,
-  never update it.
-- Tooling reference: `~/repos/serial-mcp` holds the direnv + nrfutil
-  workflow that Phase 0 ports here.
 - Every change must keep the nRF5340 target building, flashing, streaming.
+
+## Central-only test rule
+
+All agents run the LE Audio stream autonomously via the nRF5340DK `hci_uart`
+central attached to Linux as `hci0` (over `/dev/ttyACM2` at 1 000 000 baud H4
+with flow control). Use `scripts/bap_central.py` to connect to the receiver
+and stream LC3 audio. No human-operated central is allowed in any test
+procedure.
+
+The only allowed user input is a true physical observation that an agent
+cannot make: whether sound is audible from connected speakers/headphones
+after the agent has completed its test run.
+
+### Central setup (required before every test session)
+
+The nRF5340DK `hci_uart` central attaches to the kernel via `btattach`.
+Run this BEFORE `scripts/bap_central.py`:
+
+```bash
+# Attach the HCI UART dongle (nRF5340DK as central) — one-time per boot:
+setsid sudo btattach -B /dev/ttyACM2 -S 1000000 </dev/null >/tmp/btattach.log 2>&1 &
+sleep 5
+sudo btmgmt --index hci0 power off
+sudo btmgmt --index hci0 power on
+sleep 2
+sudo btmgmt --index hci0 io-cap 3
+sudo btmgmt --index hci0 sc on
+```
+
+Verify with `sudo btmgmt --index hci0 info`. Current settings must include
+`powered le secure-conn cis-central`. The dongle's BD_ADDR must be
+`C0:AA:BB:CC:DD:EE` (compile-time identity — see dongle firmware fix below).
+
+**Dongle firmware compile-time identity (Stage0)**:
+The nRF5340DK FICR DEVICEADDR is unprogrammed (all zeros). Instead of
+the runtime `btmgmt static-addr` workaround, the hci_ipc netcore firmware
+now calls `bt_ctlr_set_public_addr()` before `bt_enable_raw()` via a
+repo-owned copy of the hci_ipc sample (`dongle/hci_ipc/`). The address
+`C0:AA:BB:CC:DD:EE` is defined in `dongle/hci_identity.h` (lab-only,
+not a production-assigned OUI). Build with `fw-build-dongle`.
+
+### --peer-addr bypass
+
+When the dongle cannot scan, pass the receiver's BLE address directly:
+
+```bash
+# Get receiver address from boot log: "Identity: XX:XX:XX:XX:XX:XX (random)"
+python3 scripts/bap_central.py --peer-addr DB:A6:0C:05:A2:AA --duration 30
+```
+
+This skips BlueZ discovery, creates the device via brief raw-HCI connect,
+and calls `device.Pair()` to establish the bond + encrypted link.
+
+Then run `bap_central.py` **without sudo** — the main script needs
+dbus-python from the nix-shell (Python path stripped by sudo).  Only the
+raw-HCI connect subprocess uses sudo internally.
+
+```bash
+python3 scripts/bap_central.py --duration 30   # Mode A (default)
+python3 scripts/bap_central.py --stereo --duration 30  # --stereo flag
+```
 
 ## Build
 
@@ -96,8 +165,11 @@ fw-build-5340
 ```
 
 The build runs `west build -b ebyte_e83_nrf5340/nrf5340/cpuapp --sysbuild --pristine`
-into `build/nrf5340/`. Use `--pristine` after any `prj.conf`, overlay, or
-`sysbuild.cmake` change.  Pass extra cmake args through:
+into `build/nrf5340/`. Sysbuild produces images under `build/nrf5340/le-audio-receiver/`
+(app) and `build/nrf5340/hci_ipc/` (net core); top-level merged hexes are
+`build/nrf5340/merged.hex` and `build/nrf5340/merged_CPUNET.hex`. Use
+`--pristine` after any `prj.conf`, overlay, or `sysbuild.cmake` change.
+Pass extra cmake args through:
 
 ```bash
 fw-build-5340 -- -DCONFIG_FOO=y
@@ -275,14 +347,14 @@ worth the complexity.
 
 ### Stale bonds cause pairing failures that block PACS/ASCS reads
 
-If a phone was previously bonded and the bond info is reloaded from the
-settings partition on boot (`settings_load()`), but the phone still tries
+If a central was previously bonded and the bond info is reloaded from the
+settings partition on boot (`settings_load()`), but the central still tries
 to pair fresh or the firmware version changed security params, pairing
-will fail.  The phone then disconnects before it can read the encrypted
+will fail.  The central then disconnects before it can read the encrypted
 PACS/ASCS services.
 
-**Fix:** Either do a full chip erase (`nrfutil device recover`) before
-flashing, or update the phone (delete device in Bluetooth settings → re-scan).
+**Fix:** Either do a full chip erase (`nrf53_recover` via openocd-master) before
+flashing, or delete the bond on the central (e.g. `bluetoothctl remove`).
 
 ### printk and LOG output race on the same UART
 
@@ -326,10 +398,10 @@ and `CONFIG_BT_ISO_TX_BUF_COUNT=1` so they match — the host's
 `Num of Controller's ISO packets != ISO bt_conn_tx contexts` warning is
 silenced at the source, not tolerated.
 
-### Phones require Just Works pairing
+### Centrals require Just Works pairing
 
 Default `CONFIG_BT_SMP_ENFORCE_MITM=y` forces authenticated pairing.
-Without a passkey UI the phone shows "incorrect PIN". Disable MITM
+Without a passkey UI the central shows "incorrect PIN". Disable MITM
 (`CONFIG_BT_SMP_ENFORCE_MITM=n`) and add `pairing_accept` /
 `pairing_complete` / `pairing_failed` callbacks returning
 `BT_SECURITY_ERR_SUCCESS`. See `src/bt_bap.c` pairing callbacks.
@@ -348,13 +420,13 @@ Without it, `west flash` fails with "Cannot connect to the probe".
 
 The API fills `*chan_allocation` via pointer and returns **0 on success**,
 negative errno on failure. Checking `if (ret > 0)` silently falls through
-to the mono default for every phone that sends a valid channel allocation
+to the mono default for every source that sends a valid channel allocation
 LTV — making all stereo ASEs appear mono. Use `if (ret == 0)`. See
 `lc3_config` in `src/bt_bap.c`.
 
 ### Stereo single-ASE (Mode B) needs two LC3 decoders
 
-A phone may send one ASE with `chan_count=2` (stereo) rather than two
+A BAP source may send one ASE with `chan_count=2` (stereo) rather than two
 mono ASEs. In that case, the SDU is `[L_frame][R_frame]` concatenated.
 One `lc3_decode` call with stride=2 only fills even (L) positions;
 odd (R) positions stay zero → right channel silent. Two independent
@@ -390,17 +462,55 @@ so reconnect works without re-calling `audio_sink_init`.
 
 ### Clock recovery actuator must match platform
 
-The `AUDIO_CLOCK_ACTUATOR` Kconfig choice selects the actuator. Three options:
+The `AUDIO_CLOCK_ACTUATOR` Kconfig choice selects the actuator. Two production options:
 - `APLL` (default, nRF5340) — `audio_clock_actuator_apll.c`, trims HFCLKAUDIO APLL.
-- `SAMPLE_ADJUST` (nRF54L15) — `audio_clock_actuator_sample_adjust.c`, inserts/drops
-  single PCM samples in the I2S block (degenerate ASRC). The nRF54L15 board conf
-  sets this. No HFCLKAUDIO on nRF54L15 → APLL is not an option there.
-- `NONE` — `audio_clock_actuator_none.c`, controller runs but output is discarded
-  (testing only). Do NOT set on nRF5340 (controller output needs the APLL) and
-  do NOT set on nRF54L15 in production (use SAMPLE_ADJUST).
+- `NONE` — `audio_clock_actuator_none.c`, nRF54L15 production. ASRC consumes
+  controller ppm directly (no physical actuator on nRF54L15).
 
-`audio_clock_actuator_consume_sample_adjustment()` returns ±1/0; APLL and NONE
-always return 0 (data-path adjustment is a no-op for clock-steering actuators).
+`audio_clock_actuator_consume_sample_adjustment()` returns ±1/0; both APLL and
+NONE return 0 (data-path adjustment is a no-op for clock-steering actuators).
+Historical SAMPLE_ADJUST actuator source retained for regression testing only;
+no longer selectable in production Kconfig.
+
+### Drift controller: PCLK feedforward + per-block phase PI (Phase 4b.2)
+
+Controller has two explicit inputs:
+- `audio_drift_frequency_error_update(local_clock_error_ppm)` — from platform
+  timing (nRF54L15: PCLK TIMER20 vs GRTC; nRF5340: never called, stays zero).
+  Positive = local PCLK/I2S runs faster than controller. Feedforward correction
+  = `-measured` (local fast → negative correction → eventual insert).
+- `audio_drift_controller_update(slab_free)` — called ONCE per rendered stereo
+  block in `audio_sink_push()`, before slab allocation. Phase error =
+  `PHASE_SETPOINT - slab_free` (corrected sign vs earlier code). Combines
+  filtered frequency feedforward + phase PI. No floating point; pure 32-bit
+  integer with 64-bit intermediate multiplication.
+
+Output sign: positive ppm = consume source faster / drop frame eventually;
+negative ppm = consume source slower / insert frame eventually.
+Output clamp: `CONFIG_AUDIO_DRIFT_OUTPUT_CLAMP` (default 500; nRF54L15: 2000).
+Phase integral clamp: `CONFIG_AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP` (default 500;
+nRF54L15: 150).
+
+`audio_sink_sdu_ref_update()` is REMOVED. ISO timestamps go ONLY to
+`audio_timing_sdu_ref_update()` for GRTC scheduling. Never call drift
+controller from ISR — work/thread context only.
+
+### SDC/MPSL owns RADIO — never access RADIO directly
+
+On nRF54L15 (SDC on cpuapp), MPSL owns the RADIO peripheral. Never configure
+or read RADIO registers, RADIO events, RADIO IRQ, or RADIO DPPI publication
+subscriber. Any direct RADIO access will conflict with the SoftDevice
+Controller runtime. For drift measurement on nRF54L15, use ISO `info->ts` with
+`BT_ISO_FLAGS_TS` (controller-clock ISO SDU reference), GRTC future
+compare/action (Nordic ISO-time-sync pattern; sample at
+`nrf/samples/bluetooth/iso_time_sync/`), and TIMER20 in TIMER mode (PCLK-
+derived free-running ticks) with GRTC compare → GPPI → TIMER20 CAPTURE
+(hardware-snapshotted counter). Phase 4b.1 logs diagnostics; Phase 4b.2
+feeds measured ppm into the PI controller. **Historical: I2S20 FRAMESTART
+→ GPPI → TIMER20 COUNT was invalidated — HW validation on 2026-07-26 showed
+FRAMESTART fires at DMA buffer boundaries (~100 Hz), not LRCK edges.**
+`sdc_hci_cmd_vs_set_event_start_task()` is an ACL-event diagnostic,
+not a CIS RX timestamp.
 
 ### Zephyr does NOT detect devicetree pinctrl overlaps
 
@@ -437,7 +547,8 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 
 - App: BAP Unicast Server sink-only, 2 sink ASEs, LC3 decode → I2S
 - Audio: `audio_sink.h` interface → `audio_i2s.c` (slab/DMA backend)
-- Clock recovery: `audio_drift.c` (PI controller, ppm output) → actuator interface (`audio_clock_actuator.h`) → `audio_clock_actuator_apll.c` (nRF5340 APLL) or `audio_clock_actuator_sample_adjust.c` (nRF54L15 sample insert/drop)
+- Clock recovery: `audio_drift.c` (PI controller, ppm output) → actuator interface (`audio_clock_actuator.h`) → `audio_clock_actuator_apll.c` (nRF5340 APLL) or `audio_clock_actuator_none.c` (nRF54L15, ASRC consumes ppm)
+- ASRC: `audio_asrc.c` (fixed-point linear stereo, cpuapp) + FLPR offload (`src/flpr/`, handshake/runtime/rings)
 - Decode: `audio_decode.c` (LC3 decode + channel routing, unit-testable)
 - Net (nRF5340): `hci_ipc` with `nrf5340_cpunet_iso_peripheral-bt_ll_sw_split.conf`
 - Link Layer: nRF5340 = BT_LL_SW_SPLIT (Zephyr open-source controller, ISO required); nRF54L15 = SDC (SoftDevice Controller, single-core)
@@ -450,16 +561,32 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 | `src/main.c` | Lifecycle wiring + watchdog + advertising restart loop |
 | `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising |
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
-| `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop, sdu_ref) |
+| `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop) |
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA, 48 kHz stereo) — implements audio_sink.h |
 | `src/audio_drift.c` | PI clock recovery controller (dual-term, ppm output) |
 | `src/audio_drift.h` | Controller API + APLL register constants |
+| `src/audio_rate_convert.c` | Nearest-neighbor rate converter (PCLK32M mismatch fix) |
+| `src/audio_rate_convert.h` | Rate converter public API (unit-testable) |
+| `src/audio_timing.h` | Platform timing interface (frequency error, GRTC scheduling) |
+| `src/audio_timing_math.c` | Timing math shared across platforms |
+| `src/audio_timing_nrf54.c` | nRF54L15 TIMER20-vs-GRTC PCLK frequency measurement |
+| `src/audio_timing_none.c` | nRF5340 no-op timing (no GRTC/TIMER20) |
+| `src/stream_lifecycle.c` | Stream start/stop lifecycle (unit-testable) |
 | `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset, consume_sample_adjustment) |
 | `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator (ppm → register trim) |
-| `src/audio_clock_actuator_sample_adjust.c` | nRF54L15 sample insert/drop actuator (ppm → ±1 sample) |
-| `src/audio_clock_actuator_none.c` | No-op actuator (testing only) |
+| `src/audio_clock_actuator_sample_adjust.c` | Historical sample insert/drop actuator (regression testing only) |
+| `src/audio_clock_actuator_none.c` | nRF54L15 no-op actuator (ASRC consumes ppm directly) |
+| `src/audio_asrc.c` | Fixed-point linear stereo ASRC (cpuapp + FLPR fallback) |
+| `src/audio_offload.c` | FLPR offload manager (handshake, IPC, fallback path) |
+| `src/flpr/` | FLPR firmware (RISC-V VPR): ASRC, ICMsg/VEVIF IPC |
+| `src/flpr_handshake.c` | cpuapp↔FLPR boot handshake + VEVIF |
+| `src/flpr_protocol.h` | Shared protocol constants (ring layout, commands) |
+| `src/flpr_ring.c` | SPSC ring buffer (shared SRAM, cache-safe) |
+| `src/flpr_ring_mgr.c` | Ring manager: paired input/output rings |
+| `src/flpr_runtime.c` | FLPR runtime: IPC submit, watchdog, fault detection |
+| `src/flpr_audio_process.c` | FLPR audio block wrapper (metadata + PCM) |
 | `boards/ebyte/e83_nrf5340/` | Custom board definition for Ebyte E83-2G4M03S: I2S0 pins, ACLK 12.288 MHz, QSPI disabled, i2s-audio alias, OpenOCD flash runner |
-| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2, pdm20 disabled |
+| `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2 (MCK on D3/P1.7 — peripheral-needed routing, DAC does not consume it; 3-wire no-MCK at the DAC), pdm20 disabled, TIMER20 reserved, FLPR IPC SRAM regions |
 | `prj.conf` | App Kconfig (ACL/ISO buffers, SMP, 2 ASEs, liblc3, FPU, ZMS) |
 | `sysbuild.cmake` | Applies SW Split DT overlay + Kconfig overlay to hci_ipc |
 | `Kconfig.sysbuild` | `NRF_DEFAULT_BLUETOOTH=y` conditional on nRF5340, gates netcore |

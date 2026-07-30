@@ -20,7 +20,13 @@
 
 #include "audio_sink.h"
 #include "audio_volume.h"
+#include "audio_offload.h"
 #include "bt_bap.h"
+
+#if defined(CONFIG_SOC_NRF54L15)
+#include "flpr_handshake.h"
+#include "flpr_runtime.h"
+#endif
 
 #if defined(CONFIG_WATCHDOG)
 #include <zephyr/drivers/watchdog.h>
@@ -107,7 +113,9 @@ int main(void)
 	}
 	LOG_INF("settings_load() OK");
 
-	/* CAS (Common Audio Service) registered automatically via CONFIG_BT_CAP_ACCEPTOR */
+	/* CAS (Common Audio Service) is NOT registered — CONFIG_BT_CAP_ACCEPTOR=n
+	 * avoids the CAP context check on ASE Enable. Available contexts are
+	 * managed through bt_pacs_set_available_contexts() directly. */
 
 	err = audio_volume_init();
 	if (err) {
@@ -127,6 +135,21 @@ int main(void)
 		sys_reboot(SYS_REBOOT_COLD);
 	}
 
+#if defined(CONFIG_SOC_NRF54L15)
+	/* FLPR handshake: non-blocking, non-fatal if FLPR absent.
+	 * VPR launcher has already released FLPR from reset at this point
+	 * (NORDIC_VPR_LAUNCHER init at POST_KERNEL level). */
+	flpr_handshake_init();
+
+	/* Phase 6 Stage 2: init audio offload (FLPR ring transport).
+	 * Non-blocking — may defer ring init if FLPR not ready yet. */
+	audio_offload_init();
+
+	/* Phase 6 Stage 4A: init FLPR runtime restart manager.
+	 * Derives DT addresses, non-blocking. */
+	flpr_runtime_init();
+#endif
+
 	err = bt_bap_restart_advertising();
 	if (err) {
 		LOG_ERR("Adv start failed: %d", err);
@@ -136,6 +159,8 @@ int main(void)
 	LOG_INF("Advertising as \"%s\"", CONFIG_BT_DEVICE_NAME);
 
 	while (true) {
+		/* Heartbeat runs via k_work_delayable (flpr_handshake_init).
+		 * No poll call needed in main loop. */
 		bt_bap_wait_disconnect();
 		LOG_INF("Restarting advertising...");
 

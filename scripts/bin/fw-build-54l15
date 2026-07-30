@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
-# Build the nRF54L15 firmware.
-#
-# NOTE: nRF54L15 target is known-broken (design.md F1). This script exists as
-# the Phase 1 entry point. Expect build failures until Phase 1 lands.
+# Build the nRF54L15 firmware (nrf54l15dk + Xiao overlay).
 #
 # Build dir:  build/nrf54l15
 # Result:     build/nrf54l15/le-audio-receiver/zephyr/zephyr.elf
