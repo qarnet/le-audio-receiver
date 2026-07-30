@@ -140,11 +140,11 @@ static void print_codec_cfg(const struct bt_audio_codec_cfg *codec_cfg)
 		int ret;
 
 		ret = bt_audio_codec_cfg_get_freq(codec_cfg);
-		if (ret > 0) {
+		if (ret >= 0) {
 			LOG_INF("  Frequency: %d Hz", bt_audio_codec_cfg_freq_to_freq_hz(ret));
 		}
 		ret = bt_audio_codec_cfg_get_frame_dur(codec_cfg);
-		if (ret > 0) {
+		if (ret >= 0) {
 			LOG_INF("  Frame Duration: %d us",
 				bt_audio_codec_cfg_frame_dur_to_frame_dur_us(ret));
 		}
@@ -267,26 +267,47 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 
 #if defined(CONFIG_LIBLC3)
 	int cc = sinks[idx].decode.chan_count;
-	int ret = bt_audio_codec_cfg_get_freq(stream->codec_cfg);
-
-	if (ret <= 0) {
+	int ret;
+	ret = bt_audio_codec_cfg_get_freq(stream->codec_cfg);
+	if (ret < 0) {
 		LOG_ERR("freq not set");
 		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
 				       BT_BAP_ASCS_REASON_CODEC_DATA);
 		return ret;
 	}
 	int freq = bt_audio_codec_cfg_freq_to_freq_hz(ret);
-
-	ret = bt_audio_codec_cfg_get_frame_dur(stream->codec_cfg);
-	if (ret <= 0) {
-		LOG_ERR("frame dur not set");
+	if (freq < 0) {
+		LOG_ERR("invalid freq conversion: %d", ret);
 		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
 				       BT_BAP_ASCS_REASON_CODEC_DATA);
-		return ret;
+		return freq;
 	}
-	int frame_us = bt_audio_codec_cfg_frame_dur_to_frame_dur_us(ret);
+
+	ret = bt_audio_codec_cfg_get_frame_dur(stream->codec_cfg);
+	int frame_us;
+	if (ret < 0) {
+		/* Stock PipeWire SPA bluez5 does not include Frame Duration LTV
+		 * in the Config QOS.  Fall back to 10 ms default to match.
+		 */
+		LOG_INF("frame dur not set, defaulting to 10 ms");
+		frame_us = 10000;
+	} else {
+		frame_us = bt_audio_codec_cfg_frame_dur_to_frame_dur_us(ret);
+		if (frame_us < 0) {
+			LOG_ERR("invalid frame dur conversion: %d", ret);
+			*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
+					       BT_BAP_ASCS_REASON_CODEC_DATA);
+			return frame_us;
+		}
+	}
 
 	int frames_per_sdu = bt_audio_codec_cfg_get_frame_blocks_per_sdu(stream->codec_cfg, true);
+	if (frames_per_sdu < 0) {
+		LOG_ERR("invalid frames_per_sdu: %d", frames_per_sdu);
+		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
+				       BT_BAP_ASCS_REASON_CODEC_DATA);
+		return frames_per_sdu;
+	}
 
 	ret = audio_decode_config(&sinks[idx].decode, cc, freq, frame_us, frames_per_sdu);
 	if (ret < 0) {

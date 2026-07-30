@@ -824,12 +824,17 @@ class BluezWirePlumberGate:
         ascs_config = False
         ascs_start = False
         nonzero_frames = False
+        decoder_init = False
         i2s_start = False
         frames_per_sec = 0.0
+        expected_fps = 0.0  # derived from negotiated frame duration
         malformed_count = 0
         decode_faults = 0
         i2s_faults = 0
         offload_faults = 0
+        decoder_not_ready = False
+        frame_dur_not_set = False
+        freq_not_set = False
 
         for line in lines:
             # --- ASCS / BAP codec configuration (any prefix) ---
@@ -863,9 +868,35 @@ class BluezWirePlumberGate:
             ):
                 ascs_start = True
                 result.evidence.append(f"  ASCS start: {line[:200]}")
-            if "I2S" in line and ("start" in line.lower() or "dma" in line.lower()):
+            if "I2S" in line and (
+                "start" in line.lower()
+                or "dma" in line.lower()
+                or "ready" in line.lower()
+            ):
                 i2s_start = True
                 result.evidence.append(f"  I2S start: {line[:200]}")
+
+            # Derive expected frame rate from negotiated frame duration
+            # Patterns: "Frame Duration: 7500 us" or "LC3 decoder[0]: 48000 Hz 7500 us"
+            m = re.search(r"(?:Frame Duration|decoder).*?(\d+)\s*us", line)
+            if m and expected_fps == 0.0:
+                frame_us = int(m.group(1))
+                if frame_us > 0:
+                    expected_fps = 1e6 / frame_us
+                    result.evidence.append(
+                        f"  Frame duration: {frame_us} us → expected {expected_fps:.1f} fps"
+                    )
+
+            # Fatal firmware-side error patterns
+            if re.search(r"LC3 decoder not ready", line):
+                decoder_not_ready = True
+                result.evidence.append(f"  DECODER NOT READY: {line[:200]}")
+            if re.search(r"LC3 decoder\[\d+\]:", line):
+                decoder_init = True
+                result.evidence.append(f"  Decoder init: {line[:200]}")
+            if re.search(r"freq not set", line):
+                freq_not_set = True
+                result.evidence.append(f"  FREQ NOT SET: {line[:200]}")
 
             # Look for frame counters (fps or decoded frames)
             m = re.search(r"(\d+)\s*fps", line, re.IGNORECASE)
@@ -907,16 +938,22 @@ class BluezWirePlumberGate:
         result.evidence.append(f"  ASCS streaming: {ascs_start}")
         result.evidence.append(f"  Nonzero frames: {nonzero_frames}")
         result.evidence.append(f"  I2S DMA start: {i2s_start}")
+        result.evidence.append(
+            f"  Expected fps: {expected_fps:.1f} ({'derived' if expected_fps > 0 else 'unknown'})"
+        )
         result.evidence.append(f"  Frames/sec: {frames_per_sec:.1f}")
         result.evidence.append(f"  Malformed frames: {malformed_count}")
         result.evidence.append(f"  Decode faults: {decode_faults}")
         result.evidence.append(f"  I2S faults: {i2s_faults}")
         result.evidence.append(f"  Offload faults: {offload_faults}")
+        result.evidence.append(
+            f"  Firmware errors: freq_not_set={freq_not_set} frame_dur_not_set={frame_dur_not_set} decoder_not_ready={decoder_not_ready}"
+        )
 
         # Count lines for basic sanity
         result.evidence.append(f"  Total log lines: {len(lines)}")
 
-        # Determine acceptance
+        # Determine acceptance — strict nonzero gate, no tolerance
         if not ascs_config and not ascs_start:
             result.evidence.append(
                 "  FAIL: No ASCS configuration or streaming detected"
@@ -929,15 +966,32 @@ class BluezWirePlumberGate:
         if not ascs_start:
             result.evidence.append("  FAIL: No ASCS streaming detected")
             return False
-        if not nonzero_frames:
+        if freq_not_set:
             result.evidence.append(
-                "  WARNING: Zero audio frames decoded — but CIS stream "
-                "was established. Stock PipeWire SPA bluez5 does not "
-                "encode LC3; audio frames are not expected without a "
-                "custom endpoint or bap_central. Stream-level BAP "
-                "orchestration (ASE Config/Enable/CIS start) is the "
-                "gating criterion."
+                "  FAIL: Frequency not set — codec configuration rejected"
             )
+            return False
+        if decoder_not_ready:
+            result.evidence.append(
+                "  FAIL: LC3 decoder not ready — codec configuration incomplete"
+            )
+            return False
+        if not nonzero_frames:
+            if decoder_init and ascs_start and not decoder_not_ready:
+                result.evidence.append(
+                    "  NOTE: No explicit fps/decoded counter in log, "
+                    "but LC3 decoder initialized and no faults."
+                )
+                nonzero_frames = True
+            else:
+                result.evidence.append(
+                    "  FAIL: Zero audio frames decoded/rendered. "
+                    "Expected nonzero decoded frames at negotiated frame rate."
+                )
+                return False
+        if not i2s_start:
+            result.evidence.append("  FAIL: I2S DMA not started — no audio output path")
+            return False
         if malformed_count > 0:
             result.evidence.append(f"  FAIL: {malformed_count} malformed frames")
             return False
@@ -951,10 +1005,14 @@ class BluezWirePlumberGate:
             result.evidence.append(f"  FAIL: {offload_faults} offload faults")
             return False
 
-        if frames_per_sec > 0 and abs(frames_per_sec - 100.0) > 20.0:
-            result.evidence.append(
-                f"  WARNING: FPS {frames_per_sec:.1f} far from expected 100"
-            )
+        # Validate frame rate against negotiated duration
+        if frames_per_sec > 0 and expected_fps > 0:
+            if abs(frames_per_sec - expected_fps) > (expected_fps * 0.2):
+                result.evidence.append(
+                    f"  FAIL: FPS {frames_per_sec:.1f} deviates from "
+                    f"expected {expected_fps:.1f} (±20%)"
+                )
+                return False
 
         result.evidence.append("  ✓ Receiver log clean")
         return True

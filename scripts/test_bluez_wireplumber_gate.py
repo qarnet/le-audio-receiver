@@ -224,6 +224,7 @@ class TestParseReceiverLog(unittest.TestCase):
     def test_malformed_frames(self):
         content = """[00:00:10] ASCS: ASE configured
 [00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
 [00:00:15] 100 fps, decoded=5000
 [00:00:20] ERROR: malformed SDU detected
 """
@@ -236,6 +237,7 @@ class TestParseReceiverLog(unittest.TestCase):
     def test_decode_fault(self):
         content = """[00:00:10] ASCS: ASE configured
 [00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
 [00:00:15] 100 fps, decoded=5000
 [00:00:30] LC3 decode failed: error code -1
 """
@@ -246,6 +248,7 @@ class TestParseReceiverLog(unittest.TestCase):
     def test_i2s_fault(self):
         content = """[00:00:10] ASCS: ASE configured
 [00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
 [00:00:15] 100 fps, decoded=5000
 [00:00:20] I2S underrun detected
 """
@@ -256,6 +259,7 @@ class TestParseReceiverLog(unittest.TestCase):
     def test_offload_fault(self):
         content = """[00:00:10] ASCS: ASE configured
 [00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
 [00:00:15] 100 fps, decoded=5000
 [00:00:25] FLPR offload fault: stall detected
 """
@@ -266,6 +270,7 @@ class TestParseReceiverLog(unittest.TestCase):
     def test_fps_counter(self):
         content = """[00:00:10] ASCS: ASE configured
 [00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
 [00:00:30] Audio: 99 fps, buffer OK
 """
         result = self._write_log(content)
@@ -275,15 +280,117 @@ class TestParseReceiverLog(unittest.TestCase):
     def test_nonzero_decoded(self):
         content = """[00:00:10] ASCS: ASE configured
 [00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
 [00:00:30] decoded=12345 frames total
 """
         result = self._write_log(content)
         ok = self.gate.parse_receiver_log(result)
         self.assertTrue(ok)
 
+    # ── Strict nonzero gate tests (Phase 2 fix) ──────────────────────
+
+    def test_zero_frames_fatal(self):
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertFalse(ok)
+        evidence_str = "\n".join(result.evidence)
+        self.assertIn("Zero audio frames", evidence_str)
+
+    def test_i2s_not_started_fatal(self):
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:30] 100 fps, decoded=48000 frames
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertFalse(ok)
+        evidence_str = "\n".join(result.evidence)
+        self.assertIn("I2S DMA not started", evidence_str)
+
+    def test_decoder_not_ready_fatal(self):
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:15] 100 fps, decoded=48000
+[00:00:20] LC3 decoder not ready for stream[0]
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertFalse(ok)
+        evidence_str = "\n".join(result.evidence)
+        self.assertIn("LC3 decoder not ready", evidence_str)
+
+    def test_frame_dur_not_set_with_fallback(self):
+        """Frame duration not set triggers 10ms fallback — stream still green."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:11] Frame Duration: 10000 us
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:15] frame dur not set, defaulting to 10 ms
+[00:00:30] 100 fps, decoded=3000
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok, f"Fallback should pass: {result.evidence}")
+
+    def test_freq_not_set_fatal(self):
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:15] freq not set
+[00:00:20] 100 fps, decoded=48000
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertFalse(ok)
+        evidence_str = "\n".join(result.evidence)
+        self.assertIn("Frequency not set", evidence_str)
+
+    def test_fps_matches_10ms_expected(self):
+        """100 fps log should match 10 ms expected (Frame Duration: 10000 us)."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:11] Frame Duration: 10000 us
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] 100 fps, decoded=3000
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok)
+
+    def test_fps_matches_7_5ms_expected(self):
+        """~133 fps log should match 7.5 ms expected."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:11] Frame Duration: 7500 us
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] 133 fps, decoded=4000
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok)
+
+    def test_fps_deviation_fatal(self):
+        """Actual fps far from expected should fail."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:11] Frame Duration: 10000 us
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] 50 fps, decoded=1500
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertFalse(ok)
+        evidence_str = "\n".join(result.evidence)
+        self.assertIn("deviates from expected", evidence_str)
+
     def test_binary_log(self):
         """Ensure binary garbage in log is handled gracefully."""
-        content = b"ASCS: ASE configured\nASCS: stream started\n\x00\xff\xfe100 fps\n"
+        content = b"ASCS: ASE configured\nASCS: stream started\nI2S DMA started\n\x00\xff\xfe100 fps\n"
         with open(self.gate.log_path, "wb") as f:
             f.write(content)
         result = GateResult()
@@ -342,6 +449,7 @@ class TestParsedCounters(unittest.TestCase):
     def test_multiple_faults_counted(self):
         content = """[00:00:10] ASCS: ASE configured
 [00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
 [00:00:15] 100 fps
 [00:00:20] malformed SDU
 [00:00:21] malformed SDU

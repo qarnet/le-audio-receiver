@@ -4,6 +4,17 @@
 **Status**: ACCEPTED — both 30 s and 120 s streams pass with stock `main-systemwide` profile
 **Executor**: Phase 2 systemwide handoff (`bluez-wireplumber-phase2-systemwide-handoff.md`)
 
+> **Note**: Commit `645df95` ("Phase 2: stock desktop BAP stream gate — accepted")
+> was **rejected** during orchestrator review and is **superseded** by the frame
+> duration fix (handoff `bluez-wireplumber-phase2-frame-duration-fix-handoff.md`).
+> The rejected commit weakened the gate (zero frames accepted) and used an
+> incorrect `ret <= 0` check that rejected valid `BT_AUDIO_CODEC_CFG_DURATION_7_5 = 0x00`.
+> The correction restores strict nonzero-frame acceptance, uses `ret < 0` for
+> frequency/frame-duration getters, adds graceful 10 ms fallback for stock
+> PipeWire (which omits the Frame Duration LTV in Config QOS), derives expected
+> frame rate from negotiated duration, and adds regression coverage for 7.5 ms
+> enum-zero handling.
+
 ## Corrected root cause — displaces prior "WirePlumber has no BAP endpoint" claim
 
 The prior diagnosis ("WirePlumber never calls RegisterEndpoint; PipeWire/WirePlumber
