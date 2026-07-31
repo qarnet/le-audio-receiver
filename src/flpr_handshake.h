@@ -141,8 +141,9 @@ typedef void (*flpr_handshake_ring_handler_t)(const struct flpr_msg *msg, void *
  * @brief Register handlers for ring-control IPC messages.
  *
  * When FLPR sends RING_RESET_ACK, RING_CONSUMER, RING_TEST_REPORT,
- * or RING_STALL_ACK, the registered callbacks are invoked from
- * the IPC receive callback (under spinlock).
+ * or RING_STALL_ACK, the registered callbacks are invoked from the
+ * IPC receive callback WITHOUT holding the module spinlock
+ * (flpr_lock is released before dispatch).
  *
  * Call with NULL to unregister.
  *

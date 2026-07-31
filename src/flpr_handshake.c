@@ -90,6 +90,22 @@ static int send_msg(const struct flpr_msg *msg)
 	return ret;
 }
 
+/* ── Heartbeat work scheduling ─────────────────────────────────────
+ * Test mode (FLPR_HANDSHAKE_NATIVE_TEST) records the READY-triggered
+ * async start instead of submitting it, so the system workqueue never
+ * runs the handler concurrently with the single-threaded ztest runner;
+ * tests invoke heartbeat iterations synchronously and teardown cancels
+ * the reschedule before it fires. */
+
+#if defined(FLPR_HANDSHAKE_NATIVE_TEST)
+#include "flpr_handshake_hooks.h"
+#define FLPR_HS_WORK_START()      flpr_handshake_test_work_start()
+#define FLPR_HS_WORK_RESCHEDULE() flpr_handshake_test_work_reschedule()
+#else
+#define FLPR_HS_WORK_START()      k_work_schedule(&hb_work, K_NO_WAIT)
+#define FLPR_HS_WORK_RESCHEDULE() k_work_schedule(&hb_work, K_MSEC(FLPR_HEARTBEAT_INTERVAL_MS))
+#endif
+
 /* ── Heartbeat work handler ─────────────────────────────────────── */
 
 static void hb_work_fn(struct k_work *work)
@@ -143,7 +159,7 @@ static void hb_work_fn(struct k_work *work)
 	}
 
 reschedule:
-	k_work_schedule(&hb_work, K_MSEC(FLPR_HEARTBEAT_INTERVAL_MS));
+	FLPR_HS_WORK_RESCHEDULE();
 }
 
 /* ── IPC callbacks ──────────────────────────────────────────────── */
@@ -258,7 +274,7 @@ static void ep_received(const void *data, size_t len, void *priv)
 
 		/* Start heartbeat work outside lock. */
 		if (start_hb_now) {
-			k_work_schedule(&hb_work, K_NO_WAIT);
+			FLPR_HS_WORK_START();
 		}
 		break;
 	}
@@ -700,7 +716,9 @@ int flpr_handshake_send_msg(const struct flpr_msg *msg)
 	if (!msg) {
 		return -EINVAL;
 	}
-	return ipc_service_send(&flpr_ep, msg, sizeof(*msg));
+	/* Route through send_msg() so send failures increment err_send
+	 * exactly as documented in the header. */
+	return send_msg(msg);
 }
 
 void flpr_handshake_register_ring_handlers(flpr_handshake_ring_handler_t reset_ack_fn,
@@ -768,3 +786,118 @@ int flpr_handshake_send_fault_hang(uint32_t timeout_ms)
 	LOG_INF("FAULT_HANG_ACK received — FLPR hang imminent");
 	return 0;
 }
+
+#if defined(FLPR_HANDSHAKE_NATIVE_TEST)
+
+/* ── Test-only helpers ─────────────────────────────────────────────
+ * Compiled only under FLPR_HANDSHAKE_NATIVE_TEST (native_sim suite).
+ * Production builds contain none of these symbols.  These helpers reset
+ * module-static state, drive one heartbeat iteration synchronously, and
+ * arrange peer health/timestamp state; they never replace protocol
+ * helpers or callback switch logic. */
+
+static uint32_t test_hb_start_requests;
+static uint32_t test_hb_reschedules;
+
+void flpr_handshake_test_reset(void)
+{
+	k_work_cancel_delayable(&hb_work);
+	k_sem_init(&stress_sem, 0, FLPR_STRESS_MAX_COUNT + 1);
+	k_sem_init(&hang_ack_sem, 0, 1);
+	k_sem_reset(&bound_sem);
+	k_sem_reset(&new_ready_sem);
+
+	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+	flpr_peer_reset(&flpr);
+	hb_started = false;
+	session_available = false;
+	ring_reset_ack_fn = NULL;
+	ring_consumer_fn = NULL;
+	ring_report_fn = NULL;
+	ring_stall_ack_fn = NULL;
+	ring_handler_user_data = NULL;
+	health_cb = NULL;
+	health_cb_user_data = NULL;
+	stress_count = 0;
+	stress_sent = 0;
+	stress_recv = 0;
+	stress_timeouts = 0;
+	stress_active = false;
+	stress_cookie = 0;
+	stress_stale = 0;
+	stress_mismatch = 0;
+	stress_err_send = 0;
+	hang_ack_received = false;
+	k_spin_unlock(&flpr_lock, key);
+
+	test_hb_start_requests = 0;
+	test_hb_reschedules = 0;
+}
+
+void flpr_handshake_test_heartbeat_once(void)
+{
+	hb_work_fn(&hb_work.work);
+}
+
+void flpr_handshake_test_set_peer_state(bool bound, bool ready, bool acked, bool healthy,
+					uint32_t rx_last_ms)
+{
+	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+	flpr.bound = bound;
+	flpr.ready = ready;
+	flpr.acked = acked;
+	flpr.healthy = healthy;
+	flpr.rx_last_ms = rx_last_ms;
+	k_spin_unlock(&flpr_lock, key);
+}
+
+void flpr_handshake_test_work_start(void)
+{
+	/* Record the READY-triggered async start; do NOT submit it. */
+	test_hb_start_requests++;
+}
+
+void flpr_handshake_test_work_reschedule(void)
+{
+	/* Real reschedule at the documented interval; test teardown
+	 * cancels it before it fires (tests complete well under 1 s). */
+	test_hb_reschedules++;
+	k_work_schedule(&hb_work, K_MSEC(FLPR_HEARTBEAT_INTERVAL_MS));
+}
+
+uint32_t flpr_handshake_test_hb_start_requests(void)
+{
+	return test_hb_start_requests;
+}
+
+uint32_t flpr_handshake_test_hb_reschedules(void)
+{
+	return test_hb_reschedules;
+}
+
+bool flpr_handshake_test_work_pending(void)
+{
+	return k_work_delayable_is_pending(&hb_work);
+}
+
+uint32_t flpr_handshake_test_bound_sem_count(void)
+{
+	return k_sem_count_get(&bound_sem);
+}
+
+uint32_t flpr_handshake_test_new_ready_sem_count(void)
+{
+	return k_sem_count_get(&new_ready_sem);
+}
+
+uint32_t flpr_handshake_test_stress_sem_count(void)
+{
+	return k_sem_count_get(&stress_sem);
+}
+
+uint32_t flpr_handshake_test_hang_ack_sem_count(void)
+{
+	return k_sem_count_get(&hang_ack_sem);
+}
+
+#endif /* FLPR_HANDSHAKE_NATIVE_TEST */

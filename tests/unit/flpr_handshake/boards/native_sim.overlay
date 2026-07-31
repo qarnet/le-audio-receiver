@@ -1,0 +1,15 @@
+/*
+ * Copyright (c) 2025
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Overlay defining the fake IPC backend instance (ipc0) for the FLPR
+ * handshake suite on native_sim.  The production flpr_handshake.c uses
+ * DEVICE_DT_GET(DT_NODELABEL(ipc0)).
+ */
+
+/ {
+	ipc0: ipc0 {
+		compatible = "fake-ipc-backend";
+		status = "okay";
+	};
+};
