@@ -39,6 +39,9 @@ if ! command -v nrfutil &>/dev/null; then
     echo "ERROR: nrfutil not in PATH — source NCS toolchain environment first" >&2
     exit 1
 fi
+# Work around set -u: nrfutil env exports appending to $LD_LIBRARY_PATH,
+# which is unset under Nix (uses rpath instead).
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 eval "$(nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh)" || {
     echo "ERROR: Failed to source NCS toolchain environment" >&2
     exit 1
