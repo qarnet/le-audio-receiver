@@ -1,6 +1,6 @@
 tests:
-  unit.flpr_runtime.reset_order:
-    tags: flpr
+  unit.flpr_runtime:
+    tags: flpr runtime
     platform_allow: native_sim
     integration_platforms:
       - native_sim

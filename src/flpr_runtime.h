@@ -7,7 +7,9 @@
  * CPUAPP-owned synchronous restart of the SRAM-executing FLPR VPR
  * using public nrfx VPR HAL + public IPC service lifecycle.
  *
- * Idle-only in Stage 4A — rejects restart when offload stream active.
+ * restart() does NOT reject an active offload stream: automatic recovery
+ * invokes it while offload is RECOVERING, and the shell owns its separate
+ * active-stream guard.
  * Never reboot CPUAPP on FLPR failure.
  */
 
@@ -58,19 +60,19 @@ struct flpr_runtime_readbacks {
 /** Status snapshot (shell-readable). */
 struct flpr_runtime_status {
 	enum flpr_runtime_state state;
-	enum flpr_runtime_stage failed_stage;    /* stage where last failure occurred */
-	uint32_t requests;                       /* total restart attempts */
-	uint32_t success_count;                  /* successful restarts */
-	uint32_t fail_count;                     /* failed restarts */
-	uint32_t busy_reject;                    /* rejected due to busy/active stream */
-	uint32_t previous_epoch;                 /* epoch before last restart */
-	uint32_t new_epoch;                      /* epoch after last restart */
-	uint32_t reload_bytes;                   /* bytes copied from source to execution */
-	uint32_t source_crc;                     /* CRC-32 of source memory (last restart) */
-	uint32_t execution_crc;                  /* CRC-32 of execution memory after copy */
-	int last_errno;                          /* last error (0 on success) */
-	uint32_t total_duration_ms;              /* cumulative restart duration */
-	uint32_t max_duration_ms;                /* longest single restart */
+	enum flpr_runtime_stage failed_stage; /* stage where last failure occurred */
+	uint32_t requests;                    /* total restart attempts */
+	uint32_t success_count;               /* successful restarts */
+	uint32_t fail_count;                  /* failed restarts */
+	uint32_t busy_reject;                 /* rejected: another restart already in progress */
+	uint32_t previous_epoch;              /* epoch before last restart */
+	uint32_t new_epoch;                   /* epoch after last restart */
+	uint32_t reload_bytes;                /* bytes copied from source to execution */
+	uint32_t source_crc;                  /* CRC-32 of source memory (last restart) */
+	uint32_t execution_crc;               /* CRC-32 of execution memory after copy */
+	int last_errno;                       /* last error (0 on success) */
+	uint32_t total_duration_ms; /* cumulative restart duration (failed attempts included) */
+	uint32_t max_duration_ms;   /* longest single restart (failed attempts included) */
 	struct flpr_runtime_readbacks readbacks; /* HW register snapshots */
 };
 
@@ -87,22 +89,27 @@ int flpr_runtime_init(void);
 /**
  * @brief Perform a full FLPR restart cycle.
  *
- * Synchronous, mutex-serialised.  Rejected if offload stream is active.
+ * Synchronous, mutex-serialised.  Does NOT reject an active offload
+ * stream: automatic recovery calls it while offload is RECOVERING, and
+ * the shell owns its separate active-stream guard.
  * Never called from ISR/BT callback — shell or dedicated thread only.
  *
  * Sequence:
  *   1. Snapshot previous handshake epoch; mark manager busy.
  *   2. Deregister CPUAPP IPC endpoint (handshake disconnect).
  *   3. Stop VPR (nrf_vpr_cpurun_set false).
- *   4. Pulse NDMRESET via debugif DMCONTROL mask.
+ *   4. Assert NDMRESET (held) via debugif DMCONTROL mask — DMACTIVE
+ *      stays Enabled; reset stays HELD through preparation, released
+ *      only as the final launch edge.
  *   5. Copy execution-memory from source-memory (exact exec size).
  *   6. Cache flush + full barrier.
  *   7. CRC-32 source + execution, require equality.
  *   8. Set INITPC to execution base.
  *   9. Re-register IPC endpoint (handshake reconnect).
  *  10. Start VPR (nrf_vpr_cpurun_set true).
- *  11. Wait bound, then wait new READY with epoch different from snapshot.
- *  12. Return success; on failure leave FLPR unavailable, report stage/error.
+ *  11. Release NDMRESET (held-reset launch edge).
+ *  12. Wait bound, then wait new READY with epoch different from snapshot.
+ *  13. Return success; on failure leave FLPR unavailable, report stage/error.
  *
  * @param timeout_ms  Maximum total time for the restart (bound+ready).
  * @return 0 on success, negative errno on failure.
