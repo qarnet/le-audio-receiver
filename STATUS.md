@@ -25,8 +25,60 @@ Acceptance evidence:
 - All three builds pass on the T0 commit: `fw-build-5340`, `fw-build-54l15`,
   `fw-build-dongle`.
 - No production behavior changed; T0 touched documentation only.
-- **T1 is next**: replace replicated FLPR tests (runtime, ring manager,
-  handshake) with production-source tests.
+- No numeric line/branch coverage is claimed; no honest coverage report
+  exists until Phase T7 instrumentation.
+
+**Phase T1 — FLPR production-source tests** — ACCEPTED (2026-07-31).
+
+Replaces the false-confidence FLPR runtime, ring-manager, and handshake
+suites with native_sim suites that compile and execute the real production
+implementations.  Evidence and hook architecture:
+`docs/testing/t1-flpr-production-tests.md`; updated
+`docs/testing/coverage-matrix.md`.
+
+- `tests/unit/flpr_runtime` — 21 tests execute the real nRF54 restart body
+  (shadow VPR HAL, host source/execution arrays, ordered event log, mutex
+  busy thread).  Fixed: `failed_stage` set before disconnect/stop, failed
+  attempts included in `max_duration_ms`, header/module wording corrected
+  (no active-stream rejection inside `flpr_runtime_restart()`, held-reset
+  sequence).
+- `tests/unit/flpr_ring_mgr` — 53 tests execute `src/flpr_ring_mgr.c` +
+  real `flpr_ring.c`/`flpr_cache.c` with host ring arrays; production
+  static IPC handlers run through the handshake-mock captured handlers.
+- `tests/unit/flpr_handshake` — 43 tests execute `src/flpr_handshake.c`
+  against a fake IPC service backend (NCS v3.3.0 ipc_service test pattern,
+  real `ipc_service_*` APIs).  Fixed: `flpr_handshake_send_msg()` routes
+  through `send_msg()` so failures count `err_send`; header wording
+  corrected (ring handlers dispatch without the module spinlock).
+- No copied restart/reset/produce/consume/callback algorithm remains
+  primary proof in any of the three suites.
+- Physical cache/FLPR entry-point behavior remains hardware-only; native
+  `flpr_cache.c` coverage is API/barrier-call proof only.
+
+Acceptance evidence:
+
+- Focused suites on the desktop (`thomas-main`): runtime 21/21,
+  ring manager 53/53, handshake 43/43 — zero compiler warnings.
+- Full gate on the provisioned workstation (`thomas-workstation`) from a
+  detached temporary worktree of the exact T1 commit, transferred via
+  non-destructive git bundle: **21 PASS / 0 FAIL / 21 TOTAL** on the final
+  validated commit (three gate runs total; two clean 21/21 runs, one run
+  with a single transient non-BSim child failure not reproduced on the
+  subsequent runs; BSim hashes deterministic in every run — 10 ms
+  `0xFE0D4245`, 7.5 ms `0x5853F445`).
+- All three builds pass on the T1 commit: `fw-build-5340`, `fw-build-54l15`,
+  `fw-build-dongle` (both desktop and workstation).
+- Desktop gate is 20/21 locally: the `bsim: stage1` child cannot run on
+  `thomas-main` because the BabbleSim component binaries are not built
+  there (`~/ncs/v3.3.0/tools/bsim/bin/bs_2G4_phy_v1` missing); the
+  workstation provides the authoritative BSim leg.
+- Production fixed addresses and wire ABI unchanged; production images
+  contain no test hooks (test-only compile definitions are applied only by
+  test CMakeLists).
+- Worktree clean after scoped commits; workstation repo returned to clean
+  `main` with all temporary refs/worktrees/bundles removed.
+- **T2 is next**: audio pipeline unit characterization (decode golden
+  output, volume, stats).
 - No numeric line/branch coverage is claimed; no honest coverage report
   exists until Phase T7 instrumentation.
 
