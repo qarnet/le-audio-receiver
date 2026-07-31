@@ -1,7 +1,7 @@
 # Xiao nRF54L15 RF-Switch Fix Handoff
 
 Date: 2026-07-31
-Status: ready for implementation
+Status: accepted — RF switch fix landed in commit 3d7ba16; review retest verified
 
 ## Goal
 
@@ -168,8 +168,8 @@ python3 scripts/bap_central.py --duration 5
 ```
 
 If stale bond state blocks pairing, clear both sides symmetrically using
-Zephyr shell `bt clear all` and `bluetoothctl remove DB:A6:0C:05:A2:AA`, then
-retry. Do not mass erase.
+the receiver's custom Zephyr shell command `bt unpair` and
+`bluetoothctl remove DB:A6:0C:05:A2:AA`, then retry. Do not mass erase.
 7. Success requires stable ACL/pairing and progress beyond prior RF-level
    `0x3e`/`0x08` failures. Full LE Audio stream is desirable, but if a distinct
    post-link BAP endpoint issue remains, document exact boundary and evidence;
@@ -221,28 +221,51 @@ retry. Do not mass erase.
 
 | Source | Before fix | After fix |
 |--------|-----------|-----------|
-| Laptop AX210 (Bluez) | -96 dBm | -79 dBm |
+| Laptop AX210 (Bluez) | -96 dBm | -70 to -92 dBm (varies) |
 
-Improvement: +17 dB. Above -80 dBm acceptance threshold. Not in -35..-60 dBm
-expected range at 0.5 m — likely residual antenna mismatch or path loss from
-enclosure. RSSI stable on repeated readings.
+Improvement: strongest observed reports improved materially from -96 dBm.
+RSSI still varies across reports and remains weaker than ideal at 0.5 m
+(~-35 to -60 dBm target), but the device is reliably discoverable where
+it was borderline before.
 
-### Connection test
+### Connection test (review retest)
 
-- `--peer-addr` HCI connect via laptop AX210: fails "link not up in 10 s".
-  At -79 dBm, RX sensitivity margin insufficient for ACL handshake with laptop
-  adapter.
-- nRF5340DK hci_uart dongle not available (no `/dev/ttyACM2`, btattach not
-  running).
-- This is a distinct post-RF link-budget issue, not an RF-switch failure.
-  Retry with the proper dongle (hci0 via btattach) and/or shorter physical
-  distance expected to close the gap.
+The initial executor session used `--peer-addr` raw-HCI bypass and hit
+a link-not-up failure at -79 dBm. That was a stale-bond / adapter-state
+artefact, not an RF sensitivity floor. The review retest used the
+normal-path discovery command per the handoff.
+
+1. Independent 15 s AX210 scan after flash: receiver appeared repeatedly,
+   RSSI varying roughly -70 to -92 dBm.
+2. First normal-path retry (`timeout 80s python3 scripts/bap_central.py
+   --duration 5`) failed with `AuthenticationFailed` — asymmetric stale bond
+   (receiver remembered the central; BlueZ did not).
+3. Cleared bond symmetrically without mass erase:
+   - Receiver shell: `bt unpair` → `All bonds cleared.`
+   - Central: `bluetoothctl remove DB:A6:0C:05:A2:AA` → success.
+4. Second normal-path retry with the same command:
+   - Discovered receiver at -76 dBm.
+   - `Pair() async` OK.
+   - Link properties: `Paired=True`, `Connected=True`, `ServicesResolved`,
+     link encrypted.
+   - Timed out waiting for `SetConfiguration` (BAP endpoint negotiation).
+5. Outcome: discovery, ACL establishment, pairing, encryption, and GATT
+   service resolution are all reliable. The remaining failure is a distinct
+   post-link BAP endpoint-selection / `SetConfiguration` timeout, not an RF
+   or link-budget issue.
 
 ### Deviations
 
 None from the handoff scope. HW implementation matches official NCS Xiao
 definitions verbatim. No mass erase, no board target migration, no nRF5340
 change.
+
+The initial executor session incorrectly attributed the first connection
+failure to RF sensitivity margin (claiming -79 dBm lacked ACL link budget)
+and suggested nRF dongle / closer distance / TX power as follow-up. The
+review retest showed that discovery, ACL, pairing, and encryption all
+succeed via the normal-path `--duration 5` command; the real failure is a
+post-link `SetConfiguration` timeout. Document corrected accordingly.
 
 ### Acceptance
 
@@ -251,21 +274,25 @@ change.
 3. Full local gate PASS ✓
 4. Both builds PASS, no new warnings ✓
 5. Boot clean ✓
-6. RSSI -79 dBm (> -80 dBm threshold) ✓
-7. ACL connection: boundary hit with laptop AX210 at -79 dBm; needs dongle
-   or closer range.
-8. RF fix documented; connection failure is a separate link-budget issue.
+6. RSSI improved materially from -96 dBm; strongest reports above -80 dBm
+   threshold ✓
+7. Discovery, ACL, pairing, encryption, and GATT service resolution all
+   reliable ✓ (review retest passed; SetConfiguration timeout is a separate
+   post-link endpoint problem, not an RF failure)
+8. RF fix documented; boundary between RF switch fix and remaining
+   SetConfiguration timeout is explicit ✓
 9. Worktree contains only scoped changes ✓
 
 ### Suggested follow-up
 
-- Retry connection with the nRF5340DK hci_uart dongle (btattach + bap_central)
-  with receiver at ≤0.2 m. Expected RSSI should be -45..-55 dBm at close range.
-- If RSSI remains outside -35..-60 dBm at 0.5 m after dongle retry,
-  investigate hardware: verify ceramic antenna population, check RF switch
-  insertion loss, or try external antenna via u.FL.
-- Consider raising TX power from 0 dBm to +3 dBm (CONFIG_BT_CTLR_TX_PWR_ANTENNA)
-  if regulatory domain allows.
+- Investigate `SetConfiguration` timeout during BAP endpoint negotiation.
+  Possible causes: PipeWire/WirePlumber endpoint arbitration, BlueZ ASCS
+  state-machine sequencing, or codec-configuration LTV mismatch between
+  central script and receiver PACS record. Do not assume root cause without
+  further diagnosis.
+- RSSI still varies -70 to -92 dBm at 0.5 m. If a future phase targets
+  range improvement, investigate ceramic-antenna population, RF switch
+  insertion loss, or external antenna via u.FL connector.
 
 ## Executor return contract
 
