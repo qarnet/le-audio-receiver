@@ -186,12 +186,53 @@ ZTEST(volume, test_zero_samples_no_memory_change)
 	}
 }
 
-ZTEST(volume, test_null_zero_samples_harmless)
+ZTEST(volume, test_null_and_zero_safe_all_states)
 {
+	/* NULL with zero and nonzero samples, and zero samples with a real
+	 * buffer, must be deterministic no-ops under every production state:
+	 * muted, volume zero, unity, and an intermediate scale.
+	 */
+	struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS];
+	const struct {
+		uint8_t vol;
+		uint8_t mute;
+	} states[] = {
+		{255, 1}, /* muted */
+		{0, 0},   /* volume zero */
+		{255, 0}, /* unity */
+		{100, 0}, /* intermediate */
+	};
+	int16_t buf[8] = {GUARD_VAL, GUARD_VAL, GUARD_VAL, GUARD_VAL,
+			  GUARD_VAL, GUARD_VAL, GUARD_VAL, GUARD_VAL};
+	uint32_t count_before;
+
 	zassert_ok(audio_volume_init(), "init");
-	set_volume(17, 0);
-	audio_volume_apply(NULL, 0);
-	audio_volume_apply(NULL, 0);
+
+	for (size_t s = 0; s < sizeof(states) / sizeof(states[0]); s++) {
+		set_volume(states[s].vol, states[s].mute);
+
+		audio_perf_snapshot(paths, NULL);
+		count_before = paths[AUDIO_PERF_PATH_VOLUME].count;
+
+		audio_volume_apply(NULL, 0);
+		audio_volume_apply(NULL, 16);
+		audio_volume_apply(buf, 0);
+
+		/* One balanced performance sample per call, including the
+		 * no-data exits.
+		 */
+		audio_perf_snapshot(paths, NULL);
+		zassert_equal(paths[AUDIO_PERF_PATH_VOLUME].count, count_before + 3,
+			      "balanced no-data exits (state %zu)", s);
+
+		/* State unchanged and real buffer untouched. */
+		zassert_equal(audio_volume_get(), states[s].vol, "volume state %zu", s);
+		zassert_equal(audio_volume_is_muted(), states[s].mute != 0, "mute state %zu", s);
+		for (int i = 0; i < 8; i++) {
+			zassert_equal(buf[i], GUARD_VAL, "buffer untouched at %d (state %zu)", i,
+				      s);
+		}
+	}
 }
 
 /* ── perf hook balance (real audio_perf.c) ───────────────────────── */

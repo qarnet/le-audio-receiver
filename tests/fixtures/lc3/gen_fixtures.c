@@ -16,10 +16,12 @@
  *   modeb_48k_10ms_60b   Mode B, 48 kHz, 10 ms,  [L 60 B][R 60 B]  -> 960 samples
  *
  * Source PCM is deterministic integer-generated with distinct left and
- * right patterns:
+ * right patterns.  All arithmetic is defined: the index converts to
+ * uint32_t before multiplication, constants are UINT32_C, and the
+ * unsigned wrap is explicit:
  *
- *   L(i) = (int16_t)((uint32_t)(i * 1103515245 + 12345) >> 12)
- *   R(i) = (int16_t)((uint32_t)(i * 2654435761 + 67890) >> 12)
+ *   L(i) = (int16_t)(((uint32_t)i * UINT32_C(1103515245) + UINT32_C(12345)) >> 12)
+ *   R(i) = (int16_t)(((uint32_t)i * UINT32_C(2654435761) + UINT32_C(67890)) >> 12)
  *
  * Mono encodes L only and the expected output duplicates every decoded
  * sample into both channels.  Mode B encodes L and R with independent
@@ -27,9 +29,10 @@
  * two independent decoder instances.
  *
  * The bitstream is written as raw bytes; the PCM is written explicitly
- * little-endian.  The build must use the same relevant flags as the
- * Zephyr liblc3 module (-O3 -std=c11 -ffast-math) so the golden PCM is
- * bit-exact against the native_sim production decoder.
+ * little-endian (samples convert to uint16_t before shifting).  The
+ * build must use the same relevant flags as the Zephyr liblc3 module
+ * (-O3 -std=c11 -ffast-math) so the golden PCM is bit-exact against the
+ * native_sim production decoder.
  */
 
 #include <stdio.h>
@@ -44,18 +47,31 @@
 
 static void write_le16_to_buf(uint8_t *buf, int16_t v)
 {
-	buf[0] = (uint8_t)(v & 0xFFu);
-	buf[1] = (uint8_t)((v >> 8) & 0xFFu);
+	/* Convert to uint16_t before shifting: right-shifting a negative
+	 * int16_t is implementation-defined.
+	 */
+	uint16_t u = (uint16_t)v;
+
+	buf[0] = (uint8_t)(u & 0xFFu);
+	buf[1] = (uint8_t)((u >> 8) & 0xFFu);
 }
 
 static int16_t gen_l(int i)
 {
-	return (int16_t)((uint32_t)(i * 1103515245 + 12345) >> 12);
+	/* Defined unsigned wrap: the index is converted to uint32_t before
+	 * multiplication and the constants are unsigned.  The low 16 bits
+	 * of the result form the sample.
+	 */
+	uint32_t u = (uint32_t)i * UINT32_C(1103515245) + UINT32_C(12345);
+
+	return (int16_t)(u >> 12);
 }
 
 static int16_t gen_r(int i)
 {
-	return (int16_t)((uint32_t)(i * 2654435761 + 67890) >> 12);
+	uint32_t u = (uint32_t)i * UINT32_C(2654435761) + UINT32_C(67890);
+
+	return (int16_t)(u >> 12);
 }
 
 /* CRC-32 / IEEE 802.3 (reflected poly 0xEDB88320, init/xorout

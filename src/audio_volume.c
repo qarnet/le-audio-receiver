@@ -86,6 +86,17 @@ void audio_volume_apply(int16_t *buf, size_t samples)
 {
 	uint32_t t0 = audio_perf_cycle_start();
 
+	if (buf == NULL || samples == 0) {
+		/* Safe no-data exit: NULL with any sample count and zero
+		 * samples with any pointer are deterministic no-ops.  This
+		 * must precede the state read so mute/zero scaling never
+		 * runs memset on a NULL pointer (not a portable C
+		 * guarantee).
+		 */
+		audio_perf_cycle_end(t0, AUDIO_PERF_PATH_VOLUME);
+		return;
+	}
+
 	uint32_t state = (uint32_t)atomic_get(&vol_state);
 	uint8_t vol = VOL_UNPACK_VOL(state);
 	uint8_t muted = VOL_UNPACK_MUTE(state);

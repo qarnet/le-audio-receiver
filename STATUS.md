@@ -101,6 +101,109 @@ Acceptance evidence:
   `main` with all temporary refs/worktrees/bundles removed.
 - **T3 is next**: I2S and sink state machine.
 
+### Transient gate run disposition (2026-08-01, T2 review fix)
+
+One workstation gate run on the exact T2 commit (`63d8344`) produced
+**21 PASS / 2 FAIL / 23 TOTAL**: children `exec: offload_asrc` and
+`bsim: stage1` both failed because their generated `build.ninja` files
+were truncated mid-write.  The same commit passed 23/23 immediately
+before (run 1) and twice after (runs 3 and 4), so the acceptance evidence
+above stands; this run is recorded here because the originally committed
+STATUS omitted it.
+
+Exact retained diagnostics (from the executor session; the full gate log
+was deleted during cleanup before this review — see lost evidence below):
+
+- Command context: `./scripts/test-all.sh` on `thomas-workstation`, worktree
+  `/tmp/t2-validation/t2repo` at detached commit `63d8344`, invoked via ssh;
+  strictly serial with the other gate runs (each invocation completed before
+  the next started; no repo gate overlapped).
+- `exec: offload_asrc` — Ninja parse error `ninja: error:
+  build.ninja:7358: unexpected EOF`.  Build directory: a fresh
+  `mktemp -d` root created by `test-all.sh` for that run (path not
+  retained; removed by the script's own EXIT trap).
+- `bsim: stage1` — `Failure building tests/bsim prj.conf for
+  nrf5340bsim/nrf5340/cpuapp`; underlying `ninja: error:
+  build.ninja:17942: unexpected EOF` during a CMake re-configure, with
+  `CMake Error at cmake/modules/sysbuild_extensions.cmake:740 (message)`
+  and `Configuring incomplete, errors occurred!`.  Build directory:
+  `~/ncs/v3.3.0/zephyr/bsim_out/tests/bsim/bs_nrf5340bsim_nrf5340_cpuapp_le_audio_receiver_bsim_prj_conf`
+  (shared `bsim_out` tree, subsequently overwritten by the later clean
+  builds).
+- Why repo source cannot truncate generated build files: `build.ninja`
+  is written by CMake during configure into the build directory; repo
+  sources are read-only inputs that are compiled into objects and never
+  open, write, or truncate build files.  Truncation requires an external
+  writer (concurrent process, filesystem fault, or an interrupted CMake
+  write); no such writer can be identified from the retained evidence.
+- No root-cause claim beyond the observed truncated generated files is
+  made, and no claim that this is the same failure as T1's unidentified
+  transient (no evidence supports that).
+
+Lost evidence: `/tmp/t2_final_gate2.log` (the full run log) was removed
+during post-acceptance cleanup before this review; the offload_asrc
+temporary build directory was removed by `test-all.sh`'s EXIT trap; the
+bsim build directory was overwritten by later successful builds.  Only
+the diagnostics quoted above survive.
+
+Per the review-fix handoff, the exact final commit was re-validated with
+three consecutive serial full-gate runs on the workstation (all 23/23,
+BSim hashes unchanged) — see the review-fix acceptance evidence below.
+
+### T2 review-fix round (2026-08-01, commit `fix: harden audio test boundaries`)
+
+Closes the portability/safety defects found during orchestrator review:
+
+- **size_t-before-int validation** — `audio_decode_sdu()` keeps all
+  length arithmetic in `size_t`; rejects `frame_len > INT_MAX` (valid and
+  PLC), odd Mode B lengths (including PLC), out-of-range per-channel
+  shapes (20..400, valid frames), and nonzero PLC shapes outside the
+  range — before any narrowing cast.  Zero-length PLC stays supported
+  (BSim startup).  Public header now documents exact supported config,
+  PLC length semantics, output capacity, and `-EINVAL`/`-EBADMSG`
+  outcomes.  New tests: `SIZE_MAX`, `INT_MAX+1`, odd/short/long PLC
+  shapes, zero-length mono/Mode B PLC.
+- **Volume null safety** — `audio_volume_apply()` gains an early no-data
+  exit (NULL buffer or zero samples) after the performance timing starts,
+  before the state read: mute/zero scaling can no longer run
+  `memset(NULL, 0)`.  NULL with zero and nonzero samples is a
+  deterministic no-op under muted/zero/unity/intermediate states with one
+  balanced performance sample per call (locked by a new state-matrix
+  test).
+- **Generator defined behavior** — sample formulas convert the index to
+  `uint32_t` before multiplication with `UINT32_C` constants; LE writing
+  converts to `uint16_t` before shifting.  `generate.sh` uses `mktemp` +
+  EXIT trap (no fixed executable path) and compiles without
+  `-Wno-array-bounds` (verified warning-free under
+  `-Wall -Wextra -Wdouble-promotion -Wvla -pedantic`; no liblc3
+  false positive to suppress).  Root `.gitattributes` marks
+  `tests/fixtures/lc3/*.lc3` and `*.pcm` binary.  Regeneration from two
+  clean copies is byte-identical to the checked-in binaries — no fixture,
+  README, or test CRC updates were needed.
+- **Complete transient evidence** — the omitted 21/23 gate run is
+  recorded above with exact retained diagnostics and a precise
+  lost-evidence statement.
+
+Review-fix acceptance evidence:
+
+- Generator comparison: two clean-copy runs, all SHA-256/CRC-32 identical
+  to checked-in values; `git diff` over the binary fixtures empty.
+- Focused suites on the desktop (`thomas-main`): decode 43/43,
+  volume 12/12 — zero compiler warnings.
+- Full gate on the exact final commit (`fix: harden audio test
+  boundaries`, the last commit of this round) from a detached temporary
+  worktree of a non-destructive bundle on `thomas-workstation`:
+  **three consecutive serial runs, all 23 PASS / 0 FAIL / 23 TOTAL**;
+  BSim hashes unchanged in every run — 10 ms `0x9225F075`,
+  7.5 ms `0x2011C0F9`.
+- All three builds pass on the final commit: `fw-build-5340`,
+  `fw-build-54l15`, `fw-build-dongle` (documented diagnostics only).
+- No recurrence of the truncated-`build.ninja` transient in any of the
+  three runs.
+- Worktree clean after the scoped commit; workstation repo returned to
+  clean `main`; all temporary refs/worktrees/bundles/generator binaries
+  removed.
+
 **Phase T1 — FLPR production-source tests** — ACCEPTED (2026-07-31).
 
 Replaces the false-confidence FLPR runtime, ring-manager, and handshake

@@ -20,6 +20,11 @@ int audio_volume_init(void);
 /**
  * @brief Apply current volume and mute state to a PCM buffer in-place.
  *        Scales each int16_t sample by volume/255; zeroes buffer when muted.
+ *
+ * Safety: a NULL buffer with any sample count and a zero sample count
+ * with any buffer are deterministic no-ops (no state read, no memory
+ * access).  One balanced performance sample is recorded per call on
+ * every exit path, including the no-data exit.
  */
 void audio_volume_apply(int16_t *buf, size_t samples);
 

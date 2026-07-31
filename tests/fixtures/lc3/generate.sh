@@ -4,7 +4,7 @@
 # This is a REPRODUCIBILITY tool only.  The test suites never run it;
 # they embed the checked-in binaries.  Run it from anywhere; it writes
 # the fixture files next to this script and removes its temporary
-# executable afterwards.
+# executable (mktemp + EXIT trap) afterwards.
 #
 # Prerequisite: NCS v3.3.0 installed at $HOME/ncs/v3.3.0 (override with
 # NCS=/path/to/ncs).  Uses the host C compiler with the SAME relevant
@@ -32,16 +32,23 @@ cd "$HERE"
 
 CC="${CC:-cc}"
 
-# Same relevant flags as zephyr/modules/liblc3/CMakeLists.txt.
-"$CC" -O3 -std=c11 -ffast-math -Wno-array-bounds -Wall -Wextra \
-      -Wdouble-promotion -Wvla -pedantic \
+TMPBIN="$(mktemp /tmp/le-audio-lc3-gen.XXXXXX)" || {
+    echo "FATAL: mktemp failed" >&2
+    exit 1
+}
+trap 'rm -f "$TMPBIN"' EXIT
+
+# Same relevant flags as zephyr/modules/liblc3/CMakeLists.txt.  -Wno-array-bounds
+# is intentionally NOT passed: the generator must compile warning-free on its
+# own, and no suppression may be added without a recorded compiler diagnostic
+# naming a source file (see the review-fix handoff policy).
+"$CC" -O3 -std=c11 -ffast-math \
+      -Wall -Wextra -Wdouble-promotion -Wvla -pedantic \
       -I "$LC3/include" \
       gen_fixtures.c "$LC3"/src/*.c \
-      -lm -o /tmp/le-audio-lc3-gen-fixtures
+      -lm -o "$TMPBIN"
 
-trap 'rm -f /tmp/le-audio-lc3-gen-fixtures' EXIT
-
-/tmp/le-audio-lc3-gen-fixtures
+"$TMPBIN"
 
 echo "---"
 sha256sum ./*.lc3 ./*.pcm

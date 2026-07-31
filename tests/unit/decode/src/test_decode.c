@@ -13,6 +13,8 @@
 #include <zephyr/sys/crc.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
+#include <stdint.h>
 
 #include "audio_decode.h"
 #include "audio_stats.h"
@@ -758,4 +760,135 @@ ZTEST(decode, test_stats_modeb_success_counts_both)
 	zassert_equal(st.total_frames, 2, "both channel decoders counted");
 	zassert_equal(st.plc_frames, 0, "no plc");
 	zassert_equal(st.decode_errors, 0, "no errors");
+}
+
+/* ── size_t-before-int boundary validation ───────────────────────── */
+
+static void assert_huge_rejected(struct audio_decode_ctx *ctx, const uint8_t *data, size_t len,
+				 bool valid, int tag)
+{
+	int16_t out[2 * 480 + 4];
+
+	fill_guards(out, 2 * 480 + 4);
+	zassert_equal(audio_decode_sdu(ctx, data, len, valid, out), -EINVAL,
+		      "reject tag %d (len=%zu)", tag, len);
+	assert_guards(out, 0, 2 * 480 + 4);
+}
+
+ZTEST(decode, test_sdu_huge_lengths_rejected)
+{
+	struct audio_decode_ctx ctx;
+
+	memset(&ctx, 0, sizeof(ctx));
+	zassert_ok(audio_decode_config(&ctx, 1, 48000, 10000, 1), "config mono");
+
+	/* valid and PLC calls must reject lengths above INT_MAX before any
+	 * narrowing cast; output guards stay untouched.
+	 */
+	assert_huge_rejected(&ctx, mono_10ms_lc3, SIZE_MAX, true, 1);
+	assert_huge_rejected(&ctx, mono_10ms_lc3, (size_t)INT_MAX + 1, true, 2);
+	assert_huge_rejected(&ctx, mono_10ms_lc3, SIZE_MAX, false, 3);
+	assert_huge_rejected(&ctx, mono_10ms_lc3, (size_t)INT_MAX + 1, false, 4);
+
+	zassert_ok(audio_decode_config(&ctx, 2, 48000, 10000, 1), "config modeb");
+
+	assert_huge_rejected(&ctx, modeb_10ms_lc3, SIZE_MAX, true, 5);
+	assert_huge_rejected(&ctx, modeb_10ms_lc3, (size_t)INT_MAX + 1, true, 6);
+	assert_huge_rejected(&ctx, modeb_10ms_lc3, SIZE_MAX, false, 7);
+	assert_huge_rejected(&ctx, modeb_10ms_lc3, (size_t)INT_MAX + 1, false, 8);
+}
+
+ZTEST(decode, test_sdu_huge_rejection_then_golden)
+{
+	/* Rejection of oversized lengths must leave decoder state untouched. */
+	struct audio_decode_ctx ctx;
+	int16_t out[960];
+
+	memset(&ctx, 0, sizeof(ctx));
+	zassert_ok(audio_decode_config(&ctx, 1, 48000, 10000, 1), "config");
+
+	memset(out, 0, sizeof(out));
+	zassert_equal(audio_decode_sdu(&ctx, mono_10ms_lc3, SIZE_MAX, true, out), -EINVAL,
+		      "reject huge");
+	zassert_equal(audio_decode_sdu(&ctx, mono_10ms_lc3, (size_t)INT_MAX + 1, false, out),
+		      -EINVAL, "reject huge plc");
+
+	memset(out, 0, sizeof(out));
+	zassert_ok(audio_decode_sdu(&ctx, mono_10ms_lc3, 60, true, out), "decode");
+	zassert_mem_equal(out, mono_10ms_pcm, sizeof(mono_10ms_pcm), "golden after reject");
+}
+
+/* ── PLC length semantics ────────────────────────────────────────── */
+
+ZTEST(decode, test_plc_zero_length_mono)
+{
+	/* BSim startup frames arrive with length 0: must stay supported. */
+	struct audio_decode_ctx ctx;
+	int16_t out[2 * 480 + 4];
+	struct audio_stats st;
+
+	memset(&ctx, 0, sizeof(ctx));
+	zassert_ok(audio_decode_config(&ctx, 1, 48000, 10000, 1), "config");
+
+	fill_guards(out, 2 * 480 + 4);
+	zassert_ok(audio_decode_sdu(&ctx, NULL, 0, false, out), "zero-length PLC ret 0");
+	assert_guards(out, 2 * 480, 4);
+
+	st = audio_stats_get();
+	zassert_equal(st.plc_frames, 1, "plc 1");
+	zassert_equal(st.total_frames, 1, "total 1");
+}
+
+ZTEST(decode, test_plc_zero_length_modeb)
+{
+	struct audio_decode_ctx ctx;
+	int16_t out[2 * 480 + 4];
+	struct audio_stats st;
+
+	memset(&ctx, 0, sizeof(ctx));
+	zassert_ok(audio_decode_config(&ctx, 2, 48000, 10000, 1), "config");
+
+	fill_guards(out, 2 * 480 + 4);
+	zassert_ok(audio_decode_sdu(&ctx, NULL, 0, false, out), "zero-length Mode B PLC");
+	assert_guards(out, 2 * 480, 4);
+
+	st = audio_stats_get();
+	zassert_equal(st.plc_frames, 2, "both channel decoders conceal");
+	zassert_equal(st.total_frames, 2, "total 2");
+}
+
+ZTEST(decode, test_plc_shape_rejections)
+{
+	/* Nonzero PLC lengths must form a valid divisible per-channel shape. */
+	struct audio_decode_ctx ctx;
+
+	memset(&ctx, 0, sizeof(ctx));
+	zassert_ok(audio_decode_config(&ctx, 1, 48000, 10000, 1), "config mono");
+
+	assert_huge_rejected(&ctx, NULL, 19, false, 1);  /* too short */
+	assert_huge_rejected(&ctx, NULL, 401, false, 2); /* too long */
+
+	zassert_ok(audio_decode_config(&ctx, 2, 48000, 10000, 1), "config modeb");
+
+	assert_huge_rejected(&ctx, NULL, 61, false, 3);  /* odd Mode B PLC length */
+	assert_huge_rejected(&ctx, NULL, 30, false, 4);  /* per-channel 15: too short */
+	assert_huge_rejected(&ctx, NULL, 802, false, 5); /* per-channel 401: too long */
+}
+
+ZTEST(decode, test_plc_shape_rejection_then_valid_golden)
+{
+	/* Rejected PLC shapes leave decoder state untouched. */
+	struct audio_decode_ctx ctx;
+	int16_t out[960];
+
+	memset(&ctx, 0, sizeof(ctx));
+	zassert_ok(audio_decode_config(&ctx, 2, 48000, 10000, 1), "config");
+
+	memset(out, 0, sizeof(out));
+	zassert_equal(audio_decode_sdu(&ctx, NULL, 61, false, out), -EINVAL, "odd PLC reject");
+	zassert_equal(audio_decode_sdu(&ctx, NULL, 30, false, out), -EINVAL, "short PLC reject");
+
+	memset(out, 0, sizeof(out));
+	zassert_ok(audio_decode_sdu(&ctx, modeb_10ms_lc3, 120, true, out), "decode");
+	zassert_mem_equal(out, modeb_10ms_pcm, sizeof(modeb_10ms_pcm), "golden after reject");
 }

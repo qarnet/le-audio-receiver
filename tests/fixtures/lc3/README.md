@@ -30,28 +30,36 @@ sources from NCS v3.3.0 (`~/ncs/v3.3.0/modules/lib/liblc3`), using the
 same relevant flags as the Zephyr liblc3 module build:
 
 ```text
--O3 -std=c11 -ffast-math -Wno-array-bounds -Wall -Wextra -Wdouble-promotion -Wvla -pedantic
+-O3 -std=c11 -ffast-math -Wall -Wextra -Wdouble-promotion -Wvla -pedantic
 ```
 
-The generator calls the installed liblc3 C API (`lc3_setup_encoder()` /
-`lc3_encode()`, and independently `lc3_setup_decoder()` / `lc3_decode()`
-with one encoder and one decoder instance per channel), writes the PCM
-explicitly little-endian, and removes its temporary executable.
-Generation is deterministic and path-independent (verified by repeated
-runs producing identical hashes).
+`-Wno-array-bounds` is intentionally NOT used: the generator compiles
+warning-free without it and no suppression may be added without a
+recorded compiler diagnostic.  The generator calls the installed liblc3
+C API (`lc3_setup_encoder()` / `lc3_encode()`, and independently
+`lc3_setup_decoder()` / `lc3_decode()` with one encoder and one decoder
+instance per channel), writes the PCM explicitly little-endian, and
+removes its temporary executable via `mktemp` + EXIT trap.  Generation
+is deterministic and path-independent (verified by repeated runs from
+clean copies producing identical hashes).
 
 ## Source PCM formulas
 
-Integer-generated, distinct left/right patterns (sample index `i`,
-0-based):
+Deterministic integer-generated, distinct left/right patterns (sample
+index `i`, 0-based).  All arithmetic is defined: the index converts to
+`uint32_t` before multiplication and the constants are `UINT32_C`
+(explicit unsigned wrap):
 
 ```text
-L(i) = (int16_t)((uint32_t)(i * 1103515245 + 12345) >> 12)
-R(i) = (int16_t)((uint32_t)(i * 2654435761 + 67890) >> 12)
+L(i) = (int16_t)(((uint32_t)i * UINT32_C(1103515245) + UINT32_C(12345)) >> 12)
+R(i) = (int16_t)(((uint32_t)i * UINT32_C(2654435761) + UINT32_C(67890)) >> 12)
 ```
 
 Mono encodes `L` only (expected output duplicates the decoded sample).
-Mode B encodes `L` and `R` with independent encoder instances.
+Mode B encodes `L` and `R` with independent encoder instances.  The
+defined arithmetic produces byte-identical fixtures to the original
+formulation on the pinned toolchain (verified: two clean-copy runs,
+all SHA-256/CRC-32 unchanged).
 
 ## SHA-256 (checked-in binaries)
 

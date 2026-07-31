@@ -9,6 +9,7 @@
 
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 
 #include <zephyr/sys/clock.h>
 
@@ -99,16 +100,27 @@ int audio_decode_sdu(struct audio_decode_ctx *ctx, const uint8_t *frame_data, si
 	const int spc = ctx->samples_per_ch;
 	const int chan_count = ctx->chan_count;
 
-	/* Per-channel frame-byte shape.  For PLC this is the "supplied valid
-	 * configured frame-byte shape": liblc3 still consumes nbytes on the
-	 * concealment path (LTPF post-filter strength), so the shape must be
-	 * the same value a real frame would carry.
+	/* All length arithmetic stays in size_t until bounds and
+	 * divisibility pass; the narrowing cast happens only afterwards.
+	 * Every rejection below leaves output and decoder state untouched.
 	 */
-	int octets_per_channel = (int)(frame_len / (size_t)f_per_sdu);
+	size_t shape_len = frame_len / (size_t)f_per_sdu;
 
+	if (frame_len > (size_t)INT_MAX) {
+		/* Never narrow a larger value: implementation-defined wrap is
+		 * not acceptable for valid or PLC calls alike.
+		 */
+		return -EINVAL;
+	}
+	if (chan_count == 2) {
+		if (shape_len % 2U != 0U) {
+			return -EINVAL; /* Mode B must split exactly per channel */
+		}
+		shape_len /= 2U;
+	}
 	if (valid) {
-		/* Length/shape checks apply to real frames.  PLC (valid=false)
-		 * accepts any supplied length and never dereferences frame data.
+		/* Length/shape checks apply to real frames.  The data pointer is
+		 * only dereferenced on this path.
 		 */
 		if (!frame_data) {
 			return -EINVAL;
@@ -116,27 +128,22 @@ int audio_decode_sdu(struct audio_decode_ctx *ctx, const uint8_t *frame_data, si
 		if (frame_len == 0) {
 			return -EINVAL;
 		}
-
-		/* Bound the shape before any narrowing cast: per-channel frame
-		 * length must stay within liblc3 basic 20..400 byte range.
+		if (shape_len < AUDIO_DECODE_MIN_FRAME_BYTES ||
+		    shape_len > AUDIO_DECODE_MAX_FRAME_BYTES) {
+			return -EINVAL;
+		}
+	} else if (shape_len != 0U && (shape_len < AUDIO_DECODE_MIN_FRAME_BYTES ||
+				       shape_len > AUDIO_DECODE_MAX_FRAME_BYTES)) {
+		/* PLC: zero length stays supported (BSim startup frames arrive
+		 * with length 0 and liblc3 conceals for NULL input regardless
+		 * of nbytes).  Any nonzero supplied length must be a valid
+		 * divisible per-channel frame shape; frame data is never
+		 * dereferenced.
 		 */
-		if (frame_len > (size_t)(chan_count == 2 ? 800 : 400)) {
-			return -EINVAL;
-		}
-
-		if (chan_count == 2) {
-			if (octets_per_channel % chan_count != 0) {
-				return -EINVAL; /* Mode B must split exactly per channel */
-			}
-			octets_per_channel /= chan_count;
-		}
-		if (octets_per_channel < AUDIO_DECODE_MIN_FRAME_BYTES ||
-		    octets_per_channel > AUDIO_DECODE_MAX_FRAME_BYTES) {
-			return -EINVAL;
-		}
-	} else if (chan_count == 2) {
-		octets_per_channel /= chan_count;
+		return -EINVAL;
 	}
+
+	const int octets_per_channel = (int)shape_len;
 
 	int ret = 0;
 

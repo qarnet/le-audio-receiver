@@ -87,10 +87,11 @@ Two failure outcomes exist for bad ISO input:
 
 - ISO `BT_ISO_FLAGS_VALID` flag clear → `audio_decode_sdu()` receives
   `valid=false` and passes NULL LC3 data → `lc3_decode()` returns 1 (PLC).
-  Counted as `plc_frames` + `total_frames`.  PLC accepts any supplied
-  length and never dereferences frame data (liblc3 ignores `nbytes` for
-  NULL input; rejecting PLC lengths would drop concealment for truncated
-  invalid SDUs).
+  Counted as `plc_frames` + `total_frames`.  PLC never dereferences frame
+  data.  Length semantics: a zero length is accepted (BSim startup
+  frames arrive with length 0); any nonzero length must form a valid
+  divisible per-channel 20..400 shape, otherwise the call is rejected
+  with `-EINVAL` before output or decoder state is touched.
 - VALID flag set but LC3 payload malformed → NCS v3.3.0 liblc3 1.1.2
   returns **1 (PLC)** for a malformed bitstream of valid length (verified
   empirically); hard negatives occur only for parameter errors (NULL
@@ -121,10 +122,13 @@ reset), but translating those rejections into ASCS response codes in
 `audio_decode_sdu()` rejects with `-EINVAL` before touching output or
 decoder state for: null context/output, unconfigured or reset context,
 stored unsupported shape, Mode B without a right decoder, `valid=true`
-with NULL data, zero valid length, valid per-channel frame length outside
-the liblc3 basic 20..400 byte range, Mode B length not divisible by the
-channel count, and any length that would truncate input.  Rejected input
-never mutates output, decoder state, or statistics.
+with NULL data, zero valid length, any length above `INT_MAX` (valid and
+PLC), valid per-channel frame length outside the liblc3 basic 20..400
+byte range, Mode B length not divisible by the channel count (valid and
+PLC), and nonzero PLC lengths that do not form a valid divisible
+per-channel 20..400 shape.  All length arithmetic happens in `size_t`
+before any narrowing cast.  Rejected input never mutates output, decoder
+state, or statistics.
 
 ### CODEC-009 — Overlap-safe mono expansion
 

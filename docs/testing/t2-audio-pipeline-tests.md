@@ -181,6 +181,68 @@ expansion reproduces the constant-energy/collapsed stream shape (8
 startup-zero pushes, 100 constant-energy pushes), while the corrected
 path matches the new oracle counters.
 
+## Review-fix round (2026-08-01)
+
+Closes the portability/safety defects found during orchestrator review
+(commit `fix: harden audio test boundaries`):
+
+1. **size_t-before-int validation** — `audio_decode_sdu()` keeps all
+   length arithmetic in `size_t` until bounds and divisibility pass:
+   `frame_len > INT_MAX` is rejected for valid and PLC calls before any
+   narrowing cast; odd Mode B lengths are rejected before division
+   (including PLC); valid frames require a per-channel 20..400 shape;
+   PLC preserves zero-length support (BSim startup frames) and rejects
+   nonzero shapes outside a valid divisible per-channel 20..400 range.
+   New tests cover `SIZE_MAX`, `(size_t)INT_MAX + 1`, odd Mode B PLC
+   lengths, nonzero too-short/too-long PLC lengths, zero-length
+   mono/Mode B PLC success, and rejection-then-golden state preservation.
+   The public header now documents the exact supported configuration,
+   PLC length semantics, output capacity, and `-EINVAL`/`-EBADMSG`
+   outcomes.
+2. **Volume null/zero safety** — `audio_volume_apply()` exits early after
+   the performance timing starts when the buffer is NULL or the sample
+   count is zero, before the state read, so mute/zero scaling can never
+   `memset(NULL, 0)` (not a portable C guarantee).  NULL with zero and
+   nonzero samples is a deterministic no-op under muted, volume-zero,
+   unity, and intermediate states, with exactly one balanced performance
+   sample per call — locked by the new state-matrix test.
+3. **Generator defined behavior** — sample formulas convert the index to
+   `uint32_t` before multiplication with `UINT32_C` constants (explicit
+   unsigned wrap; the previous signed `int` multiply was UB); LE writing
+   converts to `uint16_t` before shifting (shifting a negative `int16_t`
+   was implementation-defined).  `generate.sh` uses `mktemp` + EXIT trap
+   instead of a fixed executable path, and drops `-Wno-array-bounds`
+   (verified warning-free with `-Wall -Wextra -Wdouble-promotion -Wvla
+   -pedantic`; the installed liblc3 does not trigger the diagnostic, so
+   no suppression is needed).  Root `.gitattributes` marks
+   `tests/fixtures/lc3/*.lc3` and `*.pcm` binary.  Regeneration from two
+   clean copies is byte-identical to the checked-in binaries (all
+   SHA-256/CRC-32 unchanged; the defined arithmetic produces the same
+   samples), so no fixture, README, or test-CRC updates were required.
+
+### Transient gate run disposition
+
+One workstation full-gate run on the accepted T2 commit (`63d8344`)
+failed 21/23 with both `exec: offload_asrc` and `bsim: stage1` hitting
+truncated generated `build.ninja` files:
+
+- `offload_asrc`: `ninja: error: build.ninja:7358: unexpected EOF` (fresh
+  `mktemp` build root, removed by `test-all.sh`'s EXIT trap).
+- `bsim: stage1`: `ninja: error: build.ninja:17942: unexpected EOF`
+  during a CMake re-configure (`CMake Error at
+  cmake/modules/sysbuild_extensions.cmake:740`, `Configuring incomplete,
+  errors occurred!`), build dir under the shared `bsim_out` tree.
+- The runs were strictly serial (no gate overlap).  Repo source cannot
+  truncate generated build files: `build.ninja` is written by CMake at
+  configure time; sources are read-only inputs.  No root cause beyond the
+  observed truncated generated files is claimed, and no equivalence to
+  T1's unidentified transient is claimed.  The full run log was removed
+  during cleanup before the review; only the quoted diagnostics survive
+  (see STATUS.md for the complete lost-evidence statement).
+- The same commit passed 23/23 before and after that run, and the
+  review-fix final commit passed the full gate three consecutive serial
+  times (see STATUS.md review-fix acceptance evidence).
+
 ## Non-claims
 
 No audio-quality claim and no hardware claim are made from these
