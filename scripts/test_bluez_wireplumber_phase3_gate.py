@@ -918,14 +918,14 @@ class TestWirePlumberLifecycle(unittest.TestCase):
             self.assertFalse(result)
 
     @patch("subprocess.run")
-    def test_wait_for_bluez_spa_pwdump_confirmatory(self, mock_run):
-        """pw-dump bluez5 factory passes as secondary confirmation."""
+    def test_wait_for_bluez_spa_pwdump_rejected(self, mock_run):
+        """pw-dump bluez5 factory does NOT auth — maps proof required."""
         mock_proc = MagicMock()
         mock_proc.pid = 99999
         self.gate._wp_owned = True
         self.gate._wp_proc = mock_proc
 
-        # Maps has no bluez5 on first iteration, pw-dump has bluez5 factory
+        # Maps has no bluez5, pw-dump has bluez5 factory — must still fail
         map_no_bluez = "7f0000000000-7f0000100000 r-xp /usr/lib/libc.so.6\n"
         with patch(
             "builtins.open",
@@ -934,7 +934,7 @@ class TestWirePlumberLifecycle(unittest.TestCase):
             dump = [{"info": {"props": {"factory.name": "api.bluez5.midi.node"}}}]
             mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(dump))
             result = self.gate._wait_for_bluez_spa(timeout=0.5)
-            self.assertTrue(result)
+            self.assertFalse(result)
 
     @patch("subprocess.run")
     def test_wait_for_bluez_spa_no_pid(self, mock_run):

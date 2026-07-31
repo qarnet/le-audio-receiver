@@ -13,10 +13,11 @@ zero decode/I2S/offload faults each.
 
 Preflight hardened with two corrections landed in final review:
 
-- **SPA proof**: `_wait_for_bluez_spa()` now requires `libspa-bluez5.so`
-  mapped in the WirePlumber process (`/proc/<pid>/maps`); `pw-cli info all`
-  substring fallback removed. Owned WP uses subprocess PID; active-seat WP
-  resolves `MainPID` via systemd.
+- **SPA proof**: `_wait_for_bluez_spa()` now requires only `libspa-bluez5.so`
+  mapped in the WirePlumber process (`/proc/<pid>/maps`). All fallback paths
+  removed — `pw-cli info all` substring (final review) and `pw-dump`
+  factory/device node (spa-proof-fix). Owned WP uses subprocess PID;
+  active-seat WP resolves `MainPID` via systemd.
 - **Remove fatal**: failed `bluetoothctl remove` is now fatal unless exact
   postcondition shows device object no longer exists and no `Paired`/`Bonded`
   state remains.

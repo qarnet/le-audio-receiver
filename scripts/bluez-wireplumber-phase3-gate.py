@@ -1427,10 +1427,10 @@ class Phase3Gate:
     def _wait_for_bluez_spa(self, timeout: float = 20.0) -> bool:
         """Wait for BlueZ SPA plugin to be mapped in WirePlumber.
 
-        Grounded evidence: WirePlumber process must have libspa-bluez5.so
-        mapped in its address space (/proc/<pid>/maps).  Falls back to
-        PipeWire factory/device nodes only as optional post-connection
-        confirmation — pre-connect proof requires the actual plugin map.
+        Proof: WirePlumber process must have libspa-bluez5.so
+        mapped in its address space (/proc/<pid>/maps).
+        No PipeWire factory/device fallback is accepted — the actual
+        plugin map is required.
 
         Does NOT require a BT device to be connected.
         """
@@ -1444,7 +1444,7 @@ class Phase3Gate:
 
         start = time.monotonic()
         while time.monotonic() - start < timeout:
-            # Proof 1 (required): libspa-bluez5.so in WP process maps
+            # Proof: libspa-bluez5.so in WP process maps
             try:
                 with open(f"/proc/{wp_pid}/maps", "r") as f:
                     if "libspa-bluez5" in f.read():
@@ -1460,28 +1460,6 @@ class Phase3Gate:
                     f"WARNING: Cannot read /proc/{wp_pid}/maps: {e}",
                     file=sys.stderr,
                 )
-
-            # Proof 2 (optional): PipeWire bluez5 factory or device node
-            # Accept only as confirmatory after maps-based proof already passed
-            # on a prior iteration; never accept as standalone pre-connect proof.
-            try:
-                proc = subprocess.run(
-                    ["pw-dump"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10.0,
-                )
-                dump = json.loads(proc.stdout)
-                for obj in dump:
-                    props = obj.get("info", {}).get("props", {})
-                    fname = props.get("factory.name", "")
-                    api = props.get("device.api", "")
-                    if "bluez5" in fname.lower() or "bluez5" in api.lower():
-                        return True
-            except (json.JSONDecodeError, subprocess.TimeoutExpired):
-                pass
-            except Exception:
-                pass
 
             time.sleep(1.0)
         return False
