@@ -23,6 +23,29 @@
 	aliases {
 		i2s-audio = &i2s20;
 	};
+
+	/*
+	 * RF antenna switch for the Xiao nRF54L15 ceramic antenna.
+	 * These fixed regulators drive the onboard RF switch:
+	 *   rfsw_ctl: P2.05 active-low  → selects ceramic antenna
+	 *   rfsw_pwr: P2.03 active-high → powers antenna path
+	 * Without these, the antenna path is open and Bluetooth range
+	 * collapses to ~ -96 dBm at 0.5 m (stock DK has no RF switch).
+	 * Definitions match the official Seeed Xiao board.
+	 */
+	rfsw_ctl: rfsw-ctl {
+		compatible = "regulator-fixed";
+		regulator-name = "rfsw-ctl";
+		enable-gpios = <&gpio2 5 GPIO_ACTIVE_LOW>;
+		regulator-boot-on;
+	};
+
+	rfsw_pwr: rfsw-pwr {
+		compatible = "regulator-fixed";
+		regulator-name = "rfsw-pwr";
+		enable-gpios = <&gpio2 3 GPIO_ACTIVE_HIGH>;
+		regulator-boot-on;
+	};
 };
 
 &pinctrl {
@@ -165,4 +188,22 @@
 
 &spi00 {
 	status = "disabled";
+};
+
+/*
+ * Xiao nRF54L15 uses 16 pF internal load capacitance for both LFXO
+ * and HFXO. The stock DK settings (inherited from nrf54l15dk) are
+ * 17 pF LFXO / 15 pF HFXO — wrong for the Xiao PCB.
+ * Match the official Seeed Xiao board definition.
+ */
+&lfxo {
+	load-capacitors = "internal";
+	load-capacitance-femtofarad = <16000>;
+	status = "okay";
+};
+
+&hfxo {
+	load-capacitors = "internal";
+	load-capacitance-femtofarad = <16000>;
+	status = "okay";
 };
