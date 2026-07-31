@@ -8,16 +8,33 @@
 Test plan accepted: `docs/development/pre-refactor-testing-plan.md`.  Phases
 T0–T8 lock current supported behavior before large-scale refactoring.
 
-**Phase T0 — behavior contract and honest coverage map** — in progress.
-Creates `docs/testing/behavior-contract.md` (numbered contracts for supported
-and unsupported behavior), `docs/testing/coverage-matrix.md` (every production
-source file classified with current evidence and gaps), and
+**Phase T0 — behavior contract and honest coverage map** — ACCEPTED (2026-07-31).
+
+Creates `docs/testing/behavior-contract.md` (57 numbered contracts for
+supported and unsupported behavior), `docs/testing/coverage-matrix.md` (every
+production source file classified with current evidence and gaps), and
 `docs/testing/v0.0.1-baseline.md` (release and RF-fix baseline evidence).
 
-The existing 432 unit tests (396 C + 36 Python) do NOT mean full production
-branch coverage.  Several suites compile stubs, test copied models, or test
-retired implementations.  T1–T8 will replace weak tests with production-source
-tests and add coverage for untested modules.
+Acceptance evidence:
+
+- Full gate **21 PASS / 0 FAIL / 21 TOTAL** on the provisioned workstation
+  (`thomas-workstation`) from a detached temporary worktree of the exact T0
+  commit, transferred via non-destructive git bundle; BSim hashes
+  deterministic across repeated runs (10 ms `0xFE0D4245`,
+  7.5 ms `0x5853F445`).
+- All three builds pass on the T0 commit: `fw-build-5340`, `fw-build-54l15`,
+  `fw-build-dongle`.
+- No production behavior changed; T0 touched documentation only.
+- **T1 is next**: replace replicated FLPR tests (runtime, ring manager,
+  handshake) with production-source tests.
+- No numeric line/branch coverage is claimed; no honest coverage report
+  exists until Phase T7 instrumentation.
+
+The existing 432 unit tests (396 C + 36 Python) are a historical Phase 6
+count and do NOT mean full production branch coverage.  Several suites
+compile stubs, test copied models, or test retired implementations.
+T1–T8 will replace weak tests with production-source tests and add coverage
+for untested modules.
 
 Manual connection after RF-switch fix (PR #3, merged
 `20b37c405835e5c2c747fa7b072c4c0b752b29cd`) is recorded as hardware evidence
