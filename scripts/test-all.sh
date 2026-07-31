@@ -5,7 +5,8 @@
 #   1. Twister C unit suites (12 suites with testcase.yaml)
 #   2. Exec-only C unit suites (4 suites: audio_offload, flpr_audio_process,
 #      flpr_ring, offload_asrc)
-#   3. Python unit suites (2: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py)
+#   3. Python unit suites (4: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py,
+#      bluez_wp_gate/test_bluez_wireplumber_gate.py, bluez_wp_phase3_gate/test_bluez_wireplumber_phase3_gate.py)
 #   4. BabbleSim Stage 1 (sink-only scenario, deterministic across runs)
 #
 # Required: NCS v3.3.0 dev shell (nix develop / direnv allow).

@@ -3,6 +3,26 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
+## Pre-refactor testing track — STARTED (2026-07-31)
+
+Test plan accepted: `docs/development/pre-refactor-testing-plan.md`.  Phases
+T0–T8 lock current supported behavior before large-scale refactoring.
+
+**Phase T0 — behavior contract and honest coverage map** — in progress.
+Creates `docs/testing/behavior-contract.md` (numbered contracts for supported
+and unsupported behavior), `docs/testing/coverage-matrix.md` (every production
+source file classified with current evidence and gaps), and
+`docs/testing/v0.0.1-baseline.md` (release and RF-fix baseline evidence).
+
+The existing 432 unit tests (396 C + 36 Python) do NOT mean full production
+branch coverage.  Several suites compile stubs, test copied models, or test
+retired implementations.  T1–T8 will replace weak tests with production-source
+tests and add coverage for untested modules.
+
+Manual connection after RF-switch fix (PR #3, merged
+`20b37c405835e5c2c747fa7b072c4c0b752b29cd`) is recorded as hardware evidence
+in the baseline but is not automated regression protection.
+
 ## Phase 3 — BlueZ/WirePlumber pairing and reconnect lifecycle — ACCEPTED (2026-07-31)
 
 Phase 3 accepted with three autonomous strict stock playbacks on nRF54L15.
