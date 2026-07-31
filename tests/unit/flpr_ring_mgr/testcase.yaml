@@ -1,3 +1,6 @@
 tests:
   unit.flpr_ring_mgr:
-    tags: flpr_ring_mgr
+    tags: flpr ring_mgr
+    platform_allow: native_sim
+    integration_platforms:
+      - native_sim

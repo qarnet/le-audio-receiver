@@ -29,14 +29,29 @@
 
 LOG_MODULE_REGISTER(flpr_ring, LOG_LEVEL_INF);
 
-/* ── Devicetree resolved addresses ───────────────────────────────── */
+/* ── Ring memory and cycle source ──────────────────────────────────
+ * Production: devicetree-resolved shared SRAM at 0x2002C000..0x20030000
+ * with fixed-address assertions.  Test mode (FLPR_RING_MGR_NATIVE_TEST):
+ * two aligned host arrays of FLPR_RING_TOTAL_SIZE each — native_sim has
+ * no MMU/address translation, so the physical addresses cannot be
+ * dereferenced.  Test arrays never change production DT. */
+
+#if defined(FLPR_RING_MGR_NATIVE_TEST)
+
+#include "flpr_ring_mgr_hooks.h"
+
+#define RING_INPUT_BASE  flpr_ring_mgr_test_input_ring()
+#define RING_OUTPUT_BASE flpr_ring_mgr_test_output_ring()
+#define RING_CYCLE_GET() flpr_ring_mgr_test_cycle_get()
+
+#else
 
 #define DT_PCM_RING DT_NODELABEL(pcm_ring)
 
 #if DT_NODE_EXISTS(DT_PCM_RING)
 /* pcm_ring: 16 KiB at 0x2002C000.  Split into two 8 KiB SPSC rings. */
-#define RING_DT_BASE DT_REG_ADDR(DT_PCM_RING)
-#define RING_DT_SIZE DT_REG_SIZE(DT_PCM_RING)
+#define RING_DT_BASE     DT_REG_ADDR(DT_PCM_RING)
+#define RING_DT_SIZE     DT_REG_SIZE(DT_PCM_RING)
 
 BUILD_ASSERT(RING_DT_SIZE == 0x4000U, "pcm_ring DT size must be 16 KiB");
 BUILD_ASSERT(RING_DT_SIZE == 2U * FLPR_RING_TOTAL_SIZE,
@@ -44,7 +59,7 @@ BUILD_ASSERT(RING_DT_SIZE == 2U * FLPR_RING_TOTAL_SIZE,
 BUILD_ASSERT(FLPR_RING_TOTAL_SIZE == 8192U, "ring size must be 8 KiB");
 
 /* Input ring (CPUAPP→FLPR): lower 8 KiB. */
-#define RING_INPUT_BASE ((uint8_t *)(uintptr_t)(RING_DT_BASE))
+#define RING_INPUT_BASE  ((uint8_t *)(uintptr_t)(RING_DT_BASE))
 
 /* Output ring (FLPR→CPUAPP): upper 8 KiB. */
 #define RING_OUTPUT_BASE ((uint8_t *)(uintptr_t)(RING_DT_BASE + FLPR_RING_TOTAL_SIZE))
@@ -58,6 +73,10 @@ BUILD_ASSERT(RING_DT_BASE + RING_DT_SIZE == 0x20030000U,
 #else
 #error "DT node pcm_ring not found — add reservation to cpuapp overlay"
 #endif
+
+#define RING_CYCLE_GET() k_cycle_get_32()
+
+#endif /* FLPR_RING_MGR_NATIVE_TEST */
 
 /* ── State ──────────────────────────────────────────────────────── */
 
@@ -267,8 +286,13 @@ int flpr_ring_mgr_init(void)
 	ring_stream_epoch = 0; /* not yet agreed */
 	k_spin_unlock(&ring_lock, key);
 
+#if defined(FLPR_RING_MGR_NATIVE_TEST)
+	LOG_INF("PCM rings at %p (in) / %p (out), 481-frame capacity", (void *)RING_INPUT_BASE,
+		(void *)RING_OUTPUT_BASE);
+#else
 	LOG_INF("PCM rings at 0x%08x (in) / 0x%08x (out), 481-frame capacity", RING_DT_BASE,
 		RING_DT_BASE + FLPR_RING_TOTAL_SIZE);
+#endif
 
 	return 0;
 }
@@ -290,7 +314,7 @@ int flpr_ring_mgr_coordinated_reset(uint32_t new_epoch, uint32_t timeout_ms)
 	}
 
 	if (new_epoch == 0) {
-		new_epoch = k_cycle_get_32();
+		new_epoch = RING_CYCLE_GET();
 	}
 	if (new_epoch == 0) {
 		LOG_ERR("Failed to generate non-zero epoch");
@@ -524,7 +548,7 @@ enum flpr_produce_result flpr_ring_mgr_produce_block(const uint8_t *pcm_data, ui
 	meta->valid_frames = valid_frames;
 	meta->flags = FLPR_SLOT_FLAG_VALID;
 	meta->correction_ppm = correction_ppm;
-	meta->cpu_timestamp = k_cycle_get_32();
+	meta->cpu_timestamp = RING_CYCLE_GET();
 
 	/* Fill payload.  Copy only valid bytes; zero remainder. */
 	size_t copy_bytes = (size_t)valid_frames * 4U; /* stereo 16-bit */
@@ -584,7 +608,7 @@ enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t 
 
 	/* Compute roundtrip latency from cpu_timestamp. */
 	if (latency_cycles_out) {
-		uint32_t now = k_cycle_get_32();
+		uint32_t now = RING_CYCLE_GET();
 		uint32_t latency = now - meta->cpu_timestamp;
 		if (latency > 0) {
 			*latency_cycles_out = latency;
@@ -1139,7 +1163,7 @@ enum flpr_produce_result flpr_ring_mgr_produce_asrc(const int16_t *pcm_data, uin
 	meta->valid_frames = valid_frames;
 	meta->flags = FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR;
 	meta->correction_ppm = correction_ppm;
-	meta->cpu_timestamp = k_cycle_get_32();
+	meta->cpu_timestamp = RING_CYCLE_GET();
 
 	/* Copy typed ASRC pre-state. */
 	memcpy(&meta->asrc_state, pre_state, sizeof(*pre_state));
@@ -1257,7 +1281,7 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 	result->processing_status = meta->processing_status;
 
 	/* RTT from cpu_timestamp. */
-	uint32_t now = k_cycle_get_32();
+	uint32_t now = RING_CYCLE_GET();
 	uint32_t latency = now - meta->cpu_timestamp;
 	result->rtt_cycles = (latency > 0) ? latency : 0;
 
@@ -1269,3 +1293,88 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 
 	return FLPR_CONSUME_OK;
 }
+
+#if defined(FLPR_RING_MGR_NATIVE_TEST)
+
+/* ── Test-only helpers ─────────────────────────────────────────────
+ * Compiled only under FLPR_RING_MGR_NATIVE_TEST (native_sim suite).
+ * Production builds contain none of these symbols.  These helpers reset
+ * module-static state and expose ring memory/semaphore observability;
+ * they never implement state transitions — production code does. */
+
+void flpr_ring_mgr_test_reset_state(void)
+{
+	/* Re-initialize semaphores and module state for a clean test. */
+	k_sem_init(&consume_sem, 0, 1000001);
+	k_sem_init(&reset_ack_sem, 0, 1);
+	k_sem_init(&stall_ack_sem, 0, 1);
+
+	ring_stream_epoch = 0;
+	rings_initialized = false;
+
+	diag_notify_sent = 0;
+	diag_notify_err = 0;
+	diag_sem_gives = 0;
+	diag_sem_takes = 0;
+	diag_stale_notify = 0;
+	diag_sem_drained = 0;
+
+	test_active = false;
+	test_blocks_sent = 0;
+	test_blocks_recv = 0;
+	test_crc_errors = 0;
+	test_payload_errors = 0;
+	test_seq_gaps = 0;
+	test_full_events = 0;
+	test_backpressure = 0;
+	test_empty_events = 0;
+	test_stale_events = 0;
+	test_flpr_blocks = 0;
+	test_flpr_crc_err = 0;
+	test_output_full = 0;
+	test_flpr_notify_rcv = 0;
+	test_flpr_worker_wake = 0;
+	test_flpr_consume_ok = 0;
+	test_flpr_consume_empty = 0;
+	test_flpr_consume_stale = 0;
+	test_flpr_produce_ok = 0;
+	test_flpr_produce_full = 0;
+
+	latency_min = UINT32_MAX;
+	latency_max = 0;
+	latency_sum = 0;
+	latency_count = 0;
+
+	stall_producer_enabled = false;
+	reset_ack_epoch = 0;
+	reset_ack_received = false;
+	stall_ack_data = 0;
+	stall_ack_received = false;
+
+	flpr_ring_init(RING_INPUT_BASE, FLPR_RING_CPUAPP_TO_FLPR);
+	flpr_ring_init(RING_OUTPUT_BASE, FLPR_RING_FLPR_TO_CPUAPP);
+}
+
+void flpr_ring_mgr_test_set_test_active(bool on)
+{
+	k_spinlock_key_t key = k_spin_lock(&ring_lock);
+	test_active = on;
+	k_spin_unlock(&ring_lock, key);
+}
+
+uint32_t flpr_ring_mgr_test_consume_sem_count(void)
+{
+	return k_sem_count_get(&consume_sem);
+}
+
+uint32_t flpr_ring_mgr_test_reset_ack_sem_count(void)
+{
+	return k_sem_count_get(&reset_ack_sem);
+}
+
+uint32_t flpr_ring_mgr_test_stall_ack_sem_count(void)
+{
+	return k_sem_count_get(&stall_ack_sem);
+}
+
+#endif /* FLPR_RING_MGR_NATIVE_TEST */

@@ -2,360 +2,1035 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * Unit tests for flpr_ring_mgr epoch-tagged consumer notification and
- * consume_sem drain logic (Stage 2 stale-notify fix).
+ * Unit tests for the FLPR ring manager — real production source
+ * execution (T1B).
  *
- * Tests the core logic without requiring devicetree:
- *   1. Matching-epoch notification → semaphore given.
- *   2. Old-epoch notification after reset → semaphore NOT given,
- *      stale count incremented.
- *   3. Preloaded consume tokens drained by reset.
- *   4. New-epoch notification after reset still wakes.
- *   5. No stale notifications after clean startup (zero counters).
+ * This suite compiles src/flpr_ring_mgr.c, src/flpr_ring.c, and
+ * src/flpr_cache.c with FLPR_RING_MGR_NATIVE_TEST: DT ring pointers are
+ * replaced by two aligned host arrays and the cycle counter is
+ * test-controlled.  The production static IPC handlers (on_ring_reset_ack,
+ * on_ring_consumer, on_ring_test_report, on_ring_stall_ack) are invoked
+ * through the captured handlers of the handshake mock, and the real
+ * flpr_ring producer/consumer APIs are used to arrange ring contents.
+ * No copied reset/produce/consume/callback algorithm is used.
  */
-
 #include <zephyr/ztest.h>
-#include <zephyr/kernel.h>
 #include <string.h>
+#include <errno.h>
 
-/* Replicate the diagnostic state from flpr_ring_mgr.c (under test). */
-static uint32_t test_ring_epoch;
-static uint32_t test_stale_notify;
-static uint32_t test_sem_drained;
-static uint32_t test_sem_gives;
+#include "flpr_ring_mgr.h"
+#include "flpr_ring_mgr_hooks.h"
+#include "mock_flpr_handshake.h"
+#include "flpr_ring.h"
+#include "flpr_protocol.h"
+#include "audio_asrc.h"
 
-/* Simulated semaphore: counter incremented on give, decremented on take. */
-static int fake_sem_count;
+/* ── Helpers ────────────────────────────────────────────────────── */
 
-static void fake_sem_give(void)
-{
-	fake_sem_count++;
-	test_sem_gives++;
-}
-
-static int fake_sem_take_no_wait(void)
-{
-	if (fake_sem_count > 0) {
-		fake_sem_count--;
-		return 0; /* success */
-	}
-	return -1; /* empty */
-}
-
-/* ── Logic under test: replication of on_ring_consumer ──────────────
- * This is the exact logic from flpr_ring_mgr.c, replicated for unit
- * testing without DT/hardware dependencies.
- */
-static void ring_notify_receive(uint32_t notify_epoch, uint32_t *block_count_out)
-{
-	if (notify_epoch != test_ring_epoch) {
-		test_stale_notify++;
-		return; /* stale: do NOT give semaphore */
-	}
-
-	/* Matching epoch: update block count, give sem. */
-	if (block_count_out) {
-		*block_count_out = 0; /* not relevant for wake test */
-	}
-	fake_sem_give();
-}
-
-/* ── Logic under test: replication of consume_sem drain ────────────
- * This is the exact logic from flpr_ring_mgr_reset().
- */
-static uint32_t ring_mgr_drain_consume(void)
-{
-	uint32_t drained = 0;
-	while (fake_sem_take_no_wait() == 0) {
-		drained++;
-	}
-	return drained;
-}
-
-/* Model of flpr_ring_mgr_reset() with epoch-invalidation window.
- * FLPR_PROTOCOL_VERSION ≥ 3 reset order:
- *   1. Invalidate: set epoch=0 so in-flight notifications are rejected.
- *   2. Drain stale consume tokens.
- *   3. Publish new epoch.
- */
-static void ring_mgr_do_reset(uint32_t new_epoch)
-{
-	/* 1. Invalidate: all in-flight notifications rejected as stale. */
-	test_ring_epoch = 0;
-
-	/* 2. Drain stale semaphore tokens. */
-	uint32_t drained = ring_mgr_drain_consume();
-	if (drained > 0) {
-		test_sem_drained += drained;
-	}
-
-	/* 3. Publish new epoch. */
-	test_ring_epoch = new_epoch;
-}
-
-/* Step 1 of reset only: invalidate epoch to 0 without draining or publishing.
- * Used by race tests to stage notification delivery in the invalidation window. */
-static void ring_mgr_reset_phase1_invalidate(void)
-{
-	test_ring_epoch = 0;
-}
-
-/* Step 3 of reset only: publish new epoch without draining or invalidating.
- * Used by race tests to complete a reset after staged drain. */
-static void ring_mgr_reset_phase3_publish(uint32_t new_epoch, uint32_t drained)
-{
-	if (drained > 0) {
-		test_sem_drained += drained;
-	}
-	test_ring_epoch = new_epoch;
-}
-
-/* ── Setup ──────────────────────────────────────────────────────── */
-
-static void test_setup(void *fixture)
+static void rm_setup(void *fixture)
 {
 	(void)fixture;
-	test_ring_epoch = 0;
-	test_stale_notify = 0;
-	test_sem_drained = 0;
-	test_sem_gives = 0;
-	fake_sem_count = 0;
+	flpr_ring_mgr_test_reset_state();
+	mock_hs_reset();
+	flpr_ring_mgr_test_set_cycle(0);
 }
 
-/* ── Test 1: Matching-epoch notification wakes consumer ──────────── */
-
-ZTEST(flpr_ring_mgr, test_matching_epoch_wakes)
+/* Standard arrangement: FLPR ready+acked, manager init, epoch reset. */
+static void rm_init_and_reset(uint32_t epoch)
 {
-	/* Setup: ring at epoch 42. */
-	ring_mgr_do_reset(42);
-	zassert_equal(test_ring_epoch, 42, "epoch set to 42");
-	zassert_equal(fake_sem_count, 0, "sem empty after reset");
-
-	/* Send notification with matching epoch. */
-	ring_notify_receive(42, NULL);
-	zassert_equal(fake_sem_count, 1, "sem given for matching epoch");
-	zassert_equal(test_stale_notify, 0, "no stale counted");
-	zassert_equal(test_sem_gives, 1, "sem_gives incremented");
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init");
+	zassert_ok(flpr_ring_mgr_reset(epoch), "reset");
 }
 
-/* ── Test 2: Old-epoch notification after reset does not wake ────── */
-
-ZTEST(flpr_ring_mgr, test_old_epoch_rejected)
+/* Arrange a slot in the OUTPUT ring using the real flpr_ring APIs. */
+static void arrange_output_slot(uint32_t epoch, uint32_t seq, uint16_t vf, uint16_t flags,
+				int32_t ppm, uint32_t crc32, uint32_t cpu_ts, int32_t status,
+				uint32_t cycles, const uint8_t *payload,
+				const struct audio_asrc_state *st)
 {
-	/* Setup: ring at epoch 100. */
-	ring_mgr_do_reset(100);
-	zassert_equal(test_ring_epoch, 100, "epoch set to 100");
-	zassert_equal(fake_sem_count, 0, "sem empty");
+	uint8_t *ring = flpr_ring_mgr_test_output_ring();
+	uint32_t idx;
 
-	/* Reset to new epoch 200. */
-	ring_mgr_do_reset(200);
-	zassert_equal(test_ring_epoch, 200, "epoch set to 200");
+	zassert_ok(flpr_ring_produce_begin(ring, &idx), "output produce begin");
 
-	/* Stale notification from old epoch 100 arrives. */
-	ring_notify_receive(100, NULL);
-	zassert_equal(fake_sem_count, 0, "sem NOT given for old epoch");
-	zassert_equal(test_stale_notify, 1, "stale_notify incremented");
-	zassert_equal(test_sem_gives, 0, "sem_gives unchanged");
+	uint8_t *slot = flpr_ring_slot_base(ring, idx);
+	struct flpr_ring_slot_meta *meta = flpr_ring_slot_meta_ptr(slot);
 
-	/* Another stale. */
-	ring_notify_receive(100, NULL);
-	zassert_equal(test_stale_notify, 2, "stale_notify incremented again");
-	zassert_equal(fake_sem_count, 0, "sem still empty");
+	memset(slot, 0, FLPR_RING_SLOT_STRIDE);
+	meta->epoch = epoch;
+	meta->sequence = seq;
+	meta->valid_frames = vf;
+	meta->flags = flags;
+	meta->correction_ppm = ppm;
+	meta->crc32 = crc32;
+	meta->cpu_timestamp = cpu_ts;
+	meta->processing_cycles = cycles;
+	meta->processing_status = status;
+	if (st) {
+		memcpy(&meta->asrc_state, st, sizeof(*st));
+	}
+	if (payload && vf > 0) {
+		memcpy(flpr_ring_slot_payload(slot), payload, (size_t)vf * 4U);
+	}
+
+	flpr_ring_produce_commit(ring, idx);
 }
 
-/* ── Test 3: Preloaded consume token drained by reset ────────────── */
-
-ZTEST(flpr_ring_mgr, test_preloaded_token_drained)
+/* Metadata of the most recently produced INPUT ring slot. */
+static struct flpr_ring_slot_meta *last_input_slot(void)
 {
-	/* Preload semaphore with 3 tokens (simulating stale notifications). */
-	fake_sem_give();
-	fake_sem_give();
-	fake_sem_give();
-	zassert_equal(fake_sem_count, 3, "3 tokens preloaded");
+	uint8_t *ring = flpr_ring_mgr_test_input_ring();
 
-	/* Reset should drain all 3. */
-	uint32_t drained = ring_mgr_drain_consume();
-	zassert_equal(drained, 3, "3 tokens drained");
-	zassert_equal(fake_sem_count, 0, "sem empty after drain");
-
-	/* Second drain should find nothing. */
-	drained = ring_mgr_drain_consume();
-	zassert_equal(drained, 0, "no tokens on second drain");
+	zassert_true(flpr_ring_producer(ring) > flpr_ring_consumer(ring),
+		     "at least one produced slot");
+	return flpr_ring_slot_meta_ptr(flpr_ring_slot_base(ring, flpr_ring_producer(ring) - 1));
 }
 
-/* ── Test 4: New-epoch notification after reset still wakes ──────── */
+/* ── Initialization and status ──────────────────────────────────── */
 
-ZTEST(flpr_ring_mgr, test_new_epoch_after_reset_wakes)
+ZTEST(flpr_ring_mgr, test_init_rejects_remote_not_ready)
 {
-	/* Setup: ring at epoch 5, preload a stale token. */
-	ring_mgr_do_reset(5);
-	fake_sem_give(); /* stale token from old epoch */
-	zassert_equal(fake_sem_count, 1, "1 stale token preloaded");
+	mock_hs_set_ready_acked(false, true);
+	zassert_equal(flpr_ring_mgr_init(), -EAGAIN, "not ready → -EAGAIN");
 
-	/* Reset to epoch 6 — drains stale token. */
-	ring_mgr_do_reset(6);
-	zassert_equal(test_ring_epoch, 6, "epoch set to 6");
-	zassert_equal(fake_sem_count, 0, "sem drained");
-	zassert_equal(test_sem_drained, 1, "sem_drained counter = 1");
-
-	/* Reset sem_gives so we measure ONLY the new epoch notification. */
-	test_sem_gives = 0;
-
-	/* New-epoch notification should wake. */
-	ring_notify_receive(6, NULL);
-	zassert_equal(fake_sem_count, 1, "sem given for new epoch");
-	zassert_equal(test_sem_gives, 1, "sem_gives = 1 (fresh)");
-	zassert_equal(test_stale_notify, 0, "no stale for new epoch");
+	mock_hs_set_ready_acked(true, false);
+	zassert_equal(flpr_ring_mgr_init(), -EAGAIN, "not acked → -EAGAIN");
 }
 
-/* ── Test 5: Zero stale notifications on clean startup ───────────── */
-
-ZTEST(flpr_ring_mgr, test_clean_startup_no_stale)
+ZTEST(flpr_ring_mgr, test_init_registers_and_inits_rings)
 {
-	/* Fresh initialization: epoch 0, no tokens. */
-	zassert_equal(test_ring_epoch, 0, "epoch starts at 0");
-	zassert_equal(fake_sem_count, 0, "no preloaded tokens");
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init");
 
-	/* Reset to epoch 1. */
-	ring_mgr_do_reset(1);
-	zassert_equal(test_ring_epoch, 1, "epoch = 1");
-	zassert_equal(test_sem_drained, 0, "nothing to drain at clean startup");
+	/* Both ring headers must be valid after init. */
+	zassert_true(flpr_ring_validate(flpr_ring_mgr_test_input_ring()), "input ring valid");
+	zassert_true(flpr_ring_validate(flpr_ring_mgr_test_output_ring()), "output ring valid");
 
-	/* Matching notifications. */
-	ring_notify_receive(1, NULL);
-	ring_notify_receive(1, NULL);
-	ring_notify_receive(1, NULL);
-	zassert_equal(fake_sem_count, 3, "3 sem tokens from 3 matching notifies");
-	zassert_equal(test_stale_notify, 0, "zero stale notifications");
-	zassert_equal(test_sem_gives, 3, "3 sem_gives");
+	/* Handlers must be captured by the mock (registered by init). */
+	zassert_true(mock_hs_handlers_registered(), "ring handlers registered");
 }
 
-/* ── Test 6: race — notification during invalidation window rejected ─
- * Scenario: CPUAPP invalidates epoch (set to 0), FLPR sends a stale
- * notification before the new epoch is published, then CPUAPP completes
- * the reset.  The mid-reset notification must be counted as stale and
- * must NOT give the consume semaphore.
- *
- * This exercises the race between the invalidation lock (epoch=0) and
- * the final publish — the exact window that the v3 reset order closes. */
-
-ZTEST(flpr_ring_mgr, test_notify_during_invalidation_window_rejected)
+ZTEST(flpr_ring_mgr, test_status_before_after_init)
 {
-	/* Setup: ring at epoch 42. */
-	ring_mgr_do_reset(42);
-	zassert_equal(test_ring_epoch, 42, "epoch=42");
-	zassert_equal(fake_sem_count, 0, "sem empty");
-	zassert_equal(test_stale_notify, 0, "no stale yet");
+	struct flpr_ring_status st;
 
-	/* Phase 1: CPUAPP invalidates (epoch=0).  All subsequent
-	 * notifications from the old epoch must be rejected. */
-	ring_mgr_reset_phase1_invalidate();
-	zassert_equal(test_ring_epoch, 0, "epoch invalidated to 0");
+	flpr_ring_mgr_get_status(NULL); /* null output harmless */
 
-	/* FLPR (simulated) sends notification with old epoch 42
-	 * during the invalidation window.  Must be stale. */
-	ring_notify_receive(42, NULL);
-	zassert_equal(fake_sem_count, 0, "sem NOT given during invalidation");
-	zassert_equal(test_stale_notify, 1, "stale_notify = 1 during window");
+	flpr_ring_mgr_get_status(&st);
+	zassert_false(st.initialized, "not initialized before init");
 
-	/* Another stale from old epoch. */
-	ring_notify_receive(42, NULL);
-	zassert_equal(test_stale_notify, 2, "stale_notify = 2");
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init");
 
-	/* Phase 2+3: drain (nothing in sem) + publish new epoch 200. */
-	uint32_t drained = ring_mgr_drain_consume();
-	ring_mgr_reset_phase3_publish(200, drained);
-	zassert_equal(test_ring_epoch, 200, "epoch=200 after reset");
-	zassert_equal(test_sem_drained, 0, "nothing to drain");
-	zassert_equal(drained, 0, "drained=0");
-
-	/* New-epoch notification now works. */
-	ring_notify_receive(200, NULL);
-	zassert_equal(fake_sem_count, 1, "sem given for new epoch 200");
-	zassert_equal(test_stale_notify, 2, "stale count unchanged after new epoch");
-
-	/* Old-epoch notification after publish still rejected. */
-	ring_notify_receive(42, NULL);
-	zassert_equal(test_stale_notify, 3, "stale_notify = 3 (post-reset stale)");
-	zassert_equal(fake_sem_count, 1, "sem unchanged (old epoch after publish)");
+	flpr_ring_mgr_get_status(&st);
+	zassert_true(st.initialized, "initialized after init");
+	zassert_equal(st.epoch, 0, "epoch not yet agreed");
+	zassert_equal(st.in_epoch, 0, "input ring epoch 0");
+	zassert_equal(st.out_epoch, 0, "output ring epoch 0");
 }
 
-/* ── Test 7: race — pre-reset token drained, count observable ──────
- * Scenario: Token injected (FLPR notify) BEFORE reset begins.
- * Reset drains it, drained count observable in diag_sem_drained.
- * New-epoch notifications after reset work normally. */
-
-ZTEST(flpr_ring_mgr, test_pre_reset_token_drained_observable)
+ZTEST(flpr_ring_mgr, test_repeated_init_safe)
 {
-	/* Setup: epoch=5, FLPR sends 3 notifications (preload tokens). */
-	ring_mgr_do_reset(5);
-	fake_sem_give();
-	fake_sem_give();
-	fake_sem_give();
-	zassert_equal(fake_sem_count, 3, "3 tokens preloaded before reset");
-	zassert_equal(test_sem_gives, 3, "gives from preload");
-	/* Reset sem_gives so we can track post-reset notifications. */
-	test_sem_gives = 0;
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init 1");
+	zassert_ok(flpr_ring_mgr_init(), "init 2");
 
-	/* Full reset sequence (invalidate → drain → publish). */
-	uint32_t drained_before = test_sem_drained;
-	ring_mgr_do_reset(6);
-	zassert_equal(test_ring_epoch, 6, "epoch=6 after reset");
-	zassert_equal(fake_sem_count, 0, "sem emptied by drain");
-	zassert_equal(test_sem_drained - drained_before, 3, "diag_sem_drained incremented by 3");
-
-	/* Post-reset new-epoch notification works. */
-	ring_notify_receive(6, NULL);
-	zassert_equal(fake_sem_count, 1, "sem given for new epoch 6");
-	zassert_equal(test_sem_gives, 1, "sem_gives = 1 (fresh, not preload)");
-	zassert_equal(test_stale_notify, 0, "no stale after clean reset");
+	zassert_true(flpr_ring_validate(flpr_ring_mgr_test_input_ring()), "input ring valid");
+	zassert_true(flpr_ring_validate(flpr_ring_mgr_test_output_ring()), "output ring valid");
 }
 
-/* ── Test 8: race — notification injected between invalidate and drain ─
- * Full race staging: invalidate → inject stale notification → drain
- * (drains the stale token) → publish.  Both the stale notification
- * counter AND the drained token counter must be correct. */
+/* ── Notification and reset ──────────────────────────────────────── */
 
-ZTEST(flpr_ring_mgr, test_race_inject_between_invalidate_and_drain)
+ZTEST(flpr_ring_mgr, test_notify_message_fields_and_counters)
 {
-	/* Setup: epoch=100, preload 2 sem tokens (old FLPR notifies). */
-	ring_mgr_do_reset(100);
-	fake_sem_give();
-	fake_sem_give();
-	zassert_equal(fake_sem_count, 2, "2 preloaded tokens");
-	test_sem_gives = 0;
-	uint32_t stale_before = test_stale_notify;
-	uint32_t drained_before = test_sem_drained;
+	rm_init_and_reset(42);
 
-	/* Phase 1: invalidate epoch. */
-	ring_mgr_reset_phase1_invalidate();
-	zassert_equal(test_ring_epoch, 0, "epoch invalidated to 0");
+	zassert_ok(flpr_ring_mgr_notify_producer(), "notify");
 
-	/* FLPR sends notification with old epoch 100 during invalidation
-	 * window — rejected as stale (epoch=0 ≠ 100). */
-	ring_notify_receive(100, NULL);
-	zassert_equal(test_stale_notify - stale_before, 1, "stale_notify +1 during window");
-	zassert_equal(fake_sem_count, 2, "sem count unchanged (stale notify gave no token)");
+	const struct flpr_msg *sent = mock_hs_sent_at(0);
+	zassert_not_null(sent, "message sent");
+	zassert_equal(sent->type, FLPR_MSG_RING_PRODUCER, "type");
+	zassert_equal(sent->version, FLPR_PROTOCOL_VERSION, "version");
+	zassert_equal(sent->seq, 0, "seq");
+	zassert_equal(sent->data, 0, "data");
 
-	/* Phase 2: drain — clears the 2 preloaded tokens. */
-	uint32_t drained = ring_mgr_drain_consume();
-	zassert_equal(drained, 2, "drained 2 preloaded tokens");
-	zassert_equal(fake_sem_count, 0, "sem empty after drain");
-
-	/* Phase 3: publish new epoch 200. */
-	ring_mgr_reset_phase3_publish(200, drained);
-	zassert_equal(test_ring_epoch, 200, "epoch=200 after publish");
-	zassert_equal(test_sem_drained - drained_before, 2, "diag_sem_drained incremented by 2");
-	zassert_equal(drained, 2, "returned drained value = 2");
-
-	/* Post-reset: new-epoch notification works.  Old-epoch still stale. */
-	ring_notify_receive(100, NULL);
-	zassert_equal(test_stale_notify - stale_before, 2, "stale +1 post-reset for old=100");
-	ring_notify_receive(200, NULL);
-	zassert_equal(fake_sem_count, 1, "sem given for new epoch 200");
-	zassert_equal(test_stale_notify - stale_before, 2, "stale unchanged after matching");
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.notify_sent, 1, "notify_sent");
+	zassert_equal(st.notify_err, 0, "notify_err");
 }
 
-/* ── Test suite ─────────────────────────────────────────────── */
+ZTEST(flpr_ring_mgr, test_notify_send_failure_counter)
+{
+	rm_init_and_reset(42);
+	mock_hs_set_send_result(-EIO);
 
-ZTEST_SUITE(flpr_ring_mgr, NULL, NULL, test_setup, NULL, NULL);
+	zassert_equal(flpr_ring_mgr_notify_producer(), -EIO, "send failure propagates");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.notify_sent, 1, "notify_sent counted");
+	zassert_equal(st.notify_err, 1, "notify_err counted");
+}
+
+ZTEST(flpr_ring_mgr, test_local_reset_rejects_zero_epoch)
+{
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init");
+
+	zassert_equal(flpr_ring_mgr_reset(0), -EINVAL, "zero epoch rejected");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.epoch, 0, "epoch stays invalid (0)");
+}
+
+ZTEST(flpr_ring_mgr, test_coordinated_reset_rejects_unhealthy_peer)
+{
+	mock_hs_set_ready_acked(false, false);
+	zassert_equal(flpr_ring_mgr_init(), -EAGAIN, "init deferred when not ready");
+
+	zassert_equal(flpr_ring_mgr_coordinated_reset(42, 100), -EAGAIN, "not ready → -EAGAIN");
+
+	mock_hs_set_ready_acked(true, false);
+	zassert_equal(flpr_ring_mgr_coordinated_reset(42, 100), -EAGAIN, "not acked → -EAGAIN");
+}
+
+ZTEST(flpr_ring_mgr, test_generated_epoch_zero_fails)
+{
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init");
+
+	flpr_ring_mgr_test_set_cycle(0);
+	zassert_equal(flpr_ring_mgr_coordinated_reset(0, 100), -EINVAL,
+		      "cycle source returning 0 → -EINVAL");
+}
+
+ZTEST(flpr_ring_mgr, test_reset_send_failure)
+{
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init");
+	mock_hs_set_send_result(-EIO);
+
+	zassert_equal(flpr_ring_mgr_coordinated_reset(42, 100), -EIO, "send failure → -EIO");
+}
+
+ZTEST(flpr_ring_mgr, test_reset_ack_timeout)
+{
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init");
+	/* No ACK injected. */
+
+	zassert_equal(flpr_ring_mgr_coordinated_reset(42, 50), -ETIMEDOUT, "ACK timeout");
+}
+
+ZTEST(flpr_ring_mgr, test_reset_ack_mismatch)
+{
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init");
+	mock_hs_set_auto_ack(true);
+	mock_hs_set_auto_ack_data_offset(1); /* ACK echoes 43, expected 42 */
+
+	zassert_equal(flpr_ring_mgr_coordinated_reset(42, 100), -EIO, "epoch mismatch → -EIO");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.epoch, 0, "epoch not published on mismatch");
+}
+
+ZTEST(flpr_ring_mgr, test_reset_ack_exact_match)
+{
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init");
+	mock_hs_set_auto_ack(true);
+
+	zassert_ok(flpr_ring_mgr_coordinated_reset(42, 100), "coordinated reset");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.epoch, 42, "epoch published");
+	zassert_equal(st.in_epoch, 42, "input ring epoch");
+	zassert_equal(st.out_epoch, 42, "output ring epoch");
+	zassert_equal(st.in_producer, 0, "input indices cleared");
+	zassert_equal(st.out_producer, 0, "output indices cleared");
+}
+
+ZTEST(flpr_ring_mgr, test_old_epoch_notification_rejected)
+{
+	rm_init_and_reset(42);
+
+	struct flpr_msg notify = {.type = FLPR_MSG_RING_CONSUMER,
+				  .version = FLPR_PROTOCOL_VERSION,
+				  .seq = 5,
+				  .data = 41};
+	mock_hs_invoke_consumer(&notify);
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.stale_notify, 1, "stale_notify counted");
+	zassert_equal(flpr_ring_mgr_test_consume_sem_count(), 0, "no semaphore give");
+}
+
+ZTEST(flpr_ring_mgr, test_matching_epoch_notification_gives)
+{
+	rm_init_and_reset(42);
+
+	struct flpr_msg notify = {.type = FLPR_MSG_RING_CONSUMER,
+				  .version = FLPR_PROTOCOL_VERSION,
+				  .seq = 7,
+				  .data = 42};
+	mock_hs_invoke_consumer(&notify);
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(flpr_ring_mgr_test_consume_sem_count(), 1, "semaphore given");
+	zassert_equal(st.sem_gives, 1, "sem_gives counted");
+	zassert_equal(st.test_producer_blocks, 7, "FLPR block count updated");
+	zassert_equal(st.stale_notify, 0, "not stale");
+}
+
+ZTEST(flpr_ring_mgr, test_token_present_before_reset_drained)
+{
+	rm_init_and_reset(42);
+
+	struct flpr_msg notify = {.type = FLPR_MSG_RING_CONSUMER,
+				  .version = FLPR_PROTOCOL_VERSION,
+				  .seq = 1,
+				  .data = 42};
+	mock_hs_invoke_consumer(&notify);
+	zassert_equal(flpr_ring_mgr_test_consume_sem_count(), 1, "token present");
+
+	zassert_ok(flpr_ring_mgr_reset(43), "reset to 43");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.sem_drained, 1, "one token drained and observable");
+	zassert_equal(flpr_ring_mgr_test_consume_sem_count(), 0, "semaphore empty");
+	zassert_equal(st.epoch, 43, "new epoch published");
+}
+
+ZTEST(flpr_ring_mgr, test_notification_during_epoch_zero_window_stale)
+{
+	rm_init_and_reset(42);
+	zassert_ok(flpr_ring_mgr_remote_restarted(), "remote restart → epoch 0");
+
+	struct flpr_msg notify = {.type = FLPR_MSG_RING_CONSUMER,
+				  .version = FLPR_PROTOCOL_VERSION,
+				  .seq = 3,
+				  .data = 42};
+	mock_hs_invoke_consumer(&notify);
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.epoch, 0, "epoch invalidated");
+	zassert_equal(st.stale_notify, 1, "notification during invalidation window is stale");
+	zassert_equal(flpr_ring_mgr_test_consume_sem_count(), 0, "no semaphore give");
+}
+
+/* ── Produce / consume ───────────────────────────────────────────── */
+
+ZTEST(flpr_ring_mgr, test_produce_frames_over_max_rejected)
+{
+	rm_init_and_reset(42);
+
+	enum flpr_produce_result pr =
+		flpr_ring_mgr_produce_block(NULL, FLPR_RING_PAYLOAD_MAX_INPUT + 1, 0, 0, true);
+	zassert_equal(pr, FLPR_PRODUCE_INVALID, "frames over input max rejected");
+}
+
+ZTEST(flpr_ring_mgr, test_produce_null_pcm_zero_filled)
+{
+	rm_init_and_reset(42);
+
+	enum flpr_produce_result pr = flpr_ring_mgr_produce_block(NULL, 480, 7, -3, true);
+	zassert_equal(pr, FLPR_PRODUCE_OK, "null PCM produces");
+
+	struct flpr_ring_slot_meta *meta = last_input_slot();
+	zassert_equal(meta->sequence, 7, "sequence");
+	zassert_equal(meta->epoch, 42, "epoch");
+	zassert_equal(meta->valid_frames, 480, "valid_frames");
+	zassert_equal(meta->flags, FLPR_SLOT_FLAG_VALID, "flags");
+	zassert_equal(meta->correction_ppm, -3, "ppm");
+
+	const uint8_t *payload = flpr_ring_slot_payload((uint8_t *)meta);
+	for (uint32_t i = 0; i < FLPR_RING_PAYLOAD_CAPACITY_BYTES; i++) {
+		zassert_equal(payload[i], 0, "payload byte %u zero-filled", i);
+	}
+	zassert_equal(meta->crc32, flpr_ring_crc32(payload, 480 * 4U), "CRC over zeros");
+}
+
+ZTEST(flpr_ring_mgr, test_produce_exact_metadata_crc_remainder)
+{
+	rm_init_and_reset(42);
+
+	uint8_t pcm[480 * 4U];
+	for (uint32_t i = 0; i < sizeof(pcm); i++) {
+		pcm[i] = (uint8_t)(i * 13U + 1U);
+	}
+
+	flpr_ring_mgr_test_set_cycle(1000);
+	enum flpr_produce_result pr = flpr_ring_mgr_produce_block(pcm, 480, 99, 12, true);
+	zassert_equal(pr, FLPR_PRODUCE_OK, "produce");
+
+	struct flpr_ring_slot_meta *meta = last_input_slot();
+	zassert_equal(meta->sequence, 99, "sequence");
+	zassert_equal(meta->epoch, 42, "epoch");
+	zassert_equal(meta->valid_frames, 480, "valid_frames");
+	zassert_equal(meta->flags, FLPR_SLOT_FLAG_VALID, "flags");
+	zassert_equal(meta->correction_ppm, 12, "ppm");
+	zassert_equal(meta->cpu_timestamp, 1000, "cpu_timestamp");
+
+	const uint8_t *payload = flpr_ring_slot_payload((uint8_t *)meta);
+	zassert_equal(memcmp(payload, pcm, sizeof(pcm)), 0, "payload copied");
+	for (uint32_t i = sizeof(pcm); i < FLPR_RING_PAYLOAD_CAPACITY_BYTES; i++) {
+		zassert_equal(payload[i], 0, "remainder byte %u zero", i);
+	}
+	zassert_equal(meta->crc32, flpr_ring_crc32(payload, sizeof(pcm)), "CRC over valid bytes");
+
+	/* compute_crc = false → crc32 left 0. */
+	zassert_equal(flpr_ring_mgr_produce_block(pcm, 480, 100, 0, false), FLPR_PRODUCE_OK,
+		      "produce without crc");
+	meta = last_input_slot();
+	zassert_equal(meta->crc32, 0, "crc32 zero when disabled");
+}
+
+ZTEST(flpr_ring_mgr, test_producer_stall_full_backpressure)
+{
+	rm_init_and_reset(42);
+
+	flpr_ring_mgr_stall_producer(true);
+
+	enum flpr_produce_result pr = flpr_ring_mgr_produce_block(NULL, 480, 1, 0, true);
+	zassert_equal(pr, FLPR_PRODUCE_FULL, "stalled producer returns FULL");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.test_backpressure, 1, "backpressure counted");
+	zassert_equal(flpr_ring_producer(flpr_ring_mgr_test_input_ring()), 0, "index not advanced");
+
+	flpr_ring_mgr_stall_producer(false);
+}
+
+ZTEST(flpr_ring_mgr, test_physical_four_slot_full)
+{
+	rm_init_and_reset(42);
+
+	for (uint32_t i = 0; i < 4; i++) {
+		zassert_equal(flpr_ring_mgr_produce_block(NULL, 480, i, 0, false), FLPR_PRODUCE_OK,
+			      "produce %u", i);
+	}
+
+	enum flpr_produce_result pr = flpr_ring_mgr_produce_block(NULL, 480, 4, 0, false);
+	zassert_equal(pr, FLPR_PRODUCE_FULL, "5th produce on 4-slot ring is FULL");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.test_full_events, 1, "full event counted");
+}
+
+ZTEST(flpr_ring_mgr, test_index_wrap_preserves_slot_order)
+{
+	rm_init_and_reset(42);
+
+	for (uint32_t i = 0; i < 4; i++) {
+		zassert_equal(flpr_ring_mgr_produce_block(NULL, 480, i, 0, false), FLPR_PRODUCE_OK,
+			      "produce %u", i);
+	}
+
+	/* FLPR consumes the input ring (real ring APIs, epoch check off). */
+	uint8_t *in_ring = flpr_ring_mgr_test_input_ring();
+	for (uint32_t i = 0; i < 4; i++) {
+		uint8_t *slot_base;
+		struct flpr_ring_slot_meta *meta;
+		zassert_ok(flpr_ring_consume_begin(in_ring, 0, &slot_base, &meta),
+			   "consume input %u", i);
+		zassert_equal(meta->sequence, i, "input order %u", i);
+		flpr_ring_consume_done(in_ring);
+	}
+
+	/* Produce four more: slot indices wrap to 0..3 again. */
+	for (uint32_t i = 4; i < 8; i++) {
+		zassert_equal(flpr_ring_mgr_produce_block(NULL, 480, i, 0, false), FLPR_PRODUCE_OK,
+			      "produce %u", i);
+	}
+
+	/* Slot 0 (producer index 4) holds sequence 4. */
+	struct flpr_ring_slot_meta *slot0 =
+		flpr_ring_slot_meta_ptr(flpr_ring_slot_base(flpr_ring_mgr_test_input_ring(), 0));
+	zassert_equal(slot0->sequence, 4, "wrapped slot 0 holds sequence 4");
+
+	/* Wrap again: first four slots refilled in order. */
+	for (uint32_t i = 0; i < 4; i++) {
+		uint8_t *slot_base;
+		struct flpr_ring_slot_meta *meta;
+		zassert_ok(flpr_ring_consume_begin(in_ring, 0, &slot_base, &meta),
+			   "consume input (wrap) %u", i);
+		zassert_equal(meta->sequence, i + 4, "wrapped input order %u", i);
+		flpr_ring_consume_done(in_ring);
+	}
+}
+
+ZTEST(flpr_ring_mgr, test_consume_empty)
+{
+	rm_init_and_reset(42);
+
+	zassert_equal(flpr_ring_mgr_consume_block(NULL, NULL, NULL, NULL, NULL), FLPR_CONSUME_EMPTY,
+		      "empty output ring");
+}
+
+ZTEST(flpr_ring_mgr, test_stale_slot_advances)
+{
+	rm_init_and_reset(42);
+
+	/* Stale slot with wrong epoch in the OUTPUT ring. */
+	zassert_ok(flpr_ring_mgr_produce_stale_test(7), "produce stale slot");
+
+	zassert_equal(flpr_ring_mgr_consume_block(NULL, NULL, NULL, NULL, NULL), FLPR_CONSUME_STALE,
+		      "stale slot reported");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.test_stale_events, 1, "stale event counted");
+
+	/* Consumer advanced past the stale slot. */
+	zassert_equal(flpr_ring_mgr_consume_block(NULL, NULL, NULL, NULL, NULL), FLPR_CONSUME_EMPTY,
+		      "advanced past stale slot");
+}
+
+ZTEST(flpr_ring_mgr, test_consume_invalid_frame_count)
+{
+	rm_init_and_reset(42);
+
+	arrange_output_slot(42, 1, FLPR_RING_PAYLOAD_CAPACITY_FRAMES + 1, FLPR_SLOT_FLAG_VALID, 0,
+			    0, 0, 0, 0, NULL, NULL);
+
+	zassert_equal(flpr_ring_mgr_consume_block(NULL, NULL, NULL, NULL, NULL),
+		      FLPR_CONSUME_INVALID, "invalid frame count rejected");
+
+	/* Slot consumed (rejected safely, no stuck state). */
+	zassert_equal(flpr_ring_mgr_consume_block(NULL, NULL, NULL, NULL, NULL), FLPR_CONSUME_EMPTY,
+		      "invalid slot consumed");
+}
+
+ZTEST(flpr_ring_mgr, test_consume_valid_fills_outputs)
+{
+	rm_init_and_reset(42);
+	flpr_ring_mgr_test_set_test_active(true);
+
+	uint8_t pcm[100 * 4U];
+	for (uint32_t i = 0; i < sizeof(pcm); i++) {
+		pcm[i] = (uint8_t)(i * 5U + 2U);
+	}
+	uint32_t crc = flpr_ring_crc32(pcm, sizeof(pcm));
+	arrange_output_slot(42, 77, 100, FLPR_SLOT_FLAG_VALID, -9, crc, 900, 0, 0, pcm, NULL);
+
+	flpr_ring_mgr_test_set_cycle(1000);
+
+	uint8_t out[sizeof(pcm)];
+	uint16_t vf = 0;
+	uint32_t seq_out = 0;
+	uint32_t crc_out = 0;
+	uint32_t latency_out = 0;
+	zassert_equal(flpr_ring_mgr_consume_block(out, &vf, &seq_out, &crc_out, &latency_out),
+		      FLPR_CONSUME_OK, "consume");
+	zassert_equal(vf, 100, "valid_frames");
+	zassert_equal(seq_out, 77, "sequence");
+	zassert_equal(crc_out, crc, "crc");
+	zassert_equal(latency_out, 100, "latency = now - cpu_timestamp");
+	zassert_equal(memcmp(out, pcm, sizeof(pcm)), 0, "payload");
+}
+
+ZTEST(flpr_ring_mgr, test_consume_null_outputs_safe)
+{
+	rm_init_and_reset(42);
+
+	arrange_output_slot(42, 3, 10, FLPR_SLOT_FLAG_VALID, 0, 0, 0, 0, 0, NULL, NULL);
+
+	zassert_equal(flpr_ring_mgr_consume_block(NULL, NULL, NULL, NULL, NULL), FLPR_CONSUME_OK,
+		      "all-null outputs safe");
+}
+
+ZTEST(flpr_ring_mgr, test_latency_wrap_unsigned)
+{
+	rm_init_and_reset(42);
+	flpr_ring_mgr_test_set_test_active(true);
+
+	/* cpu_timestamp = now + 0xFFFF0000 (mod 2^32): unsigned subtraction
+	 * yields exactly 0x10000 regardless of the current cycle value. */
+	flpr_ring_mgr_test_set_cycle(1000);
+	arrange_output_slot(42, 1, 10, FLPR_SLOT_FLAG_VALID, 0, 0, 1000U + 0xFFFF0000U, 0, 0, NULL,
+			    NULL);
+
+	uint32_t latency_out = 0;
+	zassert_equal(flpr_ring_mgr_consume_block(NULL, NULL, NULL, NULL, &latency_out),
+		      FLPR_CONSUME_OK, "consume");
+	zassert_equal(latency_out, 0x10000U, "wrapped unsigned latency");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.latency_count, 1, "metrics updated in test mode");
+	zassert_equal(st.latency_min, 0x10000U, "latency_min");
+	zassert_equal(st.latency_max, 0x10000U, "latency_max");
+	zassert_equal(st.latency_sum, 0x10000U, "latency_sum");
+}
+
+ZTEST(flpr_ring_mgr, test_latency_metrics_only_in_test_mode)
+{
+	rm_init_and_reset(42);
+	/* test_active OFF. */
+
+	flpr_ring_mgr_test_set_cycle(1000);
+	arrange_output_slot(42, 1, 10, FLPR_SLOT_FLAG_VALID, 0, 0, 900, 0, 0, NULL, NULL);
+
+	uint32_t latency_out = 0;
+	zassert_equal(flpr_ring_mgr_consume_block(NULL, NULL, NULL, NULL, &latency_out),
+		      FLPR_CONSUME_OK, "consume");
+	zassert_equal(latency_out, 100, "latency still reported");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.latency_count, 0, "metrics NOT updated outside test mode");
+}
+
+ZTEST(flpr_ring_mgr, test_crc_error_accounting)
+{
+	rm_init_and_reset(42);
+	flpr_ring_mgr_test_set_test_active(true);
+
+	/* Payload matches the deterministic pattern for seq 5, but the
+	 * stored CRC is wrong → CRC error counted, payload verification OK. */
+	uint8_t pcm[50 * 4U];
+	flpr_ring_gen_payload(pcm, sizeof(pcm), 5);
+	arrange_output_slot(42, 5, 50, FLPR_SLOT_FLAG_VALID, 0, 0xDEADBEEFU, 0, 0, 0, pcm, NULL);
+
+	zassert_equal(flpr_ring_mgr_consume_block(NULL, NULL, NULL, NULL, NULL), FLPR_CONSUME_OK,
+		      "consume (CRC mismatch counted, not fatal)");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.test_crc_errors, 1, "CRC error counted");
+	zassert_equal(st.test_payload_errors, 0, "payload still matches pattern");
+}
+
+ZTEST(flpr_ring_mgr, test_payload_mismatch_accounting)
+{
+	rm_init_and_reset(42);
+	flpr_ring_mgr_test_set_test_active(true);
+
+	uint8_t pcm[100 * 4U];
+	flpr_ring_gen_payload(pcm, sizeof(pcm), 9);
+	pcm[0] ^= 0xFFU; /* corrupt one byte → one frame error */
+	uint32_t crc = flpr_ring_crc32(pcm, sizeof(pcm));
+	arrange_output_slot(42, 9, 100, FLPR_SLOT_FLAG_VALID, 0, crc, 0, 0, 0, pcm, NULL);
+
+	zassert_equal(flpr_ring_mgr_consume_block(NULL, NULL, NULL, NULL, NULL), FLPR_CONSUME_OK,
+		      "consume");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.test_payload_errors, 1, "payload mismatch counted per frame");
+	zassert_equal(st.test_crc_errors, 0, "CRC still valid (corrupted after crc)");
+}
+
+ZTEST(flpr_ring_mgr, test_set_consume_cb_noop)
+{
+	/* Documented no-op (refactor-review candidate); must be safe. */
+	flpr_ring_mgr_set_consume_cb(NULL, NULL);
+	flpr_ring_mgr_set_consume_cb((flpr_ring_consume_cb_t)1, (void *)0x1);
+}
+
+/* ── Typed ASRC ──────────────────────────────────────────────────── */
+
+ZTEST(flpr_ring_mgr, test_produce_asrc_invalid_args)
+{
+	rm_init_and_reset(42);
+
+	struct audio_asrc_state st;
+	memset(&st, 0, sizeof(st));
+
+	zassert_equal(flpr_ring_mgr_produce_asrc(NULL, FLPR_RING_PAYLOAD_MAX_INPUT - 1, 1, 0, &st),
+		      FLPR_PRODUCE_INVALID, "wrong frame count rejected");
+	zassert_equal(flpr_ring_mgr_produce_asrc(NULL, FLPR_RING_PAYLOAD_MAX_INPUT, 1, 0, NULL),
+		      FLPR_PRODUCE_INVALID, "null state rejected");
+}
+
+ZTEST(flpr_ring_mgr, test_produce_asrc_metadata_prestate_crc)
+{
+	rm_init_and_reset(42);
+
+	int16_t pcm[480 * 2U];
+	for (uint32_t i = 0; i < sizeof(pcm) / sizeof(pcm[0]); i++) {
+		pcm[i] = (int16_t)(i * 3U - 100);
+	}
+
+	struct audio_asrc_state pre;
+	memset(&pre, 0, sizeof(pre));
+	pre.phase = 0x12345678ULL;
+	pre.step_base = 0x100000000ULL;
+	pre.prev_l = -100;
+	pre.prev_r = 200;
+	pre.prev_valid = 1;
+
+	zassert_equal(flpr_ring_mgr_produce_asrc(pcm, 480, 11, -7, &pre), FLPR_PRODUCE_OK,
+		      "produce_asrc");
+
+	struct flpr_ring_slot_meta *meta = last_input_slot();
+	zassert_equal(meta->flags, FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR, "flags");
+	zassert_equal(meta->sequence, 11, "sequence");
+	zassert_equal(meta->epoch, 42, "epoch");
+	zassert_equal(meta->correction_ppm, -7, "ppm");
+	zassert_equal(memcmp(&meta->asrc_state, &pre, sizeof(pre)), 0, "pre-state copied");
+
+	const uint8_t *payload = flpr_ring_slot_payload((uint8_t *)meta);
+	zassert_equal(memcmp(payload, pcm, sizeof(pcm)), 0, "payload copied");
+	zassert_equal(meta->crc32, flpr_ring_crc32(payload, 480 * 4U), "CRC always computed");
+}
+
+ZTEST(flpr_ring_mgr, test_consume_asrc_empty_and_stale)
+{
+	rm_init_and_reset(42);
+
+	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	struct flpr_consume_asrc_result res;
+
+	zassert_equal(
+		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
+		FLPR_CONSUME_EMPTY, "empty");
+
+	zassert_ok(flpr_ring_mgr_produce_stale_test(7), "stale slot");
+	zassert_equal(
+		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
+		FLPR_CONSUME_STALE, "stale");
+}
+
+ZTEST(flpr_ring_mgr, test_consume_asrc_bad_status)
+{
+	rm_init_and_reset(42);
+
+	/* vf == 0 with non-negative processing_status is invalid. */
+	arrange_output_slot(42, 1, 0, FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR, 0, 0, 0, 0,
+			    0, NULL, NULL);
+
+	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	struct flpr_consume_asrc_result res;
+	zassert_equal(
+		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
+		FLPR_CONSUME_INVALID, "vf=0 with status>=0 invalid");
+	zassert_equal(res.output_frames, 0, "output_frames zeroed");
+}
+
+ZTEST(flpr_ring_mgr, test_consume_asrc_error_output_ok)
+{
+	rm_init_and_reset(42);
+
+	/* FLPR error output: vf == 0, processing_status < 0 → valid response. */
+	arrange_output_slot(42, 2, 0, FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR, 0, 0, 0,
+			    -5, 0, NULL, NULL);
+
+	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	struct flpr_consume_asrc_result res;
+	zassert_equal(
+		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
+		FLPR_CONSUME_OK, "error output is a valid transport response");
+	zassert_equal(res.output_frames, 0, "output_frames 0");
+	zassert_equal(res.processing_status, -5, "status echoed");
+}
+
+ZTEST(flpr_ring_mgr, test_consume_asrc_bad_flags)
+{
+	rm_init_and_reset(42);
+
+	/* Missing ASRC_LINEAR flag. */
+	arrange_output_slot(42, 1, 100, FLPR_SLOT_FLAG_VALID, 0, 0, 0, 0, 0, NULL, NULL);
+
+	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	memset(out, 0x5A, sizeof(out));
+	struct flpr_consume_asrc_result res;
+	zassert_equal(
+		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
+		FLPR_CONSUME_INVALID, "bad flags rejected");
+	zassert_equal(res.output_frames, 0, "output_frames zeroed");
+}
+
+ZTEST(flpr_ring_mgr, test_consume_asrc_state_corruption)
+{
+	rm_init_and_reset(42);
+
+	struct audio_asrc_state bad;
+	memset(&bad, 0, sizeof(bad));
+	bad.reserved[0] = 1; /* reserved bytes must be zero */
+
+	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	struct flpr_consume_asrc_result res;
+	arrange_output_slot(42, 1, 100, FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR, 0, 0, 0,
+			    0, 0, NULL, &bad);
+	zassert_equal(
+		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
+		FLPR_CONSUME_INVALID, "corrupt state rejected");
+	zassert_equal(res.output_frames, 0, "output_frames zeroed");
+}
+
+ZTEST(flpr_ring_mgr, test_consume_asrc_bad_frame_range)
+{
+	rm_init_and_reset(42);
+
+	arrange_output_slot(42, 1, FLPR_RING_PAYLOAD_CAPACITY_FRAMES + 1,
+			    FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR, 0, 0, 0, 0, 0, NULL,
+			    NULL);
+
+	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	struct flpr_consume_asrc_result res;
+	zassert_equal(
+		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
+		FLPR_CONSUME_INVALID, "frame range rejected");
+	zassert_equal(res.output_frames, 0, "output_frames zeroed");
+}
+
+ZTEST(flpr_ring_mgr, test_consume_asrc_bad_crc)
+{
+	rm_init_and_reset(42);
+
+	uint8_t pcm[100 * 4U];
+	memset(pcm, 0x11, sizeof(pcm));
+	arrange_output_slot(42, 1, 100, FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR, 0,
+			    0xDEADBEEFU, 0, 0, 0, pcm, NULL);
+
+	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	struct flpr_consume_asrc_result res;
+	zassert_equal(
+		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
+		FLPR_CONSUME_INVALID, "bad CRC rejected");
+	zassert_equal(res.output_frames, 0, "output_frames zeroed");
+	zassert_equal(res.sequence, 0, "result fields untouched");
+}
+
+ZTEST(flpr_ring_mgr, test_consume_asrc_transactional_output)
+{
+	rm_init_and_reset(42);
+
+	/* Bad flags: fails before any output write. */
+	arrange_output_slot(42, 1, 100, FLPR_SLOT_FLAG_VALID, 0, 0, 0, 0, 0, NULL, NULL);
+
+	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	memset(out, 0x5A, sizeof(out));
+	struct flpr_consume_asrc_result res;
+	zassert_equal(
+		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
+		FLPR_CONSUME_INVALID, "rejected");
+	zassert_equal(res.output_frames, 0, "output_frames zeroed");
+	for (uint32_t i = 0; i < sizeof(out) / sizeof(out[0]); i++) {
+		zassert_equal((uint16_t)out[i], 0x5A5A, "pcm_out untouched on pre-copy failure");
+	}
+}
+
+ZTEST(flpr_ring_mgr, test_consume_asrc_success)
+{
+	rm_init_and_reset(42);
+
+	uint8_t pcm[100 * 4U];
+	for (uint32_t i = 0; i < sizeof(pcm); i++) {
+		pcm[i] = (uint8_t)(i * 7U + 3U);
+	}
+	uint32_t crc = flpr_ring_crc32(pcm, sizeof(pcm));
+
+	struct audio_asrc_state post;
+	memset(&post, 0, sizeof(post));
+	post.phase = 0x0F0F0F0FULL;
+	post.step_base = 0x100000000ULL;
+	post.prev_l = 5;
+	post.prev_r = -6;
+	post.prev_valid = 1;
+
+	arrange_output_slot(42, 66, 100, FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR, -4, crc,
+			    1800, 0, 4321, pcm, &post);
+
+	flpr_ring_mgr_test_set_cycle(2000);
+
+	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	struct flpr_consume_asrc_result res;
+	zassert_equal(
+		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
+		FLPR_CONSUME_OK, "consume_asrc success");
+	zassert_equal(res.output_frames, 100, "output_frames");
+	zassert_equal(res.sequence, 66, "sequence");
+	zassert_equal(res.flags, FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR, "flags");
+	zassert_equal(res.correction_ppm, -4, "ppm");
+	zassert_equal(res.payload_crc, flpr_ring_crc32(pcm, sizeof(pcm)), "payload_crc recomputed");
+	zassert_equal(memcmp(&res.post_state, &post, sizeof(post)), 0, "post_state");
+	zassert_equal(res.processing_cycles, 4321, "processing_cycles");
+	zassert_equal(res.processing_status, 0, "processing_status");
+	zassert_equal(res.rtt_cycles, 200, "rtt_cycles = now - cpu_timestamp");
+	zassert_equal(memcmp(out, pcm, sizeof(pcm)), 0, "payload");
+}
+
+/* ── Stall / report / restart ────────────────────────────────────── */
+
+ZTEST(flpr_ring_mgr, test_stall_persistent_packing)
+{
+	rm_init_and_reset(42);
+	mock_hs_set_auto_ack(true);
+
+	zassert_ok(flpr_ring_mgr_flpr_stall(0x01, 100), "persistent stall");
+
+	const struct flpr_msg *sent = mock_hs_sent_at(0);
+	zassert_not_null(sent, "message sent");
+	zassert_equal(sent->type, FLPR_MSG_RING_STALL, "type");
+	zassert_equal(sent->data, FLPR_STALL_PACK(0x01, 0), "packed persistent value");
+}
+
+ZTEST(flpr_ring_mgr, test_stall_timed_packing)
+{
+	rm_init_and_reset(42);
+	mock_hs_set_auto_ack(true);
+
+	zassert_ok(flpr_ring_mgr_flpr_stall_timed(0x03, 5000, 100), "timed stall");
+
+	const struct flpr_msg *sent = mock_hs_sent_at(0);
+	zassert_not_null(sent, "message sent");
+	zassert_equal(sent->type, FLPR_MSG_RING_STALL, "type");
+	zassert_equal(sent->data, FLPR_STALL_PACK(0x03, 5000), "packed timed value");
+}
+
+ZTEST(flpr_ring_mgr, test_stall_timed_zero_mask_rejected)
+{
+	rm_init_and_reset(42);
+	mock_hs_set_auto_ack(true);
+
+	zassert_equal(flpr_ring_mgr_flpr_stall_timed(0, 100, 100), -EINVAL,
+		      "zero mask with duration rejected");
+	zassert_equal(flpr_ring_mgr_flpr_stall_timed(0x01, FLPR_STALL_DURATION_MAX + 1, 100),
+		      -EINVAL, "duration overflow rejected");
+
+	/* Zero mask + zero duration is the persistent clear — allowed. */
+	zassert_ok(flpr_ring_mgr_flpr_stall_timed(0, 0, 100), "persistent clear");
+	const struct flpr_msg *sent = mock_hs_sent_at(0);
+	zassert_not_null(sent, "message sent");
+	zassert_equal(sent->data, 0U, "clear value packed");
+}
+
+ZTEST(flpr_ring_mgr, test_stall_send_failure)
+{
+	rm_init_and_reset(42);
+	mock_hs_set_send_result(-EIO);
+
+	zassert_equal(flpr_ring_mgr_flpr_stall(0x01, 100), -EIO, "send failure propagates");
+}
+
+ZTEST(flpr_ring_mgr, test_stall_ack_timeout)
+{
+	rm_init_and_reset(42);
+	/* No auto-ack, no manual ACK. */
+
+	zassert_equal(flpr_ring_mgr_flpr_stall(0x01, 50), -ETIMEDOUT, "ACK timeout");
+}
+
+ZTEST(flpr_ring_mgr, test_stall_wrong_ack)
+{
+	rm_init_and_reset(42);
+	mock_hs_set_auto_ack(true);
+	mock_hs_set_auto_ack_data_offset(1);
+
+	zassert_equal(flpr_ring_mgr_flpr_stall(0x01, 100), -EIO, "wrong ACK echo rejected");
+}
+
+ZTEST(flpr_ring_mgr, test_stall_exact_ack)
+{
+	rm_init_and_reset(42);
+	mock_hs_set_auto_ack(true);
+
+	zassert_ok(flpr_ring_mgr_flpr_stall_timed(0x05, 12345, 100), "stall with exact ACK");
+	zassert_equal(flpr_ring_mgr_flpr_stall_acked(), FLPR_STALL_PACK(0x05, 12345),
+		      "acked value observable");
+}
+
+ZTEST(flpr_ring_mgr, test_report_subtypes_update_status)
+{
+	rm_init_and_reset(42);
+
+	struct flpr_msg report = {.type = FLPR_MSG_RING_TEST_REPORT,
+				  .version = FLPR_PROTOCOL_VERSION};
+	struct flpr_ring_status st;
+
+	/* Subtype 0x00: seq lo 16 = crc errors (not exported), data = block count. */
+	report.seq = 0x0003;
+	report.data = 100;
+	mock_hs_invoke_report(&report);
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.test_producer_blocks, 100, "blocks");
+
+	/* Subtype 0xD1: consume_ok. */
+	report.seq = 0xD100;
+	report.data = 55;
+	mock_hs_invoke_report(&report);
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.flpr_consume_ok, 55, "consume_ok");
+
+	/* Subtype 0xD2: produce_ok. */
+	report.seq = 0xD200;
+	report.data = 44;
+	mock_hs_invoke_report(&report);
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.flpr_produce_ok, 44, "produce_ok");
+
+	/* Subtype 0xD3: notify_rcv (seq&0xFF), worker_wake (data lo), produce_full (data hi). */
+	report.seq = 0xD301;
+	report.data = (33U << 16) | 22U;
+	mock_hs_invoke_report(&report);
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.flpr_notify_rcv, 1, "notify_rcv");
+	zassert_equal(st.flpr_worker_wake, 22, "worker_wake");
+	zassert_equal(st.flpr_produce_full, 33, "produce_full");
+
+	/* Subtype 0xD4: consume_empty (lo), consume_stale (hi). */
+	report.seq = 0xD400;
+	report.data = (9U << 16) | 8U;
+	mock_hs_invoke_report(&report);
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.flpr_consume_empty, 8, "consume_empty");
+	zassert_equal(st.flpr_consume_stale, 9, "consume_stale");
+
+	/* Unknown subtype: no field updates. */
+	report.seq = 0x99FF;
+	report.data = 0xDEADBEEF;
+	mock_hs_invoke_report(&report);
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.flpr_consume_ok, 55, "unknown subtype ignored");
+}
+
+ZTEST(flpr_ring_mgr, test_remote_restarted_invalidates_and_requires_reset)
+{
+	rm_init_and_reset(42);
+
+	/* Live traffic first. */
+	zassert_equal(flpr_ring_mgr_produce_block(NULL, 480, 1, 0, false), FLPR_PRODUCE_OK,
+		      "produce");
+	struct flpr_msg notify = {.type = FLPR_MSG_RING_CONSUMER,
+				  .version = FLPR_PROTOCOL_VERSION,
+				  .seq = 1,
+				  .data = 42};
+	mock_hs_invoke_consumer(&notify);
+	zassert_equal(flpr_ring_mgr_test_consume_sem_count(), 1, "token present");
+
+	zassert_ok(flpr_ring_mgr_remote_restarted(), "remote restart");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.epoch, 0, "epoch invalidated");
+	zassert_equal(flpr_ring_mgr_test_consume_sem_count(), 0, "consume sem drained");
+	zassert_equal(flpr_ring_mgr_test_reset_ack_sem_count(), 0, "reset ack sem drained");
+	zassert_equal(flpr_ring_mgr_test_stall_ack_sem_count(), 0, "stall ack sem drained");
+	zassert_true(flpr_ring_validate(flpr_ring_mgr_test_input_ring()), "input ring re-inited");
+	zassert_true(flpr_ring_validate(flpr_ring_mgr_test_output_ring()), "output ring re-inited");
+	zassert_equal(flpr_ring_producer(flpr_ring_mgr_test_input_ring()), 0,
+		      "input indices cleared");
+	zassert_equal(st.test_blocks_sent, 0, "test counters reset");
+
+	/* Subsequent coordinated reset required and works. */
+	mock_hs_set_auto_ack(true);
+	zassert_ok(flpr_ring_mgr_coordinated_reset(43, 100), "coordinated reset after restart");
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.epoch, 43, "epoch re-established");
+}
+
+ZTEST_SUITE(flpr_ring_mgr, NULL, NULL, rm_setup, NULL, NULL);
