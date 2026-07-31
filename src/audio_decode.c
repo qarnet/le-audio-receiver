@@ -95,12 +95,20 @@ int audio_decode_sdu(struct audio_decode_ctx *ctx, const uint8_t *frame_data, si
 		return -EINVAL;
 	}
 
-	int octets_per_channel = 0;
+	const int f_per_sdu = ctx->frames_per_sdu;
+	const int spc = ctx->samples_per_ch;
+	const int chan_count = ctx->chan_count;
+
+	/* Per-channel frame-byte shape.  For PLC this is the "supplied valid
+	 * configured frame-byte shape": liblc3 still consumes nbytes on the
+	 * concealment path (LTPF post-filter strength), so the shape must be
+	 * the same value a real frame would carry.
+	 */
+	int octets_per_channel = (int)(frame_len / (size_t)f_per_sdu);
 
 	if (valid) {
 		/* Length/shape checks apply to real frames.  PLC (valid=false)
-		 * accepts any supplied length and never dereferences frame data;
-		 * liblc3 ignores nbytes for NULL input (PLC concealment).
+		 * accepts any supplied length and never dereferences frame data.
 		 */
 		if (!frame_data) {
 			return -EINVAL;
@@ -109,8 +117,6 @@ int audio_decode_sdu(struct audio_decode_ctx *ctx, const uint8_t *frame_data, si
 			return -EINVAL;
 		}
 
-		const int chan_count = ctx->chan_count;
-
 		/* Bound the shape before any narrowing cast: per-channel frame
 		 * length must stay within liblc3 basic 20..400 byte range.
 		 */
@@ -118,25 +124,19 @@ int audio_decode_sdu(struct audio_decode_ctx *ctx, const uint8_t *frame_data, si
 			return -EINVAL;
 		}
 
-		const int octets_per_frame = (int)frame_len;
-
 		if (chan_count == 2) {
-			if (octets_per_frame % chan_count != 0) {
+			if (octets_per_channel % chan_count != 0) {
 				return -EINVAL; /* Mode B must split exactly per channel */
 			}
-			octets_per_channel = octets_per_frame / chan_count;
-		} else {
-			octets_per_channel = octets_per_frame;
+			octets_per_channel /= chan_count;
 		}
 		if (octets_per_channel < AUDIO_DECODE_MIN_FRAME_BYTES ||
 		    octets_per_channel > AUDIO_DECODE_MAX_FRAME_BYTES) {
 			return -EINVAL;
 		}
+	} else if (chan_count == 2) {
+		octets_per_channel /= chan_count;
 	}
-
-	const int f_per_sdu = ctx->frames_per_sdu;
-	const int spc = ctx->samples_per_ch;
-	const int chan_count = ctx->chan_count;
 
 	int ret = 0;
 
