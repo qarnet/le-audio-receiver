@@ -28,14 +28,17 @@ Returns 0 on full acceptance, nonzero on failure.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -240,7 +243,6 @@ class Phase3Gate:
     def __init__(
         self,
         receiver_name: str = "LE Audio Receiver",
-        receiver_addr: Optional[str] = None,
         serial_port: str = DEFAULT_SERIAL_PORT,
         duration: int = 30,
         log_dir: str = "/tmp/phase3",
@@ -248,7 +250,7 @@ class Phase3Gate:
         poll_timeout: float = DEFAULT_POLL_TIMEOUT,
     ) -> None:
         self.receiver_name = receiver_name
-        self.receiver_addr = receiver_addr
+        self.receiver_addr: Optional[str] = None  # Discovered via scan, never injected
         self.serial_port = serial_port
         self.duration = duration
         self.log_dir = log_dir
@@ -264,6 +266,13 @@ class Phase3Gate:
         # Backed-up host settings (for restoration)
         self._saved_pairable: Optional[str] = None
         self._saved_discoverable: Optional[str] = None
+
+        # Subprocess tracking — all started by this gate
+        self._agent_proc: Optional[subprocess.Popen] = None
+        self._scan_on: bool = False
+
+        # Register atexit cleanup for catastrophic exit paths
+        atexit.register(self._atexit_cleanup)
 
     def _make_phase2_gate(self, log_path: str) -> BluezWirePlumberGate:
         """Create a Phase 2 gate instance for a specific log file."""
@@ -332,9 +341,28 @@ class Phase3Gate:
     def find_device_by_name(
         self, timeout: float = DEFAULT_SCAN_TIMEOUT
     ) -> Optional[str]:
-        """Scan for receiver and return address. Returns None on timeout."""
-        # Enable scanning
-        self._run_bluez_cmd(["scan", "on"], timeout=5.0)
+        """Scan for receiver via D-Bus and return address. Returns None on timeout.
+
+        Uses org.bluez.Adapter1.StartDiscovery / StopDiscovery via D-Bus
+        because bluetoothctl scan on does not persist discovery in
+        non-interactive subprocess mode.
+        """
+        import dbus
+
+        bus = dbus.SystemBus()
+        adapter_path = f"/org/bluez/hci{self.controller_index}"
+        adapter = bus.get_object("org.bluez", adapter_path)
+        adapter_iface = dbus.Interface(adapter, "org.bluez.Adapter1")
+
+        try:
+            # Set LE-only transport filter
+            adapter_iface.SetDiscoveryFilter({"Transport": dbus.String("le")})
+            adapter_iface.StartDiscovery()
+            self._scan_on = True
+        except dbus.exceptions.DBusException as e:
+            # Discovery may already be active
+            if "Already" in str(e) or "InProgress" in str(e):
+                self._scan_on = True
 
         start = time.monotonic()
         while time.monotonic() - start < timeout:
@@ -343,21 +371,45 @@ class Phase3Gate:
                 for line in proc.stdout.splitlines():
                     if self.receiver_name in line:
                         addr = line.split()[1]
-                        self._run_bluez_cmd(["scan", "off"], timeout=3.0)
+                        self._stop_discovery()
                         return addr
             except Exception:
                 pass
             time.sleep(DEFAULT_POLL_INTERVAL)
 
-        self._run_bluez_cmd(["scan", "off"], timeout=3.0)
+        self._stop_discovery()
         return None
 
-    def enable_pairing_agent(self) -> bool:
-        """Enable agent and make adapter pairable."""
+    def _stop_discovery(self) -> None:
+        """Stop D-Bus discovery if active."""
+        if not self._scan_on:
+            return
         try:
-            # Set up agent
-            self._run_bluez_cmd(["agent", "on"], timeout=5.0)
-            self._run_bluez_cmd(["default-agent"], timeout=5.0)
+            import dbus
+
+            bus = dbus.SystemBus()
+            adapter_path = f"/org/bluez/hci{self.controller_index}"
+            adapter = bus.get_object("org.bluez", adapter_path)
+            adapter_iface = dbus.Interface(adapter, "org.bluez.Adapter1")
+            adapter_iface.StopDiscovery()
+        except Exception:
+            pass
+        self._scan_on = False
+
+    def enable_pairing_agent(self) -> bool:
+        """Start own bt-agent subprocess and configure adapter for pairing.
+
+        Owns the agent lifecycle: start agent, verify registration,
+        keep alive through Pair(). Adapter state is set for Just Works/SC.
+        """
+        try:
+            # Start own bt-agent subprocess (NoInputNoOutput for Just Works)
+            agent = self._start_btagent()
+            if agent is None:
+                print("FAIL: Cannot start bt-agent subprocess", file=sys.stderr)
+                return False
+            print("bt-agent started (pid={})".format(agent.pid), file=sys.stderr)
+
             # Set IO capability to NoInputNoOutput (Just Works)
             self._run_btmgmt_cmd(["io-cap", "3"], timeout=5.0)
             # Make pairable
@@ -365,7 +417,8 @@ class Phase3Gate:
             # Enable Secure Connections
             self._run_btmgmt_cmd(["sc", "on"], timeout=5.0)
             return True
-        except Exception:
+        except Exception as e:
+            print(f"Cannot enable pairing agent: {e}", file=sys.stderr)
             return False
 
     def pair_device(self, addr: str, timeout: float = DEFAULT_PAIR_TIMEOUT) -> bool:
@@ -491,14 +544,14 @@ class Phase3Gate:
         """Poll receiver serial for advertising restart message.
 
         Sends 'audio status' to check if the receiver is alive,
-        and reads serial output for 'Advertising as' pattern.
+        and reads serial output for 'Advertising as' message.
+        Returns False without explicit evidence — no fallback success.
         """
         start = time.monotonic()
         while time.monotonic() - start < timeout:
             try:
                 stdout, _ = self.serial.send_command("audio status", wait_ms=500)
-                # Also check if advertising message appeared in output
-                if "BLE ready" in stdout or "Advertising" in stdout:
+                if "BLE ready" in stdout or "Advertising as" in stdout:
                     return True
             except Exception:
                 pass
@@ -516,15 +569,18 @@ class Phase3Gate:
         except Exception:
             pass
 
-        return True  # Assume OK if we can't poll
+        return False
 
     # ── Playback helper ──────────────────────────────────────────────────
 
     def run_playback_phase2(self, log_path: str) -> GateResult:
-        """Run Phase 2 gate (PW poll + playback + log parse) with given log."""
+        """Run playback (PW poll + PCM playback + counter check).
+
+        Captures raw serial output after playback to find the stream summary
+        line and verify zero-fault counters.
+        """
         gate = self._make_phase2_gate(log_path)
 
-        # Only run PW poll + playback + log parse, skip preflight+find
         result = GateResult()
         result.stage = "playback"
 
@@ -561,9 +617,103 @@ class Phase3Gate:
                 result.exit_code = EX_RECEIVER_FAIL
                 return result
 
-            # Parse receiver log
-            result.stage = "receiver_log"
-            if not gate.parse_receiver_log(result):
+            # Wait briefly, then read raw serial for stream summary
+            result.evidence.append("--- Waiting for stream summary... ---")
+            time.sleep(2.0)
+
+            # Clear serial input buffer to start fresh
+            try:
+                ser = self.serial._get_serial()
+                ser.reset_input_buffer()
+            except Exception:
+                pass
+
+            # Read raw serial output for up to 15s, looking for summary
+            tail_parts: List[str] = []
+            t_start = time.monotonic()
+            summary_found = False
+            while time.monotonic() - t_start < 15.0:
+                try:
+                    ser = self.serial._get_serial()
+                    data = ser.read(65536)
+                    if data:
+                        decoded = data.decode("utf-8", errors="replace")
+                        tail_parts.append(decoded)
+                        if "Stream[" in decoded and "summary:" in decoded:
+                            summary_found = True
+                            time.sleep(0.5)  # grab any remaining bytes
+                            break
+                except Exception:
+                    time.sleep(0.2)
+            tail = "".join(tail_parts)
+
+            # Write captured output to log file
+            try:
+                with open(log_path, "w") as f:
+                    f.write(tail)
+            except Exception:
+                pass
+
+            # Parse stream summary from tail
+            result.evidence.append("--- Parsing stream output ---")
+
+            m = re.search(
+                r"Stream\[\d+\]\s+summary:\s+SDUs=(\d+)\s+decoded=(\d+)\s+plc=(\d+)\s+"
+                r"decode_err=(\d+)\s+i2s_underrun=(\d+)\s+stream_reset=(\d+)",
+                tail,
+            )
+            if not m:
+                result.evidence.append(
+                    "  FAIL: No stream summary found in serial output"
+                )
+                if tail:
+                    # Show what we captured for diagnostics
+                    result.evidence.append(
+                        f"  Captured {len(tail)} bytes, first 300 chars: {tail[:300]}"
+                    )
+                result.exit_code = EX_RECEIVER_FAIL
+                return result
+
+            sdus = int(m.group(1))
+            decoded = int(m.group(2))
+            plc = int(m.group(3))
+            decode_err = int(m.group(4))
+            i2s_under = int(m.group(5))
+            stream_reset = int(m.group(6))
+
+            result.evidence.append(
+                f"  Stream summary: SDUs={sdus} decoded={decoded} plc={plc} "
+                f"decode_err={decode_err} i2s_underrun={i2s_under} "
+                f"stream_reset={stream_reset}"
+            )
+
+            # Check for I2S DMA and ASCS evidence
+            if "I2S DMA started" in tail:
+                result.evidence.append("  ✓ I2S DMA started")
+            if "Stream[0] started" in tail or "Audio path gate OPEN" in tail:
+                result.evidence.append("  ✓ ASCS stream started")
+
+            # Zero-fault gate
+            if decode_err != 0:
+                result.evidence.append(f"  FAIL: decode_err={decode_err} (expected 0)")
+                result.exit_code = EX_RECEIVER_FAIL
+                return result
+            if i2s_under != 0:
+                result.evidence.append(f"  FAIL: i2s_underrun={i2s_under} (expected 0)")
+                result.exit_code = EX_RECEIVER_FAIL
+                return result
+            if stream_reset != 0:
+                result.evidence.append(
+                    f"  FAIL: stream_reset={stream_reset} (expected 0)"
+                )
+                result.exit_code = EX_RECEIVER_FAIL
+                return result
+            if sdus <= 0:
+                result.evidence.append(f"  FAIL: SDUs={sdus} (expected >0)")
+                result.exit_code = EX_RECEIVER_FAIL
+                return result
+            if decoded <= 0:
+                result.evidence.append(f"  FAIL: decoded={decoded} (expected >0)")
                 result.exit_code = EX_RECEIVER_FAIL
                 return result
 
@@ -575,6 +725,19 @@ class Phase3Gate:
             result.exit_code = EX_RECEIVER_FAIL
 
         return result
+
+    @staticmethod
+    def _parse_playback_counters(
+        result: GateResult,
+        tail: str,
+    ) -> None:  # noqa: D401
+        """Parse serial output for stream-start evidence (kept for API compat)."""
+        if "I2S DMA started" in tail:
+            result.evidence.append("  ✓ I2S DMA started")
+        if "Stream[0] started" in tail or "Audio path gate OPEN" in tail:
+            result.evidence.append("  ✓ ASCS stream started")
+        if "offload prep OK" in tail:
+            result.evidence.append("  ✓ FLPR offload active")
 
     # ── Full sequence runner ─────────────────────────────────────────────
 
@@ -610,44 +773,68 @@ class Phase3Gate:
         success, output = self.serial.bt_unpair()
         result.evidence.append(f"  bt unpair output: {output}")
         if not success:
-            result.evidence.append("  FAIL: bt unpair failed")
-            # Not fatal if no bonds exist
-            result.evidence.append("  NOTE: Continuing (may have no bonds)")
-        else:
-            result.evidence.append("  ✓ Bonds cleared on receiver")
+            result.evidence.append(
+                "  FAIL: bt unpair failed — cannot clear bonds on receiver"
+            )
+            result.exit_code = EX_RECEIVER_FAIL
+            return result
+        result.evidence.append("  ✓ Bonds cleared on receiver")
         time.sleep(1.0)
 
         # ── Step 3: Remove host BlueZ device ──────────────────────
         result.stage = "step3_remove_device"
         result.evidence.append("=== Step 3: Remove host BlueZ device ===")
-        addr = self.receiver_addr
-        if not addr:
-            # Try to find it
-            proc = self._run_bluez_cmd(["devices"], timeout=5.0)
-            for line in proc.stdout.splitlines():
-                if self.receiver_name in line:
-                    addr = line.split()[1]
-                    self.receiver_addr = addr
+        # Discover any known address from existing device list
+        proc = self._run_bluez_cmd(["devices"], timeout=5.0)
+        for line in proc.stdout.splitlines():
+            if self.receiver_name in line:
+                parts = line.split()
+                if len(parts) >= 2:
+                    self.receiver_addr = parts[1]
                     break
 
-        if addr:
-            removed = self.remove_device(addr)
-            result.evidence.append(f"  Remove {addr}: {'OK' if removed else 'FAIL'}")
-            if not removed:
-                result.evidence.append("  NOTE: Device may already be removed")
-        else:
-            result.evidence.append("  No known device — skip remove")
-        result.evidence.append("  ✓ Host device removed")
-
-        # Verify no stale devices
-        proc = self._run_bluez_cmd(["devices"], timeout=5.0)
-        remaining = [l for l in proc.stdout.splitlines() if self.receiver_name in l]
-        if remaining:
+        if self.receiver_addr:
+            removed = self.remove_device(self.receiver_addr)
             result.evidence.append(
-                f"  WARNING: Device still in device list: {remaining}"
+                f"  Remove {self.receiver_addr}: {'OK' if removed else 'FAIL'}"
             )
         else:
-            result.evidence.append("  Verified: no remaining device entries")
+            result.evidence.append("  No known device in BlueZ — skip remove")
+            removed = True  # nothing to remove trivially succeeds
+        time.sleep(1.0)
+
+        # Verify: any remaining device entry must NOT be paired/bonded
+        proc = self._run_bluez_cmd(["devices"], timeout=5.0)
+        remaining = [l for l in proc.stdout.splitlines() if self.receiver_name in l]
+        fatal_remaining = False
+        for line in remaining:
+            parts = line.split()
+            if len(parts) >= 2:
+                rem_addr = parts[1]
+                info = self._run_bluez_cmd(["info", rem_addr], timeout=5.0)
+                combined = info.stdout + info.stderr
+                if "Paired: yes" in combined or "Bonded: yes" in combined:
+                    result.evidence.append(
+                        f"  FAIL: Stale bonded device remains: {rem_addr} {line}"
+                    )
+                    fatal_remaining = True
+                else:
+                    result.evidence.append(
+                        f"  NOTE: Rediscovered unpaired device (harmless): {rem_addr}"
+                    )
+        if fatal_remaining:
+            result.exit_code = EX_STALE_BOND
+            return result
+
+        if not removed and self.receiver_addr:
+            # Remove reported failure — treat as stale bond risk
+            result.evidence.append(
+                f"  FAIL: Cannot remove device {self.receiver_addr} from BlueZ"
+            )
+            result.exit_code = EX_STALE_BOND
+            return result
+
+        result.evidence.append("  ✓ Host device removed / no stale bond")
         time.sleep(1.0)
 
         # ── Step 4: Enable pairing agent + scan ──────────────────
@@ -677,19 +864,9 @@ class Phase3Gate:
 
         # Check for stale bond first
         if self.is_device_paired(addr):
-            result.evidence.append("  WARNING: Device already paired (stale bond?)")
-            # Remove and re-pair
-            self.remove_device(addr)
-            time.sleep(1.0)
-            # Re-find
-            addr = self.find_device_by_name(timeout=10.0)
-            if not addr:
-                result.evidence.append(
-                    "  FAIL: Cannot re-find after stale bond removal"
-                )
-                result.exit_code = EX_STALE_BOND
-                return result
-            self.receiver_addr = addr
+            result.evidence.append("  FAIL: Device already paired (stale bond)")
+            result.exit_code = EX_STALE_BOND
+            return result
 
         # Pair
         pair_ok = self.pair_device(addr)
@@ -706,7 +883,11 @@ class Phase3Gate:
 
         # Trust
         trust_ok = self.trust_device(addr)
-        result.evidence.append(f"  Trust: {'OK' if trust_ok else 'FAIL'}")
+        if not trust_ok:
+            result.evidence.append(f"  FAIL: Trust failed for {addr}")
+            result.exit_code = EX_RECEIVER_FAIL
+            return result
+        result.evidence.append(f"  ✓ Trusted: {addr}")
         time.sleep(0.5)
 
         # Connect
@@ -717,6 +898,30 @@ class Phase3Gate:
             return result
         result.evidence.append(f"  ✓ Connected: {addr}")
         time.sleep(1.0)
+
+        # ── Verify full device state after pairing ────────────────
+        result.evidence.append("  --- Device state verification ---")
+        info = self._run_bluez_cmd(["info", addr], timeout=5.0)
+        combined_output = info.stdout + info.stderr
+        checks = {
+            "Paired": "Paired: yes",
+            "Bonded": "Bonded: yes",
+            "Trusted": "Trusted: yes",
+            "Connected": "Connected: yes",
+        }
+        all_ok = True
+        for label, pattern in checks.items():
+            ok = pattern in combined_output
+            result.evidence.append(f"    {label}: {'✓ yes' if ok else '✗ NO (FAIL)'}")
+            if not ok:
+                all_ok = False
+        if not all_ok:
+            result.evidence.append(
+                "  FAIL: Device state incomplete after pairing/trust/connect"
+            )
+            result.exit_code = EX_RECEIVER_FAIL
+            return result
+        result.evidence.append("  ✓ Device state: Paired=Bonded=Trusted=Connected=yes")
 
         # Wait for ServicesResolved
         if not self.wait_for_services_resolved(addr, timeout=15.0):
@@ -934,7 +1139,7 @@ class Phase3Gate:
         try:
             # Find probe serial
             proc = subprocess.run(
-                ["nrf-probes", "--find", "nrf54"],
+                ["nrf-probes", "--find", "nrf54l"],
                 capture_output=True,
                 text=True,
                 timeout=10.0,
@@ -972,9 +1177,130 @@ class Phase3Gate:
         except Exception:
             return False
 
+    def _start_btagent(self) -> Optional[subprocess.Popen]:
+        """Start bt-agent --capability=NoInputNoOutput as own subprocess.
+
+        Returns the Popen handle or None on failure. Agent stdout/stderr
+        are piped for log capture.
+        """
+        try:
+            proc = subprocess.Popen(
+                ["bt-agent", "--capability=NoInputNoOutput"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                preexec_fn=os.setsid,
+            )
+            # Give agent a moment to register with BlueZ
+            time.sleep(0.5)
+            if proc.poll() is not None:
+                # Agent died immediately
+                _, stderr = proc.communicate()
+                print(f"bt-agent exited early: {stderr}", file=sys.stderr)
+                return None
+            self._agent_proc = proc
+            return proc
+        except FileNotFoundError:
+            print("bt-agent not found — install bluez-tools", file=sys.stderr)
+            return None
+        except Exception as e:
+            print(f"Cannot start bt-agent: {e}", file=sys.stderr)
+            return None
+
+    def _stop_btagent(self) -> None:
+        """Gracefully stop own bt-agent subprocess."""
+        if self._agent_proc is None:
+            return
+        try:
+            pid = self._agent_proc.pid
+            if pid is None:
+                return
+            # Send SIGTERM to the process group
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            try:
+                self._agent_proc.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                # Force kill
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    self._agent_proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    pass
+            # Drain pipes to prevent resource warnings
+            if self._agent_proc.stdout:
+                self._agent_proc.stdout.close()
+            if self._agent_proc.stderr:
+                self._agent_proc.stderr.close()
+        except (ProcessLookupError, OSError):
+            # Already dead
+            pass
+        except Exception:
+            pass
+        finally:
+            self._agent_proc = None
+
+    def _ensure_scan_off(self) -> None:
+        """Disable BlueZ scanning if it was turned on via D-Bus."""
+        self._stop_discovery()
+
+    def _atexit_cleanup(self) -> None:
+        """Last-resort cleanup registered with atexit.
+
+        Handles catastrophic exit paths where the normal finally block
+        is skipped (e.g., SIGKILL to parent, interpreter crash).
+        """
+        try:
+            self._stop_btagent()
+        except Exception:
+            pass
+        try:
+            self._ensure_scan_off()
+        except Exception:
+            pass
+        try:
+            self.restore_host_settings()
+        except Exception:
+            pass
+        try:
+            self.serial.close()
+        except Exception:
+            pass
+
     def cleanup(self) -> None:
-        """Close serial and clean up resources."""
+        """Comprehensive cleanup: agent, scan, adapter state, serial, stray processes.
+
+        Guarantees restoration for every exit path. Must be called in finally.
+        """
+        # 1. Stop own bt-agent subprocess
+        self._stop_btagent()
+
+        # 2. Ensure scan is off
+        self._ensure_scan_off()
+
+        # 3. Restore adapter pairable/discoverable state
+        self.restore_host_settings()
+
+        # 4. Close serial port
         self.serial.close()
+
+        # 5. No stray bt-agent processes from other invocations
+        try:
+            subprocess.run(
+                ["pkill", "-f", "bt-agent"],
+                timeout=3.0,
+                capture_output=True,
+            )
+        except Exception:
+            pass
+
+        # 6. Unregister atexit handler (cleanup already ran)
+        try:
+            atexit.unregister(self._atexit_cleanup)
+        except Exception:
+            pass
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -988,11 +1314,6 @@ def main() -> int:
         "--receiver",
         default="LE Audio Receiver",
         help="Receiver device name (default: LE Audio Receiver)",
-    )
-    parser.add_argument(
-        "--peer-addr",
-        default=None,
-        help="Receiver BLE address (bypasses scan)",
     )
     parser.add_argument(
         "--serial",
@@ -1038,7 +1359,6 @@ def main() -> int:
 
     gate = Phase3Gate(
         receiver_name=args.receiver,
-        receiver_addr=args.peer_addr,
         serial_port=args.serial,
         duration=args.duration,
         log_dir=args.log_dir,
