@@ -11,6 +11,10 @@ Sink direction only.  Source ASEs are rejected deterministically, not silently
 ignored or accepted.  `available_sink_contexts` field in PACS is non-NONE when
 an ACL connection exists; `available_source_contexts` is never populated.
 
+**Known gap (T4):** source-direction rejection is asserted by design but lacks
+an automated regression test.  T4 must add a BSim scenario that attempts source
+ASE configuration and verifies the correct ASCS response.
+
 ### BT-002 — PACS capability advertisement
 
 Advertised capabilities: 48 kHz LC3 only, 7.5 ms and 10 ms frame durations,
@@ -45,20 +49,19 @@ and GATT database state) and before advertising starts.  Skipping
 
 Disconnect releases the retained connection reference, resets stream lifecycle
 state, stops audio/offload, and wakes the advertising restart loop.  No stale
-connection reference or joinable thread survives disconnect.
+connection reference survives disconnect.
 
 ## Codec and routing contract (`CODEC-*`)
 
 ### CODEC-001 — 10 ms frame size
 
-At 48 kHz 10 ms frame duration, `CODEC_OUTPUT_FRAME_SAMPLES` = 480
-samples/channel.  This is verified at build time by the LC3 configuration
-constants, not runtime branch.
+At 48 kHz 10 ms frame duration, `audio_decode_config()` calculates
+`samples_per_ch = (frame_us * freq_hz) / USEC_PER_SEC`, yielding 480
+samples/channel.  The `lc3_setup_decoder()` call validates the parameters.
 
 ### CODEC-002 — 7.5 ms frame size
 
-At 48 kHz 7.5 ms frame duration, `CODEC_OUTPUT_FRAME_SAMPLES` = 360
-samples/channel.
+At 48 kHz 7.5 ms frame duration, `samples_per_ch` = 360 (same calculation).
 
 ### CODEC-003 — Mono duplication
 
@@ -80,15 +83,26 @@ Mode B uses one two-channel sink ASE.  Each SDU contains consecutive `[L_frame]
 
 ### CODEC-006 — Invalid ISO and PLC
 
-Invalid ISO packet input (null data, bad length, header error) invokes PLC
-(LC3 Packet Loss Concealment).  Decode failures are counted and do not corrupt
-decoder state for subsequent valid frames.
+Two failure outcomes exist for bad ISO input:
+
+- ISO `BT_ISO_FLAGS_VALID` flag clear → `audio_decode_sdu()` receives
+  `valid=false` and passes NULL LC3 data → `lc3_decode()` returns 1 (PLC).
+  Counted as `plc_frames`.
+- VALID flag set but LC3 payload malformed → `lc3_decode()` returns a negative
+  error code.  Counted as `decode_errors`.
+
+Neither outcome corrupts decoder state for subsequent valid frames.
 
 ### CODEC-007 — Configuration rejection
 
-Unsupported frequency, frame duration, channel count, or frame-block shape is
-rejected through ASCS response codes rather than silently guessed or accepted.
-The receiver never accepts a configuration it cannot decode.
+Unsupported frequency, frame duration, channel count, or frame-block shape must
+be rejected through ASCS response codes rather than silently guessed or
+accepted.  The receiver must never accept a configuration it cannot decode.
+
+**Known gap (T4):** current production code does not independently validate
+remote codec configuration; it accepts whatever the remote sends.  T4 must add
+explicit rejection tests and, if needed, a config-validation path in
+`bt_bap.c`.
 
 ## Stream lifecycle contract (`LIFE-*`)
 
@@ -105,8 +119,12 @@ open (one ASE streaming, second not) does not pass audio.
 
 ### LIFE-003 — Closed-to-open edge
 
-Stream open is a closed-to-open edge event.  It fires exactly once per stream
-lifecycle, not re-triggered by every subsequent ASE start notification.
+Stream open is a closed-to-open edge event.  It must fire exactly once per
+stream lifecycle, not re-triggered by every subsequent ASE start notification.
+
+**Known gap (T5):** current lifecycle unit tests exist but do not exhaustively
+prove one-shot semantics across all re-configure/re-start permutations.  T5
+must add coverage for duplicate-start protection and edge-counting.
 
 ### LIFE-004 — First close wins
 
@@ -134,8 +152,9 @@ configuration.  `audio_sink_stop` drops DMA but retains `configured = true`.
 ### I2S-001 — Input validation
 
 `audio_sink_push` input is non-null, non-empty, stereo-paired, and exactly
-`INPUT_FRAMES` × 2 samples in size.  Malformed input is rejected with
-observable error.
+`input_frames` × 2 samples in size.  `input_frames` is a runtime variable set
+by `audio_sink_set_input_frames()` (called from `bt_bap.c` at ASE config time).
+Malformed input is rejected with observable error.
 
 ### I2S-002 — Startup pre-fill
 
@@ -157,9 +176,15 @@ allocation.  The controller runs in work/thread context, never ISR.
 
 ### I2S-005 — Emergency repeat fallback
 
-When no audio data is available (slab allocation failure), a separately
-allocated emergency repeat block is queued to I2S to prevent DMA underrun.
-This block is not shared with any data path.
+After a successful normal `i2s_write` of audio data, if
+`k_mem_slab_num_free_get(&i2s_slab) >= DRIFT_THRESHOLD`, a separate slab block
+is allocated and `saved_frame` (the most recent successfully written PCM) is
+copied into it and queued to I2S.  This repeat fallback provides a safety margin
+against DMA starvation; it is counted via `audio_perf_repeat_fallback()`.
+
+Slab allocation failure in the main push path is a different event: it logs
+`"I2S slab full"`, increments `i2s_underruns`, and returns the allocation error
+(`audio_sink_push` returns < 0).
 
 ### I2S-006 — `-EIO` recovery
 
@@ -275,8 +300,11 @@ expired epoch is never consumed.
 
 ### OFFLOAD-010 — Backpressure isolation
 
-Output-ring backpressure may stall or drop current output but cannot consume
-or drop pending input slots.  Input and output ring throughput are independent.
+Output-ring backpressure may stall consumption but cannot drop pending input
+slots.  FLPR checks output capacity before consuming an input slot; if the
+output ring is full or stalled, the input consumer index remains unchanged for
+retry on the next poll cycle.  Input and output ring throughput are
+independent.
 
 ## Initialization and diagnostics contract (`APP-*`)
 
@@ -334,9 +362,11 @@ connection throttling.
 ### BUILD-004 — nRF54L15 pin and crystal
 
 nRF54L15 I2S pins: D0/P1.4 (BCK), D1/P1.5 (LRCK), D2/P1.6 (SDOUT).  UART20
-to SAMD11 USB CDC bridge: P1.9 TX / P1.8 RX.  RF switch pins as configured
-on Xiao (`&swctrl0` polarity).  PDM20 disabled to prevent pinctrl conflict.
-16 pF crystal configuration via DTS `load-capacitance` properties.
+to SAMD11 USB CDC bridge: P1.9 TX / P1.8 RX.  RF switch pins via fixed
+regulator nodes: `rfsw_ctl` on P2.05 `GPIO_ACTIVE_LOW`, `rfsw_pwr` on P2.03
+`GPIO_ACTIVE_HIGH`, both `regulator-boot-on`.  PDM20 disabled to prevent
+pinctrl conflict.  16 pF crystal configuration via DTS `load-capacitance`
+properties.
 
 ### BUILD-005 — FLPR memory regions
 
