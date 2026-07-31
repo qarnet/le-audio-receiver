@@ -28,6 +28,62 @@ Acceptance evidence:
 - No numeric line/branch coverage is claimed; no honest coverage report
   exists until Phase T7 instrumentation.
 
+**Phase T2 — audio pipeline unit characterization** — in progress.
+
+Locks LC3 decode/routing, volume, and statistics to direct production-source
+proof: deterministic 48 kHz golden fixtures, real-decode golden tests, and
+three production decoder defects fixed.  Evidence:
+`docs/testing/t2-audio-pipeline-tests.md`; updated
+`docs/testing/behavior-contract.md` (CODEC-006..010, STAT-001) and
+`docs/testing/coverage-matrix.md`.
+
+- `tests/fixtures/lc3/` — four checked-in fixture pairs (mono 7.5/10 ms,
+  Mode B 7.5/10 ms; 60-byte LC3 frames), reproducible generator
+  (`generate.sh`, liblc3 C API, `-O3 -std=c11 -ffast-math`), deterministic
+  and path-independent (verified by repeated runs), SHA-256 + CRC-32
+  recorded.  Tests embed the binaries; fixtures are never regenerated
+  during test runs.
+- `tests/unit/decode` — 37 tests execute real `audio_decode.c` +
+  `audio_stats.c` + real liblc3 1.1.2: byte-exact golden PCM for all four
+  fixtures, full/per-channel CRC-32, config rejection (liblc3 untouched),
+  SDU rejection with output guards, PLC accounting, overlap-safe mono
+  expansion, Mode B dual accounting, hard-failure accounting.
+- `tests/unit/volume` — 12 tests execute the real VCP branch against a
+  test-local shadow of the exact NCS v3.3.0 renderer types + fake
+  `bt_vcp_vol_rend_register()`; real `audio_perf.c` proves hook balance on
+  all exits; concurrent callback toggling proves atomic snapshot packing.
+- `tests/unit/stats` — 10 tests execute real `audio_stats.c`: exact
+  counter coupling, reset, by-value snapshots, 4-thread concurrent exact
+  counts.
+- Fixed defects: mono in-place expansion overlap corruption (backward
+  expansion when input/output share the base); Mode B right-channel
+  decoder accounting (was: success/PLC uncounted); hard decode failures
+  propagated as `-EBADMSG` instead of success (second Mode B decoder still
+  invoked to keep independent state aligned).
+- liblc3 1.1.2 semantic correction: malformed bitstream of valid length
+  returns 1 (PLC), not a hard negative — verified empirically; the
+  hard-error accounting path is exercised via a test-only linker wrap of
+  `lc3_decode()` (delegates to the real implementation otherwise).
+- ASCS response-code mapping of decode-layer rejection remains T4 (known
+  gap preserved).
+
+Focused suites (desktop `thomas-main`): decode 37/37, volume 12/12,
+stats 10/10 — zero compiler warnings.
+
+Acceptance evidence (to be completed on `thomas-workstation` from a
+detached temporary worktree of the exact T2 commit, transferred via
+non-destructive git bundle):
+
+- Desktop full gate: **22 PASS / 1 FAIL / 23 TOTAL** — the only failing
+  child is `bsim: stage1`, which cannot run on `thomas-main` because the
+  BabbleSim component binaries are not built there
+  (`~/ncs/v3.3.0/tools/bsim/bin/bs_2G4_phy_v1` missing); the workstation
+  provides the authoritative BSim leg (same as T1).
+- All three builds pass on the T2 working tree: `fw-build-5340`,
+  `fw-build-54l15`, `fw-build-dongle` (documented Kconfig/CMake
+  diagnostics only; no compiler warnings).
+- **T3 is next**: I2S and sink state machine.
+
 **Phase T1 — FLPR production-source tests** — ACCEPTED (2026-07-31).
 
 Replaces the false-confidence FLPR runtime, ring-manager, and handshake

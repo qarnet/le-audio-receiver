@@ -1,6 +1,6 @@
 # Behavior contract — pre-refactor baseline
 
-Version: T0, 2026-07-31.  Each contract carries a stable ID.  Breaking a contract
+Version: T2, 2026-08-01.  Each contract carries a stable ID.  Breaking a contract
 without a handoff that updates this document is a regression.
 
 ## Bluetooth and service contract (`BT-*`)
@@ -87,9 +87,18 @@ Two failure outcomes exist for bad ISO input:
 
 - ISO `BT_ISO_FLAGS_VALID` flag clear → `audio_decode_sdu()` receives
   `valid=false` and passes NULL LC3 data → `lc3_decode()` returns 1 (PLC).
-  Counted as `plc_frames`.
-- VALID flag set but LC3 payload malformed → `lc3_decode()` returns a negative
-  error code.  Counted as `decode_errors`.
+  Counted as `plc_frames` + `total_frames`.  PLC accepts any supplied
+  length and never dereferences frame data (liblc3 ignores `nbytes` for
+  NULL input; rejecting PLC lengths would drop concealment for truncated
+  invalid SDUs).
+- VALID flag set but LC3 payload malformed → NCS v3.3.0 liblc3 1.1.2
+  returns **1 (PLC)** for a malformed bitstream of valid length (verified
+  empirically); hard negatives occur only for parameter errors (NULL
+  handle, frame size outside 20..400 bytes), which `audio_decode_sdu()`
+  pre-validates.  A hard negative is counted exactly once per failed
+  decoder invocation as `decode_errors`, never as success, and
+  `audio_decode_sdu()` returns a negative errno after completing any
+  second Mode B decoder call so independent decoder state stays aligned.
 
 Neither outcome corrupts decoder state for subsequent valid frames.
 
@@ -99,14 +108,53 @@ Unsupported frequency, frame duration, channel count, or frame-block shape must
 be rejected through ASCS response codes rather than silently guessed or
 accepted.  The receiver must never accept a configuration it cannot decode.
 
-**Known gap (T4):** current production code does not independently validate
-remote codec configuration; it accepts whatever the remote sends.  T4 must add
-explicit rejection tests and, if needed, a config-validation path in
-`bt_bap.c`.
+**Known gap (T4):** the decode layer now rejects these shapes
+independently (`audio_decode_config()` returns `-EINVAL` without calling
+liblc3 for null context, channel count other than 1 or 2, frequency other
+than 48000 Hz, frame duration other than 7500/10000 µs, `frames_per_sdu`
+other than exactly 1; failed configurations leave the context fully
+reset), but translating those rejections into ASCS response codes in
+`bt_bap.c` remains T4.
 
-## Stream lifecycle contract (`LIFE-*`)
+### CODEC-008 — Safe SDU rejection
 
-### LIFE-001 — Mono/Mode B stream open
+`audio_decode_sdu()` rejects with `-EINVAL` before touching output or
+decoder state for: null context/output, unconfigured or reset context,
+stored unsupported shape, Mode B without a right decoder, `valid=true`
+with NULL data, zero valid length, valid per-channel frame length outside
+the liblc3 basic 20..400 byte range, Mode B length not divisible by the
+channel count, and any length that would truncate input.  Rejected input
+never mutates output, decoder state, or statistics.
+
+### CODEC-009 — Overlap-safe mono expansion
+
+Mono duplication is exact for separate buffers and for in-place expansion
+(input and output share the same base).  In-place expansion runs backward
+so no unread source sample is overwritten; the production mono decode path
+uses the in-place form.
+
+### CODEC-010 — Hard decode failure accounting
+
+Every LC3 decoder invocation is accounted identically: success →
+`audio_stats_frame_decoded()`, PLC (1) → `audio_stats_frame_plc()`, hard
+negative → `audio_stats_decode_error()`.  Mode B counts both channel
+decoder invocations.  A hard negative makes `audio_decode_sdu()` return a
+negative errno (`-EBADMSG`); a hard decode failure is never reported as
+success.
+
+## Statistics contract (`STAT-*`)
+
+### STAT-001 — Counter coupling
+
+`audio_stats_frame_decoded()` increments `total_frames` only.
+`audio_stats_frame_plc()` increments `plc_frames` and `total_frames`
+exactly once each.  `audio_stats_decode_error()`, `audio_stats_i2s_underrun()`,
+and `audio_stats_stream_reset()` increment only their own counter — a
+decode error never counts as a total frame.  Snapshots are returned by
+value; reading them never mutates state.  All counters are atomic and
+exact under concurrent access, including `total = decoded + PLC`.
+
+## Stream lifecycle contract (`LIFE-*`)### LIFE-001 — Mono/Mode B stream open
 
 A mono or Mode B stream opens as soon as its single configured ASE enters the
 streaming state (QoS configured → enabling → streaming).
