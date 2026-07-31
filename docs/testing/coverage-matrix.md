@@ -1,6 +1,6 @@
 # Honest coverage matrix — pre-refactor baseline
 
-Version: T0, 2026-07-31.  This matrix maps every production source file to the
+Version: T1, 2026-07-31.  This matrix maps every production source file to the
 current test coverage that exercises it.  A test that duplicates production
 logic, compiles a stub, or checks copied constants is NOT counted as proof of
 production behavior.
@@ -40,14 +40,14 @@ production behavior.
 | `audio_volume.c` | Volume control | — | BSim: compiled and exercised | — | Hardware streaming at default volume | **No direct unit test.** Mute, zero, unity, signed extremes, callback error not tested in isolation. | T2 |
 | `bt_bap.c` | BAP unicast server, ASCS, PACS, pairing | — | BSim: compiled and exercised with one mono ASE + fake sink | — | Hardware connection + streaming | No direct unit test. BSim covers mono only; Mode A/B, reconnect, invalid config, malformed ASE, source-rejection, and teardown permutations not covered. | T4 |
 | `flpr_audio_process.c` | FLPR audio block wrapper | `tests/unit/flpr_audio_process/` — compiles production source | — | — | nRF54L15 FLPR streaming | No known functional gap; branch coverage unmeasured. | T7 |
-| `flpr_cache.c` | FLPR cache operations | Compiled by `flpr_ring` and `flpr_audio_process` exec-only suites (production source) | — | — | nRF54L15 FLPR activation | Exec-only suites run on native_sim; compiling real source there does not prove real hardware cache/barrier semantics — hardware-only behavior must be covered or classified in T1. Branch coverage unmeasured. | T1, T7 |
-| `flpr_handshake.c` | FLPR boot handshake + VEVIF IPC | `tests/unit/flpr_handshake/` — Twister suite | — | — | nRF54L15 FLPR handshake | Suite tests **protocol helpers from headers only**; does NOT compile `src/flpr_handshake.c`. Bind/unbind, ACK send failures, callback lock, malformed messages, disconnect/reconnect, semaphore draining not tested against production source. | T1 |
+| `flpr_cache.c` | FLPR cache operations | Compiled by `flpr_ring`, `flpr_audio_process`, and `flpr_ring_mgr` (T1) suites (production source) | — | — | nRF54L15 FLPR activation | native_sim coverage is API/barrier-call proof only — the native branch uses `atomic_thread_fence`; physical cache/barrier semantics remain hardware-only. Branch coverage unmeasured. | T7 |
+| `flpr_handshake.c` | FLPR boot handshake + VEVIF IPC | `tests/unit/flpr_handshake/` — 43 tests compile and execute `src/flpr_handshake.c` against a fake IPC service backend (real `ipc_service_*` APIs, production callbacks) | — | — | nRF54L15 FLPR handshake | Bind/unbind, READY/duplicate/changed epoch, ACK send failures, heartbeat health transitions, ring dispatch, disconnect/reconnect, stress, fault-hang now direct production-source proof. Branch coverage unmeasured. | T7 |
 | `flpr_ring.c` | SPSC ring buffer (shared SRAM) | `tests/unit/flpr_ring/` — compiles production source | — | — | nRF54L15 FLPR ring through I/O | No known functional gap; branch coverage unmeasured. | T7 |
-| `flpr_ring_mgr.c` | Ring manager: paired input/output rings | `tests/unit/flpr_ring_mgr/` — Twister suite | — | — | nRF54L15 FLPR ring manager through I/O | Suite tests **copied model** with replicated reset/notification logic; does NOT compile `src/flpr_ring_mgr.c`. Coordinated reset, invalidation races, semaphore draining, producer/consumer validation, backpressure, sequence wrap, remote restart not tested against production source. | T1 |
-| `flpr_runtime.c` | Synchronous FLPR VPR runtime restart manager | `tests/unit/flpr_runtime/` — Twister suite | — | — | nRF54L15 FLPR runtime restart + fault handling | Compiles `src/flpr_runtime.c` against **non-nRF54L stub** mocks. Production nRF54 path is preprocessor-excluded; mock register operations in test file are independent of real `flpr_runtime_restart()`. DMCONTROL transitions, fault stages, CRC rejection not tested with real VPR register access. | T1 |
+| `flpr_ring_mgr.c` | Ring manager: paired input/output rings | `tests/unit/flpr_ring_mgr/` — 53 tests compile and execute `src/flpr_ring_mgr.c` (+ real `flpr_ring.c`, `flpr_cache.c`) with host ring arrays and a handshake mock | — | — | nRF54L15 FLPR ring manager through I/O | Coordinated reset, invalidation races, semaphore draining, producer/consumer validation, backpressure, sequence wrap, remote restart now direct production-source proof. Branch coverage unmeasured. | T7 |
+| `flpr_runtime.c` | Synchronous FLPR VPR runtime restart manager | `tests/unit/flpr_runtime/` — 21 tests compile and execute the real nRF54 restart body (shadow VPR HAL, host source/exec arrays, ordered event log) | — | — | nRF54L15 FLPR runtime restart + fault handling | DMCONTROL transitions, fault stages, CRC rejection, mutex busy, duration accounting now direct production-source proof. Physical cache/FLPR entry behavior remains hardware-only. Branch coverage unmeasured. | T7 |
 | `main.c` | Boot, init wiring, watchdog, advertising loop | — | — | — | Boot logs on both targets | **No direct unit test.** Init order, fatal-reboot path, advertising restart loop not tested in isolation. | T6 |
 | `stream_lifecycle.c` | Stream start/stop lifecycle | `tests/unit/lifecycle/` — Twister suite | BSim: compiled and exercised | — | Hardware connect/disconnect cycles | Functional tests exist; duplicate-start edge semantics not exhaustively covered. | T5 |
-| `src/flpr/main.c` | FLPR firmware entry point (RISC-V VPR) | — | — | — | nRF54L15 FLPR firmware loaded + active | **No direct unit test.** No RISC-V simulator test infrastructure exists. Hardware-only by design; no practical simulation path. | T1 (classify as hardware-only, no plan to unit-test) |
+| `src/flpr/main.c` | FLPR firmware entry point (RISC-V VPR) | — | — | — | nRF54L15 FLPR firmware loaded + active | **No direct unit test.** No RISC-V simulator test infrastructure exists. Hardware-only by design; no practical simulation path. | — (hardware-only) |
 
 ## Current suite inventory
 
@@ -63,16 +63,13 @@ production behavior.
 
 1. **Actuator suite** compiles retired `audio_clock_actuator_sample_adjust.c`,
    not either production actuator (APLL or NONE).
-2. **FLPR runtime suite** compiles `src/flpr_runtime.c` against non-nRF54L
-   stubs. Production nRF54 path is preprocessor-excluded; mock register
-   operations in the test file are independent of real
-   `flpr_runtime_restart()`. DMCONTROL transitions, CRC rejection, and fault
-   stages are not exercised through real VPR hardware access.
-3. **FLPR ring-manager suite** tests a separate copied model with replicated
-   reset and notification logic; does not compile `src/flpr_ring_mgr.c`.
-4. **FLPR handshake suite** tests header-only protocol helpers; does not
-   compile `src/flpr_handshake.c`.
-5. **BabbleSim** compiles production `bt_bap.c`, `audio_decode.c`,
+2. **FLPR runtime, ring-manager, and handshake suites** became direct
+   production-source proof in T1 (see rows above); their former stub/copied/
+   header-only tests were removed or replaced.
+3. **flpr_cache.c native coverage is API/barrier-call proof only** — the
+   native branch uses `atomic_thread_fence`; physical cache/barrier semantics
+   are hardware-only evidence.
+4. **BabbleSim** compiles production `bt_bap.c`, `audio_decode.c`,
    `audio_stats.c`, `audio_drift.c`, `audio_rate_convert.c`,
    `audio_timing_math.c`, `audio_timing_none.c`, `stream_lifecycle.c`,
    `audio_volume.c`, and `audio_offload.c`, but exercises one mono ASE with a
@@ -84,11 +81,11 @@ production behavior.
    branch (no CONFIG_SOC_NRF54L15).  `audio_asrc.c` and `audio_i2s.c` are
    not compiled into BSim at all.  Mode A, Mode B, reconnect, packet-loss,
    and malformed-configuration scenarios are not covered.
-6. **Build contracts** (resolved `.config` and `zephyr.dts` for both targets)
+5. **Build contracts** (resolved `.config` and `zephyr.dts` for both targets)
    are not automatically asserted.  Host/controller ISO buffer agreement,
    ASRC/FLPR path selection, pin assignments, and SW Split overlay application
    are only checked manually.
-7. **Hardware evidence** comes from logs and autonomous central automated
+6. **Hardware evidence** comes from logs and autonomous central automated
    streams.  These verify end-to-end data flow but do not replace direct
    branch/error-path unit tests.
 
