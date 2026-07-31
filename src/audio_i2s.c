@@ -39,10 +39,16 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_AUDIO_CLOCK_ACTUATOR_NONE),
 #define CHANNELS    2
 
 /*
- * Supported input frame count per push call.
- * Must match the decoder output (48 kHz LC3, 10 ms frame).
+ * Input frame count per push call — dynamic, set by audio_sink_set_input_frames().
+ * Defaults to 480 (10 ms @ 48 kHz).  For 7.5 ms frames the decoder produces 360.
  */
-#define INPUT_FRAMES 480
+#define INPUT_FRAMES_10MS 480
+static uint16_t input_frames = INPUT_FRAMES_10MS;
+
+void audio_sink_set_input_frames(uint16_t frames)
+{
+	input_frames = (frames > 0) ? frames : INPUT_FRAMES_10MS;
+}
 
 /*
  * Maximum output stereo frames per block.
@@ -51,7 +57,7 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_AUDIO_CLOCK_ACTUATOR_NONE),
  */
 #define MAX_OUTPUT_FRAMES 481
 #define BLOCK_SIZE        ((size_t)(MAX_OUTPUT_FRAMES) * CHANNELS * (BIT_WIDTH / 8))
-#define BLOCK_COUNT       12
+#define BLOCK_COUNT       16
 
 #define DRIFT_THRESHOLD (BLOCK_COUNT - 4)
 
@@ -165,11 +171,10 @@ static int validate_push_input(const int16_t *stereo_data, size_t sample_count)
 	if (sample_count & 1u) {
 		return -EINVAL;
 	}
-	/* Strict frame count: the decoder always produces INPUT_FRAMES
-	 * stereo frames per SDU.  This contract is required for slab
-	 * sizing and capacity proofs.
+	/* Strict frame count: the decoder produces input_frames stereo
+	 * frames per SDU (dynamic, depends on frame duration).
 	 */
-	if (sample_count / CHANNELS != INPUT_FRAMES) {
+	if (sample_count / CHANNELS != (size_t)input_frames) {
 		return -EINVAL;
 	}
 	return 0;
@@ -205,7 +210,7 @@ static int fill_block_asrc(const int16_t *stereo_data, int32_t ppm, void **block
 	struct audio_offload_asrc_result off_result;
 	memset(&off_result, 0, sizeof(off_result));
 
-	int off_ret = audio_offload_process_asrc(stereo_data, INPUT_FRAMES, offload_sequence, ppm,
+	int off_ret = audio_offload_process_asrc(stereo_data, input_frames, offload_sequence, ppm,
 						 &cpu_state, (int16_t *)*block, MAX_OUTPUT_FRAMES,
 						 &off_result);
 
@@ -240,7 +245,7 @@ static int fill_block_asrc(const int16_t *stereo_data, int32_t ppm, void **block
 		size_t consumed;
 		uint32_t t_asrc = audio_perf_cycle_start();
 		int asrc_ret =
-			audio_asrc_process(&asrc_ctx, stereo_data, INPUT_FRAMES, (int16_t *)*block,
+			audio_asrc_process(&asrc_ctx, stereo_data, input_frames, (int16_t *)*block,
 					   MAX_OUTPUT_FRAMES, ppm, asrc_prev_l, asrc_prev_r,
 					   asrc_prev_valid, &consumed, &produced, &next_l, &next_r);
 		audio_perf_cycle_end(t_asrc, AUDIO_PERF_PATH_ASRC);
@@ -281,10 +286,10 @@ static int fill_block_identity(const int16_t *stereo_data, int32_t ppm_unused, v
 		return ret;
 	}
 
-	size_t bytes = INPUT_FRAMES * CHANNELS * (BIT_WIDTH / 8);
+	size_t bytes = (size_t)input_frames * CHANNELS * (BIT_WIDTH / 8);
 
 	memcpy(*block, stereo_data, bytes);
-	*output_frames = INPUT_FRAMES;
+	*output_frames = input_frames;
 	return 0;
 }
 
@@ -344,7 +349,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 		/* Pre-fill 6 blocks of silence to absorb jitter. */
 		for (int pre = 0; pre < 6; pre++) {
 			size_t pre_frames =
-				audio_rate_converter_next_frames(&rate_ctx, INPUT_FRAMES);
+				audio_rate_converter_next_frames(&rate_ctx, input_frames);
 			size_t pre_bytes = pre_frames * CHANNELS * (BIT_WIDTH / 8);
 			void *sil;
 

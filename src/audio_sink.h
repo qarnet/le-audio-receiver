@@ -44,4 +44,13 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count);
  */
 void audio_sink_stop(void);
 
+/**
+ * @brief Set the expected input stereo frames per push call.
+ *
+ * Called by the BAP codec configuration path so the sink can validate
+ * against the negotiated frame duration (360 for 7.5 ms, 480 for 10 ms).
+ * Must be called before the first push of a stream.
+ */
+void audio_sink_set_input_frames(uint16_t frames);
+
 #endif /* AUDIO_SINK_H */

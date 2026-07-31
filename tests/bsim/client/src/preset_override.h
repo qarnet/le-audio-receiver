@@ -23,18 +23,29 @@
 /* ── Step 1: pull in all preset definitions ──────────────────────── */
 #include <zephyr/bluetooth/audio/bap_lc3_preset.h>
 
-/* ── Step 2: override 16_2_1 → 48_4_1 ────────────────────────────── */
+/* ── Step 2: override 16_2_1 → selected preset ────────────────────── */
 /* bap_lc3_preset.h defines BT_BAP_LC3_UNICAST_PRESET_16_2_1 as a
  * convenience macro. Since the header has already been included (include
  * guard prevents re-expansion), we can safely undef and redefine it.
  * Upstream main.c uses:
  *   static struct bt_bap_lc3_preset codec_configuration =
  *       BT_BAP_LC3_UNICAST_PRESET_16_2_1(...);
- * After this override, it expands to BT_BAP_LC3_UNICAST_PRESET_48_4_1(...).
+ * After this override, it expands to the selected preset.
+ *
+ * BSIM_CLIENT_PRESET_48_4_1 = 10 ms frame duration
+ * BSIM_CLIENT_PRESET_48_3_1 = 7.5 ms frame duration
  */
 
+#if defined(CONFIG_BSIM_CLIENT_PRESET_48_4_1)
+#define BSIM_LC3_PRESET BT_BAP_LC3_UNICAST_PRESET_48_4_1
+#elif defined(CONFIG_BSIM_CLIENT_PRESET_48_3_1)
+#define BSIM_LC3_PRESET BT_BAP_LC3_UNICAST_PRESET_48_3_1
+#else
+#define BSIM_LC3_PRESET BT_BAP_LC3_UNICAST_PRESET_48_4_1
+#endif
+
 #undef BT_BAP_LC3_UNICAST_PRESET_16_2_1
-#define BT_BAP_LC3_UNICAST_PRESET_16_2_1(loc, ctx) BT_BAP_LC3_UNICAST_PRESET_48_4_1(loc, ctx)
+#define BT_BAP_LC3_UNICAST_PRESET_16_2_1(loc, ctx) BSIM_LC3_PRESET(loc, ctx)
 
 /* ── Step 3: wrap bt_bap_stream_send ──────────────────────────────── */
 /*

@@ -140,11 +140,11 @@ static void print_codec_cfg(const struct bt_audio_codec_cfg *codec_cfg)
 		int ret;
 
 		ret = bt_audio_codec_cfg_get_freq(codec_cfg);
-		if (ret > 0) {
+		if (ret >= 0) {
 			LOG_INF("  Frequency: %d Hz", bt_audio_codec_cfg_freq_to_freq_hz(ret));
 		}
 		ret = bt_audio_codec_cfg_get_frame_dur(codec_cfg);
-		if (ret > 0) {
+		if (ret >= 0) {
 			LOG_INF("  Frame Duration: %d us",
 				bt_audio_codec_cfg_frame_dur_to_frame_dur_us(ret));
 		}
@@ -267,26 +267,46 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 
 #if defined(CONFIG_LIBLC3)
 	int cc = sinks[idx].decode.chan_count;
-	int ret = bt_audio_codec_cfg_get_freq(stream->codec_cfg);
-
-	if (ret <= 0) {
+	int ret;
+	ret = bt_audio_codec_cfg_get_freq(stream->codec_cfg);
+	if (ret < 0) {
 		LOG_ERR("freq not set");
 		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
 				       BT_BAP_ASCS_REASON_CODEC_DATA);
 		return ret;
 	}
 	int freq = bt_audio_codec_cfg_freq_to_freq_hz(ret);
+	if (freq < 0) {
+		LOG_ERR("invalid freq conversion: %d", ret);
+		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
+				       BT_BAP_ASCS_REASON_CODEC_DATA);
+		return freq;
+	}
 
 	ret = bt_audio_codec_cfg_get_frame_dur(stream->codec_cfg);
-	if (ret <= 0) {
-		LOG_ERR("frame dur not set");
+	int frame_us;
+	if (ret < 0) {
+		LOG_ERR("frame dur not set (ret=%d)", ret);
 		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
 				       BT_BAP_ASCS_REASON_CODEC_DATA);
 		return ret;
+	} else {
+		frame_us = bt_audio_codec_cfg_frame_dur_to_frame_dur_us(ret);
+		if (frame_us < 0) {
+			LOG_ERR("invalid frame dur conversion: %d", ret);
+			*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
+					       BT_BAP_ASCS_REASON_CODEC_DATA);
+			return frame_us;
+		}
 	}
-	int frame_us = bt_audio_codec_cfg_frame_dur_to_frame_dur_us(ret);
 
 	int frames_per_sdu = bt_audio_codec_cfg_get_frame_blocks_per_sdu(stream->codec_cfg, true);
+	if (frames_per_sdu < 0) {
+		LOG_ERR("invalid frames_per_sdu: %d", frames_per_sdu);
+		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
+				       BT_BAP_ASCS_REASON_CODEC_DATA);
+		return frames_per_sdu;
+	}
 
 	ret = audio_decode_config(&sinks[idx].decode, cc, freq, frame_us, frames_per_sdu);
 	if (ret < 0) {
@@ -296,6 +316,11 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 		return ret;
 	}
 	LOG_INF("LC3 decoder[%zu]: %d Hz %d us ch=%d", idx, freq, frame_us, cc);
+
+	/* Tell the audio sink the expected stereo frames per push
+	 * (depends on frame duration: 360 for 7.5 ms, 480 for 10 ms).
+	 */
+	audio_sink_set_input_frames((uint16_t)sinks[idx].decode.samples_per_ch);
 #endif
 	return 0;
 }
@@ -619,6 +644,18 @@ static void stream_disabled_cb(struct bt_bap_stream *s)
 	}
 
 	/*
+	 * Stream summary: log key counters before reset so the gate
+	 * can extract explicit SDUs/decoded/I2S evidence.
+	 */
+	{
+		struct audio_stats stats = audio_stats_get();
+		LOG_INF("Stream[%zu] summary: SDUs=%zu decoded=%u plc=%u "
+			"decode_err=%u i2s_underrun=%u stream_reset=%u",
+			idx, sinks[idx].recv_cnt, stats.total_frames, stats.plc_frames,
+			stats.decode_errors, stats.i2s_underruns, stats.stream_resets);
+	}
+
+	/*
 	 * audio_sink_stop() is idempotent and already calls
 	 * audio_timing_reset() internally.  Do NOT duplicate the
 	 * audio_timing_reset() call — it is redundant here.
@@ -650,8 +687,9 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	LOG_INF("Connected: %s", a);
 	default_conn = bt_conn_ref(conn);
 
-	/* Signal no contexts available while this connection owns the ASEs */
-	bt_pacs_set_available_contexts(BT_AUDIO_DIR_SINK, BT_AUDIO_CONTEXT_TYPE_NONE);
+	/* Keep available contexts truthful — ACL connection is not ASE ownership.
+	 * Stock desktop policy (BlueZ/WirePlumber) reads PACS during connection
+	 * and needs to see the correct available contexts to create audio devices. */
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
@@ -691,9 +729,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	bt_conn_unref(default_conn);
 	default_conn = NULL;
 
-	/* Restore available contexts for the next client */
-	bt_pacs_set_available_contexts(BT_AUDIO_DIR_SINK, AVAILABLE_SINK_CONTEXT);
-
+	/* Available contexts persist from initial registration.
+	 * No restore needed — ACL disconnect does not alter the default. */
 	k_sem_give(&sem_disconnected);
 }
 

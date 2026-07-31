@@ -1,7 +1,71 @@
-# STATUS — le-audio-receiver — 2026-07-29
+# STATUS — le-audio-receiver — 2026-07-31
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
+
+## Phase 3 — BlueZ/WirePlumber pairing and reconnect lifecycle — ACCEPTED (2026-07-31)
+
+Phase 3 accepted with three autonomous strict stock playbacks on nRF54L15.
+Full 12-step sequence (unpair, remove host device, pair, trust, connect,
+playback, disconnect, reconnect, playback, reset, reconnect, playback) all
+pass without repo harness. Three 30 s playbacks at 7.5 ms frame duration,
+zero decode/I2S/offload faults each.
+
+Preflight hardened with two corrections landed in final review:
+
+- **SPA proof**: `_wait_for_bluez_spa()` now requires only `libspa-bluez5.so`
+  mapped in the WirePlumber process (`/proc/<pid>/maps`). All fallback paths
+  removed — `pw-cli info all` substring (final review) and `pw-dump`
+  factory/device node (spa-proof-fix). Owned WP uses subprocess PID;
+  active-seat WP resolves `MainPID` via systemd.
+- **Remove fatal**: failed `bluetoothctl remove` is now fatal unless exact
+  postcondition shows device object no longer exists and no `Paired`/`Bonded`
+  state remains.
+
+See `docs/development/phase3-results.md` for acceptance evidence,
+`docs/development/bluez-wireplumber-phase3-final-review-handoff.md` for
+execution handoff, and `docs/development/bluez-wireplumber-interoperability-plan.md`
+for Phase 1–4 plan.
+
+**Phase 4 compatibility expansion NOT needed.** Bare BAP passed with stock
+WirePlumber main-systemwide playback. CAP/CAS remain disabled; no speculative
+services or custom host policy required.
+
+## Phase 2 — BlueZ/WirePlumber stock desktop gate — ACCEPTED (2026-07-31)
+
+Phase 2 accepted with strict nonzero-audio/zero-fault evidence on nRF54L15,
+stock WirePlumber main-systemwide playback:
+
+- **30 s gate**: SDUs=4578, decoded=4729, decode_err=0, i2s_underrun=0,
+  stream_reset=0 (~35.47 s at 7.5 ms / 133.3 fps).
+- **120 s gate**: SDUs=16565, decoded=16722, decode_err=0, i2s_underrun=0,
+  stream_reset=0 (~125.41 s at 7.5 ms / 133.3 fps).
+- **Explicit runtime `I2S DMA started`** confirmed each run.
+- **Canonical gate**: 20/20 gate tests pass.
+- **BSim regression**: 10 ms hash `0xFE0D4245`, 7.5 ms hash `0x5853F445` —
+  each scenario run twice with pairwise hash equality enforced; both
+  fully deterministic across repeated runs.
+- **Corrective fixes**: 10 ms missing-frame-duration fallback removed;
+  I2S slab block count raised 12→16 (startup transient headroom);
+  `INPUT_FRAMES` made dynamic for 7.5 ms stock PipeWire config.
+
+See `docs/development/phase2-stock-desktop-gate-results.md` for full evidence
+and `docs/development/bluez-wireplumber-interoperability-plan.md` for Phase
+1–4 plan.
+
+## Phase 1 — BlueZ/WirePlumber PACS availability — DONE (2026-07-30)
+
+Sink Available Audio Contexts no longer cleared to `BT_AUDIO_CONTEXT_TYPE_NONE`
+on ACL connect. ACL connection is not ASE ownership — stock desktop policy
+(BlueZ/WirePlumber) reads PACS during connection and needs truthful contexts
+to create audio devices. Regression test added to BSIM gate (PACS assertion
+at PASS point verifies contexts non-NONE after connection + 100-frame stream).
+
+Contexts persist from `bt_bap_init()` through connect/disconnect cycles.
+Zephyr PACS restores default on ACL disconnect per spec — no manual restore
+needed. See `docs/development/bluez-wireplumber-interoperability-plan.md` for
+full Phase 1–4 plan and `docs/development/bluez-wireplumber-phase1-handoff.md`
+for execution handoff.
 
 ## Stage 0 — PASS (2026-07-27)
 
@@ -23,19 +87,30 @@ repeat fb=0, ASRC cap fail=0. Zero warnings, zero assertions, zero faults.
 
 See `docs/development/phase6-stage0-results.md` for full verification evidence.
 
-## BSIM Stage 1 — PASS + CLEANUP (2026-07-29)
+## BSIM Stage 1 — PASS + CLEANUP + REPEATED-RUN GATE (2026-07-31)
 
 CONFIG_TEST decode bypass removed from `bt_bap.c`. BSIM now executes same
 PLC/decode path as hardware.  Startup-zero/PLC oracle in `audio_sink_stub.c`
 with local counters (not production `audio_stats`):
 8 startup-zero pushes, 7 PLC frames (all before first nonzero PCM).  100
-nonzero pushes, 104 client sends.  Fully deterministic across two runs:
+nonzero pushes, 104 client sends.  Fully deterministic across repeated runs.
 
+10 ms (48_4_1) — two independent runs:
 - `startup_zero=8`, `startup_plc=7`, `plc=7`, `total=108`
 - `total == pushes + startup_zero` (108 = 100 + 8)
 - `plc == startup_plc` (7 = 7, all PLC in startup)
-- `hash=0xFE0D4245`, `energy=12480` (identical both runs)
-- `errors=0`, `malformed=0`, `after_stop=0`, `nonzero=1`
+- `hash=0xFE0D4245`, `energy=12480` (pairwise identical both runs)
+
+7.5 ms (48_3_1) — two independent runs:
+- `startup_zero=11`, `startup_plc=10`, `plc=10`, `total=111`
+- `total == pushes + startup_zero` (111 = 100 + 11)
+- `plc == startup_plc` (10 = 10, all PLC in startup)
+- `hash=0x5853F445`, `energy=9636480..9637920` (pairwise identical both runs)
+
+Repeated-run gate (`scripts/bsim-stage1-run.sh`): each scenario runs twice
+with pairwise hash equality enforced AND known accepted values asserted
+(10 ms → `0xFE0D4245`, 7.5 ms → `0x5853F445`).  Per-run unique logs with
+all artifact paths and hashes printed.
 
 Production `audio_stats` cleaned — `startup_zero`/`startup_plc` fields and
 functions removed; startup accounting is local to sink stub.  Real-target

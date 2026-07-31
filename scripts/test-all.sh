@@ -99,11 +99,17 @@ run_exec_suites() {
 # ---------- Python suites ----------
 run_python_suites() {
     run_one "python: gate" \
-        env PYTHONPATH="$REPO_ROOT/scripts" \
+        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
         python3 "$REPO_ROOT/tests/unit/gate/test_gate.py" || true
     run_one "python: flpr_stall_gate" \
-        env PYTHONPATH="$REPO_ROOT/scripts" \
+        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
         python3 "$REPO_ROOT/tests/unit/flpr_stall_gate/test_flpr_stall_gate.py" || true
+    run_one "python: bluez_wp_gate" \
+        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
+        python3 "$REPO_ROOT/scripts/test_bluez_wireplumber_gate.py" || true
+    run_one "python: bluez_wp_phase3_gate" \
+        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
+        python3 "$REPO_ROOT/scripts/test_bluez_wireplumber_phase3_gate.py" || true
 }
 
 # ---------- BSim Stage 1 ----------

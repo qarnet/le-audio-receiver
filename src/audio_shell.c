@@ -134,7 +134,7 @@ static int cmd_bt_unpair(const struct shell *sh, size_t argc, char **argv)
 	} else {
 		shell_error(sh, "bt_unpair failed: %d", ret);
 	}
-	return 0;
+	return ret;
 }
 
 SHELL_STATIC_SUBCMD_SET_CREATE(

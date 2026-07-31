@@ -28,22 +28,37 @@
 #include "audio_stats.h"
 #include "bsim_test_helpers.h"
 
+#include <zephyr/bluetooth/audio/audio.h>
+#include <zephyr/bluetooth/audio/pacs.h>
+
 #include <limits.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <errno.h>
 
-#define REQUIRED_SAMPLES 960 /* 48 kHz × 10 ms × 2 channels */
-#define PASS_FRAME_COUNT 100
-#define FNV_OFFSET_BASIS 0x811c9dc5UL
-#define FNV_PRIME        0x01000193UL
+#define REQUIRED_SAMPLES_DEFAULT 960 /* 48 kHz × 10 ms × 2 channels */
+#define PASS_FRAME_COUNT         100
+#define FNV_OFFSET_BASIS         0x811c9dc5UL
+#define FNV_PRIME                0x01000193UL
 
 static atomic_int push_count;
 static atomic_int startup_push_count; /* total pushes observed (nonzero + zero startup) */
 static atomic_int malformed_count;
 static atomic_int pushes_after_stop;
 static atomic_bool stopped;
+
+/* Dynamic required samples — set by audio_sink_set_input_frames(),
+ * defaults to REQUIRED_SAMPLES_DEFAULT (10 ms). */
+static uint16_t required_samples = REQUIRED_SAMPLES_DEFAULT;
+
+void audio_sink_set_input_frames(uint16_t frames)
+{
+	required_samples = (uint16_t)(frames * 2); /* stereo: frames → samples */
+	if (required_samples == 0) {
+		required_samples = REQUIRED_SAMPLES_DEFAULT;
+	}
+}
 
 /* Startup accounting — local to sink stub, not in production audio_stats */
 static uint32_t local_startup_zero;
@@ -98,10 +113,10 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 	}
 
 	/* Validate sample count */
-	if (sample_count != REQUIRED_SAMPLES) {
+	if (sample_count != (size_t)required_samples) {
 		atomic_fetch_add(&malformed_count, 1);
-		FAIL("le_audio_receiver: malformed sample count — expected %d got %zu push#%d\n",
-		     REQUIRED_SAMPLES, sample_count, atomic_load(&push_count));
+		FAIL("le_audio_receiver: malformed sample count — expected %u got %zu push#%d\n",
+		     required_samples, sample_count, atomic_load(&push_count));
 		return -EINVAL;
 	}
 
@@ -213,6 +228,21 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 			FAIL("le_audio_receiver: pushes_after_stop=%d != 0\n",
 			     atomic_load(&pushes_after_stop));
 			return -EIO;
+		}
+
+		/* Regression: available sink contexts must not be NONE
+		 * after ACL connection + stream setup.  Phase 1 fix
+		 * removed the connection-time clear that broke stock
+		 * desktop PACS discovery. */
+		{
+			enum bt_audio_context ctx;
+
+			ctx = bt_pacs_get_available_contexts(BT_AUDIO_DIR_SINK);
+			if (ctx == BT_AUDIO_CONTEXT_TYPE_NONE) {
+				FAIL("le_audio_receiver: available sink contexts NONE "
+				     "after connection + stream — Phase 1 regression\n");
+				return -EIO;
+			}
 		}
 
 		PASS("le_audio_receiver: %d pushes — "

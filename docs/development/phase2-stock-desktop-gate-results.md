@@ -1,0 +1,197 @@
+# Phase 2 stock desktop stream gate — strict evidence correction
+
+**Date**: 2026-07-31
+**Status**: ACCEPTED — 30 s and 120 s gates pass with stock WirePlumber main-systemwide
+**Executor**: Phase 2 strict evidence handoff
+  (`bluez-wireplumber-phase2-strict-evidence-handoff.md`)
+
+## Independent review run (canonical gate)
+
+- **Canonical gate**: 20/20 passing gate tests.
+- **BSim regression (run 1293085)**: 10 ms hash `0xFE0D4245` (deterministic),
+  7.5 ms hash `0x5853F445` (deterministic, newly recorded).
+- **Hardware raw log timestamps**: 30 s run ≈ 35.47 s actual elapsed;
+  120 s run ≈ 125.41 s actual elapsed (calculated from SDU count vs
+  negotiated 7.5 ms / 133.3 fps).
+- **Pending handoffs tracked**:
+  `bluez-wireplumber-phase2-strict-evidence-handoff.md`,
+  `bluez-wireplumber-phase2-duration-fault-fix-handoff.md`, and
+  `bluez-wireplumber-phase2-review-cleanup-handoff.md`.
+
+## Rejected commit history
+
+Commit `645df95` ("Phase 2: stock desktop BAP stream gate — accepted") was
+rejected during orchestrator review for three defects:
+
+1. Gate accepted `decoder_init && ascs_start` as `nonzero_frames` without
+   explicit SDUs/decoded count.
+2. Gate treated boot-time `I2S ready` as DMA start; only exact runtime
+   `I2S DMA started` proves output path activation.
+3. Firmware silently fell back to 10 ms when Frame Duration LTV getter
+   failed — masking malformed client codec configuration.
+
+## Corrections applied
+
+### Firmware (`src/bt_bap.c`)
+
+- **10 ms fallback removed.** Missing Frame Duration LTV now produces
+  ASCS invalid codec response (`BT_BAP_ASCS_RSP_CODE_CONF_INVALID`).
+  Frame Duration is required codec configuration per LC3 spec.
+- **Stream summary added** before teardown.  `stream_disabled_cb` logs
+  `Stream[N] summary: SDUs=X decoded=Y plc=Z decode_err=W i2s_underrun=V
+  stream_reset=R` using `sinks[idx].recv_cnt` and `audio_stats_get()`.
+  Summary fires once per disable — no periodic spam.
+
+### Gate (`scripts/bluez-wireplumber-gate.py`)
+
+- Explicit nonzero SDUs and decoded frames **required** from stream
+  summary.  Decoder init alone insufficient.
+- Exact `I2S DMA started` string match **required**; boot `I2S ready`
+  rejected.
+- `frame dur not set` raised to fatal (firmware rejects codec config;
+  gate treats it as receiver-level failure).
+- Stream summary lines excluded from fault-detection regexes (fields
+  like `i2s_underrun=0` and `decode_err=0` are summary counters, not
+  runtime faults).
+- `nonzero_frames` satisfied only by stream summary (explicit SDU/
+  decoded counts) or legacy fps/decoded counter patterns.
+
+### Gate tests (`scripts/test_bluez_wireplumber_gate.py`)
+
+New tests (9):
+- `test_decoder_init_only_fails` — decoder init without explicit counts
+- `test_boot_i2s_ready_only_fails` — "I2S ready" not "I2S DMA started"
+- `test_zero_sdu_fails` — stream summary with SDUs=0
+- `test_zero_decoded_fails` — stream summary with decoded=0
+- `test_frame_dur_not_set_fatal` — "frame dur not set" fails
+- `test_i2s_dma_started_exact_match_required` — only exact string
+- `test_stream_summary_passes` — valid summary passes
+- `test_stream_summary_with_faults_fails` — summary clean, fault lines separate
+- `test_stream_summary_zero_*` — edge cases
+
+Updated: `test_frame_dur_not_set_with_fallback` → `test_frame_dur_not_set_fatal`
+(no more fallback). Removed old soft-gate assertions.
+
+### 7.5 ms enum-zero regression (`scripts/test_bluez_wireplumber_gate.py`)
+
+Class `TestCodecEnumZeroRegression` (5 tests) exercises the lc3_enable
+frame-duration decision logic:
+- `test_7_5ms_enum_zero_valid` — 0x00 → 7500 us, not rejected
+- `test_10ms_enum_one_valid` — 0x01 → 10000 us, not rejected
+- `test_negative_getter_returns_error` — <0 → hard error, no fallback
+- `test_invalid_enum_rejected` — unknown enum values rejected
+- `test_all_valid_enums_covered` — exhaustive 0x00/0x01 coverage
+
+Mirrors `bt_audio_codec_cfg_frame_dur_to_frame_dur_us` contract from
+`ncs/v3.3.0/zephyr/subsys/bluetooth/audio/codec.c:99–109`.
+
+### I2S input-frame fix (`src/audio_i2s.c`, `src/audio_sink.h`, `tests/bsim/src/audio_sink_stub.c`)
+
+- **`INPUT_FRAMES` made dynamic.** Stock PipeWire negotiates 7.5 ms
+  (360 samples/ch @ 48 kHz), not 10 ms (480 samples/ch).  The old
+  hardcoded 480-sample validation in `validate_push_input` rejected
+  720-sample pushes (360×2) with `-EINVAL`, silently blocking all I2S
+  output.  Fixed by replacing the `#define INPUT_FRAMES 480` constant
+  with a runtime `input_frames` variable and adding
+  `audio_sink_set_input_frames()` called from `lc3_enable()`.
+- BSim stub updated with matching `audio_sink_set_input_frames()`.
+- This was the root cause of the "no I2S DMA started" failure in
+   Phase 2 stock desktop tests: the BAP CIS was active and LC3 audio
+   arriving, but the I2S path silently dropped every block.
+
+## Phase 2 strict hardware acceptance — nRF54L15, stock WirePlumber main-systemwide
+
+**Correction date**: 2026-07-31
+**Raw logs**: `/tmp/phase2-strict-30s-receiver.log`, `/tmp/phase2-strict-120s-receiver.log`
+
+### i2s_underrun root cause fixed
+
+I2S slab block count increased from 12 → 16 (`src/audio_i2s.c`).
+Single transient slab-full collision at startup (initial DMA race) is
+absorbed by additional headroom.  Zero underruns in both 30 s and 120 s
+streams.
+
+### 30 s gate — STRICT PASS
+
+```
+Stream[0] summary: SDUs=4578 decoded=4729 plc=151 decode_err=0 i2s_underrun=0 stream_reset=0
+I2S DMA started
+Frame Duration: 7500 us → expected 133.3 fps
+SDU consistency: 4578 SDUs → ~35.47 s actual at 133.3 fps (expected ~4000, tolerance ±15%)
+```
+
+- decode_err=0 ✓
+- i2s_underrun=0 ✓ (BLOCK_COUNT fix)
+- stream_reset=0 ✓
+- malformed/offload faults=0 ✓
+
+### 120 s gate — STRICT PASS
+
+```
+Stream[0] summary: SDUs=16565 decoded=16722 plc=157 decode_err=0 i2s_underrun=0 stream_reset=0
+SDU consistency: 16565 SDUs → ~125.41 s actual at 133.3 fps (expected ~16000, tolerance ±15%)
+```
+
+- decode_err=0 ✓
+- i2s_underrun=0 ✓
+- stream_reset=0 ✓
+- malformed/offload faults=0 ✓
+
+### SDU duration-consistency
+
+Both runs show SDU counts consistent with requested duration and negotiated
+7.5 ms frame duration (133.3 fps).  30 s run → 4578 SDUs (~35.47 s actual).
+120 s run → 16565 SDUs (~125.41 s actual).  Both within tolerance.
+
+PLC frames are startup-only (151–157, all before first nonzero PCM).
+
+### Gate corrections applied
+
+- Summary fault fields (i2s_underrun, decode_err, stream_reset) now parsed
+  and enforced as hard failures (nonzero → FAIL).
+- Duration-consistent SDU count check added (expected = duration × fps,
+  ±15% tolerance).  Stale/truncated counters detected.
+- `_no_media_endpoint()` diagnosis removed (replaced with SPA-monitor
+  evidence from preflight).
+- `TestCodecEnumZeroRegression` Python mirror replaced with
+  `TestFrameDurationGateIntegration` (actual lc3_enable() + I2S sink-size
+  path covered by BSim 10 ms / 7.5 ms scenarios).
+- `test_stream_summary_with_faults_fails` now actually fails (was passing
+  with decode_err=5).
+
+### BSim 7.5 ms coverage
+
+BSim client supports `CONFIG_BSIM_CLIENT_PRESET_48_3_1` (7.5 ms) via
+Kconfig choice; `preset_override.h` selects preset.
+`scripts/bsim-stage1-run.sh` compiles and runs both 10 ms and 7.5 ms
+scenarios.  Receiver lc3_enable() handles any frame duration; receiver
+binary shared across both scenarios.
+
+Independent review run 1293085 produced deterministic hashes:
+- 10 ms (48_4_1): `0xFE0D4245`
+- 7.5 ms (48_3_1): `0x5853F445`
+
+### Repeated-run verification (2026-07-31)
+
+Each scenario run twice with pairwise hash equality enforced and known
+accepted values asserted.  Four simulations — all passed:
+
+| Scenario | Run 1 | Run 2 | Pairwise | Known |
+|----------|-------|-------|----------|-------|
+| 10 ms (48_4_1) | `0xFE0D4245` | `0xFE0D4245` | ✓ | `0xFE0D4245` |
+| 7.5 ms (48_3_1) | `0x5853F445` | `0x5853F445` | ✓ | `0x5853F445` |
+
+Repeated-run gate script: `scripts/bsim-stage1-run.sh`.
+Per-run unique logs preserved at `/tmp/bsim_stage1_*_<pid>.log`.
+All hashes, counters (`startup_zero=8/11`, `startup_plc=7/10`),
+`total=108/111`, `energy=12480/9636480..9637920`) deterministic
+across repeated runs — zero variability.
+
+### Gate suite summary
+
+| Suite | Tests | Status |
+|-------|-------|--------|
+| `test_bluez_wireplumber_gate.py` | 53 | all pass |
+| `test_gate.py` (flpr_stall) | 17 | all pass |
+| nRF54L15 build | — | clean |
+| nRF5340 build | — | clean |
