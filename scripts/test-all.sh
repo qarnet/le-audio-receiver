@@ -2,7 +2,7 @@
 # Canonical full local gate script for le-audio-receiver.
 #
 # Runs every test suite:
-#   1. Twister C unit suites (12 suites with testcase.yaml)
+#   1. Twister C unit suites (14 suites with testcase.yaml)
 #   2. Exec-only C unit suites (4 suites: audio_offload, flpr_audio_process,
 #      flpr_ring, offload_asrc)
 #   3. Python unit suites (4: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py,
