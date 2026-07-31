@@ -9,10 +9,11 @@ import importlib
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch, PropertyMock, mock_open
 
 # Ensure scripts directory in path
 SCRIPT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)))
@@ -222,9 +223,32 @@ class TestPhase3GateMocked(unittest.TestCase):
         self.assertTrue(result)
 
     @patch("subprocess.run")
-    def test_remove_device_failure(self, mock_run):
-        """remove_device with rc!=0 returns False."""
-        mock_run.return_value = MagicMock(returncode=1)
+    def test_remove_device_fails_device_gone(self, mock_run):
+        """rc!=0 but info fails (device gone) → True."""
+        mock_run.side_effect = [
+            MagicMock(returncode=1),  # remove fails
+            subprocess.CalledProcessError(1, ["bluetoothctl"]),  # info fails
+        ]
+        result = self.gate.remove_device("AA:BB:CC:DD:EE:FF")
+        self.assertTrue(result)
+
+    @patch("subprocess.run")
+    def test_remove_device_fails_no_bond(self, mock_run):
+        """rc!=0 but info shows no Paired/Bonded → True."""
+        mock_run.side_effect = [
+            MagicMock(returncode=1),  # remove fails
+            MagicMock(returncode=0, stdout="Device\n\tName: LE Audio\n\tPaired: no\n"),
+        ]
+        result = self.gate.remove_device("AA:BB:CC:DD:EE:FF")
+        self.assertTrue(result)
+
+    @patch("subprocess.run")
+    def test_remove_device_fails_still_bonded(self, mock_run):
+        """rc!=0 and info shows Paired: yes → False (fatal)."""
+        mock_run.side_effect = [
+            MagicMock(returncode=1),  # remove fails
+            MagicMock(returncode=0, stdout="Device\n\tPaired: yes\n"),
+        ]
         result = self.gate.remove_device("AA:BB:CC:DD:EE:FF")
         self.assertFalse(result)
 
@@ -651,10 +675,13 @@ class TestFailureModeClassification(unittest.TestCase):
         success, _ = rs.bt_unpair()
         self.assertFalse(success)
 
-    def test_remove_failure_returns_false(self):
-        """remove_device with rc!=0 returns False."""
+    def test_remove_failure_device_still_bonded(self):
+        """remove_device with rc!=0 and Paired: yes in info → False."""
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1)
+            mock_run.side_effect = [
+                MagicMock(returncode=1),  # remove fails
+                MagicMock(returncode=0, stdout="Paired: yes\n"),
+            ]
             result = self.gate.remove_device("AA:BB:CC:DD:EE:FF")
             self.assertFalse(result)
 
@@ -815,38 +842,106 @@ class TestWirePlumberLifecycle(unittest.TestCase):
         self.assertFalse(result)
 
     @patch("subprocess.run")
-    def test_wait_for_bluez_spa_factory(self, mock_run):
-        """BlueZ SPA factory (api.bluez5.midi.node) returns True."""
-        dump = [{"info": {"props": {"factory.name": "api.bluez5.midi.node"}}}]
-        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(dump))
-        result = self.gate._wait_for_bluez_spa(timeout=0.5)
-        self.assertTrue(result)
+    def test_get_wp_pid_owned(self, mock_run):
+        """_get_wp_pid returns owned WP subprocess PID."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        self.gate._wp_owned = True
+        self.gate._wp_proc = mock_proc
+        pid = self.gate._get_wp_pid()
+        self.assertEqual(pid, 99999)
 
     @patch("subprocess.run")
-    def test_wait_for_bluez_spa_device_api(self, mock_run):
-        """BlueZ device.api: bluez5 returns True."""
-        dump = [{"info": {"props": {"device.api": "bluez5"}}}]
-        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(dump))
-        result = self.gate._wait_for_bluez_spa(timeout=0.5)
-        self.assertTrue(result)
+    def test_get_wp_pid_service(self, mock_run):
+        """_get_wp_pid resolves MainPID from user systemd service."""
+        self.gate._wp_owned = False
+        self.gate._wp_proc = None
+        mock_run.return_value = MagicMock(returncode=0, stdout="MainPID=56789\n")
+        pid = self.gate._get_wp_pid()
+        self.assertEqual(pid, 56789)
 
     @patch("subprocess.run")
-    def test_wait_for_bluez_spa_pwcli_fallback(self, mock_run):
-        """pw-cli fallback with bluetooth.audio returns True."""
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout=json.dumps([])),
-            MagicMock(returncode=0, stdout="bluetooth.audio: enabled\n"),
-        ]
-        result = self.gate._wait_for_bluez_spa(timeout=0.5)
-        self.assertTrue(result)
+    def test_get_wp_pid_none(self, mock_run):
+        """_get_wp_pid returns None when neither owned nor service PID."""
+        self.gate._wp_owned = False
+        self.gate._wp_proc = None
+        mock_run.return_value = MagicMock(returncode=0, stdout="MainPID=0\n")
+        pid = self.gate._get_wp_pid()
+        self.assertIsNone(pid)
 
     @patch("subprocess.run")
-    def test_wait_for_bluez_spa_inactive(self, mock_run):
-        """No BlueZ SPA evidence returns False after timeout."""
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout=json.dumps([])),
-            MagicMock(returncode=0, stdout="no bluetooth\n"),
-        ]
+    def test_wait_for_bluez_spa_maps_pass(self, mock_run):
+        """libspa-bluez5 in /proc/PID/maps returns True."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        self.gate._wp_owned = True
+        self.gate._wp_proc = mock_proc
+
+        map_text = (
+            "7f0000000000-7f0000100000 r-xp 00000000 /usr/lib/x86_64-linux-gnu"
+            "/spa-0.2/bluez5/libspa-bluez5.so\n"
+        )
+        with patch("builtins.open", mock_open(read_data=map_text)):
+            result = self.gate._wait_for_bluez_spa(timeout=0.5)
+            self.assertTrue(result)
+
+    @patch("subprocess.run")
+    def test_wait_for_bluez_spa_maps_no_plugin(self, mock_run):
+        """No libspa-bluez5 in /proc/PID/maps and no pw-dump → False."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        self.gate._wp_owned = True
+        self.gate._wp_proc = mock_proc
+
+        map_text = (
+            "7f0000000000-7f0000100000 r-xp /usr/lib/x86_64-linux-gnu/libc.so.6\n"
+        )
+        # pw-dump also returns nothing
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps([]))
+        with patch("builtins.open", mock_open(read_data=map_text)):
+            result = self.gate._wait_for_bluez_spa(timeout=0.1)
+            self.assertFalse(result)
+
+    @patch("subprocess.run")
+    def test_wait_for_bluez_spa_dead_pid(self, mock_run):
+        """Dead/missing PID returns False immediately."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        self.gate._wp_owned = True
+        self.gate._wp_proc = mock_proc
+
+        with patch(
+            "builtins.open",
+            side_effect=FileNotFoundError("No such process"),
+        ):
+            result = self.gate._wait_for_bluez_spa(timeout=0.5)
+            self.assertFalse(result)
+
+    @patch("subprocess.run")
+    def test_wait_for_bluez_spa_pwdump_confirmatory(self, mock_run):
+        """pw-dump bluez5 factory passes as secondary confirmation."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        self.gate._wp_owned = True
+        self.gate._wp_proc = mock_proc
+
+        # Maps has no bluez5 on first iteration, pw-dump has bluez5 factory
+        map_no_bluez = "7f0000000000-7f0000100000 r-xp /usr/lib/libc.so.6\n"
+        with patch(
+            "builtins.open",
+            mock_open(read_data=map_no_bluez),
+        ):
+            dump = [{"info": {"props": {"factory.name": "api.bluez5.midi.node"}}}]
+            mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(dump))
+            result = self.gate._wait_for_bluez_spa(timeout=0.5)
+            self.assertTrue(result)
+
+    @patch("subprocess.run")
+    def test_wait_for_bluez_spa_no_pid(self, mock_run):
+        """_get_wp_pid returns None → _wait_for_bluez_spa returns False."""
+        self.gate._wp_owned = False
+        self.gate._wp_proc = None
+        mock_run.return_value = MagicMock(returncode=0, stdout="MainPID=0\n")
         result = self.gate._wait_for_bluez_spa(timeout=0.1)
         self.assertFalse(result)
 

@@ -479,12 +479,35 @@ class Phase3Gate:
             return False
 
     def remove_device(self, addr: str) -> bool:
-        """Remove device from BlueZ."""
+        """Remove device from BlueZ.
+
+        Returns True if device is fully removed (bluetoothctl remove
+        succeeded OR postcondition shows no device object and no bond
+        state).  Returns False only when the device still exists with
+        Paired/Bonded state — that is a fatal preflight failure.
+        """
+        # Try the normal remove path
         try:
             proc = self._run_bluez_cmd(["remove", addr], timeout=5.0)
-            return proc.returncode == 0
+            if proc.returncode == 0:
+                return True
         except Exception:
-            return False
+            pass
+
+        # Remove failed — check postcondition
+        try:
+            info = self._run_bluez_cmd(["info", addr], timeout=5.0)
+        except Exception:
+            # info failed → device object does not exist → clean
+            return True
+
+        # Device object still exists — check for bond state
+        if "Paired: yes" not in info.stdout and "Bonded: yes" not in info.stdout:
+            # No paired or bonded state → clean enough
+            return True
+
+        # Device exists AND is paired/bonded → fatal
+        return False
 
     def is_device_paired(self, addr: str) -> bool:
         """Check if device is paired."""
@@ -758,9 +781,14 @@ class Phase3Gate:
                     break
         if self.receiver_addr:
             removed = self.remove_device(self.receiver_addr)
-            result.evidence.append(
-                f"  Remove {self.receiver_addr}: {'OK' if removed else 'attempted'}"
-            )
+            if not removed:
+                result.evidence.append(
+                    f"  FAIL: Cannot remove {self.receiver_addr} — device "
+                    f"still exists and is paired/bonded"
+                )
+                result.exit_code = EX_HOST_PREREQ
+                return result
+            result.evidence.append(f"  Remove {self.receiver_addr}: OK")
         else:
             result.evidence.append("  No known device in BlueZ — skip remove")
 
@@ -1365,16 +1393,77 @@ class Phase3Gate:
         print("WirePlumber ready — BlueZ SPA plugin registered", file=sys.stderr)
         return True
 
-    def _wait_for_bluez_spa(self, timeout: float = 20.0) -> bool:
-        """Wait for BlueZ SPA plugin to be registered in PipeWire.
+    def _get_wp_pid(self) -> Optional[int]:
+        """Return PID of WirePlumber process whose SPA plugin we must verify.
 
-        Grounded evidence: WirePlumber session.services includes
-        bluetooth.audio or api.bluez; PipeWire has api.bluez5.midi.node
-        factory registered (proves the BlueZ SPA plugin loaded).
+        For owned WP (headless, main-systemwide) use the subprocess PID.
+        For active-seat WP, resolve MainPID from the user systemd service.
+        Returns None if the PID cannot be determined.
+        """
+        # Owned process: use tracked PID
+        if self._wp_owned and self._wp_proc is not None:
+            pid = self._wp_proc.pid
+            if pid is not None:
+                return pid
+
+        # Active seat: resolve MainPID from user service
+        try:
+            proc = subprocess.run(
+                ["systemctl", "--user", "show", "wireplumber", "-p", "MainPID"],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+            )
+            for line in proc.stdout.splitlines():
+                if line.startswith("MainPID="):
+                    val = line.split("=", 1)[1]
+                    if val and val != "0":
+                        return int(val)
+        except Exception:
+            pass
+
+        return None
+
+    def _wait_for_bluez_spa(self, timeout: float = 20.0) -> bool:
+        """Wait for BlueZ SPA plugin to be mapped in WirePlumber.
+
+        Grounded evidence: WirePlumber process must have libspa-bluez5.so
+        mapped in its address space (/proc/<pid>/maps).  Falls back to
+        PipeWire factory/device nodes only as optional post-connection
+        confirmation — pre-connect proof requires the actual plugin map.
+
         Does NOT require a BT device to be connected.
         """
+        wp_pid = self._get_wp_pid()
+        if wp_pid is None:
+            print(
+                "FAIL: Cannot determine WirePlumber PID for SPA proof",
+                file=sys.stderr,
+            )
+            return False
+
         start = time.monotonic()
         while time.monotonic() - start < timeout:
+            # Proof 1 (required): libspa-bluez5.so in WP process maps
+            try:
+                with open(f"/proc/{wp_pid}/maps", "r") as f:
+                    if "libspa-bluez5" in f.read():
+                        return True
+            except (FileNotFoundError, ProcessLookupError):
+                print(
+                    f"FAIL: WirePlumber PID {wp_pid} not running (maps unreadable)",
+                    file=sys.stderr,
+                )
+                return False
+            except Exception as e:
+                print(
+                    f"WARNING: Cannot read /proc/{wp_pid}/maps: {e}",
+                    file=sys.stderr,
+                )
+
+            # Proof 2 (optional): PipeWire bluez5 factory or device node
+            # Accept only as confirmatory after maps-based proof already passed
+            # on a prior iteration; never accept as standalone pre-connect proof.
             try:
                 proc = subprocess.run(
                     ["pw-dump"],
@@ -1383,35 +1472,17 @@ class Phase3Gate:
                     timeout=10.0,
                 )
                 dump = json.loads(proc.stdout)
-
-                # Check for BlueZ SPA factory or device node
                 for obj in dump:
                     props = obj.get("info", {}).get("props", {})
                     fname = props.get("factory.name", "")
                     api = props.get("device.api", "")
                     if "bluez5" in fname.lower() or "bluez5" in api.lower():
                         return True
-
-                # Fallback: check pw-cli for bluetooth services
-                try:
-                    pwp = subprocess.run(
-                        ["pw-cli", "info", "all"],
-                        capture_output=True,
-                        text=True,
-                        timeout=10.0,
-                    )
-                    out = (pwp.stdout or "") + (
-                        pwp.stderr if isinstance(pwp.stderr, str) else ""
-                    )
-                    if "bluetooth.audio" in out or "api.bluez" in out:
-                        return True
-                except Exception:
-                    pass
-
             except (json.JSONDecodeError, subprocess.TimeoutExpired):
                 pass
             except Exception:
                 pass
+
             time.sleep(1.0)
         return False
 

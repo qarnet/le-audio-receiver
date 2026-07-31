@@ -71,18 +71,25 @@ Original acceptance criteria (all met):
 Gate must fail loudly when host lacks BAP roles or experimental ISO support;
 host prerequisites cannot be mistaken for receiver failure.
 
-## Phase 3 — pairing and reconnect lifecycle
+## Phase 3 — pairing and reconnect lifecycle ✅ ACCEPTED (2026-07-31)
 
-Validate clean first pairing, disconnect/reconnect with persisted bond, stream
-restart, and post-disconnect advertising. Add a deliberate development pairing
-reset command using standard Zephyr bond APIs if needed to create clean test
-state without mass erase. No production auto-delete of bonds.
+All 12 autonomous sequence steps pass with three strict stock playbacks at
+7.5 ms frame duration, zero decode/I2S/offload faults. Preflight hardened:
+SPA proof requires actual `libspa-bluez5.so` mapped in WirePlumber process
+(`/proc/<pid>/maps`); failed `bluetoothctl remove` is fatal unless exact
+postcondition shows no device object and no bond state.
 
-## Phase 4 — compatibility expansion only from evidence
+Two corrections per `docs/development/bluez-wireplumber-phase3-final-review-handoff.md`:
+- `_wait_for_bluez_spa()`: maps proof replaces `pw-cli info all` fallback.
+- `remove_device()`: postcondition check makes partial removal fatal.
 
-If bare BAP still fails, capture bluetoothd/WirePlumber logs and btmon trace.
-Enable CAP Acceptor/CAS, broaden LC3 capabilities, or adjust QoS only when trace
-shows exact client requirement. No speculative services or custom host policy.
+See `docs/development/phase3-results.md` for full acceptance evidence.
+
+## Phase 4 — compatibility expansion — NOT NEEDED
+
+Bare BAP passed with stock WirePlumber main-systemwide playback. Three 30 s
+playbacks zero-fault. CAP/CAS remain disabled; no phone interoperability,
+speculative services, or custom host policy required. Phase 4 cancelled.
 
 ## Final acceptance
 

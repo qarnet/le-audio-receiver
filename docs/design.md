@@ -1,6 +1,6 @@
 # LE Audio Receiver — Design Document
 
-Status: **revised 2026-07-31** (Phase 5 closed — cpuapp ASRC accepted, Mode A+B 600s zero faults; Phase 6 FLPR offload Stages 0–5 complete; Phase 1 BlueZ/WirePlumber PACS availability landed; Phase 2 BlueZ/WirePlumber stock desktop gate accepted). Earlier history: accepted 2026-07-05.
+Status: **revised 2026-07-31** (Phase 5 closed — cpuapp ASRC accepted, Mode A+B 600s zero faults; Phase 6 FLPR offload Stages 0–5 complete; Phase 1 BlueZ/WirePlumber PACS availability landed; Phase 2 BlueZ/WirePlumber stock desktop gate accepted; Phase 3 BlueZ/WirePlumber pairing/reconnect lifecycle accepted; Phase 4 compatibility expansion not needed). Earlier history: accepted 2026-07-05.
 
 This is the consolidated design doc for the firmware supporting both **nRF5340**
 and **nRF54L15**. It records current state, findings (historical), target

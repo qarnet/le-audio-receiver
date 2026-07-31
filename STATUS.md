@@ -3,6 +3,33 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
+## Phase 3 — BlueZ/WirePlumber pairing and reconnect lifecycle — ACCEPTED (2026-07-31)
+
+Phase 3 accepted with three autonomous strict stock playbacks on nRF54L15.
+Full 12-step sequence (unpair, remove host device, pair, trust, connect,
+playback, disconnect, reconnect, playback, reset, reconnect, playback) all
+pass without repo harness. Three 30 s playbacks at 7.5 ms frame duration,
+zero decode/I2S/offload faults each.
+
+Preflight hardened with two corrections landed in final review:
+
+- **SPA proof**: `_wait_for_bluez_spa()` now requires `libspa-bluez5.so`
+  mapped in the WirePlumber process (`/proc/<pid>/maps`); `pw-cli info all`
+  substring fallback removed. Owned WP uses subprocess PID; active-seat WP
+  resolves `MainPID` via systemd.
+- **Remove fatal**: failed `bluetoothctl remove` is now fatal unless exact
+  postcondition shows device object no longer exists and no `Paired`/`Bonded`
+  state remains.
+
+See `docs/development/phase3-results.md` for acceptance evidence,
+`docs/development/bluez-wireplumber-phase3-final-review-handoff.md` for
+execution handoff, and `docs/development/bluez-wireplumber-interoperability-plan.md`
+for Phase 1–4 plan.
+
+**Phase 4 compatibility expansion NOT needed.** Bare BAP passed with stock
+WirePlumber main-systemwide playback. CAP/CAS remain disabled; no speculative
+services or custom host policy required.
+
 ## Phase 2 — BlueZ/WirePlumber stock desktop gate — ACCEPTED (2026-07-31)
 
 Phase 2 accepted with strict nonzero-audio/zero-fault evidence on nRF54L15,
@@ -24,12 +51,6 @@ stock WirePlumber main-systemwide playback:
 See `docs/development/phase2-stock-desktop-gate-results.md` for full evidence
 and `docs/development/bluez-wireplumber-interoperability-plan.md` for Phase
 1–4 plan.
-
-**Pending handoffs**:
-- `docs/development/bluez-wireplumber-phase2-strict-evidence-handoff.md`
-- `docs/development/bluez-wireplumber-phase2-duration-fault-fix-handoff.md`
-- `docs/development/bluez-wireplumber-phase2-review-cleanup-handoff.md` (this)
-- Phase 3 (pairing/reconnect lifecycle) is next open work.
 
 ## Phase 1 — BlueZ/WirePlumber PACS availability — DONE (2026-07-30)
 
