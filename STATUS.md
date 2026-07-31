@@ -28,7 +28,7 @@ Acceptance evidence:
 - No numeric line/branch coverage is claimed; no honest coverage report
   exists until Phase T7 instrumentation.
 
-**Phase T2 — audio pipeline unit characterization** — in progress.
+**Phase T2 — audio pipeline unit characterization** — ACCEPTED (2026-08-01).
 
 Locks LC3 decode/routing, volume, and statistics to direct production-source
 proof: deterministic 48 kHz golden fixtures, real-decode golden tests, and
@@ -77,18 +77,28 @@ three production decoder defects fixed.  Evidence:
 Focused suites (desktop `thomas-main`): decode 37/37, volume 12/12,
 stats 10/10 — zero compiler warnings.
 
-Acceptance evidence (to be completed on `thomas-workstation` from a
-detached temporary worktree of the exact T2 commit, transferred via
-non-destructive git bundle):
+Acceptance evidence:
 
-- Desktop full gate: **22 PASS / 1 FAIL / 23 TOTAL** — the only failing
-  child is `bsim: stage1`, which cannot run on `thomas-main` because the
-  BabbleSim component binaries are not built there
-  (`~/ncs/v3.3.0/tools/bsim/bin/bs_2G4_phy_v1` missing); the workstation
-  provides the authoritative BSim leg (same as T1).
-- All three builds pass on the T2 working tree: `fw-build-5340`,
-  `fw-build-54l15`, `fw-build-dongle` (documented Kconfig/CMake
-  diagnostics only; no compiler warnings).
+- Full gate on the provisioned workstation (`thomas-workstation`) from a
+  detached temporary worktree of the exact T2 commit, transferred via
+  non-destructive git bundle: **23 PASS / 0 FAIL / 23 TOTAL**, run twice
+  consecutively, both clean; BSim hashes deterministic in every run —
+  10 ms `0x9225F075`, 7.5 ms `0x2011C0F9` (pairwise equality enforced;
+  these are the corrected mono-decode values, see the hash-change note
+  above).
+- All three builds pass on the T2 commit: `fw-build-5340`,
+  `fw-build-54l15`, `fw-build-dongle` (both desktop and workstation) —
+  documented Kconfig/CMake diagnostics only, no compiler warnings.
+- Desktop full gate is 22/23 locally: the `bsim: stage1` child cannot run
+  on `thomas-main` because the BabbleSim component binaries are not built
+  there (`~/ncs/v3.3.0/tools/bsim/bin/bs_2G4_phy_v1` missing); the
+  workstation provides the authoritative BSim leg (same as T1).
+- Production APIs/wire/audio formats unchanged except documented safe
+  decode-layer rejection and defect corrections; production images
+  contain no test hooks (test-only compile definitions and the
+  `lc3_decode` linker wrap are applied only by test CMakeLists).
+- Worktree clean after scoped commits; workstation repo returned to clean
+  `main` with all temporary refs/worktrees/bundles removed.
 - **T3 is next**: I2S and sink state machine.
 
 **Phase T1 — FLPR production-source tests** — ACCEPTED (2026-07-31).
