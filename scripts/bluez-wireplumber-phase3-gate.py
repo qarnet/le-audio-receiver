@@ -260,8 +260,14 @@ class Phase3Gate:
         # Ensure log directory exists
         os.makedirs(log_dir, exist_ok=True)
 
-        # Serial interface
+        # Serial interface — open eagerly to keep SAMD11 CDC bridge alive.
+        # Never close/reopen; the USB CDC endpoint on Xiao boards fails
+        # if the serial port is closed and reopened.
         self.serial = ReceiverSerial(port=serial_port)
+        try:
+            self.serial._get_serial()  # force eager open, caches handle
+        except Exception:
+            pass  # not a real port (e.g. tests) — lazy open still works
 
         # Backed-up host settings (for restoration)
         self._saved_pairable: Optional[str] = None
@@ -270,6 +276,11 @@ class Phase3Gate:
         # Subprocess tracking — all started by this gate
         self._agent_proc: Optional[subprocess.Popen] = None
         self._scan_on: bool = False
+
+        # WirePlumber lifecycle ownership
+        self._wp_owned: bool = False
+        self._wp_proc: Optional[subprocess.Popen] = None
+        self._saved_wp_service_state: Optional[str] = None
 
         # Register atexit cleanup for catastrophic exit paths
         atexit.register(self._atexit_cleanup)
@@ -540,51 +551,78 @@ class Phase3Gate:
             pass
         return result
 
-    def wait_for_advertising_restart(self, timeout: float = 15.0) -> bool:
-        """Poll receiver serial for advertising restart message.
+    def wait_for_advertising_restart(self, timeout: float = 20.0) -> bool:
+        """Wait for receiver to restart advertising after disconnect.
 
-        Sends 'audio status' to check if the receiver is alive,
-        and reads serial output for 'Advertising as' message.
-        Returns False without explicit evidence — no fallback success.
+        Reuses the existing open serial connection — never closes/reopens
+        because that can break the SAMD11 USB CDC bridge on Xiao boards.
+        The serial was opened during gate init and remains open.
+
+        Firmware prints 'Restarting advertising...' + 'Advertising again'
+        after disconnect (main.c:164-172), not the initial 'Advertising as'.
         """
         start = time.monotonic()
+        all_data = ""
         while time.monotonic() - start < timeout:
             try:
-                stdout, _ = self.serial.send_command("audio status", wait_ms=500)
-                if "BLE ready" in stdout or "Advertising as" in stdout:
-                    return True
+                ser = self.serial._get_serial()
+                data = ser.read(65536)
+                if data:
+                    chunk = data.decode("utf-8", errors="replace")
+                    all_data += chunk
+                    if (
+                        "Restarting advertising" in all_data
+                        or "Advertising again" in all_data
+                    ):
+                        return True
             except Exception:
                 pass
-            time.sleep(1.0)
-
-        # Final check: flush and read serial
-        try:
-            ser = self.serial._get_serial()
-            ser.reset_input_buffer()
-            time.sleep(2.0)
-            data = ser.read(4096)
-            decoded = data.decode("utf-8", errors="replace")
-            if "Advertising as" in decoded:
-                return True
-        except Exception:
-            pass
+            time.sleep(0.3)
 
         return False
 
     # ── Playback helper ──────────────────────────────────────────────────
 
     def run_playback_phase2(self, log_path: str) -> GateResult:
-        """Run playback (PW poll + PCM playback + counter check).
+        """Run playback with continuous UART capture and strict Phase 2 log parsing.
 
-        Captures raw serial output after playback to find the stream summary
-        line and verify zero-fault counters.
+        Captures UART continuously from before pw-play through stream summary,
+        without resetting away startup evidence. Uses Phase 2 parse_receiver_log()
+        for strict validation.
         """
         gate = self._make_phase2_gate(log_path)
 
         result = GateResult()
         result.stage = "playback"
 
+        # ── Start continuous UART capture in background thread ──
+        capture_done = threading.Event()
+        capture_chunks: List[str] = []
+        capture_thread: Optional[threading.Thread] = None
+
+        def capture_worker() -> None:
+            """Continuously read serial until capture_done is set."""
+            try:
+                ser = self.serial._get_serial()
+                ser.reset_input_buffer()
+                while not capture_done.is_set():
+                    try:
+                        data = ser.read(65536)
+                        if data:
+                            capture_chunks.append(
+                                data.decode("utf-8", errors="replace")
+                            )
+                    except Exception:
+                        time.sleep(0.1)
+            except Exception:
+                pass
+
         try:
+            # Start capture NOW, before pw-play
+            capture_thread = threading.Thread(target=capture_worker, daemon=True)
+            capture_thread.start()
+            time.sleep(0.5)  # Give capture a head start
+
             # Find receiver (device should already be connected)
             device_path = gate.find_receiver()
             if not device_path:
@@ -617,127 +655,55 @@ class Phase3Gate:
                 result.exit_code = EX_RECEIVER_FAIL
                 return result
 
-            # Wait briefly, then read raw serial for stream summary
-            result.evidence.append("--- Waiting for stream summary... ---")
-            time.sleep(2.0)
-
-            # Clear serial input buffer to start fresh
-            try:
-                ser = self.serial._get_serial()
-                ser.reset_input_buffer()
-            except Exception:
-                pass
-
-            # Read raw serial output for up to 15s, looking for summary
-            tail_parts: List[str] = []
+            # Wait for stream summary to appear in capture
+            result.evidence.append(
+                "--- Waiting for stream summary in continuous capture... ---"
+            )
             t_start = time.monotonic()
             summary_found = False
             while time.monotonic() - t_start < 15.0:
-                try:
-                    ser = self.serial._get_serial()
-                    data = ser.read(65536)
-                    if data:
-                        decoded = data.decode("utf-8", errors="replace")
-                        tail_parts.append(decoded)
-                        if "Stream[" in decoded and "summary:" in decoded:
-                            summary_found = True
-                            time.sleep(0.5)  # grab any remaining bytes
-                            break
-                except Exception:
-                    time.sleep(0.2)
-            tail = "".join(tail_parts)
+                combined = "".join(capture_chunks)
+                if "Stream[" in combined and "summary:" in combined:
+                    summary_found = True
+                    # Wait a bit more for the full summary line
+                    time.sleep(1.0)
+                    break
+                time.sleep(0.3)
 
-            # Write captured output to log file
-            try:
-                with open(log_path, "w") as f:
-                    f.write(tail)
-            except Exception:
-                pass
-
-            # Parse stream summary from tail
-            result.evidence.append("--- Parsing stream output ---")
-
-            m = re.search(
-                r"Stream\[\d+\]\s+summary:\s+SDUs=(\d+)\s+decoded=(\d+)\s+plc=(\d+)\s+"
-                r"decode_err=(\d+)\s+i2s_underrun=(\d+)\s+stream_reset=(\d+)",
-                tail,
-            )
-            if not m:
+            if not summary_found:
                 result.evidence.append(
-                    "  FAIL: No stream summary found in serial output"
+                    "  NOTE: Stream summary not seen in capture; "
+                    "continuing with available data"
                 )
-                if tail:
-                    # Show what we captured for diagnostics
-                    result.evidence.append(
-                        f"  Captured {len(tail)} bytes, first 300 chars: {tail[:300]}"
-                    )
-                result.exit_code = EX_RECEIVER_FAIL
-                return result
 
-            sdus = int(m.group(1))
-            decoded = int(m.group(2))
-            plc = int(m.group(3))
-            decode_err = int(m.group(4))
-            i2s_under = int(m.group(5))
-            stream_reset = int(m.group(6))
+        finally:
+            # Stop capture
+            capture_done.set()
+            if capture_thread is not None:
+                capture_thread.join(timeout=3.0)
 
-            result.evidence.append(
-                f"  Stream summary: SDUs={sdus} decoded={decoded} plc={plc} "
-                f"decode_err={decode_err} i2s_underrun={i2s_under} "
-                f"stream_reset={stream_reset}"
-            )
+        # Combine captured data and write to log file
+        tail = "".join(capture_chunks)
+        try:
+            with open(log_path, "w") as f:
+                f.write(tail)
+        except Exception:
+            pass
 
-            # Check for I2S DMA and ASCS evidence
-            if "I2S DMA started" in tail:
-                result.evidence.append("  ✓ I2S DMA started")
-            if "Stream[0] started" in tail or "Audio path gate OPEN" in tail:
-                result.evidence.append("  ✓ ASCS stream started")
+        result.evidence.append(
+            f"  Captured {len(tail)} bytes of UART output to {log_path}"
+        )
 
-            # Zero-fault gate
-            if decode_err != 0:
-                result.evidence.append(f"  FAIL: decode_err={decode_err} (expected 0)")
-                result.exit_code = EX_RECEIVER_FAIL
-                return result
-            if i2s_under != 0:
-                result.evidence.append(f"  FAIL: i2s_underrun={i2s_under} (expected 0)")
-                result.exit_code = EX_RECEIVER_FAIL
-                return result
-            if stream_reset != 0:
-                result.evidence.append(
-                    f"  FAIL: stream_reset={stream_reset} (expected 0)"
-                )
-                result.exit_code = EX_RECEIVER_FAIL
-                return result
-            if sdus <= 0:
-                result.evidence.append(f"  FAIL: SDUs={sdus} (expected >0)")
-                result.exit_code = EX_RECEIVER_FAIL
-                return result
-            if decoded <= 0:
-                result.evidence.append(f"  FAIL: decoded={decoded} (expected >0)")
-                result.exit_code = EX_RECEIVER_FAIL
-                return result
-
-            result.success = True
-            result.exit_code = EX_OK
-
-        except Exception as e:
-            result.evidence.append(f"Playback error: {e}")
+        # ── Use Phase 2 strict parse_receiver_log() ──
+        # Set log_path on the gate so parse_receiver_log can read it
+        gate.log_path = log_path
+        if not gate.parse_receiver_log(result):
             result.exit_code = EX_RECEIVER_FAIL
+            return result
 
+        result.success = True
+        result.exit_code = EX_OK
         return result
-
-    @staticmethod
-    def _parse_playback_counters(
-        result: GateResult,
-        tail: str,
-    ) -> None:  # noqa: D401
-        """Parse serial output for stream-start evidence (kept for API compat)."""
-        if "I2S DMA started" in tail:
-            result.evidence.append("  ✓ I2S DMA started")
-        if "Stream[0] started" in tail or "Audio path gate OPEN" in tail:
-            result.evidence.append("  ✓ ASCS stream started")
-        if "offload prep OK" in tail:
-            result.evidence.append("  ✓ FLPR offload active")
 
     # ── Full sequence runner ─────────────────────────────────────────────
 
@@ -748,6 +714,15 @@ class Phase3Gate:
         """
         result = Phase3Result()
         result.stage = "sequence"
+
+        # ── WirePlumber lifecycle setup ────────────────────────────
+        result.stage = "wp_lifecycle_setup"
+        result.evidence.append("=== WirePlumber lifecycle setup ===")
+        if not self._begin_wp_lifecycle():
+            result.evidence.append("  FAIL: WirePlumber lifecycle setup failed")
+            result.exit_code = EX_HOST_PREREQ
+            return result
+        result.evidence.append("  ✓ WirePlumber ready")
 
         # ── Pre-run backup ──────────────────────────────────────────
         self.backup_host_settings()
@@ -767,9 +742,38 @@ class Phase3Gate:
             return result
         result.evidence.append("  ✓ Firmware identity confirmed")
 
-        # ── Step 2: bt unpair ────────────────────────────────────
-        result.stage = "step2_bt_unpair"
-        result.evidence.append("=== Step 2: bt unpair ===")
+        # ── Step 2: Remove host device + unpair receiver ─────────
+        result.stage = "step2_remove_and_unpair"
+        result.evidence.append(
+            "=== Step 2: Remove host BlueZ device + unpair receiver ==="
+        )
+
+        # Remove device from BlueZ FIRST to prevent auto-reconnect storm
+        proc = self._run_bluez_cmd(["devices"], timeout=5.0)
+        for line in proc.stdout.splitlines():
+            if self.receiver_name in line:
+                parts = line.split()
+                if len(parts) >= 2:
+                    self.receiver_addr = parts[1]
+                    break
+        if self.receiver_addr:
+            removed = self.remove_device(self.receiver_addr)
+            result.evidence.append(
+                f"  Remove {self.receiver_addr}: {'OK' if removed else 'attempted'}"
+            )
+        else:
+            result.evidence.append("  No known device in BlueZ — skip remove")
+
+        # Power-cycle controller to clear any pending auto-reconnect
+        try:
+            self._run_btmgmt_cmd(["power", "off"], timeout=5.0)
+            time.sleep(1.0)
+            self._run_btmgmt_cmd(["power", "on"], timeout=5.0)
+            time.sleep(1.0)
+        except Exception:
+            pass
+
+        # Now unpair on receiver — controller won't auto-reconnect
         success, output = self.serial.bt_unpair()
         result.evidence.append(f"  bt unpair output: {output}")
         if not success:
@@ -779,31 +783,22 @@ class Phase3Gate:
             result.exit_code = EX_RECEIVER_FAIL
             return result
         result.evidence.append("  ✓ Bonds cleared on receiver")
+
+        # Drain serial — despite removing + power-cycling, some
+        # residual reconnect attempts may still arrive.
+        time.sleep(1.0)
+        try:
+            ser = self.serial._get_serial()
+            ser.reset_input_buffer()
+        except Exception:
+            pass
         time.sleep(1.0)
 
-        # ── Step 3: Remove host BlueZ device ──────────────────────
-        result.stage = "step3_remove_device"
-        result.evidence.append("=== Step 3: Remove host BlueZ device ===")
-        # Discover any known address from existing device list
-        proc = self._run_bluez_cmd(["devices"], timeout=5.0)
-        for line in proc.stdout.splitlines():
-            if self.receiver_name in line:
-                parts = line.split()
-                if len(parts) >= 2:
-                    self.receiver_addr = parts[1]
-                    break
-
-        if self.receiver_addr:
-            removed = self.remove_device(self.receiver_addr)
-            result.evidence.append(
-                f"  Remove {self.receiver_addr}: {'OK' if removed else 'FAIL'}"
-            )
-        else:
-            result.evidence.append("  No known device in BlueZ — skip remove")
-            removed = True  # nothing to remove trivially succeeds
-        time.sleep(1.0)
-
-        # Verify: any remaining device entry must NOT be paired/bonded
+        # ── Step 3: Verify no stale bond ─────────────────────────
+        result.stage = "step3_verify_no_stale_bond"
+        result.evidence.append("=== Step 3: Verify no stale bond ===")
+        # Step 2 already removed device from BlueZ and unpair'd receiver.
+        # Just verify no paired/bonded device object remains.
         proc = self._run_bluez_cmd(["devices"], timeout=5.0)
         remaining = [l for l in proc.stdout.splitlines() if self.receiver_name in l]
         fatal_remaining = False
@@ -815,26 +810,13 @@ class Phase3Gate:
                 combined = info.stdout + info.stderr
                 if "Paired: yes" in combined or "Bonded: yes" in combined:
                     result.evidence.append(
-                        f"  FAIL: Stale bonded device remains: {rem_addr} {line}"
+                        f"  FAIL: Stale bonded device remains: {rem_addr}"
                     )
                     fatal_remaining = True
-                else:
-                    result.evidence.append(
-                        f"  NOTE: Rediscovered unpaired device (harmless): {rem_addr}"
-                    )
         if fatal_remaining:
             result.exit_code = EX_STALE_BOND
             return result
-
-        if not removed and self.receiver_addr:
-            # Remove reported failure — treat as stale bond risk
-            result.evidence.append(
-                f"  FAIL: Cannot remove device {self.receiver_addr} from BlueZ"
-            )
-            result.exit_code = EX_STALE_BOND
-            return result
-
-        result.evidence.append("  ✓ Host device removed / no stale bond")
+        result.evidence.append("  ✓ No stale bond on host or receiver")
         time.sleep(1.0)
 
         # ── Step 4: Enable pairing agent + scan ──────────────────
@@ -971,21 +953,49 @@ class Phase3Gate:
         result.stage = "step8_disconnect"
         result.evidence.append("=== Step 8: Disconnect ===")
         dc_ok = self.disconnect_device(addr)
-        result.evidence.append(f"  Disconnect: {'OK' if dc_ok else 'attempted'}")
-        time.sleep(2.0)
+        if not dc_ok:
+            result.evidence.append("  FAIL: BlueZ disconnect failed — cannot proceed")
+            result.exit_code = EX_RECEIVER_FAIL
+            return result
+        result.evidence.append("  ✓ Disconnect called")
 
-        # Verify receiver advertising restart
+        # Poll until device is actually disconnected (bluetoothctl disconnect
+        # may return success before the link drops)
+        t_start = time.monotonic()
+        dc_timeout = 10.0
+        while time.monotonic() - t_start < dc_timeout:
+            if not self.is_device_connected(addr):
+                break
+            time.sleep(0.5)
+        if self.is_device_connected(addr):
+            result.evidence.append(
+                f"  FAIL: Device still connected {dc_timeout}s after disconnect"
+            )
+            result.exit_code = EX_RECEIVER_FAIL
+            return result
+        result.evidence.append("  ✓ Device disconnected")
+
+        # Do NOT remove from BlueZ — bond must persist for step 9.
+        # BlueZ does not auto-reconnect on pure disconnect; the device
+        # stays as Paired:yes, Connected:no.
+
+        # Verify receiver advertising restart — fatal on failure
         adv_ok = self.wait_for_advertising_restart()
-        result.evidence.append(
-            f"  Receiver advertising: {'restarted' if adv_ok else 'unconfirmed'}"
-        )
+        if not adv_ok:
+            result.evidence.append(
+                "  FAIL: Receiver advertising not confirmed after disconnect"
+            )
+            result.exit_code = EX_NO_ADVERTISE
+            return result
+        result.evidence.append("  ✓ Receiver advertising restarted")
         result.evidence.append("  ✓ Disconnect complete")
 
         # ── Step 9: Reconnect (persisted bond) ────────────────────
         result.stage = "step9_reconnect"
         result.evidence.append("=== Step 9: Reconnect (persisted bond) ===")
 
-        # Verify device still bonded
+        # Device was disconnected but NOT removed — bond remains in BlueZ.
+        # Verify bond persisted, then connect without re-pairing.
         if not self.is_device_paired(addr):
             result.evidence.append("  FAIL: Bond lost after disconnect")
             result.exit_code = EX_RECEIVER_FAIL
@@ -1100,8 +1110,9 @@ class Phase3Gate:
             return result
         result.evidence.append("  ✓ PipeWire sink restored after reset")
 
-        # Short playback (10s)
-        short_dur = min(10, self.duration)
+        # Short playback (30s — shorter durations have SDU count skew
+        # from stream startup overhead; handoff allows 30s).
+        short_dur = 30
         orig_dur = self.duration
         self.duration = short_dur
         log3_path = os.path.join(self.log_dir, "phase3_playback3.log")
@@ -1246,11 +1257,213 @@ class Phase3Gate:
         """Disable BlueZ scanning if it was turned on via D-Bus."""
         self._stop_discovery()
 
+    # ── WirePlumber lifecycle ownership ───────────────────────────────────
+
+    def _detect_seat(self) -> Optional[str]:
+        """Detect active logind seat for current session. Returns seat name or None."""
+        try:
+            proc = subprocess.run(
+                ["loginctl", "list-sessions", "--no-legend"],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+            )
+            sessions = proc.stdout.strip().splitlines()
+            if not sessions:
+                return None
+            session_id = sessions[0].split()[0]
+            proc = subprocess.run(
+                ["loginctl", "show-session", session_id, "-p", "Seat", "-p", "Remote"],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+            )
+            seat = ""
+            for line in proc.stdout.splitlines():
+                if line.startswith("Seat="):
+                    seat = line.split("=", 1)[1] if "=" in line else ""
+            return seat if seat else None
+        except Exception:
+            return None
+
+    def _save_wp_service_state(self) -> None:
+        """Record current WirePlumber user service state."""
+        try:
+            proc = subprocess.run(
+                ["systemctl", "--user", "is-active", "wireplumber"],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+            )
+            self._saved_wp_service_state = proc.stdout.strip()
+        except Exception:
+            self._saved_wp_service_state = None
+
+    def _begin_wp_lifecycle(self) -> bool:
+        """Ensure WirePlumber runs with correct profile for current session.
+
+        If session has active logind seat → use existing WP as-is.
+        If headless (no seat) → stop user service, start own main-systemwide.
+        Waits for BlueZ SPA plugin registration in PipeWire.
+        Returns True if WP is ready and BlueZ SPA plugin is loaded.
+        """
+        self._save_wp_service_state()
+        seat = self._detect_seat()
+
+        if seat:
+            # Active seat: use existing WP
+            print(
+                f"WirePlumber: active seat '{seat}' — using existing profile",
+                file=sys.stderr,
+            )
+            self._wp_owned = False
+        else:
+            # Headless: stop user service, start main-systemwide
+            print(
+                "WirePlumber: no seat — stopping user service, launching main-systemwide",
+                file=sys.stderr,
+            )
+
+            # Stop user WirePlumber service
+            try:
+                subprocess.run(
+                    ["systemctl", "--user", "stop", "wireplumber"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15.0,
+                )
+                time.sleep(2.0)
+            except Exception as e:
+                print(f"WARNING: Cannot stop user wireplumber: {e}", file=sys.stderr)
+
+            # Start own WirePlumber with main-systemwide profile
+            try:
+                self._wp_proc = subprocess.Popen(
+                    ["wireplumber", "--profile", "main-systemwide"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    preexec_fn=os.setsid,
+                )
+                self._wp_owned = True
+                print(
+                    f"wireplumber --profile main-systemwide started (pid={self._wp_proc.pid})",
+                    file=sys.stderr,
+                )
+                time.sleep(3.0)  # Give WP time to initialize
+            except Exception as e:
+                print(f"FAIL: Cannot start wireplumber: {e}", file=sys.stderr)
+                return False
+
+        # Wait for BlueZ SPA plugin to register in PipeWire
+        if not self._wait_for_bluez_spa(timeout=20.0):
+            print(
+                "FAIL: BlueZ SPA plugin not loaded in PipeWire",
+                file=sys.stderr,
+            )
+            return False
+
+        print("WirePlumber ready — BlueZ SPA plugin registered", file=sys.stderr)
+        return True
+
+    def _wait_for_bluez_spa(self, timeout: float = 20.0) -> bool:
+        """Wait for BlueZ SPA plugin to be registered in PipeWire.
+
+        Grounded evidence: WirePlumber session.services includes
+        bluetooth.audio or api.bluez; PipeWire has api.bluez5.midi.node
+        factory registered (proves the BlueZ SPA plugin loaded).
+        Does NOT require a BT device to be connected.
+        """
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            try:
+                proc = subprocess.run(
+                    ["pw-dump"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10.0,
+                )
+                dump = json.loads(proc.stdout)
+
+                # Check for BlueZ SPA factory or device node
+                for obj in dump:
+                    props = obj.get("info", {}).get("props", {})
+                    fname = props.get("factory.name", "")
+                    api = props.get("device.api", "")
+                    if "bluez5" in fname.lower() or "bluez5" in api.lower():
+                        return True
+
+                # Fallback: check pw-cli for bluetooth services
+                try:
+                    pwp = subprocess.run(
+                        ["pw-cli", "info", "all"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10.0,
+                    )
+                    out = (pwp.stdout or "") + (
+                        pwp.stderr if isinstance(pwp.stderr, str) else ""
+                    )
+                    if "bluetooth.audio" in out or "api.bluez" in out:
+                        return True
+                except Exception:
+                    pass
+
+            except (json.JSONDecodeError, subprocess.TimeoutExpired):
+                pass
+            except Exception:
+                pass
+            time.sleep(1.0)
+        return False
+
+    def _end_wp_lifecycle(self) -> None:
+        """Stop owned WirePlumber and restore original user service."""
+        if not self._wp_owned or self._wp_proc is None:
+            # WP was not owned by us — nothing to restore
+            return
+
+        print("Stopping owned WirePlumber...", file=sys.stderr)
+        try:
+            pid = self._wp_proc.pid
+            if pid is not None:
+                os.killpg(os.getpgid(pid), signal.SIGTERM)
+                try:
+                    self._wp_proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(os.getpgid(pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        self._wp_proc.wait(timeout=3.0)
+                    except subprocess.TimeoutExpired:
+                        pass
+        except (ProcessLookupError, OSError):
+            pass
+        except Exception as e:
+            print(f"WARNING: Error stopping owned WirePlumber: {e}", file=sys.stderr)
+
+        self._wp_proc = None
+        self._wp_owned = False
+
+        # Restore original user service if it was active
+        if self._saved_wp_service_state == "active":
+            print("Restoring user wireplumber service...", file=sys.stderr)
+            try:
+                subprocess.run(
+                    ["systemctl", "--user", "start", "wireplumber"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15.0,
+                )
+            except Exception as e:
+                print(f"WARNING: Cannot restart user wireplumber: {e}", file=sys.stderr)
+
     def _atexit_cleanup(self) -> None:
         """Last-resort cleanup registered with atexit.
 
         Handles catastrophic exit paths where the normal finally block
         is skipped (e.g., SIGKILL to parent, interpreter crash).
+        Does NOT close serial — CDC bridge dies on close.
         """
         try:
             self._stop_btagent()
@@ -1261,18 +1474,20 @@ class Phase3Gate:
         except Exception:
             pass
         try:
-            self.restore_host_settings()
+            self._end_wp_lifecycle()
         except Exception:
             pass
         try:
-            self.serial.close()
+            self.restore_host_settings()
         except Exception:
             pass
 
     def cleanup(self) -> None:
-        """Comprehensive cleanup: agent, scan, adapter state, serial, stray processes.
+        """Comprehensive cleanup: agent, scan, WP lifecycle, adapter state.
 
         Guarantees restoration for every exit path. Must be called in finally.
+        No global process kills — only own process groups are stopped.
+        Does NOT close serial — SAMD11 CDC bridge dies on close/reopen.
         """
         # 1. Stop own bt-agent subprocess
         self._stop_btagent()
@@ -1280,23 +1495,13 @@ class Phase3Gate:
         # 2. Ensure scan is off
         self._ensure_scan_off()
 
-        # 3. Restore adapter pairable/discoverable state
+        # 3. Stop owned WirePlumber and restore user service
+        self._end_wp_lifecycle()
+
+        # 4. Restore adapter pairable/discoverable state
         self.restore_host_settings()
 
-        # 4. Close serial port
-        self.serial.close()
-
-        # 5. No stray bt-agent processes from other invocations
-        try:
-            subprocess.run(
-                ["pkill", "-f", "bt-agent"],
-                timeout=3.0,
-                capture_output=True,
-            )
-        except Exception:
-            pass
-
-        # 6. Unregister atexit handler (cleanup already ran)
+        # 5. Unregister atexit handler (cleanup already ran)
         try:
             atexit.unregister(self._atexit_cleanup)
         except Exception:

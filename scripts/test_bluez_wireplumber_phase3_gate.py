@@ -6,7 +6,9 @@ pairing rejection, service resolution, reconnect, log scoping.
 """
 
 import importlib
+import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -29,6 +31,11 @@ EX_PAIR_REJECT = _p3.EX_PAIR_REJECT
 EX_NO_ADVERTISE = _p3.EX_NO_ADVERTISE
 EX_SERVICE_FAIL = _p3.EX_SERVICE_FAIL
 EX_RESET_FAIL = _p3.EX_RESET_FAIL
+
+# Import Phase 2 gate for log parsing tests
+_bg = importlib.import_module("bluez-wireplumber-gate")
+BluezWirePlumberGate = _bg.BluezWirePlumberGate
+GateResult = _bg.GateResult
 
 
 class TestPhase3GateInit(unittest.TestCase):
@@ -704,8 +711,10 @@ class TestReceiverSerialWaitForAdvertising(unittest.TestCase):
             receiver_name="Test Receiver",
             serial_port="/dev/fake",
         )
-        self.gate.serial = MagicMock()
-        self.gate.serial.send_command.return_value = ("", "")
+        self.mock_ser = MagicMock()
+        self.gate.serial = ReceiverSerial(port="/dev/fake")
+        self.gate.serial._get_serial = MagicMock(return_value=self.mock_ser)
+        self.gate.serial.reset = MagicMock()
 
     def tearDown(self):
         try:
@@ -714,18 +723,440 @@ class TestReceiverSerialWaitForAdvertising(unittest.TestCase):
             pass
 
     def test_wait_for_advertising_restart_returns_false_by_default(self):
-        """wait_for_advertising_restart should return False without evidence."""
-        result = self.gate.wait_for_advertising_restart(timeout=0.1)
+        """wait_for_advertising_restart returns False without evidence."""
+        self.mock_ser.read.return_value = b""
+        result = self.gate.wait_for_advertising_restart(timeout=0.2)
         self.assertFalse(result)
 
     def test_wait_for_advertising_restart_found(self):
-        """If 'Advertising' found in output, returns True."""
-        self.gate.serial.send_command.return_value = (
-            "Advertising as LE Audio Receiver",
-            "",
-        )
-        result = self.gate.wait_for_advertising_restart(timeout=1.0)
+        """If 'Restarting advertising' in raw serial, returns True."""
+        self.mock_ser.read.return_value = b"Restarting advertising...\r\n"
+        result = self.gate.wait_for_advertising_restart(timeout=0.5)
         self.assertTrue(result)
+
+
+class TestWirePlumberLifecycle(unittest.TestCase):
+    """Test WirePlumber lifecycle ownership — seat detection, launch, SPA wait."""
+
+    def setUp(self):
+        self.gate = Phase3Gate(
+            receiver_name="Test Receiver",
+            serial_port="/dev/fake",
+        )
+        self.gate.serial = MagicMock()
+
+    def tearDown(self):
+        try:
+            self.gate.cleanup()
+        except Exception:
+            pass
+
+    @patch("subprocess.run")
+    def test_detect_seat_active(self, mock_run):
+        """detect_seat returns seat name when session has one."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="c1 1000 thomas seat0\n"),
+            MagicMock(returncode=0, stdout="Seat=seat0\nRemote=no\n"),
+        ]
+        seat = self.gate._detect_seat()
+        self.assertEqual(seat, "seat0")
+
+    @patch("subprocess.run")
+    def test_detect_seat_none(self, mock_run):
+        """detect_seat returns None when no sessions."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        seat = self.gate._detect_seat()
+        self.assertIsNone(seat)
+
+    def test_save_wp_service_state(self):
+        """save_wp_service_state should not raise."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="active\n")
+            self.gate._save_wp_service_state()
+            self.assertEqual(self.gate._saved_wp_service_state, "active")
+
+    @patch("subprocess.run")
+    @patch("subprocess.Popen")
+    def test_begin_wp_lifecycle_headless(self, mock_popen, mock_run):
+        """Headless session starts wireplumber main-systemwide."""
+        # No seat detected
+        self.gate._detect_seat = MagicMock(return_value=None)
+        self.gate._save_wp_service_state = MagicMock()
+        self.gate._wait_for_bluez_spa = MagicMock(return_value=True)
+
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+
+        result = self.gate._begin_wp_lifecycle()
+        self.assertTrue(result)
+        self.assertTrue(self.gate._wp_owned)
+        mock_popen.assert_called_once()
+
+    @patch("subprocess.run")
+    def test_begin_wp_lifecycle_with_seat(self, mock_run):
+        """Active seat keeps existing WP."""
+        self.gate._detect_seat = MagicMock(return_value="seat0")
+        self.gate._save_wp_service_state = MagicMock()
+        self.gate._wait_for_bluez_spa = MagicMock(return_value=True)
+
+        result = self.gate._begin_wp_lifecycle()
+        self.assertTrue(result)
+        self.assertFalse(self.gate._wp_owned)
+
+    def test_begin_wp_lifecycle_spa_fails(self):
+        """WL lifecycle fails when BlueZ SPA monitor never appears."""
+        self.gate._detect_seat = MagicMock(return_value="seat0")
+        self.gate._save_wp_service_state = MagicMock()
+        self.gate._wait_for_bluez_spa = MagicMock(return_value=False)
+
+        result = self.gate._begin_wp_lifecycle()
+        self.assertFalse(result)
+
+    @patch("subprocess.run")
+    def test_wait_for_bluez_spa_factory(self, mock_run):
+        """BlueZ SPA factory (api.bluez5.midi.node) returns True."""
+        dump = [{"info": {"props": {"factory.name": "api.bluez5.midi.node"}}}]
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(dump))
+        result = self.gate._wait_for_bluez_spa(timeout=0.5)
+        self.assertTrue(result)
+
+    @patch("subprocess.run")
+    def test_wait_for_bluez_spa_device_api(self, mock_run):
+        """BlueZ device.api: bluez5 returns True."""
+        dump = [{"info": {"props": {"device.api": "bluez5"}}}]
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(dump))
+        result = self.gate._wait_for_bluez_spa(timeout=0.5)
+        self.assertTrue(result)
+
+    @patch("subprocess.run")
+    def test_wait_for_bluez_spa_pwcli_fallback(self, mock_run):
+        """pw-cli fallback with bluetooth.audio returns True."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=json.dumps([])),
+            MagicMock(returncode=0, stdout="bluetooth.audio: enabled\n"),
+        ]
+        result = self.gate._wait_for_bluez_spa(timeout=0.5)
+        self.assertTrue(result)
+
+    @patch("subprocess.run")
+    def test_wait_for_bluez_spa_inactive(self, mock_run):
+        """No BlueZ SPA evidence returns False after timeout."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=json.dumps([])),
+            MagicMock(returncode=0, stdout="no bluetooth\n"),
+        ]
+        result = self.gate._wait_for_bluez_spa(timeout=0.1)
+        self.assertFalse(result)
+
+    @patch("subprocess.run")
+    def test_begin_wp_lifecycle_launch_failure(self, mock_run):
+        """WP launch failure returns False."""
+        self.gate._detect_seat = MagicMock(return_value=None)
+        self.gate._save_wp_service_state = MagicMock()
+        mock_run.return_value = MagicMock(returncode=0)
+
+        with patch("subprocess.Popen", side_effect=OSError("exec failed")):
+            result = self.gate._begin_wp_lifecycle()
+            self.assertFalse(result)
+
+    @patch("subprocess.run")
+    @patch("subprocess.Popen")
+    def test_begin_wp_lifecycle_no_pkill(self, mock_popen, mock_run):
+        """Headless launch must NOT call pkill."""
+        self.gate._detect_seat = MagicMock(return_value=None)
+        self.gate._save_wp_service_state = MagicMock()
+        self.gate._wait_for_bluez_spa = MagicMock(return_value=True)
+
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        mock_popen.return_value = mock_proc
+
+        self.gate._begin_wp_lifecycle()
+        for call in mock_run.call_args_list:
+            args_str = str(call)
+            self.assertNotIn("pkill", args_str, "WP lifecycle must not use pkill")
+
+    @patch("os.killpg")
+    @patch("os.getpgid")
+    @patch("subprocess.run")
+    def test_end_wp_lifecycle_restores_service(self, mock_run, mock_getpgid, mock_kill):
+        """end_wp_lifecycle restores user wireplumber service if it was active."""
+        self.gate._wp_owned = True
+        self.gate._saved_wp_service_state = "active"
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        self.gate._wp_proc = mock_proc
+
+        mock_getpgid.return_value = 12345
+        self.gate._end_wp_lifecycle()
+        mock_kill.assert_called()  # Signal sent to own WP
+        # Should have called systemctl start wireplumber
+        start_calls = [c for c in mock_run.call_args_list if "start" in str(c)]
+        self.assertGreater(len(start_calls), 0)
+
+    def test_end_wp_lifecycle_not_owned(self):
+        """end_wp_lifecycle is no-op when WP not owned."""
+        self.gate._wp_owned = False
+        self.gate._end_wp_lifecycle()  # Must not raise
+
+
+class TestDisconnectFailureFatal(unittest.TestCase):
+    """Test that disconnect failure causes Phase3Result failure."""
+
+    def setUp(self):
+        self.gate = Phase3Gate(
+            receiver_name="Test Receiver",
+            serial_port="/dev/fake",
+        )
+        self.gate.serial = MagicMock()
+
+    def tearDown(self):
+        try:
+            self.gate.cleanup()
+        except Exception:
+            pass
+
+    @patch("subprocess.run")
+    def test_disconnect_device_false_returns_false(self, mock_run):
+        """disconnect_device with nonzero return code returns False."""
+        mock_run.return_value = MagicMock(returncode=1)
+        result = self.gate.disconnect_device("AA:BB:CC:DD:EE:FF")
+        self.assertFalse(result)
+
+    def test_disconnect_failure_is_not_attempted(self):
+        """disconnect_device failure returns False, not a soft 'attempted'."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1)
+            result = self.gate.disconnect_device("AA:BB:CC:DD:EE:FF")
+        self.assertFalse(result)
+        # A caller checking "if not result" will enter the failure path
+
+
+class TestAdvertisingRestartFatal(unittest.TestCase):
+    """Test that missing advertising evidence causes failure."""
+
+    def setUp(self):
+        self.gate = Phase3Gate(
+            receiver_name="Test Receiver",
+            serial_port="/dev/fake",
+        )
+        self.mock_ser = MagicMock()
+        self.gate.serial = ReceiverSerial(port="/dev/fake")
+        self.gate.serial._get_serial = MagicMock(return_value=self.mock_ser)
+        self.gate.serial.reset = MagicMock()
+
+    def tearDown(self):
+        try:
+            self.gate.cleanup()
+        except Exception:
+            pass
+
+    def test_advertising_restart_returns_false_without_evidence(self):
+        """wait_for_advertising_restart returns False when no evidence found."""
+        self.mock_ser.read.return_value = b""
+        result = self.gate.wait_for_advertising_restart(timeout=0.2)
+        self.assertFalse(result)
+        # Caller must treat False as fatal
+
+
+class TestCleanupNoUnrelatedKill(unittest.TestCase):
+    """Test that cleanup does NOT use global pkill."""
+
+    def setUp(self):
+        self.gate = Phase3Gate(
+            receiver_name="Test Receiver",
+            serial_port="/dev/fake",
+        )
+        self.gate.serial = MagicMock()
+
+    def tearDown(self):
+        try:
+            self.gate.cleanup()
+        except Exception:
+            pass
+
+    @patch("subprocess.run")
+    @patch("atexit.unregister")
+    def test_cleanup_no_pkill(self, mock_unreg, mock_run):
+        """cleanup must not call pkill for any process name."""
+        self.gate.cleanup()
+        for call in mock_run.call_args_list:
+            args = str(call)
+            self.assertNotIn("pkill", args, "cleanup must not use global pkill")
+
+    def test_cleanup_only_stops_own_processes(self):
+        """cleanup stops only own process group, not unrelated agents."""
+        # verify _stop_btagent is called but only kills its own pid group
+        with (
+            patch.object(self.gate, "_stop_btagent") as mock_stop,
+            patch.object(self.gate, "_ensure_scan_off"),
+            patch.object(self.gate, "_end_wp_lifecycle"),
+            patch.object(self.gate, "restore_host_settings"),
+            patch("atexit.unregister"),
+        ):
+            self.gate.cleanup()
+            mock_stop.assert_called_once()
+
+
+class TestEarlyCleanup(unittest.TestCase):
+    """Test cleanup after early-stage failure does not raise."""
+
+    def test_cleanup_after_partial_init(self):
+        """cleanup after partial init must not raise."""
+        gate = Phase3Gate(
+            receiver_name="Test Cleanup",
+            serial_port="/dev/fake",
+        )
+        gate.serial = MagicMock()
+        # Simulate early failure: agent not started, scan never on, no WP
+        gate._agent_proc = None
+        gate._wp_owned = False
+        gate._wp_proc = None
+        gate.cleanup()  # Must not raise
+
+    def test_cleanup_with_dead_agent(self):
+        """cleanup with dead agent PID must not raise."""
+        gate = Phase3Gate(
+            receiver_name="Test Cleanup",
+            serial_port="/dev/fake",
+        )
+        gate.serial = MagicMock()
+        # Agent proc exists but died
+        mock_proc = MagicMock()
+        mock_proc.pid = None
+        gate._agent_proc = mock_proc
+        gate.cleanup()  # Must not raise
+
+
+class TestParseReceiverLogReuse(unittest.TestCase):
+    """Test that parse_receiver_log correctly rejects faulty logs.
+
+    Uses Phase 2 BluezWirePlumberGate.parse_receiver_log() for validation.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_gate(self, log_content: str) -> BluezWirePlumberGate:
+        log_path = os.path.join(self.tmpdir, "test.log")
+        with open(log_path, "w") as f:
+            f.write(log_content)
+        return BluezWirePlumberGate(
+            receiver_name="Test Receiver",
+            duration=30,
+            log_path=log_path,
+        )
+
+    def test_i2s_dma_not_started_fails(self):
+        """Log without 'I2S DMA started' should fail."""
+        log = (
+            "I2S ready\n"
+            "LC3 decoder[0]: 48000 Hz 7500 us\n"
+            "ASCS config OK\n"
+            "ASCS streaming started\n"
+            "Stream[0] summary: SDUs=4000 decoded=4100 plc=100 "
+            "decode_err=0 i2s_underrun=0 stream_reset=0\n"
+        )
+        gate = self._make_gate(log)
+        result = GateResult()
+        ok = gate.parse_receiver_log(result)
+        self.assertFalse(ok)
+        self.assertIn("I2S DMA not started", " ".join(result.evidence))
+
+    def test_zero_sdu_fails(self):
+        """Stream summary with SDUs=0 should fail."""
+        log = (
+            "I2S DMA started\n"
+            "LC3 decoder[0]: 48000 Hz 7500 us\n"
+            "ASCS config OK\n"
+            "ASCS streaming started\n"
+            "Stream[0] summary: SDUs=0 decoded=0 plc=0 "
+            "decode_err=0 i2s_underrun=0 stream_reset=0\n"
+        )
+        gate = self._make_gate(log)
+        result = GateResult()
+        ok = gate.parse_receiver_log(result)
+        self.assertFalse(ok)
+
+    def test_short_sdu_count_fails(self):
+        """SDU count too low for duration should fail (Phase 2 strict check)."""
+        log = (
+            "I2S DMA started\n"
+            "LC3 decoder[0]: 48000 Hz 7500 us\n"
+            "ASCS config OK\n"
+            "ASCS streaming started\n"
+            "Stream[0] summary: SDUs=100 decoded=210 plc=110 "
+            "decode_err=0 i2s_underrun=0 stream_reset=0\n"
+        )
+        gate = self._make_gate(log)
+        result = GateResult()
+        ok = gate.parse_receiver_log(result)
+        self.assertFalse(ok)
+        # Evidence should mention SDU count too low
+        evidence = " ".join(result.evidence)
+        self.assertTrue("too low" in evidence.lower() or "SDU" in evidence)
+
+    def test_valid_log_passes(self):
+        """Valid log with all required evidence passes."""
+        log = (
+            "I2S DMA started\n"
+            "LC3 decoder[0]: 48000 Hz 7500 us\n"
+            "bt_bap: ASE Config: freq=48000 frame_dur=7500\n"
+            "bt_bap: Enable: stream started\n"
+            "Stream[0] summary: SDUs=4000 decoded=4100 plc=100 "
+            "decode_err=0 i2s_underrun=0 stream_reset=0\n"
+        )
+        gate = self._make_gate(log)
+        result = GateResult()
+        ok = gate.parse_receiver_log(result)
+        self.assertTrue(ok)
+
+
+class TestNoBapCentralDependency(unittest.TestCase):
+    """Verify Phase 3 gate never imports bap_central, raw-HCI, or MediaEndpoint."""
+
+    @staticmethod
+    def _clean_source(source):
+        """Remove docstrings and comments from source for dependency check."""
+        # Remove all triple-quoted strings (docstrings)
+        cleaned = re.sub(r'""".*?"""', "", source, flags=re.DOTALL)
+        cleaned = re.sub(r"'''.*?'''", "", cleaned, flags=re.DOTALL)
+        # Remove comment lines
+        lines = [l for l in cleaned.splitlines() if not l.strip().startswith("#")]
+        return "\n".join(lines)
+
+    def test_no_bap_central_import(self):
+        """Gate module must not import bap_central."""
+        import inspect
+
+        source = inspect.getsource(_p3)
+        cleaned = self._clean_source(source)
+        self.assertNotIn(
+            "bap_central", cleaned, "Phase 3 gate must not import bap_central"
+        )
+        self.assertNotIn(
+            "MediaEndpoint", cleaned, "Phase 3 gate must not register MediaEndpoint"
+        )
+        self.assertNotIn(
+            "raw_hci", cleaned.lower(), "Phase 3 gate must not use raw-HCI"
+        )
+
+    def test_no_iso_socket_import(self):
+        """Gate must not open ISO sockets directly."""
+        import inspect
+
+        source = inspect.getsource(_p3)
+        cleaned = self._clean_source(source)
+        self.assertNotIn("iso_socket", cleaned.lower())
+        self.assertNotIn("BT_ISO", cleaned)
 
 
 if __name__ == "__main__":

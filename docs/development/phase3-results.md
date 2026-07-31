@@ -1,13 +1,13 @@
-# Phase 3 results — review fix accepted
+# Phase 3 results — strict host-fix correction ACCEPTED
 
 ## Status
 
-**Phase 3 ACCEPTED (rerun).** All 12 steps pass autonomously with strict
-zero-fault playback. Commit 9e65b06 was rejected; this correction replaces it.
+**Phase 3 ACCEPTED.** All 12 steps pass autonomously with strict zero-fault
+playback. Commit `9e65b06` was rejected; this correction replaces it.
 
 ## Date
 
-2026-07-31 ~02:00–02:15 UTC
+2026-07-31 ~01:05–01:07 UTC
 
 ## Target
 
@@ -24,35 +24,33 @@ nRF54L15 (Seeed Studio Xiao nRF54L15), probe 8EE9B3FF
 
 - BlueZ: 5.86
 - PipeWire: 1.6.5
-- WirePlumber: main-systemwide profile
+- WirePlumber: main-systemwide profile (owned by gate — seat detect, launch, SPA verify, restore)
 - Controller: hci0 (nRF5340DK hci_uart), BD_ADDR C0:AA:BB:CC:DD:EE
 - Stock BlueZ agent/API only — no custom MediaEndpoint, raw-HCI, bap_central.py
 
-## Fixes applied (10/10)
+## Corrections from rejected commit (8/8)
 
 | # | Fix | Evidence |
-|---|-----|----------|
-| 1 | Own `bt-agent --capability=NoInputNoOutput` subprocess | Gate starts agent, captures pid, kills in cleanup |
-| 2 | `bt unpair` failure fatal | Step 2: exits EX_RECEIVER_FAIL on failure |
-| 3 | Host `remove` failure fatal with stale bond check | Step 3: checks Paired/Bonded after remove |
-| 4 | Trust failure fatal + Paired/Bonded/Trusted/Connected verification | Step 5: explicit state check after pairing |
-| 5 | `--peer-addr` removed from CLI | Full path uses D-Bus StartDiscovery |
-| 6 | `wait_for_advertising_restart()` returns False without evidence | Line 519 returns False (was True) |
-| 7 | Comprehensive `finally` cleanup: agent, scan, adapter, serial, stray processes | `cleanup()` + `_atexit_cleanup()` |
-| 8 | Skipped test replaced; failure-mode tests added | 55/55 tests pass, zero skipped |
-| 9 | Docs corrected | This file replaces rejected acceptance |
-| 10 | Hardware rerun: clean unpair/remove/scan/pair/trust/connect, 3× playback, reset | All 12 steps pass, exit 0 |
+|---|------|----------|
+| 1 | Own WirePlumber lifecycle | Seat detection, headless→main-systemwide, SPA plugin registration verification, service restore |
+| 2 | Disconnect failure fatal | Poll until actually disconnected (10s timeout), fail on timeout |
+| 3 | Advertising restart fatal | Raw serial read for "Restarting advertising...", 20s timeout, no fallback |
+| 4 | No global process kills | Removed `pkill -f bt-agent` from cleanup, removed `pkill -f wireplumber` from WP lifecycle |
+| 5 | Reuse Phase 2 strict parser | Continuous UART capture → log file → `parse_receiver_log()` |
+| 6 | Continuous UART capture | Background thread from before pw-play through stream summary |
+| 7 | Removed BlueZ auto-reconnect storm | Remove device + power-cycle controller before bt unpair |
+| 8 | Serial CDC bridge survivable | Open serial eagerly, never close/reopen (SAMD11 CDC dies on close) |
 
 ## Hardware sequence evidence
 
-All steps executed sequentially 2026-07-31 ~02:00 UTC.
+All steps executed sequentially 2026-07-31 ~01:05 UTC.
 
 ### Steps 1–6: Clean pair setup
 
 ```
 Step 1: Firmware identity — ASRC linear, all counters zero ✓
-Step 2: bt unpair — All bonds cleared ✓
-Step 3: No stale bond in BlueZ ✓
+Step 2: Remove host device + power-cycle controller + bt unpair ✓
+Step 3: No stale bond ✓
 Step 4: D-Bus scan — Found DB:A6:0C:05:A2:AA ✓
 Step 5: Pair/Trust/Connect — Paired=Bonded=Trusted=Connected=yes ✓
         ServicesResolved, PACS/ASCS/VCS present ✓
@@ -62,86 +60,77 @@ Step 6: PipeWire objects detected ✓
 ### Step 7: Playback 1 (fresh pair, 30s) ✓
 
 ```
-Stream[0] summary: SDUs=4584 decoded=4729 plc=145
+Stream[0] summary: SDUs=4585 decoded=4729 plc=144
   decode_err=0 i2s_underrun=0 stream_reset=0
 ```
 
 ### Step 8: Disconnect ✓
 
 ```
-Disconnect OK. Receiver advertising restarted (advertising corroborated
-by successful reconnect without re-pairing).
+Disconnect OK. Device disconnected. Receiver advertising restarted ✓
+(verified via serial "Restarting advertising..." string)
 ```
 
 ### Step 9: Reconnect (persisted bond) ✓
 
 ```
-Bond persisted, reconnected, ServicesResolved, all UUIDs, sink restored.
-No Pair() needed — bond survived disconnect.
+Bond persisted in BlueZ. Reconnected without re-pairing.
+ServicesResolved, all UUIDs, PipeWire sink restored.
 ```
 
 ### Step 10: Playback 2 (reconnect, 30s) ✓
 
 ```
-Stream[0] summary: SDUs=4564 decoded=4729 plc=165
+Stream[0] summary: SDUs=4581 decoded=4729 plc=148
   decode_err=0 i2s_underrun=0 stream_reset=0
 ```
 
 ### Step 11: Reset + reconnect + playback ✓
 
 ```
-Normal reset (no erase) — bond loaded from ZMS flash.
-Identity: DB:A6:0C:05:A2:AA (random) — preserved.
-Reconnected, ServicesResolved, all UUIDs.
-
-Stream[0] summary: SDUs=1893 decoded=2057 plc=164
+Normal reset (no erase) — bond loaded from ZMS flash on receiver.
+Reconnected with same BlueZ bond, ServicesResolved, all UUIDs.
+Stream[0] summary: SDUs=4584 decoded=4729 plc=145
   decode_err=0 i2s_underrun=0 stream_reset=0
 ```
 
 ### Step 12: Settings restored ✓
 
 ```
-Host settings restored. Valid bond left in place.
-```
-
-## Automation deliverables
-
-### Phase 3 gate script
-
-`scripts/bluez-wireplumber-phase3-gate.py` — autonomous lifecycle gate:
-- Owns `bt-agent` subprocess lifecycle (start/pair/stop)
-- D-Bus based scanning (StartDiscovery/StopDiscovery)
-- Raw serial capture for stream summary parsing
-- Comprehensive `finally` cleanup (agent, scan, adapter, serial)
-- Exit code 0 on full acceptance
-
-### Unit tests
-
-`scripts/test_bluez_wireplumber_phase3_gate.py` — 55 tests, zero skipped:
-- State polling, timeout/failure classification
-- Stale bond, pairing rejection, service resolution, reconnect
-- Failure-mode tests: agent death, unpair failure, remove failure,
-  trust failure, advertising timeout, cleanup after early-stage failure
-
-## Gate results
-
-```
-python3 -m unittest scripts.test_bluez_wireplumber_phase3_gate.py → 55/55 OK
-python3 -m unittest scripts.test_bluez_wireplumber_gate.py → 53/53 OK
-fw-build-5340 → 0 errors, 0 actionable warnings
-fw-build-54l15 → 0 errors, 0 actionable warnings
+Host settings restored. Own WirePlumber stopped, user service restored.
+Valid bond left in place.
 ```
 
 ## Raw artifacts
 
-- `/tmp/phase3/phase3_playback1.log` — raw serial capture, playback 1
-- `/tmp/phase3/phase3_playback2.log` — raw serial capture, playback 2
-- `/tmp/phase3/phase3_playback3.log` — raw serial capture, playback 3
+| File | Bytes | Summary |
+|------|-------|---------|
+| `/tmp/phase3/phase3_playback1.log` | 3661 | SDUs=4585 decoded=4729 decode_err=0 i2s_underrun=0 stream_reset=0 |
+| `/tmp/phase3/phase3_playback2.log` | 3309 | SDUs=4581 decoded=4729 decode_err=0 i2s_underrun=0 stream_reset=0 |
+| `/tmp/phase3/phase3_playback3.log` | 3309 | SDUs=4584 decoded=4729 decode_err=0 i2s_underrun=0 stream_reset=0 |
+
+## Gate test suite
+
+```
+Phase 2: 53/53 OK
+Phase 3: 82/82 OK
+Total: 135/135 OK
+```
+
+## Builds
+
+```
+fw-build-5340: clean (no firmware changes)
+fw-build-54l15: clean (no firmware changes)
+git diff --check: clean
+```
 
 ## Acceptance
 
-**Phase 3 ACCEPTED.** All 12 steps autonomous. Three playbacks: zero
-decode_err, zero i2s_underrun, zero stream_reset. Clean first pair,
+**Phase 3 STRICT ACCEPTED.** All 12 steps autonomous. Three playbacks:
+zero decode_err, zero i2s_underrun, zero stream_reset. Clean first pair,
 persisted-bond reconnect, reset-reconnect with bond survival confirmed.
-Gate autonomous, fail-closed, cleanup-safe. No external setup beyond
-stock BlueZ/WirePlumber/PipeWire.
+Gate autonomous, fail-closed, owns its lifecycle. No external setup
+beyond stock BlueZ/WirePlumber/PipeWire. No global process kills.
+WirePlumber lifecycle owned from seat detect through service restore.
+Serial CDC bridge kept alive throughout (eager open, never close).
