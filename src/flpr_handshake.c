@@ -689,9 +689,12 @@ int flpr_handshake_wait_new_ready(uint32_t previous_epoch, k_timeout_t timeout)
 			k_spin_unlock(&flpr_lock, key);
 			return -ECANCELED;
 		}
-		/* If epoch already different from previous, sem already given? */
-		if (flpr.ready && flpr.epoch != previous_epoch) {
-			/* Epoch already new — drain sem and succeed. */
+		/* Fast path: epoch already different from previous AND the
+		 * READY_ACK for it succeeded.  The new-ready semaphore is only
+		 * given after a successful ACK send, so acked is required here
+		 * too — a changed epoch whose ACK failed must not succeed. */
+		if (flpr.ready && flpr.acked && flpr.epoch != previous_epoch) {
+			/* Epoch already new and acked — drain sem and succeed. */
 			k_spin_unlock(&flpr_lock, key);
 			while (k_sem_take(&new_ready_sem, K_NO_WAIT) == 0) {
 			}

@@ -105,6 +105,11 @@ int flpr_handshake_wait_bound(k_timeout_t timeout);
  * FLPR epoch differs from @p previous_epoch.  Duplicate same-epoch
  * READY does NOT give this semaphore.
  *
+ * If the epoch already differs from @p previous_epoch AND the READY_ACK
+ * for it succeeded, the call succeeds immediately (the signal was
+ * already posted); a changed epoch whose READY_ACK failed never
+ * succeeds via this fast path.
+ *
  * @param previous_epoch  The last known epoch (from disconnect snapshot).
  * @param timeout         Maximum time to wait.
  * @return 0 on success, -EAGAIN on timeout, -ECANCELED if unbound.

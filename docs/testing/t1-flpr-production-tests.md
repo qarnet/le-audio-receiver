@@ -101,6 +101,18 @@ builds contain no test symbols or host arrays.
    production dispatches them from IPC receive context without holding
    `flpr_lock` (proven by callback lock probes under
    `CONFIG_SPIN_VALIDATE`).
+8. `flpr_handshake_wait_new_ready()` fast path now requires
+   `flpr.ready && flpr.acked && flpr.epoch != previous_epoch`.  A changed
+   epoch whose READY_ACK send failed can no longer succeed without
+   waiting; the fast path is only taken after the ACK for the changed
+   epoch actually succeeded.  Header comment updated to match.
+9. `flpr_ring_mgr_consume_asrc_result()` now verifies the payload CRC
+   over the ring payload BEFORE copying PCM to the caller.  Every
+   validation failure (flags, frame range, status shape, reserved bytes,
+   CRC) now preserves both caller buffers byte-for-byte; only
+   `result->output_frames` is zeroed, exactly as the header contract
+   documents.  No scratch buffer; slot-consumption behavior on invalid
+   output is unchanged.
 
 Lifetime-counter preservation across unbind (ready_count, reboot_count,
 err_*, rx_missed_total, last epoch) was already implemented and is now
@@ -108,20 +120,10 @@ locked in by tests.
 
 ## Characterized behaviors (documented, not changed)
 
-- `flpr_ring_mgr_consume_asrc_result()` copies the payload before the CRC
-  check, so a CRC failure leaves `result->output_frames == 0` and result
-  fields untouched while the output buffer may carry the payload.  The
-  header's "UNTOUCHED" wording is inaccurate for the CRC case; callers
-  must key off `output_frames`.  Recorded as a documentation/refactor
-  review candidate.
 - `flpr_ring_mgr_set_consume_cb()` is a documented no-op.  Unchanged in
   T1; recorded as a refactor-review candidate.
 - `k_sem_take(K_NO_WAIT)` returns `-EBUSY` (not `-EAGAIN`); timeout
   waits return `-EAGAIN`.  Tests assert the actual values.
-- `flpr_handshake_wait_new_ready()`'s "already-new epoch" fast path
-  succeeds without a semaphore token even if the READY_ACK send failed
-  (epoch change is the primary signal).  The semaphore path is only given
-  after ACK success.
 
 ## Hardware-only gaps (unchanged)
 
@@ -133,7 +135,7 @@ locked in by tests.
   simulator infrastructure exists.
 - No hardware claim is made from any native_sim result.
 
-## Exact suite results (thomas-workstation, T1 commit)
+## Exact suite results (T1 + review fix, validated commit)
 
 Focused suites (west build -t run, native_sim/native/64):
 
@@ -141,21 +143,20 @@ Focused suites (west build -t run, native_sim/native/64):
 |-------|--------|
 | `tests/unit/flpr_runtime` | 21 PASS / 0 FAIL |
 | `tests/unit/flpr_ring_mgr` | 53 PASS / 0 FAIL |
-| `tests/unit/flpr_handshake` | 43 PASS / 0 FAIL |
+| `tests/unit/flpr_handshake` | 44 PASS / 0 FAIL |
 
-Full gate (`./scripts/test-all.sh`): see T1 commit evidence in STATUS.md.
+Full gate (`./scripts/test-all.sh`): see STATUS.md for the exact-commit
+workstation validation (three consecutive full-gate runs).
 
 Builds: `fw-build-5340`, `fw-build-54l15`, `fw-build-dongle` — all pass on
-the T1 commit.
+the T1 commit (desktop and workstation).
 
-T1 suite count total: 21 + 53 + 43 = 117 tests across the three suites,
+T1 suite count total: 21 + 53 + 44 = 118 tests across the three suites,
 all executing production source.
 
 ## Refactor-review candidates recorded
 
 - `flpr_ring_mgr_set_consume_cb()` unused no-op (T1B).
-- `flpr_ring_mgr_consume_asrc_result()` CRC-vs-payload-copy ordering and
-  the header "UNTOUCHED" wording (T1B).
 - `test_flpr_crc_err` internal counter is updated by the 0x00 report
   subtype but not exported in `struct flpr_ring_status` (T1B).
 - The boards/`<board>.overlay` auto-discovery does not match the

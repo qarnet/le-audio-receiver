@@ -45,7 +45,7 @@ implementations.  Evidence and hook architecture:
 - `tests/unit/flpr_ring_mgr` — 53 tests execute `src/flpr_ring_mgr.c` +
   real `flpr_ring.c`/`flpr_cache.c` with host ring arrays; production
   static IPC handlers run through the handshake-mock captured handlers.
-- `tests/unit/flpr_handshake` — 43 tests execute `src/flpr_handshake.c`
+- `tests/unit/flpr_handshake` — 44 tests execute `src/flpr_handshake.c`
   against a fake IPC service backend (NCS v3.3.0 ipc_service test pattern,
   real `ipc_service_*` APIs).  Fixed: `flpr_handshake_send_msg()` routes
   through `send_msg()` so failures count `err_send`; header wording
@@ -55,17 +55,43 @@ implementations.  Evidence and hook architecture:
 - Physical cache/FLPR entry-point behavior remains hardware-only; native
   `flpr_cache.c` coverage is API/barrier-call proof only.
 
+**Review fix round (2026-07-31, commit `fix: enforce FLPR validation
+before acceptance`)** — closes two production-contract violations found
+during orchestrator review:
+
+- `flpr_handshake_wait_new_ready()` fast path now requires
+  `flpr.ready && flpr.acked && flpr.epoch != previous_epoch`.  A changed
+  epoch whose READY_ACK send failed can no longer succeed without
+  waiting; the fast path is taken only after the ACK for the changed
+  epoch succeeded (new regression test + extended ACK-failure test).
+- `flpr_ring_mgr_consume_asrc_result()` now verifies the payload CRC over
+  the ring payload BEFORE copying PCM to the caller.  Every validation
+  failure preserves both caller buffers byte-for-byte; only
+  `result->output_frames` is zeroed, exactly as the header contract
+  documents (sentinel-buffer tests for CRC, flags, frame range, reserved
+  state, and zero-frame error output).
+- T1 evidence (`docs/testing/t1-flpr-production-tests.md`) updated: the
+  two previously "characterized" behaviors are now recorded as fixed
+  defects; the inaccurate CRC "payload may carry data" characterization
+  is removed.
+
 Acceptance evidence:
 
 - Focused suites on the desktop (`thomas-main`): runtime 21/21,
-  ring manager 53/53, handshake 43/43 — zero compiler warnings.
+  ring manager 53/53, handshake 44/44 — zero compiler warnings.
 - Full gate on the provisioned workstation (`thomas-workstation`) from a
   detached temporary worktree of the exact T1 commit, transferred via
-  non-destructive git bundle: **21 PASS / 0 FAIL / 21 TOTAL** on the final
-  validated commit (three gate runs total; two clean 21/21 runs, one run
-  with a single transient non-BSim child failure not reproduced on the
-  subsequent runs; BSim hashes deterministic in every run — 10 ms
-  `0xFE0D4245`, 7.5 ms `0x5853F445`).
+  non-destructive git bundle: **21 PASS / 0 FAIL / 21 TOTAL** — three
+  consecutive full-gate runs on the final validated commit, all clean;
+  BSim hashes deterministic in every run — 10 ms `0xFE0D4245`,
+  7.5 ms `0x5853F445`.
+- Transient-failure disposition: the earlier single 20/21 gate run's
+  failing child could not be identified after the fact — its console
+  output was not retained (only BSim logs survive in `/tmp`) and no
+  other evidence exists.  Per the review-fix handoff fallback rule, no
+  root cause is claimed; the unsupported claim was removed and the
+  final exact-commit gate was instead run three consecutive times, all
+  passing (see above).
 - All three builds pass on the T1 commit: `fw-build-5340`, `fw-build-54l15`,
   `fw-build-dongle` (both desktop and workstation).
 - Desktop gate is 20/21 locally: the `bsim: stage1` child cannot run on

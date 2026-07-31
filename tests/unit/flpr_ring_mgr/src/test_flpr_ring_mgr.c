@@ -77,6 +77,26 @@ static void arrange_output_slot(uint32_t epoch, uint32_t seq, uint16_t vf, uint1
 	flpr_ring_produce_commit(ring, idx);
 }
 
+
+/* Assert every result byte AFTER output_frames keeps the sentinel fill
+ * (the documented exception: output_frames is zeroed on failure). */
+static void assert_result_untouched(const struct flpr_consume_asrc_result *res, uint8_t fill)
+{
+	const uint8_t *b = (const uint8_t *)res;
+
+	for (uint32_t i = sizeof(res->output_frames); i < sizeof(*res); i++) {
+		zassert_equal(b[i], fill, "result byte %u must stay sentinel", i);
+	}
+}
+
+/* Assert the caller PCM buffer is byte-for-byte sentinel-filled. */
+static void assert_pcm_sentinel(const int16_t *out, size_t frames, int16_t fill)
+{
+	for (uint32_t i = 0; i < frames; i++) {
+		zassert_equal(out[i], fill, "pcm_out[%u] must stay sentinel", i);
+	}
+}
+
 /* Metadata of the most recently produced INPUT ring slot. */
 static struct flpr_ring_slot_meta *last_input_slot(void)
 {
@@ -729,12 +749,14 @@ ZTEST(flpr_ring_mgr, test_consume_asrc_error_output_ok)
 			    -5, 0, NULL, NULL);
 
 	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	memset(out, 0x5A, sizeof(out));
 	struct flpr_consume_asrc_result res;
 	zassert_equal(
 		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
 		FLPR_CONSUME_OK, "error output is a valid transport response");
 	zassert_equal(res.output_frames, 0, "output_frames 0");
 	zassert_equal(res.processing_status, -5, "status echoed");
+	assert_pcm_sentinel(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, 0x5A5A);
 }
 
 ZTEST(flpr_ring_mgr, test_consume_asrc_bad_flags)
@@ -747,10 +769,13 @@ ZTEST(flpr_ring_mgr, test_consume_asrc_bad_flags)
 	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
 	memset(out, 0x5A, sizeof(out));
 	struct flpr_consume_asrc_result res;
+	memset(&res, 0xA5, sizeof(res));
 	zassert_equal(
 		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
 		FLPR_CONSUME_INVALID, "bad flags rejected");
 	zassert_equal(res.output_frames, 0, "output_frames zeroed");
+	assert_pcm_sentinel(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, 0x5A5A);
+	assert_result_untouched(&res, 0xA5);
 }
 
 ZTEST(flpr_ring_mgr, test_consume_asrc_state_corruption)
@@ -762,13 +787,17 @@ ZTEST(flpr_ring_mgr, test_consume_asrc_state_corruption)
 	bad.reserved[0] = 1; /* reserved bytes must be zero */
 
 	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	memset(out, 0x5A, sizeof(out));
 	struct flpr_consume_asrc_result res;
+	memset(&res, 0xA5, sizeof(res));
 	arrange_output_slot(42, 1, 100, FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR, 0, 0, 0,
 			    0, 0, NULL, &bad);
 	zassert_equal(
 		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
 		FLPR_CONSUME_INVALID, "corrupt state rejected");
 	zassert_equal(res.output_frames, 0, "output_frames zeroed");
+	assert_pcm_sentinel(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, 0x5A5A);
+	assert_result_untouched(&res, 0xA5);
 }
 
 ZTEST(flpr_ring_mgr, test_consume_asrc_bad_frame_range)
@@ -780,11 +809,15 @@ ZTEST(flpr_ring_mgr, test_consume_asrc_bad_frame_range)
 			    NULL);
 
 	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	memset(out, 0x5A, sizeof(out));
 	struct flpr_consume_asrc_result res;
+	memset(&res, 0xA5, sizeof(res));
 	zassert_equal(
 		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
 		FLPR_CONSUME_INVALID, "frame range rejected");
 	zassert_equal(res.output_frames, 0, "output_frames zeroed");
+	assert_pcm_sentinel(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, 0x5A5A);
+	assert_result_untouched(&res, 0xA5);
 }
 
 ZTEST(flpr_ring_mgr, test_consume_asrc_bad_crc)
@@ -797,30 +830,62 @@ ZTEST(flpr_ring_mgr, test_consume_asrc_bad_crc)
 			    0xDEADBEEFU, 0, 0, 0, pcm, NULL);
 
 	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+	memset(out, 0x5A, sizeof(out));
 	struct flpr_consume_asrc_result res;
+	memset(&res, 0xA5, sizeof(res));
 	zassert_equal(
 		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
 		FLPR_CONSUME_INVALID, "bad CRC rejected");
-	zassert_equal(res.output_frames, 0, "output_frames zeroed");
-	zassert_equal(res.sequence, 0, "result fields untouched");
+	zassert_equal(res.output_frames, 0, "output_frames zeroed (documented exception)");
+	assert_pcm_sentinel(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, 0x5A5A);
+	assert_result_untouched(&res, 0xA5);
 }
 
 ZTEST(flpr_ring_mgr, test_consume_asrc_transactional_output)
 {
 	rm_init_and_reset(42);
 
-	/* Bad flags: fails before any output write. */
-	arrange_output_slot(42, 1, 100, FLPR_SLOT_FLAG_VALID, 0, 0, 0, 0, 0, NULL, NULL);
+	/* Every validation failure must preserve both caller buffers
+	 * (only result->output_frames is zeroed, per the header). */
+	struct audio_asrc_state bad_state;
+	memset(&bad_state, 0, sizeof(bad_state));
+	bad_state.reserved[0] = 1;
 
-	int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
-	memset(out, 0x5A, sizeof(out));
-	struct flpr_consume_asrc_result res;
-	zassert_equal(
-		flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
-		FLPR_CONSUME_INVALID, "rejected");
-	zassert_equal(res.output_frames, 0, "output_frames zeroed");
-	for (uint32_t i = 0; i < sizeof(out) / sizeof(out[0]); i++) {
-		zassert_equal((uint16_t)out[i], 0x5A5A, "pcm_out untouched on pre-copy failure");
+	uint8_t pcm[100 * 4U];
+	memset(pcm, 0x11, sizeof(pcm));
+
+	struct {
+		uint16_t vf;
+		uint16_t flags;
+		uint32_t crc;
+		const struct audio_asrc_state *state;
+		const char *label;
+	} cases[] = {
+		{100, FLPR_SLOT_FLAG_VALID, 0, NULL, "bad flags"},
+		{FLPR_RING_PAYLOAD_CAPACITY_FRAMES + 1,
+		 FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR, 0, NULL, "bad frame range"},
+		{100, FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR, 0, &bad_state,
+		 "reserved corruption"},
+		{100, FLPR_SLOT_FLAG_VALID | FLPR_SLOT_FLAG_ASRC_LINEAR, 0xDEADBEEFU, NULL,
+		 "bad CRC"},
+	};
+
+	for (uint32_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+		arrange_output_slot(42, 1, cases[c].vf, cases[c].flags, 0, cases[c].crc, 0, 0, 0,
+				    pcm, cases[c].state);
+
+		int16_t out[FLPR_RING_PAYLOAD_CAPACITY_FRAMES * 2U];
+		memset(out, 0x5A, sizeof(out));
+		struct flpr_consume_asrc_result res;
+		memset(&res, 0xA5, sizeof(res));
+
+		zassert_equal(
+			flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES,
+							  &res),
+			FLPR_CONSUME_INVALID, "%s rejected", cases[c].label);
+		zassert_equal(res.output_frames, 0, "%s: output_frames zeroed", cases[c].label);
+		assert_pcm_sentinel(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, 0x5A5A);
+		assert_result_untouched(&res, 0xA5);
 	}
 }
 

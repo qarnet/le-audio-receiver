@@ -288,8 +288,40 @@ ZTEST(flpr_handshake, test_ready_ack_send_failure_no_ack_no_signal)
 	zassert_equal(st.err_send, 1, "err_send incremented");
 	zassert_equal(flpr_handshake_test_new_ready_sem_count(), 0,
 		      "no new-ready signal without ACK");
+
+	/* Same epoch: no token (K_NO_WAIT → -EBUSY). */
 	zassert_equal(flpr_handshake_wait_new_ready(42, K_NO_WAIT), -EBUSY,
 		      "same epoch, no signal token (K_NO_WAIT) → -EBUSY");
+
+	/* CHANGED epoch with failed ACK: the fast path must NOT succeed
+	 * (it requires acked); the semaphore path has no token → timeout. */
+	zassert_equal(flpr_handshake_wait_new_ready(41, K_NO_WAIT), -EBUSY,
+		      "changed epoch without ACK: fast path blocked (K_NO_WAIT) → -EBUSY");
+	zassert_equal(flpr_handshake_wait_new_ready(41, K_MSEC(50)), -EAGAIN,
+		      "changed epoch without ACK: times out");
+
+	/* A later successful duplicate READY ACKs the epoch; only then
+	 * does the fast path succeed. */
+	fake_ipc_set_send_result(0);
+	fake_ipc_receive(&ready, sizeof(ready)); /* duplicate READY, ACK now succeeds */
+	flpr_handshake_get_status(&st);
+	zassert_true(st.acked, "acked after successful duplicate READY ACK");
+	zassert_ok(flpr_handshake_wait_new_ready(41, K_NO_WAIT),
+		   "changed epoch succeeds only after successful ACK");
+}
+
+ZTEST(flpr_handshake, test_changed_epoch_ack_success_fast_path)
+{
+	hs_ready_flow(42);
+
+	/* Changed epoch + successful ACK: fast path succeeds without
+	 * waiting and drains the posted signal. */
+	zassert_ok(flpr_handshake_wait_new_ready(41, K_NO_WAIT), "fast path success");
+	zassert_equal(flpr_handshake_test_new_ready_sem_count(), 0, "signal drained");
+
+	/* Same epoch still times out. */
+	zassert_equal(flpr_handshake_wait_new_ready(42, K_MSEC(50)), -EAGAIN,
+		      "same epoch times out");
 }
 
 ZTEST(flpr_handshake, test_heartbeat_rx_sequence_and_echo)
@@ -920,8 +952,7 @@ ZTEST(flpr_handshake, test_stress_clamps_count)
 
 	hs_spawn_worker(stress_worker_fn, (void *)(uintptr_t)(FLPR_STRESS_MAX_COUNT + 7));
 	/* Wait until the worker's own send call parks it (beyond baseline). */
-	zassert_true(hs_wait_until(send_calls_exceed_cond, (void *)(uintptr_t)baseline_calls,
-				  1000),
+	zassert_true(hs_wait_until(send_calls_exceed_cond, (void *)(uintptr_t)baseline_calls, 1000),
 		     "worker parked in send");
 
 	struct flpr_status st;

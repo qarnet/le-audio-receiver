@@ -1245,13 +1245,11 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 		}
 	}
 
-	/* Read payload if valid_frames > 0. */
-	if (vf > 0) {
-		size_t copy_bytes = (size_t)vf * 4U;
-		memcpy(pcm_out, flpr_ring_slot_payload(slot_base), copy_bytes);
-	}
-
-	/* Verify payload CRC (recompute) if vf > 0 and CRC nonzero. */
+	/* Verify payload CRC (recompute) BEFORE copying anything to the
+	 * caller: the header contract guarantees validation failures leave
+	 * the caller's PCM buffer untouched (only result->output_frames is
+	 * zeroed).  CRC reads the ring payload directly — no scratch
+	 * buffer. */
 	if (vf > 0 && meta->crc32 != 0) {
 		uint32_t computed =
 			flpr_ring_crc32(flpr_ring_slot_payload(slot_base), (size_t)vf * 4U);
@@ -1259,6 +1257,12 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 			flpr_ring_consume_done(RING_OUTPUT_BASE);
 			return FLPR_CONSUME_INVALID;
 		}
+	}
+
+	/* Read payload only after every validation passed. */
+	if (vf > 0) {
+		size_t copy_bytes = (size_t)vf * 4U;
+		memcpy(pcm_out, flpr_ring_slot_payload(slot_base), copy_bytes);
 	}
 
 	/* Fill result — snapshot metadata BEFORE consume_done.
