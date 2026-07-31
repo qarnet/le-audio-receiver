@@ -6,8 +6,14 @@
 # Both 10 ms (48_4_1) and 7.5 ms (48_3_1) frame durations tested,
 # each run twice.  Pairwise hash equality and known accepted values
 # enforced:
-#   - 10 ms: 0xFE0D4245
-#   - 7.5 ms: 0x5853F445
+#   - 10 ms: 0x9225F075
+#   - 7.5 ms: 0x2011C0F9
+#
+# The accepted hashes changed in T2: the mono in-place expansion fix
+# (backward, overlap-safe) removed the old forward-loop corruption that
+# collapsed every 960-sample push to the frame's first sample (constant
+# energy 12480).  The hashes above are the corrected mono-decode PCM
+# (10 ms startup_zero=7, 7.5 ms startup_zero=10).
 #
 # All processes must exit 0 AND logs must contain expected PASS
 # markers with correct counters and deterministic hashes.
@@ -31,8 +37,8 @@ source "${SCRIPT_DIR}/bsim-env.sh"
 BOARD_TS="${BOARD//\//_}"
 
 # Known accepted hash values for each frame-duration scenario.
-KNOWN_HASH_10MS="0xFE0D4245"
-KNOWN_HASH_7MS="0x5853F445"
+KNOWN_HASH_10MS="0x9225F075"
+KNOWN_HASH_7MS="0x2011C0F9"
 
 # --- Toolchain ---
 if ! command -v nrfutil &>/dev/null; then

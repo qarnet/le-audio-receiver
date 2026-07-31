@@ -64,6 +64,13 @@ three production decoder defects fixed.  Evidence:
   returns 1 (PLC), not a hard negative — verified empirically; the
   hard-error accounting path is exercised via a test-only linker wrap of
   `lc3_decode()` (delegates to the real implementation otherwise).
+- **BSim Stage 1 oracle hashes updated** to the corrected mono-decode
+  values: 10 ms `0xFE0D4245` → `0x9225F075`, 7.5 ms `0x5853F445` →
+  `0x2011C0F9`.  The old hashes locked in the forward-expansion overlap
+  bug (every 960-sample push collapsed to the frame's first sample —
+  constant energy 12480).  The T2B overlap-safe fix changes the decoded
+  PCM by construction; the new values are deterministic across repeated
+  runs (see `docs/testing/t2-audio-pipeline-tests.md`).
 - ASCS response-code mapping of decode-layer rejection remains T4 (known
   gap preserved).
 
@@ -259,6 +266,12 @@ repeat fb=0, ASRC cap fail=0. Zero warnings, zero assertions, zero faults.
 See `docs/development/phase6-stage0-results.md` for full verification evidence.
 
 ## BSIM Stage 1 — PASS + CLEANUP + REPEATED-RUN GATE (2026-07-31)
+
+> **T2 update (2026-08-01):** the accepted oracle hashes below changed to
+> `0x9225F075` (10 ms) and `0x2011C0F9` (7.5 ms) when the T2B mono
+> overlap-safe expansion fix corrected the decoded PCM (the pre-T2 values
+> locked in the forward-loop collapse defect).  See the T2 section above
+> and `docs/testing/t2-audio-pipeline-tests.md`.
 
 CONFIG_TEST decode bypass removed from `bt_bap.c`. BSIM now executes same
 PLC/decode path as hardware.  Startup-zero/PLC oracle in `audio_sink_stub.c`

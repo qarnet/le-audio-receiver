@@ -158,6 +158,29 @@ other than 7.5/10 ms, and more than one frame block per SDU are rejected
 by `audio_decode_config()` — but translating those rejections into ASCS
 response codes in `bt_bap.c` remains **T4** (known gap, unchanged).
 
+## BabbleSim oracle hashes changed with the mono overlap fix
+
+The Stage 1 BSim oracle hashes locked in the *defective* mono output.  The
+old forward in-place expansion overwrote unread source samples: with
+input and output sharing the same base, every 960-sample push collapsed
+to the first decoded sample of its frame (constant energy 12480 in the
+10 ms scenario — the observed `energy_min == energy_max`).  The T2B
+overlap-safe backward expansion (required fix) produces the correct
+interleaved mono PCM, so the oracle values necessarily change:
+
+| Scenario | Pre-T2 (corrupted mono expansion) | T2 (corrected) |
+|----------|-----------------------------------|----------------|
+| 10 ms (48_4_1) | `0xFE0D4245` (startup_zero=8, energy 12480 const) | `0x9225F075` (startup_zero=7, energy varies 10.4M..13.9M) |
+| 7.5 ms (48_3_1) | `0x5853F445` (startup_zero=11) | `0x2011C0F9` (startup_zero=10) |
+
+Both T2 values are deterministic across repeated runs (pairwise hash
+equality enforced by `scripts/bsim-stage1-run.sh`, whose accepted-hash
+constants were updated accordingly).  The mechanism was verified by
+replaying the real BSim LC3 frames on the host: the old forward
+expansion reproduces the constant-energy/collapsed stream shape (8
+startup-zero pushes, 100 constant-energy pushes), while the corrected
+path matches the new oracle counters.
+
 ## Non-claims
 
 No audio-quality claim and no hardware claim are made from these
