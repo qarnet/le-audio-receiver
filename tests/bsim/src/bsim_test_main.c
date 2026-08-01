@@ -111,6 +111,7 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 	uint32_t pushes1 = have_s0 ? s0.pushes : 0U;
 	uint32_t szero1 = have_s0 ? s0.startup_zero : 0U;
 	uint32_t splc1 = have_s0 ? s0.startup_plc : 0U;
+	uint32_t plc1 = have_s0 ? s0.plc_frames : 0U;
 	uint32_t total1 = have_s0 ? s0.total_frames : 0U;
 	uint32_t derr1 = have_s0 ? s0.decode_errors : 0U;
 	uint32_t mal1 = have_s0 ? s0.malformed_samples : 0U;
@@ -124,6 +125,7 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 	uint32_t pushes2 = have_s1 ? s1.pushes : 0U;
 	uint32_t szero2 = have_s1 ? s1.startup_zero : 0U;
 	uint32_t splc2 = have_s1 ? s1.startup_plc : 0U;
+	uint32_t plc2 = have_s1 ? s1.plc_frames : 0U;
 	uint32_t total2 = have_s1 ? s1.total_frames : 0U;
 	uint32_t derr2 = have_s1 ? s1.decode_errors : 0U;
 	uint32_t mal2 = have_s1 ? s1.malformed_samples : 0U;
@@ -139,9 +141,9 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 	     "obs_ok=%u obs_rej=%u obs_dir=%d obs_code=%d obs_reason=%d "
 	     "obs_gate_o=%u obs_gate_c=%u obs_mal=%u obs_blk=%u obs_stale=%u "
 	     "obs_rel=%u obs_disc=%u obs_rej_code=%d obs_rej_reason=%d "
-	     "pushes1=%u szero1=%u splc1=%u total1=%u derr1=%u mal1=%u "
+	     "pushes1=%u szero1=%u splc1=%u plc1=%u total1=%u derr1=%u mal1=%u "
 	     "h1=0x%08X lh1=0x%08X rh1=0x%08X lemin1=%d lemax1=%d remin1=%d remax1=%d "
-	     "pushes2=%u szero2=%u splc2=%u total2=%u derr2=%u mal2=%u "
+	     "pushes2=%u szero2=%u splc2=%u plc2=%u total2=%u derr2=%u mal2=%u "
 	     "h2=0x%08X lh2=0x%08X rh2=0x%08X lemin2=%d lemax2=%d remin2=%d remax2=%d\n",
 	     scenario_names[scn], audio_sink_test_segment_count(),
 	     audio_sink_test_after_stop_total(), adv_restarted ? 1U : 0U,
