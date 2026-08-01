@@ -144,14 +144,14 @@ def test_modea_lr_distinct():
     recv = recv.replace("lh1=0x12345678", "lh1=0x11111111").replace(
         "rh1=0x12345678", "rh1=0x22222222"
     )
-    ok = run_check(root, "modea_10ms", recv, cli_pass("modea_10ms", sends1=110), {})
+    ok = run_check(root, "modea_10ms", recv, cli_pass("modea_10ms", sends0=110, sends1=110), {})
     report("modea L!=R ok", ok)
 
 
 def test_modea_lr_equal_rejected():
     root = tempfile.mkdtemp()
     recv = recv_pass("modea_10ms", total1=216)
-    ok = run_check(root, "modea_10ms", recv, cli_pass("modea_10ms", sends1=110), {})
+    ok = run_check(root, "modea_10ms", recv, cli_pass("modea_10ms", sends0=110, sends1=110), {})
     report("modea L==R rejected", not ok)
 
 
