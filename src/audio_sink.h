@@ -50,6 +50,11 @@ void audio_sink_stop(void);
  * Called by the BAP codec configuration path so the sink can validate
  * against the negotiated frame duration (360 for 7.5 ms, 480 for 10 ms).
  * Must be called before the first push of a stream.
+ *
+ * Only 360 and 480 are supported.  Any other value (including 0) safely
+ * resets to 480 so the identity path can never copy more than the fixed
+ * 481-frame (1924-byte) slab block: 480 frames × 2 channels × 2 bytes
+ * = 1920 bytes.
  */
 void audio_sink_set_input_frames(uint16_t frames);
 

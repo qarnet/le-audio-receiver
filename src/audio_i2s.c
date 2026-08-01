@@ -13,6 +13,14 @@
 #include "audio_stats.h"
 #include "audio_perf.h"
 
+#if defined(AUDIO_I2S_NATIVE_TEST)
+/* Test-owned hook header (tests/unit/audio_i2s_common/).  Only included
+ * when the test-only compile definition AUDIO_I2S_NATIVE_TEST is present;
+ * production firmware never defines it.
+ */
+#include "audio_i2s_test_hook.h"
+#endif
+
 #include <string.h>
 
 #include <zephyr/kernel.h>
@@ -41,13 +49,19 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_AUDIO_CLOCK_ACTUATOR_NONE),
 /*
  * Input frame count per push call — dynamic, set by audio_sink_set_input_frames().
  * Defaults to 480 (10 ms @ 48 kHz).  For 7.5 ms frames the decoder produces 360.
+ * Only 360 and 480 are supported: any other value (including 0) safely
+ * resets to 480 so the identity path can never copy more than
+ * 480 * 2 * 2 = 1920 bytes into the fixed 481-frame (1924-byte) slab block.
  */
 #define INPUT_FRAMES_10MS 480
+#define INPUT_FRAMES_7MS5 360
 static uint16_t input_frames = INPUT_FRAMES_10MS;
 
 void audio_sink_set_input_frames(uint16_t frames)
 {
-	input_frames = (frames > 0) ? frames : INPUT_FRAMES_10MS;
+	input_frames = (frames == INPUT_FRAMES_7MS5 || frames == INPUT_FRAMES_10MS)
+			       ? frames
+			       : INPUT_FRAMES_10MS;
 }
 
 /*
@@ -89,6 +103,10 @@ static void drift_reset(void)
 	asrc_prev_valid = false;
 	offload_sequence = 0;
 #endif
+	/* Saved-frame state must not leak across stream stop: the repeat
+	 * fallback may only re-queue a frame from the current stream.
+	 */
+	saved_frame_len = 0;
 	audio_rate_converter_init(&rate_ctx, 48000, CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ);
 }
 
@@ -110,8 +128,20 @@ static int i2s_do_configure(void)
 
 int audio_sink_init(void)
 {
+	/* Stale stream state must not survive a failed (re-)initialization.
+	 * Production contract remains call-once; this also makes failed
+	 * re-init deterministic in tests.
+	 */
+	configured = false;
+	started = false;
+	saved_frame_len = 0;
+
 	i2s_dev = DEVICE_DT_GET(I2S_NODE);
+#if defined(AUDIO_I2S_NATIVE_TEST)
+	if (!audio_i2s_test_device_is_ready(i2s_dev)) {
+#else
 	if (!device_is_ready(i2s_dev)) {
+#endif
 		LOG_ERR("I2S device not ready");
 		return -ENODEV;
 	}
@@ -214,10 +244,13 @@ static int fill_block_asrc(const int16_t *stereo_data, int32_t ppm, void **block
 						 &cpu_state, (int16_t *)*block, MAX_OUTPUT_FRAMES,
 						 &off_result);
 
-	if (off_ret == 0) {
-		/* Success — output_frames in [1, 481]. */
-		produced = off_result.output_frames;
-
+	/* Only a validated round trip with output in [1, 481] is usable.
+	 * Zero-frame (valid FLPR error response) and oversized outputs must
+	 * not be treated as usable; both fall back to CPU ASRC from the
+	 * unchanged exported pre-state.
+	 */
+	if (off_ret == 0 && off_result.output_frames >= 1 &&
+	    off_result.output_frames <= MAX_OUTPUT_FRAMES) {
 		/* Transactionally import post-state into temp context. */
 		struct audio_asrc temp_ctx;
 		int16_t tmp_prev_l, tmp_prev_r;
@@ -232,12 +265,15 @@ static int fill_block_asrc(const int16_t *stereo_data, int32_t ppm, void **block
 			asrc_prev_r = tmp_prev_r;
 			asrc_prev_valid = tmp_prev_valid;
 			used_offload = true;
+			produced = off_result.output_frames;
 		} else {
 			/* Post-state import rejected — fall through to cpu ASRC. */
 			LOG_WRN("ASRC offload post-state import rejected, falling back to cpu");
 		}
 	}
-	/* Any offload fault (EAGAIN/EINVAL/etc.) falls through to cpu ASRC. */
+	/* Any offload fault (EAGAIN/EINVAL/etc.), invalid frame range, or
+	 * import rejection falls through to cpu ASRC from the unchanged
+	 * pre-state.  The CPU run overwrites any untrusted offload output. */
 #endif /* CONFIG_AUDIO_OFFLOAD_ASRC */
 
 	if (!used_offload) {
@@ -259,6 +295,15 @@ static int fill_block_asrc(const int16_t *stereo_data, int32_t ppm, void **block
 			}
 			k_mem_slab_free(&i2s_slab, *block);
 			return (asrc_ret == 1) ? -ENOSPC : -EIO;
+		}
+
+		/* Nominal success must still produce a usable frame count.
+		 * produced 0 or > 481 cannot be written to I2S.
+		 */
+		if (produced < 1 || produced > MAX_OUTPUT_FRAMES) {
+			LOG_WRN("ASRC produced %zu frames — invalid", produced);
+			k_mem_slab_free(&i2s_slab, *block);
+			return -ENOSPC;
 		}
 
 		asrc_prev_l = next_l;
@@ -339,6 +384,16 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 		return ret;
 	}
 
+	/* Output bounds: only [1, MAX_OUTPUT_FRAMES] may be written to I2S.
+	 * Anything else is a broken fill result; release the caller-owned
+	 * block and fail without touching the driver.
+	 */
+	if (output_frames < 1 || output_frames > MAX_OUTPUT_FRAMES) {
+		k_mem_slab_free(&i2s_slab, block);
+		perf_finalize_push(measuring, t0);
+		return -ENOSPC;
+	}
+
 	size_t out_bytes = output_frames * CHANNELS * (BIT_WIDTH / 8);
 
 	if (started) {
@@ -346,29 +401,64 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	}
 
 	if (!started) {
-		/* Pre-fill 6 blocks of silence to absorb jitter. */
+		/* Transactional startup: queue six distinct silence blocks,
+		 * then the data block, then START.  On any allocation/write/
+		 * START failure: return the exact primary failure, free every
+		 * caller-owned block (failed write or never submitted), and
+		 * DROP-purge previously queued driver-owned blocks.  START is
+		 * never issued after an incomplete pre-fill.
+		 */
 		for (int pre = 0; pre < 6; pre++) {
 			size_t pre_frames =
 				audio_rate_converter_next_frames(&rate_ctx, input_frames);
+
+			if (pre_frames < 1 || pre_frames > MAX_OUTPUT_FRAMES) {
+				/* Converter produced an impossible frame count:
+				 * never write beyond slab capacity.
+				 */
+				k_mem_slab_free(&i2s_slab, block);
+				i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
+				perf_finalize_push(measuring, t0);
+				return -ENOSPC;
+			}
+
 			size_t pre_bytes = pre_frames * CHANNELS * (BIT_WIDTH / 8);
 			void *sil;
 
-			if (k_mem_slab_alloc(&i2s_slab, &sil, K_NO_WAIT) == 0) {
-				memset(sil, 0, pre_bytes);
-				if (i2s_write(i2s_dev, sil, pre_bytes) < 0) {
-					k_mem_slab_free(&i2s_slab, sil);
-				}
+			if (k_mem_slab_alloc(&i2s_slab, &sil, K_NO_WAIT) < 0) {
+				k_mem_slab_free(&i2s_slab, block);
+				i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
+				perf_finalize_push(measuring, t0);
+				return -ENOMEM;
+			}
+
+			memset(sil, 0, pre_bytes);
+			ret = i2s_write(i2s_dev, sil, pre_bytes);
+			if (ret < 0) {
+				/* Failed write never took ownership. */
+				k_mem_slab_free(&i2s_slab, sil);
+				k_mem_slab_free(&i2s_slab, block);
+				i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
+				perf_finalize_push(measuring, t0);
+				return ret;
 			}
 		}
 
 		ret = i2s_write(i2s_dev, block, out_bytes);
 		if (ret < 0) {
 			k_mem_slab_free(&i2s_slab, block);
+			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
+			perf_finalize_push(measuring, t0);
 			return ret;
 		}
 
 		ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
 		if (ret < 0) {
+			/* All seven blocks are driver-owned now; purge via DROP,
+			 * never free them directly.
+			 */
+			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
+			perf_finalize_push(measuring, t0);
 			return ret;
 		}
 
@@ -393,10 +483,15 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 		return ret;
 	}
 
-	if (k_mem_slab_num_free_get(&i2s_slab) >= DRIFT_THRESHOLD) {
+	if (saved_frame_len > 0 && k_mem_slab_num_free_get(&i2s_slab) >= DRIFT_THRESHOLD) {
 		void *dup;
 
+#if defined(AUDIO_I2S_NATIVE_TEST)
+		if (!audio_i2s_test_inject_slab_alloc_failure() &&
+		    k_mem_slab_alloc(&i2s_slab, &dup, K_NO_WAIT) == 0) {
+#else
 		if (k_mem_slab_alloc(&i2s_slab, &dup, K_NO_WAIT) == 0) {
+#endif
 			memcpy(dup, saved_frame, saved_frame_len);
 			if (i2s_write(i2s_dev, dup, saved_frame_len) < 0) {
 				k_mem_slab_free(&i2s_slab, dup);
@@ -422,3 +517,119 @@ void audio_sink_stop(void)
 	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
 	started = false;
 }
+
+/* ── Narrow test hooks (AUDIO_I2S_NATIVE_TEST only) ────────────────
+ *
+ * Compiled only into test builds that define AUDIO_I2S_NATIVE_TEST via
+ * test CMake compile definitions.  Production firmware never defines the
+ * macro, so none of these symbols or branches exist in production images
+ * and there is no production runtime overhead.
+ *
+ * Device-readiness and repeat-fallback slab-allocation failure are
+ * test-controlled; module-state snapshots/reset and the slab accessor
+ * read production module-static state directly.
+ */
+#if defined(AUDIO_I2S_NATIVE_TEST)
+
+static bool test_device_ready = true;
+static bool test_inject_slab_alloc_fail;
+
+bool audio_i2s_test_device_is_ready(const struct device *dev)
+{
+	(void)dev;
+	return test_device_ready;
+}
+
+void audio_i2s_test_set_device_ready(bool ready)
+{
+	test_device_ready = ready;
+}
+
+bool audio_i2s_test_inject_slab_alloc_failure(void)
+{
+	return test_inject_slab_alloc_fail;
+}
+
+void audio_i2s_test_set_slab_alloc_failure(bool fail)
+{
+	test_inject_slab_alloc_fail = fail;
+}
+
+void audio_i2s_test_reset_module_state(void)
+{
+	configured = false;
+	started = false;
+	input_frames = INPUT_FRAMES_10MS;
+	saved_frame_len = 0;
+	memset(&rate_ctx, 0, sizeof(rate_ctx));
+#if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
+	memset(&asrc_ctx, 0, sizeof(asrc_ctx));
+	asrc_prev_l = 0;
+	asrc_prev_r = 0;
+	asrc_prev_valid = false;
+	offload_sequence = 0;
+#endif
+}
+
+bool audio_i2s_test_is_configured(void)
+{
+	return configured;
+}
+
+bool audio_i2s_test_is_started(void)
+{
+	return started;
+}
+
+uint16_t audio_i2s_test_input_frames(void)
+{
+	return input_frames;
+}
+
+size_t audio_i2s_test_saved_frame_len(void)
+{
+	return saved_frame_len;
+}
+
+uint32_t audio_i2s_test_offload_sequence(void)
+{
+#if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
+	return offload_sequence;
+#else
+	return 0;
+#endif
+}
+
+int16_t audio_i2s_test_asrc_prev_l(void)
+{
+#if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
+	return asrc_prev_l;
+#else
+	return 0;
+#endif
+}
+
+int16_t audio_i2s_test_asrc_prev_r(void)
+{
+#if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
+	return asrc_prev_r;
+#else
+	return 0;
+#endif
+}
+
+bool audio_i2s_test_asrc_prev_valid(void)
+{
+#if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
+	return asrc_prev_valid;
+#else
+	return false;
+#endif
+}
+
+struct k_mem_slab *audio_i2s_test_get_slab(void)
+{
+	return &i2s_slab;
+}
+
+#endif /* AUDIO_I2S_NATIVE_TEST */
