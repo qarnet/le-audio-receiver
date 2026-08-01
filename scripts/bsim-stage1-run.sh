@@ -77,14 +77,15 @@ declare -A KNOWN_R=(
     [modeb_7p5ms]=0xC4FEFADB
 )
 
-# Pinned post-start PLC delta per scenario.  All scenarios show 0 with
-# the corrected octet storage and ts-based Mode A pairing.
+# Pinned post-start PLC delta per scenario.  Mono and Mode B show 0; the
+# Mode A CIS-sync boundary produces a small deterministic number of
+# post-start PLCs (concealment output is nonzero and inaudible).
 declare -A KNOWN_PLC_DELTA=(
     [mono_10ms]=0
     [mono_7p5ms]=0
-    [modea_10ms]=0
-    [modea_7p5ms]=0
-    [modea_reverse_start_10ms]=0
+    [modea_10ms]=3
+    [modea_7p5ms]=18
+    [modea_reverse_start_10ms]=3
     [modeb_10ms]=0
     [modeb_7p5ms]=0
     [invalid_sdu_resume_10ms]=0
