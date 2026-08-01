@@ -442,11 +442,8 @@ APP-006, APP-007, BUILD-002..005 closed, BUILD-007, BUILD-008 added),
   4. `audio status` PLC percentage multiplied in `uint32_t` — overflowed
      for large counters; numerator now `uint64_t`, integer truncation
      preserved, zero frames still prints `(0%)` with no division.
-  Note: `flpr_hang_gate.py`'s `RE_RUNTIME_RESTART_OK` regex is
-  informational-only (not a gate check) and has drifted from the
-  production `FLPR restart OK: epoch a→b …` line since Stage 4A; T6
-  locks the current production format and leaves the gate parser
-  untouched (out of T6 scope, hardware-phase follow-up).
+  (The `flpr_hang_gate.py` `RE_RUNTIME_RESTART_OK` parser drift was a
+  further review-fix defect — closed in the T6 review-fix round below.)
 - **Resolved build-contract checker** — new `scripts/check-build-contract.py`
   (stdlib only, deterministic PASS/FAIL report listing every failed
   assertion in one run, exit 0 only when all pass) parses the resolved
@@ -473,40 +470,89 @@ APP-006, APP-007, BUILD-002..005 closed, BUILD-007, BUILD-008 added),
   half proven from build data, PACS LTV explicitly NOT claimed as a
   resolved property (C object, pinned by T2/T4 tests per BT-002), plus a
   clearly-labeled source check (SRC-001/002) on `src/bt_bap.c`.
-  `tests/unit/build_contract/test_build_contract.py` (28 tests, new
+  `tests/unit/build_contract/test_build_contract.py` (30 tests, new
   python suite) covers a complete valid dual-target fixture, missing
   image/file, duplicate/malformed config, explicit unset vs set symbols,
   comment-only DTS satisfaction attempts, wrong status/compatible/
   chosen/pins/counts/RF polarity/capacitance, missing/overlapping/
   out-of-range memory intervals, SW Split Kconfig-only and DTS-only half
-  failures, and the deterministic multi-error report with nonzero exit;
-  it never depends on pre-existing firmware build directories.  Added to
-  `scripts/test-all.sh`.
+  failures, the deterministic multi-error report with nonzero exit, an
+  alternate sysbuild default-domain name (domains.yaml resolution), and a
+  missing domains.yaml hard error; it never depends on pre-existing
+  firmware build directories.  Added to `scripts/test-all.sh`.
 
-Acceptance evidence (desktop `thomas-main`, branch `test/pre-refactor-behavior`):
+Development evidence (desktop `thomas-main`, branch `test/pre-refactor-behavior`):
 
 - Focused during development: app_lifecycle 13/13, audio_shell 13/13,
   audio_shell_noperf 10/10, audio_shell_nrf54 16/16, build_contract
   28/28 — zero compiler warnings (native_sim test-entropy notice is the
   same pre-existing line every twister suite emits).
-- Full gate on the exact code commit `cc13c85` (desktop `thomas-main`,
-  branch `test/pre-refactor-behavior`): **34 PASS / 1 FAIL / 35 TOTAL** —
-  all 24
-  twister C suites (incl. the four new ones), 4 exec-only C suites, 6
-  Python suites (incl. build_contract 28/28), and the accepted T4
-  BabbleSim matrix leg; the single failure is `bsim: stage1` because the
-  BabbleSim component binaries are not built on `thomas-main` (same
-  environmental leg as T0–T5; the workstation provides the authoritative
-  BSim leg).
-- All three pristine production builds pass: `fw-build-5340`,
-  `fw-build-54l15`, `fw-build-dongle` — zero compiler warnings; only the
-  documented non-actionable NCS v3.3.0 diagnostics (see "Build warning
-  diagnostics"), no new entries.
+- Desktop full gate on `cc13c85`: **34 PASS / 1 FAIL / 35 TOTAL** — all
+  24 twister C suites, 4 exec-only C suites, 6 Python suites, and the
+  T4 BabbleSim matrix leg; the single failure is `bsim: stage1` because
+  the BabbleSim component binaries are not built on `thomas-main` (same
+  environmental leg as T0–T5).  **This is development evidence only, not
+  acceptance** — the canonical full gate must run where BSim binaries
+  exist (see the review-fix round below).
+- Desktop three pristine production builds pass on the same code state:
+  `fw-build-5340`, `fw-build-54l15`, `fw-build-dongle` — zero compiler
+  warnings; only the documented non-actionable NCS v3.3.0 diagnostics
+  (see "Build warning diagnostics"), no new entries.
+- **T7 is next**: coverage enforcement (gcovr + `check-test-matrix.py`).
+
+### T6 review-fix round (2026-08-02)
+
+Closes the defects found in review of `411f6f2`:
+`docs/development/pre-refactor-testing-t6-review-fix-handoff.md`.  Exact
+final code commit: **`7a823cb`**.
+
+- **FLPR restart parser drift fixed** — `RE_RUNTIME_RESTART_OK` in
+  `scripts/flpr_hang_gate.py` lacked the `epoch` literal that production
+  `src/audio_shell.c` has emitted since Stage 4A, so the informational
+  recovery observation never fired on real console output.  The regex now
+  matches the exact production line (`FLPR restart OK: epoch <old>→<new>
+  crc=0x… duration=total … ms`) preserving all four captured groups.
+  New stdlib suite `tests/unit/flpr_hang_gate/` (10 tests): exact
+  production-line extraction (old/new epoch, CRC, duration), multi-digit
+  and zero values, rejection of the old drifted form and partial/
+  unrelated text (no false recovery observation), representative
+  surrounding console text, and the sibling FAULT_HANG regexes.  The
+  gate's pyserial import is now lazy (same pattern as the sibling gate
+  scripts) so the module imports on stdlib-only python3.  Suite added to
+  `scripts/test-all.sh` (python suites 6 → 7; gate children 35 → 36).
+- **stdbool include** — `src/app_lifecycle.c` now includes `<stdbool.h>`
+  directly instead of relying on transitive Zephyr headers for `bool`.
+- **Checker sysbuild app-image resolution fixed** — the checker assumed
+  the app image directory is always named `le-audio-receiver`, but
+  sysbuild names the default domain after the application source
+  directory basename; the workstation detached-worktree run (checkout
+  name `t6-rf-wt`) exposed this as a hard error.  The checker now
+  resolves the default image name from each root's `domains.yaml`
+  (missing file or missing `default:` is a hard input error) while the
+  `hci_ipc`/`flpr` domain names stay fixed.  Two new fixture tests prove
+  an alternate default domain name resolves and that a missing
+  `domains.yaml` fails hard (build_contract suite 28 → 30 tests).
+
+Authoritative acceptance evidence (workstation `thomas-workstation`,
+detached worktree of the exact final code commit **`7a823cb`**,
+bundle-transferred; workstation `main` never modified):
+
+- Canonical full gate on `7a823cb`: **36 PASS / 0 FAIL / 36 TOTAL** —
+  all 24 twister C suites, 4 exec-only C suites, 7 Python suites (incl.
+  build_contract 30/30 and flpr_hang_gate 10/10), and **`bsim: stage1`
+  PASS** (the accepted T4 BabbleSim matrix with all pinned hashes).
+- All three pristine production builds on `7a823cb`:
+  `fw-build-5340`, `fw-build-54l15`, `fw-build-dongle` — zero compiler
+  warnings; only the documented non-actionable NCS v3.3.0 diagnostics,
+  no new entries.
 - `python3 scripts/check-build-contract.py --nrf5340 build/nrf5340
-  --nrf54l15 build/nrf54l15` on the pristine builds: **74 assertions,
-  0 failed, BUILD CONTRACT PASSED, exit 0**.
-- `git diff --check` clean; `git status --short` clean after the final
-  commit.
+  --nrf54l15 build/nrf54l15` on those pristine builds (sysbuild default
+  domain resolved from `domains.yaml`): **74 assertions, 0 failed,
+  BUILD CONTRACT PASSED, exit 0**.
+- `git diff --check` clean; worktree `git status --short` clean.
+- Cleanup: workstation returned to clean `main` (`20b37c4`), detached
+  worktrees, temp refs, bundles, and logs removed; desktop repo clean on
+  `test/pre-refactor-behavior` after the evidence commit.
 - **T7 is next**: coverage enforcement (gcovr + `check-test-matrix.py`).
 
 ### T5 review-fix round (2026-08-01)

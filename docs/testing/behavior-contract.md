@@ -660,6 +660,13 @@ APIs:
 - `flpr runtime` state/stage conversion is bounded: out-of-range enum
   values print `UNKNOWN` / `unknown` instead of indexing past string
   arrays (a T6-found defect, fixed with switch-based helpers).
+- The `flpr restart` success line (`FLPR restart OK: epoch <old>→<new>
+  crc=0x… duration=total … ms`) is locked by the production test and by
+  the gate-parser suite `tests/unit/flpr_hang_gate/` (10 tests): the
+  gate's `RE_RUNTIME_RESTART_OK` matches the exact production line and
+  extracts old/new epoch, CRC, and duration, while partial and stale
+  forms produce no false recovery observation (a T6 review-fix defect,
+  fixed).
 - Narrow `AUDIO_SHELL_TEST`-guarded wrappers expose otherwise-static
   command handlers to the test suites only; they never enter production
   firmware.
@@ -748,13 +755,18 @@ ASEs, `I2S_NRFX_ALLOW_MCK_BYPASS`, 7/6/6 host counts, `i2s0` okay with
 12.288 MHz HFCLKAUDIO and exact BCK P1.15 / LRCK P1.12 / SDOUT P1.13 pins,
 QSPI disabled, WDT0 okay) and the nRF54L15 app path (ASRC linear + NONE
 actuator, no APLL/identity, offload ASRC, 47619 Hz output, LIBLC3, two sink
-ASEs, 3/1/1/3 host/controller counts).  Missing, duplicate, unreadable, or
+ASEs, 3/1/1/3 host/controller counts).  The sysbuild app image directory is
+named after the application source directory basename, so the checker
+resolves it from each root's `domains.yaml` (`default:` image; missing file
+or missing default is a hard error); `hci_ipc`/`flpr` domain names are
+fixed.  Missing, duplicate, unreadable, or
 malformed required inputs are hard failures; comments can never satisfy a
-DTS assertion.  `tests/unit/build_contract/` (28 tests) covers a complete
+DTS assertion.  `tests/unit/build_contract/` (30 tests) covers a complete
 valid dual-target fixture, every hard-input class, explicit unset vs set
-symbols, comment-only satisfaction attempts, wrong status/compatible/
+symbols, comment-only satisfaction attempts, wrong node status/compatible/
 chosen/pins/counts/polarity/capacitance, missing/overlapping/out-of-range
-memory intervals, SW Split Kconfig-only and DTS-only half failures, and the
+memory intervals, SW Split Kconfig-only and DTS-only half failures, an
+alternate sysbuild default-domain name, a missing `domains.yaml`, and the
 deterministic multi-error report with nonzero exit.
 
 ### BUILD-008 — 48 kHz capability proof split (T6)

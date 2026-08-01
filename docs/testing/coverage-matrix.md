@@ -56,9 +56,9 @@ production behavior.
 |----------|-------|--------|
 | Twister C (testcase.yaml) | 24 | actuator_apll, actuator_apll_nohfclk, actuator_none, actuator_sample_adjust_historical, app_lifecycle, asrc, audio_i2s, audio_i2s_identity, audio_shell, audio_shell_noperf, audio_shell_nrf54, decode, drift, flpr_handshake, flpr_protocol, flpr_ring_mgr, flpr_runtime, lifecycle, perf, rate_convert, stats, timing, timing_nrf54, volume |
 | Exec-only C (CMakeLists.txt, no testcase.yaml) | 4 | audio_offload, flpr_audio_process, flpr_ring, offload_asrc |
-| Python | 6 | gate (test_gate.py), flpr_stall_gate (test_flpr_stall_gate.py), bluez_wp_gate (test_bluez_wireplumber_gate.py), bluez_wp_phase3_gate (test_bluez_wireplumber_phase3_gate.py), bsim_runner (test_bsim_stage1_parse.py, 36 tests), build_contract (test_build_contract.py, 28 tests) |
+| Python | 7 | gate (test_gate.py), flpr_stall_gate (test_flpr_stall_gate.py), flpr_hang_gate (test_flpr_hang_gate.py, 10 parser tests), bluez_wp_gate (test_bluez_wireplumber_gate.py), bluez_wp_phase3_gate (test_bluez_wireplumber_phase3_gate.py), bsim_runner (test_bsim_stage1_parse.py, 36 tests), build_contract (test_build_contract.py, 30 tests) |
 | BabbleSim | 1 | bsim_stage1 (T4 15-scenario BAP matrix, scenarios 1-8 twice) |
-| **Total gate children** | **35** | |
+| **Total gate children** | **36** | |
 
 ## Explicit weak-test facts
 
@@ -102,7 +102,7 @@ production behavior.
    actuator path selection, host/controller ISO buffer agreement, pin
    assignments, RF-switch polarity, crystal capacitance, exact
    non-overlapping FLPR/ring memory ranges, and both SW Split overlays.
-   The checker's own suite (`tests/unit/build_contract/`, 28 tests) uses
+   The checker's own suite (`tests/unit/build_contract/`, 30 tests) uses
    minimal temporary fixtures and never depends on pre-existing firmware
    build directories; the real contract run happens after pristine
    production builds.
