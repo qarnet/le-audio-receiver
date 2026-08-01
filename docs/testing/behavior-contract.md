@@ -1,6 +1,6 @@
 # Behavior contract — pre-refactor baseline
 
-Version: T4, 2026-08-01.  Each contract carries a stable ID.  Breaking a contract
+Version: T5, 2026-08-01.  Each contract carries a stable ID.  Breaking a contract
 without a handoff that updates this document is a regression.
 
 ## Bluetooth and service contract (`BT-*`)
@@ -239,9 +239,15 @@ open (one ASE streaming, second not) does not pass audio.
 Stream open is a closed-to-open edge event.  It must fire exactly once per
 stream lifecycle, not re-triggered by every subsequent ASE start notification.
 
-**Known gap (T5):** current lifecycle unit tests exist but do not exhaustively
-prove one-shot semantics across all re-configure/re-start permutations.  T5
-must add coverage for duplicate-start protection and edge-counting.
+**T5 closed:** `stream_lifecycle_sink_started()` returns true only for a
+closed-to-open transition of the audio-path gate; a duplicate start while
+the gate is already open returns false, so the caller's one-time open work
+(perf reset, offload start, observer event) runs exactly once.  The
+expanded `tests/unit/lifecycle/` matrix (22 tests) pins duplicate starts
+(single-ASE and Mode A), close-then-start edges, configure/start/close/
+reconfigure/start permutations, release-then-slot-reuse, reset from
+closed/partial/open states, repeated open/close cycles, and inert
+invalid/zero/negative configurations.
 
 ### LIFE-004 — First close wins
 
@@ -418,6 +424,63 @@ events, IRQ, or DPPI publication separately.
 
 Timing work items carry a generation counter.  Stale timing work from a prior
 stream generation cannot feed drift with outdated frequency measurements.
+
+### CLOCK-008 — nRF54 timing measurement contract (T5)
+
+The production nRF54 timing path (`tests/unit/timing_nrf54`, 15 tests
+compiling `audio_timing_nrf54.c` + `audio_timing_math.c` against mocked
+GRTC/GPPI/TIMER HALs) pins: GRTC allocation failure returns the exact error
+with no later setup; GPPI allocation failure disables the GRTC compare/
+interrupt state via `nrfx_grtc_syscounter_cc_disable()` before freeing the
+channel (no GPPI free — the allocation never succeeded); successful init
+configures TIMER mode/32-bit/prescaler 0, CLEAR then START, allocates and
+enables the GRTC→CAPTURE GPPI connection with the wired event/task addresses,
+and is idempotent; updates before init and zero SDU timestamps are no-ops;
+the first valid timestamp creates exactly one anchor/compare per session;
+past first compares fall back to `now + 1 s` (incl. the 64-bit wrap case);
+future anchors schedule `anchor + 1 s`; 32-bit timestamp wrap expands one
+epoch ahead; the first compare callback schedules the next compare and
+records the baseline without feedforward; the second delivers the exact ppm
+incl. TIMER32 wrap; late callbacks reschedule at `now + 1 s`; reschedule
+failure clears active, defers exactly one error payload, and delivers no
+later measurement; reset clears session state, disables the compare,
+increments the generation, and permits one new anchor; work captured before
+reset is rejected as stale; and every non-stale measurement reaches
+`audio_drift_frequency_error_update()` while diagnostic log pacing does not
+suppress feedforward.
+
+### CLOCK-009 — Defined drift arithmetic (T5)
+
+All public drift inputs are defined across the full `int32_t`/`int` range:
+the EMA delta/update, the feedforward negation (INT32_MIN valid), phase
+subtraction/scaling, proportional term, integral increment/candidate, phase
+sum, and final total are computed in `int64_t`; the integral and the final
+output are clamped to their configured rails before narrowing.  The slab
+count is never silently clamped to a guessed size — arithmetic stays safe
+for the full `int` range while preserving sign and final rails.  `tests/unit/
+drift/` (29 tests) pins int32/int extremes, exact rail boundaries,
+100 000-update long runs at setpoint and both phase extremes, symmetric
+feedforward-rail phase unwind, and real-thread concurrent update/frequency/
+reset loops with a deterministic final reset; the focused run is clean under
+UBSan.  Tuning, signs, first-update behavior, filter ratio, anti-windup, and
+clamps are unchanged for normal production inputs.
+
+### CLOCK-010 — APLL actuator conversion (T5)
+
+`audio_clock_actuator_apll.c` converts ppm to APLL register steps with
+`offset = (ppm * 10) / 33` (C truncation toward zero), adds the center, and
+clamps to `[APLL_MIN, APLL_MAX]` — all in `int64_t` — before narrowing to the
+`uint16_t` register value, so `INT32_MIN..INT32_MAX` inputs are defined.
+`tests/unit/actuator_apll` (8 tests) pins init/reset center writes, exact
+positive/negative conversions, ±1..±3 near-zero truncation, exact MIN/MAX
+values, beyond-rail and int32-extreme clamps, repeated calls, and
+`consume_sample_adjustment() == 0`; the no-HFCLKAUDIO variant compiles the
+same production file with `NRF_CLOCK_HAS_HFCLKAUDIO=0` and proves all no-op
+returns with zero register writes.  `tests/unit/actuator_none` compiles the
+production NONE actuator and pins all-zero returns.  The retired
+sample-adjust actuator remains under
+`tests/unit/actuator_sample_adjust_historical` (historical/retired label)
+and is not selectable in production.
 
 ## ASRC and FLPR contract (`OFFLOAD-*`)
 

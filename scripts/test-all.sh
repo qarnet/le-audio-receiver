@@ -2,11 +2,12 @@
 # Canonical full local gate script for le-audio-receiver.
 #
 # Runs every test suite:
-#   1. Twister C unit suites (16 suites with testcase.yaml)
+#   1. Twister C unit suites (20 suites with testcase.yaml)
 #   2. Exec-only C unit suites (4 suites: audio_offload, flpr_audio_process,
 #      flpr_ring, offload_asrc)
-#   3. Python unit suites (4: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py,
-#      bluez_wp_gate/test_bluez_wireplumber_gate.py, bluez_wp_phase3_gate/test_bluez_wireplumber_phase3_gate.py)
+#   3. Python unit suites (5: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py,
+#      bluez_wp_gate/test_bluez_wireplumber_gate.py, bluez_wp_phase3_gate/test_bluez_wireplumber_phase3_gate.py,
+#      bsim_runner/test_bsim_stage1_parse.py)
 #   4. BabbleSim Stage 1 (sink-only scenario, deterministic across runs)
 #
 # Required: NCS v3.3.0 dev shell (nix develop / direnv allow).

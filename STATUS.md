@@ -292,8 +292,93 @@ Acceptance evidence:
   builds pass; `git diff --check` clean.
 - Worktree/repo cleanup: workstation returned to clean `main` with all
   temporary refs/worktrees/bundles removed (after the T4 review round).
-- **T5 is next**: timing/actuator internals and the broad lifecycle
-  matrix.
+
+**Phase T5 — lifecycle, timing, drift, and production actuators** — ACCEPTED (2026-08-01).
+
+Closes T5 from `docs/development/pre-refactor-testing-plan.md` by testing
+production lifecycle, nRF54 timing, drift-controller, APLL-actuator, and
+NONE-actuator behavior directly, and fixing the defects those tests exposed.
+Evidence: updated `docs/testing/behavior-contract.md` (LIFE-003 closed;
+CLOCK-008..010 added) and `docs/testing/coverage-matrix.md`; handoff:
+`docs/development/pre-refactor-testing-t5-handoff.md`.
+
+- **Lifecycle closed-to-open edge** — `stream_lifecycle_sink_started()`
+  returns true only for a closed-to-open transition; duplicate starts
+  while the gate is open return false, so the caller's one-time open
+  work (perf reset, offload start, observer event) runs exactly once
+  per stream lifecycle.  Gate state and Mode A/B/mono decisions
+  unchanged.  `tests/unit/lifecycle/` grows 13 → 22 tests.
+- **Defined drift arithmetic** — every public input is defined across
+  the full `int32_t`/`int` range: EMA delta/update, feedforward
+  negation (INT32_MIN valid), phase subtraction/scaling, proportional
+  term, integral candidate, phase sum, and final total computed in
+  `int64_t`, clamped to the configured rails before narrowing.  The
+  slab count is never silently clamped.  Tuning, signs, first-update
+  behavior, filter ratio, anti-windup, and clamps unchanged for normal
+  inputs.  `tests/unit/drift/` grows 18 → 29 tests, including
+  100 000-update long runs at setpoint and both phase extremes,
+  symmetric feedforward-rail phase unwind, and real-thread concurrent
+  update/frequency/reset loops with a deterministic final reset; the
+  focused run is clean under `-fsanitize=undefined` (trap-on-error).
+- **nRF54 timing production suite** — new `tests/unit/timing_nrf54/`
+  (15 tests) compiles real `audio_timing_nrf54.c` +
+  `audio_timing_math.c` against test-owned include shadows of the
+  installed nrfx_grtc/nrfx_gppi/nrf_grtc/nrf_timer HALs and a mock of
+  `audio_drift_frequency_error_update()`.  Narrow
+  `AUDIO_TIMING_NRF54_TEST` seams (test-owned `NRF_TIMER_Type` object
+  instead of devicetree, deferred-work capture instead of dispatch,
+  state reset, minimal active/generation reads) never enter production
+  firmware.  Production defect fixed: **GPPI-allocation failure left
+  the GRTC compare event and interrupt enabled** — init now runs
+  `nrfx_grtc_syscounter_cc_disable(grtc_channel)` before
+  `nrfx_grtc_channel_free(grtc_channel)` on that path (no GPPI free:
+  the allocation never succeeded).  Tests pin allocation-failure exact
+  errors, cleanup ordering, full init sequence + idempotence,
+  pre-init/zero-ts no-ops, one anchor per session, past/future/32-bit-
+  wrap first compares, baseline + exact-ppm callbacks incl. TIMER32
+  wrap, late reschedule, reschedule failure (inactive + one deferred
+  error), reset semantics, stale-generation rejection, and
+  per-measurement drift delivery despite log pacing.
+- **Production actuator suites** — new `tests/unit/actuator_apll/`
+  (8 tests, UBSan-clean) compiles real `audio_clock_actuator_apll.c`
+  against include-shadow `hal/nrf_clock.h`/`nrfx_clock_hfclkaudio.h`
+  with a register-write mock; the ppm→register conversion now computes
+  `(ppm * 10) / 33`, the center addition, and the rail clamp in
+  `int64_t` before narrowing to `uint16_t`.  New
+  `tests/unit/actuator_apll_nohfclk/` compiles the same production file
+  with `NRF_CLOCK_HAS_HFCLKAUDIO=0` proving all no-op returns with zero
+  writes (no conversion logic duplicated).  New `tests/unit/actuator_none/`
+  compiles real `audio_clock_actuator_none.c`.  The retired
+  sample-adjust suite moved to
+  `tests/unit/actuator_sample_adjust_historical/` and is labeled
+  historical/retired in testcase ID, tags, and comments (real retired
+  source still compiled; not selectable in production).
+
+Acceptance evidence (desktop `thomas-main` + workstation `thomas-workstation`):
+
+- Focused suites on the desktop while developing: lifecycle 22/22, drift
+  29/29 (plus a `-fsanitize=undefined` trap-on-error run), timing_nrf54
+  15/15, actuator_apll 8/8 (plus UBSan run), actuator_apll_nohfclk 1/1,
+  actuator_none 1/1, actuator_sample_adjust_historical 7/7 — zero
+  compiler warnings.
+- Full gate on the exact final code commit `1a504e0` (bundle-transferred
+  to a detached worktree on `thomas-workstation`; repo main never
+  modified): **30 PASS / 0 FAIL / 30 TOTAL** — all 20 twister C suites,
+  4 exec-only C suites, 5 Python suites, and the accepted T4 BabbleSim
+  matrix with all pinned hashes unchanged (mono 10 ms `0x22AB5C0D`,
+  Mode A/B 10 ms `0xBAE24F7E`, reconnect = fresh mono oracle, etc.).
+- All three production builds pass on `1a504e0`: `fw-build-5340`,
+  `fw-build-54l15`, `fw-build-dongle` — zero compiler warnings
+  (documented non-actionable diagnostics only; the `-Winfinite-recursion`
+  regression found by the first 54l15 build was fixed in `1a504e0`).
+- Desktop `test-all.sh` run on the same code state: 29/30 — the single
+  failure is `bsim: stage1` because the BabbleSim component binaries are
+  not built on `thomas-main` (same as T0–T4; the workstation provides
+  the authoritative BSim leg).
+- `git diff --check` clean; worktree/repo cleanup: workstation returned
+  to clean `main` with all temporary refs/worktrees/bundles/logs
+  removed; desktop repo clean on `test/pre-refactor-behavior`.
+- **T6 is next**: boot coordinator, shell, and resolved-config checker.
 
 ### T4 review-fix round (2026-08-01)
 
