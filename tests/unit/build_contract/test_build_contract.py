@@ -72,6 +72,32 @@ CONFIG_FLASH_BASE_ADDRESS=0x165000
 CONFIG_FLASH_LOAD_SIZE=0x18000
 """
 
+DOMAINS_5340 = """\
+default: le-audio-receiver
+build_dir: %ROOT%
+domains:
+  - name: le-audio-receiver
+    build_dir: %ROOT%/le-audio-receiver
+  - name: hci_ipc
+    build_dir: %ROOT%/hci_ipc
+flash_order:
+  - le-audio-receiver
+  - hci_ipc
+"""
+
+DOMAINS_54L15 = """\
+default: le-audio-receiver
+build_dir: %ROOT%
+domains:
+  - name: le-audio-receiver
+    build_dir: %ROOT%/le-audio-receiver
+  - name: flpr
+    build_dir: %ROOT%/flpr
+flash_order:
+  - le-audio-receiver
+  - flpr
+"""
+
 # Resolved-DTS-style fixture: comments, ; terminators, labels, phandles.
 APP5340_DTS = """\
 /dts-v1/;
@@ -337,6 +363,14 @@ class Fixture:
         )
         write(os.path.join(self.nrf54l15, "flpr", "zephyr", ".config"), FLPR_CONFIG)
         write(os.path.join(self.nrf54l15, "flpr", "zephyr", "zephyr.dts"), FLPR_DTS)
+        write(
+            os.path.join(self.nrf5340, "domains.yaml"),
+            DOMAINS_5340.replace("%ROOT%", self.nrf5340),
+        )
+        write(
+            os.path.join(self.nrf54l15, "domains.yaml"),
+            DOMAINS_54L15.replace("%ROOT%", self.nrf54l15),
+        )
         write(self.bt_bap, BT_BAP_SOURCE)
 
     def config(self, target, image):
@@ -458,8 +492,55 @@ class TestValidFixture(unittest.TestCase):
         finally:
             fx.destroy()
 
+    def test_alternate_default_domain_name(self):
+        # Sysbuild names the app image directory after the application
+        # source directory basename (e.g. the checkout directory), so the
+        # checker must resolve the default image from domains.yaml rather
+        # than assume a fixed name.
+        fx = Fixture()
+        try:
+            for root, domains in (
+                (fx.nrf5340, DOMAINS_5340),
+                (fx.nrf54l15, DOMAINS_54L15),
+            ):
+                os.rename(
+                    os.path.join(root, "le-audio-receiver"),
+                    os.path.join(root, "custom-checkout"),
+                )
+                write(
+                    os.path.join(root, "domains.yaml"),
+                    domains.replace("%ROOT%", root).replace(
+                        "le-audio-receiver", "custom-checkout"
+                    ),
+                )
+            parsed = cbc.resolve_inputs(fx.nrf5340, fx.nrf54l15, fx.bt_bap)
+            result = cbc.run_all(parsed)
+            self.assertEqual(
+                result.failures(), [], "failures: %s" % cbc.format_result(result)
+            )
+        finally:
+            fx.destroy()
+
 
 class TestHardInputErrors(unittest.TestCase):
+    def test_missing_domains_yaml(self):
+        fx = Fixture()
+        try:
+            os.remove(os.path.join(fx.nrf5340, "domains.yaml"))
+            rc = cbc.main(
+                [
+                    "--nrf5340",
+                    fx.nrf5340,
+                    "--nrf54l15",
+                    fx.nrf54l15,
+                    "--bt-bap-source",
+                    fx.bt_bap,
+                ]
+            )
+            self.assertEqual(rc, 2)
+        finally:
+            fx.destroy()
+
     def test_missing_image(self):
         fx = Fixture()
         try:

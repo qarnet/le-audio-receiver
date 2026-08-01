@@ -967,7 +967,22 @@ def resolve_inputs(nrf5340_root, nrf54l15_root, bt_bap_path):
 
     Returns a dict of parsed inputs.  Raises ConfigError/DtsError/OSError
     for hard failures (missing/duplicate/unreadable/malformed).
+
+    The sysbuild app image directory is named after the application
+    source directory basename (e.g. `le-audio-receiver` or the checkout
+    directory name), so it is resolved from `domains.yaml` — never
+    assumed.  The controller/FLPR image names are fixed sysbuild domain
+    names (hci_ipc, flpr).
     """
+
+    def default_image_name(root):
+        text = _read_required(
+            os.path.join(root, "domains.yaml"), "sysbuild domains.yaml"
+        )
+        m = re.search(r"^default:\s*(\S+)\s*$", text, re.M)
+        if not m:
+            raise OSError("domains.yaml has no default image: %s" % root)
+        return m.group(1)
 
     def image(root, name):
         base = os.path.join(root, name, "zephyr")
@@ -981,9 +996,11 @@ def resolve_inputs(nrf5340_root, nrf54l15_root, bt_bap_path):
         nodes, labels = parse_dts(dts_text)
         return cfg, nodes, labels
 
-    app5340 = image(nrf5340_root, "le-audio-receiver")
+    app5340_name = default_image_name(nrf5340_root)
+    app54_name = default_image_name(nrf54l15_root)
+    app5340 = image(nrf5340_root, app5340_name)
     net = image(nrf5340_root, "hci_ipc")
-    app54 = image(nrf54l15_root, "le-audio-receiver")
+    app54 = image(nrf54l15_root, app54_name)
     flpr = image(nrf54l15_root, "flpr")
     return {
         "app5340_cfg": app5340[0],
