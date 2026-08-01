@@ -1,0 +1,20 @@
+/*
+ * Shared devicetree overlay for the audio_i2s unit suites.
+ *
+ * Exposes the fake I2S driver as alias `i2s-audio` so production
+ * DT_ALIAS(i2s_audio) and DEVICE_DT_GET() in src/audio_i2s.c stay real.
+ * Included via EXTRA_DTC_OVERLAY_FILE by each suite's CMakeLists.
+ */
+
+/ {
+	aliases {
+		i2s-audio = &fake_i2s;
+	};
+
+	fake_i2s: vnd_audio_i2s_fake {
+		compatible = "vnd,audio-i2s-fake";
+		status = "okay";
+		#address-cells = <1>;
+		#size-cells = <0>;
+	};
+};

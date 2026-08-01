@@ -1,0 +1,13 @@
+# Copyright (c) 2025
+# SPDX-License-Identifier: Apache-2.0
+
+compatible: "vnd,audio-i2s-fake"
+
+description: |
+  Test-only fake I2S controller driver with nrfx-style TX block
+  ownership.  Only used by the audio_i2s unit suites; never present
+  in production firmware.
+
+include: [i2s-controller.yaml]
+
+properties: {}

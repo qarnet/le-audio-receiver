@@ -1,0 +1,12 @@
+source "Kconfig.zephyr"
+
+# The perf instrumentation symbols come from the app's Kconfig in
+# production; this suite defines them locally so the prj.conf assignment
+# is valid (same pattern as tests/unit/volume).
+config AUDIO_PERF_MEASUREMENT
+	bool "Audio performance instrumentation"
+	default y
+
+config AUDIO_PERF_DEADLINE_US
+	int "Per-path deadline threshold in microseconds"
+	default 10000
