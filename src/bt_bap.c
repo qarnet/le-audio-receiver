@@ -134,6 +134,7 @@ struct bt_sink {
 	 * activation delay — useless as a pairing key); half_idx counts
 	 * this half's received SDUs since stream start (diagnostics). */
 	bool half_valid;
+	bool half_valid_src; /* original BT_ISO_FLAGS_VALID of this half's SDU */
 	uint32_t half_ts;
 	uint16_t half_seq;
 	uint16_t half_idx;
@@ -269,8 +270,9 @@ static size_t stream_alloc_idx(void)
  *    contain exactly one or two channels, never zero or more than two.
  *
  * On success the validated shape is written to @p shape.  On failure the
- * caller's @p rsp is set to CONF_INVALID / CODEC_DATA (or
- * CONF_UNSUPPORTED / CODEC for a non-LC3 codec ID) and -EINVAL is
+ * caller's @p rsp is set to CONF_REJECTED / CODEC_DATA (the only valid
+ * application rejection code for a bad codec configuration; CONF_INVALID
+ * is excluded from the ASCS application response codes) and -EINVAL is
  * returned.  Nothing is mutated.
  */
 static int validate_codec_cfg(const struct bt_audio_codec_cfg *codec_cfg, struct bt_sink *shape,
@@ -283,7 +285,7 @@ static int validate_codec_cfg(const struct bt_audio_codec_cfg *codec_cfg, struct
 	enum bt_audio_location chan_alloc;
 
 	if (codec_cfg->id != BT_HCI_CODING_FORMAT_LC3) {
-		LOG_WRN("Codec id 0x%02x not supported", codec_cfg->id);
+		LOG_INF("Codec id 0x%02x not supported", codec_cfg->id);
 		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_UNSUPPORTED,
 				       BT_BAP_ASCS_REASON_CODEC);
 		return -EINVAL;
@@ -291,40 +293,40 @@ static int validate_codec_cfg(const struct bt_audio_codec_cfg *codec_cfg, struct
 
 	ret = bt_audio_codec_cfg_get_freq(codec_cfg);
 	if (ret < 0) {
-		LOG_WRN("Codec config: missing/invalid frequency (%d)", ret);
+		LOG_INF("Codec config: missing/invalid frequency (%d)", ret);
 		goto invalid;
 	}
 	freq_hz = bt_audio_codec_cfg_freq_to_freq_hz(ret);
 	if (freq_hz != 48000) {
-		LOG_WRN("Codec config: unsupported frequency %d Hz", freq_hz);
+		LOG_INF("Codec config: unsupported frequency %d Hz", freq_hz);
 		goto invalid;
 	}
 
 	ret = bt_audio_codec_cfg_get_frame_dur(codec_cfg);
 	if (ret < 0) {
-		LOG_WRN("Codec config: missing/invalid frame duration (%d)", ret);
+		LOG_INF("Codec config: missing/invalid frame duration (%d)", ret);
 		goto invalid;
 	}
 	frame_us = bt_audio_codec_cfg_frame_dur_to_frame_dur_us(ret);
 	if (frame_us != 7500 && frame_us != 10000) {
-		LOG_WRN("Codec config: unsupported frame duration %d us", frame_us);
+		LOG_INF("Codec config: unsupported frame duration %d us", frame_us);
 		goto invalid;
 	}
 
 	ret = bt_audio_codec_cfg_get_octets_per_frame(codec_cfg);
 	if (ret < 0) {
-		LOG_WRN("Codec config: missing/invalid octets per frame (%d)", ret);
+		LOG_INF("Codec config: missing/invalid octets per frame (%d)", ret);
 		goto invalid;
 	}
 	if (ret < 20 || ret > 120) {
-		LOG_WRN("Codec config: octets per frame %d out of advertised range 20..120", ret);
+		LOG_INF("Codec config: octets per frame %d out of advertised range 20..120", ret);
 		goto invalid;
 	}
 	const int octets = ret;
 
 	ret = bt_audio_codec_cfg_get_frame_blocks_per_sdu(codec_cfg, true);
 	if (ret < 0 || ret != 1) {
-		LOG_WRN("Codec config: frame blocks per SDU %d (must be exactly 1)", ret);
+		LOG_INF("Codec config: frame blocks per SDU %d (must be exactly 1)", ret);
 		goto invalid;
 	}
 
@@ -342,13 +344,13 @@ static int validate_codec_cfg(const struct bt_audio_codec_cfg *codec_cfg, struct
 		} else {
 			chan_count = POPCOUNT(chan_alloc);
 			if (chan_count == 0 || chan_count > MAX_SINK_CHANNELS) {
-				LOG_WRN("Codec config: channel allocation 0x%08x has %d channels",
+				LOG_INF("Codec config: channel allocation 0x%08x has %d channels",
 					chan_alloc, chan_count);
 				goto invalid;
 			}
 		}
 	} else {
-		LOG_WRN("Codec config: missing/invalid channel allocation (%d)", ret);
+		LOG_INF("Codec config: missing/invalid channel allocation (%d)", ret);
 		goto invalid;
 	}
 
@@ -360,7 +362,7 @@ static int validate_codec_cfg(const struct bt_audio_codec_cfg *codec_cfg, struct
 	return 0;
 
 invalid:
-	*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID, BT_BAP_ASCS_REASON_CODEC_DATA);
+	*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_REJECTED, BT_BAP_ASCS_REASON_CODEC_DATA);
 	return -EINVAL;
 }
 
@@ -374,7 +376,7 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 	print_codec_cfg(codec_cfg);
 
 	if (dir != BT_AUDIO_DIR_SINK) {
-		LOG_WRN("Source direction unsupported");
+		LOG_INF("Source direction unsupported");
 		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_UNSUPPORTED,
 				       BT_BAP_ASCS_REASON_NONE);
 #if defined(CONFIG_BSIM_OBSERVER)
@@ -403,7 +405,7 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 	size_t idx = stream_alloc_idx();
 
 	if (idx >= MAX_SINK_ASE) {
-		LOG_ERR("No free sink slot (max %d)", MAX_SINK_ASE);
+		LOG_INF("No free sink slot (max %d)", MAX_SINK_ASE);
 		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_NO_MEM, BT_BAP_ASCS_REASON_NONE);
 #if defined(CONFIG_BSIM_OBSERVER)
 		bsim_observer_config(false, dir, rsp->code, rsp->reason);
@@ -481,7 +483,7 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 	    shape.frame_blocks_per_sdu != sinks[idx].frame_blocks_per_sdu ||
 	    shape.chan_count != sinks[idx].chan_count) {
 		LOG_ERR("Enable: retained codec config no longer matches stored shape");
-		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
+		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_REJECTED,
 				       BT_BAP_ASCS_REASON_CODEC_DATA);
 		return -EINVAL;
 	}
@@ -491,7 +493,7 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 	if (ret < 0) {
 		LOG_ERR("LC3 decoder setup failed (freq=%d dur=%d ch=%d)", sinks[idx].freq_hz,
 			sinks[idx].frame_dur_us, sinks[idx].chan_count);
-		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
+		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_REJECTED,
 				       BT_BAP_ASCS_REASON_CODEC_DATA);
 		return ret;
 	}
@@ -573,7 +575,21 @@ static bool sink_close_audio_path(void)
  */
 static void sink_release_slot(size_t idx)
 {
-	sink_close_audio_path();
+	bool was_open = sink_close_audio_path();
+
+	if (was_open) {
+		/* Stop the audio sink immediately on Release, before
+		 * returning to ASCS, so the sink oracle can finalize the
+		 * segment (snapshotting the statistics) before any later
+		 * disabled/disconnect path.  audio_sink_stop() is
+		 * idempotent; later paths must not create a second segment
+		 * or hide pushes. */
+		LOG_INF("Release: audio sink stopped");
+		audio_sink_stop();
+#if defined(CONFIG_BSIM_OBSERVER)
+		bsim_observer_release_sink_stop();
+#endif
+	}
 
 #if defined(CONFIG_LIBLC3)
 	audio_decode_reset(&sinks[idx].decode);
@@ -705,7 +721,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 			expected *= 2U; /* Mode B: [L frame][R frame] per block */
 		}
 		if (buf->len != expected) {
-			LOG_WRN("stream[%zu]: malformed SDU len %u != expected %zu", idx, buf->len,
+			LOG_INF("stream[%zu]: malformed SDU len %u != expected %zu", idx, buf->len,
 				expected);
 			audio_stats_decode_error();
 #if defined(CONFIG_BSIM_OBSERVER)
@@ -732,6 +748,9 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		}
 		audio_volume_apply(stereo_out, spc * 2);
 
+#if defined(CONFIG_BSIM_OBSERVER)
+		bsim_observer_pre_push(valid);
+#endif
 		if (audio_sink_push(stereo_out, spc * 2) < 0) {
 			audio_perf_push_failure();
 		}
@@ -739,7 +758,21 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		/* Mode A: 2 mono ASEs — decode to separate L/R buffers.
 		 * Hard decoder errors skip that half and cannot pair it;
 		 * PLC halves may pair and produce concealment output.
-		 */
+		 * The ISO SDU reference time is the pairing key, so a
+		 * missing TS flag makes this half unusable: skip decoder,
+		 * pairing mutation, and push, count one receive/decode
+		 * fault, and emit the test observer event (a real warning
+		 * — the normal matrix proves zero occurrences). */
+		if (!(info->flags & BT_ISO_FLAGS_TS)) {
+			LOG_WRN("stream[%zu]: Mode A SDU missing TS flag — half skipped", idx);
+			audio_stats_decode_error();
+#if defined(CONFIG_BSIM_OBSERVER)
+			bsim_observer_missing_ts();
+#endif
+			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
+			return;
+		}
+
 		const int octets_per_frame = f_per_sdu > 0 ? (buf->len / f_per_sdu) : buf->len;
 		int16_t *dest = (idx == 0) ? l_buf : r_buf;
 		bool decoded_ok = true;
@@ -764,8 +797,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		if (!decoded_ok) {
 			/* Hard decoder error: this half cannot pair.  Leave
 			 * half-valid state untouched so a stale half can
-			 * never pair with the failed one.
-			 */
+			 * never pair with the failed one. */
 			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
 			return;
 		}
@@ -776,14 +808,19 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		 * numbers each CIS from a CIG-global counter, so the two
 		 * CIS seq spaces carry a constant offset (their activation
 		 * delay) that no client-side TX hold can remove — exact
-		 * seq or per-half-index matching cannot pair.  Both CISes
+		 * seq or per-half-index pairing cannot match.  Both CISes
 		 * of one CIG share the ISO SDU reference time at each
 		 * event, so equal half_ts values identify the two halves of
 		 * the same audio frame; a wrap-safe 32-bit comparison
-		 * discards only the older unmatched half.  The
-		 * controller-reported ISO seq_num stays tracked per half.
+		 * discards only the older unmatched half.  Each half's
+		 * original ISO-valid flag is stored separately from the
+		 * decoder result: a push is source-valid only when BOTH
+		 * paired halves had VALID set (the test oracle's startup
+		 * boundary uses this).  The controller-reported ISO
+		 * seq_num stays tracked per half.
 		 */
 		as->half_valid = true;
+		as->half_valid_src = valid;
 		as->half_ts = info->ts;
 		as->half_seq = info->seq_num;
 		as->half_idx++;
@@ -798,6 +835,10 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 				audio_decode_interleave(l_buf, r_buf, stereo_out, spc);
 				audio_volume_apply(stereo_out, spc * 2);
 
+#if defined(CONFIG_BSIM_OBSERVER)
+				bsim_observer_pre_push(sinks[0].half_valid_src &&
+						       sinks[1].half_valid_src);
+#endif
 				if (audio_sink_push(stereo_out, spc * 2) < 0) {
 					audio_perf_push_failure();
 				}
@@ -823,6 +864,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 #endif
 			}
 		}
+
 	} else {
 		/* Mono single-ASE: decode + mono-to-stereo handled by
 		 * audio_decode_sdu.  A negative decode return skips volume
@@ -838,6 +880,9 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		}
 		audio_volume_apply(stereo_out, spc * 2);
 
+#if defined(CONFIG_BSIM_OBSERVER)
+		bsim_observer_pre_push(valid);
+#endif
 		if (audio_sink_push(stereo_out, spc * 2) < 0) {
 			audio_perf_push_failure();
 		}

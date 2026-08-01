@@ -33,6 +33,18 @@ static atomic_int last_rej_dir;
 static atomic_int last_rej_code;
 static atomic_int last_rej_reason;
 
+static atomic_uint event_seq;
+static atomic_uint rel_ss_cnt;
+static atomic_uint rel_ss_seq;
+static atomic_uint mts_cnt;
+static atomic_uint disc_seq;
+static atomic_bool last_push_src_valid;
+
+static uint32_t obs_next_event(void)
+{
+	return atomic_fetch_add(&event_seq, 1);
+}
+
 void bsim_observer_config(bool accepted, enum bt_audio_dir dir, enum bt_bap_ascs_rsp_code code,
 			  enum bt_bap_ascs_reason reason)
 {
@@ -44,6 +56,7 @@ void bsim_observer_config(bool accepted, enum bt_audio_dir dir, enum bt_bap_ascs
 	atomic_store(&last_dir, (int)dir);
 	atomic_store(&last_code, (int)code);
 	atomic_store(&last_reason, (int)reason);
+	(void)obs_next_event();
 	if (!accepted) {
 		atomic_store(&last_rej_dir, (int)dir);
 		atomic_store(&last_rej_code, (int)code);
@@ -55,44 +68,75 @@ void bsim_observer_config(bool accepted, enum bt_audio_dir dir, enum bt_bap_ascs
 
 void bsim_observer_gate_open(void)
 {
+	(void)obs_next_event();
 	atomic_fetch_add(&gate_open_cnt, 1);
 	printk("OBS gate open\n");
 }
 
 void bsim_observer_gate_close(void)
 {
+	(void)obs_next_event();
 	atomic_fetch_add(&gate_close_cnt, 1);
 	printk("OBS gate close\n");
 }
 
 void bsim_observer_malformed_sdu(void)
 {
+	(void)obs_next_event();
 	atomic_fetch_add(&malformed_sdu_cnt, 1);
 	printk("OBS malformed sdu\n");
 }
 
 void bsim_observer_recv_gate_blocked(void)
 {
+	(void)obs_next_event();
 	atomic_fetch_add(&recv_gate_blocked_cnt, 1);
 	printk("OBS recv gate blocked\n");
 }
 
 void bsim_observer_stale_half(void)
 {
+	(void)obs_next_event();
 	atomic_fetch_add(&stale_half_cnt, 1);
 	printk("OBS stale half\n");
 }
 
 void bsim_observer_cleanup_release(unsigned int slot)
 {
+	(void)obs_next_event();
 	atomic_fetch_add(&release_cleanup_cnt, 1);
 	printk("OBS release cleanup slot=%u\n", slot);
 }
 
 void bsim_observer_cleanup_disconnect(void)
 {
+	atomic_store(&disc_seq, obs_next_event());
 	atomic_fetch_add(&disconnect_cleanup_cnt, 1);
 	printk("OBS disconnect cleanup\n");
+}
+
+void bsim_observer_release_sink_stop(void)
+{
+	atomic_store(&rel_ss_seq, obs_next_event());
+	atomic_fetch_add(&rel_ss_cnt, 1);
+	printk("OBS release sink stop\n");
+}
+
+void bsim_observer_missing_ts(void)
+{
+	(void)obs_next_event();
+	atomic_fetch_add(&mts_cnt, 1);
+	printk("OBS missing ts\n");
+}
+
+void bsim_observer_pre_push(bool src_valid)
+{
+	atomic_store(&last_push_src_valid, src_valid);
+}
+
+bool bsim_observer_get_last_push_src_valid(void)
+{
+	return atomic_load(&last_push_src_valid);
 }
 
 uint32_t bsim_observer_get_config_accepted(void)
@@ -168,4 +212,29 @@ uint32_t bsim_observer_get_release_cleanup(void)
 uint32_t bsim_observer_get_disconnect_cleanup(void)
 {
 	return atomic_load(&disconnect_cleanup_cnt);
+}
+
+uint32_t bsim_observer_get_release_sink_stop(void)
+{
+	return atomic_load(&rel_ss_cnt);
+}
+
+uint32_t bsim_observer_get_missing_ts(void)
+{
+	return atomic_load(&mts_cnt);
+}
+
+uint32_t bsim_observer_get_event_seq(void)
+{
+	return atomic_load(&event_seq);
+}
+
+uint32_t bsim_observer_get_release_sink_stop_seq(void)
+{
+	return atomic_load(&rel_ss_seq);
+}
+
+uint32_t bsim_observer_get_disconnect_seq(void)
+{
+	return atomic_load(&disc_seq);
 }

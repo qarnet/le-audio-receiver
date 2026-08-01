@@ -45,6 +45,23 @@ void bsim_observer_cleanup_release(unsigned int slot);
 /** Disconnect cleanup completed. */
 void bsim_observer_cleanup_disconnect(void);
 
+/** Release closed an open audio path and stopped the sink immediately. */
+void bsim_observer_release_sink_stop(void);
+
+/** Mode A SDU arrived without the ISO TS flag (half skipped). */
+void bsim_observer_missing_ts(void);
+
+/**
+ * Record the source-validity of the SDU about to be pushed (called by
+ * the production receive path immediately before audio_sink_push):
+ * mono/Mode B = packet BT_ISO_FLAGS_VALID; Mode A = both paired halves
+ * had VALID set.  Affects only the test oracle, never production state.
+ */
+void bsim_observer_pre_push(bool src_valid);
+
+/** Source validity of the most recently recorded pre-push SDU. */
+bool bsim_observer_get_last_push_src_valid(void);
+
 /* ── queries for the receiver scenario driver ────────────────────── */
 
 uint32_t bsim_observer_get_config_accepted(void);
@@ -63,5 +80,12 @@ uint32_t bsim_observer_get_recv_gate_blocked(void);
 uint32_t bsim_observer_get_stale_half(void);
 uint32_t bsim_observer_get_release_cleanup(void);
 uint32_t bsim_observer_get_disconnect_cleanup(void);
+uint32_t bsim_observer_get_release_sink_stop(void);
+uint32_t bsim_observer_get_missing_ts(void);
+
+/* Monotonic event sequence numbers for ordering proofs. */
+uint32_t bsim_observer_get_event_seq(void);
+uint32_t bsim_observer_get_release_sink_stop_seq(void);
+uint32_t bsim_observer_get_disconnect_seq(void);
 
 #endif /* BSIM_OBSERVER_H */
