@@ -161,12 +161,20 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 			net_buf_reserve(buf, BT_ISO_CHAN_SEND_RESERVE);
 
 			if (s->inject_pending && s->seq_num == s->inject_at_seq) {
-				/* Exactly one malformed one-byte SDU at a
-				 * controlled sequence, then resume valid LC3. */
-				net_buf_add_u8(buf, 0xAA);
+				/* Exactly one malformed SDU at a controlled
+				 * sequence, then resume valid LC3.  The ISO
+				 * stack drops a 1-byte SDU before the BAP
+				 * callback (never observed receiver-side), so
+				 * the malformed SDU is one byte short of the
+				 * configured shape (119 of 120) — still a
+				 * wrong-length SDU for the receiver's exact
+				 * payload validation. */
+				for (int j = 0; j < (int)s->cfg.octets_per_frame - 1; j++) {
+					net_buf_add_u8(buf, (uint8_t)(0x40 + j));
+				}
 				s->inject_pending = false;
-				LOG_INF("TX[%zu]: injected malformed 1-byte SDU at seq %u", i,
-					s->seq_num);
+				LOG_INF("TX[%zu]: injected malformed %u-byte SDU at seq %u", i,
+					s->cfg.octets_per_frame - 1U, s->seq_num);
 			} else if (!bsim_tx_encode_sdu(s, buf)) {
 				net_buf_unref(buf);
 				continue;
