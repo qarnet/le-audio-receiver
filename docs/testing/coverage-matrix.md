@@ -1,6 +1,6 @@
 # Honest coverage matrix — pre-refactor baseline
 
-Version: T5, 2026-08-01.  This matrix maps every production source file to the
+Version: T6, 2026-08-02.  This matrix maps every production source file to the
 current test coverage that exercises it.  A test that duplicates production
 logic, compiles a stub, or checks copied constants is NOT counted as proof of
 production behavior.
@@ -32,7 +32,8 @@ production behavior.
 | `audio_offload.c` | FLPR offload manager | `tests/unit/audio_offload/` — compiles production source | BSim: compiled without CONFIG_SOC_NRF54L15 — only no-op/non-nRF stubs are exercised; not FLPR production-path integration | — | nRF54L15 FLPR healthy + fallback | No known functional gap; branch coverage unmeasured. | T7 |
 | `audio_perf.c` | Performance timers | `tests/unit/perf/` — compiles production `src/audio_perf.c` | — | — | — | Basic tests exist; branch coverage unmeasured. | T7 |
 | `audio_rate_convert.c` | Nearest-neighbor rate converter | `tests/unit/rate_convert/` — Twister suite | BSim: compiled only — rate-converter calls live in `audio_i2s.c`, excluded from the BSim build; no BSim execution | — | nRF54L15 streaming verification | Functional tests exist; branch coverage unmeasured. | T7 |
-| `audio_shell.c` | Status shell commands | — | — | — | Log inspection during hardware gates | **No direct unit test.** Parseable status fields, zero-safe percentages, FLPR fields, unpair propagation not tested in isolation. | T6 |
+| `app_lifecycle.c` | Narrow boot coordinator (ordered fatal init + advertising restart) | `tests/unit/app_lifecycle/` — 13 tests compile production source: exact all-success order incl. optional platform step, platform absent, each of the seven fatal steps failing independently (no later callback, exactly one cold reboot, original errno), restart success (only advertising) and restart failure (one reboot, error), NULL/missing-required-callback `-EINVAL` with zero calls/reboots | — | — | Boot logs on both targets | Init order, reboot-once semantics, restart behavior now direct production-source proof; `main.c` wiring stays proven by production builds. | T6 (closed) |
+| `audio_shell.c` | Status shell commands | `tests/unit/audio_shell/` — 13 tests compile production `src/audio_shell.c` with `AUDIO_SHELL_TEST` seams, executed through the real Zephyr dummy backend + `shell_execute_cmd` against mocked stats/drift/volume/sink/unpair and real `audio_perf.c` (deterministic cycle injection): exact `audio status` field order/labels, zero-frames `(0%)` without div0, large-value percentage without uint32 overflow, `audio perf` path labels/queue fields/integer one-decimal deadline %, zero-count averages, reset-stats/perf-reset/stop exactly-once + stable text, `bt unpair` success text and exact negative errno propagation, wrapper-seam equivalence; `tests/unit/audio_shell_noperf/` — 10 tests, same production file with `CONFIG_AUDIO_PERF_MEASUREMENT=n`: truthful unavailable (zero) deadline percentage, zeroed queue fields, no div0; `tests/unit/audio_shell_nrf54/` — 16 tests compile the same file with `CONFIG_SOC_NRF54L15` for the TU against mocked FLPR APIs: `flpr status` ready/ACKed/healthy/epoch/errors/TX/RX/loss/order, `flpr ring status` counters/diagnostics/test/latency/stall incl. conditional lines, `flpr offload` state/epoch/generation/counters/faults/recovery/probation/runtime-restart/heartbeat-dedup/RTT/last-error + ASRC counters/faults/RTT/cycles (gate-parsed fields), `flpr runtime` full field set with out-of-range enums printing UNKNOWN/unknown, `flpr restart` EBUSY/success-line/failure-errno | — | — | Log inspection during hardware gates | Parseable status fields, zero-safe percentages, FLPR gate fields, unpair propagation now direct production-source proof. | T6 (closed) |
 | `audio_stats.c` | Stream statistics counters | `tests/unit/stats/` — 10 tests execute production source: exact counter coupling (total = decoded + PLC), reset, by-value snapshots, deterministic repeats, 4-thread concurrent exact counts | BSim: compiled and genuinely exercised — production `audio_stats.c` runs through `audio_decode.c`/`bt_bap.c`, and the sink stub reads `audio_stats_get()` snapshots; local counters only supplement startup accounting | — | Hardware log verification | No known functional gap; branch coverage unmeasured. | T7 |
 | `audio_timing_math.c` | Timing math shared across platforms | `tests/unit/timing/` — Twister suite; also compiled by `tests/unit/timing_nrf54/` (production ppm path) | BSim: compiled only — consumed by `audio_timing_nrf54.c`, which is not compiled into BSim; no BSim execution | — | — | Functional tests exist; branch coverage unmeasured. | T7 |
 | `audio_timing_none.c` | nRF5340 no-op timing | — | BSim: compiled; `audio_timing_sdu_ref_update()` no-op is called from the `bt_bap.c` stream path (init/reset live in `audio_i2s.c`, not called in BSim) | — | nRF5340 hardware streaming | No direct unit test; no-op implementation is low-risk. BSim integration evidence exists. Gap not in T5 scope. | — (low-risk no-op) |
@@ -45,7 +46,7 @@ production behavior.
 | `flpr_ring.c` | SPSC ring buffer (shared SRAM) | `tests/unit/flpr_ring/` — compiles production source | — | — | nRF54L15 FLPR ring through I/O | No known functional gap; branch coverage unmeasured. | T7 |
 | `flpr_ring_mgr.c` | Ring manager: paired input/output rings | `tests/unit/flpr_ring_mgr/` — 53 tests compile and execute `src/flpr_ring_mgr.c` (+ real `flpr_ring.c`, `flpr_cache.c`) with host ring arrays and a handshake mock | — | — | nRF54L15 FLPR ring manager through I/O | Coordinated reset, invalidation races, semaphore draining, producer/consumer validation, backpressure, sequence wrap, remote restart now direct production-source proof. Branch coverage unmeasured. | T7 |
 | `flpr_runtime.c` | Synchronous FLPR VPR runtime restart manager | `tests/unit/flpr_runtime/` — 21 tests compile and execute the real nRF54 restart body (shadow VPR HAL, host source/exec arrays, ordered event log) | — | — | nRF54L15 FLPR runtime restart + fault handling | DMCONTROL transitions, fault stages, CRC rejection, mutex busy, duration accounting now direct production-source proof. Physical cache/FLPR entry behavior remains hardware-only. Branch coverage unmeasured. | T7 |
-| `main.c` | Boot, init wiring, watchdog, advertising loop | — | — | — | Boot logs on both targets | **No direct unit test.** Init order, fatal-reboot path, advertising restart loop not tested in isolation. | T6 |
+| `main.c` | Boot wiring, watchdog device/thread, advertising loop | Boot ordering/reboot semantics delegated to `app_lifecycle.c` (direct suite above); `main.c` itself is not compiled into any unit suite — hardware wiring remains proven by the production builds | — | — | Boot logs on both targets | Fatal init order and reboot behavior now direct production-source proof via the coordinator; `main.c` remains adapter-only glue. | T6 (closed) |
 | `stream_lifecycle.c` | Stream start/stop lifecycle | `tests/unit/lifecycle/` — 22 tests compile production source: Mode A/B/mono gates, close idempotence, closed-to-open edge semantics (duplicate starts return false), configure/start/close/reconfigure/start permutations, release-then-slot-reuse, reset from closed/partial/open states, repeated open/close cycles, inert invalid/zero/negative configurations | BSim T4 matrix: gate open/close across mono, Mode A (two-ASE set), first-ASE stop, release-without-disable, disconnect-while-streaming, and reconnect; closed-gate receive evidence | — | Hardware connect/disconnect cycles | Duplicate-start edge semantics now direct production-source proof. | T5 (closed) |
 | `src/flpr/main.c` | FLPR firmware entry point (RISC-V VPR) | — | — | — | nRF54L15 FLPR firmware loaded + active | **No direct unit test.** No RISC-V simulator test infrastructure exists. Hardware-only by design; no practical simulation path. | — (hardware-only) |
 
@@ -53,11 +54,11 @@ production behavior.
 
 | Category | Count | Suites |
 |----------|-------|--------|
-| Twister C (testcase.yaml) | 20 | actuator_apll, actuator_apll_nohfclk, actuator_none, actuator_sample_adjust_historical, asrc, decode, drift, flpr_handshake, flpr_protocol, flpr_ring_mgr, flpr_runtime, lifecycle, perf, rate_convert, stats, timing, timing_nrf54, volume, audio_i2s, audio_i2s_identity |
+| Twister C (testcase.yaml) | 24 | actuator_apll, actuator_apll_nohfclk, actuator_none, actuator_sample_adjust_historical, app_lifecycle, asrc, audio_i2s, audio_i2s_identity, audio_shell, audio_shell_noperf, audio_shell_nrf54, decode, drift, flpr_handshake, flpr_protocol, flpr_ring_mgr, flpr_runtime, lifecycle, perf, rate_convert, stats, timing, timing_nrf54, volume |
 | Exec-only C (CMakeLists.txt, no testcase.yaml) | 4 | audio_offload, flpr_audio_process, flpr_ring, offload_asrc |
-| Python | 5 | gate (test_gate.py), flpr_stall_gate (test_flpr_stall_gate.py), bluez_wp_gate (test_bluez_wireplumber_gate.py), bluez_wp_phase3_gate (test_bluez_wireplumber_phase3_gate.py), bsim_runner (test_bsim_stage1_parse.py, 36 tests) |
+| Python | 6 | gate (test_gate.py), flpr_stall_gate (test_flpr_stall_gate.py), bluez_wp_gate (test_bluez_wireplumber_gate.py), bluez_wp_phase3_gate (test_bluez_wireplumber_phase3_gate.py), bsim_runner (test_bsim_stage1_parse.py, 36 tests), build_contract (test_build_contract.py, 28 tests) |
 | BabbleSim | 1 | bsim_stage1 (T4 15-scenario BAP matrix, scenarios 1-8 twice) |
-| **Total gate children** | **30** | |
+| **Total gate children** | **35** | |
 
 ## Explicit weak-test facts
 
@@ -94,10 +95,17 @@ production behavior.
    branch (no CONFIG_SOC_NRF54L15).  `audio_asrc.c` and `audio_i2s.c` are
    not compiled into BSim at all.  Mode A, Mode B, reconnect, packet-loss,
    and malformed-configuration scenarios are not covered.
-7. **Build contracts** (resolved `.config` and `zephyr.dts` for both targets)
-   are not automatically asserted.  Host/controller ISO buffer agreement,
-   ASRC/FLPR path selection, pin assignments, and SW Split overlay application
-   are only checked manually.
+7. **Build contracts are now automatically asserted** by
+   `scripts/check-build-contract.py` (T6): resolved `.config` and
+   `zephyr.dts` for both targets (app, nRF5340 `hci_ipc` controller, and
+   nRF54L15 `flpr` images) are parsed and checked for the resampler/
+   actuator path selection, host/controller ISO buffer agreement, pin
+   assignments, RF-switch polarity, crystal capacitance, exact
+   non-overlapping FLPR/ring memory ranges, and both SW Split overlays.
+   The checker's own suite (`tests/unit/build_contract/`, 28 tests) uses
+   minimal temporary fixtures and never depends on pre-existing firmware
+   build directories; the real contract run happens after pristine
+   production builds.
 8. **Hardware evidence** comes from logs and autonomous central automated
    streams.  These verify end-to-end data flow but do not replace direct
    branch/error-path unit tests.

@@ -381,6 +381,132 @@ Acceptance evidence (desktop `thomas-main` + workstation `thomas-workstation`):
   removed; desktop repo clean on `test/pre-refactor-behavior`.
 - **T6 is next**: boot coordinator, shell, and resolved-config checker.
 
+**Phase T6 — boot, shell, and resolved-config contracts** — ACCEPTED (2026-08-02).
+
+Closes T6 from `docs/development/pre-refactor-testing-plan.md` with a narrow
+testable boot coordinator, direct production shell-command tests, and a
+stdlib-only resolved build-contract checker for both production targets.
+Handoff: `docs/development/pre-refactor-testing-t6-handoff.md`.  Evidence
+updates: `docs/testing/behavior-contract.md` (APP-001..003 closed;
+APP-006, APP-007, BUILD-002..005 closed, BUILD-007, BUILD-008 added),
+`docs/testing/coverage-matrix.md`, `STATUS.md`.
+
+- **Boot coordinator** — new production `src/app_lifecycle.{c,h}` owns the
+  fatal init order (watchdog → Bluetooth → settings → volume → BAP → I2S →
+  optional nonfatal nRF54 platform init → advertising) and the
+  disconnect advertising restart.  `main.c` retains all hardware wiring
+  (watchdog device/thread, real subsystem wrappers incl.
+  `bt_enable(NULL)` / `sys_reboot(SYS_REBOOT_COLD)`, nRF54-only
+  `flpr_handshake_init` → `audio_offload_init` → `flpr_runtime_init`,
+  device-name log, `bt_bap_wait_disconnect()` loop).  `settings_load()`
+  stays after Bluetooth enable and before BAP/PACS registration.
+  `tests/unit/app_lifecycle/` (13 tests, new twister suite) compiles the
+  production coordinator: exact all-success order incl. platform,
+  platform-absent, each of the seven fatal steps failing independently
+  (no later callback, exactly one cold reboot, original errno returned),
+  restart success (only advertising) / restart failure (one reboot +
+  error), NULL ops and every missing required callback → `-EINVAL` with
+  zero calls and zero reboots.  `main.c` never continues into normal
+  operation after a nonzero boot/restart result.
+- **Shell behavior tests** — new twister suites compile and execute the
+  REAL production `src/audio_shell.c` through the Zephyr dummy backend +
+  `shell_execute_cmd()` against mocked subsystem APIs (real
+  `audio_perf.c` with deterministic cycle injection):
+  `tests/unit/audio_shell/` 13 tests (perf enabled), `tests/unit/
+  audio_shell_noperf/` 10 tests (`CONFIG_AUDIO_PERF_MEASUREMENT=n`),
+  `tests/unit/audio_shell_nrf54/` 16 tests (`CONFIG_SOC_NRF54L15` TU,
+  mocked FLPR APIs).  Locks exact field labels/values for `audio status`,
+  `audio perf` (path labels, zero-count averages, integer one-decimal
+  deadline %, queue fields), `audio reset-stats`, `audio perf-reset`,
+  `audio stop`, `bt unpair` (exact negative errno propagation), and every
+  FLPR field consumed by `scripts/flpr_hang_gate.py` (handshake health/
+  epoch/errors/TX/RX/loss/order, ring counters/diagnostics/test/latency/
+  stall, offload state/epoch/generation/counters/faults/recovery/
+  probation/runtime-restart/heartbeat-dedup/RTT/last-error, ASRC
+  counters/faults/RTT/cycles, runtime state/stage/requests/epochs/
+  reload/CRC/errno/duration/DMCONTROL/INITPC/CPURUN, restart EBUSY/
+  OK-line/failure).  Narrow `AUDIO_SHELL_TEST`-guarded wrappers expose
+  static handlers to tests only; production firmware never compiles them.
+- **Production defects fixed** (all found by the new tests):
+  1. `audio reset-stats` and `audio perf-reset` were registered as
+     `reset - stats` / `perf - reset` — a shell command name cannot
+     contain spaces, so the commands were unreachable; renamed to the
+     documented hyphenated names.
+  2. `audio perf` with measurement disabled computed the deadline
+     percentage against a fake 1 µs deadline (untruthful ~5000.0%);
+     now prints a truthful unavailable (zero) `0.0%` — table shape
+     unchanged, division-safe.
+  3. `flpr runtime` indexed state/stage string arrays with raw enum
+     values — an out-of-range enum read past the array; replaced with
+     bounded switch-based conversion printing `UNKNOWN` / `unknown`.
+  4. `audio status` PLC percentage multiplied in `uint32_t` — overflowed
+     for large counters; numerator now `uint64_t`, integer truncation
+     preserved, zero frames still prints `(0%)` with no division.
+  Note: `flpr_hang_gate.py`'s `RE_RUNTIME_RESTART_OK` regex is
+  informational-only (not a gate check) and has drifted from the
+  production `FLPR restart OK: epoch a→b …` line since Stage 4A; T6
+  locks the current production format and leaves the gate parser
+  untouched (out of T6 scope, hardware-phase follow-up).
+- **Resolved build-contract checker** — new `scripts/check-build-contract.py`
+  (stdlib only, deterministic PASS/FAIL report listing every failed
+  assertion in one run, exit 0 only when all pass) parses the resolved
+  `.config` + `zephyr.dts` beneath each sysbuild root — app image,
+  nRF5340 `hci_ipc` controller image, nRF54L15 `flpr` image — and asserts
+  **74 contracts**: nRF5340 path (identity+APLL, no ASRC/NONE, 48000 Hz,
+  LIBLC3, two sink ASEs, MCK bypass, 7/6/6 host counts, `i2s0` okay with
+  12.288 MHz HFCLKAUDIO and exact BCK P1.15/LRCK P1.12/SDOUT P1.13 pin
+  cells, QSPI disabled, WDT0 okay; netcore `BT_LL_SW_SPLIT=y` +
+  peripheral/connection ISO, controller counts equal to host, chosen
+  `zephyr,bt-hci` → okay `bt_hci_controller` with
+  `zephyr,bt-hci-ll-sw-split` compatible while `bt_hci_sdc` is
+  disabled), nRF54L15 path (ASRC linear + NONE, no APLL/identity,
+  offload ASRC, 47619 Hz, LIBLC3, two sink ASEs, 3/1/1/3 counts with
+  host ISO TX == controller ISO TX, `i2s20` okay + PCLK32M + exact
+  SCK P1.4/LRCK P1.5/SDOUT P1.6/MCK P1.7 cells, PDM20/SPI00/MX25R64
+  disabled, TIMER20 reserved, `rfsw_ctl` `<&gpio2 5 1>` + `rfsw_pwr`
+  `<&gpio2 3 0>` both `regulator-boot-on`, LFXO/HFXO internal 16000 fF,
+  exact non-overlapping contiguous SRAM ranges within
+  `0x20000000..0x20040000`, FLPR code partition `0x165000`+`0x18000`,
+  FLPR image cross-checks: `cpuflpr_sram`/chosen `zephyr,sram`/
+  `zephyr,code-partition`/`FLASH_BASE_ADDRESS`/`FLASH_LOAD_SIZE` vs
+  app-side launcher ranges) and the 48 kHz capability statement: resolved
+  half proven from build data, PACS LTV explicitly NOT claimed as a
+  resolved property (C object, pinned by T2/T4 tests per BT-002), plus a
+  clearly-labeled source check (SRC-001/002) on `src/bt_bap.c`.
+  `tests/unit/build_contract/test_build_contract.py` (28 tests, new
+  python suite) covers a complete valid dual-target fixture, missing
+  image/file, duplicate/malformed config, explicit unset vs set symbols,
+  comment-only DTS satisfaction attempts, wrong status/compatible/
+  chosen/pins/counts/RF polarity/capacitance, missing/overlapping/
+  out-of-range memory intervals, SW Split Kconfig-only and DTS-only half
+  failures, and the deterministic multi-error report with nonzero exit;
+  it never depends on pre-existing firmware build directories.  Added to
+  `scripts/test-all.sh`.
+
+Acceptance evidence (desktop `thomas-main`, branch `test/pre-refactor-behavior`):
+
+- Focused during development: app_lifecycle 13/13, audio_shell 13/13,
+  audio_shell_noperf 10/10, audio_shell_nrf54 16/16, build_contract
+  28/28 — zero compiler warnings (native_sim test-entropy notice is the
+  same pre-existing line every twister suite emits).
+- Full gate on the working tree: **34 PASS / 1 FAIL / 35 TOTAL** — all 24
+  twister C suites (incl. the four new ones), 4 exec-only C suites, 6
+  Python suites (incl. build_contract 28/28), and the accepted T4
+  BabbleSim matrix leg; the single failure is `bsim: stage1` because the
+  BabbleSim component binaries are not built on `thomas-main` (same
+  environmental leg as T0–T5; the workstation provides the authoritative
+  BSim leg).
+- All three pristine production builds pass: `fw-build-5340`,
+  `fw-build-54l15`, `fw-build-dongle` — zero compiler warnings; only the
+  documented non-actionable NCS v3.3.0 diagnostics (see "Build warning
+  diagnostics"), no new entries.
+- `python3 scripts/check-build-contract.py --nrf5340 build/nrf5340
+  --nrf54l15 build/nrf54l15` on the pristine builds: **74 assertions,
+  0 failed, BUILD CONTRACT PASSED, exit 0**.
+- `git diff --check` clean; `git status --short` clean after the final
+  commit.
+- **T7 is next**: coverage enforcement (gcovr + `check-test-matrix.py`).
+
 ### T5 review-fix round (2026-08-01)
 
 Closes the deferred-measurement loss defect found in Thinker review of

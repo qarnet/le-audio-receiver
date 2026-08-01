@@ -572,16 +572,37 @@ Initialization order is: watchdog, Bluetooth (`bt_enable`), settings
 I2S (`audio_sink_init`), nRF54L15 FLPR services, advertising.  Deviations from
 this order may cause silent failures (e.g., PACS not registered).
 
+**T6 closed:** the order is owned by the production boot coordinator
+`src/app_lifecycle.c` (`tests/unit/app_lifecycle/`, 13 tests): exact
+all-success order including the optional platform step between sink and
+advertising, platform-absent wiring, and every fatal step failing
+independently with no later callback and exactly one cold reboot.
+`main.c` adapts `bt_enable(NULL)`, `sys_reboot(SYS_REBOOT_COLD)`, and the
+subsystem calls to the coordinator's operations structure and retains the
+watchdog device/thread and the disconnect/advertising-restart loop.
+`settings_load()` stays after Bluetooth enable and before BAP/PACS
+registration.
+
 ### APP-002 — Fatal init/advertise reboot
 
 Fatal initialization or advertising failure requests a cold reboot via
 `sys_reboot(SYS_REBOOT_COLD)`.  The watchdog ensures progress if the reboot
 path itself hangs.
 
+**T6 closed:** `app_lifecycle_boot()` and
+`app_lifecycle_restart_advertising()` log the step and error, call
+`cold_reboot()` exactly once, stop immediately, and return the original
+error only if the reboot callback returns.  `main.c` never continues into
+normal operation after a nonzero boot/restart result.
+
 ### APP-003 — Advertising restart on disconnect
 
 Disconnect restarts advertising.  The advertise-restart loop is woken by
 disconnect completion and restarts from the same configuration.
+
+**T6 closed:** restart success invokes only `advertising_start`;
+restart failure invokes it once, cold-reboots exactly once, and returns
+the original error (unit-tested).
 
 ### APP-004 — Stable parseable status fields
 
@@ -596,6 +617,53 @@ success.  Recorded SDK diagnostics (Kconfig, CMake, upstream gaps) remain
 separately listed with root-cause analysis.  Project-level warnings are fixed
 or suppressed with a recorded reason.
 
+### APP-006 — Boot coordinator operations validation (T6)
+
+`app_lifecycle_boot()` validates the operations structure and every required
+callback (all except the optional `platform_init`) before any call: NULL ops
+or a missing required callback returns `-EINVAL` without invoking anything
+and without rebooting.  `app_lifecycle_restart_advertising()` validates
+`advertising_start` and `cold_reboot` the same way.  `platform_init` is
+nonfatal and void.
+
+### APP-007 — Shell diagnostic formatting (T6)
+
+The production shell command bodies in `src/audio_shell.c` are executed
+directly by `tests/unit/audio_shell/` (13 tests, perf enabled),
+`tests/unit/audio_shell_noperf/` (10 tests, perf disabled), and
+`tests/unit/audio_shell_nrf54/` (16 tests, FLPR fields) through the real
+Zephyr dummy backend and `shell_execute_cmd()` against mocked subsystem
+APIs:
+
+- `audio status` prints the exact field order/labels with a zero-safe PLC
+  percentage; the percentage numerator is computed in `uint64_t`
+  (large `plc_frames`/`total_frames` cannot overflow) preserving integer
+  truncation, and zero total frames prints `(0%)` without division.
+- `audio perf` prints the exact path labels, zero-count averages, integer
+  one-decimal deadline percentage, and the queue fields consumed by
+  diagnostics.  With `CONFIG_AUDIO_PERF_MEASUREMENT` disabled the deadline
+  is unavailable and the percentage prints a truthful `0.0%` — never a
+  value computed against a fake deadline.
+- The commands are reachable under their documented names:
+  `audio reset-stats`, `audio perf-reset`, `audio stop` (the previous
+  `reset - stats` / `perf - reset` spaced syntax strings could not be
+  matched by any input word — a T6-found defect, fixed).
+- `bt unpair` propagates the exact negative errno and prints
+  `bt_unpair failed: <errno>` on failure, `All bonds cleared.` on success.
+- nRF54 FLPR status commands print the exact parseable labels consumed by
+  `scripts/flpr_hang_gate.py` (handshake health/epoch/error/TX/RX/loss
+  fields, ring counters/diagnostics/test/latency/stall, offload
+  state/epoch/generation/counters/faults/recovery/probation/runtime
+  restart/heartbeat dedup/RTT/last error, ASRC counters/faults/RTT/cycles,
+  runtime state/stage/requests/epochs/reload/CRC/errno/duration and
+  DMCONTROL/INITPC/CPURUN readbacks).
+- `flpr runtime` state/stage conversion is bounded: out-of-range enum
+  values print `UNKNOWN` / `unknown` instead of indexing past string
+  arrays (a T6-found defect, fixed with switch-based helpers).
+- Narrow `AUDIO_SHELL_TEST`-guarded wrappers expose otherwise-static
+  command handlers to the test suites only; they never enter production
+  firmware.
+
 ## Board and build contract (`BUILD-*`)
 
 ### BUILD-001 — NCS version
@@ -609,12 +677,24 @@ nRF5340 cpunet applies both the SW Split Kconfig overlay and the SW Split
 devicetree overlay through `sysbuild.cmake`.  Without both, the net core stays
 on SoftDevice and `bt_enable()` fails.
 
+**T6 closed:** `scripts/check-build-contract.py` proves both halves on the
+resolved netcore image: `CONFIG_BT_LL_SW_SPLIT=y` with peripheral/connection
+ISO enabled in `hci_ipc/zephyr/.config`, and chosen `zephyr,bt-hci`
+resolving to an okay `bt_hci_controller` node compatible with
+`zephyr,bt-hci-ll-sw-split` while `bt_hci_sdc` is disabled in
+`hci_ipc/zephyr/zephyr.dts`.
+
 ### BUILD-003 — ACL/ISO buffer agreement
 
 Host (`CONFIG_BT_BUF_ACL_TX_COUNT`, `CONFIG_BT_ISO_TX_BUF_COUNT`) and
 controller ACL/ISO buffer counts match per target.  nRF5340: 7 ACL / 6 ISO.
 nRF54L15: 3 ACL / 1 ISO.  Mismatch causes `bt_hci_core` warnings and
 connection throttling.
+
+**T6 closed:** the checker asserts the exact counts on both resolved app
+configs, the netcore controller counts equal to the nRF5340 app host values,
+and (nRF54L15) host ISO TX equal to
+`CONFIG_BT_CTLR_SDC_ISO_TX_HCI_BUFFER_COUNT`.
 
 ### BUILD-004 — nRF54L15 pin and crystal
 
@@ -625,17 +705,69 @@ regulator nodes: `rfsw_ctl` on P2.05 `GPIO_ACTIVE_LOW`, `rfsw_pwr` on P2.03
 pinctrl conflict.  16 pF crystal configuration via DTS `load-capacitance`
 properties.
 
+**T6 closed:** the checker asserts on the resolved app DTS: `i2s20` okay
+with `clock-source = "PCLK32M"` and exact default pin cells
+SCK P1.4 / LRCK P1.5 / SDOUT P1.6 / MCK P1.7 (function, port, pin decoded
+from the NRF_PSEL cells); PDM20, SPI00, and MX25R64 disabled; TIMER20
+reserved; `rfsw_ctl` = `<&gpio2 5 1>` and `rfsw_pwr` = `<&gpio2 3 0>` with
+`regulator-boot-on`; LFXO and HFXO `load-capacitors = "internal"` with
+exactly 16000 fF.
+
 ### BUILD-005 — FLPR memory regions
 
 FLPR source, execution, and shared-ring memory regions are exact and non-
 overlapping in the resolved devicetree.  RRAM write-enable is applied before
 image loading.
 
+**T6 closed:** the checker asserts the exact app-side ranges on the resolved
+app DTS (cpuapp SRAM `0x20000000`+`0x28000`, RX `0x20028000`+`0x2000`,
+TX `0x2002A000`+`0x2000`, PCM ring `0x2002C000`+`0x4000`, FLPR execution
+SRAM `0x20030000`+`0x10000`, FLPR code partition `0x165000`+`0x18000`),
+that the SRAM intervals are contiguous in the designed order, non-
+overlapping, and within physical `0x20000000..0x20040000`, and cross-checks
+the FLPR image's resolved memory/chosen/code-partition values
+(`cpuflpr_sram`, chosen `zephyr,sram`/`zephyr,code-partition`,
+`CONFIG_FLASH_BASE_ADDRESS`/`CONFIG_FLASH_LOAD_SIZE`) against the
+app-side launcher ranges.
+
 ### BUILD-006 — Probe runtime resolution
 
 Probe identity is resolved at runtime via `nrf-probes`.  No static serial↔board
 mapping enters source files or documentation.  Doc hygiene: all hardware-
 identity claims include the raw evidence they rest on.
+
+### BUILD-007 — Resolved build contract checker (T6)
+
+`scripts/check-build-contract.py` (stdlib only, deterministic PASS/FAIL
+report, all failures listed in one run, exit 0 only when every contract
+passes) parses the resolved `.config` and `zephyr.dts` beneath each sysbuild
+root — app image, nRF5340 `hci_ipc` controller image, and nRF54L15 `flpr`
+image — and asserts the contracts above plus the nRF5340 app path
+(identity resampler + APLL, no ASRC/NONE, 48000 Hz output, LIBLC3, two sink
+ASEs, `I2S_NRFX_ALLOW_MCK_BYPASS`, 7/6/6 host counts, `i2s0` okay with
+12.288 MHz HFCLKAUDIO and exact BCK P1.15 / LRCK P1.12 / SDOUT P1.13 pins,
+QSPI disabled, WDT0 okay) and the nRF54L15 app path (ASRC linear + NONE
+actuator, no APLL/identity, offload ASRC, 47619 Hz output, LIBLC3, two sink
+ASEs, 3/1/1/3 host/controller counts).  Missing, duplicate, unreadable, or
+malformed required inputs are hard failures; comments can never satisfy a
+DTS assertion.  `tests/unit/build_contract/` (28 tests) covers a complete
+valid dual-target fixture, every hard-input class, explicit unset vs set
+symbols, comment-only satisfaction attempts, wrong status/compatible/
+chosen/pins/counts/polarity/capacitance, missing/overlapping/out-of-range
+memory intervals, SW Split Kconfig-only and DTS-only half failures, and the
+deterministic multi-error report with nonzero exit.
+
+### BUILD-008 — 48 kHz capability proof split (T6)
+
+The resolved half of the 48 kHz contract (output sample rate 48000,
+`CONFIG_LIBLC3=y`, two sink ASEs) is proven from resolved build data by the
+checker; the checker explicitly does NOT claim the PACS LC3 frequency LTV
+is a `.config`/DTS property (it is a C object in `src/bt_bap.c`).  The
+exact advertised capability (48 kHz, 7.5+10 ms, 1+2 channels) remains
+pinned by the direct production-source T2/T4 tests (BT-002).  A small
+source-contract check (SRC-001/002, clearly labeled source, not resolved)
+pins `BT_AUDIO_CODEC_CAP_FREQ_48KHZ` and the exact 48000 Hz acceptance gate
+in `src/bt_bap.c`.
 
 ## Explicitly unsupported
 
