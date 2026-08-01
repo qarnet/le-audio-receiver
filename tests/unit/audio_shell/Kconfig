@@ -1,0 +1,12 @@
+source "Kconfig.zephyr"
+
+# Test-local definition of the performance Kconfig used by prj.conf
+# (mirror of the production app Kconfig; needed because test apps do
+# not include the production app Kconfig).
+config AUDIO_PERF_MEASUREMENT
+	bool "Audio performance instrumentation"
+	default y
+
+config AUDIO_PERF_DEADLINE_US
+	int "Per-path deadline threshold in microseconds"
+	default 10000

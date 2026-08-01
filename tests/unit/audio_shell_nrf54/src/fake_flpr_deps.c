@@ -1,0 +1,247 @@
+/*
+ * Copyright (c) 2026
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Mock implementations of the FLPR APIs that src/audio_shell.c's nRF54
+ * command bodies call.  Status structs are controlled by the test;
+ * acceptance/stress/stall mechanics are link-only stubs (their real
+ * production modules have their own direct suites).
+ */
+
+#include <errno.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
+
+#include "audio_offload.h"
+#include "fake_flpr_deps.h"
+#include "flpr_handshake.h"
+#include "flpr_ring.h"
+#include "flpr_ring_mgr.h"
+#include "flpr_runtime.h"
+
+/* ---- handshake ---- */
+
+static struct flpr_status test_hs_status;
+
+void flpr_handshake_get_status(struct flpr_status *status)
+{
+	*status = test_hs_status;
+}
+
+void flpr_handshake_stress(uint32_t count, struct flpr_status *out)
+{
+	(void)count;
+	*out = test_hs_status;
+}
+
+int flpr_handshake_send_fault_hang(uint32_t timeout_ms)
+{
+	(void)timeout_ms;
+	return -ENOTSUP;
+}
+
+void test_flpr_set_status(const struct flpr_status *s)
+{
+	test_hs_status = *s;
+}
+
+/* ---- ring manager ---- */
+
+static struct flpr_ring_status test_ring_status;
+static uint32_t test_stall_acked;
+
+void flpr_ring_mgr_get_status(struct flpr_ring_status *status)
+{
+	*status = test_ring_status;
+}
+
+uint32_t flpr_ring_mgr_flpr_stall_acked(void)
+{
+	return test_stall_acked;
+}
+
+int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flpr_ring_status *out)
+{
+	(void)block_count;
+	(void)timeout_ms;
+	*out = test_ring_status;
+	return 0;
+}
+
+int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint32_t rate_per_sec,
+				struct flpr_ring_status *out)
+{
+	(void)block_count;
+	(void)timeout_ms;
+	(void)rate_per_sec;
+	*out = test_ring_status;
+	return 0;
+}
+
+int flpr_ring_mgr_coordinated_reset(uint32_t new_epoch, uint32_t timeout_ms)
+{
+	(void)new_epoch;
+	(void)timeout_ms;
+	return 0;
+}
+
+int flpr_ring_mgr_init(void)
+{
+	return 0;
+}
+
+void flpr_ring_mgr_stall_producer(bool stall)
+{
+	(void)stall;
+}
+
+int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms)
+{
+	(void)stall_bits;
+	(void)timeout_ms;
+	return 0;
+}
+
+int flpr_ring_mgr_flpr_stall_timed(uint8_t stall_bits, uint32_t duration_ms, uint32_t timeout_ms)
+{
+	(void)stall_bits;
+	(void)duration_ms;
+	(void)timeout_ms;
+	return 0;
+}
+
+int flpr_ring_mgr_produce_stale_test(uint32_t stale_epoch)
+{
+	(void)stale_epoch;
+	return 0;
+}
+
+enum flpr_produce_result flpr_ring_mgr_produce_block(const uint8_t *pcm_data, uint16_t valid_frames,
+						     uint32_t sequence, int32_t correction_ppm,
+						     bool compute_crc)
+{
+	(void)pcm_data;
+	(void)valid_frames;
+	(void)sequence;
+	(void)correction_ppm;
+	(void)compute_crc;
+	return FLPR_PRODUCE_OK;
+}
+
+enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t *valid_frames_out,
+						     uint32_t *sequence_out, uint32_t *crc32_out,
+						     uint32_t *latency_cycles_out)
+{
+	(void)pcm_out;
+	(void)valid_frames_out;
+	(void)sequence_out;
+	(void)crc32_out;
+	(void)latency_cycles_out;
+	return FLPR_CONSUME_EMPTY;
+}
+
+int flpr_ring_mgr_wait_consume(uint32_t timeout_ms)
+{
+	(void)timeout_ms;
+	return 0;
+}
+
+int flpr_ring_mgr_notify_producer(void)
+{
+	return 0;
+}
+
+void test_flpr_set_ring_status(const struct flpr_ring_status *s)
+{
+	test_ring_status = *s;
+}
+
+void test_flpr_set_stall_acked(uint32_t value)
+{
+	test_stall_acked = value;
+}
+
+/* ---- offload ---- */
+
+static struct audio_offload_status test_offload_status;
+static struct audio_offload_asrc_stats test_asrc_stats;
+static bool test_offload_healthy;
+
+void audio_offload_get_status(struct audio_offload_status *s)
+{
+	*s = test_offload_status;
+}
+
+void audio_offload_get_asrc_stats(struct audio_offload_asrc_stats *s)
+{
+	*s = test_asrc_stats;
+}
+
+bool audio_offload_is_healthy(void)
+{
+	return test_offload_healthy;
+}
+
+void test_flpr_set_offload_status(const struct audio_offload_status *s)
+{
+	test_offload_status = *s;
+}
+
+void test_flpr_set_asrc_stats(const struct audio_offload_asrc_stats *s)
+{
+	test_asrc_stats = *s;
+}
+
+void test_flpr_set_offload_healthy(bool healthy)
+{
+	test_offload_healthy = healthy;
+}
+
+/* ---- runtime ---- */
+
+static struct flpr_runtime_status test_runtime_status;
+static int test_restart_result;
+static int test_restart_calls;
+
+void flpr_runtime_get_status(struct flpr_runtime_status *out)
+{
+	*out = test_runtime_status;
+}
+
+int flpr_runtime_restart(uint32_t timeout_ms)
+{
+	(void)timeout_ms;
+	test_restart_calls++;
+	return test_restart_result;
+}
+
+void test_flpr_set_runtime_status(const struct flpr_runtime_status *s)
+{
+	test_runtime_status = *s;
+}
+
+void test_flpr_set_restart_result(int result)
+{
+	test_restart_result = result;
+}
+
+int test_flpr_restart_calls(void)
+{
+	return test_restart_calls;
+}
+
+/* ---- global reset ---- */
+
+void test_flpr_reset(void)
+{
+	memset(&test_hs_status, 0, sizeof(test_hs_status));
+	memset(&test_ring_status, 0, sizeof(test_ring_status));
+	memset(&test_offload_status, 0, sizeof(test_offload_status));
+	memset(&test_asrc_stats, 0, sizeof(test_asrc_stats));
+	memset(&test_runtime_status, 0, sizeof(test_runtime_status));
+	test_stall_acked = 0;
+	test_offload_healthy = false;
+	test_restart_result = 0;
+	test_restart_calls = 0;
+}

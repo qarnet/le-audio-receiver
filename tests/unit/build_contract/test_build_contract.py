@@ -1,0 +1,747 @@
+#!/usr/bin/env python3
+"""Tests for scripts/check-build-contract.py (Phase T6).
+
+Builds minimal temporary sysbuild fixtures (resolved .config + zephyr.dts
+for both targets incl. the netcore and FLPR images) and exercises the
+parser/check functions directly plus the CLI exit codes.
+"""
+
+import importlib.util
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+
+# The checker filename is hyphenated (scripts/check-build-contract.py),
+# so it cannot be imported by module name; load it explicitly.
+_CHECKER = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..",
+    "..",
+    "..",
+    "scripts",
+    "check-build-contract.py",
+)
+_SPEC = importlib.util.spec_from_file_location("check_build_contract", _CHECKER)
+cbc = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(cbc)
+
+
+# ── fixture content ─────────────────────────────────────────────────
+
+APP5340_CONFIG = """\
+CONFIG_AUDIO_RESAMPLER_IDENTITY=y
+# CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR is not set
+CONFIG_AUDIO_CLOCK_ACTUATOR_APLL=y
+# CONFIG_AUDIO_CLOCK_ACTUATOR_NONE is not set
+CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ=48000
+CONFIG_LIBLC3=y
+CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT=2
+CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y
+CONFIG_BT_BUF_ACL_TX_COUNT=7
+CONFIG_BT_ISO_TX_BUF_COUNT=6
+CONFIG_BT_ISO_RX_BUF_COUNT=6
+"""
+
+NET_CONFIG = """\
+CONFIG_BT_LL_SW_SPLIT=y
+CONFIG_BT_CTLR_PERIPHERAL_ISO=y
+CONFIG_BT_CTLR_CONN_ISO=y
+CONFIG_BT_BUF_ACL_TX_COUNT=7
+CONFIG_BT_ISO_TX_BUF_COUNT=6
+"""
+
+APP54_CONFIG = """\
+CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR=y
+# CONFIG_AUDIO_RESAMPLER_IDENTITY is not set
+CONFIG_AUDIO_CLOCK_ACTUATOR_NONE=y
+# CONFIG_AUDIO_CLOCK_ACTUATOR_APLL is not set
+CONFIG_AUDIO_OFFLOAD_ASRC=y
+CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ=47619
+CONFIG_LIBLC3=y
+CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT=2
+CONFIG_BT_BUF_ACL_TX_COUNT=3
+CONFIG_BT_ISO_TX_BUF_COUNT=1
+CONFIG_BT_CTLR_SDC_ISO_TX_HCI_BUFFER_COUNT=1
+CONFIG_BT_ISO_RX_BUF_COUNT=3
+"""
+
+FLPR_CONFIG = """\
+CONFIG_FLASH_BASE_ADDRESS=0x165000
+CONFIG_FLASH_LOAD_SIZE=0x18000
+"""
+
+# Resolved-DTS-style fixture: comments, ; terminators, labels, phandles.
+APP5340_DTS = """\
+/dts-v1/;
+
+/* root comment must never satisfy a check */
+/ {
+	chosen {
+		zephyr,bt-hci = &bt_hci_controller;
+	};
+
+	clock: clock@5000 {
+		compatible = "nordic,nrf-clock";
+		status = "okay";
+		hfclkaudio-frequency = < 0xbb8000 >;
+	};
+
+	i2s0: i2s@28000 {
+		compatible = "nordic,nrf-i2s";
+		status = "okay";
+		pinctrl-0 = < &i2s0_default >;
+	};
+
+	qspi: qspi@2b000 {
+		compatible = "nordic,nrf-qspi";
+		status = "disabled";
+	};
+
+	wdt: wdt0: watchdog@18000 {
+		compatible = "nordic,nrf-wdt";
+		status = "okay";
+	};
+
+	/* wrong status must not satisfy checks when commented out */
+	/* bt_hci_controller { status = "okay"; }; */
+
+	pin-controller {
+		i2s0_default: i2s0_default {
+			group1 {
+				psels = < 0xd00002f >,
+				        < 0xf00002c >,
+				        < 0x1200002d >;
+			};
+		};
+	};
+};
+"""
+
+NET_DTS = """\
+/dts-v1/;
+
+/ {
+	chosen {
+		zephyr,bt-hci = &bt_hci_controller;
+	};
+
+	soc {
+		radio@41008000 {
+			bt_hci_sdc: bt_hci_sdc {
+				compatible = "nordic,bt-hci-sdc";
+				status = "disabled";
+			};
+
+			bt_hci_controller: bt_hci_controller {
+				compatible = "zephyr,bt-hci-ll-sw-split";
+				status = "okay";
+			};
+		};
+	};
+};
+"""
+
+APP54_DTS = """\
+/dts-v1/;
+
+/ {
+	chosen {
+		zephyr,bt-hci = &bt_hci_sdc;
+	};
+
+	cpus {
+		#address-cells = < 0x1 >;
+
+		cpuapp: cpu: cpu@0 {
+			compatible = "arm,cortex-m33f";
+			reg = < 0x0 >;
+		};
+	};
+
+	clocks {
+		lfxo: lfxo {
+			compatible = "nordic,nrf54l-lfxo";
+			load-capacitors = "internal";
+			load-capacitance-femtofarad = < 0x3e80 >;
+			status = "okay";
+		};
+
+		hfxo: hfxo {
+			compatible = "nordic,nrf54l-hfxo";
+			load-capacitors = "internal";
+			load-capacitance-femtofarad = < 16000 >;
+			status = "okay";
+		};
+	};
+
+	soc {
+		cpuapp_sram: memory@20000000 {
+			compatible = "mmio-sram";
+			reg = < 0x20000000 0x28000 >;
+		};
+
+		spi00: spi@4a000 {
+			compatible = "nordic,nrf-spim";
+			status = "disabled";
+
+			mx25r64: mx25r6435f@0 {
+				compatible = "jedec,spi-nor";
+				status = "disabled";
+			};
+		};
+
+		timer20: timer@ca000 {
+			compatible = "nordic,nrf-timer";
+			status = "reserved";
+		};
+
+		pdm20: pdm@d0000 {
+			compatible = "nordic,nrf-pdm";
+			status = "disabled";
+		};
+
+		i2s20: i2s@dd000 {
+			compatible = "nordic,nrf-i2s";
+			status = "okay";
+			clock-source = "PCLK32M";
+			pinctrl-0 = < &i2s20_default >;
+		};
+
+		reserved-memory {
+			sram_rx: memory@20028000 {
+				reg = < 0x20028000 0x2000 >;
+			};
+
+			sram_tx: memory@2002A000 {
+				reg = < 0x2002a000 0x2000 >;
+			};
+
+			pcm_ring: memory@2002C000 {
+				reg = < 0x2002c000 0x4000 >;
+			};
+
+			cpuflpr_code_partition: image@165000 {
+				reg = < 0x165000 0x18000 >;
+			};
+		};
+
+		cpuflpr_sram_code_data: memory@20030000 {
+			compatible = "mmio-sram";
+			reg = < 0x20030000 0x10000 >;
+		};
+	};
+
+	rfsw_ctl: rfsw-ctl {
+		compatible = "regulator-fixed";
+		enable-gpios = < &gpio2 0x5 0x1 >;
+		regulator-boot-on;
+	};
+
+	rfsw_pwr: rfsw-pwr {
+		compatible = "regulator-fixed";
+		enable-gpios = < &gpio2 0x3 0x0 >;
+		regulator-boot-on;
+	};
+
+	gpio2: gpio@50001000 {
+		compatible = "nordic,nrf-gpio";
+	};
+
+	pin-controller {
+		i2s20_default: i2s20_default {
+			group1 {
+				psels = < 0xd000024 >,
+				        < 0xf000025 >,
+				        < 0x12000026 >,
+				        < 0x13000027 >;
+			};
+		};
+	};
+};
+"""
+
+FLPR_DTS = """\
+/dts-v1/;
+
+/ {
+	chosen {
+		zephyr,sram = &cpuflpr_sram;
+		zephyr,code-partition = &cpuflpr_code_partition;
+	};
+
+	soc {
+		cpuflpr_sram: memory@20030000 {
+			compatible = "mmio-sram";
+			status = "okay";
+			reg = < 0x20030000 0x10000 >;
+		};
+
+		rram-controller@5004b000 {
+			rram@165000 {
+				partitions {
+					compatible = "fixed-partitions";
+					cpuflpr_code_partition: partition@0 {
+						label = "image-0";
+						reg = < 0x0 0x18000 >;
+					};
+				};
+			};
+		};
+	};
+};
+"""
+
+BT_BAP_SOURCE = """\
+static const struct bt_audio_codec_cap lc3_codec_cap = BT_AUDIO_CODEC_CAP_LC3(
+	BT_AUDIO_CODEC_CAP_FREQ_48KHZ, ...);
+	if (freq_hz != 48000) {
+"""
+
+
+def write(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(content)
+
+
+class Fixture:
+    """Minimal dual-target sysbuild fixture in a temp directory."""
+
+    def __init__(self):
+        self.root = tempfile.mkdtemp(prefix="build_contract_test_")
+        self.nrf5340 = os.path.join(self.root, "nrf5340")
+        self.nrf54l15 = os.path.join(self.root, "nrf54l15")
+        self.bt_bap = os.path.join(self.root, "bt_bap.c")
+        self.write_valid()
+
+    def write_valid(self):
+        write(
+            os.path.join(self.nrf5340, "le-audio-receiver", "zephyr", ".config"),
+            APP5340_CONFIG,
+        )
+        write(
+            os.path.join(self.nrf5340, "le-audio-receiver", "zephyr", "zephyr.dts"),
+            APP5340_DTS,
+        )
+        write(os.path.join(self.nrf5340, "hci_ipc", "zephyr", ".config"), NET_CONFIG)
+        write(os.path.join(self.nrf5340, "hci_ipc", "zephyr", "zephyr.dts"), NET_DTS)
+        write(
+            os.path.join(self.nrf54l15, "le-audio-receiver", "zephyr", ".config"),
+            APP54_CONFIG,
+        )
+        write(
+            os.path.join(self.nrf54l15, "le-audio-receiver", "zephyr", "zephyr.dts"),
+            APP54_DTS,
+        )
+        write(os.path.join(self.nrf54l15, "flpr", "zephyr", ".config"), FLPR_CONFIG)
+        write(os.path.join(self.nrf54l15, "flpr", "zephyr", "zephyr.dts"), FLPR_DTS)
+        write(self.bt_bap, BT_BAP_SOURCE)
+
+    def config(self, target, image):
+        return os.path.join(
+            self.nrf5340 if target == "5340" else self.nrf54l15,
+            image,
+            "zephyr",
+            ".config",
+        )
+
+    def dts(self, target, image):
+        return os.path.join(
+            self.nrf5340 if target == "5340" else self.nrf54l15,
+            image,
+            "zephyr",
+            "zephyr.dts",
+        )
+
+    def destroy(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+
+# ── tests ───────────────────────────────────────────────────────────
+
+
+class TestParseConfig(unittest.TestCase):
+    def test_set_unset_values(self):
+        cfg = cbc.parse_config(
+            "CONFIG_A=y\n# CONFIG_B is not set\nCONFIG_C=n\nCONFIG_D=0x1f\n"
+            'CONFIG_E="str"\nCONFIG_F=-3\nCONFIG_G=42\n'
+        )
+        self.assertEqual(cfg["CONFIG_A"], "y")
+        self.assertEqual(cfg["CONFIG_B"], "unset")
+        self.assertEqual(cfg["CONFIG_C"], "n")
+        self.assertEqual(cfg["CONFIG_D"], 0x1F)
+        self.assertEqual(cfg["CONFIG_E"], "str")
+        self.assertEqual(cfg["CONFIG_F"], -3)
+        self.assertEqual(cfg["CONFIG_G"], 42)
+        # explicit unset is distinct from absent and from =n
+        self.assertIn("CONFIG_B", cfg)
+        self.assertNotIn("CONFIG_MISSING", cfg)
+        self.assertTrue(cbc.config_enabled(cfg, "CONFIG_A"))
+        self.assertFalse(cbc.config_enabled(cfg, "CONFIG_C"))
+        self.assertTrue(cbc.config_not_enabled(cfg, "CONFIG_B"))
+        self.assertTrue(cbc.config_not_enabled(cfg, "CONFIG_C"))
+
+    def test_duplicate_key_hard_error(self):
+        with self.assertRaises(cbc.ConfigError):
+            cbc.parse_config("CONFIG_A=y\nCONFIG_A=n\n")
+
+    def test_malformed_line_hard_error(self):
+        with self.assertRaises(cbc.ConfigError):
+            cbc.parse_config("CONFIG_A=maybe\n")
+        with self.assertRaises(cbc.ConfigError):
+            cbc.parse_config("CONFIG_A\n")
+
+
+class TestParseDts(unittest.TestCase):
+    def test_labels_chosen_pins(self):
+        nodes, labels = cbc.parse_dts(APP5340_DTS)
+        self.assertIn("i2s0", labels)
+        self.assertIn("clock", labels)
+        self.assertEqual(labels["clock"].status(), "okay")
+        self.assertEqual(labels["clock"].props["hfclkaudio-frequency"][0], [0xBB8000])
+        self.assertEqual(cbc.decode_psel(0xD00002F), (13, 1, 15))
+        net_nodes, net_labels = cbc.parse_dts(NET_DTS)
+        chosen = cbc.find_chosen(net_nodes)
+        self.assertIsNotNone(chosen)
+        hci = cbc.chosen_ref(net_labels, chosen, "zephyr,bt-hci")
+        self.assertIs(hci, net_labels["bt_hci_controller"])
+
+    def test_multi_label_node(self):
+        nodes, labels = cbc.parse_dts(APP54_DTS)
+        self.assertIn("cpuapp", labels)
+        self.assertIn("cpu", labels)
+        self.assertIs(labels["cpuapp"], labels["cpu"])
+
+    def test_comments_cannot_satisfy(self):
+        text = '/* status = "okay"; */\n/ { foo { }; };'
+        nodes, labels = cbc.parse_dts(text)
+        self.assertEqual(labels, {})
+
+    def test_partition_ancestor_unit_addr(self):
+        nodes, labels = cbc.parse_dts(FLPR_DTS)
+        part = labels["cpuflpr_code_partition"]
+        anc = part.parent
+        while anc is not None and anc.unit_addr is None:
+            anc = anc.parent
+        self.assertIsNotNone(anc)
+        self.assertEqual(anc.unit_addr, "@165000")
+
+
+class TestValidFixture(unittest.TestCase):
+    def test_full_valid_fixture_passes(self):
+        fx = Fixture()
+        try:
+            parsed = cbc.resolve_inputs(fx.nrf5340, fx.nrf54l15, fx.bt_bap)
+            result = cbc.run_all(parsed)
+            self.assertEqual(
+                result.failures(), [], "failures: %s" % cbc.format_result(result)
+            )
+        finally:
+            fx.destroy()
+
+    def test_cli_success(self):
+        fx = Fixture()
+        try:
+            rc = cbc.main(
+                [
+                    "--nrf5340",
+                    fx.nrf5340,
+                    "--nrf54l15",
+                    fx.nrf54l15,
+                    "--bt-bap-source",
+                    fx.bt_bap,
+                ]
+            )
+            self.assertEqual(rc, 0)
+        finally:
+            fx.destroy()
+
+
+class TestHardInputErrors(unittest.TestCase):
+    def test_missing_image(self):
+        fx = Fixture()
+        try:
+            os.remove(fx.config("5340", "hci_ipc"))
+            rc = cbc.main(
+                [
+                    "--nrf5340",
+                    fx.nrf5340,
+                    "--nrf54l15",
+                    fx.nrf54l15,
+                    "--bt-bap-source",
+                    fx.bt_bap,
+                ]
+            )
+            self.assertEqual(rc, 2)
+        finally:
+            fx.destroy()
+
+    def test_missing_build_root(self):
+        fx = Fixture()
+        try:
+            rc = cbc.main(
+                [
+                    "--nrf5340",
+                    os.path.join(fx.root, "nope"),
+                    "--nrf54l15",
+                    fx.nrf54l15,
+                    "--bt-bap-source",
+                    fx.bt_bap,
+                ]
+            )
+            self.assertEqual(rc, 2)
+        finally:
+            fx.destroy()
+
+    def test_duplicate_config_key_hard_error(self):
+        fx = Fixture()
+        try:
+            with open(fx.config("5340", "le-audio-receiver"), "a") as fh:
+                fh.write("CONFIG_LIBLC3=y\n")
+            rc = cbc.main(
+                [
+                    "--nrf5340",
+                    fx.nrf5340,
+                    "--nrf54l15",
+                    fx.nrf54l15,
+                    "--bt-bap-source",
+                    fx.bt_bap,
+                ]
+            )
+            self.assertEqual(rc, 2)
+        finally:
+            fx.destroy()
+
+    def test_malformed_config_hard_error(self):
+        fx = Fixture()
+        try:
+            with open(fx.config("54l15", "flpr"), "a") as fh:
+                fh.write("CONFIG_FLASH_LOAD_SIZE=big\n")
+            rc = cbc.main(
+                [
+                    "--nrf5340",
+                    fx.nrf5340,
+                    "--nrf54l15",
+                    fx.nrf54l15,
+                    "--bt-bap-source",
+                    fx.bt_bap,
+                ]
+            )
+            self.assertEqual(rc, 2)
+        finally:
+            fx.destroy()
+
+
+class TestAssertionFailures(unittest.TestCase):
+    def _rc_and_fails(self, mutate):
+        fx = Fixture()
+        try:
+            mutate(fx)
+            parsed = cbc.resolve_inputs(fx.nrf5340, fx.nrf54l15, fx.bt_bap)
+            result = cbc.run_all(parsed)
+            return cbc.main(
+                [
+                    "--nrf5340",
+                    fx.nrf5340,
+                    "--nrf54l15",
+                    fx.nrf54l15,
+                    "--bt-bap-source",
+                    fx.bt_bap,
+                ]
+            ), [e[1] for e in result.failures()]
+        finally:
+            fx.destroy()
+
+    def test_explicit_unset_vs_set_symbol(self):
+        rc, fails = self._rc_and_fails(
+            lambda fx: write(
+                fx.config("5340", "le-audio-receiver"),
+                APP5340_CONFIG.replace(
+                    "# CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR is not set",
+                    "CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR=y",
+                ),
+            )
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-003", fails)
+
+    def test_comments_cannot_satisfy_dts(self):
+        def mutate(fx):
+            dts = cbc._COMMENT_RE.sub("", APP5340_DTS)
+            # Remove the real clock node; only a comment mentions it.
+            dts = dts.replace(
+                '\tclock: clock@5000 {\n\t\tcompatible = "nordic,nrf-clock";\n'
+                '\t\tstatus = "okay";\n\t\thfclkaudio-frequency = < 0xbb8000 >;\n\t};',
+                '/* clock: clock@5000 { status = "okay"; }; */',
+            )
+            write(fx.dts("5340", "le-audio-receiver"), dts)
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-013", fails)
+
+    def test_wrong_node_status(self):
+        def mutate(fx):
+            write(
+                fx.dts("5340", "hci_ipc"),
+                NET_DTS.replace('status = "okay";', 'status = "disabled";', 1),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-025", fails)
+
+    def test_wrong_compatible(self):
+        def mutate(fx):
+            write(
+                fx.dts("5340", "hci_ipc"),
+                NET_DTS.replace("zephyr,bt-hci-ll-sw-split", "zephyr,bt-hci-other"),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-026", fails)
+
+    def test_wrong_chosen(self):
+        def mutate(fx):
+            write(
+                fx.dts("5340", "hci_ipc"),
+                NET_DTS.replace("&bt_hci_controller", "&bt_hci_missing"),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-024", fails)
+
+    def test_wrong_encoded_pin(self):
+        def mutate(fx):
+            write(
+                fx.dts("5340", "le-audio-receiver"),
+                APP5340_DTS.replace("0xf00002c", "0xf00002d"),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-014", fails)
+
+    def test_host_controller_count_mismatch(self):
+        def mutate(fx):
+            write(
+                fx.config("5340", "hci_ipc"),
+                NET_CONFIG.replace(
+                    "CONFIG_BT_BUF_ACL_TX_COUNT=7", "CONFIG_BT_BUF_ACL_TX_COUNT=6"
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-022", fails)
+
+    def test_wrong_rf_polarity(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace("< &gpio2 0x5 0x1 >", "< &gpio2 0x5 0x0 >"),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-021", fails)
+
+    def test_wrong_capacitance(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace(
+                    "load-capacitance-femtofarad = < 16000 >",
+                    "load-capacitance-femtofarad = < 15000 >",
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-024", fails)
+
+    def test_overlapping_memory_interval(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace("< 0x20028000 0x2000 >", "< 0x20027000 0x2000 >"),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-025", fails)
+
+    def test_missing_memory_interval(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace(
+                    "\t\t\tpcm_ring: memory@2002C000 {\n"
+                    "\t\t\t\treg = < 0x2002c000 0x4000 >;\n"
+                    "\t\t\t};\n",
+                    "",
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-025", fails)
+
+    def test_sw_split_kconfig_only_half(self):
+        def mutate(fx):
+            write(
+                fx.config("5340", "hci_ipc"),
+                NET_CONFIG.replace("CONFIG_BT_LL_SW_SPLIT=y\n", ""),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-017", fails)
+
+    def test_sw_split_dts_only_half(self):
+        def mutate(fx):
+            write(
+                fx.dts("5340", "hci_ipc"),
+                NET_DTS.replace('status = "disabled";', 'status = "okay";'),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-027", fails)
+
+    def test_deterministic_multi_error_report(self):
+        def mutate(fx):
+            write(
+                fx.config("5340", "le-audio-receiver"),
+                APP5340_CONFIG.replace(
+                    "CONFIG_BT_ISO_RX_BUF_COUNT=6", "CONFIG_BT_ISO_RX_BUF_COUNT=5"
+                ),
+            )
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace(
+                    'clock-source = "PCLK32M"', 'clock-source = "PCLK32M_HFXO"'
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-011", fails)
+        self.assertIn("54l15-015", fails)
+
+    def test_source_contract_failure(self):
+        def mutate(fx):
+            write(fx.bt_bap, "static int x; /* no capability markers */")
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("SRC-001", fails)
+        self.assertIn("SRC-002", fails)
+
+
+if __name__ == "__main__":
+    unittest.main()

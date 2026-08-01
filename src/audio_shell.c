@@ -41,11 +41,14 @@ static int cmd_status(const struct shell *sh, size_t argc, char **argv)
 {
 	struct audio_stats s = audio_stats_get();
 
-	uint32_t plc_pct = s.total_frames > 0 ? (s.plc_frames * 100U) / s.total_frames : 0U;
+	/* Percentage in uint64_t so large plc_frames/total_frames values
+	 * cannot overflow the numerator; integer truncation preserved. */
+	uint64_t plc_pct =
+		s.total_frames > 0 ? ((uint64_t)s.plc_frames * 100U) / s.total_frames : 0U;
 
 	shell_print(sh, "--- Audio status ---");
 	shell_print(sh, "  Frames decoded : %u", s.total_frames);
-	shell_print(sh, "  PLC frames     : %u (%u%%)", s.plc_frames, plc_pct);
+	shell_print(sh, "  PLC frames     : %u (%u%%)", s.plc_frames, (uint32_t)plc_pct);
 	shell_print(sh, "  Decode errors  : %u", s.decode_errors);
 	shell_print(sh, "  I2S underruns  : %u", s.i2s_underruns);
 	shell_print(sh, "  Stream resets  : %u", s.stream_resets);
@@ -79,7 +82,11 @@ static int cmd_perf(const struct shell *sh, size_t argc, char **argv)
 	audio_perf_snapshot(paths, &queue);
 
 #if !defined(CONFIG_AUDIO_PERF_MEASUREMENT)
-	uint32_t deadline_us = 1; /* avoid div0 */
+	/* Measurement disabled: no deadline is available.  Report a truthful
+	 * unavailable (zero) deadline percentage rather than computing
+	 * against a fake 1 us deadline.  The permille computation below is
+	 * guarded on deadline_us, so this stays division-safe. */
+	uint32_t deadline_us = 0;
 #else
 	uint32_t deadline_us = (uint32_t)CONFIG_AUDIO_PERF_DEADLINE_US;
 #endif
@@ -139,9 +146,9 @@ static int cmd_bt_unpair(const struct shell *sh, size_t argc, char **argv)
 
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	audio_cmds, SHELL_CMD_ARG(status, NULL, "Print audio stats and state.", cmd_status, 1, 0),
-	SHELL_CMD_ARG(reset - stats, NULL, "Clear all counters.", cmd_reset_stats, 1, 0),
+	SHELL_CMD_ARG(reset-stats, NULL, "Clear all counters.", cmd_reset_stats, 1, 0),
 	SHELL_CMD_ARG(perf, NULL, "Print performance instrumentation.", cmd_perf, 1, 0),
-	SHELL_CMD_ARG(perf - reset, NULL, "Clear performance counters.", cmd_perf_reset, 1, 0),
+	SHELL_CMD_ARG(perf-reset, NULL, "Clear performance counters.", cmd_perf_reset, 1, 0),
 	SHELL_CMD_ARG(stop, NULL, "Stop I2S and reset drift.", cmd_stop, 1, 0),
 	SHELL_SUBCMD_SET_END);
 
@@ -925,36 +932,64 @@ static int cmd_offload_status(const struct shell *sh, size_t argc, char **argv)
 
 /* ── FLPR runtime status command ──────────────────── */
 
+/* Bounded conversion helpers: out-of-range enum values print UNKNOWN
+ * instead of indexing past a string array. */
+static const char *flpr_runtime_state_str(enum flpr_runtime_state st)
+{
+	switch (st) {
+	case FLPR_RUNTIME_IDLE:
+		return "IDLE";
+	case FLPR_RUNTIME_BUSY:
+		return "BUSY";
+	case FLPR_RUNTIME_UNAVAILABLE:
+		return "UNAVAILABLE";
+	default:
+		return "UNKNOWN";
+	}
+}
+
+static const char *flpr_runtime_stage_str(enum flpr_runtime_stage st)
+{
+	switch (st) {
+	case FLPR_STAGE_DISCONNECT:
+		return "disconnect";
+	case FLPR_STAGE_STOP:
+		return "stop";
+	case FLPR_STAGE_ASSERT_RESET:
+		return "assert_reset";
+	case FLPR_STAGE_COPY:
+		return "copy";
+	case FLPR_STAGE_FLUSH_BARRIER:
+		return "flush_barrier";
+	case FLPR_STAGE_CRC_VERIFY:
+		return "crc_verify";
+	case FLPR_STAGE_INITPC:
+		return "initpc";
+	case FLPR_STAGE_RECONNECT:
+		return "reconnect";
+	case FLPR_STAGE_START_CPURUN:
+		return "start_cpurun";
+	case FLPR_STAGE_RELEASE_RESET:
+		return "release_reset";
+	case FLPR_STAGE_WAIT_BOUND:
+		return "wait_bound";
+	case FLPR_STAGE_WAIT_READY:
+		return "wait_ready";
+	case FLPR_STAGE_SUCCESS:
+		return "success";
+	default:
+		return "unknown";
+	}
+}
+
 static int cmd_flpr_runtime_status(const struct shell *sh, size_t argc, char **argv)
 {
 	struct flpr_runtime_status s;
 	flpr_runtime_get_status(&s);
 
-	static const char *state_str[] = {
-		[FLPR_RUNTIME_IDLE] = "IDLE",
-		[FLPR_RUNTIME_BUSY] = "BUSY",
-		[FLPR_RUNTIME_UNAVAILABLE] = "UNAVAILABLE",
-	};
-
-	static const char *stage_str[] = {
-		[FLPR_STAGE_DISCONNECT] = "disconnect",
-		[FLPR_STAGE_STOP] = "stop",
-		[FLPR_STAGE_ASSERT_RESET] = "assert_reset",
-		[FLPR_STAGE_COPY] = "copy",
-		[FLPR_STAGE_FLUSH_BARRIER] = "flush_barrier",
-		[FLPR_STAGE_CRC_VERIFY] = "crc_verify",
-		[FLPR_STAGE_INITPC] = "initpc",
-		[FLPR_STAGE_RECONNECT] = "reconnect",
-		[FLPR_STAGE_START_CPURUN] = "start_cpurun",
-		[FLPR_STAGE_RELEASE_RESET] = "release_reset",
-		[FLPR_STAGE_WAIT_BOUND] = "wait_bound",
-		[FLPR_STAGE_WAIT_READY] = "wait_ready",
-		[FLPR_STAGE_SUCCESS] = "success",
-	};
-
 	shell_print(sh, "--- FLPR runtime ---");
-	shell_print(sh, "  State          : %s", state_str[s.state]);
-	shell_print(sh, "  Failed stage   : %s", stage_str[s.failed_stage]);
+	shell_print(sh, "  State          : %s", flpr_runtime_state_str(s.state));
+	shell_print(sh, "  Failed stage   : %s", flpr_runtime_stage_str(s.failed_stage));
 	shell_print(sh, "  Requests       : %u", s.requests);
 	shell_print(sh, "  Success        : %u", s.success_count);
 	shell_print(sh, "  Failed         : %u", s.fail_count);
@@ -1077,3 +1112,69 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
 SHELL_CMD_REGISTER(flpr, &flpr_cmds, "FLPR co-processor commands.", NULL);
 
 #endif /* CONFIG_SOC_NRF54L15 */
+
+#if defined(AUDIO_SHELL_TEST)
+/*
+ * Narrow test seams for tests/unit/audio_shell*.  Expose otherwise-static
+ * command handlers to the test suites so real production command bodies
+ * are invoked directly.  Never compiled into production firmware.
+ */
+
+int audio_shell_test_cmd_status(const struct shell *sh, size_t argc, char **argv)
+{
+	return cmd_status(sh, argc, argv);
+}
+
+int audio_shell_test_cmd_reset_stats(const struct shell *sh, size_t argc, char **argv)
+{
+	return cmd_reset_stats(sh, argc, argv);
+}
+
+int audio_shell_test_cmd_stop(const struct shell *sh, size_t argc, char **argv)
+{
+	return cmd_stop(sh, argc, argv);
+}
+
+int audio_shell_test_cmd_perf(const struct shell *sh, size_t argc, char **argv)
+{
+	return cmd_perf(sh, argc, argv);
+}
+
+int audio_shell_test_cmd_perf_reset(const struct shell *sh, size_t argc, char **argv)
+{
+	return cmd_perf_reset(sh, argc, argv);
+}
+
+int audio_shell_test_cmd_bt_unpair(const struct shell *sh, size_t argc, char **argv)
+{
+	return cmd_bt_unpair(sh, argc, argv);
+}
+
+#if defined(CONFIG_SOC_NRF54L15)
+int audio_shell_test_cmd_flpr_status(const struct shell *sh, size_t argc, char **argv)
+{
+	return cmd_flpr_status(sh, argc, argv);
+}
+
+int audio_shell_test_cmd_flpr_ring_status(const struct shell *sh, size_t argc, char **argv)
+{
+	return cmd_flpr_ring_status(sh, argc, argv);
+}
+
+int audio_shell_test_cmd_offload_status(const struct shell *sh, size_t argc, char **argv)
+{
+	return cmd_offload_status(sh, argc, argv);
+}
+
+int audio_shell_test_cmd_flpr_runtime_status(const struct shell *sh, size_t argc, char **argv)
+{
+	return cmd_flpr_runtime_status(sh, argc, argv);
+}
+
+int audio_shell_test_cmd_flpr_restart(const struct shell *sh, size_t argc, char **argv)
+{
+	return cmd_flpr_restart(sh, argc, argv);
+}
+#endif /* CONFIG_SOC_NRF54L15 */
+
+#endif /* AUDIO_SHELL_TEST */
