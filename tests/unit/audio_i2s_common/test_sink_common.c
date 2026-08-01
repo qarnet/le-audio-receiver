@@ -117,19 +117,164 @@ ZTEST(audio_i2s, test_init_success_configured_after_all_stages)
 #endif
 }
 
-ZTEST(audio_i2s, test_reinit_failure_clears_stale_state)
+/* ── idempotent re-initialization ────────────────────────────────── */
+
+ZTEST(audio_i2s, test_reinit_success_noop)
 {
-	/* Successful init + started stream... */
+	test_init_ok();
+
+	int configure_before = fake_i2s_configure_calls();
+	int rate_before = mock_rate_convert_init_calls;
+	int actuator_before = mock_actuator_init_calls;
+	int timing_before = mock_timing_init_calls;
+#if defined(AUDIO_I2S_TEST_MARKER_ASRC)
+	int asrc_before = mock_asrc_init_calls;
+#endif
+
+	zassert_equal(audio_sink_init(), 0, "second init returns 0");
+
+	zassert_equal(fake_i2s_configure_calls(), configure_before, "no re-configure");
+	zassert_equal(mock_rate_convert_init_calls, rate_before, "no rate-converter init");
+	zassert_equal(mock_actuator_init_calls, actuator_before, "no actuator init");
+	zassert_equal(mock_timing_init_calls, timing_before, "no timing init");
+#if defined(AUDIO_I2S_TEST_MARKER_ASRC)
+	zassert_equal(mock_asrc_init_calls, asrc_before, "no asrc init");
+#endif
+	zassert_equal(fake_i2s_trigger_calls(), 0, "no triggers from init");
+	zassert_true(audio_i2s_test_is_configured(), "configured retained");
+}
+
+ZTEST(audio_i2s, test_reinit_active_stream_preserves_queue_state)
+{
 	test_start_stream();
-	zassert_true(audio_i2s_test_is_configured(), "configured");
-	zassert_true(audio_i2s_test_is_started(), "started");
 
-	/* ...then a failed re-init must not leave stale state behind. */
+	zassert_equal(fake_i2s_queued_count(), 7, "seven queued");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 7, "nine free");
+
+	void *ptr_before[7];
+
+	for (int i = 0; i < 7; i++) {
+		ptr_before[i] = fake_i2s_queued_ptr(i);
+	}
+	int writes_before = fake_i2s_write_calls();
+	int triggers_before = fake_i2s_trigger_calls();
+	int drift_reset_before = mock_drift_reset_calls;
+	int timing_reset_before = mock_timing_reset_calls;
+	int actuator_reset_before = mock_actuator_reset_calls;
+#if defined(AUDIO_I2S_TEST_MARKER_ASRC)
+	uint32_t sequence_before = audio_i2s_test_offload_sequence();
+#endif
+
+	zassert_equal(audio_sink_init(), 0, "re-init while streaming returns 0");
+
+	/* Exact queue/pointers/free count unchanged. */
+	zassert_equal(fake_i2s_queued_count(), 7, "queue count unchanged");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 7, "free count unchanged");
+	for (int i = 0; i < 7; i++) {
+		zassert_equal(fake_i2s_queued_ptr(i), ptr_before[i], "pointer %d unchanged", i);
+	}
+	zassert_equal(fake_i2s_write_calls(), writes_before, "no new writes");
+	zassert_equal(fake_i2s_trigger_calls(), triggers_before, "no new triggers");
+	zassert_equal(mock_drift_reset_calls, drift_reset_before, "no drift reset");
+	zassert_equal(mock_timing_reset_calls, timing_reset_before, "no timing reset");
+	zassert_equal(mock_actuator_reset_calls, actuator_reset_before, "no actuator reset");
+	zassert_equal(mock_rate_convert_init_calls, 1, "no rate-converter re-init");
+#if defined(AUDIO_I2S_TEST_MARKER_ASRC)
+	zassert_equal(mock_asrc_reset_calls, 0, "no asrc reset");
+	zassert_equal(audio_i2s_test_offload_sequence(), sequence_before, "sequence untouched");
+#endif
+	zassert_true(audio_i2s_test_is_started(), "started retained");
+	zassert_true(audio_i2s_test_is_configured(), "configured retained");
+	test_assert_no_duplicate_writes();
+}
+
+/* ── retry after first-attempt init failure ──────────────────────── */
+
+ZTEST(audio_i2s, test_init_retry_after_configure_failure)
+{
 	fake_i2s_set_configure_ret(-EIO);
-	zassert_equal(audio_sink_init(), -EIO, "re-init fails");
+	zassert_equal(audio_sink_init(), -EIO, "first attempt fails");
+	zassert_false(audio_i2s_test_is_configured(), "not configured after failure");
+	zassert_equal(mock_actuator_init_calls, 0, "no later dependency on first attempt");
 
-	zassert_false(audio_i2s_test_is_configured(), "configured cleared");
-	zassert_false(audio_i2s_test_is_started(), "started cleared");
+	fake_i2s_set_configure_ret(0);
+	zassert_equal(audio_sink_init(), 0, "retry succeeds");
+
+	zassert_true(audio_i2s_test_is_configured(), "configured after retry");
+	zassert_equal(fake_i2s_configure_calls(), 2, "configure ran again exactly once");
+	zassert_equal(mock_rate_convert_init_calls, 1, "full init on retry");
+	zassert_equal(mock_actuator_init_calls, 1, "full init on retry");
+	zassert_equal(mock_timing_init_calls, 1, "full init on retry");
+#if defined(AUDIO_I2S_TEST_MARKER_ASRC)
+	zassert_equal(mock_asrc_init_calls, 1, "full init on retry");
+#endif
+}
+
+ZTEST(audio_i2s, test_init_retry_after_actuator_failure)
+{
+	mock_actuator_init_ret = -EBUSY;
+	zassert_equal(audio_sink_init(), -EBUSY, "first attempt fails");
+	zassert_false(audio_i2s_test_is_configured(), "not configured after failure");
+	zassert_equal(mock_timing_init_calls, 0, "timing not reached on first attempt");
+
+	mock_actuator_init_ret = 0;
+	zassert_equal(audio_sink_init(), 0, "retry succeeds");
+
+	zassert_true(audio_i2s_test_is_configured(), "configured after retry");
+	zassert_equal(mock_rate_convert_init_calls, 2, "rate converter inited both attempts");
+	zassert_equal(mock_actuator_init_calls, 2, "actuator inited both attempts");
+	zassert_equal(mock_timing_init_calls, 1, "timing inited on retry");
+}
+
+ZTEST(audio_i2s, test_init_retry_after_timing_failure)
+{
+	mock_timing_init_ret = -EIO;
+	zassert_equal(audio_sink_init(), -EIO, "first attempt fails");
+	zassert_false(audio_i2s_test_is_configured(), "not configured after failure");
+
+	mock_timing_init_ret = 0;
+	zassert_equal(audio_sink_init(), 0, "retry succeeds");
+
+	zassert_true(audio_i2s_test_is_configured(), "configured after retry");
+	zassert_equal(mock_timing_init_calls, 2, "timing inited both attempts");
+}
+
+#if defined(AUDIO_I2S_TEST_MARKER_ASRC)
+ZTEST(audio_i2s, test_init_retry_after_asrc_failure)
+{
+	mock_asrc_init_ret = -EINVAL;
+	zassert_equal(audio_sink_init(), -EINVAL, "first attempt fails");
+	zassert_false(audio_i2s_test_is_configured(), "not configured after failure");
+	zassert_equal(mock_actuator_init_calls, 0, "actuator not reached on first attempt");
+
+	mock_asrc_init_ret = 0;
+	zassert_equal(audio_sink_init(), 0, "retry succeeds");
+
+	zassert_true(audio_i2s_test_is_configured(), "configured after retry");
+	zassert_equal(mock_asrc_init_calls, 2, "asrc inited both attempts");
+	zassert_equal(mock_actuator_init_calls, 1, "actuator inited on retry");
+	zassert_equal(mock_timing_init_calls, 1, "timing inited on retry");
+}
+#endif
+
+/* ── re-init never resets input frame selection ──────────────────── */
+
+ZTEST(audio_i2s, test_reinit_preserves_input_frame_selection)
+{
+	test_init_ok();
+	audio_sink_set_input_frames(TEST_FRAMES_360);
+
+	zassert_equal(audio_sink_init(), 0, "second init");
+	zassert_equal(audio_i2s_test_input_frames(), TEST_FRAMES_360, "360 preserved");
+
+	/* Also preserved across a failed-then-successful first-init retry. */
+	test_reset_all();
+	audio_sink_set_input_frames(TEST_FRAMES_360);
+	fake_i2s_set_configure_ret(-EIO);
+	zassert_equal(audio_sink_init(), -EIO, "first attempt fails");
+	fake_i2s_set_configure_ret(0);
+	zassert_equal(audio_sink_init(), 0, "retry succeeds");
+	zassert_equal(audio_i2s_test_input_frames(), TEST_FRAMES_360, "360 preserved across retry");
 }
 
 /* ── input frame setter ──────────────────────────────────────────── */

@@ -16,6 +16,14 @@
  * stereo operation and starts continuous DMA-driven output. Initial
  * buffers are primed with silence.
  *
+ * Idempotent: when the sink is already configured (possibly streaming),
+ * an accidental repeated call returns 0 immediately without changing any
+ * stream state (started, saved frame, input frame selection, ASRC/offload
+ * state, slab ownership, I2S queue) and without issuing any trigger.
+ * Initialization from unconfigured state performs the full normal init
+ * exactly once; any first-attempt failure leaves the sink unconfigured
+ * and a later retry is permitted.
+ *
  * @retval 0 on success
  * @retval -ENODEV if output device not ready
  * @retval negative errno on other failures

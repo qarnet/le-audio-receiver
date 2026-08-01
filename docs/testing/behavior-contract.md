@@ -299,6 +299,18 @@ validation (valid frame range + accepted import).  The offload sequence
 increments exactly once per successfully rendered block — offload success or
 CPU fallback — and never on a failed block.
 
+### I2S-010 — Idempotent initialization
+
+`audio_sink_init()` returns 0 immediately when the sink is already
+configured — even while streaming — without changing `started`, the saved
+frame, input frame selection, ASRC/offload state, slab ownership, or the I2S
+queue, without calling device-ready/configure/ASRC-init/actuator-init/
+timing-init, and without issuing any DROP/PREPARE (stream control remains
+`audio_sink_stop()`'s responsibility).  Initialization from unconfigured
+state performs the full normal init exactly once; any first-attempt failure
+leaves `configured` false and permits a later retry that performs the full
+init.  Re-initialization never resets the negotiated input frame selection.
+
 ## Clock and rate contract (`CLOCK-*`)
 
 ### CLOCK-001 — nRF5340 clock path

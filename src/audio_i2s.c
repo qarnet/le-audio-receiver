@@ -128,11 +128,23 @@ static int i2s_do_configure(void)
 
 int audio_sink_init(void)
 {
-	/* Stale stream state must not survive a failed (re-)initialization.
-	 * Production contract remains call-once; this also makes failed
-	 * re-init deterministic in tests.
+	/* Idempotent re-initialization: a configured sink — possibly with an
+	 * active DMA queue, drift/ASRC continuity, and negotiated input frame
+	 * selection — must never be re-initialized.  An accidental repeated
+	 * call returns success immediately without touching device-ready,
+	 * configure, dependency init, started, saved frame, input frame
+	 * selection, ASRC/offload state, slab ownership, or the I2S queue,
+	 * and without issuing any DROP/PREPARE (stream control belongs to
+	 * audio_sink_stop()).
 	 */
-	configured = false;
+	if (configured) {
+		return 0;
+	}
+
+	/* First initialization always starts from clean not-started/saved
+	 * state, so a failed attempt leaves configured false and permits a
+	 * later retry that performs the full normal init exactly once.
+	 */
 	started = false;
 	saved_frame_len = 0;
 

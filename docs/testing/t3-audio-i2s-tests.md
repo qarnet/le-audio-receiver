@@ -10,9 +10,11 @@ Base: accepted T2 commit `0408b6d` on `test/pre-refactor-behavior`.
 
 ## Production source and the two canonical variants
 
-Both suites compile the unmodified production `src/audio_i2s.c` (plus the
-unchanged `src/audio_sink.h` interface).  No production algorithm is copied
-into test code.
+Both suites compile and execute the real current production source
+`src/audio_i2s.c` — including the T3 hardening (transactional startup,
+output/offload validation, idempotent initialization) — against the fake
+driver and mocks, plus the unchanged `src/audio_sink.h` interface.  No
+production algorithm is copied into test code.
 
 | Suite | Resampler | Actuator | Offload | Output rate | Purpose |
 |-------|-----------|----------|---------|-------------|---------|
@@ -118,21 +120,42 @@ Three production defects found and fixed (all covered by tests):
    to CPU ASRC from the unchanged pre-state, and the CPU run overwrites any
    untrusted offload output.
 
-Additional hardening locked by tests: init failure cannot leave stale
-`configured/started/saved` state; saved-frame/sequence state does not leak
-across stop; CPU-ASRC nominal success with produced 0 or >481 is rejected
-with `-ENOSPC` and slab release; a rate-converter silence count outside
-[1, 481] fails with `-ENOSPC` without writing beyond slab capacity; repeat
-fallback never issues a zero-length write; output bytes are computed only
-for `1 <= output_frames <= 481`.
+Additional hardening locked by tests: first-attempt init failure leaves
+`configured` false and permits a later retry that performs the full normal
+init exactly once; repeated `audio_sink_init()` on an already-configured
+(possibly streaming) sink is an idempotent no-op that preserves started
+state, the exact queued driver-owned blocks, slab free count, input frame
+selection, and ASRC/offload state without any trigger; saved-frame/sequence
+state does not leak across stop; CPU-ASRC nominal success with produced 0
+or >481 is rejected with `-ENOSPC` and slab release; a rate-converter
+silence count outside [1, 481] fails with `-ENOSPC` without writing beyond
+slab capacity; repeat fallback never issues a zero-length write; output
+bytes are computed only for `1 <= output_frames <= 481`.
+
+### T3 review-fix round (2026-08-01, commit `fix: preserve active I2S state
+across reinit`)
+
+Removes the re-initialization regression introduced by T3's init state
+clearing: an accidental repeated `audio_sink_init()` on a configured —
+possibly streaming — sink previously re-ran the init sequence and cleared
+stream state.  `audio_sink_init()` is now idempotent: when `configured`,
+it returns 0 immediately without touching device-ready, configure,
+dependency init, started, saved frame, input frame selection, ASRC/offload
+state, slab ownership, or the I2S queue, and without issuing any trigger.
+First-attempt failures still leave `configured` false and are retryable;
+the retry performs the full normal init exactly once.  Re-init never
+resets input frame selection (360 preserved).  Tests added in both
+variants (replacing the old re-init-clears-state test): success-noop,
+active-stream queue/pointer/free preservation, retry after configure /
+actuator / timing (and ASRC) failure, input-frame-selection preservation.
 
 ## Test counts
 
 | Suite | Tests | Result |
 |-------|-------|--------|
-| `tests/unit/audio_i2s/` (ASRC/offload) | 44 | 44/44 PASS |
-| `tests/unit/audio_i2s_identity/` (identity/APLL) | 43 | 43/43 PASS |
-| **Total** | **87** | **87/87 PASS** |
+| `tests/unit/audio_i2s/` (ASRC/offload) | 50 | 50/50 PASS |
+| `tests/unit/audio_i2s_identity/` (identity/APLL) | 48 | 48/48 PASS |
+| **Total** | **98** | **98/98 PASS** |
 
 Coverage of the required behaviors:
 
@@ -140,9 +163,12 @@ Coverage of the required behaviors:
   config (TX, 16-bit, 2ch, I2S format, bit/frame master, 48000 Hz, internal
   slab, block size 1924, timeout 0), configure/ASRC-init/actuator-init/
   timing-init error propagation with no later calls, configured-only-after-
-  success, re-init failure clears stale state, setter 360/480 vs
-  0/1/359/361/479/481/65535, all push rejection classes, malformed push zero
-  side effects, push-before-init `-EIO` with no slab allocation;
+  success, idempotent re-init (success no-op; active-stream queue/pointer/
+  free-count preservation; retry after configure/actuator/timing/ASRC
+  first-attempt failure; 360 input-frame selection preserved), setter
+  360/480 vs 0/1/359/361/479/481/65535, all push rejection classes,
+  malformed push zero side effects, push-before-init `-EIO` with no slab
+  allocation;
 - startup/ownership: seven-block ordering for 480 and 360 input,
   rate-converter-selected silence sizes, zero-filled silence, exact data
   block, distinct pointers, START only after seventh write, silence-alloc
@@ -178,15 +204,15 @@ Focused suites (desktop `thomas-main`, NCS v3.3.0 dev shell):
 
 ```bash
 west build --no-sysbuild -b native_sim/native/64 -d /tmp/t3_i2s_asrc \
-  tests/unit/audio_i2s -p -t run        # 44/44 PASS, zero warnings
+  tests/unit/audio_i2s -p -t run        # 50/50 PASS, zero warnings
 west build --no-sysbuild -b native_sim/native/64 -d /tmp/t3_i2s_identity \
-  tests/unit/audio_i2s_identity -p -t run   # 43/43 PASS, zero warnings
+  tests/unit/audio_i2s_identity -p -t run   # 48/48 PASS, zero warnings
 ```
 
 Production firmware builds on the T3 commit (no compiler warnings; only the
 documented pre-existing Kconfig/CMake/DT diagnostics — see STATUS.md):
 `fw-build-5340`, `fw-build-54l15`, `fw-build-dongle` — all three pass on
-desktop and workstation.
+desktop and workstation (review-fix commit re-verified on both).
 
 Full gate: desktop (`thomas-main`) 24 PASS / 1 FAIL / 25 TOTAL — the single
 failure is the `bsim: stage1` child, which cannot run locally because the
@@ -194,9 +220,9 @@ BabbleSim binaries are not built on `thomas-main` (same as T1/T2; the
 workstation provides the authoritative BSim leg).  Workstation
 (`thomas-workstation`), detached worktree of the exact final T3 commit via
 non-destructive git bundle: **25 PASS / 0 FAIL / 25 TOTAL, run twice
-consecutively**, both clean; BSim hashes deterministic in every run —
-10 ms `0x9225F075`, 7.5 ms `0x2011C0F9` (corrected T2 values, unchanged by
-T3).
+consecutively**, both clean — re-verified on the review-fix commit; BSim
+hashes deterministic in every run — 10 ms `0x9225F075`, 7.5 ms `0x2011C0F9`
+(corrected T2 values, unchanged by T3 and the review fix).
 
 ## Remaining hardware-only I2S evidence
 

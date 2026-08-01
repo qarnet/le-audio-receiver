@@ -119,8 +119,8 @@ resampler/actuator shapes.  Evidence:
   narrow `AUDIO_I2S_NATIVE_TEST` production hooks, shared
   `vnd,audio-i2s-fake` binding + overlay exposing alias `i2s-audio`.
 - `tests/unit/audio_i2s/` (ASRC_LINEAR + NONE actuator + OFFLOAD_ASRC +
-  47619 Hz) — 44 tests; `tests/unit/audio_i2s_identity/` (IDENTITY + APLL
-  + 48000 Hz) — 43 tests.  Variant selection via test-only CMake compile
+  47619 Hz) — 50 tests; `tests/unit/audio_i2s_identity/` (IDENTITY + APLL
+  + 48000 Hz) — 48 tests.  Variant selection via test-only CMake compile
   definitions; no invalid Kconfig assignments.
 - Three production defects fixed (see commit `fix: make I2S startup
   ownership transactional`): non-transactional startup (silent pre-fill
@@ -141,8 +141,8 @@ resampler/actuator shapes.  Evidence:
 
 Acceptance evidence:
 
-- Focused suites on the desktop (`thomas-main`): audio_i2s 44/44,
-  audio_i2s_identity 43/43 — zero compiler warnings.
+- Focused suites on the desktop (`thomas-main`): audio_i2s 50/50,
+  audio_i2s_identity 48/48 — zero compiler warnings.
 - Full gate on the provisioned workstation (`thomas-workstation`) from a
   detached temporary worktree of the exact final T3 commit, transferred
   via non-destructive git bundle: **25 PASS / 0 FAIL / 25 TOTAL**, run
@@ -159,6 +159,42 @@ Acceptance evidence:
   `main` with all temporary refs/worktrees/bundles removed.
 - **T4 is next**: BAP receive handling (stream receive → decode → sink
   push integration).
+
+### T3 review-fix round (2026-08-01, commit `fix: preserve active I2S state across reinit`)
+
+Removes the re-initialization regression introduced by T3's init state
+clearing.  `audio_sink_init()` is now idempotent: when the sink is already
+configured — possibly streaming — an accidental repeated call returns 0
+immediately without touching device-ready/configure/dependency init,
+`started`, the saved frame, input frame selection, ASRC/offload state, slab
+ownership, or the I2S queue, and without issuing any DROP/PREPARE.  First-
+attempt init failures still leave `configured` false and permit a retry that
+performs the full normal init exactly once; re-init never resets the
+negotiated input frame selection (360 preserved).
+
+New tests in both variants (replacing the old re-init-clears-state test):
+init-success then immediate second init (no-op, no additional calls); init +
+started DMA then second init (started retained, exact queued pointers/count
+and slab free count unchanged, no trigger or dependency call added); retry
+success after configure / actuator / timing first-attempt failure (both
+variants) and after ASRC-init failure (ASRC variant); input-frame-selection
+preservation across re-init and across failed-then-successful retry.
+
+- Focused suites on the desktop (`thomas-main`): audio_i2s 50/50,
+  audio_i2s_identity 48/48 — zero compiler warnings.
+- Full gate on the provisioned workstation (`thomas-workstation`) from a
+  detached temporary worktree of the exact final T3 commit (including the
+  review fix), transferred via non-destructive git bundle: **25 PASS /
+  0 FAIL / 25 TOTAL, run twice consecutively**, both clean; BSim hashes
+  deterministic in every run — 10 ms `0x9225F075`, 7.5 ms `0x2011C0F9`
+  (unchanged).
+- All three builds pass on the review-fix commit (desktop and workstation):
+  `fw-build-5340`, `fw-build-54l15`, `fw-build-dongle` — documented
+  Kconfig/CMake/DT diagnostics only, no compiler warnings.
+- Desktop full gate is 24/25 locally: the `bsim: stage1` child cannot run
+  on `thomas-main` because the BabbleSim component binaries are not built
+  there (same as T1/T2); the workstation provides the authoritative BSim
+  leg.
 
 ### Transient gate run disposition (2026-08-01, T2 review fix)
 
