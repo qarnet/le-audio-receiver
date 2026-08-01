@@ -43,6 +43,10 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
 
+#ifdef AUDIO_TIMING_NRF54_TEST
+#include <string.h>
+#endif
+
 LOG_MODULE_REGISTER(audio_timing, LOG_LEVEL_INF);
 
 /* ── Hardware identities ─────────────────────────────────────────── */
@@ -50,9 +54,15 @@ LOG_MODULE_REGISTER(audio_timing, LOG_LEVEL_INF);
 /* Derive TIMER20 register base from devicetree.
  * On nRF54L15 cpuapp: &timer20 { reg = <0xca000 0x1000>; }
  * resolved to absolute address by DT_REG_ADDR.
+ * Under AUDIO_TIMING_NRF54_TEST a test-owned NRF_TIMER_Type object is
+ * used instead of devicetree parsing (see tests/unit/timing_nrf54).
  */
+#ifdef AUDIO_TIMING_NRF54_TEST
+#define TIMER20_BASE ((uintptr_t)&test_timer_reg)
+#else
 #define TIMER20_NODE DT_NODELABEL(timer20)
 #define TIMER20_BASE DT_REG_ADDR(TIMER20_NODE)
+#endif
 
 /* ── Diagnostic pacing ────────────────────────────────────────────── */
 #define DIAG_PERIOD_S  5U /* log at most every 5 seconds */
@@ -168,6 +178,60 @@ static void diag_work_handler(struct k_work *work)
 	}
 }
 
+#ifdef AUDIO_TIMING_NRF54_TEST
+/*
+ * Test seams (tests/unit/timing_nrf54):
+ *  - audio_timing_submit_diag_work() captures the work item instead of
+ *    dispatching it, so tests can run it explicitly;
+ *  - audio_timing_test_state_reset() clears file-static module state
+ *    between tests without pretending to release hardware;
+ *  - audio_timing_test_is_active()/audio_timing_test_generation()
+ *    read the minimal state the mocks cannot observe.
+ * None of these enter production firmware builds.
+ */
+static struct k_work *test_captured_work;
+
+static void audio_timing_submit_diag_work(void)
+{
+	test_captured_work = &diag_work;
+}
+
+struct k_work *audio_timing_test_take_captured_work(void)
+{
+	struct k_work *work = test_captured_work;
+
+	test_captured_work = NULL;
+	return work;
+}
+
+bool audio_timing_test_is_active(void)
+{
+	return atomic_get(&active) != 0;
+}
+
+uint32_t audio_timing_test_generation(void)
+{
+	return atomic_get(&generation);
+}
+
+void audio_timing_test_state_reset(void)
+{
+	memset(&ts, 0, sizeof(ts));
+	grtc_channel = 0;
+	gppi_grtc_to_cap = 0;
+	timer_nominal_hz = 0;
+	atomic_set(&active, 0);
+	atomic_set(&generation, 0);
+	memset(&pending_diag, 0, sizeof(pending_diag));
+	test_captured_work = NULL;
+}
+#else
+static void audio_timing_submit_diag_work(void)
+{
+	audio_timing_submit_diag_work();
+}
+#endif /* AUDIO_TIMING_NRF54_TEST */
+
 /* ── GRTC compare callback (ISR context) ──────────────────────────── */
 
 static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
@@ -216,7 +280,7 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 		pending_diag.gen = atomic_get(&generation);
 		k_spin_unlock(&diag_lock, key);
 
-		k_work_submit(&diag_work);
+		audio_timing_submit_diag_work();
 		return;
 	}
 
@@ -244,7 +308,7 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 		pending_diag.gen = atomic_get(&generation);
 		k_spin_unlock(&diag_lock, key);
 
-		k_work_submit(&diag_work);
+		audio_timing_submit_diag_work();
 	}
 
 	/* Update state for next interval */
@@ -300,6 +364,14 @@ int audio_timing_init(void)
 	ret = nrfx_gppi_conn_alloc(grtc_evt, cap_tsk, &gppi_grtc_to_cap);
 	if (ret < 0) {
 		LOG_ERR("GPPI GRTC→CAPTURE alloc failed: %d", ret);
+		/* The GRTC compare event and its interrupt were enabled
+		 * above; undo that state through
+		 * nrfx_grtc_syscounter_cc_disable() before freeing the
+		 * channel.  No GPPI free applies: the allocation never
+		 * succeeded (nrfx_gppi_conn_alloc() returns before
+		 * writing a handle on failure).
+		 */
+		nrfx_grtc_syscounter_cc_disable(grtc_channel);
 		nrfx_grtc_channel_free(grtc_channel);
 		return ret;
 	}
