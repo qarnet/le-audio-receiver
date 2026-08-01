@@ -119,10 +119,16 @@ void audio_drift_frequency_error_update(int32_t local_clock_error_ppm)
 	}
 
 	/* EMA: filtered = filtered + (measured - filtered) / 8.
-	 * Integer arithmetic with power-of-two shift — avoids
-	 * overflow for moderate ppm values.
+	 * The delta and the update are computed in int64_t so extreme
+	 * int32_t inputs (INT32_MIN/INT32_MAX) cannot overflow; the
+	 * result is clamped back to the int32_t storage range before
+	 * storing.  The arithmetic shift preserves the original
+	 * sign-correct divide-by-8 semantics.
 	 */
-	ctrl.freq_filtered += (local_clock_error_ppm - ctrl.freq_filtered) >> FREQ_FILTER_SHIFT;
+	int64_t delta = (int64_t)local_clock_error_ppm - (int64_t)ctrl.freq_filtered;
+	int64_t ema = (int64_t)ctrl.freq_filtered + (delta >> FREQ_FILTER_SHIFT);
+
+	ctrl.freq_filtered = (int32_t)CLAMP(ema, INT32_MIN, INT32_MAX);
 
 	k_spin_unlock(&ctrl_lock, key);
 }
@@ -131,8 +137,8 @@ int32_t audio_drift_controller_update(int slab_free_count)
 {
 	k_spinlock_key_t key = k_spin_lock(&ctrl_lock);
 
-	int32_t freq_correction = 0;
-	int32_t phase_output = 0;
+	int64_t freq_correction = 0;
+	int64_t phase_output = 0;
 
 	/* ── State transition: first call → ACTIVE, output zero ─── */
 	if (ctrl.state == DRIFT_INIT) {
@@ -144,26 +150,28 @@ int32_t audio_drift_controller_update(int slab_free_count)
 
 	/* ── Frequency feedforward ──────────────────────────────────
 	 * local fast (positive) → negative correction (slow-down / insert).
+	 * Negation happens in int64_t so INT32_MIN is a valid input.
 	 */
 	if (ctrl.freq_once_received) {
-		freq_correction = -ctrl.freq_filtered;
+		freq_correction = -(int64_t)ctrl.freq_filtered;
 	}
 
 	/* ── Phase PI ───────────────────────────────────────────────
 	 * phase_err = PHASE_SETPOINT - slab_free_count
 	 *   High slab_free (queue draining, many free) → negative err → slow down
 	 *   Low slab_free (queue filling, few free)   → positive err → speed up
+	 * Subtraction and scaling stay in int64_t so the full int range
+	 * of slab_free_count is defined (no silent clamp to a guessed
+	 * slab size; sign and final rails are preserved).
 	 */
-	int phase_err = PHASE_SETPOINT - slab_free_count;
-
-	/* Scale to ppm: phase_err * PHASE_SCALE */
-	int32_t phase_err_ppm = (int32_t)phase_err * PHASE_SCALE;
+	int64_t phase_err = (int64_t)PHASE_SETPOINT - (int64_t)slab_free_count;
+	int64_t phase_err_ppm = phase_err * PHASE_SCALE;
 
 	/* Proportional term in ppm */
-	int32_t phase_pp = (int32_t)(((int64_t)phase_err_ppm * KP_MILLI) / 1000);
+	int64_t phase_pp = (phase_err_ppm * KP_MILLI) / 1000;
 
 	/* Integral accumulation (ppm per block) */
-	int32_t phase_inc = (int32_t)(((int64_t)phase_err_ppm * KI_MILLI) / 1000);
+	int64_t phase_inc = (phase_err_ppm * KI_MILLI) / 1000;
 
 	/*
 	 * Directional anti-windup:
@@ -188,19 +196,23 @@ int32_t audio_drift_controller_update(int slab_free_count)
 	}
 
 	if (!block_integral) {
-		ctrl.phase_integral += phase_inc;
-		/* Clamp phase integral authority separately */
+		int64_t candidate = (int64_t)ctrl.phase_integral + phase_inc;
+
+		/* Clamp phase integral authority separately, before
+		 * narrowing to the int32_t storage.
+		 */
 		ctrl.phase_integral =
-			CLAMP(ctrl.phase_integral, -PHASE_INTEGRAL_CLAMP, PHASE_INTEGRAL_CLAMP);
+			(int32_t)CLAMP(candidate, -PHASE_INTEGRAL_CLAMP, PHASE_INTEGRAL_CLAMP);
 	}
 
 	/* Compute final phase contribution */
-	phase_output = phase_pp + ctrl.phase_integral;
+	phase_output = phase_pp + (int64_t)ctrl.phase_integral;
 
 	/* ── Combined output ─────────────────────────────────────── */
-	int32_t total = freq_correction + phase_output;
+	int64_t total = freq_correction + phase_output;
 
-	ctrl.output_ppm = CLAMP(total, -OUTPUT_CLAMP, OUTPUT_CLAMP);
+	/* Clamp to the output rails before narrowing to int32_t. */
+	ctrl.output_ppm = (int32_t)CLAMP(total, -OUTPUT_CLAMP, OUTPUT_CLAMP);
 
 	k_spin_unlock(&ctrl_lock, key);
 	return ctrl.output_ppm;
