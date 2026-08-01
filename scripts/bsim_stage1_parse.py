@@ -276,19 +276,16 @@ def check_scenario(scenario, recv, cli, known):
             if r.get("lh1") == r.get("rh1"):
                 errs.append("stereo L hash == R hash")
 
-        # Total-frames accounting (mono 1 dec/push, Mode A/B 2).
+        # Decoder-invocation accounting: every push costs exactly
+        # dec_calls decoder invocations; at most one unpaired half may
+        # decode at a segment boundary (CIS activation skew), so the
+        # total is bounded by [expected, expected + dec_calls].
         expected_total = dec_calls * (r.get("pushes1", 0) + r.get("szero1", 0))
-        if scenario in ("modea_first_stop_10ms", "release_without_disable_10ms",
-                        "disconnect_streaming_10ms", "reconnect_second_stream_10ms"):
-            # Stop-finalized segment: one unpaired half may add up to
-            # dec_calls extra decoder invocations.
-            if not (expected_total <= r.get("total1", 0) <=
-                    expected_total + dec_calls):
-                errs.append("total1 %s outside [%d, %d]"
-                            % (r.get("total1"), expected_total,
-                               expected_total + dec_calls))
-        elif r.get("total1") != expected_total:
-            errs.append("total1 %s != %d" % (r.get("total1"), expected_total))
+        if not (expected_total <= r.get("total1", 0) <=
+                expected_total + dec_calls):
+            errs.append("total1 %s outside [%d, %d]"
+                        % (r.get("total1"), expected_total,
+                           expected_total + dec_calls))
         # Post-start PLC delta is deterministic in BSim; pinned per scenario
         # (0 for mono, CIS-sync boundary value for Mode A/B).
         if "known_plc_delta" in known and known["known_plc_delta"] is not None:

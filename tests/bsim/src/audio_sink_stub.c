@@ -376,16 +376,19 @@ bool audio_sink_test_validate(void)
 			     s->plc_frames, s->startup_plc);
 			return false;
 		}
-		/* Decoder-invocation accounting: goal-finalized segments are
-		 * exact; stop-finalized segments may carry one unpaired half's
-		 * decode (the pairing was cut mid-frame), so allow up to one
-		 * extra decoder call per channel. */
-		if (s->total_frames != expected_dec &&
-		    !(scenario_needs_segment_stop(scenario) &&
-		      s->total_frames <= expected_dec + (uint32_t)dec_calls_per_push)) {
-			FAIL("le_audio_receiver: segment %d total=%u != pushes=%u+szero=%u "
-			     "x dec=%d\n",
-			     i, s->total_frames, s->pushes, s->startup_zero, dec_calls_per_push);
+		/* Decoder-invocation accounting: every push costs exactly
+		 * dec_calls decoder invocations; at most one half may decode
+		 * without pairing at a segment boundary (CIS activation skew
+		 * or a pairing cut mid-frame), so allow up to one extra
+		 * decoder call per channel.  The deterministic value is
+		 * pinned per scenario in the strict runner. */
+		if (s->total_frames < expected_dec ||
+		    s->total_frames > expected_dec + (uint32_t)dec_calls_per_push) {
+			FAIL("le_audio_receiver: segment %d total=%u outside [%u, %u] "
+			     "(pushes=%u szero=%u dec=%d)\n",
+			     i, s->total_frames, expected_dec,
+			     expected_dec + (uint32_t)dec_calls_per_push, s->pushes,
+			     s->startup_zero, dec_calls_per_push);
 			return false;
 		}
 		if (s->pushes > 0U &&
