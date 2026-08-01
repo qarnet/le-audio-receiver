@@ -1024,8 +1024,9 @@ static int scenario_reconnect_second_stream(void)
 	bsim_tx_unregister(&streams[0]);
 
 	/* Let the client library release every endpoint/stream of the old
-	 * connection (the conn object lingers until its last ref drops). */
-	k_sleep(K_MSEC(500));
+	 * connection and let the ISO channels tear down (the conn object
+	 * lingers until its last reference drops). */
+	k_sleep(K_MSEC(2000));
 
 	/* ── session 2: reconnect + rediscover + fresh stream ── */
 	unicast_group = NULL;
@@ -1354,7 +1355,7 @@ static int scenario_invalid_codec_fields(void)
 		}
 		/* Let the client library release the round's endpoints/streams
 		 * (rejected-config streams still hold conn references). */
-		k_sleep(K_MSEC(500));
+		k_sleep(K_MSEC(2000));
 	}
 
 	/* One valid mono shape must succeed on a fresh connection,
