@@ -489,7 +489,9 @@ Acceptance evidence (desktop `thomas-main`, branch `test/pre-refactor-behavior`)
   audio_shell_noperf 10/10, audio_shell_nrf54 16/16, build_contract
   28/28 — zero compiler warnings (native_sim test-entropy notice is the
   same pre-existing line every twister suite emits).
-- Full gate on the working tree: **34 PASS / 1 FAIL / 35 TOTAL** — all 24
+- Full gate on the exact code commit `cc13c85` (desktop `thomas-main`,
+  branch `test/pre-refactor-behavior`): **34 PASS / 1 FAIL / 35 TOTAL** —
+  all 24
   twister C suites (incl. the four new ones), 4 exec-only C suites, 6
   Python suites (incl. build_contract 28/28), and the accepted T4
   BabbleSim matrix leg; the single failure is `bsim: stage1` because the
