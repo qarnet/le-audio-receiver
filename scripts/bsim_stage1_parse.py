@@ -480,6 +480,7 @@ def check(scenario, recv, cli, known):
 
 def main(argv):
     ap = argparse.ArgumentParser(description="T4 BSim scenario strict check")
+    ap.add_argument("check", nargs="?", help="subcommand placeholder (the runner passes 'check')")
     ap.add_argument("--scenario", required=True)
     ap.add_argument("--receiver", required=True)
     ap.add_argument("--client", required=True)
