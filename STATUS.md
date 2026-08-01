@@ -99,7 +99,66 @@ Acceptance evidence:
   `lc3_decode` linker wrap are applied only by test CMakeLists).
 - Worktree clean after scoped commits; workstation repo returned to clean
   `main` with all temporary refs/worktrees/bundles removed.
-- **T3 is next**: I2S and sink state machine.
+
+**Phase T3 — I2S sink state-machine tests** — ACCEPTED (2026-08-01).
+
+Compiles and executes the **real `src/audio_i2s.c`** under native_sim with
+a controllable fake I2S driver and mocked platform dependencies, locking
+slab ownership, startup, steady-state drift, ASRC offload/fallback,
+underrun recovery, and stop behavior for both production
+resampler/actuator shapes.  Evidence:
+`docs/testing/t3-audio-i2s-tests.md`; updated
+`docs/testing/behavior-contract.md` (I2S-001..009) and
+`docs/testing/coverage-matrix.md` (`audio_i2s.c` row).
+
+- `tests/unit/audio_i2s_common/` — shared harness: fake I2S driver
+  (`struct i2s_driver_api`, nrfx-style TX block ownership, ordered
+  records, failure injection, DROP/PREPARE purge through the captured
+  config slab, double-submit violation detection), mocks for
+  timing/drift/actuator/rate-converter/ASRC/offload/stats/perf, the
+  narrow `AUDIO_I2S_NATIVE_TEST` production hooks, shared
+  `vnd,audio-i2s-fake` binding + overlay exposing alias `i2s-audio`.
+- `tests/unit/audio_i2s/` (ASRC_LINEAR + NONE actuator + OFFLOAD_ASRC +
+  47619 Hz) — 44 tests; `tests/unit/audio_i2s_identity/` (IDENTITY + APLL
+  + 48000 Hz) — 43 tests.  Variant selection via test-only CMake compile
+  definitions; no invalid Kconfig assignments.
+- Three production defects fixed (see commit `fix: make I2S startup
+  ownership transactional`): non-transactional startup (silent pre-fill
+  failures, START leak, START after incomplete pre-fill); unbounded input
+  frame setter (identity path could copy past the fixed slab block); and
+  untrusted offload output accepted (zero-frame/oversized results with
+  post-state commit).  Also hardened: init failure clears stale state,
+  saved-frame/sequence does not leak across stop, invalid CPU-ASRC frame
+  counts rejected with slab release, rate-converter silence counts
+  outside [1, 481] rejected, repeat fallback never issues zero-length
+  writes.
+- Production images contain no test hooks: everything test-side is
+  guarded by `AUDIO_I2S_NATIVE_TEST`, which production firmware never
+  defines.
+- BSim Stage 1 oracle hashes re-verified on every workstation gate run:
+  10 ms `0x9225F075`, 7.5 ms `0x2011C0F9` (corrected T2 values, unchanged
+  by T3 — audio path behavior identical).
+
+Acceptance evidence:
+
+- Focused suites on the desktop (`thomas-main`): audio_i2s 44/44,
+  audio_i2s_identity 43/43 — zero compiler warnings.
+- Full gate on the provisioned workstation (`thomas-workstation`) from a
+  detached temporary worktree of the exact final T3 commit, transferred
+  via non-destructive git bundle: **25 PASS / 0 FAIL / 25 TOTAL**, run
+  twice consecutively, both clean; BSim hashes deterministic in every run
+  — 10 ms `0x9225F075`, 7.5 ms `0x2011C0F9`.
+- All three builds pass on the T3 commit: `fw-build-5340`,
+  `fw-build-54l15`, `fw-build-dongle` (both desktop and workstation) —
+  documented Kconfig/CMake/DT diagnostics only, no compiler warnings.
+- Desktop full gate is 24/25 locally: the `bsim: stage1` child cannot run
+  on `thomas-main` because the BabbleSim component binaries are not built
+  there (`~/ncs/v3.3.0/tools/bsim/bin/bs_2G4_phy_v1` missing); the
+  workstation provides the authoritative BSim leg (same as T1/T2).
+- Worktree clean after scoped commits; workstation repo returned to clean
+  `main` with all temporary refs/worktrees/bundles removed.
+- **T4 is next**: BAP receive handling (stream receive → decode → sink
+  push integration).
 
 ### Transient gate run disposition (2026-08-01, T2 review fix)
 

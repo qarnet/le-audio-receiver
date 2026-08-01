@@ -208,31 +208,56 @@ configuration.  `audio_sink_stop` drops DMA but retains `configured = true`.
 by `audio_sink_set_input_frames()` (called from `bt_bap.c` at ASE config time).
 Malformed input is rejected with observable error.
 
-### I2S-002 — Startup pre-fill
+`audio_sink_set_input_frames()` accepts only the supported frame counts 360
+(7.5 ms) and 480 (10 ms).  Any other value — including 0 — safely resets to
+480, so the identity path can never copy more than 480 × 2 × 2 = 1920 bytes
+into the fixed 481-frame (1924-byte) slab block.  No buffer write may exceed
+`BLOCK_SIZE`.
 
-On first push, the sink queues six distinct silence blocks (zero-filled), then
-the first audio data block, then issues `i2s_trigger(START)`.  No audio output
-before START.
+### I2S-002 — Transactional startup pre-fill
+
+On first push, the sink queues six distinct silence blocks (zero-filled,
+rate-converter-selected sizes), then the first audio data block, then issues
+`i2s_trigger(START)`.  No audio output before START.
+
+Startup is transactional.  For any startup allocation/write/START failure the
+sink returns the exact primary failure (`-ENOMEM` for slab exhaustion, the
+driver errno for write/trigger failures, `-ENOSPC` when the rate converter
+reports an impossible silence count outside [1, 481]) and:
+
+- frees every caller-owned block (failed write or never submitted);
+- issues `i2s_trigger(DROP)` to purge previously queued driver-owned blocks
+  (driver-owned blocks are never freed directly);
+- leaves `started = false`, `configured = true`;
+- leaves the slab fully reclaimable after the DROP.
 
 ### I2S-003 — Distinct slab ownership
 
 Every `i2s_write` call owns its own distinct slab block.  The same `void *block`
 pointer is never passed to `i2s_write` more than once.  Double-write of the
-same block to I2S causes DMA corruption on the free slab block.
+same block to I2S causes DMA corruption on the free slab block.  A failed
+`i2s_write` never transfers ownership: the caller keeps (and frees) the block.
+A successful write transfers ownership to the driver; the driver releases the
+block back to the slab only on DMA completion or DROP/PREPARE purge.
 
 ### I2S-004 — Drift controller once per block
 
 Once the DMA stream is started, `audio_drift_controller_update(slab_free)` runs
 exactly once per rendered stereo block, in `audio_sink_push`, before slab
-allocation.  The controller runs in work/thread context, never ISR.
+allocation.  The controller runs in work/thread context, never ISR.  Nonzero
+ppm output is passed exactly once to the clock actuator per block.
 
 ### I2S-005 — Emergency repeat fallback
 
 After a successful normal `i2s_write` of audio data, if
-`k_mem_slab_num_free_get(&i2s_slab) >= DRIFT_THRESHOLD`, a separate slab block
-is allocated and `saved_frame` (the most recent successfully written PCM) is
-copied into it and queued to I2S.  This repeat fallback provides a safety margin
-against DMA starvation; it is counted via `audio_perf_repeat_fallback()`.
+`k_mem_slab_num_free_get(&i2s_slab) >= DRIFT_THRESHOLD` and a frame was saved
+in the current stream (never a zero-length write), a separate slab block is
+allocated and `saved_frame` (the most recent successfully written PCM) is
+copied into it and queued to I2S.  This repeat fallback provides a safety
+margin against DMA starvation; it is counted via
+`audio_perf_repeat_fallback()` exactly once per attempted fallback, whether
+or not the separate block could be allocated/written.  The repeat block is
+always a separate allocation — never the just-written data block.
 
 Slab allocation failure in the main push path is a different event: it logs
 `"I2S slab full"`, increments `i2s_underruns`, and returns the allocation error
@@ -240,21 +265,39 @@ Slab allocation failure in the main push path is a different event: it logs
 
 ### I2S-006 — `-EIO` recovery
 
-An `i2s_write` returning `-EIO` records a stream reset counter, calls
-`i2s_trigger(PREPARE)` to return the peripheral to READY state, and marks
-the stream as not-started so the next push re-pre-fills and re-triggers START.
+An `i2s_write` returning `-EIO` frees the caller block, records a stream reset
+counter, calls `i2s_trigger(PREPARE)` to return the peripheral to READY state,
+and marks the stream as not-started so the next push performs a fresh
+six-silence pre-fill and re-triggers START.  A non-`-EIO` write error frees the
+caller block and keeps the stream started.
 
 ### I2S-007 — Stop order
 
-Stop runs: reset timing/drift/actuator/rate-converter/ASRC state, then
-`i2s_trigger(PREPARE)` before `i2s_trigger(DROP)`.  The configured flag
-remains true so reconnect works without re-calling `audio_sink_init`.
+Stop runs: reset timing/drift/actuator/rate-converter/ASRC state and clear
+the saved-frame/offload-sequence state, then `i2s_trigger(PREPARE)` before
+`i2s_trigger(DROP)`.  The configured flag remains true so reconnect works
+without re-calling `audio_sink_init`.  Repeated stop issues no extra triggers
+after the first stop; stop trigger errors never flip `configured` and never
+cause double frees.
 
 ### I2S-008 — Observable failure counters
 
 Slab exhaustion, underrun count, push failure, repeat-fallback count, and ASRC
 capacity-failure count remain observable through log output and stats
 structures.
+
+### I2S-009 — ASRC/offload output validation
+
+CPU ASRC output is usable only when the produced frame count is in [1, 481]:
+a nominal success with 0 or >481 frames frees the slab block and returns
+`-ENOSPC`.  An offload round trip is usable only when it returns success with
+`output_frames` in [1, 481]; a zero-frame result (valid FLPR error response)
+or an oversized result falls back to CPU ASRC from the unchanged exported
+pre-state, and the CPU run overwrites any untrusted offload output.  The
+offload post-state import commits ASRC continuity state only after full
+validation (valid frame range + accepted import).  The offload sequence
+increments exactly once per successfully rendered block — offload success or
+CPU fallback — and never on a failed block.
 
 ## Clock and rate contract (`CLOCK-*`)
 
