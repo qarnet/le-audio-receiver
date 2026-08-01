@@ -196,6 +196,105 @@ preservation across re-init and across failed-then-successful retry.
   there (same as T1/T2); the workstation provides the authoritative BSim
   leg.
 
+**Phase T4 — BAP and Bluetooth behavior matrix** — ACCEPTED (2026-08-01).
+
+Expands the BabbleSim gate from one mono scenario into the full BAP
+matrix over real `src/bt_bap.c`, `src/audio_decode.c`, real Zephyr
+BAP/ASCS/PACS, real ISO transport, and real liblc3.  Evidence:
+`docs/testing/t4-bap-bsim-matrix.md`; updated
+`docs/testing/behavior-contract.md` (BT-001, CODEC-007 closed;
+CODEC-011..013 added) and `docs/testing/coverage-matrix.md`.
+
+- One receiver binary and one parameterized client binary carry the 15
+  BST test IDs (`mono_10ms`, `mono_7p5ms`, `modea_10ms`, `modea_7p5ms`,
+  `modea_reverse_start_10ms`, `modeb_10ms`, `modeb_7p5ms`,
+  `invalid_sdu_resume_10ms`, `modea_first_stop_10ms`,
+  `release_without_disable_10ms`, `disconnect_streaming_10ms`,
+  `reconnect_second_stream_10ms`, `unsupported_source_direction`,
+  `no_free_sink_slot`, `invalid_codec_fields`).  The client TX is a
+  repository-owned deterministic multi-channel transmitter
+  (`tests/bsim/client/src/bsim_tx.[ch]`, real BAP send + liblc3,
+  integer-only channel/sequence-dependent PCM patterns, TX hold until the
+  scenario-required stream count is streaming, exact send caps, one
+  injectable malformed SDU).  The sink stub became a scenario-aware
+  strict oracle (`audio_sink_stub.c`, `bsim_sink_oracle.h`) with
+  per-segment full/L/R ordered FNV-1a hashes, per-channel energy bounds,
+  startup/PLC accounting, and never-hidden push-after-stop.  BSim-only
+  observer (`bsim_observer.[ch]`) emits passive events from real
+  production flow; BSim-only resource seam (3 sink ASEs + 1 source PAC,
+  pool limited to 2) reaches the NO_MEM path and source rejection
+  through the real ASCS server.  The runner (`scripts/bsim-stage1-run.sh`,
+  name retained) flocks the shared `bsim_out` tree, compiles once per
+  gate, uses one private log root (preserved on failure or
+  `BSIM_KEEP_LOGS=1`), runs scenarios 1–8 twice and 9–15 once, and
+  strict-parses every named PASS field via
+  `scripts/bsim_stage1_parse.py` (36 unit tests in
+  `tests/unit/bsim_runner`); `BSIM_BASELINE=1` prints hashes for
+  pinning.
+- Known hashes (replacing the T2/T3 mono values, which the stronger T4
+  TX pattern deliberately changes): mono 10 ms `0xD65641A8`
+  (L==R `0x08D96D5C`), mono 7.5 ms `0x3CF61E00` (L==R `0xC915A389`),
+  Mode A/B 10 ms `0x7335E317` (L `0x08D96D5C`, R `0x2AE744DB`; Mode A
+  and Mode B identical because both produce the same deterministic
+  L/R patterns — a deliberate channel-identity cross-check), Mode A
+  7.5 ms `0xC05F0EA7`, Mode B 7.5 ms `0xE18E30AE`,
+  invalid-SDU-resume `0xB29C3A18`, reconnect segment 2 equals a fresh
+  mono 10 ms oracle (`0xD65641A8`).  Pinned from two identical baseline
+  runs; reproduced exactly by the two acceptance matrix runs and both
+  full gates.
+- Production defects fixed: (1) the codec-shape validator stored the
+  channel-allocation return value as octets-per-frame (0), silently
+  disabling the exact SDU length check; (2) Mode A pairing could never
+  match across CISes — the SW Split LL numbers each CIS from a
+  CIG-global counter (constant seq offset = activation delay), so
+  pairing now uses the ISO SDU reference time (`BT_ISO_FLAGS_TS`), equal
+  on both CISes of one CIG at each event, with a wrap-safe 32-bit
+  comparison discarding only the older unmatched half; (3) release-from-
+  streaming crashed the ASCS server (the release path wiped
+  `stream->iso`, which the server's streaming-exit transition
+  dereferences) — release now clears only app-owned slot state and lets
+  the server detach at the ASE idle transition; (4) the injected
+  malformed SDU must be 119 bytes (a 1-byte SDU is dropped by the ISO
+  stack before the BAP callback) — still an exact-length violation.
+- Documented deviations: the malformed SDU is 119 bytes not 1 (above);
+  Mode A normal scenarios carry a small deterministic post-start PLC
+  delta (3 for 10 ms, 18 for 7.5 ms) with nonzero concealment — pinned
+  per scenario instead of zero; stop-finalized segments pin the exact
+  total decoder invocations instead of exact `dec_calls × pushes`;
+  Zephyr's cosmetic `Invalid application error code: 9` warning is
+  allowlisted for `invalid_codec_fields` (the wire response is exactly
+  what the app chose); scenario 15 runs its nine invalid variants as
+  three rounds of three attempts on fresh connections (a rejected Config
+  leaves the client endpoint attached; no public detach for an idle
+  ASE).
+- Exact ASCS responses pinned: source direction
+  `CONF_UNSUPPORTED/NONE`; third sink config `NO_MEM/NONE` (and clean
+  releases + reusable slot); nine invalid-codec-field variants each
+  `CONF_INVALID/CODEC_DATA`; valid mono and missing-frame-blocks
+  fallback each `SUCCESS/NONE` (failures consumed no slot).
+- Lifecycle evidence: first-ASE stop closes the gate with 10
+  closed-gate receives and zero pushes after close; release-without-
+  disable closes the gate and stops sink/offload exactly once;
+  disconnect-while-streaming cleans up with zero late pushes and the
+  advertising restart path ready; reconnect streams a second segment
+  byte-identical to a fresh mono 10 ms oracle.
+
+Acceptance evidence:
+
+- Desktop: both BSim binaries compile warning-free; parser unit tests
+  36/36; `fw-build-5340/54l15/dongle` clean (documented diagnostics
+  only).
+- Workstation (`thomas-workstation`, detached worktree of the exact
+  final T4 commit, bundle-transferred, repo main never modified):
+  matrix with pinned hashes **PASS twice consecutively** (four
+  consecutive identical runs counting the baselines); full gate **26
+  PASS / 0 FAIL / 26 TOTAL twice consecutively**; all three production
+  builds pass; `git diff --check` clean.
+- Worktree/repo cleanup: workstation returned to clean `main` with all
+  temporary refs/worktrees/bundles removed (after the T4 review round).
+- **T5 is next**: timing/actuator internals and the broad lifecycle
+  matrix.
+
 ### Transient gate run disposition (2026-08-01, T2 review fix)
 
 One workstation gate run on the exact T2 commit (`63d8344`) produced

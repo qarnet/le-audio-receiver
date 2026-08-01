@@ -1,6 +1,6 @@
 # Behavior contract — pre-refactor baseline
 
-Version: T2, 2026-08-01.  Each contract carries a stable ID.  Breaking a contract
+Version: T4, 2026-08-01.  Each contract carries a stable ID.  Breaking a contract
 without a handoff that updates this document is a regression.
 
 ## Bluetooth and service contract (`BT-*`)
@@ -11,9 +11,13 @@ Sink direction only.  Source ASEs are rejected deterministically, not silently
 ignored or accepted.  `available_sink_contexts` field in PACS is non-NONE when
 an ACL connection exists; `available_source_contexts` is never populated.
 
-**Known gap (T4):** source-direction rejection is asserted by design but lacks
-an automated regression test.  T4 must add a BSim scenario that attempts source
-ASE configuration and verifies the correct ASCS response.
+**T4 closed:** BSim scenario `unsupported_source_direction` attempts a
+source-direction Config against the BSim-only source endpoint and
+verifies the exact `CONF_UNSUPPORTED / NONE` response; no slot, decoder,
+gate, or push results.  Production remains sink-only with zero source
+ASEs; the BSim source PAC exists only to make the rejection reachable
+through the real ASCS server (the server refuses source Configs it has
+no PAC cap for before the application callback runs).
 
 ### BT-002 — PACS capability advertisement
 
@@ -109,13 +113,13 @@ Unsupported frequency, frame duration, channel count, or frame-block shape must
 be rejected through ASCS response codes rather than silently guessed or
 accepted.  The receiver must never accept a configuration it cannot decode.
 
-**Known gap (T4):** the decode layer now rejects these shapes
-independently (`audio_decode_config()` returns `-EINVAL` without calling
-liblc3 for null context, channel count other than 1 or 2, frequency other
-than 48000 Hz, frame duration other than 7500/10000 µs, `frames_per_sdu`
-other than exactly 1; failed configurations leave the context fully
-reset), but translating those rejections into ASCS response codes in
-`bt_bap.c` remains T4.
+**T4 closed:** `bt_bap.c` validates the codec shape before slot
+allocation or lifecycle mutation and returns `CONF_INVALID / CODEC_DATA`
+for missing/invalid fields (codec ID not LC3 → `CONF_UNSUPPORTED /
+CODEC`); the validated shape is stored per sink and Enable re-validates
+the retained config against it, failing safely on mismatch.  BSim
+scenario `invalid_codec_fields` pins nine exact rejections plus one
+successful valid mono config (proving no slot was consumed).
 
 ### CODEC-008 — Safe SDU rejection
 
@@ -145,6 +149,43 @@ negative → `audio_stats_decode_error()`.  Mode B counts both channel
 decoder invocations.  A hard negative makes `audio_decode_sdu()` return a
 negative errno (`-EBADMSG`); a hard decode failure is never reported as
 success.
+
+### CODEC-011 — Exact SDU payload validation
+
+Before any decode/pull/copy, a valid-flag packet whose length does not
+match the configured shape (`octets_per_frame × frame_blocks_per_sdu`,
+times the channel count for Mode B) increments decode-error evidence
+exactly once, never calls liblc3, never mutates left/right pairing
+state, and never applies volume or pushes stale PCM.  Mono/Mode B
+negative `audio_decode_sdu()` returns skip volume and sink push; Mode A
+hard decoder errors skip that half and cannot pair it.  PLC
+(`valid=false`) remains supported with the configured byte shape and
+may produce concealment output.
+
+### CODEC-012 — Mode A pair identity
+
+Each decoded half tracks its ISO `seq_num` and the ISO SDU reference
+time (`BT_ISO_FLAGS_TS`).  The SW Split LL numbers each CIS from a
+CIG-global counter, so the two CIS seq spaces carry a constant offset
+(their activation delay) that no TX hold can remove; exact-seq or
+per-half-index pairing cannot match.  Both CISes of one CIG share the
+SDU reference time at each event, so equal `half_ts` values pair the
+two halves of the same audio frame; a wrap-safe 32-bit comparison
+discards only the older unmatched half.  Half state clears on
+configure, start-set completion, gate close, release, stop, and
+disconnect.
+
+### CODEC-013 — Release slot semantics
+
+Release without prior Disable closes the audio-path gate before any
+later receive callback can decode/push, stops offload and the audio
+sink exactly once through the idempotent APIs, clears pending Mode A
+halves, clears the released slot's lifecycle configuration, resets the
+decoder and app-owned slot state so the slot is reusable, and preserves
+truthful PACS contexts.  The `bt_bap_stream` struct itself is left to
+the ASCS server (it owns conn/ep/codec_cfg/iso and clears them at the
+ASE idle transition; wiping them crashes the streaming-exit
+transition).
 
 ## Statistics contract (`STAT-*`)
 
