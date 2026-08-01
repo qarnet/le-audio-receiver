@@ -67,6 +67,14 @@ bool stream_lifecycle_sink_started(size_t idx)
 	return should_open;
 }
 
+void stream_lifecycle_sink_release(size_t idx)
+{
+	if (idx < MAX_SINK_ASE) {
+		sink_chan_count[idx] = 0;
+		sink_started[idx] = false;
+	}
+}
+
 bool stream_lifecycle_audio_path_close(void)
 {
 	bool was_open = audio_path_open;

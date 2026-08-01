@@ -101,6 +101,9 @@ static const struct bt_audio_codec_cap lc3_source_codec_cap =
 
 static struct bt_conn *default_conn;
 
+/* stream ops — defined below; sink_release_slot re-registers them */
+static struct bt_bap_stream_ops stream_ops;
+
 #if defined(CONFIG_LIBLC3)
 #define SAMPLES_PER_CHANNEL_MAX 480 /* 48 kHz × 10 ms */
 #define STEREO_OUT_MAX          (SAMPLES_PER_CHANNEL_MAX * 2)
@@ -512,44 +515,68 @@ static int lc3_disable(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp
 	return 0;
 }
 
+/*
+ * Centralized audio-path close: used by stop/disabled/release/disconnect
+ * so teardown diverges as little as possible.  Closes the gate FIRST (no
+ * later receive callback can decode/push), stops offload exactly once
+ * through the idempotent API, clears pending Mode A halves, and emits the
+ * gate-close observer event on the open→closed transition.  Safe to call
+ * repeatedly.
+ */
+static bool sink_close_audio_path(void)
+{
+	bool was_open = stream_lifecycle_audio_path_close();
+
+	if (was_open) {
+		LOG_INF("Audio path gate CLOSED");
+		audio_offload_stream_stop();
+#if defined(CONFIG_BSIM_OBSERVER)
+		bsim_observer_gate_close();
+#endif
+	}
+#if defined(CONFIG_LIBLC3)
+	mode_a_halves_clear();
+#endif
+	return was_open;
+}
+
+/*
+ * Release one sink slot: close path, stop offload and audio sink exactly
+ * once through the idempotent APIs, clear lifecycle configuration for the
+ * released slot, reset the decoder and slot allocation so the slot is
+ * reusable, and preserve truthful PACS contexts (no context mutation).
+ * The stream ops are re-registered after the slot reset so a later
+ * Config on the same ASE keeps receiving callbacks.
+ */
+static void sink_release_slot(size_t idx)
+{
+	sink_close_audio_path();
+
+#if defined(CONFIG_LIBLC3)
+	audio_decode_reset(&sinks[idx].decode);
+#endif
+	memset(&sinks[idx], 0, sizeof(sinks[idx]));
+	bt_bap_stream_cb_register(&sinks[idx].stream, &stream_ops);
+	stream_lifecycle_sink_release(idx);
+	if (num_sink_ase > 0) {
+		num_sink_ase--;
+	}
+#if defined(CONFIG_BSIM_OBSERVER)
+	bsim_observer_cleanup_release(idx);
+#endif
+}
+
 static int lc3_stop(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
 {
 	LOG_INF("Stop: stream %p", stream);
-
-	/* Close audio path gate on stop (idempotent).  The disabled
-	 * callback may fire later and close it again harmlessly.
-	 */
-	if (stream_lifecycle_audio_path_close()) {
-		audio_offload_stream_stop();
-#if defined(CONFIG_LIBLC3)
-		mode_a_halves_clear();
-#endif
-	}
+	sink_close_audio_path();
 	return 0;
 }
 
 static int lc3_release(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
 {
 	LOG_INF("Release: stream %p", stream);
-	size_t idx = sink_idx(stream);
-
-#if defined(CONFIG_LIBLC3)
-	sinks[idx].decode.decoder = NULL;
-	sinks[idx].decode.decoder_r = NULL;
-#endif
-	/* Close audio path gate on release.  Idempotent — safe if
-	 * already closed by an earlier disable/stop callback.
-	 */
-	if (stream_lifecycle_audio_path_close()) {
-		audio_offload_stream_stop();
-#if defined(CONFIG_LIBLC3)
-		mode_a_halves_clear();
-#endif
-	}
-	memset(&sinks[idx], 0, sizeof(sinks[idx]));
-	if (num_sink_ase > 0) {
-		num_sink_ase--;
-	}
+	sink_release_slot(sink_idx(stream));
 	return 0;
 }
 
@@ -811,12 +838,7 @@ static void stream_stopped(struct bt_bap_stream *s, uint8_t reason)
 	/* Close audio path gate on stop (idempotent).  The disabled
 	 * callback may fire later and close it again harmlessly.
 	 */
-	if (stream_lifecycle_audio_path_close()) {
-		audio_offload_stream_stop();
-#if defined(CONFIG_LIBLC3)
-		mode_a_halves_clear();
-#endif
-	}
+	sink_close_audio_path();
 }
 
 static void stream_started(struct bt_bap_stream *s)
@@ -872,16 +894,12 @@ static void stream_disabled_cb(struct bt_bap_stream *s)
 	 * Close the audio-path gate BEFORE stopping the sink.
 	 * Must be first so late callbacks on the other ASE cannot
 	 * decode, interleave, push, or restart I2S after the gate
-	 * closes.  Clear channel-pair state on the same transition so
-	 * stale halves cannot pair.
+	 * closes.  The centralized close clears pending Mode A halves
+	 * on the same transition so stale halves cannot pair.
 	 */
-	bool was_open = stream_lifecycle_audio_path_close();
+	bool was_open = sink_close_audio_path();
 	if (was_open) {
 		LOG_INF("Audio path gate CLOSED (first disable)");
-		audio_offload_stream_stop();
-#if defined(CONFIG_LIBLC3)
-		mode_a_halves_clear();
-#endif
 	}
 
 	/*
@@ -945,17 +963,17 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	LOG_INF("Disconnected: %s reason 0x%02x", a, reason);
 
 	/*
-	 * Reset lifecycle gate so reconnect works without re-running
-	 * audio_sink_init().  Close gate first (idempotent), then
-	 * clear all state including the per-sink started flags.
+	 * Centralized teardown: close gate (idempotent), clear pending
+	 * Mode A halves, then stop offload and the audio sink exactly
+	 * once through idempotent APIs.  lifecycle reset clears the
+	 * per-sink started flags so reconnect works without re-running
+	 * audio_sink_init().
 	 */
-	stream_lifecycle_audio_path_close();
-	audio_offload_stream_stop();
+	sink_close_audio_path();
 	stream_lifecycle_reset();
+	audio_offload_stream_stop();
 
 #if defined(CONFIG_LIBLC3)
-	mode_a_halves_clear();
-
 	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
 		audio_decode_reset(&sinks[i].decode);
 	}
@@ -965,6 +983,10 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	audio_stats_reset();
 
 	num_sink_ase = 0;
+
+#if defined(CONFIG_BSIM_OBSERVER)
+	bsim_observer_cleanup_disconnect();
+#endif
 
 	bt_conn_unref(default_conn);
 	default_conn = NULL;

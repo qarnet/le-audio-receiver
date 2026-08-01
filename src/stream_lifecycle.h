@@ -34,6 +34,13 @@ void stream_lifecycle_sink_configured(size_t idx, int chan_count);
 bool stream_lifecycle_sink_started(size_t idx);
 
 /**
+ * Clear the per-slot configuration of sink @p idx (release path).
+ * Makes the slot reusable: the gate decision no longer counts it as a
+ * configured ASE.
+ */
+void stream_lifecycle_sink_release(size_t idx);
+
+/**
  * Close the audio-path gate.  Idempotent — safe to call multiple times.
  * @return true if the gate was previously open (i.e. this was the
  *         first close).
