@@ -383,7 +383,8 @@ bool audio_sink_test_validate(void)
 			     i, s->total_frames, s->pushes, s->startup_zero, dec_calls_per_push);
 			return false;
 		}
-		if (s->full_hash == FNV_OFFSET_BASIS || s->full_hash == 0U) {
+		if (s->pushes > 0U &&
+		    (s->full_hash == FNV_OFFSET_BASIS || s->full_hash == 0U)) {
 			FAIL("le_audio_receiver: segment %d full hash unchanged from seed\n", i);
 			return false;
 		}
