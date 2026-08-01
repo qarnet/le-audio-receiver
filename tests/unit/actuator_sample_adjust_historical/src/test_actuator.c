@@ -1,6 +1,16 @@
 /*
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * HISTORICAL / RETIRED actuator tests.
+ *
+ * These tests exercise audio_clock_actuator_sample_adjust.c, the
+ * retired sample insert/drop actuator retained for regression
+ * comparison only.  It is NOT a production actuator: production clock
+ * steering is audio_clock_actuator_apll.c (nRF5340) and
+ * audio_clock_actuator_none.c (nRF54L15), tested in
+ * tests/unit/actuator_apll and tests/unit/actuator_none.  This suite
+ * stays to preserve the historical behavior contract.
  */
 
 #include <zephyr/ztest.h>
@@ -12,9 +22,9 @@ static void reset_before_each(void *unused)
 	audio_clock_actuator_reset();
 }
 
-ZTEST_SUITE(actuator, NULL, NULL, reset_before_each, NULL, NULL);
+ZTEST_SUITE(actuator_sample_adjust_historical, NULL, NULL, reset_before_each, NULL, NULL);
 
-ZTEST(actuator, test_zero_ppm_no_adjustment)
+ZTEST(actuator_sample_adjust_historical, test_zero_ppm_no_adjustment)
 {
 	/* apply_ppm(0) repeatedly, consume returns 0. */
 	for (int i = 0; i < 100; i++) {
@@ -24,7 +34,7 @@ ZTEST(actuator, test_zero_ppm_no_adjustment)
 	}
 }
 
-ZTEST(actuator, test_positive_ppm_eventually_drops)
+ZTEST(actuator_sample_adjust_historical, test_positive_ppm_eventually_drops)
 {
 	/*
 	 * 1000 ppm * 480 / 1e6 = 0.48 samples per block.
@@ -48,7 +58,7 @@ ZTEST(actuator, test_positive_ppm_eventually_drops)
 		      "no pending after consume");
 }
 
-ZTEST(actuator, test_negative_ppm_eventually_inserts)
+ZTEST(actuator_sample_adjust_historical, test_negative_ppm_eventually_inserts)
 {
 	/*
 	 * -1000 ppm * 480 / 1e6 = -0.48 samples per block.
@@ -71,7 +81,7 @@ ZTEST(actuator, test_negative_ppm_eventually_inserts)
 		      "no pending after consume");
 }
 
-ZTEST(actuator, test_consume_clears_pending)
+ZTEST(actuator_sample_adjust_historical, test_consume_clears_pending)
 {
 	/* Build up to a +1, consume it, then next consume returns 0. */
 	audio_clock_actuator_apply_ppm(1000);
@@ -85,7 +95,7 @@ ZTEST(actuator, test_consume_clears_pending)
 	zassert_equal(audio_clock_actuator_consume_sample_adjustment(), 0, "3rd consume: still 0");
 }
 
-ZTEST(actuator, test_reset_clears_state)
+ZTEST(actuator_sample_adjust_historical, test_reset_clears_state)
 {
 	/* Accumulate ppm, then reset — state must be zeroed. */
 	audio_clock_actuator_apply_ppm(5000); /* 2.4 samples worth */
@@ -100,7 +110,7 @@ ZTEST(actuator, test_reset_clears_state)
 		      "after reset + one small apply, still 0");
 }
 
-ZTEST(actuator, test_clamp_prevents_burst)
+ZTEST(actuator_sample_adjust_historical, test_clamp_prevents_burst)
 {
 	/*
 	 * Apply huge ppm (100000), verify pending clamps to ±1 per
@@ -125,7 +135,7 @@ ZTEST(actuator, test_clamp_prevents_burst)
  * (negative correction) → actuator accumulates negative → eventual -1
  * (insert).  This test proves negative ppm input produces insert, not drop.
  */
-ZTEST(actuator, test_1775_negative_produces_insert)
+ZTEST(actuator_sample_adjust_historical, test_1775_negative_produces_insert)
 {
 	/*
 	 * -1775 ppm * 480 = -852,000 1e-6-sample units per block.
