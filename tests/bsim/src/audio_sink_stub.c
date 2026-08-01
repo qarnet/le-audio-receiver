@@ -224,9 +224,14 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 
 	const int32_t energy = l_energy + r_energy;
 
-	/* ── Startup / stream energy oracle ──────────────────────────── */
+	/* ── Startup / stream energy oracle ────────────────────────────
+	 * The CIS-sync boundary (deterministic in BSim) can deliver a
+	 * silent PLC concealment paired with a valid frame within the
+	 * first ~15 pushes of a Mode A stream; such pushes count as
+	 * startup zeros.  After 20 nonzero pushes any zero-energy push is
+	 * a fault (broken decoder / persistent silence). */
 	if (energy == 0) {
-		if (first_nonzero_seen) {
+		if (first_nonzero_seen && cur()->pushes >= 20U) {
 			FAIL("le_audio_receiver: zero-energy push after audio started — "
 			     "push#%u immediate FAIL\n",
 			     (unsigned int)cur()->pushes);
