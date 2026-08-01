@@ -371,7 +371,13 @@ bool audio_sink_test_validate(void)
 			     s->plc_frames, s->startup_plc);
 			return false;
 		}
-		if (s->total_frames != expected_dec) {
+		/* Decoder-invocation accounting: goal-finalized segments are
+		 * exact; stop-finalized segments may carry one unpaired half's
+		 * decode (the pairing was cut mid-frame), so allow up to one
+		 * extra decoder call per channel. */
+		if (s->total_frames != expected_dec &&
+		    !(scenario_needs_segment_stop(scenario) &&
+		      s->total_frames <= expected_dec + (uint32_t)dec_calls_per_push)) {
 			FAIL("le_audio_receiver: segment %d total=%u != pushes=%u+szero=%u "
 			     "x dec=%d\n",
 			     i, s->total_frames, s->pushes, s->startup_zero, dec_calls_per_push);

@@ -278,7 +278,16 @@ def check_scenario(scenario, recv, cli, known):
 
         # Total-frames accounting (mono 1 dec/push, Mode A/B 2).
         expected_total = dec_calls * (r.get("pushes1", 0) + r.get("szero1", 0))
-        if r.get("total1") != expected_total:
+        if scenario in ("modea_first_stop_10ms", "release_without_disable_10ms",
+                        "disconnect_streaming_10ms", "reconnect_second_stream_10ms"):
+            # Stop-finalized segment: one unpaired half may add up to
+            # dec_calls extra decoder invocations.
+            if not (expected_total <= r.get("total1", 0) <=
+                    expected_total + dec_calls):
+                errs.append("total1 %s outside [%d, %d]"
+                            % (r.get("total1"), expected_total,
+                               expected_total + dec_calls))
+        elif r.get("total1") != expected_total:
             errs.append("total1 %s != %d" % (r.get("total1"), expected_total))
         # Post-start PLC delta is deterministic in BSim; pinned per scenario
         # (0 for mono, CIS-sync boundary value for Mode A/B).
@@ -410,10 +419,10 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("obs_ok %d < 3 (2 initial + 1 reuse)" % r.get("obs_ok"))
         if r.get("obs_rej") != 1:
             errs.append("obs_rej %d != 1" % r.get("obs_rej"))
-        if r.get("obs_code") != 0x0D:
-            errs.append("obs_code 0x%02X != NO_MEM" % r.get("obs_code"))
-        if r.get("obs_reason") != 0:
-            errs.append("obs_reason %d != NONE" % r.get("obs_reason"))
+        if r.get("obs_rej_code", -1) != 0x0D:
+            errs.append("obs_rej_code 0x%02X != NO_MEM" % r.get("obs_rej_code", -1))
+        if r.get("obs_rej_reason", -1) != 0:
+            errs.append("obs_rej_reason %d != NONE" % r.get("obs_rej_reason", -1))
         if r.get("obs_rel", 0) < 3:
             errs.append("obs_rel %d < 3 (clean releases)" % r.get("obs_rel"))
         if c["cfgrsps"] != 4:
@@ -428,10 +437,10 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("obs_rej %d < 9" % r.get("obs_rej"))
         if r.get("obs_ok", 0) < 1:
             errs.append("obs_ok %d < 1 (valid mono must succeed)" % r.get("obs_ok"))
-        if r.get("obs_code") != 0x09:
-            errs.append("obs_code 0x%02X != CONF_INVALID" % r.get("obs_code"))
-        if r.get("obs_reason") != 0x02:
-            errs.append("obs_reason %d != CODEC_DATA" % r.get("obs_reason"))
+        if r.get("obs_rej_code", -1) != 0x09:
+            errs.append("obs_rej_code 0x%02X != CONF_INVALID" % r.get("obs_rej_code", -1))
+        if r.get("obs_rej_reason", -1) != 0x02:
+            errs.append("obs_rej_reason %d != CODEC_DATA" % r.get("obs_rej_reason", -1))
         if c["cfgrsps"] != 11:
             errs.append(
                 "client config responses %d != 11 (9 rejects + 2 accepts)"

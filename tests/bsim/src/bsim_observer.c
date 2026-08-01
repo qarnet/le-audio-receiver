@@ -29,6 +29,9 @@ static atomic_uint disconnect_cleanup_cnt;
 static atomic_int last_dir;
 static atomic_int last_code;
 static atomic_int last_reason;
+static atomic_int last_rej_dir;
+static atomic_int last_rej_code;
+static atomic_int last_rej_reason;
 
 void bsim_observer_config(bool accepted, enum bt_audio_dir dir, enum bt_bap_ascs_rsp_code code,
 			  enum bt_bap_ascs_reason reason)
@@ -41,6 +44,11 @@ void bsim_observer_config(bool accepted, enum bt_audio_dir dir, enum bt_bap_ascs
 	atomic_store(&last_dir, (int)dir);
 	atomic_store(&last_code, (int)code);
 	atomic_store(&last_reason, (int)reason);
+	if (!accepted) {
+		atomic_store(&last_rej_dir, (int)dir);
+		atomic_store(&last_rej_code, (int)code);
+		atomic_store(&last_rej_reason, (int)reason);
+	}
 	printk("OBS config %s dir=%u code=0x%02x reason=0x%02x\n", accepted ? "ok" : "rej",
 	       (unsigned int)dir, (unsigned int)code, (unsigned int)reason);
 }
@@ -110,6 +118,21 @@ int bsim_observer_get_last_config_code(void)
 int bsim_observer_get_last_config_reason(void)
 {
 	return atomic_load(&last_reason);
+}
+
+int bsim_observer_get_last_rej_dir(void)
+{
+	return atomic_load(&last_rej_dir);
+}
+
+int bsim_observer_get_last_rej_code(void)
+{
+	return atomic_load(&last_rej_code);
+}
+
+int bsim_observer_get_last_rej_reason(void)
+{
+	return atomic_load(&last_rej_reason);
 }
 
 uint32_t bsim_observer_get_gate_open(void)

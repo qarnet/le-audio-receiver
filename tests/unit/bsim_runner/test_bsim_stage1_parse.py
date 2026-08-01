@@ -49,6 +49,7 @@ def recv_pass(scenario, **over):
         "scenario=%s seg=1 after=0 adv_restart=0 pacs=1 "
         "obs_ok=1 obs_rej=0 obs_dir=0 obs_code=0 obs_reason=0 "
         "obs_gate_o=1 obs_gate_c=0 obs_mal=0 obs_blk=0 obs_stale=0 obs_rel=0 obs_disc=0 "
+        "obs_rej_code=0 obs_rej_reason=0 "
         "pushes1=100 szero1=8 splc1=7 total1=108 plc1=7 derr1=0 mal1=0 "
         "h1=0x12345678 lh1=0x12345678 rh1=0x12345678 "
         "lemin1=1234 lemax1=5678 remin1=1234 remax1=5678 samples1=960\n" % scenario
@@ -348,8 +349,8 @@ def test_no_free_sink_slot():
         seg=0,
         obs_ok=3,
         obs_rej=1,
-        obs_code=13,
-        obs_reason=0,
+        obs_rej_code=13,
+        obs_rej_reason=0,
         obs_rel=3,
     )
     ok = run_check(
@@ -365,8 +366,8 @@ def test_no_free_sink_slot():
         seg=0,
         obs_ok=3,
         obs_rej=1,
-        obs_code=9,
-        obs_reason=0,
+        obs_rej_code=9,
+        obs_rej_reason=0,
         obs_rel=3,
     )
     ok = run_check(
@@ -381,7 +382,8 @@ def test_no_free_sink_slot():
 def test_invalid_codec_fields():
     root = tempfile.mkdtemp()
     recv = recv_pass(
-        "invalid_codec_fields", seg=0, obs_rej=9, obs_ok=1, obs_code=9, obs_reason=2
+        "invalid_codec_fields", seg=0, obs_rej=9, obs_ok=1, obs_rej_code=9,
+        obs_rej_reason=2
     )
     ok = run_check(
         root,
@@ -392,7 +394,8 @@ def test_invalid_codec_fields():
     report("invalid_codec_fields ok", ok)
 
     recv_bad = recv_pass(
-        "invalid_codec_fields", seg=0, obs_rej=9, obs_ok=1, obs_code=9, obs_reason=0
+        "invalid_codec_fields", seg=0, obs_rej=9, obs_ok=1, obs_rej_code=9,
+        obs_rej_reason=0
     )
     ok = run_check(
         root,

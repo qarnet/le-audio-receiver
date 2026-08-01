@@ -1160,7 +1160,9 @@ static int scenario_no_free_sink_slot(void)
 	}
 
 	/* Third failure must not have mutated pool/lifecycle counters:
-	 * a slot is reusable after the releases. */
+	 * a slot is reusable after the releases.  Let the server's idle
+	 * transitions (stream detach) settle first. */
+	k_sleep(K_MSEC(200));
 	err = config_expect(&streams[0], sink_eps[0], &preset_48_4_1_mono.codec_cfg,
 			    BT_BAP_ASCS_RSP_CODE_SUCCESS, BT_BAP_ASCS_REASON_NONE);
 	if (err != 0) {
@@ -1293,8 +1295,62 @@ static int scenario_invalid_codec_fields(void)
 		BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID, BT_BAP_ASCS_REASON_CODEC_DATA);
 	struct bt_bap_ascs_rsp exp_ok =
 		BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_SUCCESS, BT_BAP_ASCS_REASON_NONE);
-	int err = scan_and_connect();
+	int err;
 
+	scn15_build_base();
+	scn15_variants(v);
+
+	/*
+	 * A rejected Config leaves the client endpoint attached to its
+	 * stream and there is no public detach API for an idle ASE, so
+	 * each sink endpoint supports exactly one attempt per connection.
+	 * The receiver registers three sink ASEs: three rounds of three
+	 * attempts cover the nine invalid variants, each round on a fresh
+	 * connection (the disconnect releases every client endpoint).
+	 */
+	for (int round = 0; round < 3; round++) {
+		err = scan_and_connect();
+		if (err != 0) {
+			return err;
+		}
+		err = discover_sinks();
+		if (err != 0) {
+			return err;
+		}
+
+		for (int k = 0; k < 3; k++) {
+			size_t i = (size_t)(round * 3 + k);
+			struct bt_audio_codec_cfg cfg;
+
+			memset(&cfg, 0, sizeof(cfg));
+			cfg.id = BT_HCI_CODING_FORMAT_LC3;
+			cfg.cid = 0x0000;
+			cfg.vid = 0x0000;
+			cfg.target_latency = BT_AUDIO_CODEC_CFG_TARGET_LATENCY_BALANCED;
+			cfg.target_phy = BT_AUDIO_CODEC_CFG_TARGET_PHY_2M;
+			cfg.data_len = v[i].data_len;
+			memcpy(cfg.data, v[i].data, v[i].data_len);
+
+			printk("CLI config attempt %zu: %s\n", i, v[i].name);
+			streams[k].ops = &stream_ops;
+			err = config_expect(&streams[k], sink_eps[k], &cfg, exp_invalid.code,
+					    exp_invalid.reason);
+			if (err != 0) {
+				FAIL("client: attempt %zu (%s) rsp mismatch\n", i, v[i].name);
+				return err;
+			}
+		}
+
+		bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+		err = k_sem_take(&sem_disconnected, K_SECONDS(10));
+		if (err != 0) {
+			return err;
+		}
+	}
+
+	/* One valid mono shape must succeed on a fresh connection,
+	 * proving the nine failures consumed no slot. */
+	err = scan_and_connect();
 	if (err != 0) {
 		return err;
 	}
@@ -1302,43 +1358,6 @@ static int scenario_invalid_codec_fields(void)
 	if (err != 0) {
 		return err;
 	}
-	if (sink_eps[0] == NULL) {
-		FAIL("client: no sink ASE discovered\n");
-		return -ENODATA;
-	}
-
-	scn15_build_base();
-	scn15_variants(v);
-
-	for (size_t i = 0U; i < 9U; i++) {
-		struct bt_audio_codec_cfg cfg;
-
-		memset(&cfg, 0, sizeof(cfg));
-		cfg.id = BT_HCI_CODING_FORMAT_LC3;
-		cfg.cid = 0x0000;
-		cfg.vid = 0x0000;
-		cfg.target_latency = BT_AUDIO_CODEC_CFG_TARGET_LATENCY_BALANCED;
-		cfg.target_phy = BT_AUDIO_CODEC_CFG_TARGET_PHY_2M;
-		cfg.data_len = v[i].data_len;
-		memcpy(cfg.data, v[i].data, v[i].data_len);
-
-		printk("CLI config attempt %zu: %s\n", i, v[i].name);
-		streams[i % 2U].ops = &stream_ops;
-		err = config_expect(&streams[i % 2U], sink_eps[0], &cfg, exp_invalid.code,
-				    exp_invalid.reason);
-		if (err != 0) {
-			FAIL("client: attempt %zu (%s) rsp mismatch\n", i, v[i].name);
-			return err;
-		}
-		/* A rejected Config leaves the ASE idle; detach the stream so
-		 * the next attempt can reuse the endpoint. */
-		err = detach_stream(&streams[i % 2U]);
-		if (err != 0) {
-			return err;
-		}
-	}
-
-	/* One valid mono shape must succeed, proving failures consumed no slot. */
 	streams[0].ops = &stream_ops;
 	err = config_expect(&streams[0], sink_eps[0], &preset_48_4_1_mono.codec_cfg, exp_ok.code,
 			    exp_ok.reason);
@@ -1367,7 +1386,7 @@ static int scenario_invalid_codec_fields(void)
 	memcpy(cfg_nofb.data, scn15_base, scn15_base_len);
 
 	streams[1].ops = &stream_ops;
-	err = config_expect(&streams[1], sink_eps[0], &cfg_nofb, exp_ok.code, exp_ok.reason);
+	err = config_expect(&streams[1], sink_eps[1], &cfg_nofb, exp_ok.code, exp_ok.reason);
 	if (err != 0) {
 		return err;
 	}

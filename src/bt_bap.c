@@ -560,10 +560,14 @@ static bool sink_close_audio_path(void)
 /*
  * Release one sink slot: close path, stop offload and audio sink exactly
  * once through the idempotent APIs, clear lifecycle configuration for the
- * released slot, reset the decoder and slot allocation so the slot is
+ * released slot, reset the decoder and app-owned slot state so the slot is
  * reusable, and preserve truthful PACS contexts (no context mutation).
- * The stream ops are re-registered after the slot reset so a later
- * Config on the same ASE keeps receiving callbacks.
+ *
+ * The bt_bap_stream struct itself is left intact: the ASCS server owns
+ * conn/ep/codec_cfg/iso and clears them when the ASE reaches idle
+ * (bt_bap_stream_detach).  Wiping the stream here crashes the server's
+ * streaming-exit transition, which dereferences stream->iso after the
+ * application release callback returns.
  */
 static void sink_release_slot(size_t idx)
 {
@@ -572,8 +576,15 @@ static void sink_release_slot(size_t idx)
 #if defined(CONFIG_LIBLC3)
 	audio_decode_reset(&sinks[idx].decode);
 #endif
-	memset(&sinks[idx], 0, sizeof(sinks[idx]));
-	bt_bap_stream_cb_register(&sinks[idx].stream, &stream_ops);
+	sinks[idx].recv_cnt = 0;
+	sinks[idx].pd_us = 0;
+	sinks[idx].freq_hz = 0;
+	sinks[idx].frame_dur_us = 0;
+	sinks[idx].octets_per_frame = 0;
+	sinks[idx].frame_blocks_per_sdu = 0;
+	sinks[idx].chan_count = 0;
+	sinks[idx].half_valid = false;
+	sinks[idx].half_idx = 0U;
 	stream_lifecycle_sink_release(idx);
 	if (num_sink_ase > 0) {
 		num_sink_ase--;

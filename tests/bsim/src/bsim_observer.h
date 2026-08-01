@@ -52,6 +52,10 @@ uint32_t bsim_observer_get_config_rejected(void);
 int bsim_observer_get_last_config_dir(void);
 int bsim_observer_get_last_config_code(void);
 int bsim_observer_get_last_config_reason(void);
+/* Last REJECTED config (the last config overall may be a success). */
+int bsim_observer_get_last_rej_dir(void);
+int bsim_observer_get_last_rej_code(void);
+int bsim_observer_get_last_rej_reason(void);
 uint32_t bsim_observer_get_gate_open(void);
 uint32_t bsim_observer_get_gate_close(void);
 uint32_t bsim_observer_get_malformed_sdu(void);
