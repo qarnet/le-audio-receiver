@@ -806,7 +806,9 @@ static int scenario_modea_first_stop(void)
 	if (err != 0) {
 		return err;
 	}
-	k_sleep(K_MSEC(TEARDOWN_MARGIN_MS));
+	/* Short margin: the gate must close while stream 1 is still sending
+	 * (its remaining SDUs become the closed-gate receive evidence). */
+	k_sleep(K_MSEC(100));
 
 	/* Disable first ASE (server closes gate). */
 	err = bt_bap_stream_disable(&streams[0]);
@@ -905,7 +907,7 @@ static int scenario_release_without_disable(void)
 	if (err != 0) {
 		return err;
 	}
-	k_sleep(K_MSEC(TEARDOWN_MARGIN_MS));
+	k_sleep(K_MSEC(300));
 
 	/* Release directly from streaming. */
 	err = bt_bap_stream_release(&streams[0]);
@@ -963,7 +965,7 @@ static int scenario_disconnect_streaming(void)
 	if (err != 0) {
 		return err;
 	}
-	k_sleep(K_MSEC(TEARDOWN_MARGIN_MS));
+	k_sleep(K_MSEC(300));
 
 	bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 	err = k_sem_take(&sem_disconnected, K_SECONDS(10));
