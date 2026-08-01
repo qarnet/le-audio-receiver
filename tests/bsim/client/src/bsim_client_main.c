@@ -138,7 +138,10 @@ static struct bt_bap_lc3_preset preset_modeb_7p5ms = {
 static void connected(struct bt_conn *conn, uint8_t err)
 {
 	if (err == 0) {
-		default_conn = bt_conn_ref(conn);
+		/* bt_conn_le_create already handed the app its reference in
+		 * default_conn; do NOT ref again or the conn object can
+		 * never be freed and reconnects find a stale connection. */
+		default_conn = conn;
 		k_sem_give(&sem_connected);
 	}
 }
