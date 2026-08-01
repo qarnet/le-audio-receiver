@@ -42,61 +42,69 @@ BOARD_TS="${BOARD//\//_}"
 # ── Pinned known hashes (full / left / right) ────────────────────────
 # Baselined 2026-08-01 from two identical workstation runs of the
 # deterministic multi-channel TX pattern.  0x00000000 = not yet pinned.
+# ── Pinned known hashes (full / left / right) ────────────────────────
+# Baselined 2026-08-01 from two identical workstation runs of the
+# deterministic multi-channel TX pattern (scenarios 1-8).  0x00000000 =
+# no audio (config-rejection scenarios) or not yet pinned.
 declare -A KNOWN_FULL=(
-    [mono_10ms]=0x00000000
-    [mono_7p5ms]=0x00000000
-    [modea_10ms]=0x00000000
-    [modea_7p5ms]=0x00000000
-    [modea_reverse_start_10ms]=0x00000000
-    [modeb_10ms]=0x00000000
-    [modeb_7p5ms]=0x00000000
-    [invalid_sdu_resume_10ms]=0x00000000
+    [mono_10ms]=0xD65641A8
+    [mono_7p5ms]=0x3CF61E00
+    [modea_10ms]=0x7335E317
+    [modea_7p5ms]=0xC05F0EA7
+    [modea_reverse_start_10ms]=0x7335E317
+    [modeb_10ms]=0x7335E317
+    [modeb_7p5ms]=0xE18E30AE
+    [invalid_sdu_resume_10ms]=0xB29C3A18
+    # Segment 2 of the reconnect scenario must equal a fresh mono 10 ms oracle.
+    [reconnect_second_stream_10ms]=0xD65641A8
 )
 declare -A KNOWN_L=(
-    [mono_10ms]=0x00000000
-    [mono_7p5ms]=0x00000000
-    [modea_10ms]=0x00000000
-    [modea_7p5ms]=0x00000000
-    [modea_reverse_start_10ms]=0x00000000
-    [modeb_10ms]=0x00000000
-    [modeb_7p5ms]=0x00000000
+    [mono_10ms]=0x08D96D5C
+    [mono_7p5ms]=0xC915A389
+    [modea_10ms]=0x08D96D5C
+    [modea_7p5ms]=0x96275542
+    [modea_reverse_start_10ms]=0x08D96D5C
+    [modeb_10ms]=0x08D96D5C
+    [modeb_7p5ms]=0xC915A389
 )
 declare -A KNOWN_R=(
-    [mono_10ms]=0x00000000
-    [mono_7p5ms]=0x00000000
-    [modea_10ms]=0x00000000
-    [modea_7p5ms]=0x00000000
-    [modea_reverse_start_10ms]=0x00000000
-    [modeb_10ms]=0x00000000
-    [modeb_7p5ms]=0x00000000
+    [mono_10ms]=0x08D96D5C
+    [mono_7p5ms]=0xC915A389
+    [modea_10ms]=0x2AE744DB
+    [modea_7p5ms]=0x499BD761
+    [modea_reverse_start_10ms]=0x2AE744DB
+    [modeb_10ms]=0x2AE744DB
+    [modeb_7p5ms]=0xC4FEFADB
 )
 
-# Pinned post-start PLC delta per scenario (0 = none; Mode A/B carry the
-# deterministic CIS-sync boundary PLC).  -1 = not yet pinned.
+# Pinned post-start PLC delta per scenario.  All scenarios show 0 with
+# the corrected octet storage and ts-based Mode A pairing.
 declare -A KNOWN_PLC_DELTA=(
-    [mono_10ms]=-1
-    [mono_7p5ms]=-1
-    [modea_10ms]=-1
-    [modea_7p5ms]=-1
-    [modea_reverse_start_10ms]=-1
-    [modeb_10ms]=-1
-    [modeb_7p5ms]=-1
+    [mono_10ms]=0
+    [mono_7p5ms]=0
+    [modea_10ms]=0
+    [modea_7p5ms]=0
+    [modea_reverse_start_10ms]=0
+    [modeb_10ms]=0
+    [modeb_7p5ms]=0
+    [invalid_sdu_resume_10ms]=0
 )
 
-# Pinned exact total decoder invocations per scenario.  -1 = not yet pinned.
+# Pinned exact total decoder invocations per scenario (deterministic,
+# including unpaired-half decodes at the CIS activation skew).
 declare -A KNOWN_TOTAL=(
-    [mono_10ms]=-1
-    [mono_7p5ms]=-1
-    [modea_10ms]=-1
-    [modea_7p5ms]=-1
-    [modea_reverse_start_10ms]=-1
-    [modeb_10ms]=-1
-    [modeb_7p5ms]=-1
-    [invalid_sdu_resume_10ms]=-1
-    [modea_first_stop_10ms]=-1
-    [release_without_disable_10ms]=-1
-    [disconnect_streaming_10ms]=-1
-    [reconnect_second_stream_10ms]=-1
+    [mono_10ms]=108
+    [mono_7p5ms]=111
+    [modea_10ms]=215
+    [modea_7p5ms]=236
+    [modea_reverse_start_10ms]=215
+    [modeb_10ms]=216
+    [modeb_7p5ms]=222
+    [invalid_sdu_resume_10ms]=108
+    [modea_first_stop_10ms]=84
+    [release_without_disable_10ms]=55
+    [disconnect_streaming_10ms]=62
+    [reconnect_second_stream_10ms]=83
 )
 
 # Scenario matrix: name runs
