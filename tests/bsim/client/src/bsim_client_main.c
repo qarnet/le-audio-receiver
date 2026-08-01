@@ -345,6 +345,10 @@ static int scan_and_connect(void)
 
 static int discover_sinks(void)
 {
+	/* The discovery callback only reports NEW endpoints; stale entries
+	 * from previous connections must be cleared or later rounds
+	 * configure freed endpoint objects. */
+	memset(sink_eps, 0, sizeof(sink_eps));
 	unicast_client_cbs.discover = discover_sinks_cb;
 
 	int err = bt_bap_unicast_client_discover(default_conn, BT_AUDIO_DIR_SINK);
@@ -357,6 +361,7 @@ static int discover_sinks(void)
 
 static int discover_sources(void)
 {
+	memset(src_eps, 0, sizeof(src_eps));
 	unicast_client_cbs.discover = discover_src_cb;
 
 	int err = bt_bap_unicast_client_discover(default_conn, BT_AUDIO_DIR_SOURCE);

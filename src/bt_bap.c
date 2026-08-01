@@ -649,6 +649,8 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
 	}
 
+	printk("RECVDBG idx=%zu valid=%d flags=0x%02x len=%u seq=%u\n", idx, valid ? 1 : 0,
+	       info->flags, buf->len, info->seq_num);
 	if (valid) {
 		as->recv_cnt++;
 #if defined(CONFIG_INFO_REPORTING_INTERVAL) && CONFIG_INFO_REPORTING_INTERVAL > 0
