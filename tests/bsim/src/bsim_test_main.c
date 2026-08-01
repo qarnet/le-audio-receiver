@@ -154,9 +154,9 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 	     bsim_observer_get_recv_gate_blocked(), bsim_observer_get_stale_half(),
 	     bsim_observer_get_release_cleanup(), bsim_observer_get_disconnect_cleanup(),
 	     bsim_observer_get_last_rej_code(), bsim_observer_get_last_rej_reason(), pushes1,
-	     szero1, splc1, total1, derr1, mal1, h1, lh1, rh1, lemin1, lemax1, remin1, remax1,
-	     pushes2, szero2, splc2, total2, derr2, mal2, h2, lh2, rh2, lemin2, lemax2, remin2,
-	     remax2);
+	     szero1, splc1, plc1, total1, derr1, mal1, h1, lh1, rh1, lemin1, lemax1, remin1, remax1,
+	     pushes2, szero2, splc2, plc2, total2, derr2, mal2, h2, lh2, rh2, lemin2, lemax2,
+	     remin2, remax2);
 }
 
 static void scenario_main(enum bsim_sink_scenario scn, int dec_calls)
