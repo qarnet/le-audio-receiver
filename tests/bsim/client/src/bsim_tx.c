@@ -183,6 +183,12 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 				continue;
 			}
 
+			{
+				struct bt_bap_ep_info ei;
+				int rie = bt_bap_ep_get_info(s->bap_stream->ep, &ei);
+				printk("TX send s=%p idx=%u st=%d seq=%u rie=%d\n", s->bap_stream, i,
+				       rie == 0 ? (int)ei.state : -1, s->seq_num, rie);
+			}
 			int err = bt_bap_stream_send(s->bap_stream, buf, s->seq_num);
 
 			if (err == 0) {
