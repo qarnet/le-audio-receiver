@@ -65,8 +65,12 @@ static bool scenario_observer_ok(enum bsim_sink_scenario scn)
 		return bsim_observer_get_gate_close() >= 1U &&
 		       bsim_observer_get_release_cleanup() >= 1U;
 	case BSIM_SCN_RELEASE_WITHOUT_DISABLE_10MS:
+		/* The ordering proof needs the disconnect event sequence too:
+		 * PASS only after the client's ACL disconnect, so
+		 * rel_ss_seq < disc_seq is observable in the record. */
 		return bsim_observer_get_release_cleanup() >= 1U &&
-		       bsim_observer_get_release_sink_stop() >= 1U;
+		       bsim_observer_get_release_sink_stop() >= 1U &&
+		       bsim_observer_get_disconnect_cleanup() >= 1U;
 	case BSIM_SCN_UNSUPPORTED_SOURCE_DIRECTION:
 		return bsim_observer_get_config_rejected() >= 1U &&
 		       bsim_observer_get_last_config_dir() == (int)BT_AUDIO_DIR_SOURCE &&
