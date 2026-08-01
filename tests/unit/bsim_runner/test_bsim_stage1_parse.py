@@ -49,8 +49,8 @@ def recv_pass(scenario, **over):
         "scenario=%s seg=1 after=0 adv_restart=0 pacs=1 "
         "obs_ok=1 obs_rej=0 obs_dir=0 obs_code=0 obs_reason=0 "
         "obs_gate_o=1 obs_gate_c=0 obs_mal=0 obs_blk=0 obs_stale=0 obs_rel=0 obs_disc=0 "
-        "obs_rej_code=0 obs_rej_reason=0 "
-        "pushes1=100 szero1=8 splc1=7 total1=108 plc1=7 derr1=0 mal1=0 "
+        "obs_rej_code=0 obs_rej_reason=0 obs_mts=0 obs_rel_ss=0 rel_ss_seq=0 disc_seq=0 "
+        "pushes1=100 trans1=8 szero1=8 splc1=7 total1=108 plc1=7 derr1=0 mal1=0 "
         "h1=0x12345678 lh1=0x12345678 rh1=0x12345678 "
         "lemin1=1234 lemax1=5678 remin1=1234 remax1=5678 samples1=960\n" % scenario
     )
@@ -170,19 +170,15 @@ def test_total_pin():
     report("total pin mismatch rejected", not ok)
 
 
-def test_plc_delta_pin():
+def test_post_start_plc():
     root = tempfile.mkdtemp()
-    known = {"known_plc_delta": 0}
-    ok = run_check(
-        root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known
-    )
-    report("plc delta 0 pinned ok", ok)
+    ok = run_check(root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"))
+    report("zero post-start PLC ok", ok)
 
-    known_bad = {"known_plc_delta": 5}
-    ok = run_check(
-        root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known_bad
-    )
-    report("plc delta mismatch rejected", not ok)
+    # plc1 != splc1 is a fault in every audio scenario.
+    recv = recv_pass("mono_10ms", plc1=9)
+    ok = run_check(root, "mono_10ms", recv, cli_pass("mono_10ms"))
+    report("post-start PLC rejected", not ok)
 
 
 def test_total_frames_mismatch():
@@ -254,7 +250,15 @@ def test_modea_first_stop():
 def test_release_without_disable():
     root = tempfile.mkdtemp()
     recv = recv_pass(
-        "release_without_disable_10ms", pushes1=25, total1=33, obs_rel=1, obs_gate_c=1
+        "release_without_disable_10ms",
+        pushes1=25,
+        total1=33,
+        obs_rel=1,
+        obs_gate_c=1,
+        obs_rel_ss=1,
+        rel_ss_seq=5,
+        disc_seq=9,
+        obs_mts=0,
     )
     ok = run_check(
         root,
@@ -408,8 +412,8 @@ def test_invalid_codec_fields():
         seg=0,
         pushes1=0,
         obs_rej=9,
-        obs_ok=1,
-        obs_rej_code=9,
+        obs_ok=2,
+        obs_rej_code=8,
         obs_rej_reason=2,
     )
     ok = run_check(
@@ -424,8 +428,8 @@ def test_invalid_codec_fields():
         "invalid_codec_fields",
         seg=0,
         obs_rej=9,
-        obs_ok=1,
-        obs_rej_code=9,
+        obs_ok=2,
+        obs_rej_code=8,
         obs_rej_reason=0,
     )
     ok = run_check(
@@ -448,53 +452,32 @@ def test_fault_scan():
     except ParseError:
         report("fault scan detects decode error", True)
 
-    # Scenario 9: gate-closed receives are allowed.
-    log9 = "d_00: ... INFO: le_audio_receiver: scenario=modea_first_stop_10ms ...\nbt_bap: stream_recv[1]: gate closed, skipping decode\n"
-    p9 = write_log(root, "r9.log", log9)
-    try:
-        scan_faults(p9, "modea_first_stop_10ms")
-        report("fault scan allowlist (gate closed)", True)
-    except ParseError:
-        report("fault scan allowlist (gate closed)", False)
-
-    # Scenario 14: NO_MEM log allowed.
-    log14 = "d_00: ... <err> bt_bap: No free sink slot (max 2)\n"
-    p14 = write_log(root, "r14.log", log14)
-    try:
-        scan_faults(p14, "no_free_sink_slot")
-        report("fault scan allowlist (no free slot)", True)
-    except ParseError:
-        report("fault scan allowlist (no free slot)", False)
-
-    # bt_bap warning outside its scenario allowlist is a fault.
+    # Any bt_bap warning is a fault (no allowlist).
     logw = "d_00: ... <wrn> bt_bap: Source direction unsupported\n"
     pw = write_log(root, "rw.log", logw)
     try:
-        scan_faults(pw, "mono_10ms")
-        report("bt_bap warning rejected outside scenario", False)
-    except ParseError:
-        report("bt_bap warning rejected outside scenario", True)
-
-    # ...but allowed in the source-rejection scenario.
-    try:
         scan_faults(pw, "unsupported_source_direction")
-        report("bt_bap warning allowed in scenario", True)
+        report("bt_bap warning rejected everywhere", False)
     except ParseError:
-        report("bt_bap warning allowed in scenario", False)
+        report("bt_bap warning rejected everywhere", True)
 
-    # Zephyr cosmetic CONF_INVALID rsp warning: allowed only in scenario 15.
+    # Any bt_ascs warning is a fault (the CONF_REJECTED path logs INFO).
     logr = "d_00: ... <wrn> bt_ascs: Invalid application error code: 9\n"
     pr = write_log(root, "rr.log", logr)
     try:
         scan_faults(pr, "invalid_codec_fields")
-        report("ascs rsp warning allowed in invalid_codec_fields", True)
+        report("ascs rsp warning rejected everywhere", False)
     except ParseError:
-        report("ascs rsp warning allowed in invalid_codec_fields", False)
+        report("ascs rsp warning rejected everywhere", True)
+
+    # Any bt_bap error is a fault.
+    log14 = "d_00: ... <err> bt_bap: No free sink slot (max 2)\n"
+    p14 = write_log(root, "r14.log", log14)
     try:
-        scan_faults(pr, "mono_10ms")
-        report("ascs rsp warning rejected elsewhere", False)
+        scan_faults(p14, "no_free_sink_slot")
+        report("bt_bap error rejected everywhere", False)
     except ParseError:
-        report("ascs rsp warning rejected elsewhere", True)
+        report("bt_bap error rejected everywhere", True)
 
 
 def test_client_pass_parse():
@@ -529,7 +512,7 @@ def main():
     test_modea_lr_equal_rejected()
     test_total_frames_mismatch()
     test_total_pin()
-    test_plc_delta_pin()
+    test_post_start_plc()
     test_invalid_sdu_resume()
     test_modea_first_stop()
     test_release_without_disable()

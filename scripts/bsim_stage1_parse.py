@@ -119,8 +119,10 @@ def parse_client_pass(path):
 
 # ── fault-marker scan ────────────────────────────────────────────────
 
-# Receiver log markers that indicate a decode/lifecycle fault.  Allowed
-# per scenario in ALLOWED_FAULTS (matched by substring on the log line).
+# Receiver log markers that indicate a decode/lifecycle fault.  There is
+# no warning allowlist: the expected control paths (unsupported source,
+# rejected codec shape, pool full, malformed SDU) log at INFO level, so
+# every remaining bt_bap / bt_ascs warning or error is a fault.
 FAULT_MARKERS = [
     "ASSERTION FAILURE",
     "FATAL",
@@ -128,60 +130,27 @@ FAULT_MARKERS = [
     "decoder not ready",
     "decode failed",
     "zero-energy push after audio started",
+    "source-invalid push after valid boundary",
     "push after stop",
     "malformed sample count",
     "Failed to start stream",
     "stream_lifecycle",
 ]
 
-# Intentionally exercised bt_bap warnings per scenario.
-BT_BAP_ALLOWED_WRN_BY_SCENARIO = {
-    "modea_first_stop_10ms": ["gate closed, skipping decode"],
-    "release_without_disable_10ms": ["gate closed, skipping decode"],
-    "disconnect_streaming_10ms": ["gate closed, skipping decode"],
-    "no_free_sink_slot": ["No free sink slot"],
-    "invalid_codec_fields": ["Codec config", "Codec config rejected"],
-    "unsupported_source_direction": ["Source direction unsupported"],
-    "invalid_sdu_resume_10ms": ["malformed SDU len"],
-}
-
-# Zephyr ASCS emits a cosmetic "Invalid application error code" warning
-# when the application returns CONF_INVALID (not in its allowed app-rsp
-# list) — the wire response is still exactly what the app chose.
-ASCS_RSP_WRN_SCENARIOS = {"invalid_codec_fields"}
-
-ALLOWED_FAULTS = {
-    # Intentional paths exercised by the lifecycle scenarios.
-    "modea_first_stop_10ms": ["gate closed, skipping decode"],
-    "release_without_disable_10ms": ["gate closed, skipping decode"],
-    "disconnect_streaming_10ms": ["gate closed, skipping decode"],
-    "no_free_sink_slot": ["No free sink slot"],
-}
-
 
 def scan_faults(receiver_path, scenario):
-    allowed = ALLOWED_FAULTS.get(scenario, [])
-    wrn_allowed = BT_BAP_ALLOWED_WRN_BY_SCENARIO.get(scenario, [])
     hits = []
     try:
         with open(receiver_path, "r", errors="replace") as fh:
             for line in fh:
                 for marker in FAULT_MARKERS:
                     if marker in line:
-                        if any(a in line for a in allowed):
-                            break
                         hits.append(line.strip())
                         break
                 else:
-                    # bt_bap module warnings: reject any warning that is
-                    # not allowlisted for this scenario.
-                    if "<wrn> bt_bap:" in line:
-                        if any(a in line for a in wrn_allowed):
-                            continue
+                    if "<wrn> bt_bap:" in line or "<wrn> bt_ascs:" in line:
                         hits.append(line.strip())
-                    elif "<wrn> bt_ascs: Invalid application error code" in line:
-                        if scenario in ASCS_RSP_WRN_SCENARIOS:
-                            continue
+                    elif "<err> bt_bap:" in line:
                         hits.append(line.strip())
     except OSError as exc:
         raise ParseError("cannot read %s: %s" % (receiver_path, exc))
@@ -281,7 +250,7 @@ def check_scenario(scenario, recv, cli, known):
         # must at least cover every push (dec_calls each); the exact
         # deterministic value (including unpaired-half decodes at the
         # CIS activation skew) is pinned per scenario.
-        expected_total = dec_calls * (r.get("pushes1", 0) + r.get("szero1", 0))
+        expected_total = dec_calls * (r.get("pushes1", 0) + r.get("trans1", 0))
         if r.get("total1", 0) < expected_total:
             errs.append("total1 %s < %d" % (r.get("total1"), expected_total))
         if "known_total" in known and known["known_total"] is not None:
@@ -289,15 +258,14 @@ def check_scenario(scenario, recv, cli, known):
                 errs.append(
                     "total1 %s != pinned %d" % (r.get("total1"), known["known_total"])
                 )
-        # Post-start PLC delta is deterministic in BSim; pinned per scenario
-        # (0 for mono, CIS-sync boundary value for Mode A/B).
-        if "known_plc_delta" in known and known["known_plc_delta"] is not None:
-            delta = r.get("plc1", 0) - r.get("splc1", 0)
-            if delta != known["known_plc_delta"]:
-                errs.append(
-                    "post-start PLC delta %d != pinned %d"
-                    % (delta, known["known_plc_delta"])
-                )
+        # Zero post-start PLC: every PLC frame happened during the
+        # startup phase (source-valid boundary).
+        if r.get("plc1", 0) != r.get("splc1", 0):
+            errs.append("post-start PLC (plc1 %s != splc1 %s)"
+                        % (r.get("plc1"), r.get("splc1")))
+        # No missing-TS events in any audio scenario.
+        if r.get("obs_mts", 0) != 0:
+            errs.append("obs_mts %d != 0 (missing ISO TS flag)" % r.get("obs_mts"))
 
         # Client send counts.
         if scenario == "invalid_sdu_resume_10ms":
@@ -345,6 +313,14 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("obs_rel < 1 (release cleanup expected)")
         if r.get("obs_gate_c", 0) < 1:
             errs.append("obs_gate_c < 1 (gate must close on release)")
+        # Sink-stop ordering proof: the release path stopped the sink
+        # (segment finalize) before the ACL disconnect, by event sequence.
+        if r.get("obs_rel_ss", -1) != 1:
+            errs.append("obs_rel_ss %s != 1 (release must stop the sink)"
+                        % r.get("obs_rel_ss", -1))
+        if r.get("rel_ss_seq", -1) >= r.get("disc_seq", -1):
+            errs.append("release sink-stop seq %s not before disconnect seq %s"
+                        % (r.get("rel_ss_seq", -1), r.get("disc_seq", -1)))
         if c["sends0"] < 20:
             errs.append("client sends0 %d < 20" % c["sends0"])
         if c["relrsps"] != 1:
@@ -431,6 +407,8 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("obs_rej %d != 1" % r.get("obs_rej"))
         if r.get("obs_rej_code", -1) != 0x0D:
             errs.append("obs_rej_code 0x%02X != NO_MEM" % r.get("obs_rej_code", -1))
+        if r.get("obs_mts", 0) != 0:
+            errs.append("obs_mts %d != 0" % r.get("obs_mts"))
         if r.get("obs_rej_reason", -1) != 0:
             errs.append("obs_rej_reason %d != NONE" % r.get("obs_rej_reason", -1))
         if r.get("obs_rel", 0) < 3:
@@ -450,11 +428,14 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("pushes1 %s != 0 (no audio expected)" % r.get("pushes1"))
         if r.get("obs_rej", 0) < 9:
             errs.append("obs_rej %d < 9" % r.get("obs_rej"))
-        if r.get("obs_ok", 0) < 1:
-            errs.append("obs_ok %d < 1 (valid mono must succeed)" % r.get("obs_ok"))
-        if r.get("obs_rej_code", -1) != 0x09:
+        # Two successes overall: the valid mono config and the
+        # missing-frame-blocks fallback (the receiver PASSes only after
+        # both, so the observer counts are not reset per round).
+        if r.get("obs_ok", 0) != 2:
+            errs.append("obs_ok %d != 2 (valid mono + fallback)" % r.get("obs_ok"))
+        if r.get("obs_rej_code", -1) != 0x08:
             errs.append(
-                "obs_rej_code 0x%02X != CONF_INVALID" % r.get("obs_rej_code", -1)
+                "obs_rej_code 0x%02X != CONF_REJECTED" % r.get("obs_rej_code", -1)
             )
         if r.get("obs_rej_reason", -1) != 0x02:
             errs.append("obs_rej_reason %d != CODEC_DATA" % r.get("obs_rej_reason", -1))
@@ -491,7 +472,6 @@ def main(argv):
     ap.add_argument("--known-full", default=None)
     ap.add_argument("--known-l", default=None)
     ap.add_argument("--known-r", default=None)
-    ap.add_argument("--known-plc-delta", default=None)
     ap.add_argument("--known-total", default=None)
     args = ap.parse_args(argv)
 
@@ -502,9 +482,7 @@ def main(argv):
         ("known_r", args.known_r),
     ):
         known[key] = int(val, 16) if val else None
-    known["known_plc_delta"] = (
-        int(args.known_plc_delta) if args.known_plc_delta else None
-    )
+
     known["known_total"] = int(args.known_total) if args.known_total else None
 
     try:

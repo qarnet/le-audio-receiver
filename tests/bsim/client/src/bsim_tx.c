@@ -51,7 +51,23 @@ struct bsim_tx_stream {
 static struct bsim_tx_stream tx_streams[BSIM_TX_MAX_STREAMS];
 static atomic_int required_streaming = 1;
 
-static struct bsim_tx_stream *tx_lookup(const struct bt_bap_stream *bap_stream)
+/*
+ * Cross-thread ownership protocol: the scenario thread and the TX thread
+ * both touch tx_streams[].  A single mutex protects every field access
+ * (registration pointers, pause, injection, sequence, limits, counters)
+ * EXCEPT the encoder memory, which only the TX thread touches and which
+ * unregister never frees (slots are reusable, not destroyed).  The mutex
+ * is never held across net_buf_alloc/bt_bap_stream_send (blocking); the
+ * TX thread snapshots the state it needs, sends, then re-acquires to
+ * commit counters/sequence only if the slot is still registered.  All
+ * getters return synchronized snapshots.
+ */
+static K_MUTEX_DEFINE(tx_lock);
+
+/* Caller must hold tx_lock. */
+static int bsim_tx_streaming_count_locked(void);
+
+static struct bsim_tx_stream *tx_lookup_locked(const struct bt_bap_stream *bap_stream)
 {
 	for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
 		if (tx_streams[i].bap_stream == bap_stream) {
@@ -142,25 +158,40 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 		bool sent_any = false;
 
 		for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
-			struct bsim_tx_stream *s = &tx_streams[i];
+			struct bt_bap_stream *stream;
+			uint16_t seq;
+			bool inject;
+			struct bsim_tx_stream *s;
 
+			/* Snapshot the slot state under the mutex; never hold
+			 * it across alloc/send. */
+			k_mutex_lock(&tx_lock, K_FOREVER);
+			s = &tx_streams[i];
 			if (s->bap_stream == NULL || s->paused) {
+				k_mutex_unlock(&tx_lock);
 				continue;
 			}
 			if (!stream_is_streaming(s->bap_stream)) {
+				k_mutex_unlock(&tx_lock);
 				continue;
 			}
 			/* Hold sending until the scenario-required stream
 			 * count is streaming (Mode A: both). */
-			if (bsim_tx_streaming_count() < atomic_load(&required_streaming)) {
+			if (bsim_tx_streaming_count_locked() <
+			    atomic_load(&required_streaming)) {
+				k_mutex_unlock(&tx_lock);
 				continue;
 			}
+			stream = s->bap_stream;
+			seq = s->seq_num;
+			inject = s->inject_pending && s->seq_num == s->inject_at_seq;
+			k_mutex_unlock(&tx_lock);
 
 			struct net_buf *buf = net_buf_alloc(&tx_pool, K_FOREVER);
 
 			net_buf_reserve(buf, BT_ISO_CHAN_SEND_RESERVE);
 
-			if (s->inject_pending && s->seq_num == s->inject_at_seq) {
+			if (inject) {
 				/* Exactly one malformed SDU at a controlled
 				 * sequence, then resume valid LC3.  The ISO
 				 * stack drops a 1-byte SDU before the BAP
@@ -172,24 +203,34 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 				for (int j = 0; j < (int)s->cfg.octets_per_frame - 1; j++) {
 					net_buf_add_u8(buf, (uint8_t)(0x40 + j));
 				}
-				s->inject_pending = false;
 				LOG_INF("TX[%zu]: injected malformed %u-byte SDU at seq %u", i,
-					s->cfg.octets_per_frame - 1U, s->seq_num);
+					s->cfg.octets_per_frame - 1U, seq);
 			} else if (!bsim_tx_encode_sdu(s, buf)) {
 				net_buf_unref(buf);
 				continue;
 			}
 
-			int err = bt_bap_stream_send(s->bap_stream, buf, s->seq_num);
+			int err = bt_bap_stream_send(stream, buf, seq);
 
 			if (err == 0) {
-				s->send_count++;
-				s->seq_num++;
-				sent_any = true;
-				if (s->send_limit > 0U && s->send_count >= s->send_limit) {
-					/* Exact send-count cap: pause at the limit. */
-					s->paused = true;
+				/* Commit under the mutex; if the slot was
+				 * unregistered while the send was in flight,
+				 * the counters stay untouched. */
+				k_mutex_lock(&tx_lock, K_FOREVER);
+				if (tx_streams[i].bap_stream == stream) {
+					tx_streams[i].send_count++;
+					tx_streams[i].seq_num++;
+					if (inject) {
+						tx_streams[i].inject_pending = false;
+					}
+					if (tx_streams[i].send_limit > 0U &&
+					    tx_streams[i].send_count >= tx_streams[i].send_limit) {
+						/* Exact send-count cap: pause at the limit. */
+						tx_streams[i].paused = true;
+					}
 				}
+				k_mutex_unlock(&tx_lock);
+				sent_any = true;
 			} else {
 				LOG_ERR("TX[%zu]: send failed: %d", i, err);
 				net_buf_unref(buf);
@@ -259,31 +300,42 @@ int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_conf
 
 int bsim_tx_unregister(struct bt_bap_stream *bap_stream)
 {
-	struct bsim_tx_stream *s = tx_lookup(bap_stream);
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	struct bsim_tx_stream *s = tx_lookup_locked(bap_stream);
 
 	if (s == NULL) {
+		k_mutex_unlock(&tx_lock);
 		return -ENODATA;
 	}
+	/* The TX thread re-checks the pointer under the mutex after an
+	 * in-flight send, so clearing it here cannot commit counters for a
+	 * stale slot; the encoder state stays allocated (slots are
+	 * reusable, never destroyed). */
 	s->bap_stream = NULL;
+	k_mutex_unlock(&tx_lock);
 	return 0;
 }
 
 void bsim_tx_pause(struct bt_bap_stream *bap_stream)
 {
-	struct bsim_tx_stream *s = tx_lookup(bap_stream);
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	struct bsim_tx_stream *s = tx_lookup_locked(bap_stream);
 
 	if (s != NULL) {
 		s->paused = true;
 	}
+	k_mutex_unlock(&tx_lock);
 }
 
 void bsim_tx_resume(struct bt_bap_stream *bap_stream)
 {
-	struct bsim_tx_stream *s = tx_lookup(bap_stream);
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	struct bsim_tx_stream *s = tx_lookup_locked(bap_stream);
 
 	if (s != NULL) {
 		s->paused = false;
 	}
+	k_mutex_unlock(&tx_lock);
 }
 
 void bsim_tx_set_required_streams(int n)
@@ -293,31 +345,39 @@ void bsim_tx_set_required_streams(int n)
 
 void bsim_tx_schedule_malformed(struct bt_bap_stream *bap_stream, uint16_t at_seq)
 {
-	struct bsim_tx_stream *s = tx_lookup(bap_stream);
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	struct bsim_tx_stream *s = tx_lookup_locked(bap_stream);
 
 	if (s != NULL) {
 		s->inject_pending = true;
 		s->inject_at_seq = at_seq;
 	}
+	k_mutex_unlock(&tx_lock);
 }
 
 void bsim_tx_set_send_limit(struct bt_bap_stream *bap_stream, uint32_t limit)
 {
-	struct bsim_tx_stream *s = tx_lookup(bap_stream);
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	struct bsim_tx_stream *s = tx_lookup_locked(bap_stream);
 
 	if (s != NULL) {
 		s->send_limit = limit;
 	}
+	k_mutex_unlock(&tx_lock);
 }
 
 uint32_t bsim_tx_send_count(struct bt_bap_stream *bap_stream)
 {
-	struct bsim_tx_stream *s = tx_lookup(bap_stream);
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	struct bsim_tx_stream *s = tx_lookup_locked(bap_stream);
+	uint32_t count = (s != NULL) ? s->send_count : 0U;
 
-	return (s != NULL) ? s->send_count : 0U;
+	k_mutex_unlock(&tx_lock);
+	return count;
 }
 
-int bsim_tx_streaming_count(void)
+/* Caller must hold tx_lock. */
+static int bsim_tx_streaming_count_locked(void)
 {
 	int n = 0;
 
@@ -327,5 +387,14 @@ int bsim_tx_streaming_count(void)
 			n++;
 		}
 	}
+	return n;
+}
+
+int bsim_tx_streaming_count(void)
+{
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	int n = bsim_tx_streaming_count_locked();
+
+	k_mutex_unlock(&tx_lock);
 	return n;
 }

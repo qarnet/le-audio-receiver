@@ -10,9 +10,7 @@
 # Every run is checked by scripts/bsim_stage1_parse.py, which parses
 # every named field of the receiver/client PASS records and asserts the
 # scenario contract (exact counts, responses, hashes, channel-hash
-# relations, no fault markers).  Known full/L/R hashes are pinned below;
-# they were baselined from two identical workstation runs of the
-# deterministic multi-channel TX pattern (see docs/testing/t4-bap-bsim-matrix.md).
+# relations, no fault markers; see the pinned tables below).
 #
 # A flock around the shared ${ZEPHYR_BASE}/bsim_out tree stops concurrent
 # gates from corrupting shared generated build files.  Logs go to one
@@ -39,9 +37,6 @@ source "${SCRIPT_DIR}/bsim-env.sh"
 
 BOARD_TS="${BOARD//\//_}"
 
-# ── Pinned known hashes (full / left / right) ────────────────────────
-# Baselined 2026-08-01 from two identical workstation runs of the
-# deterministic multi-channel TX pattern.  0x00000000 = not yet pinned.
 # ── Pinned known hashes (full / left / right) ────────────────────────
 # Baselined 2026-08-01 from two identical workstation runs of the
 # deterministic multi-channel TX pattern (scenarios 1-8).  0x00000000 =
@@ -75,20 +70,6 @@ declare -A KNOWN_R=(
     [modea_reverse_start_10ms]=0x2AE744DB
     [modeb_10ms]=0x2AE744DB
     [modeb_7p5ms]=0xC4FEFADB
-)
-
-# Pinned post-start PLC delta per scenario.  Mono and Mode B show 0; the
-# Mode A CIS-sync boundary produces a small deterministic number of
-# post-start PLCs (concealment output is nonzero and inaudible).
-declare -A KNOWN_PLC_DELTA=(
-    [mono_10ms]=0
-    [mono_7p5ms]=0
-    [modea_10ms]=3
-    [modea_7p5ms]=18
-    [modea_reverse_start_10ms]=3
-    [modeb_10ms]=0
-    [modeb_7p5ms]=0
-    [invalid_sdu_resume_10ms]=0
 )
 
 # Pinned exact total decoder invocations per scenario (deterministic,
@@ -152,8 +133,11 @@ fi
 echo "bsim_out lock acquired"
 
 # --- Compile options ---
-# Disable -Werror to survive glibc _FORTIFY_SOURCE false positive at -O0
-export cmake_args="-DCONFIG_COVERAGE=y -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCONFIG_ASSERT=y -DCONFIG_COMPILER_WARNINGS_AS_ERRORS=n"
+# Warnings are errors (Zephyr default): the repo compiles warning-free.
+# If the toolchain's glibc _FORTIFY_SOURCE diagnostic recurs it is
+# captured and suppressed with the narrowest flag and a recorded reason —
+# never by disabling warning errors for repo code.
+export cmake_args="-DCONFIG_COVERAGE=y -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCONFIG_ASSERT=y"
 export WORK_DIR="${ZEPHYR_BASE}/bsim_out"
 sysbuild=1
 
@@ -277,8 +261,6 @@ run_one() {
             _known_args+=(--known-l "${KNOWN_L[$_scn]}")
         [ "${KNOWN_R[$_scn]:-0x00000000}" != "0x00000000" ] && \
             _known_args+=(--known-r "${KNOWN_R[$_scn]}")
-        [ "${KNOWN_PLC_DELTA[$_scn]:--1}" != "-1" ] && \
-            _known_args+=(--known-plc-delta "${KNOWN_PLC_DELTA[$_scn]}")
         [ "${KNOWN_TOTAL[$_scn]:--1}" != "-1" ] && \
             _known_args+=(--known-total "${KNOWN_TOTAL[$_scn]}")
     fi

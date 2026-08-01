@@ -696,7 +696,10 @@ static int scenario_normal(const char *scenario, struct bt_bap_lc3_preset **pres
 			return err;
 		}
 		/* Exact send caps: the TX self-pauses at the limit so the
-		 * receiver sees exactly sends_per_stream SDUs. */
+		 * receiver sees exactly sends_per_stream valid SDUs.  Mode A
+		 * sends extra frames to cover the deterministic CIS-sync
+		 * losses (the strict oracle counts only valid-sourced
+		 * pushes and pins the exact count). */
 		bsim_tx_set_send_limit(&streams[i], sends_per_stream);
 	}
 
@@ -795,9 +798,10 @@ static int scenario_modea_first_stop(void)
 			return err;
 		}
 	}
-	/* Stream 0 caps at 25 sends; stream 1 keeps sending 20 more SDUs
-	 * after stream 0 is disabled (45 total). */
-	bsim_tx_set_send_limit(&streams[0], 25);
+	/* Stream 0 keeps streaming until the disable (a cap would pause
+	 * its CIS and feed the receiver source-invalid replacement SDUs);
+	 * stream 1 keeps sending 20 more SDUs after stream 0 is disabled
+	 * (45 total, all blocked by the closed gate). */
 	bsim_tx_set_send_limit(&streams[1], 45);
 
 	err = stream_up(presets, 2, false);
@@ -904,7 +908,9 @@ static int scenario_release_without_disable(void)
 	if (err != 0) {
 		return err;
 	}
-	bsim_tx_set_send_limit(&streams[0], 25);
+	/* No send cap: the TX must keep streaming until the Release closes
+	 * the gate, or the receiver would see source-invalid replacement
+	 * SDUs after the cap pause (strict oracle fault). */
 
 	err = stream_up(presets, 1, false);
 	if (err != 0) {
@@ -962,7 +968,7 @@ static int scenario_disconnect_streaming(void)
 	if (err != 0) {
 		return err;
 	}
-	bsim_tx_set_send_limit(&streams[0], 25);
+	/* No send cap: keep streaming until the disconnect closes the gate. */
 
 	err = stream_up(presets, 1, false);
 	if (err != 0) {
@@ -1011,7 +1017,7 @@ static int scenario_reconnect_second_stream(void)
 	if (err != 0) {
 		return err;
 	}
-	bsim_tx_set_send_limit(&streams[0], 25);
+	/* No send cap: keep streaming until the disconnect closes the gate. */
 
 	err = stream_up(presets, 1, false);
 	if (err != 0) {
@@ -1022,7 +1028,7 @@ static int scenario_reconnect_second_stream(void)
 	if (err != 0) {
 		return err;
 	}
-	k_sleep(K_MSEC(TEARDOWN_MARGIN_MS));
+	k_sleep(K_MSEC(300));
 
 	bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 	err = k_sem_take(&sem_disconnected, K_SECONDS(10));
@@ -1310,7 +1316,7 @@ static int scenario_invalid_codec_fields(void)
 {
 	struct scn15_variant v[16];
 	struct bt_bap_ascs_rsp exp_invalid =
-		BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID, BT_BAP_ASCS_REASON_CODEC_DATA);
+		BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_REJECTED, BT_BAP_ASCS_REASON_CODEC_DATA);
 	struct bt_bap_ascs_rsp exp_ok =
 		BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_SUCCESS, BT_BAP_ASCS_REASON_NONE);
 	int err;
@@ -1545,7 +1551,7 @@ static void test_main_normal_modea_10ms(void)
 	int err = client_setup();
 
 	if (err == 0) {
-		err = scenario_normal("modea_10ms", presets, 2, tx, 2, false, 100);
+		err = scenario_normal("modea_10ms", presets, 2, tx, 2, false, 110);
 	}
 	if (err != 0 && bst_result != Failed) {
 		FAIL("bsim_client: modea_10ms failed: %d\n", err);
@@ -1570,7 +1576,7 @@ static void test_main_normal_modea_7p5ms(void)
 	int err = client_setup();
 
 	if (err == 0) {
-		err = scenario_normal("modea_7p5ms", presets, 2, tx, 2, false, 100);
+		err = scenario_normal("modea_7p5ms", presets, 2, tx, 2, false, 110);
 	}
 	if (err != 0 && bst_result != Failed) {
 		FAIL("bsim_client: modea_7p5ms failed: %d\n", err);
@@ -1595,7 +1601,7 @@ static void test_main_normal_modea_reverse_start(void)
 	int err = client_setup();
 
 	if (err == 0) {
-		err = scenario_normal("modea_reverse_start_10ms", presets, 2, tx, 2, true, 100);
+		err = scenario_normal("modea_reverse_start_10ms", presets, 2, tx, 2, true, 110);
 	}
 	if (err != 0 && bst_result != Failed) {
 		FAIL("bsim_client: modea_reverse_start failed: %d\n", err);
