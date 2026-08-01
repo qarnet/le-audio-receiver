@@ -186,6 +186,10 @@ run_one() {
 
     source "${ZEPHYR_BASE}/tests/bsim/sh_common.source"
 
+    # sh_common's Execute() wraps processes in `timeout EXECUTE_TIMEOUT`;
+    # the default 30 s is far below the T4 matrix's 80 s sim length.
+    export EXECUTE_TIMEOUT=300
+
     local _sid="bsim_t4_${_scn}_${_run}_$$"
     echo ""
     echo "=== Run ${_scn} (${_run}) — $_sid ==="
