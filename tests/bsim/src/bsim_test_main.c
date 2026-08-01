@@ -76,15 +76,15 @@ static bool scenario_observer_ok(enum bsim_sink_scenario scn)
 	case BSIM_SCN_NO_FREE_SINK_SLOT:
 		return bsim_observer_get_config_accepted() >= 3U &&
 		       bsim_observer_get_config_rejected() == 1U &&
-		       bsim_observer_get_last_config_code() == (int)BT_BAP_ASCS_RSP_CODE_NO_MEM &&
-		       bsim_observer_get_last_config_reason() == (int)BT_BAP_ASCS_REASON_NONE &&
+		       bsim_observer_get_last_rej_code() == (int)BT_BAP_ASCS_RSP_CODE_NO_MEM &&
+		       bsim_observer_get_last_rej_reason() == (int)BT_BAP_ASCS_REASON_NONE &&
 		       bsim_observer_get_release_cleanup() >= 3U;
 	case BSIM_SCN_INVALID_CODEC_FIELDS:
 		return bsim_observer_get_config_rejected() >= 9U &&
 		       bsim_observer_get_config_accepted() >= 1U &&
-		       bsim_observer_get_last_config_code() ==
+		       bsim_observer_get_last_rej_code() ==
 			       (int)BT_BAP_ASCS_RSP_CODE_CONF_INVALID &&
-		       bsim_observer_get_last_config_reason() == (int)BT_BAP_ASCS_REASON_CODEC_DATA;
+		       bsim_observer_get_last_rej_reason() == (int)BT_BAP_ASCS_REASON_CODEC_DATA;
 	default:
 		return true;
 	}
@@ -151,16 +151,17 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 	     bsim_observer_get_gate_close(), bsim_observer_get_malformed_sdu(),
 	     bsim_observer_get_recv_gate_blocked(), bsim_observer_get_stale_half(),
 	     bsim_observer_get_release_cleanup(), bsim_observer_get_disconnect_cleanup(),
-	     bsim_observer_get_last_rej_code(), bsim_observer_get_last_rej_reason(),
-	     pushes1, szero1, splc1, total1, derr1, mal1, h1, lh1, rh1, lemin1, lemax1,
-	     remin1, remax1, pushes2, szero2, splc2, total2, derr2, mal2, h2, lh2, rh2,
-	     lemin2, lemax2, remin2, remax2);
+	     bsim_observer_get_last_rej_code(), bsim_observer_get_last_rej_reason(), pushes1,
+	     szero1, splc1, total1, derr1, mal1, h1, lh1, rh1, lemin1, lemax1, remin1, remax1,
+	     pushes2, szero2, splc2, total2, derr2, mal2, h2, lh2, rh2, lemin2, lemax2, remin2,
+	     remax2);
 }
 
 static void scenario_main(enum bsim_sink_scenario scn, int dec_calls)
 {
 	int err;
 	bool disc_handled = false;
+	uint32_t last_disc = 0U;
 
 	printk("=== LE Audio Receiver BSIM Test — scenario %s ===\n", scenario_names[scn]);
 
@@ -225,10 +226,20 @@ static void scenario_main(enum bsim_sink_scenario scn, int dec_calls)
 				printk("Advertising restarted after disconnect\n");
 				disc_handled = true;
 			}
-			k_sleep(K_MSEC(100));
-		} else {
-			k_sleep(K_MSEC(100));
+		} else if (bsim_observer_get_disconnect_cleanup() > last_disc) {
+			/* Multi-connection scenarios (reconnect, source rejection,
+			 * NO_MEM, invalid codec fields): the client disconnects
+			 * between rounds — restart advertising exactly like the
+			 * production main loop so the next round can reconnect. */
+			last_disc = bsim_observer_get_disconnect_cleanup();
+			err = bt_bap_restart_advertising();
+			if (err) {
+				FAIL("le_audio_receiver: advertising restart failed: %d\n", err);
+				return;
+			}
+			printk("Advertising restarted after disconnect\n");
 		}
+		k_sleep(K_MSEC(100));
 	}
 
 	/* If we reach here without PASS, the tick timeout will FAIL */
