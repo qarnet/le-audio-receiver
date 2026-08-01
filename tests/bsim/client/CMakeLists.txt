@@ -8,27 +8,19 @@ target_sources(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/main.c
 )
 
-# ── Upstream sample sources (reuse, no modification) ───────────────
+# ── Repo-owned deterministic multi-channel TX (replaces the upstream
+#    repeated-tone stream_tx/stream_lc3 helpers; real BAP send + liblc3) ─
 target_sources(app PRIVATE
-  ${ZEPHYR_BASE}/samples/bluetooth/bap_unicast_client/src/stream_tx.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/bsim_tx.c
 )
 
-zephyr_sources_ifdef(CONFIG_LIBLC3
-  ${ZEPHYR_BASE}/samples/bluetooth/bap_unicast_client/src/stream_lc3.c)
-
-# ── BSIM test installer (test_id=valid_lc3_client) ──────────────────
+# ── BSIM test installer (one test_id per T4 scenario) ────────────────
 target_sources(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/bsim_client_main.c
 )
 
-# ── Forced-include: preset override + send wrapper ──────────────────
-target_compile_options(app PRIVATE
-  -include ${CMAKE_CURRENT_SOURCE_DIR}/src/preset_override.h
-)
-
 # ── Include paths ──────────────────────────────────────────────────
 target_include_directories(app PRIVATE
-  ${ZEPHYR_BASE}/samples/bluetooth
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
