@@ -42,6 +42,7 @@ struct bsim_tx_stream {
 	lc3_encoder_mem_48k_t encoder_mem[2];
 	uint16_t seq_num;
 	uint32_t send_count;
+	uint32_t send_limit; /* 0 = unlimited */
 	bool paused;
 	bool inject_pending;
 	uint16_t inject_at_seq;
@@ -177,6 +178,10 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 				s->send_count++;
 				s->seq_num++;
 				sent_any = true;
+				if (s->send_limit > 0U && s->send_count >= s->send_limit) {
+					/* Exact send-count cap: pause at the limit. */
+					s->paused = true;
+				}
 			} else {
 				LOG_ERR("TX[%zu]: send failed: %d", i, err);
 				net_buf_unref(buf);
@@ -285,6 +290,15 @@ void bsim_tx_schedule_malformed(struct bt_bap_stream *bap_stream, uint16_t at_se
 	if (s != NULL) {
 		s->inject_pending = true;
 		s->inject_at_seq = at_seq;
+	}
+}
+
+void bsim_tx_set_send_limit(struct bt_bap_stream *bap_stream, uint32_t limit)
+{
+	struct bsim_tx_stream *s = tx_lookup(bap_stream);
+
+	if (s != NULL) {
+		s->send_limit = limit;
 	}
 }
 

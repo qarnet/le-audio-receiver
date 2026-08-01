@@ -299,7 +299,7 @@ def test_unsupported_source():
         "unsupported_source_direction",
         seg=0,
         obs_rej=1,
-        obs_dir=1,
+        obs_dir=2,
         obs_code=7,
         obs_reason=0,
         obs_ok=0,
@@ -316,7 +316,7 @@ def test_unsupported_source():
         "unsupported_source_direction",
         seg=0,
         obs_rej=1,
-        obs_dir=0,
+        obs_dir=1,
         obs_code=7,
         obs_reason=0,
         obs_ok=0,
@@ -420,6 +420,36 @@ def test_fault_scan():
         report("fault scan allowlist (no free slot)", True)
     except ParseError:
         report("fault scan allowlist (no free slot)", False)
+
+    # bt_bap warning outside its scenario allowlist is a fault.
+    logw = "d_00: ... <wrn> bt_bap: Source direction unsupported\n"
+    pw = write_log(root, "rw.log", logw)
+    try:
+        scan_faults(pw, "mono_10ms")
+        report("bt_bap warning rejected outside scenario", False)
+    except ParseError:
+        report("bt_bap warning rejected outside scenario", True)
+
+    # ...but allowed in the source-rejection scenario.
+    try:
+        scan_faults(pw, "unsupported_source_direction")
+        report("bt_bap warning allowed in scenario", True)
+    except ParseError:
+        report("bt_bap warning allowed in scenario", False)
+
+    # Zephyr cosmetic CONF_INVALID rsp warning: allowed only in scenario 15.
+    logr = "d_00: ... <wrn> bt_ascs: Invalid application error code: 9\n"
+    pr = write_log(root, "rr.log", logr)
+    try:
+        scan_faults(pr, "invalid_codec_fields")
+        report("ascs rsp warning allowed in invalid_codec_fields", True)
+    except ParseError:
+        report("ascs rsp warning allowed in invalid_codec_fields", False)
+    try:
+        scan_faults(pr, "mono_10ms")
+        report("ascs rsp warning rejected elsewhere", False)
+    except ParseError:
+        report("ascs rsp warning rejected elsewhere", True)
 
 
 def test_client_pass_parse():

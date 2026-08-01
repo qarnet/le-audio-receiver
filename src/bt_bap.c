@@ -323,11 +323,19 @@ static int validate_codec_cfg(const struct bt_audio_codec_cfg *codec_cfg, struct
 		/* Channel allocation absent → mono. */
 		chan_count = 1;
 	} else if (ret == 0) {
-		chan_count = POPCOUNT(chan_alloc);
-		if (chan_count == 0 || chan_count > MAX_SINK_CHANNELS) {
-			LOG_WRN("Codec config: channel allocation 0x%08x has %d channels",
-				chan_alloc, chan_count);
-			goto invalid;
+		/* BT_AUDIO_LOCATION_MONO_AUDIO is defined as 0, so a present
+		 * allocation of 0 is the standard explicit mono encoding and
+		 * counts as exactly one channel.  Any other value must carry
+		 * exactly one or two channel bits. */
+		if (chan_alloc == BT_AUDIO_LOCATION_MONO_AUDIO) {
+			chan_count = 1;
+		} else {
+			chan_count = POPCOUNT(chan_alloc);
+			if (chan_count == 0 || chan_count > MAX_SINK_CHANNELS) {
+				LOG_WRN("Codec config: channel allocation 0x%08x has %d channels",
+					chan_alloc, chan_count);
+				goto invalid;
+			}
 		}
 	} else {
 		LOG_WRN("Codec config: missing/invalid channel allocation (%d)", ret);

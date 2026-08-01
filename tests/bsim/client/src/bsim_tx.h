@@ -75,6 +75,12 @@ void bsim_tx_set_required_streams(int n);
  */
 void bsim_tx_schedule_malformed(struct bt_bap_stream *bap_stream, uint16_t at_seq);
 
+/**
+ * Cap the number of successful sends on one stream: the stream pauses
+ * itself once its send count reaches @p limit.  0 = unlimited (default).
+ */
+void bsim_tx_set_send_limit(struct bt_bap_stream *bap_stream, uint32_t limit);
+
 /** Successful send count for one stream. */
 uint32_t bsim_tx_send_count(struct bt_bap_stream *bap_stream);
 

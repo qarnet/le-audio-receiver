@@ -519,8 +519,13 @@ static int start_streams(size_t stream_cnt, bool reverse, size_t base)
 		int err = bt_bap_stream_start(&streams[i]);
 
 		/* -EINVAL: server already started (sink direction);
-		 * -EALREADY: already started. */
-		if (err == -EALREADY || err == -EINVAL) {
+		 * -EALREADY: already started.
+		 * -EBADMSG: the server auto-streams sink ASEs as soon as the
+		 * CIS connects (receiver_ready path), so the local ep state is
+		 * already STREAMING before the client Start op is sent. */
+		if (err == -EALREADY || err == -EINVAL || err == -EBADMSG) {
+			printk("CLI stream %zu already streaming (start %d)
+", i, err);
 			continue;
 		}
 		if (err != 0) {
@@ -683,6 +688,9 @@ static int scenario_normal(const char *scenario, struct bt_bap_lc3_preset **pres
 		if (err != 0) {
 			return err;
 		}
+		/* Exact send caps: the TX self-pauses at the limit so the
+		 * receiver sees exactly sends_per_stream SDUs. */
+		bsim_tx_set_send_limit(&streams[i], sends_per_stream);
 	}
 
 	err = stream_up(presets, stream_cnt, reverse);
@@ -696,6 +704,8 @@ static int scenario_normal(const char *scenario, struct bt_bap_lc3_preset **pres
 			return err;
 		}
 	}
+	/* Let the in-flight SDUs drain to the receiver. */
+	k_sleep(K_MSEC(TEARDOWN_MARGIN_MS));
 
 	client_pass(scenario);
 	return 0;
@@ -725,6 +735,7 @@ static int scenario_invalid_sdu_resume(void)
 	if (err != 0) {
 		return err;
 	}
+	bsim_tx_set_send_limit(&streams[0], 101);
 	/* Inject exactly one 1-byte SDU when the next send would use seq 20. */
 	bsim_tx_schedule_malformed(&streams[0], 20);
 
@@ -738,6 +749,7 @@ static int scenario_invalid_sdu_resume(void)
 	if (err != 0) {
 		return err;
 	}
+	k_sleep(K_MSEC(TEARDOWN_MARGIN_MS));
 
 	client_pass("invalid_sdu_resume_10ms");
 	return 0;
@@ -776,6 +788,10 @@ static int scenario_modea_first_stop(void)
 			return err;
 		}
 	}
+	/* Stream 0 caps at 25 sends; stream 1 keeps sending 20 more SDUs
+	 * after stream 0 is disabled (45 total). */
+	bsim_tx_set_send_limit(&streams[0], 25);
+	bsim_tx_set_send_limit(&streams[1], 45);
 
 	err = stream_up(presets, 2, false);
 	if (err != 0) {
@@ -808,10 +824,8 @@ static int scenario_modea_first_stop(void)
 	}
 	printk("CLI stream 0 disabled\n");
 
-	/* Second stream keeps sending at least 20 more SDUs. */
-	uint32_t base = bsim_tx_send_count(&streams[1]);
-
-	err = wait_for_sends(1, base + 20);
+	/* Second stream keeps sending at least 20 more SDUs (45 total). */
+	err = wait_for_sends(1, 45);
 	if (err != 0) {
 		return err;
 	}
@@ -986,6 +1000,7 @@ static int scenario_reconnect_second_stream(void)
 	if (err != 0) {
 		return err;
 	}
+	bsim_tx_set_send_limit(&streams[0], 25);
 
 	err = stream_up(presets, 1, false);
 	if (err != 0) {
@@ -1022,6 +1037,7 @@ static int scenario_reconnect_second_stream(void)
 	if (err != 0) {
 		return err;
 	}
+	bsim_tx_set_send_limit(&streams[1], 100);
 
 	err = config_expect(&streams[1], sink_eps[0], &presets[0]->codec_cfg,
 			    BT_BAP_ASCS_RSP_CODE_SUCCESS, BT_BAP_ASCS_REASON_NONE);
@@ -1300,6 +1316,8 @@ static int scenario_invalid_codec_fields(void)
 		cfg.id = BT_HCI_CODING_FORMAT_LC3;
 		cfg.cid = 0x0000;
 		cfg.vid = 0x0000;
+		cfg.target_latency = BT_AUDIO_CODEC_CFG_TARGET_LATENCY_BALANCED;
+		cfg.target_phy = BT_AUDIO_CODEC_CFG_TARGET_PHY_2M;
 		cfg.data_len = v[i].data_len;
 		memcpy(cfg.data, v[i].data, v[i].data_len);
 
@@ -1342,6 +1360,8 @@ static int scenario_invalid_codec_fields(void)
 	cfg_nofb.id = BT_HCI_CODING_FORMAT_LC3;
 	cfg_nofb.cid = 0x0000;
 	cfg_nofb.vid = 0x0000;
+	cfg_nofb.target_latency = BT_AUDIO_CODEC_CFG_TARGET_LATENCY_BALANCED;
+	cfg_nofb.target_phy = BT_AUDIO_CODEC_CFG_TARGET_PHY_2M;
 	cfg_nofb.data_len = scn15_base_len;
 	memcpy(cfg_nofb.data, scn15_base, scn15_base_len);
 

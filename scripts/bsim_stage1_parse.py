@@ -134,6 +134,21 @@ FAULT_MARKERS = [
     "stream_lifecycle",
 ]
 
+# Intentionally exercised bt_bap warnings per scenario.
+BT_BAP_ALLOWED_WRN_BY_SCENARIO = {
+    "modea_first_stop_10ms": ["gate closed, skipping decode"],
+    "release_without_disable_10ms": ["gate closed, skipping decode"],
+    "disconnect_streaming_10ms": ["gate closed, skipping decode"],
+    "no_free_sink_slot": ["No free sink slot"],
+    "invalid_codec_fields": ["Codec config", "Codec config rejected"],
+    "unsupported_source_direction": ["Source direction unsupported"],
+}
+
+# Zephyr ASCS emits a cosmetic "Invalid application error code" warning
+# when the application returns CONF_INVALID (not in its allowed app-rsp
+# list) — the wire response is still exactly what the app chose.
+ASCS_RSP_WRN_SCENARIOS = {"invalid_codec_fields"}
+
 ALLOWED_FAULTS = {
     # Intentional paths exercised by the lifecycle scenarios.
     "modea_first_stop_10ms": ["gate closed, skipping decode"],
@@ -145,6 +160,7 @@ ALLOWED_FAULTS = {
 
 def scan_faults(receiver_path, scenario):
     allowed = ALLOWED_FAULTS.get(scenario, [])
+    wrn_allowed = BT_BAP_ALLOWED_WRN_BY_SCENARIO.get(scenario, [])
     hits = []
     try:
         with open(receiver_path, "r", errors="replace") as fh:
@@ -152,9 +168,20 @@ def scan_faults(receiver_path, scenario):
                 for marker in FAULT_MARKERS:
                     if marker in line:
                         if any(a in line for a in allowed):
-                            continue
+                            break
                         hits.append(line.strip())
                         break
+                else:
+                    # bt_bap module warnings: reject any warning that is
+                    # not allowlisted for this scenario.
+                    if "<wrn> bt_bap:" in line:
+                        if any(a in line for a in wrn_allowed):
+                            continue
+                        hits.append(line.strip())
+                    elif "<wrn> bt_ascs: Invalid application error code" in line:
+                        if scenario in ASCS_RSP_WRN_SCENARIOS:
+                            continue
+                        hits.append(line.strip())
     except OSError as exc:
         raise ParseError("cannot read %s: %s" % (receiver_path, exc))
     if hits:
@@ -360,8 +387,8 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("obs_rej %d != 1" % r.get("obs_rej"))
         if r.get("obs_ok") != 0:
             errs.append("obs_ok %d != 0" % r.get("obs_ok"))
-        if r.get("obs_dir") != 1:
-            errs.append("obs_dir %d != SOURCE(1)" % r.get("obs_dir"))
+        if r.get("obs_dir") != 2:
+            errs.append("obs_dir %d != SOURCE(2)" % r.get("obs_dir"))
         if r.get("obs_code") != 0x07:
             errs.append("obs_code 0x%02X != CONF_UNSUPPORTED" % r.get("obs_code"))
         if r.get("obs_reason") != 0:
