@@ -34,6 +34,7 @@
 struct k_work *audio_timing_test_take_captured_work(void);
 bool audio_timing_test_is_active(void);
 uint32_t audio_timing_test_generation(void);
+bool audio_timing_test_overflow_fault(void);
 void audio_timing_test_state_reset(void);
 
 /* Work synchronization object must be cache-coherent and static. */
@@ -454,4 +455,140 @@ ZTEST(timing_nrf54, test_every_measurement_reaches_drift_despite_log_pacing)
 		zassert_equal(mock_drift_ppm_count(), i, "delivery %d", i);
 		zassert_equal(mock_drift_ppm_at(i - 1), 1, "exact ppm for cycle %d", i);
 	}
+}
+
+/* ── 14. Backlog: one work invocation drains the FIFO in order ───── */
+
+ZTEST(timing_nrf54, test_backlog_fifo_preserves_order)
+{
+	init_ok();
+	mock_grtc_now = 1000000ULL;
+	audio_timing_sdu_ref_update(2000000, 0); /* first_cmp = 3 s */
+
+	/* Baseline compare. */
+	mock_grtc_now = 3000000ULL;
+	mock_timer_cc_value = 16000000;
+	fire_cc(3000000ULL);
+
+	/* Ten measurement callbacks with NO work dispatch between them:
+	 * Zephyr may coalesce submissions while the work item is
+	 * pending, so every payload must queue and be delivered from
+	 * one work invocation, in FIFO order.  Payload i carries i ppm
+	 * so order is provable. */
+	uint32_t cap = 16000000U;
+
+	for (int i = 1; i <= 10; i++) {
+		cap += 16000000U + (uint32_t)i * 16U; /* delta → i ppm */
+		mock_grtc_now = 3000000ULL + (uint64_t)i * 1000000ULL;
+		mock_timer_cc_value = cap;
+		fire_cc(mock_grtc_now);
+	}
+	zassert_equal(mock_drift_ppm_count(), 0, "nothing delivered before dispatch");
+
+	run_captured_work();
+
+	zassert_equal(mock_drift_ppm_count(), 10, "all ten payloads delivered");
+	for (int i = 0; i < 10; i++) {
+		zassert_equal(mock_drift_ppm_at(i), i + 1, "payload %d in FIFO order", i);
+	}
+	zassert_true(audio_timing_test_is_active(), "session still active after drain");
+}
+
+/* ── 15. Stale and fresh payloads mix in one FIFO ────────────────── */
+
+ZTEST(timing_nrf54, test_stale_then_fresh_mixed_generations_deliver)
+{
+	init_ok();
+	mock_grtc_now = 1000000ULL;
+	audio_timing_sdu_ref_update(2000000, 0); /* first_cmp = 3 s */
+
+	mock_grtc_now = 3000000ULL;
+	mock_timer_cc_value = 16000000;
+	fire_cc(3000000ULL); /* baseline (gen 0) */
+
+	/* Queue three gen-0 measurements without dispatch. */
+	for (int i = 1; i <= 3; i++) {
+		mock_grtc_now = 3000000ULL + (uint64_t)i * 1000000ULL;
+		mock_timer_cc_value = 16000000U + (uint32_t)i * 16000016U;
+		fire_cc(mock_grtc_now);
+	}
+	zassert_equal(mock_drift_ppm_count(), 0, "queued but not delivered");
+
+	/* Reset does NOT rewrite queued payloads; generation bumps. */
+	audio_timing_reset();
+	zassert_equal(audio_timing_test_generation(), 1, "generation bumped");
+
+	/* New session queues a fresh gen-1 measurement. */
+	mock_grtc_now = 1000000ULL;
+	audio_timing_sdu_ref_update(2000000, 0);
+	mock_grtc_now = 3000000ULL;
+	mock_timer_cc_value = 16000000;
+	fire_cc(3000000ULL); /* new-session baseline */
+
+	mock_grtc_now = 4000000ULL;
+	mock_timer_cc_value = 32000016; /* +16,000,016 ticks → 1 ppm */
+	fire_cc(4000000ULL);
+
+	/* One dispatch: stale gen-0 payloads rejected independently,
+	 * fresh gen-1 payload delivered. */
+	run_captured_work();
+
+	zassert_equal(mock_drift_ppm_count(), 1, "only the fresh payload delivers");
+	zassert_equal(mock_drift_ppm_at(0), 1, "fresh payload value");
+}
+
+/* ── 16. FIFO overflow: explicit fault, accepted payloads drained ── */
+
+ZTEST(timing_nrf54, test_fifo_overflow_fault_drains_accepted_stops)
+{
+	init_ok();
+	mock_grtc_now = 1000000ULL;
+	audio_timing_sdu_ref_update(2000000, 0); /* first_cmp = 3 s */
+
+	mock_grtc_now = 3000000ULL;
+	mock_timer_cc_value = 16000000;
+	fire_cc(3000000ULL); /* baseline */
+
+	/* Fill all 16 FIFO entries with distinguishable ppm values
+	 * (payload i = i ppm), no dispatch. */
+	uint32_t cap = 16000000U;
+
+	for (int i = 1; i <= 16; i++) {
+		cap += 16000000U + (uint32_t)i * 16U; /* delta → i ppm */
+		mock_grtc_now = 3000000ULL + (uint64_t)i * 1000000ULL;
+		mock_timer_cc_value = cap;
+		fire_cc(mock_grtc_now);
+	}
+	zassert_true(audio_timing_test_is_active(), "active with full FIFO");
+
+	/* One more producer call overflows: active clears and the
+	 * overflow fault is observable. */
+	cap += 16000000U + 17U * 16U;
+	mock_grtc_now = 3000000ULL + 17ULL * 1000000ULL;
+	mock_timer_cc_value = cap;
+	fire_cc(mock_grtc_now);
+
+	zassert_false(audio_timing_test_is_active(), "active cleared on overflow");
+	zassert_true(audio_timing_test_overflow_fault(), "overflow fault observable");
+
+	/* One dispatch drains the 16 accepted payloads in FIFO order and
+	 * consumes the overflow report. */
+	run_captured_work();
+
+	zassert_equal(mock_drift_ppm_count(), 16, "all accepted payloads delivered");
+	for (int i = 0; i < 16; i++) {
+		zassert_equal(mock_drift_ppm_at(i), i + 1, "accepted payload %d in order", i);
+	}
+	zassert_false(audio_timing_test_overflow_fault(), "overflow report consumed");
+
+	/* Later callbacks while inactive do nothing. */
+	int count_after = mock_drift_ppm_count();
+	int abs_after = mock_grtc_cc_abs_calls;
+
+	mock_grtc_now = 3000000ULL + 18ULL * 1000000ULL;
+	mock_timer_cc_value = cap + 16000000U + 18U * 16U;
+	fire_cc(mock_grtc_now);
+
+	zassert_equal(mock_drift_ppm_count(), count_after, "no delivery while inactive");
+	zassert_equal(mock_grtc_cc_abs_calls, abs_after, "no reschedule while inactive");
 }

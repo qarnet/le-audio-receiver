@@ -99,10 +99,17 @@ static atomic_t generation;
 /* Work item for deferred logging (ISR must not log) */
 static struct k_work diag_work;
 
-/* Saved diagnostics for the work handler.
- * Published under diag_lock; consumed by work handler under the
- * same lock to prevent races with ISR and reset.
+/* Deferred diagnostics FIFO.
+ * Produced by the GRTC ISR (append) and consumed by the work handler
+ * (pop) under diag_lock.  A single work submission may represent many
+ * queued payloads: Zephyr may coalesce k_work_submit() calls while the
+ * work item is pending/running, so a shared single mailbox could
+ * silently lose one-second feedforward measurements when the system
+ * workqueue is delayed.  The FIFO guarantees that every non-stale
+ * measurement reaches the drift feedforward path.
  */
+#define DIAG_FIFO_CAPACITY 16
+
 struct diag_payload {
 	uint32_t tick_delta; /* TIMER capture delta (PCLK ticks) */
 	uint32_t elapsed_us; /* GRTC elapsed microseconds */
@@ -113,8 +120,56 @@ struct diag_payload {
 	int schedule_err;    /* error code when is_error */
 };
 
-static struct diag_payload pending_diag;
+static struct diag_payload diag_fifo[DIAG_FIFO_CAPACITY];
+static uint8_t diag_fifo_head; /* next payload to pop */
+static uint8_t diag_fifo_len;  /* queued payloads */
+
+/* Overflow fault: set by the ISR producer when the FIFO is full.
+ * Measurement stops (active cleared) and the work handler reports one
+ * LOG_ERR and clears this flag.  Timing evidence is never silently
+ * dropped — overflow is an explicit, observable fault transition.
+ */
+static atomic_t overflow_fault;
+
 static struct k_spinlock diag_lock;
+
+/* Append a payload in FIFO order.  Caller holds diag_lock.
+ * @return false when the FIFO is full (payload not stored).
+ */
+static bool diag_fifo_push(const struct diag_payload *diag)
+{
+	if (diag_fifo_len >= DIAG_FIFO_CAPACITY) {
+		return false;
+	}
+
+	uint8_t tail = (uint8_t)((diag_fifo_head + diag_fifo_len) % DIAG_FIFO_CAPACITY);
+
+	diag_fifo[tail] = *diag;
+	diag_fifo_len++;
+	return true;
+}
+
+/* Publish a payload from ISR context: append under diag_lock, then
+ * submit the deferred work.  On a full FIFO the producer sets the
+ * overflow fault, stops measurement, and still submits work so the
+ * fault is reported; the dropped payload belongs to that explicit
+ * fault transition, not to normal feedforward loss.  ISR critical
+ * section stays bounded (one small copy, no logging).
+ */
+static void audio_timing_submit_diag_work(void); /* defined with the work item below */
+
+static void diag_publish(const struct diag_payload *diag)
+{
+	k_spinlock_key_t key = k_spin_lock(&diag_lock);
+
+	if (!diag_fifo_push(diag)) {
+		atomic_set(&overflow_fault, 1);
+		atomic_set(&active, false);
+	}
+
+	k_spin_unlock(&diag_lock, key);
+	audio_timing_submit_diag_work();
+}
 
 /* ── Work handler (deferred from ISR) ─────────────────────────────── */
 
@@ -122,59 +177,78 @@ static void diag_work_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
 
-	/* Snapshot the payload under lock so ISR/reset cannot
-	 * mutate it while we inspect it.  Only the snapshot is
-	 * validated against the current session generation.
+	/* Drain every queued payload in FIFO order in this one
+	 * invocation.  Coalesced submissions must not lose payloads;
+	 * the loop terminates because producers stop enqueueing once
+	 * the FIFO is full (overflow fault) or the session ends.
 	 */
-	struct diag_payload diag;
-	k_spinlock_key_t key = k_spin_lock(&diag_lock);
+	for (;;) {
+		struct diag_payload diag;
 
-	diag = pending_diag;
-	k_spin_unlock(&diag_lock, key);
+		k_spinlock_key_t key = k_spin_lock(&diag_lock);
 
-	/* Reject stale payload from a previous session */
-	if (diag.gen != atomic_get(&generation)) {
-		return;
+		if (diag_fifo_len == 0) {
+			k_spin_unlock(&diag_lock, key);
+			break;
+		}
+
+		diag = diag_fifo[diag_fifo_head];
+		diag_fifo_head = (uint8_t)((diag_fifo_head + 1) % DIAG_FIFO_CAPACITY);
+		diag_fifo_len--;
+		k_spin_unlock(&diag_lock, key);
+
+		/* Reject stale payload from a previous session */
+		if (diag.gen != atomic_get(&generation)) {
+			continue;
+		}
+
+		/* Error payload: schedule failure deferred from ISR */
+		if (diag.is_error) {
+			LOG_ERR("GRTC compare schedule failed: %d (seq %" PRIu32 ")",
+				diag.schedule_err, diag.seq);
+			continue;
+		}
+
+		/* Not an error but no measurement data (initial skip) */
+		if (diag.elapsed_us == 0) {
+			continue;
+		}
+
+		/* Generation is the authoritative staleness guard: reset
+		 * bumps it, and queued payloads are never rewritten.  An
+		 * inactive flag alone (schedule failure, FIFO overflow)
+		 * must not discard already-accepted measurements — the
+		 * overflow contract explicitly drains accepted entries
+		 * in order.  Later callbacks are stopped at the ISR
+		 * entry, not here.
+		 */
+		/* Nominal ticks expected in this interval at the timer's base
+		 * frequency: timer_nominal_hz * elapsed_us / 1,000,000.
+		 */
+		uint64_t nominal64 = ((uint64_t)diag.nominal_hz * diag.elapsed_us) / 1000000ULL;
+		uint32_t nominal = (nominal64 > UINT32_MAX) ? UINT32_MAX : (uint32_t)nominal64;
+
+		int32_t ppm = audio_timing_compute_ppm(diag.tick_delta, nominal);
+
+		/* Phase 4b.2: every measurement feeds the PCLK frequency
+		 * error into the drift controller's feedforward path.
+		 * Positive ppm → local PCLK/I2S faster than controller.
+		 */
+		audio_drift_frequency_error_update(ppm);
+
+		/* Bounded diagnostic logging: sequence 1 and every DIAG_PERIOD_S. */
+		if (diag.seq == DIAG_FIRST_SEQ || (diag.seq % DIAG_PERIOD_S) == 0) {
+			LOG_INF("PCLK timer diag[%" PRIu32 "]: %" PRIu32 " ticks in %" PRIu32
+				" us (nom %" PRIu32 " @ %" PRIu32 " Hz) → %" PRId32 " ppm",
+				diag.seq, diag.tick_delta, diag.elapsed_us, nominal,
+				diag.nominal_hz, ppm);
+		}
 	}
 
-	/* Error payload: schedule failure deferred from ISR */
-	if (diag.is_error) {
-		LOG_ERR("GRTC compare schedule failed: %d (seq %" PRIu32 ")", diag.schedule_err,
-			diag.seq);
-		return;
-	}
-
-	/* Not an error but no measurement data (initial skip, or
-	 * cleared by reset / overwritten).
-	 */
-	if (diag.elapsed_us == 0) {
-		return;
-	}
-
-	/* Measurement is no longer active — discard */
-	if (!atomic_get(&active)) {
-		return;
-	}
-
-	/* Nominal ticks expected in this interval at the timer's base
-	 * frequency: timer_nominal_hz * elapsed_us / 1,000,000.
-	 */
-	uint64_t nominal64 = ((uint64_t)diag.nominal_hz * diag.elapsed_us) / 1000000ULL;
-	uint32_t nominal = (nominal64 > UINT32_MAX) ? UINT32_MAX : (uint32_t)nominal64;
-
-	int32_t ppm = audio_timing_compute_ppm(diag.tick_delta, nominal);
-
-	/* Phase 4b.2: every measurement feeds the PCLK frequency
-	 * error into the drift controller's feedforward path.
-	 * Positive ppm → local PCLK/I2S faster than controller.
-	 */
-	audio_drift_frequency_error_update(ppm);
-
-	/* Bounded diagnostic logging: sequence 1 and every DIAG_PERIOD_S. */
-	if (diag.seq == DIAG_FIRST_SEQ || (diag.seq % DIAG_PERIOD_S) == 0) {
-		LOG_INF("PCLK timer diag[%" PRIu32 "]: %" PRIu32 " ticks in %" PRIu32
-			" us (nom %" PRIu32 " @ %" PRIu32 " Hz) → %" PRId32 " ppm",
-			diag.seq, diag.tick_delta, diag.elapsed_us, nominal, diag.nominal_hz, ppm);
+	/* Overflow report: one LOG_ERR per fault, cleared after report. */
+	if (atomic_get(&overflow_fault)) {
+		atomic_set(&overflow_fault, 0);
+		LOG_ERR("GRTC diag FIFO overflow: measurement stopped until session reset");
 	}
 }
 
@@ -186,7 +260,9 @@ static void diag_work_handler(struct k_work *work)
  *  - audio_timing_test_state_reset() clears file-static module state
  *    between tests without pretending to release hardware;
  *  - audio_timing_test_is_active()/audio_timing_test_generation()
- *    read the minimal state the mocks cannot observe.
+ *    read the minimal state the mocks cannot observe;
+ *  - audio_timing_test_overflow_fault() reads the overflow fault flag
+ *    (the mocks cannot observe the LOG_ERR that consumes it).
  * None of these enter production firmware builds.
  */
 static struct k_work *test_captured_work;
@@ -214,6 +290,11 @@ uint32_t audio_timing_test_generation(void)
 	return atomic_get(&generation);
 }
 
+bool audio_timing_test_overflow_fault(void)
+{
+	return atomic_get(&overflow_fault) != 0;
+}
+
 void audio_timing_test_state_reset(void)
 {
 	memset(&ts, 0, sizeof(ts));
@@ -222,7 +303,9 @@ void audio_timing_test_state_reset(void)
 	timer_nominal_hz = 0;
 	atomic_set(&active, 0);
 	atomic_set(&generation, 0);
-	memset(&pending_diag, 0, sizeof(pending_diag));
+	atomic_set(&overflow_fault, 0);
+	diag_fifo_head = 0;
+	diag_fifo_len = 0;
 	test_captured_work = NULL;
 }
 #else
@@ -268,19 +351,19 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 	int ret = nrfx_grtc_syscounter_cc_absolute_set(&chan_data, next_cmp, true);
 	if (ret < 0) {
 		/* Schedule failure: stop active measurement and
-		 * defer a single error log via the work handler.
+		 * defer an error payload via the work handler.
 		 * Do NOT log from ISR context.
 		 */
 		atomic_set(&active, false);
 
-		k_spinlock_key_t key = k_spin_lock(&diag_lock);
-		pending_diag.is_error = true;
-		pending_diag.schedule_err = ret;
-		pending_diag.seq = ts.diag_seq;
-		pending_diag.gen = atomic_get(&generation);
-		k_spin_unlock(&diag_lock, key);
+		struct diag_payload diag = {
+			.is_error = true,
+			.schedule_err = ret,
+			.seq = ts.diag_seq,
+			.gen = atomic_get(&generation),
+		};
 
-		audio_timing_submit_diag_work();
+		diag_publish(&diag);
 		return;
 	}
 
@@ -299,16 +382,16 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 		 * frequency-error feedforward path.  Diagnostic
 		 * logging is gated in the work handler.
 		 */
-		k_spinlock_key_t key = k_spin_lock(&diag_lock);
-		pending_diag.is_error = false;
-		pending_diag.tick_delta = tick_delta;
-		pending_diag.elapsed_us = elapsed_us;
-		pending_diag.nominal_hz = timer_nominal_hz;
-		pending_diag.seq = ts.diag_seq;
-		pending_diag.gen = atomic_get(&generation);
-		k_spin_unlock(&diag_lock, key);
+		struct diag_payload diag = {
+			.is_error = false,
+			.tick_delta = tick_delta,
+			.elapsed_us = elapsed_us,
+			.nominal_hz = timer_nominal_hz,
+			.seq = ts.diag_seq,
+			.gen = atomic_get(&generation),
+		};
 
-		audio_timing_submit_diag_work();
+		diag_publish(&diag);
 	}
 
 	/* Update state for next interval */
@@ -454,16 +537,16 @@ void audio_timing_reset(void)
 		return;
 	}
 
-	/* Invalidate payload, mark inactive, and bump generation
-	 * under the spinlock so any concurrent ISR sees a consistent
-	 * state and any already-queued work payload is rejected.
+	/* Mark inactive and bump the generation under the spinlock so
+	 * any concurrent ISR sees a consistent state.  Already-queued
+	 * payloads are NOT rewritten: deferred work rejects them as
+	 * stale by generation, and new-session payloads may follow old
+	 * payloads in the FIFO and still deliver.
 	 */
 	k_spinlock_key_t key = k_spin_lock(&diag_lock);
 
 	atomic_set(&active, false);
 	atomic_inc(&generation);
-	pending_diag.is_error = false;
-	pending_diag.elapsed_us = 0;
 	ts.diag_seq = 0;
 
 	k_spin_unlock(&diag_lock, key);
