@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
-# BabbleSim Stage 1 — receiver + custom valid-LC3 client (10 ms + 7.5 ms)
+# BabbleSim Stage 1 — T4 BAP scenario matrix (canonical gate entry).
 #
-# Compiles repo receiver (sink stub) and custom 48_4_1 client (10 ms),
-# then runs dual-core simulations with real per-process log capture.
-# Both 10 ms (48_4_1) and 7.5 ms (48_3_1) frame durations tested,
-# each run twice.  Pairwise hash equality and known accepted values
-# enforced:
-#   - 10 ms: 0x9225F075
-#   - 7.5 ms: 0x2011C0F9
+# Compiles the repo receiver and the repo parameterized client once per
+# gate, then runs the 15-scenario BAP matrix:
+#   scenarios 1–7 (normal mono / Mode A / Mode B, 10 ms + 7.5 ms, plus
+#   reverse start) run twice, scenarios 8–15 (malformed SDU, lifecycle,
+#   reconnect, source rejection, NO_MEM, invalid codec fields) run once.
 #
-# The accepted hashes changed in T2: the mono in-place expansion fix
-# (backward, overlap-safe) removed the old forward-loop corruption that
-# collapsed every 960-sample push to the frame's first sample (constant
-# energy 12480).  The hashes above are the corrected mono-decode PCM
-# (10 ms startup_zero=7, 7.5 ms startup_zero=10).
+# Every run is checked by scripts/bsim_stage1_parse.py, which parses
+# every named field of the receiver/client PASS records and asserts the
+# scenario contract (exact counts, responses, hashes, channel-hash
+# relations, no fault markers).  Known full/L/R hashes are pinned below;
+# they were baselined from two identical workstation runs of the
+# deterministic multi-channel TX pattern (see docs/testing/t4-bap-bsim-matrix.md).
 #
-# All processes must exit 0 AND logs must contain expected PASS
-# markers with correct counters and deterministic hashes.
+# A flock around the shared ${ZEPHYR_BASE}/bsim_out tree stops concurrent
+# gates from corrupting shared generated build files.  Logs go to one
+# private mktemp root: removed on success, preserved (with a printed
+# path) on failure or when BSIM_KEEP_LOGS=1.
 #
 # Usage: bash scripts/bsim-stage1-run.sh
+#        BSIM_BASELINE=1 bash scripts/bsim-stage1-run.sh   (print hashes, skip known asserts)
+#        BSIM_KEEP_LOGS=1 bash scripts/bsim-stage1-run.sh  (preserve logs on success)
 #
 # Prerequisites:
 #   - ZEPHYR_BASE exported
@@ -36,27 +39,84 @@ source "${SCRIPT_DIR}/bsim-env.sh"
 
 BOARD_TS="${BOARD//\//_}"
 
-# Known accepted hash values for each frame-duration scenario.
-KNOWN_HASH_10MS="0x9225F075"
-KNOWN_HASH_7MS="0x2011C0F9"
+# ── Pinned known hashes (full / left / right) ────────────────────────
+# Baselined 2026-08-01 from two identical workstation runs of the
+# deterministic multi-channel TX pattern.  0x00000000 = not yet pinned.
+declare -A KNOWN_FULL=(
+    [mono_10ms]=0x00000000
+    [mono_7p5ms]=0x00000000
+    [modea_10ms]=0x00000000
+    [modea_7p5ms]=0x00000000
+    [modea_reverse_start_10ms]=0x00000000
+    [modeb_10ms]=0x00000000
+    [modeb_7p5ms]=0x00000000
+    [invalid_sdu_resume_10ms]=0x00000000
+)
+declare -A KNOWN_L=(
+    [mono_10ms]=0x00000000
+    [mono_7p5ms]=0x00000000
+    [modea_10ms]=0x00000000
+    [modea_7p5ms]=0x00000000
+    [modea_reverse_start_10ms]=0x00000000
+    [modeb_10ms]=0x00000000
+    [modeb_7p5ms]=0x00000000
+)
+declare -A KNOWN_R=(
+    [mono_10ms]=0x00000000
+    [mono_7p5ms]=0x00000000
+    [modea_10ms]=0x00000000
+    [modea_7p5ms]=0x00000000
+    [modea_reverse_start_10ms]=0x00000000
+    [modeb_10ms]=0x00000000
+    [modeb_7p5ms]=0x00000000
+)
+
+# Scenario matrix: name runs
+MATRIX=(
+    "mono_10ms 2"
+    "mono_7p5ms 2"
+    "modea_10ms 2"
+    "modea_7p5ms 2"
+    "modea_reverse_start_10ms 2"
+    "modeb_10ms 2"
+    "modeb_7p5ms 2"
+    "invalid_sdu_resume_10ms 2"
+    "modea_first_stop_10ms 1"
+    "release_without_disable_10ms 1"
+    "disconnect_streaming_10ms 1"
+    "reconnect_second_stream_10ms 1"
+    "unsupported_source_direction 1"
+    "no_free_sink_slot 1"
+    "invalid_codec_fields 1"
+)
+
+BASELINE="${BSIM_BASELINE:-0}"
+KEEP_LOGS="${BSIM_KEEP_LOGS:-0}"
 
 # --- Toolchain ---
 if ! command -v nrfutil &>/dev/null; then
     echo "ERROR: nrfutil not in PATH — source NCS toolchain environment first" >&2
     exit 1
 fi
-# Work around set -u: nrfutil env exports appending to $LD_LIBRARY_PATH,
-# which is unset under Nix (uses rpath instead).
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 eval "$(nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh)" || {
     echo "ERROR: Failed to source NCS toolchain environment" >&2
     exit 1
 }
 
+# --- Lock the shared bsim_out tree ---
+BSIM_LOCK="${ZEPHYR_BASE}/bsim_out/.bsim_stage1.lock"
+mkdir -p "$(dirname "$BSIM_LOCK")"
+exec 9>"$BSIM_LOCK"
+if ! flock -w 3600 9; then
+    echo "ERROR: another gate holds ${BSIM_LOCK} — bsim_out is in use" >&2
+    exit 2
+fi
+echo "bsim_out lock acquired"
+
 # --- Compile options ---
 # Disable -Werror to survive glibc _FORTIFY_SOURCE false positive at -O0
 export cmake_args="-DCONFIG_COVERAGE=y -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCONFIG_ASSERT=y -DCONFIG_COMPILER_WARNINGS_AS_ERRORS=n"
-export ORIG_CMAKE_ARGS="$cmake_args"
 export WORK_DIR="${ZEPHYR_BASE}/bsim_out"
 sysbuild=1
 
@@ -86,7 +146,7 @@ echo ""
 echo "=== Compile client (tests/bsim/client) ==="
 app="tests/bsim/client"
 BOARD_ROOT="${REPO_ROOT}"
-exe_name="bs_${BOARD_TS}_valid_lc3_client_bsim_prj_conf"
+exe_name="bs_${BOARD_TS}_bsim_client_bsim_prj_conf"
 export app BOARD_ROOT exe_name
 compile
 wait_for_background_jobs
@@ -98,294 +158,195 @@ if [ ! -x "$CLIENT_BIN" ]; then
 fi
 echo "Client: $CLIENT_BIN"
 
-# ---- Run one simulation with given client binary and label ----
-# Sets global BSIM_LAST_HASH to the extracted receiver hash (uppercase hex,
-# including 0x prefix) on success.  On failure, BSIM_LAST_HASH is empty
-# and function returns non-zero.
-#
-# Usage: run_sim <label> <client_bin> <client_testid>
-run_sim() {
-    local _label="$1"
-    local _client_bin="$2"
-    local _client_testid="$3"
+# ---- Private log root ----
+LOGROOT="$(mktemp -d "${TMPDIR:-/tmp}/bsim_t4_XXXXXX")"
+OVERALL_FAIL=0
 
-    BSIM_LAST_HASH=""
+cleanup() {
+    if [ "$OVERALL_FAIL" -eq 0 ] && [ "$KEEP_LOGS" != "1" ]; then
+        rm -rf "$LOGROOT"
+    else
+        echo ""
+        echo "Logs preserved at: $LOGROOT"
+        echo "  (set BSIM_KEEP_LOGS=1 to keep logs on success too)"
+    fi
+}
+trap cleanup EXIT
+
+# ---- Run one simulation with strict per-scenario parsing ----
+# Sets global LAST_H, LAST_LH, LAST_RH (uppercase hex incl. 0x) and
+# LAST_PUSHES on success.  Returns non-zero on any failure.
+run_one() {
+    local _scn="$1"
+    local _run="$2"
+    local _dir="$LOGROOT/${_scn}-run${_run}"
+
+    LAST_H=""; LAST_LH=""; LAST_RH=""; LAST_PUSHES=""
+    mkdir -p "$_dir"
 
     source "${ZEPHYR_BASE}/tests/bsim/sh_common.source"
 
-    local _sid="bsim_stage1_${_label}_$$"
-    local _RLOG="/tmp/bsim_stage1_${_label}_receiver_$$.log"
-    local _CLOG="/tmp/bsim_stage1_${_label}_client_$$.log"
-    local _PLOG="/tmp/bsim_stage1_${_label}_phy_$$.log"
-
+    local _sid="bsim_t4_${_scn}_${_run}_$$"
     echo ""
-    echo "=== Run ${_label} simulation $_sid ==="
-    echo "Receiver: $RECV_BIN  →  $_RLOG"
-    echo "Client:   $_client_bin  →  $_CLOG"
-    echo "PHY log:  $_PLOG"
+    echo "=== Run ${_scn} (${_run}) — $_sid ==="
 
     cd "${BSIM_OUT_PATH}/bin"
 
-    # Device 0: repo receiver (peripheral sink)
     Execute "${RECV_BIN}" \
         -v=2 -s="$_sid" -d=0 \
-        -testid=le_audio_receiver \
+        -testid="$_scn" \
         -RealEncryption=1 -rs=23 \
-        >"$_RLOG" 2>&1
+        >"$_dir/receiver.log" 2>&1
 
-    # Device 1: client (central source)
-    Execute "$_client_bin" \
+    Execute "$CLIENT_BIN" \
         -v=2 -s="$_sid" -d=1 \
-        -testid="$_client_testid" \
+        -testid="$_scn" \
         -RealEncryption=1 -rs=28 \
-        >"$_CLOG" 2>&1
+        >"$_dir/client.log" 2>&1
 
-    # PHY — sim_length=40e6 (~40 s simulated)
     Execute ./bs_2G4_phy_v1 \
         -v=2 -s="$_sid" \
-        -D=2 -sim_length=40e6 \
-        >"$_PLOG" 2>&1
+        -D=2 -sim_length=80e6 \
+        >"$_dir/phy.log" 2>&1
 
-    echo "Waiting for background processes..."
-
-    local _recv_rc=0 _client_rc=0 _phy_rc=0 _any_nonzero=0
-    local _pid_idx=0
+    local _any_nonzero=0 _pid_idx=0
     for _pid in $_process_ids; do
         local _single_rc=0
         wait $_pid || _single_rc=$?
         _pid_idx=$((_pid_idx + 1))
-        case $_pid_idx in
-            1) _recv_rc=$_single_rc; echo "RECEIVER (pid $_pid) exit $_recv_rc" ;;
-            2) _client_rc=$_single_rc; echo "CLIENT   (pid $_pid) exit $_client_rc" ;;
-            3) _phy_rc=$_single_rc; echo "PHY      (pid $_pid) exit $_phy_rc" ;;
-        esac
         [ "$_single_rc" -ne 0 ] && _any_nonzero=$_single_rc
+        case $_pid_idx in
+            1) echo "  RECEIVER (pid $_pid) exit $_single_rc" ;;
+            2) echo "  CLIENT   (pid $_pid) exit $_single_rc" ;;
+            3) echo "  PHY      (pid $_pid) exit $_single_rc" ;;
+        esac
     done
 
-    echo ""
-    echo "Log files ($_label):"
-    echo "  Receiver:  $_RLOG ($(wc -c <"$_RLOG" 2>/dev/null || echo 0) bytes)"
-    echo "  Client:    $_CLOG ($(wc -c <"$_CLOG" 2>/dev/null || echo 0) bytes)"
-    echo "  PHY:       $_PLOG ($(wc -c <"$_PLOG" 2>/dev/null || echo 0) bytes)"
-
     if [ "$_any_nonzero" -ne 0 ]; then
-        echo ""
-        echo "=== ${_label} FAILED: process exit non-zero ==="
-        [ "$_recv_rc" -ne 0 ] && echo "  RECEIVER exit $_recv_rc"
-        [ "$_client_rc" -ne 0 ] && echo "  CLIENT exit $_client_rc"
-        [ "$_phy_rc" -ne 0 ] && echo "  PHY exit $_phy_rc"
+        echo "FAIL: ${_scn} run ${_run} — process exit non-zero" >&2
         return 1
     fi
 
-    echo "All three processes exited 0."
-
-    # ---- Validate PASS markers ----
-    local _fail=0
-
-    local _grep_pass="INFO: le_audio_receiver:"
-    if ! grep -q "$_grep_pass" "$_RLOG" 2>/dev/null; then
-        echo "FAIL: Receiver log missing PASS marker" >&2
-        _fail=1
-    else
-        local _pass_line
-        _pass_line=$(grep "$_grep_pass" "$_RLOG" | tail -1)
-        echo "Receiver PASS line: $_pass_line"
-
-        if ! echo "$_pass_line" | grep -q "errors=0"; then
-            echo "FAIL: Receiver decode_errors != 0" >&2; _fail=1
-        fi
-        if ! echo "$_pass_line" | grep -q "malformed=0"; then
-            echo "FAIL: Receiver malformed_count != 0" >&2; _fail=1
-        fi
-        if ! echo "$_pass_line" | grep -q "after_stop=0"; then
-            echo "FAIL: Receiver pushes_after_stop != 0" >&2; _fail=1
-        fi
-        if ! echo "$_pass_line" | grep -q "nonzero=1"; then
-            echo "FAIL: Receiver no nonzero samples" >&2; _fail=1
-        fi
-
-        local _plc _splc _total _pushes _szero
-        _plc=$(echo "$_pass_line" | grep -oP 'plc=\K\d+' | head -1)
-        _splc=$(echo "$_pass_line" | grep -oP 'startup_plc=\K\d+' | head -1)
-        if [ -n "$_plc" ] && [ -n "$_splc" ]; then
-            if [ "$_plc" -ne "$_splc" ]; then
-                echo "FAIL: plc=$_plc != startup_plc=$_splc" >&2; _fail=1
-            fi
-        fi
-
-        _total=$(echo "$_pass_line" | grep -oP 'total=\K\d+' | head -1)
-        _pushes=$(echo "$_pass_line" | grep -oP '[0-9]+ pushes' | grep -oP '\d+' | head -1)
-        _szero=$(echo "$_pass_line" | grep -oP 'startup_zero=\K\d+' | head -1)
-        if [ -n "$_total" ] && [ -n "$_pushes" ] && [ -n "$_szero" ]; then
-            if [ "$_total" -ne $((_pushes + _szero)) ]; then
-                echo "FAIL: total=$_total != pushes=$_pushes + startup_zero=$_szero" >&2; _fail=1
-            fi
-        fi
-
-        local _emax
-        _emax=$(echo "$_pass_line" | grep -oP 'energy_max=\K\d+')
-        if [ -z "$_emax" ] || [ "$_emax" -le 0 ]; then
-            echo "FAIL: energy_max zero or missing" >&2; _fail=1
-        fi
-
-        local _hash _hash_val
-        _hash=$(echo "$_pass_line" | grep -oP 'hash=0x[0-9A-Fa-f]+' | head -1)
-        if [ -z "$_hash" ]; then
-            echo "FAIL: PASS line missing hash=" >&2; _fail=1
-        else
-            _hash_val=$(echo "$_hash" | cut -d= -f2 | tr 'a-f' 'A-F')
-            if [ "$_hash_val" = "0x00000000" ] || [ "$_hash_val" = "0x811C9DC5" ]; then
-                echo "FAIL: hash is zero or FNV seed: $_hash_val" >&2; _fail=1
-            fi
-        fi
+    # Strict scenario check via the Python parser.
+    local _known_args=()
+    if [ "$BASELINE" != "1" ]; then
+        [ "${KNOWN_FULL[$_scn]:-0x00000000}" != "0x00000000" ] && \
+            _known_args+=(--known-full "${KNOWN_FULL[$_scn]}")
+        [ "${KNOWN_L[$_scn]:-0x00000000}" != "0x00000000" ] && \
+            _known_args+=(--known-l "${KNOWN_L[$_scn]}")
+        [ "${KNOWN_R[$_scn]:-0x00000000}" != "0x00000000" ] && \
+            _known_args+=(--known-r "${KNOWN_R[$_scn]}")
     fi
 
-    # Client PASS check
-    if ! grep -q "INFO: ${_client_testid}:" "$_CLOG" 2>/dev/null; then
-        echo "FAIL: Client log missing PASS marker" >&2; _fail=1
-    else
-        local _cpass _tx
-        _cpass=$(grep "INFO: ${_client_testid}:" "$_CLOG" | tail -1)
-        echo "Client PASS line: $_cpass"
-        _tx=$(echo "$_cpass" | grep -oP '\d+ successful sends' | grep -oP '\d+')
-        if [ -z "$_tx" ] || [ "$_tx" -lt 100 ]; then
-            echo "FAIL: Client TX count < 100 (got $_tx)" >&2; _fail=1
-        fi
-    fi
-
-    echo ""
-    echo "Simulation ID: $_sid"
-
-    if [ "$_fail" -eq 0 ]; then
-        # Export hash to global for pairwise/known-value checks
-        BSIM_LAST_HASH="${_hash_val:-}"
-        echo "=== ${_label} PASS  (hash=${BSIM_LAST_HASH}) ==="
-        echo "  Receiver log: $_RLOG"
-        return 0
-    else
-        echo "=== ${_label} FAIL ==="
+    local _parse_out
+    if ! _parse_out=$(python3 "$SCRIPT_DIR/bsim_stage1_parse.py" check \
+            --scenario "$_scn" \
+            --receiver "$_dir/receiver.log" \
+            --client "$_dir/client.log" \
+            "${_known_args[@]}" 2>&1); then
+        echo "FAIL: ${_scn} run ${_run} — strict parse rejected" >&2
+        echo "$_parse_out" >&2
         return 1
     fi
-}
+    echo "  $_parse_out"
 
-# assert_hash <label> <run_number> <actual_hash> <known_hash>
-# Checks pairwise equality against previous run and known accepted value.
-# Uses global ASSERTS_FAILED counter.
-assert_hash() {
-    local _label="$1"
-    local _run="$2"
-    local _actual="$3"
-    local _known="$4"
+    # Extract hashes for pairwise + table (from the parser's PASS line).
+    LAST_H="$(echo "$_parse_out" | grep -oP 'h1=0x[0-9A-Fa-f]+' | head -1 | cut -d= -f2 | tr 'a-f' 'A-F')"
+    LAST_LH="$(echo "$_parse_out" | grep -oP 'lh1=0x[0-9A-Fa-f]+' | head -1 | cut -d= -f2 | tr 'a-f' 'A-F')"
+    LAST_RH="$(echo "$_parse_out" | grep -oP 'rh1=0x[0-9A-Fa-f]+' | head -1 | cut -d= -f2 | tr 'a-f' 'A-F')"
+    LAST_PUSHES="$(echo "$_parse_out" | grep -oP 'pushes1=\d+' | head -1 | cut -d= -f2)"
 
-    if [ -z "$_actual" ]; then
-        echo "FAIL: ${_label} run ${_run} — no hash extracted" >&2
-        ASSERTS_FAILED=$((ASSERTS_FAILED + 1))
-        return 1
-    fi
-
-    # Known-value check
-    if [ "$_actual" != "$_known" ]; then
-        echo "FAIL: ${_label} run ${_run} — hash ${_actual} != known ${_known}" >&2
-        ASSERTS_FAILED=$((ASSERTS_FAILED + 1))
-        return 1
-    fi
-    echo "  ${_label} run ${_run} hash=${_actual} == known ${_known} ✓"
-
-    # Pairwise check (run > 1)
-    if [ "$_run" -gt 1 ]; then
-        local _prev_var="PREV_${_label//[^a-zA-Z0-9]/_}_HASH"
-        local _prev="${!_prev_var:-}"
-        if [ -n "$_prev" ]; then
-            if [ "$_actual" != "$_prev" ]; then
-                echo "FAIL: ${_label} run ${_run} — hash ${_actual} != run $((_run - 1)) hash ${_prev}" >&2
-                ASSERTS_FAILED=$((ASSERTS_FAILED + 1))
-                return 1
-            fi
-            echo "  ${_label} run ${_run} hash=${_actual} == run $((_run - 1)) hash=${_prev} ✓ (pairwise deterministic)"
-        fi
-    fi
-
-    # Store for next pairwise check
-    eval "PREV_${_label//[^a-zA-Z0-9]/_}_HASH=${_actual}"
+    echo "=== ${_scn} run ${_run} PASS (h=${LAST_H} lh=${LAST_LH} rh=${LAST_RH}) ==="
     return 0
 }
 
-# ---- Run 10 ms simulations (twice) ----
-ASSERTS_FAILED=0
+# ── Run the matrix ──────────────────────────────────────────────────
+
+declare -A H_RUN1 H_RUN2 H_L1 H_R1 H_PUSHES
+FAILED_SCNS=""
 
 echo ""
 echo "══════════════════════════════════════════════════════════════════"
-echo "  10 ms (48_4_1) — Run 1 of 2"
-echo "══════════════════════════════════════════════════════════════════"
-run_sim "10ms-run1" "$CLIENT_BIN" "valid_lc3_client" || exit $?
-HASH_10MS_R1="$BSIM_LAST_HASH"
-assert_hash "10ms" 1 "$HASH_10MS_R1" "$KNOWN_HASH_10MS"
-
-echo ""
-echo "══════════════════════════════════════════════════════════════════"
-echo "  10 ms (48_4_1) — Run 2 of 2"
-echo "══════════════════════════════════════════════════════════════════"
-run_sim "10ms-run2" "$CLIENT_BIN" "valid_lc3_client" || exit $?
-HASH_10MS_R2="$BSIM_LAST_HASH"
-assert_hash "10ms" 2 "$HASH_10MS_R2" "$KNOWN_HASH_10MS"
-
-# ---- Compile 7.5 ms client ----
-echo ""
-echo "=== Compile 7.5ms client (tests/bsim/client) ==="
-app="tests/bsim/client"
-BOARD_ROOT="${REPO_ROOT}"
-exe_name="bs_${BOARD_TS}_valid_lc3_client_7ms_bsim_prj_conf"
-export app BOARD_ROOT exe_name
-# Preserve original cmake_args, add 7.5ms preset
-export cmake_args="${cmake_args} -DCONFIG_BSIM_CLIENT_PRESET_48_3_1=y"
-compile
-wait_for_background_jobs
-# Restore cmake_args
-export cmake_args="${ORIG_CMAKE_ARGS:-${cmake_args/-DCONFIG_BSIM_CLIENT_PRESET_48_3_1=y/}}"
-
-CLIENT_7MS_BIN="${BSIM_OUT_PATH}/bin/${exe_name}"
-if [ ! -x "$CLIENT_7MS_BIN" ]; then
-    echo "ERROR: 7.5ms client binary not found: $CLIENT_7MS_BIN" >&2
-    exit 1
+echo "  T4 BAP scenario matrix ($((${#MATRIX[@]})) scenarios, "
+echo "  $(awk '{s+=$2} END {print s}' <<<"$(printf '%s\n' "${MATRIX[@]}")") runs)"
+if [ "$BASELINE" = "1" ]; then
+    echo "  BASELINE MODE — known-hash asserts skipped, hashes printed"
 fi
-echo "7.5ms Client: $CLIENT_7MS_BIN"
+echo "══════════════════════════════════════════════════════════════════"
 
-# ---- Run 7.5 ms simulations (twice) ----
-echo ""
-echo "══════════════════════════════════════════════════════════════════"
-echo "  7.5 ms (48_3_1) — Run 1 of 2"
-echo "══════════════════════════════════════════════════════════════════"
-run_sim "7.5ms-run1" "$CLIENT_7MS_BIN" "valid_lc3_client" || exit $?
-HASH_7MS_R1="$BSIM_LAST_HASH"
-assert_hash "7.5ms" 1 "$HASH_7MS_R1" "$KNOWN_HASH_7MS"
+for entry in "${MATRIX[@]}"; do
+    scn="${entry%% *}"
+    runs="${entry##* }"
+
+    for ((rn = 1; rn <= runs; rn++)); do
+        if ! run_one "$scn" "$rn"; then
+            OVERALL_FAIL=1
+            FAILED_SCNS="${FAILED_SCNS} ${scn}"
+            break
+        fi
+        if [ "$rn" -eq 1 ]; then
+            H_RUN1[$scn]="$LAST_H"
+            H_L1[$scn]="$LAST_LH"
+            H_R1[$scn]="$LAST_RH"
+            H_PUSHES[$scn]="$LAST_PUSHES"
+        else
+            H_RUN2[$scn]="$LAST_H"
+            # Pairwise determinism: run 2 must be identical to run 1.
+            if [ "$LAST_H" != "${H_RUN1[$scn]}" ] || \
+               [ "$LAST_LH" != "${H_L1[$scn]}" ] || \
+               [ "$LAST_RH" != "${H_R1[$scn]}" ]; then
+                echo "FAIL: ${scn} run 2 hash differs from run 1" >&2
+                OVERALL_FAIL=1
+                FAILED_SCNS="${FAILED_SCNS} ${scn}"
+                break
+            fi
+            echo "  pairwise deterministic ✓"
+        fi
+    done
+done
+
+# ── Final summary ───────────────────────────────────────────────────
 
 echo ""
 echo "══════════════════════════════════════════════════════════════════"
-echo "  7.5 ms (48_3_1) — Run 2 of 2"
+echo "  T4 BAP SCENARIO MATRIX SUMMARY"
 echo "══════════════════════════════════════════════════════════════════"
-run_sim "7.5ms-run2" "$CLIENT_7MS_BIN" "valid_lc3_client" || exit $?
-HASH_7MS_R2="$BSIM_LAST_HASH"
-assert_hash "7.5ms" 2 "$HASH_7MS_R2" "$KNOWN_HASH_7MS"
+printf "  %-28s %-4s %-12s %-12s %-12s %s\n" "scenario" "runs" "full" "left" "right" "pushes"
+printf "  %-28s %-4s %-12s %-12s %-12s %s\n" "--------" "----" "----" "----" "-----" "------"
+for entry in "${MATRIX[@]}"; do
+    scn="${entry%% *}"
+    runs="${entry##* }"
+    h1="${H_RUN1[$scn]:-FAIL}"
+    lh1="${H_L1[$scn]:--}"
+    rh1="${H_R1[$scn]:--}"
+    pushes="${H_PUSHES[$scn]:--}"
+    printf "  %-28s %-4s %-12s %-12s %-12s %s\n" "$scn" "$runs" "$h1" "$lh1" "$rh1" "$pushes"
+done
 
-# ---- Final summary ----
 echo ""
-echo "══════════════════════════════════════════════════════════════════"
-echo "  STAGE 1 — REPEATED-RUN HASH SUMMARY"
-echo "══════════════════════════════════════════════════════════════════"
-echo ""
-echo "  10 ms  run 1:  $HASH_10MS_R1"
-echo "  10 ms  run 2:  $HASH_10MS_R2  (pairwise match: $([ "$HASH_10MS_R1" = "$HASH_10MS_R2" ] && echo YES || echo NO))"
-echo "  10 ms  known:  $KNOWN_HASH_10MS  (known match: $([ "$HASH_10MS_R1" = "$KNOWN_HASH_10MS" ] && echo YES || echo NO))"
-echo ""
-echo "  7.5 ms run 1:  $HASH_7MS_R1"
-echo "  7.5 ms run 2:  $HASH_7MS_R2  (pairwise match: $([ "$HASH_7MS_R1" = "$HASH_7MS_R2" ] && echo YES || echo NO))"
-echo "  7.5 ms known:  $KNOWN_HASH_7MS  (known match: $([ "$HASH_7MS_R1" = "$KNOWN_HASH_7MS" ] && echo YES || echo NO))"
-echo ""
+echo "Known full/L/R hashes (pinned):"
+for scn in mono_10ms mono_7p5ms modea_10ms modea_7p5ms modea_reverse_start_10ms \
+           modeb_10ms modeb_7p5ms invalid_sdu_resume_10ms; do
+    printf "  %-28s full=%-12s L=%-12s R=%-12s\n" "$scn" "${KNOWN_FULL[$scn]}" \
+        "${KNOWN_L[$scn]}" "${KNOWN_R[$scn]}"
+done
 
-if [ "$ASSERTS_FAILED" -eq 0 ]; then
-    echo "=== STAGE1 PASS — 10ms+7.5ms repeated-run hash assertions all correct ==="
+if [ "$BASELINE" = "1" ]; then
+    echo ""
+    echo "=== BASELINE HASHES (pin these into KNOWN_* after two identical runs) ==="
+    for scn in mono_10ms mono_7p5ms modea_10ms modea_7p5ms modea_reverse_start_10ms \
+               modeb_10ms modeb_7p5ms invalid_sdu_resume_10ms; do
+        printf "  %-28s full=%-12s L=%-12s R=%-12s\n" "$scn" "${H_RUN1[$scn]:-FAIL}" \
+            "${H_L1[$scn]:-FAIL}" "${H_R1[$scn]:-FAIL}"
+    done
+fi
+
+if [ "$OVERALL_FAIL" -eq 0 ]; then
+    echo ""
+    echo "=== STAGE1 (T4 matrix) PASS — all scenarios strict-checked ==="
     exit 0
 else
-    echo "=== STAGE1 FAIL — $ASSERTS_FAILED hash assertion(s) failed ==="
+    echo ""
+    echo "=== STAGE1 (T4 matrix) FAIL — failed scenarios:${FAILED_SCNS} ==="
     exit 1
 fi

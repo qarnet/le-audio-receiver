@@ -2,30 +2,33 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * BSIM audio sink stub — strict PCM oracle with startup-zero/PLC accounting.
+ * BSIM audio sink stub — scenario-aware strict PCM oracle.
  *
- * Startup phase (before first nonzero PCM):
- *   - Zero-energy push → increment local startup_zero, snapshot current PLC count.
- *   - Non-zero-energy push → ends startup, begins counting nonzero pushes.
+ * Keeps the public audio_sink.h API exact.  Records per-streamed segment:
+ * pushes, startup-zero pushes, startup PLC, final audio_stats, malformed
+ * sample counts, pushes after stop, full interleaved ordered FNV-1a hash,
+ * left/right ordered hashes, per-channel energy min/max, configured sample
+ * count.  Segment-local state resets when a valid new stream shape is set
+ * after disconnect/reconnect; push-after-stop is never hidden.
  *
- * Stream phase (after first nonzero PCM):
- *   - Zero-energy push → immediate FAIL (decoded audio must never be silent).
- *   - Non-zero-energy push → increment push_count, update energy/hash.
+ * Invariants (per scenario, checked at segment finalize / goal):
+ *  - zero decode errors, except scenario 8 which expects exactly one
+ *    (the pre-decode malformed-SDU rejection);
+ *  - all PLC frames happened during startup (before first nonzero PCM);
+ *  - total_frames == decoder_calls_per_push * (pushes + startup_zero);
+ *  - mono: left hash == right hash; Mode A/B: left hash != right hash;
+ *  - nonzero hashes, positive per-channel energy bounds;
+ *  - zero pushes after stop, zero malformed sample counts;
+ *  - available sink contexts never NONE after connection + stream.
  *
- * At 100 nonzero pushes (PASS):
- *   - decode_errors=0, malformed=0, after_stop=0.
- *   - All PLC frames occurred before first nonzero PCM
- *     (final plc_frames == startup_plc snapshot).
- *   - total_frames == nonzero_push_count + startup_zero (one-frame-per-SDU).
- *   - Ordered FNV-1a hash nonzero and not initial seed.
- *   - Energy min/max positive and deterministic.
- *
- * Reports startup_zero, startup_plc, final PLC, total, hash, energy.
- * Startup accounting is local to this stub; no test fields in production stats.
+ * The oracle never emits PASS — the receiver scenario driver composes the
+ * PASS record from the query API and observer counts.  Faults FAIL
+ * immediately (bst_result = Failed).
  */
 
 #include "audio_sink.h"
 #include "audio_stats.h"
+#include "bsim_sink_oracle.h"
 #include "bsim_test_helpers.h"
 
 #include <zephyr/bluetooth/audio/audio.h>
@@ -37,58 +40,30 @@
 #include <stdint.h>
 #include <errno.h>
 
-#define REQUIRED_SAMPLES_DEFAULT 960 /* 48 kHz × 10 ms × 2 channels */
-#define PASS_FRAME_COUNT         100
-#define FNV_OFFSET_BASIS         0x811c9dc5UL
-#define FNV_PRIME                0x01000193UL
+#define FNV_OFFSET_BASIS   0x811c9dc5UL
+#define FNV_PRIME          0x01000193UL
+#define NORMAL_GOAL_PUSHES 100
 
-static atomic_int push_count;
-static atomic_int startup_push_count; /* total pushes observed (nonzero + zero startup) */
-static atomic_int malformed_count;
-static atomic_int pushes_after_stop;
-static atomic_bool stopped;
+static enum bsim_sink_scenario scenario;
+static int dec_calls_per_push = 1;
 
-/* Dynamic required samples — set by audio_sink_set_input_frames(),
- * defaults to REQUIRED_SAMPLES_DEFAULT (10 ms). */
-static uint16_t required_samples = REQUIRED_SAMPLES_DEFAULT;
+static struct bsim_sink_segment segments[BSIM_SINK_MAX_SEGMENTS];
+static int segment_count; /* finalized segments */
+static int current_seg;   /* open segment index */
+static bool stopped;
+static bool first_nonzero_seen;   /* per segment */
+static uint32_t after_stop_total; /* cumulative, never hidden */
 
-void audio_sink_set_input_frames(uint16_t frames)
+static uint16_t required_samples = 960; /* 48 kHz × 10 ms × 2 ch */
+
+static bool seg_finalized(int idx)
 {
-	required_samples = (uint16_t)(frames * 2); /* stereo: frames → samples */
-	if (required_samples == 0) {
-		required_samples = REQUIRED_SAMPLES_DEFAULT;
-	}
+	return idx >= 0 && idx < segment_count;
 }
 
-/* Startup accounting — local to sink stub, not in production audio_stats */
-static uint32_t local_startup_zero;
-static uint32_t local_startup_plc;
-
-/* Tracks whether the first nonzero-energy push has been seen.
- * Transitions false→true once and stays true.  After transition,
- * zero-energy pushes are faults. */
-static bool first_nonzero_seen;
-
-/* Energy bounds tracked across nonzero pushes */
-static atomic_int energy_min = ATOMIC_VAR_INIT(INT32_MAX);
-static atomic_int energy_max;
-static int32_t running_energy_min = INT32_MAX;
-static int32_t running_energy_max;
-
-/* Ordered FNV-1a hash across frame index and all sample bytes.
- * Initial seed = FNV_OFFSET_BASIS; chained: hash = FNV-1a(hash, idx, samples...).
- * Hash is only updated for nonzero-energy pushes. */
-static uint32_t running_hash = FNV_OFFSET_BASIS;
-static atomic_uint final_hash;
-
-int audio_sink_init(void)
+static struct bsim_sink_segment *cur(void)
 {
-	return 0;
-}
-
-void audio_sink_stop(void)
-{
-	atomic_store(&stopped, true);
+	return &segments[current_seg];
 }
 
 static uint32_t fnv1a_update(uint32_t hash, const uint8_t *bytes, size_t len)
@@ -100,161 +75,346 @@ static uint32_t fnv1a_update(uint32_t hash, const uint8_t *bytes, size_t len)
 	return hash;
 }
 
+static void segment_finalize(int idx)
+{
+	struct bsim_sink_segment *s = &segments[idx];
+	struct audio_stats stats = audio_stats_get();
+
+	s->total_frames = stats.total_frames;
+	s->plc_frames = stats.plc_frames;
+	s->decode_errors = stats.decode_errors;
+	s->configured_samples = required_samples;
+	s->finalized = true;
+
+	printk("SINK_SEG %d pushes=%u szero=%u splc=%u total=%u plc=%u derr=%u "
+	       "malformed=%u hash=0x%08X lhash=0x%08X rhash=0x%08X "
+	       "lemin=%d lemax=%d remin=%d remax=%d samples=%u\n",
+	       idx, s->pushes, s->startup_zero, s->startup_plc, s->total_frames, s->plc_frames,
+	       s->decode_errors, s->malformed_samples, s->full_hash, s->l_hash, s->r_hash,
+	       s->l_energy_min, s->l_energy_max, s->r_energy_min, s->r_energy_max,
+	       s->configured_samples);
+}
+
+/*
+ * Start a new segment.  Called on begin() and whenever a valid new stream
+ * shape is set while stopped (post-disconnect/reconnect).  The previous
+ * open segment, if any, is finalized first.
+ */
+static void segment_start(void)
+{
+	if (current_seg >= 0 && !segments[current_seg].finalized) {
+		segment_finalize(current_seg);
+		segment_count = current_seg + 1;
+	}
+	if (current_seg + 1 >= BSIM_SINK_MAX_SEGMENTS) {
+		FAIL("le_audio_receiver: too many oracle segments\n");
+		return;
+	}
+	current_seg++;
+	memset(&segments[current_seg], 0, sizeof(segments[current_seg]));
+	segments[current_seg].l_energy_min = INT32_MAX;
+	segments[current_seg].r_energy_min = INT32_MAX;
+	first_nonzero_seen = false;
+}
+
+void audio_sink_test_begin(enum bsim_sink_scenario scn, int dec_calls)
+{
+	scenario = scn;
+	dec_calls_per_push = (dec_calls > 0) ? dec_calls : 1;
+	stopped = false;
+	after_stop_total = 0U;
+	segment_count = 0;
+	current_seg = -1;
+	segment_start();
+}
+
+/* ── public audio_sink API ───────────────────────────────────────── */
+
+int audio_sink_init(void)
+{
+	return 0;
+}
+
+void audio_sink_stop(void)
+{
+	if (!stopped) {
+		stopped = true;
+		if (current_seg >= 0 && !segments[current_seg].finalized) {
+			segment_finalize(current_seg);
+			segment_count = current_seg + 1;
+		}
+	}
+}
+
+void audio_sink_set_input_frames(uint16_t frames)
+{
+	uint16_t samples = (uint16_t)(frames * 2); /* stereo: frames → samples */
+
+	if (samples == 0) {
+		samples = 960;
+	}
+
+	if (stopped && current_seg >= 0 && segments[current_seg].finalized) {
+		/* Valid new stream shape after disconnect/reconnect:
+		 * reset stopped/segment-local oracle state (a new segment
+		 * starts fresh).  Push-after-stop stays cumulative. */
+		stopped = false;
+		segment_start();
+	} else if (current_seg < 0 || segments[current_seg].finalized) {
+		segment_start();
+	}
+	required_samples = samples;
+}
+
 int audio_sink_push(const int16_t *data, size_t sample_count)
 {
-	int cnt;
-
-	/* Reject pushes after stop */
-	if (atomic_load(&stopped)) {
-		atomic_fetch_add(&pushes_after_stop, 1);
-		FAIL("le_audio_receiver: push after stop — sample_count=%zu push#%d\n",
-		     sample_count, atomic_load(&push_count));
+	if (stopped) {
+		after_stop_total++;
+		FAIL("le_audio_receiver: push after stop — sample_count=%zu push#%u\n",
+		     sample_count, (unsigned int)segments[current_seg].pushes);
 		return -EIO;
 	}
 
-	/* Validate sample count */
 	if (sample_count != (size_t)required_samples) {
-		atomic_fetch_add(&malformed_count, 1);
-		FAIL("le_audio_receiver: malformed sample count — expected %u got %zu push#%d\n",
-		     required_samples, sample_count, atomic_load(&push_count));
+		cur()->malformed_samples++;
+		FAIL("le_audio_receiver: malformed sample count — expected %u got %zu push#%u\n",
+		     required_samples, sample_count, (unsigned int)cur()->pushes);
 		return -EINVAL;
 	}
 
-	/* Compute energy */
-	int32_t energy = 0;
+	/* Per-channel energy + ordered per-channel hashes. */
+	int32_t l_energy = 0;
+	int32_t r_energy = 0;
+	uint32_t l_hash = cur()->l_hash;
+	uint32_t r_hash = cur()->r_hash;
 
-	for (size_t i = 0; i < sample_count; i++) {
-		int32_t val = data[i];
-		int32_t abs_val = val < 0 ? -val : val;
+	for (size_t i = 0; i < sample_count; i += 2U) {
+		int32_t lv = data[i];
+		int32_t rv = data[i + 1U];
+		int32_t lav = lv < 0 ? -lv : lv;
+		int32_t rav = rv < 0 ? -rv : rv;
 
-		energy += abs_val;
+		l_energy += lav;
+		r_energy += rav;
+		l_hash ^= (uint8_t)(lv & 0xFF);
+		l_hash *= FNV_PRIME;
+		l_hash ^= (uint8_t)((lv >> 8) & 0xFF);
+		l_hash *= FNV_PRIME;
+		r_hash ^= (uint8_t)(rv & 0xFF);
+		r_hash *= FNV_PRIME;
+		r_hash ^= (uint8_t)((rv >> 8) & 0xFF);
+		r_hash *= FNV_PRIME;
 	}
+
+	const int32_t energy = l_energy + r_energy;
 
 	/* ── Startup / stream energy oracle ──────────────────────────── */
 	if (energy == 0) {
-		/* Zero-energy push */
 		if (first_nonzero_seen) {
-			/* Already streaming — silence is fault */
 			FAIL("le_audio_receiver: zero-energy push after audio started — "
-			     "push#%d immediate FAIL\n",
-			     atomic_load(&push_count));
+			     "push#%u immediate FAIL\n",
+			     (unsigned int)cur()->pushes);
 			return -EINVAL;
 		}
-		/* Startup zero: count locally and snapshot PLC state.
-		 * audio_stats has already been updated for this frame
-		 * by the decode path in bt_bap.c. */
-		local_startup_zero++;
-		local_startup_plc = audio_stats_get().plc_frames;
-		atomic_fetch_add(&startup_push_count, 1);
+		cur()->startup_zero++;
+		cur()->startup_plc = audio_stats_get().plc_frames;
 		return 0;
 	}
 
-	/* ── Non-zero-energy push ───────────────────────────────────── */
 	first_nonzero_seen = true;
 
-	/* Track energy bounds (nonzero pushes only) */
-	if (energy < running_energy_min) {
-		running_energy_min = energy;
+	if (l_energy < cur()->l_energy_min) {
+		cur()->l_energy_min = l_energy;
 	}
-	if (energy > running_energy_max) {
-		running_energy_max = energy;
+	if (l_energy > cur()->l_energy_max) {
+		cur()->l_energy_max = l_energy;
+	}
+	if (r_energy < cur()->r_energy_min) {
+		cur()->r_energy_min = r_energy;
+	}
+	if (r_energy > cur()->r_energy_max) {
+		cur()->r_energy_max = r_energy;
 	}
 
-	/* Ordered FNV-1a: chain frame index then sample bytes */
-	cnt = atomic_fetch_add(&push_count, 1);
-	atomic_fetch_add(&startup_push_count, 1);
+	/* Ordered FNV-1a over interleaved PCM (full) and per channel. */
+	uint32_t cnt = cur()->pushes;
 	uint8_t idx_bytes[4];
 
 	idx_bytes[0] = cnt & 0xFF;
 	idx_bytes[1] = (cnt >> 8) & 0xFF;
 	idx_bytes[2] = (cnt >> 16) & 0xFF;
 	idx_bytes[3] = (cnt >> 24) & 0xFF;
-	running_hash = fnv1a_update(running_hash, idx_bytes, 4);
-	running_hash =
-		fnv1a_update(running_hash, (const uint8_t *)data, sample_count * sizeof(int16_t));
+	cur()->full_hash = fnv1a_update(cur()->full_hash, idx_bytes, 4);
+	cur()->full_hash = fnv1a_update(cur()->full_hash, (const uint8_t *)data, sample_count * 2U);
+	cur()->l_hash = fnv1a_update(l_hash, idx_bytes, 4);
+	cur()->r_hash = fnv1a_update(r_hash, idx_bytes, 4);
 
-	cnt++; /* push_count after increment */
+	cur()->pushes++;
 
-	if (cnt == PASS_FRAME_COUNT) {
-		struct audio_stats stats;
-		const int nonzero_pushes = cnt;
-		const uint32_t szero = local_startup_zero;
-		const uint32_t splc = local_startup_plc;
-
-		/* Atomically snapshot final state before PASS */
-		stats = audio_stats_get();
-		atomic_store(&energy_min, running_energy_min);
-		atomic_store(&energy_max, running_energy_max);
-		atomic_store(&final_hash, running_hash);
-
-		/* ── Invariants ───────────────────────────────────────── */
-
-		/* Hash must be nonzero and not initial seed */
-		if (running_hash == FNV_OFFSET_BASIS) {
-			FAIL("le_audio_receiver: ordered hash unchanged from seed\n");
-			return -EIO;
-		}
-
-		/* Zero decode errors */
-		if (stats.decode_errors != 0) {
-			FAIL("le_audio_receiver: decode_errors=%" PRIu32 " != 0\n",
-			     stats.decode_errors);
-			return -EIO;
-		}
-
-		/* All PLC frames occurred before first nonzero PCM */
-		if (stats.plc_frames != splc) {
-			FAIL("le_audio_receiver: plc_frames=%" PRIu32 " != startup_plc=%" PRIu32
-			     " (PLC after first nonzero PCM)\n",
-			     stats.plc_frames, splc);
-			return -EIO;
-		}
-
-		/* total_frames == nonzero_push_count + startup_zero */
-		if (stats.total_frames != (uint32_t)nonzero_pushes + szero) {
-			FAIL("le_audio_receiver: total_frames=%" PRIu32
-			     " != pushes=%d + startup_zero=%" PRIu32 "\n",
-			     stats.total_frames, nonzero_pushes, szero);
-			return -EIO;
-		}
-
-		/* Zero malformed, zero pushes after stop */
-		if (atomic_load(&malformed_count) != 0) {
-			FAIL("le_audio_receiver: malformed_count=%d != 0\n",
-			     atomic_load(&malformed_count));
-			return -EIO;
-		}
-		if (atomic_load(&pushes_after_stop) != 0) {
-			FAIL("le_audio_receiver: pushes_after_stop=%d != 0\n",
-			     atomic_load(&pushes_after_stop));
-			return -EIO;
-		}
-
-		/* Regression: available sink contexts must not be NONE
-		 * after ACL connection + stream setup.  Phase 1 fix
-		 * removed the connection-time clear that broke stock
-		 * desktop PACS discovery. */
-		{
-			enum bt_audio_context ctx;
-
-			ctx = bt_pacs_get_available_contexts(BT_AUDIO_DIR_SINK);
-			if (ctx == BT_AUDIO_CONTEXT_TYPE_NONE) {
-				FAIL("le_audio_receiver: available sink contexts NONE "
-				     "after connection + stream — Phase 1 regression\n");
-				return -EIO;
-			}
-		}
-
-		PASS("le_audio_receiver: %d pushes — "
-		     "nonzero=%d errors=%" PRIu32 " plc=%" PRIu32 " total=%" PRIu32
-		     " malformed=%d after_stop=%d "
-		     "startup_zero=%" PRIu32 " startup_plc=%" PRIu32 " "
-		     "energy_min=%" PRId32 " energy_max=%" PRId32 " hash=0x%08" PRIX32 "\n",
-		     nonzero_pushes, (running_energy_max > 0) ? 1 : 0, stats.decode_errors,
-		     stats.plc_frames, stats.total_frames, atomic_load(&malformed_count),
-		     atomic_load(&pushes_after_stop), szero, splc, running_energy_min,
-		     running_energy_max, running_hash);
+	if (cur()->pushes == NORMAL_GOAL_PUSHES && !cur()->finalized) {
+		segment_finalize(current_seg);
+		segment_count = current_seg + 1;
 	}
 
 	return 0;
+}
+
+/* ── oracle queries ──────────────────────────────────────────────── */
+
+static bool scenario_needs_segment_stop(enum bsim_sink_scenario scn)
+{
+	return scn == BSIM_SCN_MODEA_FIRST_STOP_10MS ||
+	       scn == BSIM_SCN_RELEASE_WITHOUT_DISABLE_10MS ||
+	       scn == BSIM_SCN_DISCONNECT_STREAMING_10MS;
+}
+
+static uint32_t segment_pushes(int idx)
+{
+	return (idx >= 0 && idx < segment_count) ? segments[idx].pushes : 0U;
+}
+
+bool audio_sink_test_goal_reached(void)
+{
+	struct bsim_sink_segment *s0;
+	struct bsim_sink_segment *s1;
+
+	switch (scenario) {
+	case BSIM_SCN_MONO_10MS:
+	case BSIM_SCN_MONO_7P5MS:
+	case BSIM_SCN_MODEA_10MS:
+	case BSIM_SCN_MODEA_7P5MS:
+	case BSIM_SCN_MODEA_REVERSE_START_10MS:
+	case BSIM_SCN_MODEB_10MS:
+	case BSIM_SCN_MODEB_7P5MS:
+		return segment_count >= 1 && segments[0].finalized &&
+		       segments[0].pushes == NORMAL_GOAL_PUSHES;
+
+	case BSIM_SCN_INVALID_SDU_RESUME_10MS:
+		return segment_count >= 1 && segments[0].finalized &&
+		       segments[0].pushes == NORMAL_GOAL_PUSHES;
+
+	case BSIM_SCN_MODEA_FIRST_STOP_10MS:
+	case BSIM_SCN_RELEASE_WITHOUT_DISABLE_10MS:
+	case BSIM_SCN_DISCONNECT_STREAMING_10MS:
+		/* Segment finalized by stop; client guarantees >= 20 pushes. */
+		return segment_count >= 1 && segments[0].finalized && segments[0].pushes >= 20U &&
+		       after_stop_total == 0U;
+
+	case BSIM_SCN_RECONNECT_SECOND_STREAM_10MS:
+		if (segment_count < 2) {
+			return false;
+		}
+		s0 = &segments[0];
+		s1 = &segments[1];
+		return s0->finalized && s1->finalized && s0->pushes >= 20U &&
+		       s1->pushes == NORMAL_GOAL_PUSHES && after_stop_total == 0U;
+
+	case BSIM_SCN_UNSUPPORTED_SOURCE_DIRECTION:
+	case BSIM_SCN_NO_FREE_SINK_SLOT:
+	case BSIM_SCN_INVALID_CODEC_FIELDS:
+		/* No audio expected: goal is driven by observer events in the
+		 * receiver scenario driver.  Ignore the (empty) segment that the
+		 * final disconnect finalizes; any actual push FAILs the oracle. */
+		return after_stop_total == 0U;
+
+	default:
+		return false;
+	}
+}
+
+/* Invariant checks performed by the receiver driver before PASS. */
+bool audio_sink_test_validate(void)
+{
+	for (int i = 0; i < segment_count; i++) {
+		struct bsim_sink_segment *s = &segments[i];
+		const uint32_t expected_dec =
+			(uint32_t)dec_calls_per_push * (s->pushes + s->startup_zero);
+		const bool expect_stereo = (dec_calls_per_push == 2);
+		const uint32_t expected_err =
+			(scenario == BSIM_SCN_INVALID_SDU_RESUME_10MS) ? 1U : 0U;
+
+		if (s->malformed_samples != 0U) {
+			FAIL("le_audio_receiver: segment %d malformed sample count %u\n", i,
+			     s->malformed_samples);
+			return false;
+		}
+		if (s->decode_errors != expected_err) {
+			FAIL("le_audio_receiver: segment %d decode_errors=%u != expected %u\n", i,
+			     s->decode_errors, expected_err);
+			return false;
+		}
+		if (s->plc_frames != s->startup_plc) {
+			FAIL("le_audio_receiver: segment %d plc=%u != startup_plc=%u "
+			     "(PLC after first nonzero PCM)\n",
+			     i, s->plc_frames, s->startup_plc);
+			return false;
+		}
+		if (s->total_frames != expected_dec) {
+			FAIL("le_audio_receiver: segment %d total=%u != pushes=%u+szero=%u "
+			     "x dec=%d\n",
+			     i, s->total_frames, s->pushes, s->startup_zero, dec_calls_per_push);
+			return false;
+		}
+		if (s->full_hash == FNV_OFFSET_BASIS || s->full_hash == 0U) {
+			FAIL("le_audio_receiver: segment %d full hash unchanged from seed\n", i);
+			return false;
+		}
+		if (s->pushes > 0U) {
+			if (expect_stereo) {
+				if (s->l_hash == s->r_hash) {
+					FAIL("le_audio_receiver: segment %d L hash == R hash "
+					     "(stereo expected distinct)\n",
+					     i);
+					return false;
+				}
+				if (s->l_energy_min <= 0 || s->r_energy_min <= 0) {
+					FAIL("le_audio_receiver: segment %d zero channel energy\n",
+					     i);
+					return false;
+				}
+			} else {
+				if (s->l_hash != s->r_hash) {
+					FAIL("le_audio_receiver: segment %d L hash != R hash "
+					     "(mono expected equal)\n",
+					     i);
+					return false;
+				}
+				if (s->l_energy_min <= 0) {
+					FAIL("le_audio_receiver: segment %d zero channel energy\n",
+					     i);
+					return false;
+				}
+			}
+		}
+
+		/* PACS available sink contexts must never be NONE after
+		 * connection + stream (Phase 1 regression). */
+		enum bt_audio_context ctx = bt_pacs_get_available_contexts(BT_AUDIO_DIR_SINK);
+
+		if (ctx == BT_AUDIO_CONTEXT_TYPE_NONE) {
+			FAIL("le_audio_receiver: available sink contexts NONE after "
+			     "connection + stream\n");
+			return false;
+		}
+	}
+	return true;
+}
+
+int audio_sink_test_segment_count(void)
+{
+	return segment_count;
+}
+
+bool audio_sink_test_get_segment(int idx, struct bsim_sink_segment *out)
+{
+	if (!seg_finalized(idx) || out == NULL) {
+		return false;
+	}
+	*out = segments[idx];
+	return true;
+}
+
+uint32_t audio_sink_test_after_stop_total(void)
+{
+	return after_stop_total;
 }

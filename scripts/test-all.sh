@@ -111,6 +111,9 @@ run_python_suites() {
     run_one "python: bluez_wp_phase3_gate" \
         env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
         python3 "$REPO_ROOT/scripts/test_bluez_wireplumber_phase3_gate.py" || true
+    run_one "python: bsim_runner" \
+        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
+        python3 "$REPO_ROOT/tests/unit/bsim_runner/test_bsim_stage1_parse.py" || true
 }
 
 # ---------- BSim Stage 1 ----------
