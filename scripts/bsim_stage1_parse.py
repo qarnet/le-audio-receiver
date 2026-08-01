@@ -286,15 +286,18 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("total1 %s < %d" % (r.get("total1"), expected_total))
         if "known_total" in known and known["known_total"] is not None:
             if r.get("total1") != known["known_total"]:
-                errs.append("total1 %s != pinned %d"
-                            % (r.get("total1"), known["known_total"]))
+                errs.append(
+                    "total1 %s != pinned %d" % (r.get("total1"), known["known_total"])
+                )
         # Post-start PLC delta is deterministic in BSim; pinned per scenario
         # (0 for mono, CIS-sync boundary value for Mode A/B).
         if "known_plc_delta" in known and known["known_plc_delta"] is not None:
             delta = r.get("plc1", 0) - r.get("splc1", 0)
             if delta != known["known_plc_delta"]:
-                errs.append("post-start PLC delta %d != pinned %d"
-                            % (delta, known["known_plc_delta"]))
+                errs.append(
+                    "post-start PLC delta %d != pinned %d"
+                    % (delta, known["known_plc_delta"])
+                )
 
         # Client send counts.
         if scenario == "invalid_sdu_resume_10ms":
@@ -450,7 +453,9 @@ def check_scenario(scenario, recv, cli, known):
         if r.get("obs_ok", 0) < 1:
             errs.append("obs_ok %d < 1 (valid mono must succeed)" % r.get("obs_ok"))
         if r.get("obs_rej_code", -1) != 0x09:
-            errs.append("obs_rej_code 0x%02X != CONF_INVALID" % r.get("obs_rej_code", -1))
+            errs.append(
+                "obs_rej_code 0x%02X != CONF_INVALID" % r.get("obs_rej_code", -1)
+            )
         if r.get("obs_rej_reason", -1) != 0x02:
             errs.append("obs_rej_reason %d != CODEC_DATA" % r.get("obs_rej_reason", -1))
         if c["cfgrsps"] != 11:
@@ -477,13 +482,17 @@ def check(scenario, recv, cli, known):
 
 def main(argv):
     ap = argparse.ArgumentParser(description="T4 BSim scenario strict check")
-    ap.add_argument("check", nargs="?", help="subcommand placeholder (the runner passes 'check')")
+    ap.add_argument(
+        "check", nargs="?", help="subcommand placeholder (the runner passes 'check')"
+    )
     ap.add_argument("--scenario", required=True)
     ap.add_argument("--receiver", required=True)
     ap.add_argument("--client", required=True)
     ap.add_argument("--known-full", default=None)
     ap.add_argument("--known-l", default=None)
     ap.add_argument("--known-r", default=None)
+    ap.add_argument("--known-plc-delta", default=None)
+    ap.add_argument("--known-total", default=None)
     args = ap.parse_args(argv)
 
     known = {}
@@ -493,6 +502,10 @@ def main(argv):
         ("known_r", args.known_r),
     ):
         known[key] = int(val, 16) if val else None
+    known["known_plc_delta"] = (
+        int(args.known_plc_delta) if args.known_plc_delta else None
+    )
+    known["known_total"] = int(args.known_total) if args.known_total else None
 
     try:
         check(args.scenario, args.receiver, args.client, known)
