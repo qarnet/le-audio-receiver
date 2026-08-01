@@ -524,8 +524,7 @@ static int start_streams(size_t stream_cnt, bool reverse, size_t base)
 		 * CIS connects (receiver_ready path), so the local ep state is
 		 * already STREAMING before the client Start op is sent. */
 		if (err == -EALREADY || err == -EINVAL || err == -EBADMSG) {
-			printk("CLI stream %zu already streaming (start %d)
-", i, err);
+			printk("CLI stream %zu already streaming (start %d)\n", i, err);
 			continue;
 		}
 		if (err != 0) {
