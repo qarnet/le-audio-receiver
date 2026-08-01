@@ -257,6 +257,11 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 	 * post-start PLC (plc_frames != startup_plc at finalize) is a
 	 * fault.
 	 */
+	if (cur()->pushes + cur()->transients < 25U) {
+		printk("ORACLEDBG push=%u trans=%u energy=%d srcvalid=%d plc=%u\n",
+		       cur()->pushes, cur()->transients, energy, src_valid ? 1 : 0,
+		       audio_stats_get().plc_frames);
+	}
 	if (!boundary_closed) {
 		if (energy == 0) {
 			cur()->startup_zero++;
