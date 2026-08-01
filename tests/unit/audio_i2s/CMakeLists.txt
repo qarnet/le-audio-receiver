@@ -15,6 +15,7 @@ set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../src)
 
 target_sources(app PRIVATE
   src/main.c
+  src/test_asrc_path.c
   ${COMMON_DIR}/test_sink_common.c
   ${COMMON_DIR}/test_sink_startup.c
   ${COMMON_DIR}/test_sink_stop.c
