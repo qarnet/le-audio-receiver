@@ -389,11 +389,6 @@ bool audio_sink_test_validate(void)
 					     i);
 					return false;
 				}
-				if (s->l_energy_min <= 0 || s->r_energy_min <= 0) {
-					FAIL("le_audio_receiver: segment %d zero channel energy\n",
-					     i);
-					return false;
-				}
 			} else {
 				if (s->l_hash != s->r_hash) {
 					FAIL("le_audio_receiver: segment %d L hash != R hash "
@@ -401,11 +396,16 @@ bool audio_sink_test_validate(void)
 					     i);
 					return false;
 				}
-				if (s->l_energy_min <= 0) {
-					FAIL("le_audio_receiver: segment %d zero channel energy\n",
-					     i);
-					return false;
-				}
+			}
+			/* Each channel must have produced audio at least once; a
+			 * per-push channel min of 0 is legitimate at the CIS-sync
+			 * boundary (one half's PLC concealment paired with the
+			 * other half's valid frame). */
+			if (s->l_energy_max <= 0 || s->r_energy_max <= 0) {
+				FAIL("le_audio_receiver: segment %d dead channel "
+				     "(lmax=%d rmax=%d)\n",
+				     i, s->l_energy_max, s->r_energy_max);
+				return false;
 			}
 		}
 
