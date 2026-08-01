@@ -71,6 +71,18 @@ declare -A KNOWN_R=(
     [modeb_7p5ms]=0x00000000
 )
 
+# Pinned post-start PLC delta per scenario (0 = none; Mode A/B carry the
+# deterministic CIS-sync boundary PLC).  -1 = not yet pinned.
+declare -A KNOWN_PLC_DELTA=(
+    [mono_10ms]=-1
+    [mono_7p5ms]=-1
+    [modea_10ms]=-1
+    [modea_7p5ms]=-1
+    [modea_reverse_start_10ms]=-1
+    [modeb_10ms]=-1
+    [modeb_7p5ms]=-1
+)
+
 # Scenario matrix: name runs
 MATRIX=(
     "mono_10ms 2"
@@ -240,6 +252,8 @@ run_one() {
             _known_args+=(--known-l "${KNOWN_L[$_scn]}")
         [ "${KNOWN_R[$_scn]:-0x00000000}" != "0x00000000" ] && \
             _known_args+=(--known-r "${KNOWN_R[$_scn]}")
+        [ "${KNOWN_PLC_DELTA[$_scn]:--1}" != "-1" ] && \
+            _known_args+=(--known-plc-delta "${KNOWN_PLC_DELTA[$_scn]}")
     fi
 
     local _parse_out

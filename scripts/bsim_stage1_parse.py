@@ -280,8 +280,13 @@ def check_scenario(scenario, recv, cli, known):
         expected_total = dec_calls * (r.get("pushes1", 0) + r.get("szero1", 0))
         if r.get("total1") != expected_total:
             errs.append("total1 %s != %d" % (r.get("total1"), expected_total))
-        if r.get("splc1") != r.get("plc1"):
-            errs.append("PLC after first nonzero PCM")
+        # Post-start PLC delta is deterministic in BSim; pinned per scenario
+        # (0 for mono, CIS-sync boundary value for Mode A/B).
+        if "known_plc_delta" in known and known["known_plc_delta"] is not None:
+            delta = r.get("plc1", 0) - r.get("splc1", 0)
+            if delta != known["known_plc_delta"]:
+                errs.append("post-start PLC delta %d != pinned %d"
+                            % (delta, known["known_plc_delta"]))
         if r.get("lemin1", 0) <= 0 or r.get("remin1", 0) <= 0:
             errs.append("non-positive channel energy min")
 

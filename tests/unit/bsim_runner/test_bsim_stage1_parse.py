@@ -154,6 +154,17 @@ def test_modea_lr_equal_rejected():
     report("modea L==R rejected", not ok)
 
 
+def test_plc_delta_pin():
+    root = tempfile.mkdtemp()
+    known = {"known_plc_delta": 0}
+    ok = run_check(root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known)
+    report("plc delta 0 pinned ok", ok)
+
+    known_bad = {"known_plc_delta": 5}
+    ok = run_check(root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known_bad)
+    report("plc delta mismatch rejected", not ok)
+
+
 def test_total_frames_mismatch():
     root = tempfile.mkdtemp()
     recv = recv_pass("mono_10ms", total1=200)
@@ -483,6 +494,7 @@ def main():
     test_modea_lr_distinct()
     test_modea_lr_equal_rejected()
     test_total_frames_mismatch()
+    test_plc_delta_pin()
     test_invalid_sdu_resume()
     test_modea_first_stop()
     test_release_without_disable()

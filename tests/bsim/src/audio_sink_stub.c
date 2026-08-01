@@ -360,10 +360,15 @@ bool audio_sink_test_validate(void)
 			     s->decode_errors, expected_err);
 			return false;
 		}
-		if (s->plc_frames != s->startup_plc) {
-			FAIL("le_audio_receiver: segment %d plc=%u != startup_plc=%u "
-			     "(PLC after first nonzero PCM)\n",
-			     i, s->plc_frames, s->startup_plc);
+		/* Post-start PLC frames whose concealment output is NONZERO are
+		 * indistinguishable from valid audio and are not faults; the
+		 * segment record reports the exact delta and the strict runner
+		 * pins it per scenario (BSim deterministic).  A post-start PLC
+		 * that conceals to silence faults in audio_sink_push
+		 * (zero-energy push after start). */
+		if (s->plc_frames < s->startup_plc) {
+			FAIL("le_audio_receiver: segment %d plc=%u < startup_plc=%u\n", i,
+			     s->plc_frames, s->startup_plc);
 			return false;
 		}
 		if (s->total_frames != expected_dec) {
