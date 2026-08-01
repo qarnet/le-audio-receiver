@@ -395,7 +395,7 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 
 	memset(&shape, 0, sizeof(shape));
 	if (validate_codec_cfg(codec_cfg, &shape, rsp) != 0) {
-		LOG_WRN("Codec config rejected: code 0x%02x reason 0x%02x", rsp->code, rsp->reason);
+		LOG_INF("Codec config rejected: code 0x%02x reason 0x%02x", rsp->code, rsp->reason);
 #if defined(CONFIG_BSIM_OBSERVER)
 		bsim_observer_config(false, dir, rsp->code, rsp->reason);
 #endif

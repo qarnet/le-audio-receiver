@@ -272,9 +272,12 @@ def check_scenario(scenario, recv, cli, known):
             if c["sends0"] != 101:
                 errs.append("client sends0 %d != 101" % c["sends0"])
         elif scenario in ("modea_10ms", "modea_7p5ms", "modea_reverse_start_10ms"):
-            if c["sends0"] != 100 or c["sends1"] != 100:
+            # Mode A sends 110 per stream: the deterministic CIS-sync
+            # losses are consumed by startup transients, and the strict
+            # oracle pins exactly 100 valid-sourced pushes.
+            if c["sends0"] != 110 or c["sends1"] != 110:
                 errs.append(
-                    "client sends %d/%d != 100/100" % (c["sends0"], c["sends1"])
+                    "client sends %d/%d != 110/110" % (c["sends0"], c["sends1"])
                 )
         else:
             if c["sends0"] != 100:
