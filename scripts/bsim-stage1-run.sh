@@ -41,35 +41,40 @@ BOARD_TS="${BOARD//\//_}"
 # Baselined 2026-08-01 from two identical workstation runs of the
 # deterministic multi-channel TX pattern (scenarios 1-8).  0x00000000 =
 # no audio (config-rejection scenarios) or not yet pinned.
+# ── Pinned known hashes (full / left / right) ────────────────────────
+# Baselined 2026-08-01 from two identical post-review-fix workstation
+# runs of the FNV-corrected oracle (samples converted to uint16_t before
+# byte extraction; full/L/R prepend the 4-byte LE frame index).
+# reconnect_second_stream_10ms pins its second segment, which must equal
+# a fresh mono 10 ms oracle.
 declare -A KNOWN_FULL=(
-    [mono_10ms]=0xD65641A8
-    [mono_7p5ms]=0x3CF61E00
-    [modea_10ms]=0x7335E317
-    [modea_7p5ms]=0xC05F0EA7
-    [modea_reverse_start_10ms]=0x7335E317
-    [modeb_10ms]=0x7335E317
-    [modeb_7p5ms]=0xE18E30AE
-    [invalid_sdu_resume_10ms]=0xB29C3A18
-    # Segment 2 of the reconnect scenario must equal a fresh mono 10 ms oracle.
-    [reconnect_second_stream_10ms]=0xD65641A8
+    [mono_10ms]=0x22AB5C0D
+    [mono_7p5ms]=0x01A3EB05
+    [modea_10ms]=0xBAE24F7E
+    [modea_7p5ms]=0x00A5D3F9
+    [modea_reverse_start_10ms]=0xBAE24F7E
+    [modeb_10ms]=0xBAE24F7E
+    [modeb_7p5ms]=0xFF82CADB
+    [invalid_sdu_resume_10ms]=0x0C61918D
+    [reconnect_second_stream_10ms]=0x22AB5C0D
 )
 declare -A KNOWN_L=(
-    [mono_10ms]=0x08D96D5C
-    [mono_7p5ms]=0xC915A389
-    [modea_10ms]=0x08D96D5C
-    [modea_7p5ms]=0x96275542
-    [modea_reverse_start_10ms]=0x08D96D5C
-    [modeb_10ms]=0x08D96D5C
-    [modeb_7p5ms]=0xC915A389
+    [mono_10ms]=0x32777D65
+    [mono_7p5ms]=0x30F0308C
+    [modea_10ms]=0x32777D65
+    [modea_7p5ms]=0xEE461704
+    [modea_reverse_start_10ms]=0x32777D65
+    [modeb_10ms]=0x32777D65
+    [modeb_7p5ms]=0x30F0308C
 )
 declare -A KNOWN_R=(
-    [mono_10ms]=0x08D96D5C
-    [mono_7p5ms]=0xC915A389
-    [modea_10ms]=0x2AE744DB
-    [modea_7p5ms]=0x499BD761
-    [modea_reverse_start_10ms]=0x2AE744DB
-    [modeb_10ms]=0x2AE744DB
-    [modeb_7p5ms]=0xC4FEFADB
+    [mono_10ms]=0x32777D65
+    [mono_7p5ms]=0x30F0308C
+    [modea_10ms]=0xD3EE3722
+    [modea_7p5ms]=0x37E155C8
+    [modea_reverse_start_10ms]=0xD3EE3722
+    [modeb_10ms]=0xD3EE3722
+    [modeb_7p5ms]=0x129591EE
 )
 
 # Pinned exact total decoder invocations per scenario (deterministic,
@@ -83,10 +88,10 @@ declare -A KNOWN_TOTAL=(
     [modeb_10ms]=216
     [modeb_7p5ms]=222
     [invalid_sdu_resume_10ms]=108
-    [modea_first_stop_10ms]=84
-    [release_without_disable_10ms]=55
-    [disconnect_streaming_10ms]=62
-    [reconnect_second_stream_10ms]=83
+    [modea_first_stop_10ms]=85
+    [release_without_disable_10ms]=56
+    [disconnect_streaming_10ms]=63
+    [reconnect_second_stream_10ms]=63
 )
 
 # Scenario matrix: name runs

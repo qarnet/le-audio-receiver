@@ -305,7 +305,7 @@ def test_reconnect_second_stream():
         "pushes1=25 szero1=8 splc1=7 total1=33 plc1=7 derr1=0 mal1=0 "
         "h1=0x11111111 lh1=0x11111111 rh1=0x11111111 "
         "lemin1=1 lemax1=2 remin1=1 remax1=2 samples1=960 "
-        "pushes2=100 szero2=8 splc2=7 total2=108 plc2=7 derr2=0 mal2=0 "
+        "pushes2=100 trans2=8 szero2=8 splc2=7 total2=108 plc2=7 derr2=0 mal2=0 "
         "h2=0xABCD1234 lh2=0xABCD1234 rh2=0xABCD1234 "
         "lemin2=1 lemax2=2 remin2=1 remax2=2 samples2=960\n"
     )

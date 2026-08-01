@@ -367,7 +367,7 @@ def check_scenario(scenario, recv, cli, known):
                 )
         if r.get("lh2") != r.get("rh2"):
             errs.append("mono seg2 L hash != R hash")
-        expected_total = r.get("pushes2", 0) + r.get("szero2", 0)
+        expected_total = r.get("pushes2", 0) + r.get("trans2", 0)
         if r.get("total2") != expected_total:
             errs.append("total2 %s != %d" % (r.get("total2"), expected_total))
         if c["sends1"] != 100:
