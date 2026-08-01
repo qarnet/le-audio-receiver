@@ -85,10 +85,12 @@ static bool scenario_observer_ok(enum bsim_sink_scenario scn)
 		       bsim_observer_get_last_rej_reason() == (int)BT_BAP_ASCS_REASON_NONE &&
 		       bsim_observer_get_release_cleanup() >= 3U;
 	case BSIM_SCN_INVALID_CODEC_FIELDS:
+		/* Two accepted configs overall (valid mono + missing-frame-
+		 * blocks fallback); the last rejection is CONF_REJECTED. */
 		return bsim_observer_get_config_rejected() >= 9U &&
-		       bsim_observer_get_config_accepted() >= 1U &&
+		       bsim_observer_get_config_accepted() >= 2U &&
 		       bsim_observer_get_last_rej_code() ==
-			       (int)BT_BAP_ASCS_RSP_CODE_CONF_INVALID &&
+			       (int)BT_BAP_ASCS_RSP_CODE_CONF_REJECTED &&
 		       bsim_observer_get_last_rej_reason() == (int)BT_BAP_ASCS_REASON_CODEC_DATA;
 	default:
 		return true;
