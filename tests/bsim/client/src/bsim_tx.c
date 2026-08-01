@@ -9,6 +9,29 @@
  * scenario-required stream count is streaming (Mode A holds both).
  * Per-channel encoders are independent; PCM patterns are deterministic
  * integer functions of (channel, sequence number, sample index).
+ *
+ * Cross-thread ownership protocol (scenario thread vs TX thread):
+ *
+ *  - One mutex (tx_lock) protects every tx_streams field access.  It is
+ *    never held across net_buf_alloc or bt_bap_stream_send (blocking).
+ *  - A candidate slot snapshot is taken under the lock and increments
+ *    that slot's in_flight counter, recording generation, stream, and
+ *    sequence.  Every path after the unlock (encode failure, send
+ *    failure, success, stale registration) decrements in_flight; send
+ *    counters/sequence/injection are committed only if the generation
+ *    and stream still match the snapshot.
+ *  - register() takes the lock and selects only a slot with
+ *    bap_stream == NULL and in_flight == 0; the config and encoders are
+ *    initialized while protected, the generation is bumped to a nonzero
+ *    value, and bap_stream is published last.  The only memset happens
+ *    while in_flight == 0 under the lock, so it can never race an
+ *    in-flight encode/send, and the generation is reassigned afterwards.
+ *  - unregister() clears bap_stream and bumps the generation under the
+ *    lock, then waits (without holding the lock) until in_flight == 0.
+ *  - pause() sets paused under the lock then waits for in_flight == 0;
+ *    resume() is synchronized under the lock.
+ *  - The TX thread is the sole mutator of the encoder state while a slot
+ *    is in flight; register() cannot touch a slot with in_flight > 0.
  */
 
 #include "bsim_tx.h"
@@ -35,6 +58,8 @@ LOG_MODULE_REGISTER(bsim_tx, LOG_LEVEL_INF);
 
 #define BSIM_TX_MAX_SAMPLES 480 /* 48 kHz × 10 ms */
 
+#define BSIM_TX_IDLE_WAIT_MS 1000U
+
 struct bsim_tx_stream {
 	struct bt_bap_stream *bap_stream;
 	struct bsim_tx_config cfg;
@@ -43,6 +68,8 @@ struct bsim_tx_stream {
 	uint16_t seq_num;
 	uint32_t send_count;
 	uint32_t send_limit; /* 0 = unlimited */
+	uint32_t generation; /* bumped on register/unregister; 0 = never used */
+	uint32_t in_flight;  /* TX candidates currently past the snapshot */
 	bool paused;
 	bool inject_pending;
 	uint16_t inject_at_seq;
@@ -51,17 +78,6 @@ struct bsim_tx_stream {
 static struct bsim_tx_stream tx_streams[BSIM_TX_MAX_STREAMS];
 static atomic_int required_streaming = 1;
 
-/*
- * Cross-thread ownership protocol: the scenario thread and the TX thread
- * both touch tx_streams[].  A single mutex protects every field access
- * (registration pointers, pause, injection, sequence, limits, counters)
- * EXCEPT the encoder memory, which only the TX thread touches and which
- * unregister never frees (slots are reusable, not destroyed).  The mutex
- * is never held across net_buf_alloc/bt_bap_stream_send (blocking); the
- * TX thread snapshots the state it needs, sends, then re-acquires to
- * commit counters/sequence only if the slot is still registered.  All
- * getters return synchronized snapshots.
- */
 static K_MUTEX_DEFINE(tx_lock);
 
 /* Caller must hold tx_lock. */
@@ -158,15 +174,16 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 		bool sent_any = false;
 
 		for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
+			struct bsim_tx_stream *s = &tx_streams[i];
 			struct bt_bap_stream *stream;
 			uint16_t seq;
 			bool inject;
-			struct bsim_tx_stream *s;
+			uint32_t gen;
 
-			/* Snapshot the slot state under the mutex; never hold
-			 * it across alloc/send. */
+			/* Candidate snapshot under the lock: increment
+			 * in_flight and record generation/stream/seq.  The
+			 * lock is never held across alloc/encode/send. */
 			k_mutex_lock(&tx_lock, K_FOREVER);
-			s = &tx_streams[i];
 			if (s->bap_stream == NULL || s->paused) {
 				k_mutex_unlock(&tx_lock);
 				continue;
@@ -177,16 +194,20 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 			}
 			/* Hold sending until the scenario-required stream
 			 * count is streaming (Mode A: both). */
-			if (bsim_tx_streaming_count_locked() <
-			    atomic_load(&required_streaming)) {
+			if (bsim_tx_streaming_count_locked() < atomic_load(&required_streaming)) {
 				k_mutex_unlock(&tx_lock);
 				continue;
 			}
 			stream = s->bap_stream;
 			seq = s->seq_num;
 			inject = s->inject_pending && s->seq_num == s->inject_at_seq;
+			gen = s->generation;
+			s->in_flight++;
 			k_mutex_unlock(&tx_lock);
 
+			/* Build the SDU without the lock (encoder state is
+			 * TX-thread-owned while in_flight > 0; register
+			 * cannot touch this slot). */
 			struct net_buf *buf = net_buf_alloc(&tx_pool, K_FOREVER);
 
 			net_buf_reserve(buf, BT_ISO_CHAN_SEND_RESERVE);
@@ -206,6 +227,10 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 				LOG_INF("TX[%zu]: injected malformed %u-byte SDU at seq %u", i,
 					s->cfg.octets_per_frame - 1U, seq);
 			} else if (!bsim_tx_encode_sdu(s, buf)) {
+				/* Encode failure: decrement in_flight, no commit. */
+				k_mutex_lock(&tx_lock, K_FOREVER);
+				s->in_flight--;
+				k_mutex_unlock(&tx_lock);
 				net_buf_unref(buf);
 				continue;
 			}
@@ -213,26 +238,32 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 			int err = bt_bap_stream_send(stream, buf, seq);
 
 			if (err == 0) {
-				/* Commit under the mutex; if the slot was
-				 * unregistered while the send was in flight,
-				 * the counters stay untouched. */
-				k_mutex_lock(&tx_lock, K_FOREVER);
-				if (tx_streams[i].bap_stream == stream) {
-					tx_streams[i].send_count++;
-					tx_streams[i].seq_num++;
-					if (inject) {
-						tx_streams[i].inject_pending = false;
-					}
-					if (tx_streams[i].send_limit > 0U &&
-					    tx_streams[i].send_count >= tx_streams[i].send_limit) {
-						/* Exact send-count cap: pause at the limit. */
-						tx_streams[i].paused = true;
-					}
-				}
-				k_mutex_unlock(&tx_lock);
 				sent_any = true;
 			} else {
 				LOG_ERR("TX[%zu]: send failed: %d", i, err);
+			}
+
+			/* Commit under the mutex only if the generation and
+			 * stream still match the snapshot; decrement
+			 * in_flight on every path. */
+			k_mutex_lock(&tx_lock, K_FOREVER);
+			if (s->generation == gen && s->bap_stream == stream) {
+				if (err == 0) {
+					s->send_count++;
+					s->seq_num++;
+					if (inject) {
+						s->inject_pending = false;
+					}
+					if (s->send_limit > 0U && s->send_count >= s->send_limit) {
+						/* Exact send-count cap: pause at the limit. */
+						s->paused = true;
+					}
+				}
+			}
+			s->in_flight--;
+			k_mutex_unlock(&tx_lock);
+
+			if (err != 0) {
 				net_buf_unref(buf);
 			}
 		}
@@ -268,34 +299,69 @@ int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_conf
 		return -EINVAL;
 	}
 
+	k_mutex_lock(&tx_lock, K_FOREVER);
 	for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
-		if (tx_streams[i].bap_stream == NULL) {
+		/* Select only an empty slot with no in-flight TX: the
+		 * memset and encoder setup below can never race a TX that
+		 * already passed its candidate snapshot. */
+		if (tx_streams[i].bap_stream == NULL && tx_streams[i].in_flight == 0U) {
 			struct bsim_tx_stream *s = &tx_streams[i];
 
 			memset(s, 0, sizeof(*s));
-			s->bap_stream = bap_stream;
 			s->cfg = *cfg;
 			s->seq_num = 0U;
+			/* Reassign a nonzero generation so any stale TX
+			 * snapshot from a previous registration fails the
+			 * commit check. */
+			s->generation++;
 
 			for (uint8_t ch = 0U; ch < cfg->chan_count; ch++) {
 				s->encoder[ch] =
 					lc3_setup_encoder(cfg->frame_duration_us, cfg->freq_hz, 0,
 							  &s->encoder_mem[ch]);
 				if (s->encoder[ch] == NULL) {
-					LOG_ERR("TX: encoder setup failed for stream %zu ch %u", i,
+					LOG_ERR("TX: encoder setup failed for slot %zu ch %u", i,
 						ch);
-					s->bap_stream = NULL;
+					k_mutex_unlock(&tx_lock);
 					return -ENOEXEC;
 				}
 			}
 
-			LOG_INF("TX: registered stream %p (ch=%u octets=%u seq starts at 0)", i,
-				bap_stream, cfg->chan_count, cfg->octets_per_frame);
+			/* Publish the stream pointer last. */
+			s->bap_stream = bap_stream;
+
+			LOG_INF("TX: registered slot %zu stream %p (ch=%u octets=%u "
+				"seq starts at 0)",
+				i, bap_stream, cfg->chan_count, cfg->octets_per_frame);
+			k_mutex_unlock(&tx_lock);
 			return 0;
 		}
 	}
+	k_mutex_unlock(&tx_lock);
 
 	return -ENOMEM;
+}
+
+/* Wait (without holding tx_lock) until the slot has no in-flight TX. */
+static int tx_wait_idle(struct bsim_tx_stream *s)
+{
+	uint32_t waited = 0U;
+
+	while (true) {
+		k_mutex_lock(&tx_lock, K_FOREVER);
+		bool busy = s->in_flight != 0U;
+
+		k_mutex_unlock(&tx_lock);
+		if (!busy) {
+			return 0;
+		}
+		if (waited >= BSIM_TX_IDLE_WAIT_MS) {
+			LOG_ERR("TX: slot busy for %u ms", BSIM_TX_IDLE_WAIT_MS);
+			return -EBUSY;
+		}
+		k_sleep(K_MSEC(1));
+		waited++;
+	}
 }
 
 int bsim_tx_unregister(struct bt_bap_stream *bap_stream)
@@ -307,13 +373,14 @@ int bsim_tx_unregister(struct bt_bap_stream *bap_stream)
 		k_mutex_unlock(&tx_lock);
 		return -ENODATA;
 	}
-	/* The TX thread re-checks the pointer under the mutex after an
-	 * in-flight send, so clearing it here cannot commit counters for a
-	 * stale slot; the encoder state stays allocated (slots are
-	 * reusable, never destroyed). */
+	/* Clear the pointer and bump the generation under the lock so any
+	 * in-flight TX fails its commit check; then wait for it to drain
+	 * without holding the lock. */
 	s->bap_stream = NULL;
+	s->generation++;
 	k_mutex_unlock(&tx_lock);
-	return 0;
+
+	return tx_wait_idle(s);
 }
 
 void bsim_tx_pause(struct bt_bap_stream *bap_stream)
@@ -325,6 +392,10 @@ void bsim_tx_pause(struct bt_bap_stream *bap_stream)
 		s->paused = true;
 	}
 	k_mutex_unlock(&tx_lock);
+
+	if (s != NULL) {
+		(void)tx_wait_idle(s);
+	}
 }
 
 void bsim_tx_resume(struct bt_bap_stream *bap_stream)
