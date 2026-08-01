@@ -65,7 +65,8 @@ static bool scenario_observer_ok(enum bsim_sink_scenario scn)
 		return bsim_observer_get_gate_close() >= 1U &&
 		       bsim_observer_get_release_cleanup() >= 1U;
 	case BSIM_SCN_RELEASE_WITHOUT_DISABLE_10MS:
-		return bsim_observer_get_release_cleanup() >= 1U;
+		return bsim_observer_get_release_cleanup() >= 1U &&
+		       bsim_observer_get_release_sink_stop() >= 1U;
 	case BSIM_SCN_UNSUPPORTED_SOURCE_DIRECTION:
 		return bsim_observer_get_config_rejected() >= 1U &&
 		       bsim_observer_get_last_config_dir() == (int)BT_AUDIO_DIR_SOURCE &&
@@ -109,6 +110,7 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 	bool have_s0 = audio_sink_test_get_segment(0, &s0);
 	bool have_s1 = audio_sink_test_get_segment(1, &s1);
 	uint32_t pushes1 = have_s0 ? s0.pushes : 0U;
+	uint32_t trans1 = have_s0 ? s0.transients : 0U;
 	uint32_t szero1 = have_s0 ? s0.startup_zero : 0U;
 	uint32_t splc1 = have_s0 ? s0.startup_plc : 0U;
 	uint32_t plc1 = have_s0 ? s0.plc_frames : 0U;
@@ -123,6 +125,7 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 	int32_t remin1 = have_s0 ? s0.r_energy_min : 0;
 	int32_t remax1 = have_s0 ? s0.r_energy_max : 0;
 	uint32_t pushes2 = have_s1 ? s1.pushes : 0U;
+	uint32_t trans2 = have_s1 ? s1.transients : 0U;
 	uint32_t szero2 = have_s1 ? s1.startup_zero : 0U;
 	uint32_t splc2 = have_s1 ? s1.startup_plc : 0U;
 	uint32_t plc2 = have_s1 ? s1.plc_frames : 0U;
@@ -141,9 +144,10 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 	     "obs_ok=%u obs_rej=%u obs_dir=%d obs_code=%d obs_reason=%d "
 	     "obs_gate_o=%u obs_gate_c=%u obs_mal=%u obs_blk=%u obs_stale=%u "
 	     "obs_rel=%u obs_disc=%u obs_rej_code=%d obs_rej_reason=%d "
-	     "pushes1=%u szero1=%u splc1=%u plc1=%u total1=%u derr1=%u mal1=%u "
+	     "obs_mts=%u obs_rel_ss=%u rel_ss_seq=%u disc_seq=%u "
+	     "pushes1=%u trans1=%u szero1=%u splc1=%u plc1=%u total1=%u derr1=%u mal1=%u "
 	     "h1=0x%08X lh1=0x%08X rh1=0x%08X lemin1=%d lemax1=%d remin1=%d remax1=%d "
-	     "pushes2=%u szero2=%u splc2=%u plc2=%u total2=%u derr2=%u mal2=%u "
+	     "pushes2=%u trans2=%u szero2=%u splc2=%u plc2=%u total2=%u derr2=%u mal2=%u "
 	     "h2=0x%08X lh2=0x%08X rh2=0x%08X lemin2=%d lemax2=%d remin2=%d remax2=%d\n",
 	     scenario_names[scn], audio_sink_test_segment_count(),
 	     audio_sink_test_after_stop_total(), adv_restarted ? 1U : 0U,
@@ -153,10 +157,12 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 	     bsim_observer_get_gate_close(), bsim_observer_get_malformed_sdu(),
 	     bsim_observer_get_recv_gate_blocked(), bsim_observer_get_stale_half(),
 	     bsim_observer_get_release_cleanup(), bsim_observer_get_disconnect_cleanup(),
-	     bsim_observer_get_last_rej_code(), bsim_observer_get_last_rej_reason(), pushes1,
-	     szero1, splc1, plc1, total1, derr1, mal1, h1, lh1, rh1, lemin1, lemax1, remin1, remax1,
-	     pushes2, szero2, splc2, plc2, total2, derr2, mal2, h2, lh2, rh2, lemin2, lemax2,
-	     remin2, remax2);
+	     bsim_observer_get_last_rej_code(), bsim_observer_get_last_rej_reason(),
+	     bsim_observer_get_missing_ts(), bsim_observer_get_release_sink_stop(),
+	     bsim_observer_get_release_sink_stop_seq(), bsim_observer_get_disconnect_seq(), pushes1,
+	     trans1, szero1, splc1, plc1, total1, derr1, mal1, h1, lh1, rh1, lemin1, lemax1, remin1,
+	     remax1, pushes2, trans2, szero2, splc2, plc2, total2, derr2, mal2, h2, lh2, rh2,
+	     lemin2, lemax2, remin2, remax2);
 }
 
 static void scenario_main(enum bsim_sink_scenario scn, int dec_calls)

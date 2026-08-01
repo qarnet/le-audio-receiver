@@ -38,9 +38,10 @@ enum bsim_sink_scenario {
 
 /** Per-segment strict record. */
 struct bsim_sink_segment {
-	uint32_t pushes;            /* nonzero-energy pushes */
-	uint32_t startup_zero;      /* zero-energy pushes before first nonzero */
-	uint32_t startup_plc;       /* audio_stats plc at the last startup-zero push */
+	uint32_t pushes;            /* post-boundary nonzero source-valid pushes */
+	uint32_t transients;        /* pushes before the source-valid boundary */
+	uint32_t startup_zero;      /* zero-energy pushes (subset of transients) */
+	uint32_t startup_plc;       /* audio_stats plc at the last startup transient */
 	uint32_t total_frames;      /* audio_stats total_frames at finalize */
 	uint32_t plc_frames;        /* audio_stats plc_frames at finalize */
 	uint32_t decode_errors;     /* audio_stats decode_errors at finalize */

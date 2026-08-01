@@ -29,6 +29,7 @@
 #include "audio_sink.h"
 #include "audio_stats.h"
 #include "bsim_sink_oracle.h"
+#include "bsim_observer.h"
 #include "bsim_test_helpers.h"
 
 #include <zephyr/bluetooth/audio/audio.h>
@@ -52,6 +53,7 @@ static int segment_count; /* finalized segments */
 static int current_seg;   /* open segment index */
 static bool stopped;
 static bool first_nonzero_seen;   /* per segment */
+static bool boundary_closed;      /* per segment: first nonzero source-valid push */
 static uint32_t after_stop_total; /* cumulative, never hidden */
 
 static uint16_t required_samples = 960; /* 48 kHz × 10 ms × 2 ch */
@@ -78,6 +80,33 @@ static uint32_t fnv1a_update(uint32_t hash, const uint8_t *bytes, size_t len)
 {
 	for (size_t i = 0; i < len; i++) {
 		hash ^= bytes[i];
+		hash *= FNV_PRIME;
+	}
+	return hash;
+}
+
+/*
+ * Ordered per-channel hash: prepend the 4-byte LE frame index, then each
+ * sample as its two LE bytes.  Samples are converted to uint16_t BEFORE
+ * byte extraction so negative signed values are never right-shifted.
+ */
+static uint32_t fnv1a_hash_channel(uint32_t hash, uint32_t push_idx, const int16_t *samples,
+				   size_t count, size_t stride)
+{
+	uint8_t idx_bytes[4];
+
+	idx_bytes[0] = push_idx & 0xFF;
+	idx_bytes[1] = (push_idx >> 8) & 0xFF;
+	idx_bytes[2] = (push_idx >> 16) & 0xFF;
+	idx_bytes[3] = (push_idx >> 24) & 0xFF;
+	hash = fnv1a_update(hash, idx_bytes, 4);
+
+	for (size_t i = 0; i < count; i++) {
+		uint16_t u = (uint16_t)samples[i * stride];
+
+		hash ^= (uint8_t)(u & 0xFF);
+		hash *= FNV_PRIME;
+		hash ^= (uint8_t)((u >> 8) & 0xFF);
 		hash *= FNV_PRIME;
 	}
 	return hash;
@@ -120,9 +149,13 @@ static void segment_start(void)
 	}
 	current_seg++;
 	memset(&segments[current_seg], 0, sizeof(segments[current_seg]));
+	segments[current_seg].full_hash = FNV_OFFSET_BASIS;
+	segments[current_seg].l_hash = FNV_OFFSET_BASIS;
+	segments[current_seg].r_hash = FNV_OFFSET_BASIS;
 	segments[current_seg].l_energy_min = INT32_MAX;
 	segments[current_seg].r_energy_min = INT32_MAX;
 	first_nonzero_seen = false;
+	boundary_closed = false;
 }
 
 void audio_sink_test_begin(enum bsim_sink_scenario scn, int dec_calls)
@@ -198,11 +231,9 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 		return -EINVAL;
 	}
 
-	/* Per-channel energy + ordered per-channel hashes. */
+	/* Per-channel energy. */
 	int32_t l_energy = 0;
 	int32_t r_energy = 0;
-	uint32_t l_hash = cur()->l_hash;
-	uint32_t r_hash = cur()->r_hash;
 
 	for (size_t i = 0; i < sample_count; i += 2U) {
 		int32_t lv = data[i];
@@ -212,34 +243,46 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 
 		l_energy += lav;
 		r_energy += rav;
-		l_hash ^= (uint8_t)(lv & 0xFF);
-		l_hash *= FNV_PRIME;
-		l_hash ^= (uint8_t)((lv >> 8) & 0xFF);
-		l_hash *= FNV_PRIME;
-		r_hash ^= (uint8_t)(rv & 0xFF);
-		r_hash *= FNV_PRIME;
-		r_hash ^= (uint8_t)((rv >> 8) & 0xFF);
-		r_hash *= FNV_PRIME;
 	}
 
 	const int32_t energy = l_energy + r_energy;
+	const bool src_valid = bsim_observer_get_last_push_src_valid();
 
-	/* ── Startup / stream energy oracle ────────────────────────────
-	 * The CIS-sync boundary (deterministic in BSim) can deliver a
-	 * silent PLC concealment paired with a valid frame within the
-	 * first ~15 pushes of a Mode A stream; such pushes count as
-	 * startup zeros.  After 20 nonzero pushes any zero-energy push is
-	 * a fault (broken decoder / persistent silence). */
-	if (energy == 0) {
-		if (first_nonzero_seen && cur()->pushes >= 20U) {
+	/*
+	 * Strict startup boundary: startup stays open until the first
+	 * nonzero push sourced entirely from valid ISO input.  While open,
+	 * zero or nonzero concealment is a startup transient; startup_plc
+	 * is updated after each transient push.  After the boundary
+	 * closes, any source-invalid push, any zero-energy push, and any
+	 * post-start PLC (plc_frames != startup_plc at finalize) is a
+	 * fault.
+	 */
+	if (!boundary_closed) {
+		if (energy == 0) {
+			cur()->startup_zero++;
+		}
+		cur()->transients++;
+		cur()->startup_plc = audio_stats_get().plc_frames;
+		if (energy != 0 && src_valid) {
+			/* First fully valid push: closes the boundary and is
+			 * the first hashed frame. */
+			boundary_closed = true;
+		} else {
+			return 0;
+		}
+	} else {
+		if (!src_valid) {
+			FAIL("le_audio_receiver: source-invalid push after valid boundary — "
+			     "push#%u immediate FAIL\n",
+			     (unsigned int)cur()->pushes);
+			return -EINVAL;
+		}
+		if (energy == 0) {
 			FAIL("le_audio_receiver: zero-energy push after audio started — "
 			     "push#%u immediate FAIL\n",
 			     (unsigned int)cur()->pushes);
 			return -EINVAL;
 		}
-		cur()->startup_zero++;
-		cur()->startup_plc = audio_stats_get().plc_frames;
-		return 0;
 	}
 
 	first_nonzero_seen = true;
@@ -257,7 +300,9 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 		cur()->r_energy_max = r_energy;
 	}
 
-	/* Ordered FNV-1a over interleaved PCM (full) and per channel. */
+	/* Ordered FNV-1a: prepend the 4-byte LE frame index, then channel
+	 * sample bytes (uint16_t conversion before byte extraction).
+	 * Full = interleaved L,R; L and R per channel, one helper. */
 	uint32_t cnt = cur()->pushes;
 	uint8_t idx_bytes[4];
 
@@ -267,12 +312,12 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 	idx_bytes[3] = (cnt >> 24) & 0xFF;
 	cur()->full_hash = fnv1a_update(cur()->full_hash, idx_bytes, 4);
 	cur()->full_hash = fnv1a_update(cur()->full_hash, (const uint8_t *)data, sample_count * 2U);
-	cur()->l_hash = fnv1a_update(l_hash, idx_bytes, 4);
-	cur()->r_hash = fnv1a_update(r_hash, idx_bytes, 4);
+	cur()->l_hash = fnv1a_hash_channel(cur()->l_hash, cnt, data, sample_count / 2U, 2U);
+	cur()->r_hash = fnv1a_hash_channel(cur()->r_hash, cnt, data + 1, sample_count / 2U, 2U);
 
 	cur()->pushes++;
 
-	if (cur()->pushes == NORMAL_GOAL_PUSHES && !cur()->finalized) {
+	if (cur()->pushes >= NORMAL_GOAL_PUSHES && !cur()->finalized) {
 		segment_finalize(current_seg);
 		segment_count = current_seg + 1;
 		goal_finalized = true;
@@ -282,18 +327,6 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 }
 
 /* ── oracle queries ──────────────────────────────────────────────── */
-
-static bool scenario_needs_segment_stop(enum bsim_sink_scenario scn)
-{
-	return scn == BSIM_SCN_MODEA_FIRST_STOP_10MS ||
-	       scn == BSIM_SCN_RELEASE_WITHOUT_DISABLE_10MS ||
-	       scn == BSIM_SCN_DISCONNECT_STREAMING_10MS;
-}
-
-static uint32_t segment_pushes(int idx)
-{
-	return (idx >= 0 && idx < segment_count) ? segments[idx].pushes : 0U;
-}
 
 bool audio_sink_test_goal_reached(void)
 {
@@ -350,7 +383,7 @@ bool audio_sink_test_validate(void)
 	for (int i = 0; i < segment_count; i++) {
 		struct bsim_sink_segment *s = &segments[i];
 		const uint32_t expected_dec =
-			(uint32_t)dec_calls_per_push * (s->pushes + s->startup_zero);
+			(uint32_t)dec_calls_per_push * (s->pushes + s->transients);
 		const bool expect_stereo = (dec_calls_per_push == 2);
 		const uint32_t expected_err =
 			(scenario == BSIM_SCN_INVALID_SDU_RESUME_10MS) ? 1U : 0U;
@@ -365,31 +398,28 @@ bool audio_sink_test_validate(void)
 			     s->decode_errors, expected_err);
 			return false;
 		}
-		/* Post-start PLC frames whose concealment output is NONZERO are
-		 * indistinguishable from valid audio and are not faults; the
-		 * segment record reports the exact delta and the strict runner
-		 * pins it per scenario (BSim deterministic).  A post-start PLC
-		 * that conceals to silence faults in audio_sink_push
-		 * (zero-energy push after start). */
-		if (s->plc_frames < s->startup_plc) {
-			FAIL("le_audio_receiver: segment %d plc=%u < startup_plc=%u\n", i,
-			     s->plc_frames, s->startup_plc);
+		/* Zero post-start PLC: every PLC frame happened during the
+		 * startup phase (source-valid boundary), exactly. */
+		if (s->plc_frames != s->startup_plc) {
+			FAIL("le_audio_receiver: segment %d plc=%u != startup_plc=%u "
+			     "(post-start PLC)\n",
+			     i, s->plc_frames, s->startup_plc);
 			return false;
 		}
-		/* Decoder-invocation accounting: every push costs exactly
-		 * dec_calls decoder invocations, so the total can never
-		 * undercut pushes+startup-zeros; unpaired halves at the CIS
-		 * activation skew or a pairing cut add a bounded number of
-		 * extra decodes whose exact deterministic value is pinned
-		 * per scenario in the strict runner. */
+		/* Decoder-invocation accounting: every pushed SDU (valid or
+		 * startup transient) costs exactly dec_calls decoder
+		 * invocations, so the total can never undercut
+		 * pushes+transients; unpaired halves at the CIS activation
+		 * skew or a pairing cut add a bounded number of extra
+		 * decodes whose exact deterministic value is pinned per
+		 * scenario in the strict runner. */
 		if (s->total_frames < expected_dec) {
-			FAIL("le_audio_receiver: segment %d total=%u < pushes=%u+szero=%u "
+			FAIL("le_audio_receiver: segment %d total=%u < pushes=%u+transients=%u "
 			     "x dec=%d\n",
-			     i, s->total_frames, s->pushes, s->startup_zero, dec_calls_per_push);
+			     i, s->total_frames, s->pushes, s->transients, dec_calls_per_push);
 			return false;
 		}
-		if (s->pushes > 0U &&
-		    (s->full_hash == FNV_OFFSET_BASIS || s->full_hash == 0U)) {
+		if (s->pushes > 0U && (s->full_hash == FNV_OFFSET_BASIS || s->full_hash == 0U)) {
 			FAIL("le_audio_receiver: segment %d full hash unchanged from seed\n", i);
 			return false;
 		}
