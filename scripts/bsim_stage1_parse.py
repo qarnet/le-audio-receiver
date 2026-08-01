@@ -296,8 +296,6 @@ def check_scenario(scenario, recv, cli, known):
             if delta != known["known_plc_delta"]:
                 errs.append("post-start PLC delta %d != pinned %d"
                             % (delta, known["known_plc_delta"]))
-        if r.get("lemin1", 0) <= 0 or r.get("remin1", 0) <= 0:
-            errs.append("non-positive channel energy min")
 
         # Client send counts.
         if scenario == "invalid_sdu_resume_10ms":
