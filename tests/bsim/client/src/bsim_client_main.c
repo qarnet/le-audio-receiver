@@ -894,6 +894,7 @@ static int scenario_release_without_disable(void)
 	if (err != 0) {
 		return err;
 	}
+	bsim_tx_set_send_limit(&streams[0], 25);
 
 	err = stream_up(presets, 1, false);
 	if (err != 0) {
@@ -951,6 +952,7 @@ static int scenario_disconnect_streaming(void)
 	if (err != 0) {
 		return err;
 	}
+	bsim_tx_set_send_limit(&streams[0], 25);
 
 	err = stream_up(presets, 1, false);
 	if (err != 0) {

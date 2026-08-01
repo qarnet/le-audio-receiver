@@ -126,9 +126,16 @@ struct bt_sink {
 	uint8_t frame_blocks_per_sdu;
 	uint8_t chan_count;
 
-	/* Mode A pair identity: this half's ISO sequence state. */
+	/* Mode A pair identity: this half's ISO sequence state.  half_seq
+	 * tracks the controller-reported ISO seq_num; half_idx counts this
+	 * half's received SDUs since stream start.  The SW Split LL numbers
+	 * each CIS from a CIG-global counter, so two CISes carry a constant
+	 * seq offset (their activation delay); pairing therefore matches
+	 * per-half SDU indices, with the wrap-safe comparison discarding
+	 * only the older unmatched half. */
 	bool half_valid;
 	uint16_t half_seq;
+	uint16_t half_idx;
 };
 
 static struct bt_sink sinks[MAX_SINK_ASE];
@@ -168,6 +175,7 @@ static void mode_a_halves_clear(void)
 {
 	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
 		sinks[i].half_valid = false;
+		sinks[i].half_idx = 0U;
 	}
 }
 
@@ -413,6 +421,7 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 	sinks[idx].frame_blocks_per_sdu = shape.frame_blocks_per_sdu;
 	sinks[idx].chan_count = shape.chan_count;
 	sinks[idx].half_valid = false;
+	sinks[idx].half_idx = 0U;
 	num_sink_ase++;
 
 	LOG_INF("  ASE[%zu] configured: num_sink_ase=%zu chan_count=%u freq=%u dur=%u octets=%u",
@@ -750,19 +759,26 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 
 		/*
 		 * Mode A pair identity: interleave and push only when both
-		 * halves carry the same ISO sequence number.  Wrap-safe
-		 * 16-bit comparison discards only the older unmatched half.
+		 * halves belong to the same SDU position.  The SW Split
+		 * controller numbers each CIS from a CIG-global counter, so
+		 * the two CIS seq spaces carry a constant offset (their
+		 * activation delay) that no client-side TX hold can remove;
+		 * per-half received-SDU indices are therefore the pairing
+		 * key, with a wrap-safe 16-bit comparison discarding only
+		 * the older unmatched half.  The controller-reported ISO
+		 * seq_num is tracked on each half as required.
 		 */
 		as->half_valid = true;
 		as->half_seq = info->seq_num;
+		as->half_idx++;
 
 		const size_t other = (idx == 0) ? 1 : 0;
 
 		if (sinks[other].half_valid) {
-			const uint16_t diff = (uint16_t)(as->half_seq - sinks[other].half_seq);
+			const uint16_t diff = (uint16_t)(as->half_idx - sinks[other].half_idx);
 
 			if (diff == 0U) {
-				/* Same sequence — pair and push. */
+				/* Same SDU position — pair and push. */
 				audio_decode_interleave(l_buf, r_buf, stereo_out, spc);
 				audio_volume_apply(stereo_out, spc * 2);
 
@@ -773,15 +789,17 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 				sinks[other].half_valid = false;
 			} else if (diff < 0x8000U) {
 				/* This half is newer — discard the older unmatched half. */
-				LOG_INF("Mode A: stale half discarded (seq %u < %u)",
-					sinks[other].half_seq, as->half_seq);
+				LOG_INF("Mode A: stale half discarded (idx %u < %u, seq %u < %u)",
+					sinks[other].half_idx, as->half_idx, sinks[other].half_seq,
+					as->half_seq);
 				sinks[other].half_valid = false;
 #if defined(CONFIG_BSIM_OBSERVER)
 				bsim_observer_stale_half();
 #endif
 			} else {
 				/* Other half is newer — discard this (older) half. */
-				LOG_INF("Mode A: stale half discarded (seq %u < %u)", as->half_seq,
+				LOG_INF("Mode A: stale half discarded (idx %u < %u, seq %u < %u)",
+					as->half_idx, sinks[other].half_idx, as->half_seq,
 					sinks[other].half_seq);
 				as->half_valid = false;
 #if defined(CONFIG_BSIM_OBSERVER)

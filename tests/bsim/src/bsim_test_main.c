@@ -108,31 +108,41 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 	struct bsim_sink_segment s1;
 	bool have_s0 = audio_sink_test_get_segment(0, &s0);
 	bool have_s1 = audio_sink_test_get_segment(1, &s1);
-
-	printk("PASS_REC scenario=%s seg=%d after=%u adv_restart=%u pacs=1 "
-	       "obs_ok=%u obs_rej=%u obs_dir=%d obs_code=%d obs_reason=%d "
-	       "obs_gate_o=%u obs_gate_c=%u obs_mal=%u obs_blk=%u obs_stale=%u "
-	       "obs_rel=%u obs_disc=%u\n",
-	       scenario_names[scn], audio_sink_test_segment_count(),
-	       audio_sink_test_after_stop_total(), adv_restarted ? 1U : 0U,
-	       bsim_observer_get_config_accepted(), bsim_observer_get_config_rejected(),
-	       bsim_observer_get_last_config_dir(), bsim_observer_get_last_config_code(),
-	       bsim_observer_get_last_config_reason(), bsim_observer_get_gate_open(),
-	       bsim_observer_get_gate_close(), bsim_observer_get_malformed_sdu(),
-	       bsim_observer_get_recv_gate_blocked(), bsim_observer_get_stale_half(),
-	       bsim_observer_get_release_cleanup(), bsim_observer_get_disconnect_cleanup());
-
-	if (have_s0) {
-		emit_segment_fields("1", &s0);
-	}
-	if (have_s1) {
-		emit_segment_fields("2", &s1);
-	}
+	uint32_t pushes1 = have_s0 ? s0.pushes : 0U;
+	uint32_t szero1 = have_s0 ? s0.startup_zero : 0U;
+	uint32_t splc1 = have_s0 ? s0.startup_plc : 0U;
+	uint32_t total1 = have_s0 ? s0.total_frames : 0U;
+	uint32_t derr1 = have_s0 ? s0.decode_errors : 0U;
+	uint32_t mal1 = have_s0 ? s0.malformed_samples : 0U;
+	uint32_t h1 = have_s0 ? s0.full_hash : 0U;
+	uint32_t lh1 = have_s0 ? s0.l_hash : 0U;
+	uint32_t rh1 = have_s0 ? s0.r_hash : 0U;
+	int32_t lemin1 = have_s0 ? s0.l_energy_min : 0;
+	int32_t lemax1 = have_s0 ? s0.l_energy_max : 0;
+	int32_t remin1 = have_s0 ? s0.r_energy_min : 0;
+	int32_t remax1 = have_s0 ? s0.r_energy_max : 0;
+	uint32_t pushes2 = have_s1 ? s1.pushes : 0U;
+	uint32_t szero2 = have_s1 ? s1.startup_zero : 0U;
+	uint32_t splc2 = have_s1 ? s1.startup_plc : 0U;
+	uint32_t total2 = have_s1 ? s1.total_frames : 0U;
+	uint32_t derr2 = have_s1 ? s1.decode_errors : 0U;
+	uint32_t mal2 = have_s1 ? s1.malformed_samples : 0U;
+	uint32_t h2 = have_s1 ? s1.full_hash : 0U;
+	uint32_t lh2 = have_s1 ? s1.l_hash : 0U;
+	uint32_t rh2 = have_s1 ? s1.r_hash : 0U;
+	int32_t lemin2 = have_s1 ? s1.l_energy_min : 0;
+	int32_t lemax2 = have_s1 ? s1.l_energy_max : 0;
+	int32_t remin2 = have_s1 ? s1.r_energy_min : 0;
+	int32_t remax2 = have_s1 ? s1.r_energy_max : 0;
 
 	PASS("le_audio_receiver: scenario=%s seg=%u after=%u adv_restart=%u pacs=1 "
 	     "obs_ok=%u obs_rej=%u obs_dir=%d obs_code=%d obs_reason=%d "
 	     "obs_gate_o=%u obs_gate_c=%u obs_mal=%u obs_blk=%u obs_stale=%u "
-	     "obs_rel=%u obs_disc=%u\n",
+	     "obs_rel=%u obs_disc=%u "
+	     "pushes1=%u szero1=%u splc1=%u total1=%u derr1=%u mal1=%u "
+	     "h1=0x%08X lh1=0x%08X rh1=0x%08X lemin1=%d lemax1=%d remin1=%d remax1=%d "
+	     "pushes2=%u szero2=%u splc2=%u total2=%u derr2=%u mal2=%u "
+	     "h2=0x%08X lh2=0x%08X rh2=0x%08X lemin2=%d lemax2=%d remin2=%d remax2=%d\n",
 	     scenario_names[scn], audio_sink_test_segment_count(),
 	     audio_sink_test_after_stop_total(), adv_restarted ? 1U : 0U,
 	     bsim_observer_get_config_accepted(), bsim_observer_get_config_rejected(),
@@ -140,7 +150,10 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 	     bsim_observer_get_last_config_reason(), bsim_observer_get_gate_open(),
 	     bsim_observer_get_gate_close(), bsim_observer_get_malformed_sdu(),
 	     bsim_observer_get_recv_gate_blocked(), bsim_observer_get_stale_half(),
-	     bsim_observer_get_release_cleanup(), bsim_observer_get_disconnect_cleanup());
+	     bsim_observer_get_release_cleanup(), bsim_observer_get_disconnect_cleanup(),
+	     pushes1, szero1, splc1, total1, derr1, mal1, h1, lh1, rh1, lemin1, lemax1,
+	     remin1, remax1, pushes2, szero2, splc2, total2, derr2, mal2, h2, lh2, rh2,
+	     lemin2, lemax2, remin2, remax2);
 }
 
 static void scenario_main(enum bsim_sink_scenario scn, int dec_calls)

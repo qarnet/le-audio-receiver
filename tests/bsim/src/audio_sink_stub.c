@@ -61,6 +61,14 @@ static bool seg_finalized(int idx)
 	return idx >= 0 && idx < segment_count;
 }
 
+/*
+ * True once the current segment reached the normal 100-push goal and was
+ * finalized by it.  Pushes arriving after that (in-flight SDUs, teardown
+ * PLC concealment) are ignored, not counted and not faulted: the scenario
+ * is complete and the client has stopped sending.
+ */
+static bool goal_finalized;
+
 static struct bsim_sink_segment *cur(void)
 {
 	return &segments[current_seg];
@@ -125,6 +133,7 @@ void audio_sink_test_begin(enum bsim_sink_scenario scn, int dec_calls)
 	after_stop_total = 0U;
 	segment_count = 0;
 	current_seg = -1;
+	goal_finalized = false;
 	segment_start();
 }
 
@@ -159,8 +168,10 @@ void audio_sink_set_input_frames(uint16_t frames)
 		 * reset stopped/segment-local oracle state (a new segment
 		 * starts fresh).  Push-after-stop stays cumulative. */
 		stopped = false;
+		goal_finalized = false;
 		segment_start();
 	} else if (current_seg < 0 || segments[current_seg].finalized) {
+		goal_finalized = false;
 		segment_start();
 	}
 	required_samples = samples;
@@ -168,6 +179,11 @@ void audio_sink_set_input_frames(uint16_t frames)
 
 int audio_sink_push(const int16_t *data, size_t sample_count)
 {
+	if (goal_finalized) {
+		/* Scenario goal already reached: ignore any later push. */
+		return 0;
+	}
+
 	if (stopped) {
 		after_stop_total++;
 		FAIL("le_audio_receiver: push after stop — sample_count=%zu push#%u\n",
@@ -254,6 +270,7 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 	if (cur()->pushes == NORMAL_GOAL_PUSHES && !cur()->finalized) {
 		segment_finalize(current_seg);
 		segment_count = current_seg + 1;
+		goal_finalized = true;
 	}
 
 	return 0;

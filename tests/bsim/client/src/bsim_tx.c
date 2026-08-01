@@ -50,7 +50,6 @@ struct bsim_tx_stream {
 
 static struct bsim_tx_stream tx_streams[BSIM_TX_MAX_STREAMS];
 static atomic_int required_streaming = 1;
-static bool hold_reported;
 
 static struct bsim_tx_stream *tx_lookup(const struct bt_bap_stream *bap_stream)
 {
@@ -141,16 +140,6 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 
 	while (true) {
 		bool sent_any = false;
-		int stream_cnt = bsim_tx_streaming_count();
-		int req_cnt = atomic_load(&required_streaming);
-
-		if (stream_cnt >= req_cnt && req_cnt > 1 && !hold_reported) {
-			hold_reported = true;
-			printk("TX hold released: streaming=%d required=%d\n", stream_cnt, req_cnt);
-		}
-		if (stream_cnt < req_cnt) {
-			hold_reported = false;
-		}
 
 		for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
 			struct bsim_tx_stream *s = &tx_streams[i];
@@ -183,12 +172,6 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 				continue;
 			}
 
-			{
-				struct bt_bap_ep_info ei;
-				int rie = bt_bap_ep_get_info(s->bap_stream->ep, &ei);
-				printk("TX send s=%p idx=%u st=%d seq=%u rie=%d\n", s->bap_stream, i,
-				       rie == 0 ? (int)ei.state : -1, s->seq_num, rie);
-			}
 			int err = bt_bap_stream_send(s->bap_stream, buf, s->seq_num);
 
 			if (err == 0) {
