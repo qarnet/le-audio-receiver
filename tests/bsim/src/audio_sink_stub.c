@@ -257,19 +257,19 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 	 * post-start PLC (plc_frames != startup_plc at finalize) is a
 	 * fault.
 	 */
-	if (cur()->pushes + cur()->transients < 25U) {
-		printk("ORACLEDBG push=%u trans=%u energy=%d srcvalid=%d plc=%u\n",
-		       cur()->pushes, cur()->transients, energy, src_valid ? 1 : 0,
-		       audio_stats_get().plc_frames);
-	}
 	if (!boundary_closed) {
 		if (energy == 0) {
 			cur()->startup_zero++;
 		}
 		if (energy != 0 && src_valid) {
 			/* First fully valid push: closes the boundary and is
-			 * the first hashed frame (not a transient). */
+			 * the first hashed frame (not a transient).  The
+			 * interleaved sync-boundary LOST SDUs decode (PLC)
+			 * without pairing right up to this push, so the
+			 * startup_plc snapshot updates here too — every
+			 * PLC must land in the startup evidence. */
 			boundary_closed = true;
+			cur()->startup_plc = audio_stats_get().plc_frames;
 		} else {
 			cur()->transients++;
 			cur()->startup_plc = audio_stats_get().plc_frames;
