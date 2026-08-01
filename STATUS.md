@@ -321,15 +321,16 @@ CLOCK-008..010 added) and `docs/testing/coverage-matrix.md`; handoff:
   update/frequency/reset loops with a deterministic final reset; the
   focused run is clean under `-fsanitize=undefined` (trap-on-error).
 - **nRF54 timing production suite** — new `tests/unit/timing_nrf54/`
-  (15 tests) compiles real `audio_timing_nrf54.c` +
+  (18 tests) compiles real `audio_timing_nrf54.c` +
   `audio_timing_math.c` against test-owned include shadows of the
   installed nrfx_grtc/nrfx_gppi/nrf_grtc/nrf_timer HALs and a mock of
   `audio_drift_frequency_error_update()`.  Narrow
   `AUDIO_TIMING_NRF54_TEST` seams (test-owned `NRF_TIMER_Type` object
   instead of devicetree, deferred-work capture instead of dispatch,
-  state reset, minimal active/generation reads) never enter production
-  firmware.  Production defect fixed: **GPPI-allocation failure left
-  the GRTC compare event and interrupt enabled** — init now runs
+  state reset, minimal active/generation/overflow reads) never enter
+  production firmware.  Production defect fixed: **GPPI-allocation
+  failure left the GRTC compare event and interrupt enabled** — init
+  now runs
   `nrfx_grtc_syscounter_cc_disable(grtc_channel)` before
   `nrfx_grtc_channel_free(grtc_channel)` on that path (no GPPI free:
   the allocation never succeeded).  Tests pin allocation-failure exact
@@ -380,7 +381,62 @@ Acceptance evidence (desktop `thomas-main` + workstation `thomas-workstation`):
   removed; desktop repo clean on `test/pre-refactor-behavior`.
 - **T6 is next**: boot coordinator, shell, and resolved-config checker.
 
-### T4 review-fix round (2026-08-01)
+### T5 review-fix round (2026-08-01)
+
+Closes the deferred-measurement loss defect found in Thinker review of
+`102fc12`: the single `pending_diag` mailbox was overwritten by each GRTC
+callback before `k_work_submit()`, and Zephyr may coalesce submissions
+while the work item is pending/running, so a delayed system workqueue
+could silently discard one-second feedforward measurements — contradicting
+the every-measurement contract in `audio_drift.h` and CLOCK-008.
+Handoff: `docs/development/pre-refactor-testing-t5-review-fix-handoff.md`.
+Evidence updates: `docs/testing/behavior-contract.md` (CLOCK-008
+review-fix), `docs/testing/coverage-matrix.md` (timing row).
+
+- **Bounded FIFO** — the mailbox is replaced by a fixed, allocation-free
+  16-entry `diag_fifo` protected by `diag_lock`.  The ISR producer appends
+  measurement and schedule-error payloads in order via small private
+  helpers (bounded critical section, no logging, no dynamic allocation);
+  the work handler drains every queued payload in FIFO order in one
+  invocation, so one work submission may represent many payloads and
+  coalescing cannot lose measurements.  Each payload retains its
+  generation: stale generations are discarded independently, reset does
+  not rewrite queued payloads, and fresh-session payloads may follow old
+  payloads and still deliver.  Logging cadence stays per-payload
+  sequence.
+- **Overflow is an explicit fault** — a full FIFO sets an observable
+  overflow fault, clears `active`, and submits work; the handler emits
+  one `LOG_ERR` and clears the report; measurement resumes only via a
+  normal session reset and a new anchor; later callbacks while inactive
+  do nothing (ISR entry guard).  The dropped payload belongs to that
+  fault transition, not to normal feedforward loss.  Generation — not the
+  inactive flag — is the staleness authority, so accepted payloads queued
+  before a schedule failure or overflow still deliver (this removed the
+  work-handler `active` discard that would have dropped the 16 accepted
+  entries in the overflow case).
+- **Tests** — `tests/unit/timing_nrf54/` grows 15 → 18: 10-payload
+  backlog drained in FIFO order from one dispatch; stale-then-fresh mixed
+  generations in one FIFO (old rejected, fresh delivered); full-FIFO
+  overflow (16 accepted drained in order, fault observable and consumed,
+  later callbacks inactive).  All pre-existing timing tests stay green;
+  focused run 18/18 with zero warnings.
+
+Acceptance evidence (exact final code commit `ad74125`,
+bundle-transferred to a detached worktree on `thomas-workstation`; repo
+main never modified):
+
+- Full gate: **30 PASS / 0 FAIL / 30 TOTAL** — all 20 twister C suites
+  (incl. timing_nrf54 18/18), 4 exec-only C suites, 5 Python suites, and
+  the accepted T4 BabbleSim matrix with all pinned hashes unchanged.
+- All three production builds pass: `fw-build-5340`, `fw-build-54l15`,
+  `fw-build-dongle` — zero compiler warnings (documented non-actionable
+  diagnostics only).
+- Desktop `test-all.sh` on the same commit: 29/30 — the single failure
+  is `bsim: stage1` (BabbleSim component binaries not built on
+  `thomas-main`; workstation provides the authoritative BSim leg).
+- `git diff --check` clean; worktree/repo cleanup: workstation returned
+  to clean `main`, all temporary refs/worktrees/bundles/logs removed;
+  desktop repo clean on `test/pre-refactor-behavior`.
 
 Closes the protocol, oracle, teardown, timestamp, and harness-race
 defects found in orchestrator review.  Evidence:

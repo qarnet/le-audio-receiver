@@ -427,7 +427,7 @@ stream generation cannot feed drift with outdated frequency measurements.
 
 ### CLOCK-008 — nRF54 timing measurement contract (T5)
 
-The production nRF54 timing path (`tests/unit/timing_nrf54`, 15 tests
+The production nRF54 timing path (`tests/unit/timing_nrf54`, 18 tests
 compiling `audio_timing_nrf54.c` + `audio_timing_math.c` against mocked
 GRTC/GPPI/TIMER HALs) pins: GRTC allocation failure returns the exact error
 with no later setup; GPPI allocation failure disables the GRTC compare/
@@ -448,6 +448,28 @@ increments the generation, and permits one new anchor; work captured before
 reset is rejected as stale; and every non-stale measurement reaches
 `audio_drift_frequency_error_update()` while diagnostic log pacing does not
 suppress feedforward.
+
+**T5 review-fix (FIFO/backlog/overflow):** measurements are published into a
+fixed, allocation-free 16-entry FIFO (`diag_fifo`) instead of a single
+mailbox, so Zephyr's `k_work_submit()` coalescing while the work item is
+pending/running cannot lose one-second feedforward measurements.  The ISR
+producer appends measurement and schedule-error payloads in order under
+`diag_lock` (bounded critical section, no logging, no dynamic allocation);
+the work handler drains every queued payload in FIFO order in one invocation
+(a single submission may represent many payloads).  Each payload retains its
+generation: stale generations are discarded independently, reset does not
+rewrite queued payloads, and fresh-session payloads may follow old payloads
+and still deliver.  Logging cadence stays per-payload sequence.  Queue
+overflow is an explicit fault, never silent evidence loss: a full FIFO sets
+an observable overflow fault, clears `active`, and submits work; the handler
+emits one `LOG_ERR` and clears the report; measurement resumes only via a
+normal session reset and a new anchor; later callbacks while inactive do
+nothing (ISR entry guard).  Generation — not the inactive flag — is the
+staleness authority, so accepted payloads queued before a schedule failure
+or overflow still deliver.  Tests pin 10-payload backlog FIFO order from one
+dispatch, stale-then-fresh mixed generations in one FIFO, and full-FIFO
+overflow (16 accepted drained in order, fault observable and consumed,
+later callbacks inactive).
 
 ### CLOCK-009 — Defined drift arithmetic (T5)
 
