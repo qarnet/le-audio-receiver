@@ -16,10 +16,12 @@ target_sources(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio_offload.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/audio_sink_stub.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/bsim_test_main.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/bsim_observer.c
 )
 
 target_include_directories(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 # BSIM component headers

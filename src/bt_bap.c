@@ -43,13 +43,30 @@
 #include "audio_offload.h"
 #include "stream_lifecycle.h"
 
+#if defined(CONFIG_BSIM_OBSERVER)
+#include "bsim_observer.h"
+#endif
+
 #if defined(CONFIG_LIBLC3)
 #include "lc3.h"
 #endif
 
 LOG_MODULE_REGISTER(bt_bap, LOG_LEVEL_INF);
 
-#define MAX_SINK_ASE      CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT
+/*
+ * Sink stream pool.  Production registers exactly
+ * CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT sink ASEs and allocates one stream
+ * per ASE.  The BSim build registers three sink ASEs (to reach the
+ * otherwise unreachable NO_MEM path) but keeps the repository stream
+ * pool limited to two via the test-only CONFIG_BSIM_SINK_POOL_LIMIT
+ * symbol; production builds contain no such symbol.
+ */
+#if defined(CONFIG_BSIM_SINK_POOL_LIMIT)
+#define MAX_SINK_ASE CONFIG_BSIM_SINK_POOL_LIMIT
+#else
+#define MAX_SINK_ASE CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT
+#endif
+
 #define MAX_SINK_CHANNELS 2
 
 #define AVAILABLE_SINK_CONTEXT                                                                     \
@@ -67,6 +84,21 @@ static const struct bt_audio_codec_cap lc3_codec_cap = BT_AUDIO_CODEC_CAP_LC3(
 	BT_AUDIO_CODEC_CAP_CHAN_COUNT_SUPPORT(1) | BT_AUDIO_CODEC_CAP_CHAN_COUNT_SUPPORT(2), 20u,
 	120u, 1u, AVAILABLE_SINK_CONTEXT);
 
+#if defined(CONFIG_BSIM_SOURCE_ASE)
+/*
+ * BSim-only source capability.  Production is sink-only (zero source
+ * ASEs); the BSim source endpoint exists solely to exercise the
+ * repository's source-direction rejection through the real ASCS server
+ * (the server refuses source Configs it has no PAC cap for before the
+ * application callback runs, so a source PAC must exist in BSim).
+ */
+static const struct bt_audio_codec_cap lc3_source_codec_cap =
+	BT_AUDIO_CODEC_CAP_LC3(BT_AUDIO_CODEC_CAP_FREQ_48KHZ,
+			       BT_AUDIO_CODEC_CAP_DURATION_7_5 | BT_AUDIO_CODEC_CAP_DURATION_10,
+			       BT_AUDIO_CODEC_CAP_CHAN_COUNT_SUPPORT(1), 20u, 120u, 1u,
+			       (BT_AUDIO_CONTEXT_TYPE_UNSPECIFIED | BT_AUDIO_CONTEXT_TYPE_MEDIA));
+#endif /* CONFIG_BSIM_SOURCE_ASE */
+
 static struct bt_conn *default_conn;
 
 #if defined(CONFIG_LIBLC3)
@@ -79,6 +111,21 @@ struct bt_sink {
 	size_t recv_cnt;
 	uint32_t pd_us; /* negotiated presentation delay */
 	struct audio_decode_ctx decode;
+
+	/*
+	 * Validated codec shape, stored at Config time.  Enable re-validates
+	 * the retained codec config against this shape and fails safely on
+	 * mismatch.  SDU length validation in stream_recv uses these fields.
+	 */
+	uint16_t freq_hz;
+	uint16_t frame_dur_us;
+	uint16_t octets_per_frame;
+	uint8_t frame_blocks_per_sdu;
+	uint8_t chan_count;
+
+	/* Mode A pair identity: this half's ISO sequence state. */
+	bool half_valid;
+	uint16_t half_seq;
 };
 
 static struct bt_sink sinks[MAX_SINK_ASE];
@@ -113,8 +160,13 @@ static const struct bt_data ad[] = {
 static int16_t l_buf[SAMPLES_PER_CHANNEL_MAX];
 static int16_t r_buf[SAMPLES_PER_CHANNEL_MAX];
 static int16_t stereo_out[STEREO_OUT_MAX];
-static bool l_received;
-static bool r_received;
+
+static void mode_a_halves_clear(void)
+{
+	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
+		sinks[i].half_valid = false;
+	}
+}
 
 #endif /* CONFIG_LIBLC3 */
 
@@ -188,6 +240,109 @@ static size_t stream_alloc_idx(void)
 	return MAX_SINK_ASE; /* no free slot */
 }
 
+/* ── early codec-shape validation ─────────────────────────────────── */
+
+/*
+ * Validate one LC3 codec configuration against the advertised receiver
+ * shape BEFORE any slot allocation or lifecycle mutation:
+ *
+ *  - codec ID is LC3;
+ *  - frequency field present, converts successfully, exactly 48000 Hz;
+ *  - frame-duration field present, converts successfully, 7500 or 10000 us;
+ *  - octets-per-frame field present, 20..120 inclusive;
+ *  - frame blocks per SDU resolves to exactly 1 (missing optional field
+ *    falls back to 1 per the Zephyr/spec default; explicit other values
+ *    rejected);
+ *  - channel allocation absent means mono; a present allocation must
+ *    contain exactly one or two channels, never zero or more than two.
+ *
+ * On success the validated shape is written to @p shape.  On failure the
+ * caller's @p rsp is set to CONF_INVALID / CODEC_DATA (or
+ * CONF_UNSUPPORTED / CODEC for a non-LC3 codec ID) and -EINVAL is
+ * returned.  Nothing is mutated.
+ */
+static int validate_codec_cfg(const struct bt_audio_codec_cfg *codec_cfg, struct bt_sink *shape,
+			      struct bt_bap_ascs_rsp *rsp)
+{
+	int ret;
+	int freq_hz;
+	int frame_us;
+	int chan_count;
+	enum bt_audio_location chan_alloc;
+
+	if (codec_cfg->id != BT_HCI_CODING_FORMAT_LC3) {
+		LOG_WRN("Codec id 0x%02x not supported", codec_cfg->id);
+		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_UNSUPPORTED,
+				       BT_BAP_ASCS_REASON_CODEC);
+		return -EINVAL;
+	}
+
+	ret = bt_audio_codec_cfg_get_freq(codec_cfg);
+	if (ret < 0) {
+		LOG_WRN("Codec config: missing/invalid frequency (%d)", ret);
+		goto invalid;
+	}
+	freq_hz = bt_audio_codec_cfg_freq_to_freq_hz(ret);
+	if (freq_hz != 48000) {
+		LOG_WRN("Codec config: unsupported frequency %d Hz", freq_hz);
+		goto invalid;
+	}
+
+	ret = bt_audio_codec_cfg_get_frame_dur(codec_cfg);
+	if (ret < 0) {
+		LOG_WRN("Codec config: missing/invalid frame duration (%d)", ret);
+		goto invalid;
+	}
+	frame_us = bt_audio_codec_cfg_frame_dur_to_frame_dur_us(ret);
+	if (frame_us != 7500 && frame_us != 10000) {
+		LOG_WRN("Codec config: unsupported frame duration %d us", frame_us);
+		goto invalid;
+	}
+
+	ret = bt_audio_codec_cfg_get_octets_per_frame(codec_cfg);
+	if (ret < 0) {
+		LOG_WRN("Codec config: missing/invalid octets per frame (%d)", ret);
+		goto invalid;
+	}
+	if (ret < 20 || ret > 120) {
+		LOG_WRN("Codec config: octets per frame %d out of advertised range 20..120", ret);
+		goto invalid;
+	}
+
+	ret = bt_audio_codec_cfg_get_frame_blocks_per_sdu(codec_cfg, true);
+	if (ret < 0 || ret != 1) {
+		LOG_WRN("Codec config: frame blocks per SDU %d (must be exactly 1)", ret);
+		goto invalid;
+	}
+
+	ret = bt_audio_codec_cfg_get_chan_allocation(codec_cfg, &chan_alloc, false);
+	if (ret == -ENODATA) {
+		/* Channel allocation absent → mono. */
+		chan_count = 1;
+	} else if (ret == 0) {
+		chan_count = POPCOUNT(chan_alloc);
+		if (chan_count == 0 || chan_count > MAX_SINK_CHANNELS) {
+			LOG_WRN("Codec config: channel allocation 0x%08x has %d channels",
+				chan_alloc, chan_count);
+			goto invalid;
+		}
+	} else {
+		LOG_WRN("Codec config: missing/invalid channel allocation (%d)", ret);
+		goto invalid;
+	}
+
+	shape->freq_hz = (uint16_t)freq_hz;
+	shape->frame_dur_us = (uint16_t)frame_us;
+	shape->octets_per_frame = (uint16_t)ret;
+	shape->frame_blocks_per_sdu = 1;
+	shape->chan_count = (uint8_t)chan_count;
+	return 0;
+
+invalid:
+	*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID, BT_BAP_ASCS_REASON_CODEC_DATA);
+	return -EINVAL;
+}
+
 /* ── ASCS callbacks ──────────────────────────────────────────────── */
 
 static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_audio_dir dir,
@@ -201,6 +356,26 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 		LOG_WRN("Source direction unsupported");
 		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_UNSUPPORTED,
 				       BT_BAP_ASCS_REASON_NONE);
+#if defined(CONFIG_BSIM_OBSERVER)
+		bsim_observer_config(false, dir, rsp->code, rsp->reason);
+#endif
+		return -EINVAL;
+	}
+
+	/*
+	 * Validate the codec shape BEFORE slot allocation or any lifecycle
+	 * mutation: a rejected Config must not allocate a sink slot,
+	 * increment num_sink_ase, touch a decoder/lifecycle slot, or
+	 * consume capacity needed by a later valid request.
+	 */
+	struct bt_sink shape;
+
+	memset(&shape, 0, sizeof(shape));
+	if (validate_codec_cfg(codec_cfg, &shape, rsp) != 0) {
+		LOG_WRN("Codec config rejected: code 0x%02x reason 0x%02x", rsp->code, rsp->reason);
+#if defined(CONFIG_BSIM_OBSERVER)
+		bsim_observer_config(false, dir, rsp->code, rsp->reason);
+#endif
 		return -EINVAL;
 	}
 
@@ -209,6 +384,9 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 	if (idx >= MAX_SINK_ASE) {
 		LOG_ERR("No free sink slot (max %d)", MAX_SINK_ASE);
 		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_NO_MEM, BT_BAP_ASCS_REASON_NONE);
+#if defined(CONFIG_BSIM_OBSERVER)
+		bsim_observer_config(false, dir, rsp->code, rsp->reason);
+#endif
 		return -ENOMEM;
 	}
 
@@ -217,30 +395,29 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 	sinks[idx].decode.decoder = NULL;
 #endif
 	sinks[idx].recv_cnt = 0;
+	sinks[idx].pd_us = 0;
+	sinks[idx].freq_hz = shape.freq_hz;
+	sinks[idx].frame_dur_us = shape.frame_dur_us;
+	sinks[idx].octets_per_frame = shape.octets_per_frame;
+	sinks[idx].frame_blocks_per_sdu = shape.frame_blocks_per_sdu;
+	sinks[idx].chan_count = shape.chan_count;
+	sinks[idx].half_valid = false;
 	num_sink_ase++;
 
-	enum bt_audio_location chan_alloc;
-	int cc = bt_audio_codec_cfg_get_chan_allocation(codec_cfg, &chan_alloc, false);
-
-	if (cc == 0) {
-		int cnt = POPCOUNT(chan_alloc);
-
-		sinks[idx].decode.chan_count = (cnt > 0) ? cnt : 1;
-		LOG_INF("  chan alloc 0x%08x count=%d", chan_alloc, sinks[idx].decode.chan_count);
-	} else {
-		LOG_DBG("  chan alloc not found (%d), defaulting chan_count=1", cc);
-		sinks[idx].decode.chan_count = 1;
-	}
+	LOG_INF("  ASE[%zu] configured: num_sink_ase=%zu chan_count=%u freq=%u dur=%u octets=%u",
+		idx, num_sink_ase, sinks[idx].chan_count, sinks[idx].freq_hz,
+		sinks[idx].frame_dur_us, sinks[idx].octets_per_frame);
 
 	/*
 	 * Register with lifecycle gate AFTER final chan_count is known,
 	 * so the started callback can distinguish Mode A (two mono ASEs)
 	 * from Mode B / mono (single ASE).
 	 */
-	LOG_DBG("lifecycle: sink[%zu] configured chan_count=%d", idx, sinks[idx].decode.chan_count);
-	stream_lifecycle_sink_configured(idx, sinks[idx].decode.chan_count);
+	stream_lifecycle_sink_configured(idx, sinks[idx].chan_count);
 
-	LOG_INF("  ASE[%zu] configured: num_sink_ase=%zu", idx, num_sink_ase);
+#if defined(CONFIG_BSIM_OBSERVER)
+	bsim_observer_config(true, dir, BT_BAP_ASCS_RSP_CODE_SUCCESS, BT_BAP_ASCS_REASON_NONE);
+#endif
 
 	*pref = qos_pref;
 	return 0;
@@ -266,56 +443,38 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 	LOG_INF("Enable: stream[%zu] meta_len %zu", idx, meta_len);
 
 #if defined(CONFIG_LIBLC3)
-	int cc = sinks[idx].decode.chan_count;
-	int ret;
-	ret = bt_audio_codec_cfg_get_freq(stream->codec_cfg);
+	/*
+	 * Re-validate the retained codec config against the shape stored
+	 * at Config time.  Enable fails safely (CONF_INVALID / CODEC_DATA)
+	 * if the retained config no longer matches the stored shape.
+	 */
+	struct bt_sink shape;
+
+	memset(&shape, 0, sizeof(shape));
+	if (validate_codec_cfg(stream->codec_cfg, &shape, rsp) != 0) {
+		return -EINVAL;
+	}
+	if (shape.freq_hz != sinks[idx].freq_hz || shape.frame_dur_us != sinks[idx].frame_dur_us ||
+	    shape.octets_per_frame != sinks[idx].octets_per_frame ||
+	    shape.frame_blocks_per_sdu != sinks[idx].frame_blocks_per_sdu ||
+	    shape.chan_count != sinks[idx].chan_count) {
+		LOG_ERR("Enable: retained codec config no longer matches stored shape");
+		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
+				       BT_BAP_ASCS_REASON_CODEC_DATA);
+		return -EINVAL;
+	}
+
+	int ret = audio_decode_config(&sinks[idx].decode, sinks[idx].chan_count, sinks[idx].freq_hz,
+				      sinks[idx].frame_dur_us, sinks[idx].frame_blocks_per_sdu);
 	if (ret < 0) {
-		LOG_ERR("freq not set");
+		LOG_ERR("LC3 decoder setup failed (freq=%d dur=%d ch=%d)", sinks[idx].freq_hz,
+			sinks[idx].frame_dur_us, sinks[idx].chan_count);
 		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
 				       BT_BAP_ASCS_REASON_CODEC_DATA);
 		return ret;
 	}
-	int freq = bt_audio_codec_cfg_freq_to_freq_hz(ret);
-	if (freq < 0) {
-		LOG_ERR("invalid freq conversion: %d", ret);
-		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
-				       BT_BAP_ASCS_REASON_CODEC_DATA);
-		return freq;
-	}
-
-	ret = bt_audio_codec_cfg_get_frame_dur(stream->codec_cfg);
-	int frame_us;
-	if (ret < 0) {
-		LOG_ERR("frame dur not set (ret=%d)", ret);
-		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
-				       BT_BAP_ASCS_REASON_CODEC_DATA);
-		return ret;
-	} else {
-		frame_us = bt_audio_codec_cfg_frame_dur_to_frame_dur_us(ret);
-		if (frame_us < 0) {
-			LOG_ERR("invalid frame dur conversion: %d", ret);
-			*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
-					       BT_BAP_ASCS_REASON_CODEC_DATA);
-			return frame_us;
-		}
-	}
-
-	int frames_per_sdu = bt_audio_codec_cfg_get_frame_blocks_per_sdu(stream->codec_cfg, true);
-	if (frames_per_sdu < 0) {
-		LOG_ERR("invalid frames_per_sdu: %d", frames_per_sdu);
-		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
-				       BT_BAP_ASCS_REASON_CODEC_DATA);
-		return frames_per_sdu;
-	}
-
-	ret = audio_decode_config(&sinks[idx].decode, cc, freq, frame_us, frames_per_sdu);
-	if (ret < 0) {
-		LOG_ERR("LC3 decoder setup failed (freq=%d dur=%d ch=%d)", freq, frame_us, cc);
-		*rsp = BT_BAP_ASCS_RSP(BT_BAP_ASCS_RSP_CODE_CONF_INVALID,
-				       BT_BAP_ASCS_REASON_CODEC_DATA);
-		return ret;
-	}
-	LOG_INF("LC3 decoder[%zu]: %d Hz %d us ch=%d", idx, freq, frame_us, cc);
+	LOG_INF("LC3 decoder[%zu]: %d Hz %d us ch=%d", idx, sinks[idx].freq_hz,
+		sinks[idx].frame_dur_us, sinks[idx].chan_count);
 
 	/* Tell the audio sink the expected stereo frames per push
 	 * (depends on frame duration: 360 for 7.5 ms, 480 for 10 ms).
@@ -328,8 +487,9 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 static int lc3_start(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
 {
 	LOG_INF("Start: stream[%zu]", sink_idx(stream));
-	l_received = false;
-	r_received = false;
+#if defined(CONFIG_LIBLC3)
+	mode_a_halves_clear();
+#endif
 	return 0;
 }
 
@@ -362,8 +522,7 @@ static int lc3_stop(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
 	if (stream_lifecycle_audio_path_close()) {
 		audio_offload_stream_stop();
 #if defined(CONFIG_LIBLC3)
-		l_received = false;
-		r_received = false;
+		mode_a_halves_clear();
 #endif
 	}
 	return 0;
@@ -384,8 +543,7 @@ static int lc3_release(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp
 	if (stream_lifecycle_audio_path_close()) {
 		audio_offload_stream_stop();
 #if defined(CONFIG_LIBLC3)
-		l_received = false;
-		r_received = false;
+		mode_a_halves_clear();
 #endif
 	}
 	memset(&sinks[idx], 0, sizeof(sinks[idx]));
@@ -409,22 +567,6 @@ static const struct bt_bap_unicast_server_cb unicast_server_cb = {
 /* ── Data path: LC3 decode → stereo interleave → I2S push ───────── */
 
 #if defined(CONFIG_LIBLC3)
-
-static void push_stereo(void)
-{
-	if (num_sink_ase >= 1 && l_received && r_received) {
-		int n = sinks[0].decode.samples_per_ch;
-
-		audio_decode_interleave(l_buf, r_buf, stereo_out, n);
-		audio_volume_apply(stereo_out, n * 2);
-
-		if (audio_sink_push(stereo_out, n * 2) < 0) {
-			audio_perf_push_failure();
-		}
-		l_received = false;
-		r_received = false;
-	}
-}
 
 static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_info *info,
 			struct net_buf *buf)
@@ -475,6 +617,11 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 			LOG_INF("stream_recv[%zu]: gate closed, skipping decode", idx);
 			gate_blocked++;
 		}
+#if defined(CONFIG_BSIM_OBSERVER)
+		if (valid) {
+			bsim_observer_recv_gate_blocked();
+		}
+#endif
 		audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
 		return;
 	}
@@ -485,24 +632,60 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		return;
 	}
 
+	/*
+	 * Exact SDU payload validation (valid packets only).  A valid-flag
+	 * packet whose length does not match the configured shape is
+	 * rejected BEFORE any decode/pull/copy: exactly one
+	 * decode-error/malformed-SDU evidence increment, no liblc3 call,
+	 * no left/right pairing-state mutation, no volume apply, no push.
+	 * PLC (valid=false) remains supported with the configured byte
+	 * shape and may produce concealment output.
+	 */
+	if (valid && as->octets_per_frame > 0U) {
+		size_t expected = (size_t)as->octets_per_frame * as->frame_blocks_per_sdu;
+
+		if (as->decode.chan_count == 2) {
+			expected *= 2U; /* Mode B: [L frame][R frame] per block */
+		}
+		if (buf->len != expected) {
+			LOG_WRN("stream[%zu]: malformed SDU len %u != expected %zu", idx, buf->len,
+				expected);
+			audio_stats_decode_error();
+#if defined(CONFIG_BSIM_OBSERVER)
+			bsim_observer_malformed_sdu();
+#endif
+			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
+			return;
+		}
+	}
+
 	if (as->decode.chan_count >= 2) {
 		/* Mode B: stereo single-ASE — split SDU per-channel, two
 		 * independent decoders with stride=2 handled by
-		 * audio_decode_sdu.
+		 * audio_decode_sdu.  A negative decode return skips volume
+		 * and sink push.
 		 */
-		audio_decode_sdu(&as->decode, valid ? buf->data : NULL, buf->len, valid,
-				 stereo_out);
+		int ret = audio_decode_sdu(&as->decode, valid ? buf->data : NULL, buf->len, valid,
+					   stereo_out);
+
+		if (ret < 0) {
+			LOG_WRN("stream[%zu]: decode failed %d — skipping volume/push", idx, ret);
+			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
+			return;
+		}
 		audio_volume_apply(stereo_out, spc * 2);
 
 		if (audio_sink_push(stereo_out, spc * 2) < 0) {
 			audio_perf_push_failure();
 		}
 	} else if (num_sink_ase >= 2) {
-		/* Mode A: 2 mono ASEs — decode to separate L/R buffers,
-		 * then interleave when both have arrived.
+		/* Mode A: 2 mono ASEs — decode to separate L/R buffers.
+		 * Hard decoder errors skip that half and cannot pair it;
+		 * PLC halves may pair and produce concealment output.
 		 */
 		const int octets_per_frame = f_per_sdu > 0 ? (buf->len / f_per_sdu) : buf->len;
 		int16_t *dest = (idx == 0) ? l_buf : r_buf;
+		bool decoded_ok = true;
 
 		for (int i = 0; i < f_per_sdu; i++) {
 			uint32_t t1 = audio_perf_cycle_start();
@@ -516,22 +699,74 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 			} else if (err < 0) {
 				LOG_WRN("[%zu:%d]: LC3 decode error %d", idx, i, err);
 				audio_stats_decode_error();
+				decoded_ok = false;
 			} else {
 				audio_stats_frame_decoded();
 			}
 		}
-		if (idx == 0) {
-			l_received = true;
-		} else {
-			r_received = true;
+		if (!decoded_ok) {
+			/* Hard decoder error: this half cannot pair.  Leave
+			 * half-valid state untouched so a stale half can
+			 * never pair with the failed one.
+			 */
+			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
+			return;
 		}
-		push_stereo();
+
+		/*
+		 * Mode A pair identity: interleave and push only when both
+		 * halves carry the same ISO sequence number.  Wrap-safe
+		 * 16-bit comparison discards only the older unmatched half.
+		 */
+		as->half_valid = true;
+		as->half_seq = info->seq_num;
+
+		const size_t other = (idx == 0) ? 1 : 0;
+
+		if (sinks[other].half_valid) {
+			const uint16_t diff = (uint16_t)(as->half_seq - sinks[other].half_seq);
+
+			if (diff == 0U) {
+				/* Same sequence — pair and push. */
+				audio_decode_interleave(l_buf, r_buf, stereo_out, spc);
+				audio_volume_apply(stereo_out, spc * 2);
+
+				if (audio_sink_push(stereo_out, spc * 2) < 0) {
+					audio_perf_push_failure();
+				}
+				as->half_valid = false;
+				sinks[other].half_valid = false;
+			} else if (diff < 0x8000U) {
+				/* This half is newer — discard the older unmatched half. */
+				LOG_INF("Mode A: stale half discarded (seq %u < %u)",
+					sinks[other].half_seq, as->half_seq);
+				sinks[other].half_valid = false;
+#if defined(CONFIG_BSIM_OBSERVER)
+				bsim_observer_stale_half();
+#endif
+			} else {
+				/* Other half is newer — discard this (older) half. */
+				LOG_INF("Mode A: stale half discarded (seq %u < %u)", as->half_seq,
+					sinks[other].half_seq);
+				as->half_valid = false;
+#if defined(CONFIG_BSIM_OBSERVER)
+				bsim_observer_stale_half();
+#endif
+			}
+		}
 	} else {
 		/* Mono single-ASE: decode + mono-to-stereo handled by
-		 * audio_decode_sdu.
+		 * audio_decode_sdu.  A negative decode return skips volume
+		 * and sink push.
 		 */
-		audio_decode_sdu(&as->decode, valid ? buf->data : NULL, buf->len, valid,
-				 stereo_out);
+		int ret = audio_decode_sdu(&as->decode, valid ? buf->data : NULL, buf->len, valid,
+					   stereo_out);
+
+		if (ret < 0) {
+			LOG_WRN("stream[%zu]: decode failed %d — skipping volume/push", idx, ret);
+			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
+			return;
+		}
 		audio_volume_apply(stereo_out, spc * 2);
 
 		if (audio_sink_push(stereo_out, spc * 2) < 0) {
@@ -579,8 +814,7 @@ static void stream_stopped(struct bt_bap_stream *s, uint8_t reason)
 	if (stream_lifecycle_audio_path_close()) {
 		audio_offload_stream_stop();
 #if defined(CONFIG_LIBLC3)
-		l_received = false;
-		r_received = false;
+		mode_a_halves_clear();
 #endif
 	}
 }
@@ -600,6 +834,10 @@ static void stream_started(struct bt_bap_stream *s)
 
 	if (gate_opened) {
 		LOG_INF("Audio path gate OPEN (stream[%zu] completed the set)", idx);
+#if defined(CONFIG_LIBLC3)
+		/* Clear any pending Mode A halves from the previous session. */
+		mode_a_halves_clear();
+#endif
 		/* Phase 5.0: reset perf counters at start of new audio session.
 		 * Metrics from previous session are discarded here; use
 		 * 'audio perf' before gate opens to inspect completed-session data.
@@ -608,6 +846,10 @@ static void stream_started(struct bt_bap_stream *s)
 
 		/* Phase 6 Stage 2: start offload pipeline for new stream. */
 		audio_offload_stream_start();
+
+#if defined(CONFIG_BSIM_OBSERVER)
+		bsim_observer_gate_open();
+#endif
 	}
 }
 
@@ -630,16 +872,15 @@ static void stream_disabled_cb(struct bt_bap_stream *s)
 	 * Close the audio-path gate BEFORE stopping the sink.
 	 * Must be first so late callbacks on the other ASE cannot
 	 * decode, interleave, push, or restart I2S after the gate
-	 * closes.  Clear channel-pair state (l_received/r_received)
-	 * on the same transition so stale halves cannot pair.
+	 * closes.  Clear channel-pair state on the same transition so
+	 * stale halves cannot pair.
 	 */
 	bool was_open = stream_lifecycle_audio_path_close();
 	if (was_open) {
 		LOG_INF("Audio path gate CLOSED (first disable)");
 		audio_offload_stream_stop();
 #if defined(CONFIG_LIBLC3)
-		l_received = false;
-		r_received = false;
+		mode_a_halves_clear();
 #endif
 	}
 
@@ -713,8 +954,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	stream_lifecycle_reset();
 
 #if defined(CONFIG_LIBLC3)
-	l_received = false;
-	r_received = false;
+	mode_a_halves_clear();
 
 	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
 		audio_decode_reset(&sinks[i].decode);
@@ -742,6 +982,9 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 /* ── PACS / contexts / location ──────────────────────────────────── */
 
 static struct bt_pacs_cap cap_sink = {.codec_cap = &lc3_codec_cap};
+#if defined(CONFIG_BSIM_SOURCE_ASE)
+static struct bt_pacs_cap cap_source = {.codec_cap = &lc3_source_codec_cap};
+#endif
 
 static int set_location(void)
 {
@@ -806,6 +1049,10 @@ int bt_bap_init(void)
 	const struct bt_pacs_register_param pacs_param = {
 		.snk_pac = true,
 		.snk_loc = true,
+#if defined(CONFIG_BSIM_SOURCE_ASE)
+		.src_pac = true,
+		.src_loc = true,
+#endif
 	};
 	static struct bt_bap_unicast_server_register_param param = {
 		CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT, CONFIG_BT_ASCS_MAX_ASE_SRC_COUNT};
@@ -836,6 +1083,14 @@ int bt_bap_init(void)
 		LOG_ERR("PACS cap register failed: %d", err);
 		return err;
 	}
+
+#if defined(CONFIG_BSIM_SOURCE_ASE)
+	err = bt_pacs_cap_register(BT_AUDIO_DIR_SOURCE, &cap_source);
+	if (err) {
+		LOG_ERR("PACS source cap register failed: %d", err);
+		return err;
+	}
+#endif
 
 	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
 		bt_bap_stream_cb_register(&sinks[i].stream, &stream_ops);
