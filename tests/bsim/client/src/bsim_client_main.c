@@ -1031,8 +1031,13 @@ static int scenario_reconnect_second_stream(void)
 	 * lingers until its last reference drops). */
 	k_sleep(K_MSEC(2000));
 
+	/* Free session 1's unicast group (single-group pool). */
+	if (unicast_group != NULL) {
+		bt_bap_unicast_group_delete(unicast_group);
+		unicast_group = NULL;
+	}
+
 	/* ── session 2: reconnect + rediscover + fresh stream ── */
-	unicast_group = NULL;
 	err = scan_and_connect();
 	if (err != 0) {
 		return err;
