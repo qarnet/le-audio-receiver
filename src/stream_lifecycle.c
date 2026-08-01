@@ -60,11 +60,18 @@ bool stream_lifecycle_sink_started(size_t idx)
 		should_open = (started >= 2);
 	}
 
-	if (should_open && !audio_path_open) {
+	/* Report a closed-to-open transition only: a duplicate start
+	 * while the gate is already open must not repeat the one-time
+	 * open work in the caller (perf reset, offload start, observer
+	 * event).  See LIFE-003.
+	 */
+	bool opened = should_open && !audio_path_open;
+
+	if (opened) {
 		audio_path_open = true;
 	}
 
-	return should_open;
+	return opened;
 }
 
 void stream_lifecycle_sink_release(size_t idx)

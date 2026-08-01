@@ -28,8 +28,11 @@ void stream_lifecycle_sink_configured(size_t idx, int chan_count);
 
 /**
  * Mark sink @p idx as started.
- * @return true if the audio-path gate should now be opened
- *         (Mode B: 1 ASE started; Mode A: both ASEs started).
+ * @return true only for a closed-to-open transition of the audio-path
+ *         gate (Mode B: 1 ASE started; Mode A: both ASEs started).
+ *         Duplicate starts while the gate is already open return false
+ *         so the caller runs the one-time open work exactly once per
+ *         stream lifecycle.
  */
 bool stream_lifecycle_sink_started(size_t idx);
 

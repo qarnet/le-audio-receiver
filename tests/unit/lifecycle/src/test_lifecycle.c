@@ -220,6 +220,152 @@ ZTEST(lifecycle, test_out_of_bounds_idx_noop)
 	zassert_false(stream_lifecycle_audio_path_is_open());
 }
 
+/* ── T5: closed-to-open edge semantics ─────────────────────────────
+ * stream_lifecycle_sink_started() returns true only for a
+ * closed-to-open transition; duplicate starts must not repeat the
+ * one-time open work in the caller (LIFE-003).
+ */
+
+ZTEST(lifecycle, test_duplicate_start_single_ase_no_new_edge)
+{
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0, 2);
+	zassert_true(stream_lifecycle_sink_started(0), "first start opens gate");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate open");
+
+	zassert_false(stream_lifecycle_sink_started(0), "duplicate start is not a new edge");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate remains open");
+	zassert_false(stream_lifecycle_sink_started(0), "third start still not an edge");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate still open");
+}
+
+ZTEST(lifecycle, test_mode_a_duplicate_starts_single_edge)
+{
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0, 1);
+	stream_lifecycle_sink_configured(1, 1);
+
+	zassert_false(stream_lifecycle_sink_started(0), "first ASE alone is not an edge");
+	zassert_true(stream_lifecycle_sink_started(1), "completing ASE is the edge");
+	zassert_false(stream_lifecycle_sink_started(0), "duplicate first ASE not an edge");
+	zassert_false(stream_lifecycle_sink_started(1), "duplicate second ASE not an edge");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate open after the pair");
+}
+
+ZTEST(lifecycle, test_close_then_start_one_new_edge_then_duplicates_false)
+{
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0, 2);
+	zassert_true(stream_lifecycle_sink_started(0), "first start opens gate");
+	zassert_true(stream_lifecycle_audio_path_close(), "close returns was-open");
+
+	zassert_true(stream_lifecycle_sink_started(0), "start after close is one new edge");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "reopened");
+	zassert_false(stream_lifecycle_sink_started(0), "duplicate after reopen not an edge");
+	zassert_false(stream_lifecycle_sink_started(0), "second duplicate still not an edge");
+}
+
+ZTEST(lifecycle, test_configure_start_close_reconfigure_start)
+{
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0, 2);
+	zassert_true(stream_lifecycle_sink_started(0), "open");
+	zassert_true(stream_lifecycle_audio_path_close(), "close");
+
+	/* Reconfigure clears the started flag; a fresh start must be a
+	 * new closed-to-open edge. */
+	stream_lifecycle_sink_configured(0, 2);
+	zassert_true(stream_lifecycle_sink_started(0), "reconfigured start re-opens");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "open again");
+	zassert_false(stream_lifecycle_sink_started(0), "duplicate after reconfigure not edge");
+}
+
+ZTEST(lifecycle, test_mode_a_close_reconfigure_both_start_pair_edges)
+{
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0, 1);
+	stream_lifecycle_sink_configured(1, 1);
+	zassert_false(stream_lifecycle_sink_started(0), "partial");
+	zassert_true(stream_lifecycle_sink_started(1), "pair completes");
+	zassert_true(stream_lifecycle_audio_path_close(), "close");
+
+	/* Both slots were reconfigured (started cleared), so the gate
+	 * must again require both starts. */
+	stream_lifecycle_sink_configured(0, 1);
+	stream_lifecycle_sink_configured(1, 1);
+	zassert_false(stream_lifecycle_sink_started(0), "partial after reconfigure");
+	zassert_true(stream_lifecycle_sink_started(1), "pair completes again");
+}
+
+ZTEST(lifecycle, test_release_then_slot_reuse)
+{
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0, 2);
+	zassert_true(stream_lifecycle_sink_started(0), "open");
+	zassert_true(stream_lifecycle_audio_path_close(), "close");
+
+	/* Release clears the slot; a start without configure is inert. */
+	stream_lifecycle_sink_release(0);
+	zassert_false(stream_lifecycle_sink_started(0), "released slot is not configured");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "gate stays closed");
+
+	/* Reconfigure reuses the slot with a fresh edge. */
+	stream_lifecycle_sink_configured(0, 2);
+	zassert_true(stream_lifecycle_sink_started(0), "slot reuse opens again");
+}
+
+ZTEST(lifecycle, test_reset_from_closed_and_partial_states)
+{
+	/* Reset from closed: nothing configured. */
+	stream_lifecycle_reset();
+	stream_lifecycle_sink_configured(0, 1);
+	stream_lifecycle_sink_configured(1, 1);
+	stream_lifecycle_reset();
+	zassert_false(stream_lifecycle_sink_started(0), "nothing configured after reset");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "closed");
+
+	/* Reset from partially started: the half-started state must not
+	 * survive. */
+	stream_lifecycle_sink_configured(0, 1);
+	stream_lifecycle_sink_configured(1, 1);
+	stream_lifecycle_sink_started(0);
+	stream_lifecycle_reset();
+	zassert_false(stream_lifecycle_sink_started(1), "partial start erased");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "still closed");
+	stream_lifecycle_sink_configured(0, 2);
+	zassert_true(stream_lifecycle_sink_started(0), "fresh single-ASE after reset");
+}
+
+ZTEST(lifecycle, test_repeated_close_and_open_cycles)
+{
+	stream_lifecycle_reset();
+	stream_lifecycle_sink_configured(0, 2);
+
+	for (int i = 0; i < 10; i++) {
+		zassert_true(stream_lifecycle_sink_started(0), "cycle %d open edge", i);
+		zassert_false(stream_lifecycle_sink_started(0), "cycle %d duplicate", i);
+		zassert_true(stream_lifecycle_audio_path_close(), "cycle %d close", i);
+		zassert_false(stream_lifecycle_audio_path_is_open(), "cycle %d closed", i);
+	}
+}
+
+/* ── Edge: negative chan_count treated as absent ─────────────────── */
+
+ZTEST(lifecycle, test_negative_chan_count_inert)
+{
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0, -1);
+	zassert_false(stream_lifecycle_sink_started(0), "negative chan_count inert");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "gate stays closed");
+}
+
 /* ── Suite entry ─────────────────────────────────────────────────── */
 
 ZTEST_SUITE(lifecycle, NULL, NULL, NULL, NULL, NULL);
