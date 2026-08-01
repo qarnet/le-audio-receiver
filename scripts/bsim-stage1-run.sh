@@ -363,8 +363,8 @@ echo ""
 echo "Known full/L/R hashes (pinned):"
 for scn in mono_10ms mono_7p5ms modea_10ms modea_7p5ms modea_reverse_start_10ms \
            modeb_10ms modeb_7p5ms invalid_sdu_resume_10ms; do
-    printf "  %-28s full=%-12s L=%-12s R=%-12s\n" "$scn" "${KNOWN_FULL[$scn]}" \
-        "${KNOWN_L[$scn]}" "${KNOWN_R[$scn]}"
+    printf "  %-28s full=%-12s L=%-12s R=%-12s\n" "$scn" "${KNOWN_FULL[$scn]:-0x00000000}" \
+        "${KNOWN_L[$scn]:-0x00000000}" "${KNOWN_R[$scn]:-0x00000000}"
 done
 
 if [ "$BASELINE" = "1" ]; then
