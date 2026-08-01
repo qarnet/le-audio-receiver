@@ -759,13 +759,17 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		 * Hard decoder errors skip that half and cannot pair it;
 		 * PLC halves may pair and produce concealment output.
 		 * The ISO SDU reference time is the pairing key, so a
-		 * missing TS flag makes this half unusable: skip decoder,
-		 * pairing mutation, and push, count one receive/decode
-		 * fault, and emit the test observer event (a real warning
-		 * — the normal matrix proves zero occurrences). */
-		if (!(info->flags & BT_ISO_FLAGS_TS)) {
-			LOG_WRN("stream[%zu]: Mode A SDU missing TS flag (flags 0x%02x) — half skipped",
-			       idx, info->flags);
+		 * VALID-flag SDU missing the TS flag makes this half
+		 * unusable: skip decoder, pairing mutation, and push,
+		 * count one receive/decode fault, and emit the test
+		 * observer event (a real warning — the normal matrix
+		 * proves zero occurrences).  Non-valid SDUs (LOST /
+		 * sync-boundary replacements) carry no TS by definition
+		 * and keep the concealment/startup-transient path; their
+		 * source validity is reported to the oracle separately. */
+		if (valid && !(info->flags & BT_ISO_FLAGS_TS)) {
+			LOG_WRN("stream[%zu]: Mode A valid SDU missing TS flag — half skipped",
+				idx);
 			audio_stats_decode_error();
 #if defined(CONFIG_BSIM_OBSERVER)
 			bsim_observer_missing_ts();
