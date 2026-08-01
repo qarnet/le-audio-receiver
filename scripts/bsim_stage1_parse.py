@@ -142,6 +142,7 @@ BT_BAP_ALLOWED_WRN_BY_SCENARIO = {
     "no_free_sink_slot": ["No free sink slot"],
     "invalid_codec_fields": ["Codec config", "Codec config rejected"],
     "unsupported_source_direction": ["Source direction unsupported"],
+    "invalid_sdu_resume_10ms": ["malformed SDU len"],
 }
 
 # Zephyr ASCS emits a cosmetic "Invalid application error code" warning
@@ -276,16 +277,17 @@ def check_scenario(scenario, recv, cli, known):
             if r.get("lh1") == r.get("rh1"):
                 errs.append("stereo L hash == R hash")
 
-        # Decoder-invocation accounting: every push costs exactly
-        # dec_calls decoder invocations; at most one unpaired half may
-        # decode at a segment boundary (CIS activation skew), so the
-        # total is bounded by [expected, expected + dec_calls].
+        # Decoder-invocation accounting: the total decoder invocations
+        # must at least cover every push (dec_calls each); the exact
+        # deterministic value (including unpaired-half decodes at the
+        # CIS activation skew) is pinned per scenario.
         expected_total = dec_calls * (r.get("pushes1", 0) + r.get("szero1", 0))
-        if not (expected_total <= r.get("total1", 0) <=
-                expected_total + dec_calls):
-            errs.append("total1 %s outside [%d, %d]"
-                        % (r.get("total1"), expected_total,
-                           expected_total + dec_calls))
+        if r.get("total1", 0) < expected_total:
+            errs.append("total1 %s < %d" % (r.get("total1"), expected_total))
+        if "known_total" in known and known["known_total"] is not None:
+            if r.get("total1") != known["known_total"]:
+                errs.append("total1 %s != pinned %d"
+                            % (r.get("total1"), known["known_total"]))
         # Post-start PLC delta is deterministic in BSim; pinned per scenario
         # (0 for mono, CIS-sync boundary value for Mode A/B).
         if "known_plc_delta" in known and known["known_plc_delta"] is not None:

@@ -1219,13 +1219,17 @@ static uint8_t scn15_base_len;
 
 static void scn15_build_base(void)
 {
-	/* freq=48k(0x08), dur=10ms(0x01), loc=mono(0x01 00 00 00), len=120 (78 00),
-	 * no frame-blocks LTV (omitted when 1). */
+	/* LTV layout (len includes the type byte):
+	 *   FREQ      = 0x02 0x01 0x08              (48 kHz)
+	 *   DURATION  = 0x02 0x02 0x01              (10 ms)
+	 *   CHAN_ALLOC= 0x05 0x03 <4 bytes LE32>    (MONO)
+	 *   FRAME_LEN = 0x03 0x04 <2 bytes LE16>    (120)
+	 * No frame-blocks LTV (omitted when 1). */
 	uint8_t base[16] = {
-		0x02, 0x01, 0x08,                   /* FREQ = 48 kHz */
-		0x02, 0x02, 0x01,                   /* DURATION = 10 ms */
-		0x06, 0x03, 0x01, 0x00, 0x00, 0x00, /* CHAN_ALLOC = MONO */
-		0x04, 0x04, 0x78, 0x00,             /* FRAME_LEN = 120 */
+		0x02, 0x01, 0x08,
+		0x02, 0x02, 0x01,
+		0x05, 0x03, 0x01, 0x00, 0x00, 0x00,
+		0x03, 0x04, 0x78, 0x00,
 	};
 
 	scn15_base_len = sizeof(base);
@@ -1236,28 +1240,24 @@ static void scn15_variants(struct scn15_variant *v)
 {
 	size_t n = 0U;
 
-	/* 1. missing frequency */
+	/* 1. missing frequency (drop FREQ LTV at [0,3)) */
 	v[n].name = "missing_freq";
 	v[n].data_len = 13;
-	memcpy(v[n].data, scn15_base, 13);
-	v[n].data[0] = 0x00; /* strip FREQ LTV: shift left by 3 */
-	memmove(&v[n].data[0], &v[n].data[3], 10);
-	v[n].data_len = 10;
+	memcpy(v[n].data, &scn15_base[3], 13);
 	n++;
 
-	/* 2. unsupported frequency (16 kHz) */
+	/* 2. unsupported frequency (16 kHz = 0x03) */
 	v[n].name = "freq_16khz";
 	v[n].data_len = scn15_base_len;
 	memcpy(v[n].data, scn15_base, scn15_base_len);
-	v[n].data[2] = 0x03; /* BT_AUDIO_CODEC_CFG_FREQ_16KHZ */
+	v[n].data[2] = 0x03;
 	n++;
 
-	/* 3. missing duration */
+	/* 3. missing duration (drop DURATION LTV at [3,6)) */
 	v[n].name = "missing_dur";
-	v[n].data_len = scn15_base_len;
-	memcpy(v[n].data, scn15_base, scn15_base_len);
-	memmove(&v[n].data[3], &v[n].data[6], scn15_base_len - 6);
-	v[n].data_len = scn15_base_len - 3;
+	v[n].data_len = 13;
+	memcpy(v[n].data, scn15_base, 3);
+	memcpy(&v[n].data[3], &scn15_base[6], 10);
 	n++;
 
 	/* 4. invalid duration encoding */
@@ -1267,28 +1267,26 @@ static void scn15_variants(struct scn15_variant *v)
 	v[n].data[5] = 0xFF;
 	n++;
 
-	/* 5. missing octets per frame */
+	/* 5. missing octets per frame (drop FRAME_LEN LTV at [12,16)) */
 	v[n].name = "missing_octets";
-	v[n].data_len = scn15_base_len;
-	memcpy(v[n].data, scn15_base, scn15_base_len);
-	memmove(&v[n].data[9], &v[n].data[13], scn15_base_len - 13);
-	v[n].data_len = scn15_base_len - 4;
+	v[n].data_len = 12;
+	memcpy(v[n].data, scn15_base, 12);
 	n++;
 
 	/* 6. octets 19 */
 	v[n].name = "octets_19";
 	v[n].data_len = scn15_base_len;
 	memcpy(v[n].data, scn15_base, scn15_base_len);
-	v[n].data[12] = 19;
-	v[n].data[11] = 0x00;
+	v[n].data[13] = 19;
+	v[n].data[14] = 0x00;
 	n++;
 
 	/* 7. octets 121 */
 	v[n].name = "octets_121";
 	v[n].data_len = scn15_base_len;
 	memcpy(v[n].data, scn15_base, scn15_base_len);
-	v[n].data[12] = 121;
-	v[n].data[11] = 0x00;
+	v[n].data[13] = 121;
+	v[n].data[14] = 0x00;
 	n++;
 
 	/* 8. explicit frame blocks 2 */

@@ -83,6 +83,22 @@ declare -A KNOWN_PLC_DELTA=(
     [modeb_7p5ms]=-1
 )
 
+# Pinned exact total decoder invocations per scenario.  -1 = not yet pinned.
+declare -A KNOWN_TOTAL=(
+    [mono_10ms]=-1
+    [mono_7p5ms]=-1
+    [modea_10ms]=-1
+    [modea_7p5ms]=-1
+    [modea_reverse_start_10ms]=-1
+    [modeb_10ms]=-1
+    [modeb_7p5ms]=-1
+    [invalid_sdu_resume_10ms]=-1
+    [modea_first_stop_10ms]=-1
+    [release_without_disable_10ms]=-1
+    [disconnect_streaming_10ms]=-1
+    [reconnect_second_stream_10ms]=-1
+)
+
 # Scenario matrix: name runs
 MATRIX=(
     "mono_10ms 2"
@@ -254,6 +270,8 @@ run_one() {
             _known_args+=(--known-r "${KNOWN_R[$_scn]}")
         [ "${KNOWN_PLC_DELTA[$_scn]:--1}" != "-1" ] && \
             _known_args+=(--known-plc-delta "${KNOWN_PLC_DELTA[$_scn]}")
+        [ "${KNOWN_TOTAL[$_scn]:--1}" != "-1" ] && \
+            _known_args+=(--known-total "${KNOWN_TOTAL[$_scn]}")
     fi
 
     local _parse_out

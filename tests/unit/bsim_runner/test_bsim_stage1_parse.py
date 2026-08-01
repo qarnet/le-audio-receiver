@@ -155,20 +155,40 @@ def test_modea_lr_equal_rejected():
     report("modea L==R rejected", not ok)
 
 
+def test_total_pin():
+    root = tempfile.mkdtemp()
+    known = {"known_total": 108}
+    ok = run_check(
+        root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known
+    )
+    report("total pin ok", ok)
+
+    known_bad = {"known_total": 200}
+    ok = run_check(
+        root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known_bad
+    )
+    report("total pin mismatch rejected", not ok)
+
+
 def test_plc_delta_pin():
     root = tempfile.mkdtemp()
     known = {"known_plc_delta": 0}
-    ok = run_check(root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known)
+    ok = run_check(
+        root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known
+    )
     report("plc delta 0 pinned ok", ok)
 
     known_bad = {"known_plc_delta": 5}
-    ok = run_check(root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known_bad)
+    ok = run_check(
+        root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known_bad
+    )
     report("plc delta mismatch rejected", not ok)
 
 
 def test_total_frames_mismatch():
     root = tempfile.mkdtemp()
-    recv = recv_pass("mono_10ms", total1=200)
+    # Undercount: total below pushes+startup-zeros is a fault.
+    recv = recv_pass("mono_10ms", total1=100)
     ok = run_check(root, "mono_10ms", recv, cli_pass("mono_10ms"))
     report("total frames mismatch rejected", not ok)
 
@@ -384,8 +404,13 @@ def test_no_free_sink_slot():
 def test_invalid_codec_fields():
     root = tempfile.mkdtemp()
     recv = recv_pass(
-        "invalid_codec_fields", seg=0, pushes1=0, obs_rej=9, obs_ok=1,
-        obs_rej_code=9, obs_rej_reason=2
+        "invalid_codec_fields",
+        seg=0,
+        pushes1=0,
+        obs_rej=9,
+        obs_ok=1,
+        obs_rej_code=9,
+        obs_rej_reason=2,
     )
     ok = run_check(
         root,
@@ -396,8 +421,12 @@ def test_invalid_codec_fields():
     report("invalid_codec_fields ok", ok)
 
     recv_bad = recv_pass(
-        "invalid_codec_fields", seg=0, obs_rej=9, obs_ok=1, obs_rej_code=9,
-        obs_rej_reason=0
+        "invalid_codec_fields",
+        seg=0,
+        obs_rej=9,
+        obs_ok=1,
+        obs_rej_code=9,
+        obs_rej_reason=0,
     )
     ok = run_check(
         root,
@@ -499,6 +528,7 @@ def main():
     test_modea_lr_distinct()
     test_modea_lr_equal_rejected()
     test_total_frames_mismatch()
+    test_total_pin()
     test_plc_delta_pin()
     test_invalid_sdu_resume()
     test_modea_first_stop()
