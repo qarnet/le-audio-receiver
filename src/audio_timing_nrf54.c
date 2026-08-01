@@ -228,7 +228,7 @@ void audio_timing_test_state_reset(void)
 #else
 static void audio_timing_submit_diag_work(void)
 {
-	audio_timing_submit_diag_work();
+	k_work_submit(&diag_work);
 }
 #endif /* AUDIO_TIMING_NRF54_TEST */
 
