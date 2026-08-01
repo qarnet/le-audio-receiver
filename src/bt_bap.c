@@ -764,7 +764,8 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		 * fault, and emit the test observer event (a real warning
 		 * — the normal matrix proves zero occurrences). */
 		if (!(info->flags & BT_ISO_FLAGS_TS)) {
-			LOG_WRN("stream[%zu]: Mode A SDU missing TS flag — half skipped", idx);
+			LOG_WRN("stream[%zu]: Mode A SDU missing TS flag (flags 0x%02x) — half skipped",
+			       idx, info->flags);
 			audio_stats_decode_error();
 #if defined(CONFIG_BSIM_OBSERVER)
 			bsim_observer_missing_ts();

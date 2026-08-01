@@ -261,13 +261,13 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 		if (energy == 0) {
 			cur()->startup_zero++;
 		}
-		cur()->transients++;
-		cur()->startup_plc = audio_stats_get().plc_frames;
 		if (energy != 0 && src_valid) {
 			/* First fully valid push: closes the boundary and is
-			 * the first hashed frame. */
+			 * the first hashed frame (not a transient). */
 			boundary_closed = true;
 		} else {
+			cur()->transients++;
+			cur()->startup_plc = audio_stats_get().plc_frames;
 			return 0;
 		}
 	} else {
