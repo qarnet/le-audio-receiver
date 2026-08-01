@@ -114,12 +114,15 @@ be rejected through ASCS response codes rather than silently guessed or
 accepted.  The receiver must never accept a configuration it cannot decode.
 
 **T4 closed:** `bt_bap.c` validates the codec shape before slot
-allocation or lifecycle mutation and returns `CONF_INVALID / CODEC_DATA`
-for missing/invalid fields (codec ID not LC3 → `CONF_UNSUPPORTED /
+allocation or lifecycle mutation and returns `CONF_REJECTED / CODEC_DATA`
+for missing/invalid fields (`CONF_INVALID` is excluded from the ASCS
+application response codes; codec ID not LC3 → `CONF_UNSUPPORTED /
 CODEC`); the validated shape is stored per sink and Enable re-validates
-the retained config against it, failing safely on mismatch.  BSim
-scenario `invalid_codec_fields` pins nine exact rejections plus one
-successful valid mono config (proving no slot was consumed).
+the retained config against it, failing safely on mismatch.  The
+expected negative remote-request paths log at INFO level.  BSim
+scenario `invalid_codec_fields` pins nine exact rejections plus two
+successful configs (valid mono and the missing-frame-blocks fallback,
+proving no slot was consumed).
 
 ### CODEC-008 — Safe SDU rejection
 
@@ -167,13 +170,34 @@ may produce concealment output.
 Each decoded half tracks its ISO `seq_num` and the ISO SDU reference
 time (`BT_ISO_FLAGS_TS`).  The SW Split LL numbers each CIS from a
 CIG-global counter, so the two CIS seq spaces carry a constant offset
-(their activation delay) that no TX hold can remove; exact-seq or
+(their activation delay) that no TX hold can remove — exact seq or
 per-half-index pairing cannot match.  Both CISes of one CIG share the
 SDU reference time at each event, so equal `half_ts` values pair the
 two halves of the same audio frame; a wrap-safe 32-bit comparison
-discards only the older unmatched half.  Half state clears on
-configure, start-set completion, gate close, release, stop, and
-disconnect.
+discards only the older unmatched half.  A VALID-flag SDU missing the
+TS flag is a fault (skipped half, receive/decode counter increment,
+test observer event, real warning); non-valid SDUs (`BT_ISO_FLAGS_LOST`
+sync replacements) carry no TS by definition and keep the
+concealment/startup-transient path.  Each half's original ISO-valid
+flag is stored separately from the decoder result, and the receive path
+reports per-push source validity to the test oracle before every sink
+push.  Half state clears on configure, start-set completion, gate
+close, release, stop, and disconnect.
+
+### CODEC-013 — Release slot semantics
+
+Release without prior Disable closes the audio-path gate before any
+later receive callback can decode/push, stops the audio sink
+immediately (before returning to ASCS) so the sink oracle finalizes the
+segment with a statistics snapshot, stops offload exactly once through
+the idempotent APIs, clears pending Mode A halves, clears the released
+slot's lifecycle configuration, resets the decoder and app-owned slot
+state so the slot is reusable, and preserves truthful PACS contexts.
+The `bt_bap_stream` struct itself is left to the ASCS server (it owns
+conn/ep/codec_cfg/iso and clears them at the ASE idle transition;
+wiping them crashes the streaming-exit transition).  Later
+disabled/disconnect paths stay idempotent and must not create a second
+segment or hide pushes.
 
 ### CODEC-013 — Release slot semantics
 

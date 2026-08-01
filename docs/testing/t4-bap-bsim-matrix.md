@@ -7,10 +7,21 @@ Channel routing, codec rejection, teardown, disconnect, and reconnect are
 locked by 15 strict scenarios executed twice (scenarios 1–8) or once
 (9–15) per gate.
 
-Accepted on commit `f50dcea` (final T4 commit on
-`test/pre-refactor-behavior`), after the matrix passed **four consecutive
-identical runs** (two baselines, two pinned acceptances) and the full
-gate passed **twice consecutively**.
+The T4 review-fix round corrected the ASCS rejection response
+(`CONF_REJECTED`), added Mode A ISO timestamp validation, stopped the
+sink immediately on Release (with an ordering proof), corrected the
+ordered FNV hashes (uint16_t sample conversion, FNV offset basis per
+segment), introduced a strict source-valid startup boundary with zero
+post-start PLC, synchronized the custom TX cross-thread state, removed
+every warning allowlist, and enabled warnings-as-errors.
+
+Accepted on the exact final T4 code commit `8542f1a`
+(`tests: pin post-review-fix FNV hashes and totals`) on
+`test/pre-refactor-behavior` — the matrix passed **four consecutive
+identical runs** (two post-fix baselines, two pinned acceptances) and
+the full gate passed **26 PASS / 0 FAIL / 26 TOTAL** once (per the
+review-fix handoff, one full gate suffices because the matrix is the
+gate's long BSim child and no non-BSim code changed after it).
 
 ## Architecture and test-only seams
 
@@ -63,7 +74,7 @@ BSIM_BASELINE=1 bash scripts/bsim-stage1-run.sh
 BSIM_KEEP_LOGS=1 bash scripts/bsim-stage1-run.sh
 # Strict parser (also unit-tested in tests/unit/bsim_runner):
 python3 scripts/bsim_stage1_parse.py check --scenario mono_10ms \
-    --receiver R.log --client C.log --known-full 0xD65641A8
+    --receiver R.log --client C.log --known-full 0x22AB5C0D
 ```
 
 The runner acquires a `flock` on `${ZEPHYR_BASE}/bsim_out` (shared
@@ -71,7 +82,7 @@ build/run tree), compiles both binaries once per gate, runs every
 simulation with receiver/client/PHY exit-zero enforcement, parses every
 named field of the PASS records via `scripts/bsim_stage1_parse.py`
 (no PASS-substring-only validation), enforces pairwise determinism,
-pinned hashes/PLC deltas/totals, and prints the final matrix and known
+pinned hashes/totals, and prints the final matrix and known
 hash tables.  Logs live in one private `mktemp -d` root: cleaned on
 success, preserved on failure or `BSIM_KEEP_LOGS=1`.
 
@@ -85,35 +96,21 @@ NONE (`pacs=1`).
 
 | # | Scenario | Runs | Receiver PASS record (full/L/R hashes, counts) |
 |---|----------|------|-----------------------------------------------|
-| 1 | `mono_10ms` | 2 | pushes=100 szero=8 splc=plc=8 total=108 derr=0 mal=0 after=0; h=0xD65641A8, L==R=0x08D96D5C |
-| 2 | `mono_7p5ms` | 2 | pushes=100 szero=11 total=111; h=0x3CF61E00, L==R=0xC915A389 |
-| 3 | `modea_10ms` | 2 | pushes=100 szero=6 splc=12 plc=15 total=215; h=0x7335E317, L=0x08D96D5C, R=0x2AE744DB |
-| 4 | `modea_7p5ms` | 2 | pushes=100 szero=9 splc=18 plc=36 total=236; h=0xC05F0EA7, L=0x96275542, R=0x499BD761 |
-| 5 | `modea_reverse_start_10ms` | 2 | identical to scenario 3 (0x7335E317 / 0x08D96D5C / 0x2AE744DB) |
-| 6 | `modeb_10ms` | 2 | pushes=100 szero=8 splc=plc=16 total=216; h=0x7335E317, L=0x08D96D5C, R=0x2AE744DB |
-| 7 | `modeb_7p5ms` | 2 | pushes=100 szero=11 splc=plc=22 total=222; h=0xE18E30AE, L=0xC915A389, R=0xC4FEFADB |
-| 8 | `invalid_sdu_resume_10ms` | 2 | pushes=100, malformed-SDU evidence exactly 1 (obs_mal=1, derr=1); h=0xB29C3A18, L==R=0x2ECAC1C7 |
-| 9 | `modea_first_stop_10ms` | 1 | pushes=24, after=0, gate closed 1, closed-gate receives 10, release cleanup 1; h=0x66B39174 |
-| 10 | `release_without_disable_10ms` | 1 | pushes=47, after=0, gate closed 1, release cleanup 1, disconnect cleanup 1; h=0x33651EB3 |
-| 11 | `disconnect_streaming_10ms` | 1 | pushes=54, after=0, adv_restart=1, disconnect cleanup 1; h=0x70B513F9 |
-| 12 | `reconnect_second_stream_10ms` | 1 | seg1 pushes=75; **seg2 = fresh mono 10 ms oracle: pushes=100, h2=0xD65641A8** (== scenario 1), adv_restart=1 |
+| 1 | `mono_10ms` | 2 | pushes=100 trans=8 szero=8 splc=plc=8 total=108 derr=0 mal=0 after=0 mts=0; h=0x22AB5C0D, L==R=0x32777D65 |
+| 2 | `mono_7p5ms` | 2 | pushes=100 trans=11 total=111; h=0x01A3EB05, L==R=0x30F0308C |
+| 3 | `modea_10ms` | 2 | pushes=100 trans=6 splc=plc=15 total=215; h=0xBAE24F7E, L=0x32777D65, R=0xD3EE3722 |
+| 4 | `modea_7p5ms` | 2 | pushes=100 trans=9 splc=plc=22 total=236; h=0x00A5D3F9, L=0xEE461704, R=0x37E155C8 |
+| 5 | `modea_reverse_start_10ms` | 2 | identical to scenario 3 (0xBAE24F7E / 0x32777D65 / 0xD3EE3722) |
+| 6 | `modeb_10ms` | 2 | pushes=100 trans=8 splc=plc=16 total=216; h=0xBAE24F7E, L=0x32777D65, R=0xD3EE3722 |
+| 7 | `modeb_7p5ms` | 2 | pushes=100 trans=11 splc=plc=22 total=222; h=0xFF82CADB, L=0x30F0308C, R=0x129591EE |
+| 8 | `invalid_sdu_resume_10ms` | 2 | pushes=100, malformed-SDU evidence exactly 1 (obs_mal=1, derr=1); h=0x0C61918D, L==R=0x7FFE087A |
+| 9 | `modea_first_stop_10ms` | 1 | pushes=35, after=0, gate closed 1, closed-gate receives 10, release cleanup 1; h=0x5A025240 |
+| 10 | `release_without_disable_10ms` | 1 | pushes=48, after=0, gate closed 1, release cleanup 1, **sink stopped on Release (obs_rel_ss=1, rel_ss_seq=3 < disc_seq=5)**, disconnect cleanup 1; h=0xAEBD23A1 |
+| 11 | `disconnect_streaming_10ms` | 1 | pushes=55, after=0, adv_restart=1, disconnect cleanup 1; h=0x8500C966 |
+| 12 | `reconnect_second_stream_10ms` | 1 | seg1 pushes=55; **seg2 = fresh mono 10 ms oracle: pushes=100, h2=0x22AB5C0D** (== scenario 1), adv_restart=1 |
 | 13 | `unsupported_source_direction` | 1 | obs_rej=1 dir=SOURCE(2) code=CONF_UNSUPPORTED(7) reason=NONE(0), obs_ok=0, no audio |
 | 14 | `no_free_sink_slot` | 1 | obs_ok=3 (2 configs + 1 reuse), obs_rej=1 code=NO_MEM(0x0D) reason=NONE, release cleanup 3, no audio |
-| 15 | `invalid_codec_fields` | 1 | obs_rej=9 (last: CONF_INVALID(9)/CODEC_DATA(2)), obs_ok=1 (valid mono), no audio |
-
-Notes:
-
-- **Mode A == Mode B full hash** (scenarios 3/5/6): both produce the
-  same L (channel 0 pattern) and R (channel 1 pattern) PCM — the decode
-  topology differs but the deterministic PCM content is identical.  This
-  is a deliberate cross-check of channel identity.
-- **Reverse start** (5) is byte-identical to normal Mode A start (3):
-  the TX hold begins both streams' transmitted counters at zero and the
-  receiver pairs by CIG event, so start order does not change the audio.
-- **Reconnect** (12) segment 2 equals a fresh mono 10 ms oracle exactly
-  (0xD65641A8), proving fresh decoder/oracle/lifecycle state with no
-  stale half/slot/bond state.
-- Mono L == R and Mode A/B L != R hold in every audio scenario.
+| 15 | `invalid_codec_fields` | 1 | obs_rej=9 (last: CONF_REJECTED(8)/CODEC_DATA(2)), **obs_ok=2 (valid mono + missing-frame-blocks fallback)**, no audio |
 
 ## Exact ASCS response matrix
 
@@ -123,37 +120,44 @@ Notes:
 | Sink Config #1, #2 | 14 | `SUCCESS(0x00) / NONE` |
 | Sink Config #3 (pool full) | 14 | `NO_MEM(0x0D) / NONE(0x00)` |
 | Sink Config after releases (reuse) | 14 | `SUCCESS(0x00) / NONE` |
-| Missing frequency | 15 | `CONF_INVALID(0x09) / CODEC_DATA(0x02)` |
-| Unsupported frequency (16 kHz) | 15 | `CONF_INVALID / CODEC_DATA` |
-| Missing duration | 15 | `CONF_INVALID / CODEC_DATA` |
-| Invalid duration encoding (0xFF) | 15 | `CONF_INVALID / CODEC_DATA` |
-| Missing octets per frame | 15 | `CONF_INVALID / CODEC_DATA` |
-| Octets 19 | 15 | `CONF_INVALID / CODEC_DATA` |
-| Octets 121 | 15 | `CONF_INVALID / CODEC_DATA` |
-| Explicit frame blocks 2 | 15 | `CONF_INVALID / CODEC_DATA` |
-| Channel allocation with 3 channels | 15 | `CONF_INVALID / CODEC_DATA` |
+| Missing frequency | 15 | `CONF_REJECTED(0x08) / CODEC_DATA(0x02)` |
+| Unsupported frequency (16 kHz) | 15 | `CONF_REJECTED / CODEC_DATA` |
+| Missing duration | 15 | `CONF_REJECTED / CODEC_DATA` |
+| Invalid duration encoding (0xFF) | 15 | `CONF_REJECTED / CODEC_DATA` |
+| Missing octets per frame | 15 | `CONF_REJECTED / CODEC_DATA` |
+| Octets 19 | 15 | `CONF_REJECTED / CODEC_DATA` |
+| Octets 121 | 15 | `CONF_REJECTED / CODEC_DATA` |
+| Explicit frame blocks 2 | 15 | `CONF_REJECTED / CODEC_DATA` |
+| Channel allocation with 3 channels | 15 | `CONF_REJECTED / CODEC_DATA` |
 | Valid mono (after the nine failures) | 15 | `SUCCESS / NONE` (proves no slot consumed) |
 | Missing optional frame blocks (fallback 1) | 15 | `SUCCESS / NONE` |
 
 ## Known hashes (pinned in the runner)
 
+FNV-corrected ordered hashes (FNV offset basis per segment; each signed
+sample converted to `uint16_t` before byte extraction; full/L/R prepend
+the 4-byte LE frame index then channel sample bytes).  Baselined from
+two pairwise-identical post-fix workstation runs and reproduced exactly
+by the two pinned runs and the full gate.
+
 | Scenario | full | L | R |
 |----------|------|---|---|
-| mono_10ms | 0xD65641A8 | 0x08D96D5C | 0x08D96D5C |
-| mono_7p5ms | 0x3CF61E00 | 0xC915A389 | 0xC915A389 |
-| modea_10ms | 0x7335E317 | 0x08D96D5C | 0x2AE744DB |
-| modea_7p5ms | 0xC05F0EA7 | 0x96275542 | 0x499BD761 |
-| modea_reverse_start_10ms | 0x7335E317 | 0x08D96D5C | 0x2AE744DB |
-| modeb_10ms | 0x7335E317 | 0x08D96D5C | 0x2AE744DB |
-| modeb_7p5ms | 0xE18E30AE | 0xC915A389 | 0xC4FEFADB |
-| invalid_sdu_resume_10ms | 0xB29C3A18 | 0x2ECAC1C7 | 0x2ECAC1C7 |
-| reconnect_second_stream_10ms (seg2) | 0xD65641A8 | — | — |
+| mono_10ms | 0x22AB5C0D | 0x32777D65 | 0x32777D65 |
+| mono_7p5ms | 0x01A3EB05 | 0x30F0308C | 0x30F0308C |
+| modea_10ms | 0xBAE24F7E | 0x32777D65 | 0xD3EE3722 |
+| modea_7p5ms | 0x00A5D3F9 | 0xEE461704 | 0x37E155C8 |
+| modea_reverse_start_10ms | 0xBAE24F7E | 0x32777D65 | 0xD3EE3722 |
+| modeb_10ms | 0xBAE24F7E | 0x32777D65 | 0xD3EE3722 |
+| modeb_7p5ms | 0xFF82CADB | 0x30F0308C | 0x129591EE |
+| invalid_sdu_resume_10ms | 0x0C61918D | 0x7FFE087A | 0x7FFE087A |
+| reconnect_second_stream_10ms (seg2) | 0x22AB5C0D | — | — |
 
-These replace the T2/T3 mono-only hashes (0x9225F075 / 0x2011C0F9):
-the T4 client uses a deliberately stronger deterministic multi-channel
-TX pattern, so new PCM → new hashes.  Baselined from two identical
-workstation runs, then pinned; the acceptance runs (twice) and both full
-gates reproduced them exactly.
+These replace the pre-review hashes (e.g. mono 10 ms 0xD65641A8): the
+review-fix oracle corrected the FNV initialization (offset basis at
+every segment start) and the signed-sample byte extraction (uint16_t
+conversion), which deliberately changes every audio hash.  No other
+behavior changed them — the TX synchronization rewrite produced
+byte-identical hashes (verified with focused runs before the baselines).
 
 ## Lifecycle event/count evidence
 
@@ -170,7 +174,7 @@ gates reproduced them exactly.
 - Scenario 12: two sessions over one simulation; the second session
   produces a fresh mono oracle (see above).
 
-## Production defects fixed
+## Production defects fixed (original T4 + review-fix round)
 
 1. **Codec-shape validation did not store the validated octets per
    frame.**  The validator reused its scratch return value after the
@@ -180,48 +184,73 @@ gates reproduced them exactly.
 2. **Mode A pairing could not match across CISes.**  The SW Split LL
    numbers each CIS from a CIG-global counter, so the two CIS seq spaces
    carry a constant offset (their activation delay) that no TX hold can
-   remove; exact-seq or per-half-index pairing never pairs (perpetual
-   stale-half discards).  Pairing now uses the ISO SDU reference time
-   (BT_ISO_FLAGS_TS): both CISes of one CIG share the reference at each
-   event, so equal `half_ts` identifies the two halves of the same audio
-   frame; a wrap-safe 32-bit comparison discards only the older half.
+   remove; exact-seq or per-half-index pairing never pairs.  Pairing now
+   uses the ISO SDU reference time (`BT_ISO_FLAGS_TS`), equal on both
+   CISes of one CIG at each event, with a wrap-safe 32-bit comparison
+   discarding only the older unmatched half.
 3. **Release from streaming crashed the server.**  The release path
-   memset the `bt_bap_stream` struct; the ASCS server's streaming-exit
-   transition dereferences `stream->iso` after the application release
-   callback returns (SEGV in `bt_bap_remove_iso_data_path`).  Release now
-   clears only app-owned slot state; the server owns conn/ep/codec_cfg/
-   iso and clears them at the ASE idle transition.
+   wiped `stream->iso`; the ASCS server's streaming-exit transition
+   dereferences it after the application release callback returns (SEGV
+   in `bt_bap_remove_iso_data_path`).  Release now clears only app-owned
+   slot state and lets the server detach at the ASE idle transition.
 4. **Malformed-SDU injection size.**  A one-byte SDU is dropped by the
    ISO stack before the BAP callback (never observable receiver-side);
    the injected malformed SDU is one byte short of the configured shape
-   (119 of 120) — still an exact-length violation that reaches the
-   receiver's payload validation.
+   (119 of 120) — still an exact-length violation.
+5. **Invalid application ASCS response.**  `CONF_INVALID` is excluded
+   from the ASCS application response codes (NCS v3.3.0 `bap.h`,
+   `ascs.c` warns); missing/invalid codec shapes now return
+   `CONF_REJECTED / CODEC_DATA`.  The expected negative remote-request
+   paths (unsupported source, rejected codec shape, pool full, malformed
+   SDU) log at INFO level, so the strict runner rejects every remaining
+   bt_bap/ASCS warning with no allowlists.
+6. **Mode A timestamp validation.**  A VALID-flag SDU missing the ISO TS
+   flag skips decoder/pairing/push, increments a receive/decode fault
+   counter, emits a test observer event, and logs a real warning — zero
+   occurrences in the matrix (the ISOAL's `BT_ISO_FLAGS_LOST`
+   sync-boundary SDUs carry no TS by definition and keep the
+   concealment/startup-transient path).
+7. **Release did not stop the sink immediately.**  Release now calls
+   `audio_sink_stop()` before returning to ASCS when it closes an open
+   audio path; a passive observer event with a monotonic sequence number
+   proves the stop precedes the ACL disconnect (scenario 10:
+   `rel_ss_seq=3 < disc_seq=5`).
+8. **Custom TX cross-thread races.**  Per-slot `generation` and
+   `in_flight` counters under one mutex: the TX candidate snapshot
+   increments `in_flight` and records generation/stream/seq under the
+   lock, decrements on every path after unlock, and commits counters
+   only when generation and stream still match; register selects only
+   `bap_stream == NULL && in_flight == 0` slots, initializes encoders
+   while protected, reassigns a nonzero generation, and publishes
+   `bap_stream` last (the memset can never race an in-flight send);
+   unregister/pause clear state under the lock then wait for
+   `in_flight == 0` without holding it.  The lock is never held across
+   `net_buf_alloc`/`bt_bap_stream_send`.
 
-## Deviations from the handoff
+## Strict startup boundary and zero post-start PLC
 
-- The injected malformed SDU is **119 bytes, not 1 byte** (deviation 4
-  above): a 1-byte SDU never reaches the BAP layer in the SW Split ISO
-  stack.  The observable contract (exactly one malformed-SDU observer
-  event, one decode-error increment, no push, then resume) is unchanged.
-- Mode A normal scenarios carry a small deterministic number of
-  **post-start PLC frames** (3 for 10 ms, 18 for 7.5 ms) whose
-  concealment output is nonzero — indistinguishable from valid audio and
-  inaudible; the strict runner pins the exact PLC delta per scenario
-  instead of requiring zero.  Zero-energy (silent) pushes after the
-  first 20 nonzero pushes remain an immediate fault.
-- The stop-finalized segments (scenarios 9–12) carry a bounded number of
-  unpaired-half decodes (CIS activation skew / pairing cut mid-frame);
-  the exact total decoder invocations are pinned per scenario rather
-  than asserted as exactly `dec_calls × pushes`.
-- The ASCS server emits a cosmetic `Invalid application error code: 9`
-  warning when the application returns `CONF_INVALID` (not in Zephyr's
-  allowed app-rsp list); the wire response is exactly what the app
-  chose.  Allowlisted for `invalid_codec_fields`.
-- Scenario 15's nine invalid variants run as three rounds of three
-  attempts on fresh connections (one attempt per endpoint per
-  connection): a rejected Config leaves the client endpoint attached and
-  there is no public detach API for an idle ASE.  The disconnect
-  releases every client endpoint.
+The production receive path reports per-push source validity to the test
+oracle immediately before every sink push (mono/Mode B: the packet
+`BT_ISO_FLAGS_VALID`; Mode A: both paired halves had VALID set).  The
+oracle's startup phase stays open until the first nonzero push sourced
+entirely from valid ISO input; while open, zero or nonzero concealment
+counts as a startup transient and `startup_plc` updates after each push
+(including the boundary-closing push, which absorbs the interleaved
+sync-boundary LOST decodes).  After the boundary: any source-invalid
+push, any zero-energy push, and any post-start PLC (`plc_frames !=
+startup_plc` at finalize) is an immediate fault.  Every scenario reports
+`plc == splc` exactly — the Mode A sync-boundary PLCs (previously pinned
+as deltas 3/18) moved into the startup evidence and the steady-state
+delta is zero.  The arbitrary 20-push zero-energy grace and the PLC-delta
+pin table are removed.
+
+## Warning policy and warnings-as-errors
+
+The runner compiles both BSim binaries with Zephyr's default
+warnings-as-errors (no `CONFIG_COMPILER_WARNINGS_AS_ERRORS=n`) and
+rejects every `<wrn> bt_bap:`, `<wrn> bt_ascs:`, and `<err> bt_bap:`
+line with no scenario allowlist; the expected control paths log at INFO.
+Final builds show zero repo compiler warnings.
 
 ## Runtime and gate duration
 
@@ -231,17 +260,27 @@ gates reproduced them exactly.
   of which the matrix is the long child.
 - No physical RF/audio hardware was used anywhere in this phase.
 
-## Acceptance evidence
+## Acceptance evidence (T4 review-fix round)
 
-- Matrix with pinned hashes: **PASS twice consecutively** on
-  `thomas-workstation` (`/tmp/t4-val` detached worktree of the exact
-  final commit, bundle-transferred, `thomas-workstation` repo main never
-  modified).
-- Full gate: **26 PASS / 0 FAIL / 26 TOTAL, twice consecutively** on the
-  same worktree.
-- Production builds on the final commit: `fw-build-5340`,
-  `fw-build-54l15`, `fw-build-dongle` — zero compiler errors/warnings
-  (documented non-actionable Kconfig/CMake/DT diagnostics only).
-- `git diff --check` clean.
-- Desktop compile of both BSim binaries: zero warnings.
-- Parser unit tests: 36/36 (`tests/unit/bsim_runner`).
+- Focused hash-equivalence: after the TX synchronization rewrite,
+  mono_10ms / modea_10ms / release_without_disable hashes were
+  byte-identical to the diagnostic baseline (0x22AB5C0D / 0xBAE24F7E /
+  0xAEBD23A1), proving the sync fix changes no PCM.
+- Two post-fix baseline matrices: **PASS, pairwise identical fields**
+  (`/tmp/t4_rf_bl1.log`, `/tmp/t4_rf_bl2.log` on the workstation).
+- Two pinned matrices: **PASS** (`/tmp/t4_rf_pin1.log`,
+  `/tmp/t4_rf_pin2.log`).
+- Parser unit tests: **33/33** (`tests/unit/bsim_runner`).
+- Full gate on the exact final code commit `8542f1a`: **26 PASS / 0
+  FAIL / 26 TOTAL** (one full gate suffices per the review-fix handoff:
+  the matrix is the gate's long BSim child and no non-BSim code changed
+  after it).
+- Production builds `fw-build-5340`, `fw-build-54l15`,
+  `fw-build-dongle`: zero errors/warnings (documented non-actionable
+  Kconfig/CMake/DT diagnostics only).
+- `git diff --check` clean; both BSim binaries compile with
+  warnings-as-errors, zero repo warnings.
+- Worktree/repo cleanup: workstation returned to clean `main` with all
+  temporary refs/worktrees/bundles removed.
+- **T5 is next**: timing/actuator internals and the broad lifecycle
+  matrix.

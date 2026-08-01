@@ -295,6 +295,95 @@ Acceptance evidence:
 - **T5 is next**: timing/actuator internals and the broad lifecycle
   matrix.
 
+### T4 review-fix round (2026-08-01)
+
+Closes the protocol, oracle, teardown, timestamp, and harness-race
+defects found in orchestrator review.  Evidence:
+`docs/testing/t4-bap-bsim-matrix.md` (review-fix section); updated
+`docs/testing/behavior-contract.md` (CODEC-007, CODEC-012, CODEC-013)
+and `docs/testing/coverage-matrix.md`.
+
+- **Valid ASCS responses**: missing/invalid codec-shape configs now
+  return `CONF_REJECTED / CODEC_DATA` (`CONF_INVALID` is excluded from
+  the ASCS application response codes); source stays
+  `CONF_UNSUPPORTED / NONE`, pool exhaustion `NO_MEM / NONE`.  The
+  expected negative remote-request paths (unsupported source, rejected
+  codec shape, pool full, malformed SDU) log at INFO level, so the
+  strict runner rejects every remaining bt_bap/ASCS warning with **no
+  allowlists**; the ASCS warning allowlist is removed entirely.
+- **Mode A timestamp validation**: a VALID-flag SDU missing the ISO TS
+  flag skips decoder/pairing/push, increments a receive/decode fault
+  counter, emits a test observer event, and logs a real warning —
+  **zero occurrences in every scenario** (`obs_mts=0`).  The ISOAL's
+  `BT_ISO_FLAGS_LOST` sync-boundary SDUs carry no TS by definition and
+  keep the concealment/startup-transient path.
+- **Release stops the sink immediately**: Release calls
+  `audio_sink_stop()` before returning to ASCS when it closes an open
+  audio path; a passive observer event with a monotonic sequence number
+  proves the stop precedes the ACL disconnect (scenario 10:
+  `obs_rel_ss=1`, `rel_ss_seq=3 < disc_seq=5`).  Later
+  disabled/disconnect paths stay idempotent and create no second
+  segment.
+- **Corrected ordered hashes**: every segment starts full/L/R at the
+  FNV offset basis; samples convert to `uint16_t` before byte
+  extraction; one helper prepends the 4-byte LE frame index then
+  channel sample bytes.  New pinned values (mono 10 ms `0x22AB5C0D`,
+  L==R `0x32777D65`; mono 7.5 ms `0x01A3EB05`; Mode A/B 10 ms
+  `0xBAE24F7E`; Mode A 7.5 ms `0x00A5D3F9`; Mode B 7.5 ms
+  `0xFF82CADB`; invalid-SDU-resume `0x0C61918D`; reconnect seg2 equals
+  a fresh mono 10 ms oracle), baselined from two pairwise-identical
+  post-fix runs and reproduced by two pinned runs and the full gate.
+  Mode B L == mono L cross-checks hold.
+- **Strict source-valid startup boundary, zero post-start PLC**: the
+  production receive path reports per-push source validity to the
+  oracle before every sink push; startup stays open until the first
+  nonzero push sourced entirely from valid ISO input; `startup_plc`
+  updates after each transient push (including the boundary-closing
+  push, absorbing the interleaved sync-boundary LOST decodes).  Every
+  scenario reports `plc == splc` exactly; the arbitrary 20-push
+  zero-energy grace and the PLC-delta pin table are removed; the
+  "inaudible" claim is removed.
+- **Synchronized TX**: per-slot `generation` and `in_flight` counters
+  under one mutex; candidate snapshots increment `in_flight` and
+  decrement on every path after unlock; commits require matching
+  generation and stream; register selects only idle slots, initializes
+  encoders under the lock, reassigns a nonzero generation, and
+  publishes `bap_stream` last; unregister/pause wait for `in_flight==0`
+  without holding the lock; the lock never spans
+  `net_buf_alloc`/`bt_bap_stream_send`; the registration log uses
+  matching `%zu`/`%p`/`%u` arguments.  Focused runs after the rewrite
+  were byte-identical to the baseline hashes.
+- **Warnings-as-errors**: `CONFIG_COMPILER_WARNINGS_AS_ERRORS=n` removed
+  from the runner; both BSim binaries compile with warnings as errors,
+  zero repo warnings; the glibc `_FORTIFY_SOURCE` diagnostic did not
+  recur (no suppression needed).
+- Scenario 15 accepts **two configs overall** (valid mono +
+  missing-frame-blocks fallback) with nine `CONF_REJECTED / CODEC_DATA`
+  rejections; the receiver PASSes only after both, so observer counts
+  are not reset per round.  Mode A normal scenarios send 110 frames per
+  stream (CIS-sync losses are startup transients; exactly 100
+  valid-sourced pushes are pinned); mid-stream TX caps were removed
+  from the lifecycle scenarios so the source stays valid until the gate
+  closes.
+
+Acceptance evidence (workstation detached worktree of the exact final
+code commit `8542f1a`, bundle-transferred, repo main never modified):
+
+- Focused hash-equivalence after the TX rewrite: mono_10ms /
+  modea_10ms / release_without_disable byte-identical to the
+  diagnostic baseline.
+- Two post-fix baseline matrices: **PASS, pairwise identical fields**;
+  two pinned matrices: **PASS** (four consecutive full-matrix PASSes).
+- Parser unit tests: **33/33**.
+- Full gate: **26 PASS / 0 FAIL / 26 TOTAL** (one run per the
+  review-fix handoff — the matrix is the gate's long BSim child and no
+  non-BSim code changed after it).
+- Production builds `fw-build-5340`, `fw-build-54l15`,
+  `fw-build-dongle`: zero errors/warnings (documented non-actionable
+  diagnostics only); `git diff --check` clean.
+- Worktree/repo cleanup: workstation returned to clean `main` with all
+  temporary refs/worktrees/bundles/logs removed.
+
 ### Transient gate run disposition (2026-08-01, T2 review fix)
 
 One workstation gate run on the exact T2 commit (`63d8344`) produced
