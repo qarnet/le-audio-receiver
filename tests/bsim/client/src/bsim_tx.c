@@ -138,7 +138,7 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 				  CONFIG_BT_CONN_TX_USER_DATA_SIZE, NULL);
 
 	while (true) {
-		bool any_err = false;
+		bool sent_any = false;
 
 		for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
 			struct bsim_tx_stream *s = &tx_streams[i];
@@ -152,7 +152,6 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 			/* Hold sending until the scenario-required stream
 			 * count is streaming (Mode A: both). */
 			if (bsim_tx_streaming_count() < atomic_load(&required_streaming)) {
-				any_err = true;
 				continue;
 			}
 
@@ -169,7 +168,6 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 					s->seq_num);
 			} else if (!bsim_tx_encode_sdu(s, buf)) {
 				net_buf_unref(buf);
-				any_err = true;
 				continue;
 			}
 
@@ -178,14 +176,16 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 			if (err == 0) {
 				s->send_count++;
 				s->seq_num++;
+				sent_any = true;
 			} else {
 				LOG_ERR("TX[%zu]: send failed: %d", i, err);
 				net_buf_unref(buf);
-				any_err = true;
 			}
 		}
 
-		if (any_err) {
+		/* Never spin: sleep whenever no send succeeded this round
+		 * (streams not yet streaming, buffer backpressure, errors). */
+		if (!sent_any) {
 			k_sleep(K_MSEC(10));
 		}
 	}
