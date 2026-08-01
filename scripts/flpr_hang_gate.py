@@ -32,8 +32,6 @@ import sys
 import time
 from datetime import datetime
 
-import serial
-
 
 # ── Regex patterns ─────────────────────────────────────────────────────
 
@@ -54,7 +52,7 @@ RE_RUNTIME = re.compile(
     r"Runtime\s*:\s*restarts=(\d+)\s+fails=(\d+)\s+last_ms=(\d+)\s+remote_epoch=(\d+)"
 )
 RE_RUNTIME_RESTART_OK = re.compile(
-    r"FLPR restart OK:\s*(\d+)→(\d+)\s+crc=0x([0-9a-fA-F]+)\s+duration=total\s+(\d+)\s+ms"
+    r"FLPR restart OK: epoch\s+(\d+)→(\d+)\s+crc=0x([0-9a-fA-F]+)\s+duration=total\s+(\d+)\s+ms"
 )
 RE_FAULT_HANG_ACK = re.compile(r"FAULT_HANG_ACK received")
 RE_FAULT_HANG_FAIL = re.compile(r"FAULT_HANG failed:\s*(-?\d+)\s+\(no ACK\)")
@@ -122,6 +120,11 @@ class HangGateRunner:
         self._recv_buf = bytearray()
 
     def open(self):
+        # pyserial is imported lazily (same pattern as the sibling gate
+        # scripts) so the module stays importable without it — the parser
+        # unit suite runs on stdlib-only python3.
+        import serial
+
         self._ser = serial.Serial(self.port, self.baud, timeout=0.05)
         self._log_fh = open(self.log_path, "w", buffering=1)
 

@@ -6,7 +6,8 @@
 #      app_lifecycle, audio_shell, audio_shell_noperf, audio_shell_nrf54)
 #   2. Exec-only C unit suites (4 suites: audio_offload, flpr_audio_process,
 #      flpr_ring, offload_asrc)
-#   3. Python unit suites (6: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py,
+#   3. Python unit suites (7: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py,
+#      flpr_hang_gate/test_flpr_hang_gate.py,
 #      bluez_wp_gate/test_bluez_wireplumber_gate.py, bluez_wp_phase3_gate/test_bluez_wireplumber_phase3_gate.py,
 #      bsim_runner/test_bsim_stage1_parse.py, build_contract/test_build_contract.py)
 #   4. BabbleSim Stage 1 (sink-only scenario, deterministic across runs)
@@ -110,6 +111,8 @@ run_python_suites() {
     run_one "python: flpr_stall_gate" \
         env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
         python3 "$REPO_ROOT/tests/unit/flpr_stall_gate/test_flpr_stall_gate.py" || true
+    run_one "python: flpr_hang_gate" \
+        python3 "$REPO_ROOT/tests/unit/flpr_hang_gate/test_flpr_hang_gate.py" || true
     run_one "python: bluez_wp_gate" \
         env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
         python3 "$REPO_ROOT/scripts/test_bluez_wireplumber_gate.py" || true
