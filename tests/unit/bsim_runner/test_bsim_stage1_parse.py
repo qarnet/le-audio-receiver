@@ -310,6 +310,7 @@ def test_unsupported_source():
     recv = recv_pass(
         "unsupported_source_direction",
         seg=0,
+        pushes1=0,
         obs_rej=1,
         obs_dir=2,
         obs_code=7,
@@ -347,6 +348,7 @@ def test_no_free_sink_slot():
     recv = recv_pass(
         "no_free_sink_slot",
         seg=0,
+        pushes1=0,
         obs_ok=3,
         obs_rej=1,
         obs_rej_code=13,
@@ -382,8 +384,8 @@ def test_no_free_sink_slot():
 def test_invalid_codec_fields():
     root = tempfile.mkdtemp()
     recv = recv_pass(
-        "invalid_codec_fields", seg=0, obs_rej=9, obs_ok=1, obs_rej_code=9,
-        obs_rej_reason=2
+        "invalid_codec_fields", seg=0, pushes1=0, obs_rej=9, obs_ok=1,
+        obs_rej_code=9, obs_rej_reason=2
     )
     ok = run_check(
         root,

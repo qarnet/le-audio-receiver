@@ -395,8 +395,13 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("client session-2 sends %d != 100" % c["sends1"])
 
     elif scenario == "unsupported_source_direction":
-        if seg != 0:
-            errs.append("seg %d != 0 (no audio expected)" % seg)
+        # The final disconnect finalizes an empty segment; seg may be 0
+        # (PASS before the disconnect) or 1 (empty segment).  Any push is
+        # a fault.
+        if seg not in (0, 1):
+            errs.append("seg %d not in (0, 1) (no audio expected)" % seg)
+        if r.get("pushes1", 0) != 0:
+            errs.append("pushes1 %s != 0 (no audio expected)" % r.get("pushes1"))
         if r.get("obs_rej") != 1:
             errs.append("obs_rej %d != 1" % r.get("obs_rej"))
         if r.get("obs_ok") != 0:
@@ -413,8 +418,13 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("client sends0 %d != 0" % c["sends0"])
 
     elif scenario == "no_free_sink_slot":
-        if seg != 0:
-            errs.append("seg %d != 0 (no audio expected)" % seg)
+        # The final disconnect finalizes an empty segment; seg may be 0
+        # (PASS before the disconnect) or 1 (empty segment).  Any push is
+        # a fault.
+        if seg not in (0, 1):
+            errs.append("seg %d not in (0, 1) (no audio expected)" % seg)
+        if r.get("pushes1", 0) != 0:
+            errs.append("pushes1 %s != 0 (no audio expected)" % r.get("pushes1"))
         if r.get("obs_ok", 0) < 3:
             errs.append("obs_ok %d < 3 (2 initial + 1 reuse)" % r.get("obs_ok"))
         if r.get("obs_rej") != 1:
@@ -431,8 +441,13 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("client release responses %d != 3" % c["relrsps"])
 
     elif scenario == "invalid_codec_fields":
-        if seg != 0:
-            errs.append("seg %d != 0 (no audio expected)" % seg)
+        # The final disconnect finalizes an empty segment; seg may be 0
+        # (PASS before the disconnect) or 1 (empty segment).  Any push is
+        # a fault.
+        if seg not in (0, 1):
+            errs.append("seg %d not in (0, 1) (no audio expected)" % seg)
+        if r.get("pushes1", 0) != 0:
+            errs.append("pushes1 %s != 0 (no audio expected)" % r.get("pushes1"))
         if r.get("obs_rej", 0) < 9:
             errs.append("obs_rej %d < 9" % r.get("obs_rej"))
         if r.get("obs_ok", 0) < 1:
