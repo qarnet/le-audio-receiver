@@ -264,11 +264,11 @@ def build_hci_filter():
     """struct hci_filter (BlueZ hci.h) bytes for setsockopt(HCI_FILTER).
 
     type_mask = bit(HCI_EVENT_PKT) = 0x10, event_mask all-ones (accept
-    every event), opcode 0.  Packed "<IIIIH" (18 bytes; the kernel reads
-    its 16-byte struct).
+    every event), opcode 0.  Packed to the kernel's 16-byte struct hci_filter
+    size (type_mask u32, event_mask[2] u32, opcode u16, 2 pad bytes).
     """
     # Linux hci_filter uses 4-byte type mask + two 4-byte event masks + 2-byte opcode.
-    return struct.pack("<IIIH", 1 << 4, 0xFFFFFFFF, 0xFFFFFFFF, 0)
+    return struct.pack("<IIIH", 1 << 4, 0xFFFFFFFF, 0xFFFFFFFF, 0) + b"\x00\x00"
 
 
 def cmd(opcode, params=b""):
@@ -521,7 +521,7 @@ def main():
         now = time.monotonic()
         _dispatch(session.handle_timeout(now))
         if session.state == "idle" and not session.is_done() and now >= backoff_until:
-            _dispatch(session.begin_attempt())
+            _dispatch([session.begin_attempt()])
         wait_s = min(0.2, max(0.0, deadline - time.monotonic()))
         try:
             r, _, _ = select.select([s], [], [], wait_s)

@@ -980,9 +980,26 @@ def main():
         assert raw_connect_stdout is not None
         helper_deadline = time.monotonic() + 40.0
         ready, detail, helper_lines = wait_for_helper_ready(
-            raw_connect_stdout, raw_connect_proc.poll, helper_deadline
+            raw_connect_stdout,
+            lambda: raw_connect_proc.poll() is None,
+            helper_deadline,
         )
         if not ready:
+            # Drain any remaining helper stdout (e.g. an HCI_CONNECT_FAIL
+            # line) so the failure reason is not lost.
+            if raw_connect_proc.poll() is not None:
+                try:
+                    rest = raw_connect_stdout.read(4096)
+                except Exception:
+                    rest = b""
+                for rl in rest.split(b"\n"):
+                    rl = rl.strip()
+                    if rl:
+                        helper_lines.append(rl)
+                        print(
+                            "[helper] {}".format(rl.decode(errors="replace")),
+                            flush=True,
+                        )
             if (
                 raw_connect_proc.poll() is not None
                 and raw_connect_proc.stderr is not None

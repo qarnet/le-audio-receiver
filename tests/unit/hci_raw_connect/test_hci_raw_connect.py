@@ -195,6 +195,7 @@ class TestBuilders(unittest.TestCase):
 
     def test_build_hci_filter(self):
         f = build_hci_filter()
+        self.assertEqual(len(f), 16)
         self.assertEqual(struct.unpack_from("<I", f, 0)[0], 1 << 4)
         self.assertEqual(struct.unpack_from("<I", f, 4)[0], 0xFFFFFFFF)
         self.assertEqual(struct.unpack_from("<I", f, 8)[0], 0xFFFFFFFF)
