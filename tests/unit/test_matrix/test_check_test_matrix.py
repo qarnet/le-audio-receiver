@@ -906,6 +906,93 @@ class CheckTestMatrixCoverage(unittest.TestCase):
         finally:
             fx.cleanup()
 
+    def test_fully_excluded_testonly_function_not_flagged(self):
+        # GCOVR_EXCL test-only helpers: every line marked gcovr/excluded —
+        # the function is not production metrics and must not be a
+        # zero-hit error even when its execution_count is 0.
+        fx = Fixture(valid_entries())
+        try:
+            cov = write_coverage(
+                fx.root,
+                [
+                    {
+                        "file": "src/alpha.c",
+                        "lines": [
+                            {
+                                "line_number": 1,
+                                "count": 1,
+                                "branches": [],
+                                "function_name": "alpha_run",
+                            },
+                            {
+                                "line_number": 2,
+                                "count": 0,
+                                "branches": [],
+                                "function_name": "alpha_test_seam",
+                                "gcovr/excluded": True,
+                            },
+                        ],
+                        "functions": [
+                            {"name": "alpha_run", "execution_count": 1},
+                            {"name": "alpha_test_seam", "execution_count": 0},
+                        ],
+                    },
+                    {
+                        "file": "src/beta.c",
+                        "lines": [],
+                        "functions": [{"name": "beta_init", "execution_count": 1}],
+                    },
+                ],
+            )
+            code, out = fx.run_checker(cov)
+            self.assertEqual(0, code, out)
+            self.assertNotIn("alpha_test_seam", out)
+        finally:
+            fx.cleanup()
+
+    def test_partially_excluded_zero_hit_still_flagged(self):
+        # Only SOME lines excluded: the function remains production
+        # metrics and a zero execution_count is still an error.
+        fx = Fixture(valid_entries())
+        try:
+            cov = write_coverage(
+                fx.root,
+                [
+                    {
+                        "file": "src/alpha.c",
+                        "lines": [
+                            {
+                                "line_number": 1,
+                                "count": 1,
+                                "branches": [],
+                                "function_name": "alpha_run",
+                            },
+                            {
+                                "line_number": 2,
+                                "count": 0,
+                                "branches": [],
+                                "function_name": "alpha_parse",
+                                "gcovr/excluded": True,
+                            },
+                        ],
+                        "functions": [
+                            {"name": "alpha_run", "execution_count": 1},
+                            {"name": "alpha_parse", "execution_count": 0},
+                        ],
+                    },
+                    {
+                        "file": "src/beta.c",
+                        "lines": [],
+                        "functions": [{"name": "beta_init", "execution_count": 1}],
+                    },
+                ],
+            )
+            code, out = fx.run_checker(cov)
+            self.assertNotEqual(0, code)
+            self.assertIn("error: zero-hit function: src/alpha.c: alpha_parse", out)
+        finally:
+            fx.cleanup()
+
 
 class CheckTestMatrixDeterminism(unittest.TestCase):
     def test_deterministic_multiple_error_output(self):

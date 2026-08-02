@@ -286,8 +286,16 @@ for src in population:
     rec = by_path.get(src)
     if rec is None:
         continue
+    # Map function -> excluded flags of its lines (GCOVR_EXCL blocks).
+    lines_by_fn = {}
+    for line in rec.get("lines", []):
+        fn = line.get("function_name")
+        if fn:
+            lines_by_fn.setdefault(fn, []).append(line.get("gcovr/excluded", False))
     lt = lc = bt = bc = 0
     for line in rec.get("lines", []):
+        if line.get("gcovr/excluded", False):
+            continue  # test-only helpers never enter production metrics
         lt += 1
         if line.get("count", 0) > 0:
             lc += 1
@@ -295,8 +303,15 @@ for src in population:
             bt += 1
             if b.get("count", 0) > 0:
                 bc += 1
-    ft = len(rec.get("functions", []))
-    fc = sum(1 for fn in rec.get("functions", []) if fn.get("execution_count", 0) > 0)
+    ft = fc = 0
+    for fn in rec.get("functions", []):
+        name = fn.get("name") or fn.get("demangled_name")
+        excl_flags = lines_by_fn.get(name, [])
+        if excl_flags and all(excl_flags):
+            continue  # fully excluded test-only helper
+        ft += 1
+        if fn.get("execution_count", 0) > 0:
+            fc += 1
     files[src] = {
         "lines": [lc, lt],
         "branches": [bc, bt],

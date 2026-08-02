@@ -603,11 +603,23 @@ class Checker:
                 for e in entry.get("function_exclusions", [])
                 if isinstance(e, dict)
             }
+            # Functions whose every line is gcovr-excluded (GCOVR_EXCL
+            # test-only blocks) are not production metrics: skip them.
+            lines_by_fn = {}
+            for line in rec.get("lines", []):
+                fn = line.get("function_name")
+                if not fn:
+                    continue
+                entry_lines = lines_by_fn.setdefault(fn, [])
+                entry_lines.append(line.get("gcovr/excluded", False))
             groups = {}
             for fn in rec.get("functions", []):
                 name = fn.get("name") or fn.get("demangled_name")
                 groups.setdefault(name, []).append(fn)
             for name in sorted(groups):
+                fn_lines = lines_by_fn.get(name, [])
+                if fn_lines and all(fn_lines):
+                    continue  # fully excluded test-only helper
                 counts = [fn.get("execution_count", 0) for fn in groups[name]]
                 executed = max(counts) > 0
                 zero_variants = sum(1 for c in counts if c == 0)
