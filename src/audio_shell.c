@@ -146,9 +146,9 @@ static int cmd_bt_unpair(const struct shell *sh, size_t argc, char **argv)
 
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	audio_cmds, SHELL_CMD_ARG(status, NULL, "Print audio stats and state.", cmd_status, 1, 0),
-	SHELL_CMD_ARG(reset - stats, NULL, "Clear all counters.", cmd_reset_stats, 1, 0),
+	SHELL_CMD_ARG(reset-stats, NULL, "Clear all counters.", cmd_reset_stats, 1, 0),
 	SHELL_CMD_ARG(perf, NULL, "Print performance instrumentation.", cmd_perf, 1, 0),
-	SHELL_CMD_ARG(perf - reset, NULL, "Clear performance counters.", cmd_perf_reset, 1, 0),
+	SHELL_CMD_ARG(perf-reset, NULL, "Clear performance counters.", cmd_perf_reset, 1, 0),
 	SHELL_CMD_ARG(stop, NULL, "Stop I2S and reset drift.", cmd_stop, 1, 0),
 	SHELL_SUBCMD_SET_END);
 

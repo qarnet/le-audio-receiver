@@ -207,7 +207,8 @@ for suite in "${all_suites[@]}"; do
     fi
 
     "$build_dir/zephyr/zephyr.exe" >"$TMP_ROOT/$suite.run.log" 2>&1 \
-        || die "native run failed for $suite — see $TMP_ROOT/$suite.run.log"
+        || { cp "$TMP_ROOT/$suite.run.log" "$OUTPUT_DIR/logs/" 2>/dev/null || true; \
+             die "native run failed for $suite — see $OUTPUT_DIR/logs/$suite.run.log"; }
 
     gcda_count="$(find "$build_dir" -name '*.gcda' | wc -l)"
     [ "$gcda_count" -gt 0 ] \
