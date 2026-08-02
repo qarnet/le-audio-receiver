@@ -140,6 +140,20 @@ struct bt_sink {
 	uint16_t half_idx;
 };
 
+/*
+ * Validated codec shape carried out of validate_codec_cfg into the ASCS
+ * Config/Enable callbacks.  Deliberately SMALL (five scalars): the full
+ * struct bt_sink embeds two lc3_decoder_mem_48k_t objects (~4.2 KB each)
+ * that must never live on the BT RX WQ stack, where these callbacks run.
+ */
+struct codec_shape {
+	uint16_t freq_hz;
+	uint16_t frame_dur_us;
+	uint16_t octets_per_frame;
+	uint8_t frame_blocks_per_sdu;
+	uint8_t chan_count;
+};
+
 static struct bt_sink sinks[MAX_SINK_ASE];
 static size_t num_sink_ase;
 
@@ -275,7 +289,7 @@ static size_t stream_alloc_idx(void)
  * is excluded from the ASCS application response codes) and -EINVAL is
  * returned.  Nothing is mutated.
  */
-static int validate_codec_cfg(const struct bt_audio_codec_cfg *codec_cfg, struct bt_sink *shape,
+static int validate_codec_cfg(const struct bt_audio_codec_cfg *codec_cfg, struct codec_shape *shape,
 			      struct bt_bap_ascs_rsp *rsp)
 {
 	int ret;
@@ -391,7 +405,7 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 	 * increment num_sink_ase, touch a decoder/lifecycle slot, or
 	 * consume capacity needed by a later valid request.
 	 */
-	struct bt_sink shape;
+	struct codec_shape shape;
 
 	memset(&shape, 0, sizeof(shape));
 	if (validate_codec_cfg(codec_cfg, &shape, rsp) != 0) {
@@ -472,7 +486,7 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 	 * at Config time.  Enable fails safely (CONF_INVALID / CODEC_DATA)
 	 * if the retained config no longer matches the stored shape.
 	 */
-	struct bt_sink shape;
+	struct codec_shape shape;
 
 	memset(&shape, 0, sizeof(shape));
 	if (validate_codec_cfg(stream->codec_cfg, &shape, rsp) != 0) {
