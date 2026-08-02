@@ -435,4 +435,7 @@ state-machine improvements, readability work, and diagnostic improvements.
     observed exact `41 PASS / 0 FAIL / 41 TOTAL`, exit 0, elapsed 816 s
     (13m36s), zero Kconfig assigned-value warnings (see `STATUS.md` T7
    section and `docs/development/workstation-transfer-status.md`).
-9. T8 — hardware baseline freeze — NOT STARTED.
+9. T8 — hardware baseline freeze — IN PROGRESS (2026-08-02; nRF54L15 Stage 2
+   rows run on `ace13ff`, one flagged row + Stage 3 pending — see
+   `docs/testing/pre-refactor-hardware-baseline.md`; final gate 42/42 on
+   `1d90873`).

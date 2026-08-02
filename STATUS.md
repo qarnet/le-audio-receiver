@@ -17,7 +17,15 @@ that exact commit, with **zero Kconfig assigned-value warnings and zero
 compiler warnings** (full provenance in the T7 section).  Baseline
 provenance unchanged: baseline generated on clean `c6adce8`, committed and
 wired in `4a31324`, warning-only test-config correction (`8f7bfca`)
-afterward.  **T8 NOT STARTED.**  Transfer/status handoff:
+afterward.  **T8 IN PROGRESS — not accepted** — nRF54L15 Stage 2 matrix
+run to completion on `ace13ff` (one flagged row, see
+`docs/testing/pre-refactor-hardware-baseline.md`); nRF5340 Stage 3 not
+started (hardware absent).  Canonical gate on the final T8 code commit
+`1d90873` observed exact **42 PASS / 0 FAIL / 42 TOTAL** (T8 added the
+hci_raw_connect python suite: 25 twister + 4 exec + 10 Python + coverage +
+matrix + BSim), exit 0, zero Kconfig assigned-value warnings; coverage
+baseline enforcement PASS on the committed baseline with zero drift.
+Transfer/status handoff:
 `docs/development/workstation-transfer-status.md`.
 
 **Phase T0 — behavior contract and honest coverage map** — ACCEPTED (2026-07-31).
@@ -673,8 +681,19 @@ gate evidence below).
   pristine production builds (`fw-build-5340`, `fw-build-54l15`,
   `fw-build-dongle`) pass with zero warnings; `git diff --check` clean;
   both repos left clean.
-- **T8 (hardware baseline freeze) NOT STARTED** — see the plan Phase T8
-  and `docs/development/workstation-transfer-status.md`.
+- **T8 (hardware baseline freeze) IN PROGRESS — not accepted** — see the
+  plan Phase T8 and `docs/testing/pre-refactor-hardware-baseline.md`.
+  nRF54L15 Stage 2: Mode A/B 120 s x2 + reconnects PASS, FLPR hang gate
+  Mode B PASS (16/16), Phase 3 lifecycle gate PASS (exit 0), FLPR hang
+  gate Mode A 15/16 (flagged: `frame_count_plausible` under 8-14% RF
+  loss, all firmware-recovery checks pass), Mode A underruns flagged
+  (RF-loss starvation, auto-recovered).  Three tooling commits
+  (`2988e1c`, `e8dbc1c`, `1d90873`) and one firmware fix (`ace13ff`:
+  keep validated codec shape off the BT RX WQ stack — 18.4 KB local
+  overflowed the 4096 B RX stack; fixed with a five-scalar
+  `struct codec_shape`, lc3_config 18400→192 B / lc3_enable 18344→144 B
+  per `-fstack-usage`).  nRF5340 Stage 3 NOT STARTED — E83 probe and
+  `/dev/ttyUSB0` absent.
 
 ### T5 review-fix round (2026-08-01)
 

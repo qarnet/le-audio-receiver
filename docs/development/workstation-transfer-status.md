@@ -52,7 +52,7 @@ bounded steps and final commands are.
 | T5 — lifecycle, timing, drift, actuators | ACCEPTED (2026-08-01) | `STATUS.md` |
 | T6 — boot, shell, resolved-config contracts | ACCEPTED (2026-08-02) | `STATUS.md`, `docs/development/pre-refactor-testing-t6-handoff.md` |
 | T7 — coverage enforcement | **ACCEPTED (2026-08-02)** | `STATUS.md` (T7 section), `docs/testing/coverage-matrix.md`, `docs/development/pre-refactor-testing-t7-stage1-handoff.md`, `-t7-stage2-handoff.md`, `-t7-evidence-fix-handoff.md` |
-| T8 — hardware baseline freeze | **NOT STARTED** | `docs/development/pre-refactor-testing-plan.md` (Phase T8) |
+| T8 — hardware baseline freeze | **IN PROGRESS (2026-08-02) — NOT ACCEPTED** | `docs/testing/pre-refactor-hardware-baseline.md` (nRF54L15 Stage 2 complete, one flagged row; nRF5340 Stage 3 not started — hardware absent) |
 
 ## Key T7 commit chain
 
@@ -94,6 +94,10 @@ Code/tooling (oldest → newest), per `git log` on `8f7bfca`:
 - current HEAD (this docs-only update) — record the accepted gate evidence
   on `8f7bfca` with zero Kconfig assigned-value warnings; T7 ACCEPTED,
   T8 NOT STARTED.
+- T8 execution (2026-08-02, commits `2988e1c`/`e8dbc1c`/`ace13ff`/
+  `1d90873`) — nRF54L15 Stage 2 run to completion with one flagged row;
+  nRF5340 Stage 3 not started (hardware absent).  See
+  `docs/testing/pre-refactor-hardware-baseline.md`; T8 NOT ACCEPTED.
 
 ## T7 metrics (committed baseline, never lowered)
 
@@ -185,15 +189,16 @@ after the T7 evidence-fix commit.
 ## Next bounded steps
 
 1. T7 is ACCEPTED with exact evidence (above).  Nothing further for T7.
-2. Start **T8 — hardware baseline freeze** (see the plan Phase T8 and the
-   hardware matrix below): fresh builds and flashes, Mode A/B 120 s on both
-   targets, disconnect/reconnect, FLPR stall fallback on nRF54L15, stock
-   BlueZ/WirePlumber pair + reconnect + reset + bonded-reconnect playback,
-   and the nRF5340 APLL steady-state repeat-fallback-zero check.  Record
-   evidence in `docs/testing/pre-refactor-hardware-baseline.md` (not yet
-   created — T8 not started).
+2. **T8 in progress (2026-08-02)** — nRF54L15 Stage 2 done on `ace13ff`
+   (Mode A/B 120 s ×2 + reconnects, FLPR hang Mode B 16/16, Phase 3 gate
+   exit 0; FLPR hang Mode A 15/16 flagged — `frame_count_plausible` under
+   8-14% RF loss — and Mode A underruns flagged; evidence in
+   `docs/testing/pre-refactor-hardware-baseline.md`).  Remaining before
+   acceptance: orchestrator disposition of the flagged rows, then
+   nRF5340 Stage 3 (E83 probe + `/dev/ttyUSB0` currently absent) and the
+   final acceptance pass.
 
-## Canonical gate composition (41 children)
+## Canonical gate composition (42 children)
 
 From `scripts/test-all.sh` (header + run order):
 
@@ -205,9 +210,9 @@ From `scripts/test-all.sh` (header + run order):
   rate_convert, stats, timing, timing_none, timing_nrf54, volume.
 - **4 exec-only C suites** (CMakeLists.txt, no testcase.yaml):
   audio_offload, flpr_audio_process, flpr_ring, offload_asrc.
-- **9 Python suites**: gate, flpr_stall_gate, flpr_hang_gate,
+- **10 Python suites**: gate, flpr_stall_gate, flpr_hang_gate,
   bluez_wp_gate, bluez_wp_phase3_gate, bsim_runner, build_contract,
-  test_matrix, test_coverage_runner.
+  hci_raw_connect (T8), test_matrix, test_coverage_runner.
 - **1 coverage child**: `test-coverage.sh` default mode (rebuilds the 25
   twister + 4 exec suites with `CONFIG_COVERAGE=y`, enforces the committed
   baseline; requires a clean worktree).
@@ -217,7 +222,7 @@ From `scripts/test-all.sh` (header + run order):
 - **1 BSim child**: `bsim: stage1` (T4 15-scenario BAP matrix,
   scenarios 1–8 twice, pinned hashes, strict parse).
 
-25 + 4 + 9 + 1 + 1 + 1 = **41**.
+25 + 4 + 10 + 1 + 1 + 1 = **42**.
 
 ## Final commands (T7 gate + T8 preconditions)
 
