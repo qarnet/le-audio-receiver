@@ -22,6 +22,7 @@ import ctypes
 import ctypes.util
 import math
 import os
+import select
 import struct
 import subprocess
 import sys
@@ -43,6 +44,71 @@ AGENT_PATH = "/bap_central/agent"
 RAW_CONNECT_HELPER = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "hci_raw_connect.py"
 )
+# Machine-readable ready token emitted by hci_raw_connect.py on a
+# confirmed raw-HCI link to the exact peer.
+READY_PREFIX = b"HCI_CONNECT_READY"
+
+
+def wait_for_helper_ready(out, is_alive, deadline, poll_s=0.05):
+    """Wait for the raw-HCI helper's confirmed-connect ready line.
+
+    Reads helper stdout lines until a line starts with READY_PREFIX, the
+    helper exits, or the deadline passes.  Returns
+    (ok, detail, lines) where lines is the list of helper stdout lines seen.
+    """
+    lines = []
+    buffer = b""
+    out_fd = out.fileno()
+
+    while time.monotonic() < deadline:
+        if not is_alive():
+            return (False, "helper exited before ready", lines)
+
+        timeout = deadline - time.monotonic()
+        if timeout <= 0:
+            break
+
+        r, _, _ = select.select([out_fd], [], [], min(poll_s, timeout))
+        if not r:
+            continue
+
+        chunk = os.read(out_fd, 4096)
+        if chunk == b"":
+            if buffer:
+                line = buffer.rstrip(b"\r\n")
+                if line:
+                    lines.append(line)
+                    print(
+                        "[helper] {}".format(line.decode(errors="replace")), flush=True
+                    )
+                    if line.startswith(READY_PREFIX):
+                        return (True, line, lines)
+            return (False, "helper stdout closed", lines)
+
+        buffer += chunk
+        while True:
+            idx = buffer.find(b"\n")
+            if idx < 0:
+                break
+            line = buffer[:idx]
+            buffer = buffer[idx + 1 :]
+            line = line.rstrip(b"\r")
+            if line:
+                lines.append(line)
+                print("[helper] {}".format(line.decode(errors="replace")), flush=True)
+                if line.startswith(READY_PREFIX):
+                    return (True, line, lines)
+
+    if buffer:
+        line = buffer.rstrip(b"\r")
+        if line:
+            lines.append(line)
+            print("[helper] {}".format(line.decode(errors="replace")), flush=True)
+            if line.startswith(READY_PREFIX):
+                return (True, line, lines)
+
+    return (False, "helper ready-line timeout", lines)
+
 
 PAC_SOURCE_UUID = "00002bcb-0000-1000-8000-00805f9b34fb"
 LC3_CODEC = 0x06
@@ -898,13 +964,48 @@ def main():
                 "public",
                 "--peer-addr-type",
                 "random",
+                "--connect-deadline",
+                "30",
                 "--device",
                 str(hci_dev),
             ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        # Wait for the Device1 Connected property (up to 10 s).
+
+        # Gate 1: wait for the helper's machine-readable confirmed-connect
+        # line (bounded; the helper retries internally until its connect
+        # deadline).
+        raw_connect_stdout = raw_connect_proc.stdout
+        assert raw_connect_stdout is not None
+        helper_deadline = time.monotonic() + 40.0
+        ready, detail, helper_lines = wait_for_helper_ready(
+            raw_connect_stdout, raw_connect_proc.poll, helper_deadline
+        )
+        if not ready:
+            if (
+                raw_connect_proc.poll() is not None
+                and raw_connect_proc.stderr is not None
+            ):
+                try:
+                    err = raw_connect_proc.stderr.read(4096).decode(errors="replace")
+                except Exception:
+                    err = ""
+                if err:
+                    print("[error] helper stderr: {}".format(err[:2000]))
+            if helper_lines:
+                print("[error] helper stdout tail: {}".format(helper_lines[-3:]))
+            print("[error] Raw HCI connect failed: {}".format(detail))
+            raw_connect_proc.terminate()
+            try:
+                raw_connect_proc.wait(timeout=3)
+            except Exception:
+                pass
+            sys.exit(1)
+        print("[main] Raw HCI link confirmed: {}".format(detail))
+
+        # Gate 2: BlueZ must observe the link (Device1 Connected) before
+        # pairing proceeds.
         dev_props0 = _dbus.Interface(
             bus.get_object("org.bluez", dev_path),
             "org.freedesktop.DBus.Properties",
@@ -921,10 +1022,14 @@ def main():
             _GLib.MainContext.default().iteration(False)
             time.sleep(0.1)
         if not connected:
-            print("[error] Raw HCI connect failed (link not up in 10 s)")
+            print("[error] Device1 not Connected after confirmed raw HCI link")
             raw_connect_proc.terminate()
+            try:
+                raw_connect_proc.wait(timeout=3)
+            except Exception:
+                pass
             sys.exit(1)
-        print("[main] ACL link up")
+        print("[main] Device1 Connected confirmed")
 
         # After RemoveDevice + raw HCI reconnect, recreate proxies from the
         # live bus.  Pre-existing proxies may be stale after RemoveDevice

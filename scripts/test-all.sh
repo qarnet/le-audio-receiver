@@ -7,10 +7,11 @@
 #      timing_none)
 #   2. Exec-only C unit suites (4 suites: audio_offload, flpr_audio_process,
 #      flpr_ring, offload_asrc)
-#   3. Python unit suites (9: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py,
+#   3. Python unit suites (10: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py,
 #      flpr_hang_gate/test_flpr_hang_gate.py,
 #      bluez_wp_gate/test_bluez_wireplumber_gate.py, bluez_wp_phase3_gate/test_bluez_wireplumber_phase3_gate.py,
 #      bsim_runner/test_bsim_stage1_parse.py, build_contract/test_build_contract.py,
+#      hci_raw_connect/test_hci_raw_connect.py,
 #      test_matrix/test_check_test_matrix.py, test_coverage_runner/test_test_coverage_runner.py)
 #   4. Coverage (T7): rebuilds all native C suites with CONFIG_COVERAGE=y
 #      and enforces the committed tests/coverage-baseline.json
@@ -130,6 +131,8 @@ run_python_suites() {
         python3 "$REPO_ROOT/tests/unit/bsim_runner/test_bsim_stage1_parse.py" || true
     run_one "python: build_contract" \
         python3 "$REPO_ROOT/tests/unit/build_contract/test_build_contract.py" || true
+    run_one "python: hci_raw_connect" \
+        python3 "$REPO_ROOT/tests/unit/hci_raw_connect/test_hci_raw_connect.py" || true
     run_one "python: test_matrix" \
         python3 "$REPO_ROOT/tests/unit/test_matrix/test_check_test_matrix.py" || true
     run_one "python: test_coverage_runner" \
