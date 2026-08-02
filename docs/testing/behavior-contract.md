@@ -804,9 +804,11 @@ children of `scripts/test-all.sh`.
 
 ### CV-001 — Numeric coverage never decreases
 
-The committed `tests/coverage-baseline.json` (schema v1, generated on
-`4a31324`; lines 3070/3503, branches 1332/1921, functions 182/182 in the
-23-file numeric population) is enforced with integer cross multiplication:
+The committed `tests/coverage-baseline.json` (schema v1, generated on the
+clean commit `c6adce8`, committed in `4a31324`, enforcement rerun on clean
+`4a31324` with identical ratios; lines 3070/3503, branches 1332/1921,
+functions 182/182 in the 23-file numeric population) is enforced with
+integer cross multiplication:
 `current_covered/current_total >= baseline_covered/baseline_total` for the
 overall lines and branches totals and for every per-file lines, branches,
 and functions record.  Lowering the baseline is a regression.
