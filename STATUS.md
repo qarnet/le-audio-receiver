@@ -8,13 +8,13 @@
 Test plan accepted: `docs/development/pre-refactor-testing-plan.md`.  Phases
 T0–T8 lock current supported behavior before large-scale refactoring.
 
-**Current status (2026-08-02):** T0–T6 ACCEPTED.  **T7 IMPLEMENTED, FINAL
-EVIDENCE PENDING** — implementation complete on `4a31324` with the committed
-numeric baseline, but no retained observed exact canonical gate result or
-runtime is documented; the canonical gate has **41 children** (25 twister +
-4 exec + 9 Python + coverage + matrix + BSim) and `41 PASS / 0 FAIL /
-41 TOTAL` is NOT yet claimed.  **T8 NOT STARTED.**  Transfer/status handoff:
-`docs/development/workstation-transfer-status.md`.
+**Current status (2026-08-02):** T0–T7 ACCEPTED.  **T7 ACCEPTED** —
+canonical gate observed exact **41 PASS / 0 FAIL / 41 TOTAL** (25 twister +
+4 exec + 9 Python + coverage + matrix + BSim) on the exact code commit
+`4a31324`, script exit 0, elapsed `real 14m51,504s`, run 2026-08-02 on
+`thomas-workstation` from a detached clone at that exact commit (full
+provenance in the T7 section).  **T8 NOT STARTED.**  Transfer/status
+handoff: `docs/development/workstation-transfer-status.md`.
 
 **Phase T0 — behavior contract and honest coverage map** — ACCEPTED (2026-07-31).
 
@@ -506,10 +506,10 @@ Development evidence (desktop `thomas-main`, branch `test/pre-refactor-behavior`
   `fw-build-5340`, `fw-build-54l15`, `fw-build-dongle` — zero compiler
   warnings; only the documented non-actionable NCS v3.3.0 diagnostics
   (see "Build warning diagnostics"), no new entries.
-- **T7 implementation complete, final gate evidence pending** (2026-08-02)
-  — see the T7 section below; coverage and matrix checks are canonical gate
-  children.  No retained observed exact canonical gate result/runtime
-  exists yet; acceptance is not final.
+- **T7 ACCEPTED** (2026-08-02) — see the T7 section below; coverage and
+  matrix checks are canonical gate children.  Canonical gate observed exact
+  `41 PASS / 0 FAIL / 41 TOTAL` on commit `4a31324` (exit 0,
+  `real 14m51,504s`).
 
 ### T6 review-fix round (2026-08-02)
 
@@ -564,14 +564,14 @@ bundle-transferred; workstation `main` never modified):
 - Cleanup: workstation returned to clean `main` (`20b37c4`), detached
   worktrees, temp refs, bundles, and logs removed; desktop repo clean on
   `test/pre-refactor-behavior` after the evidence commit.
-- **T7 implementation complete, final gate evidence pending** (2026-08-02)
-  — see the T7 section below; coverage and matrix checks are canonical gate
-  children.  No retained observed exact canonical gate result/runtime
-  exists yet; acceptance is not final.
+- **T7 ACCEPTED** (2026-08-02) — see the T7 section below; coverage and
+  matrix checks are canonical gate children.  Canonical gate observed exact
+  `41 PASS / 0 FAIL / 41 TOTAL` on commit `4a31324` (exit 0,
+  `real 14m51,504s`).
 
-### T7 implementation and pending acceptance (2026-08-02)
+### T7 implementation and acceptance (2026-08-02)
 
-Implements the coverage-enforcement phase (final acceptance pending):
+Implements the coverage-enforcement phase (**ACCEPTED**):
 `docs/development/pre-refactor-testing-t7-stage1-handoff.md` and
 `docs/development/pre-refactor-testing-t7-stage2-handoff.md`.  Exact final
 code commit: **`4a31324`** (baseline + gate wiring; code commits `bd51054`,
@@ -614,21 +614,49 @@ tooling).
   `/tmp` or `$HOME` tree (root/repo-root/cwd/relative/inside-repo refused),
   baseline write/enforcement require a clean worktree with exact `HEAD`
   provenance, and per-suite failure logs are preserved in the output dir.
-- Full canonical gate on `4a31324` (detached worktree): **final acceptance
-  PENDING** — the canonical gate has **41 children** (25 twister + 4
-  exec-only + 9 Python + coverage + matrix + BSim; see
-  `docs/development/workstation-transfer-status.md`), and **no retained
-  observed exact canonical gate result or runtime is documented**, so
-  `41 PASS / 0 FAIL / 41 TOTAL` is NOT yet claimed.  What IS documented:
-  the baseline was generated on clean `c6adce8`, committed in `4a31324`,
-  and default enforcement reran on clean `4a31324` with identical ratios
-  (first bullet above); the checker local run reports zero errors (zero
-  zero-hit production functions).  Three pristine production builds
-  (`fw-build-5340`, `fw-build-54l15`, `fw-build-dongle`) pass with zero
-  warnings; `git diff --check` clean; both repos left clean.  Required
-  next: rerun `./scripts/test-all.sh` on a detached workstation worktree of
-  exact `4a31324`, capture the full log and elapsed runtime, verify the
-  exact 41/41 line, then record T7 ACCEPTED.
+- **Canonical gate ACCEPTED (2026-08-02)** — observed exact result on the
+  exact T7 code commit `4a31324` (`4a31324cf4df4073857f198c042378c3e860510e`):
+  full `./scripts/test-all.sh` run on `thomas-workstation` from a detached
+  worktree clone at that exact commit (HEAD == `4a31324`, worktree clean;
+  a `git worktree` cannot host the gate because `test-coverage.sh` requires
+  a real `.git` directory — `[ -d .git ]` — so the detached checkout is a
+  fresh clone).  Log capture: `time ./scripts/test-all.sh` stdout/stderr to
+  transient `/tmp/t7-evidence-final-gate.log` (removed after evidence
+  extraction — see provenance note below).  Observed: **`Gate complete:
+  41 PASS / 0 FAIL / 41 TOTAL`**, script exit 0, elapsed **`real
+  14m51,504s`** (user 28m12,129s, sys 8m56,381s).  All 41 children PASS:
+  25 twister + 4 exec-only + 9 Python + coverage + matrix + BSim (BSim T4
+  matrix hashes all match pinned values).  This matches a prior
+  workstation run of the same exact commit captured in
+  `/tmp/t7-canonical-gate.log` (`41 PASS / 0 FAIL / 41 TOTAL`,
+  `GATE_EXIT=0`, `real 13m52,920s`) — the retained earlier log corroborates
+  the result independently.
+- Warnings in the accepted run (all classified, none unexplained):
+  29 native_sim `Using a test - not safe - entropy source` notices (the
+  pre-existing line every twister suite emits, already documented), and 2
+  upstream Zephyr Kconfig `LOG` assigned-`n`-got-`y` messages from the
+  `audio_shell` and `audio_shell_nrf54` test builds (`CONFIG_LOG=n` in
+  those suites' `prj.conf` is overridden by the shell subsystem's
+  `select LOG_OUTPUT`/`SHELL_LOG_BACKEND` forcing `LOG=y`; deterministic —
+  identical 2 occurrences in the retained prior run — and present since the
+  T6 gate on `cc13c85`, not introduced by T7).  All `<wrn>`/`<err>` lines
+  in the log are deliberate failure-injection output of the negative-path
+  tests (volume callback errors, offload recovery escalations, FLPR ring
+  rejections) and are expected test behavior, not faults.
+- **Provenance note**: the transient captured gate log (`/tmp/...`) is NOT
+  retained — the committed evidence in this file (exact line, exit code,
+  elapsed runtime, commit, date, workstation context) is the durable
+  record.  The prior retained `/tmp/t7-canonical-gate.log` was also
+  transient and is not part of this repo.
+- **Baseline provenance (unchanged, still exact)**: baseline was generated
+  on clean `c6adce8`, committed in `4a31324`, and default enforcement reran
+  on clean `4a31324` with identical ratios (first bullet above); the
+  checker local run reports zero errors (zero zero-hit production
+  functions).  Three pristine production builds (`fw-build-5340`,
+  `fw-build-54l15`, `fw-build-dongle`) pass with zero warnings;
+  `git diff --check` clean; both repos left clean.
+- **T8 (hardware baseline freeze) NOT STARTED** — see the plan Phase T8
+  and `docs/development/workstation-transfer-status.md`.
 
 ### T5 review-fix round (2026-08-01)
 

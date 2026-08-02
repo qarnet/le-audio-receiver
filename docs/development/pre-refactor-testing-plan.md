@@ -324,16 +324,17 @@ python3 scripts/check-build-contract.py \
   --nrf54l15 build/nrf54l15
 ```
 
-## Phase T7 — Coverage enforcement — IMPLEMENTED, FINAL EVIDENCE PENDING (2026-08-02)
+## Phase T7 — Coverage enforcement — ACCEPTED (2026-08-02)
 
 Implementation complete on exact code commit `4a31324`; baseline generated
 on the clean commit `c6adce8`, committed in `4a31324`, default enforcement
-rerun on clean `4a31324` with identical ratios.  **Final acceptance is
-pending**: the canonical gate now has **41 children** (25 twister + 4
-exec-only + 9 Python + coverage + matrix + BSim), and no retained observed
-exact canonical gate result or runtime is documented — `41 PASS / 0 FAIL /
-41 TOTAL` is not yet claimed.  Status and pending evidence:
-`docs/development/workstation-transfer-status.md`, `STATUS.md` (T7 section),
+rerun on clean `4a31324` with identical ratios.  **ACCEPTED (2026-08-02)**:
+full canonical gate observed on the exact commit `4a31324` from a detached
+worktree clone on `thomas-workstation` — **41 PASS / 0 FAIL / 41 TOTAL**
+(25 twister + 4 exec-only + 9 Python + coverage + matrix + BSim), script
+exit 0, elapsed `real 14m51,504s`.  Observed evidence, warning
+classification, and provenance: `STATUS.md` (T7 section),
+`docs/development/workstation-transfer-status.md`,
 `docs/testing/coverage-matrix.md` (numeric baseline).
 Committed `tests/coverage-baseline.json`: lines 3070/3503, branches
 1332/1921, functions 182/182 (100%) in the 23-file numeric population.
@@ -424,7 +425,8 @@ state-machine improvements, readability work, and diagnostic improvements.
 5. T4 — BAP/BabbleSim matrix.
 6. T5 — lifecycle, timing, drift, and actuators.
 7. T6 — boot, shell, and build contracts.
-8. T7 — coverage enforcement → IMPLEMENTED (2026-08-02, commit `4a31324`);
-   exact 41/41 canonical gate acceptance PENDING (no retained observed run;
-   see `docs/development/workstation-transfer-status.md`).
+8. T7 — coverage enforcement → ACCEPTED (2026-08-02, commit `4a31324`);
+   canonical gate observed exact `41 PASS / 0 FAIL / 41 TOTAL`, exit 0,
+   `real 14m51,504s` (see `STATUS.md` T7 section and
+   `docs/development/workstation-transfer-status.md`).
 9. T8 — hardware baseline freeze — NOT STARTED.
