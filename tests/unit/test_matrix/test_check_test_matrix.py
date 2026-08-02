@@ -974,6 +974,12 @@ class CheckTestMatrixCoverage(unittest.TestCase):
                                 "function_name": "alpha_parse",
                                 "gcovr/excluded": True,
                             },
+                            {
+                                "line_number": 3,
+                                "count": 0,
+                                "branches": [],
+                                "function_name": "alpha_parse",
+                            },
                         ],
                         "functions": [
                             {"name": "alpha_run", "execution_count": 1},
