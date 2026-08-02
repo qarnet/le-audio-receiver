@@ -96,6 +96,12 @@ class GateResult:
         self.recovery_time = 0.0
         self.baseline_epoch = 0
         self.baseline_success = 0
+        self.baseline_recovery_attempts = 0
+        self.baseline_runtime_restarts = 0
+        self.baseline_runtime_fails = 0
+        self.baseline_relapses = 0
+        self.baseline_exhaustion = 0
+        self.baseline_probation_cleared = 0
         self.final_status = {}
         self.active_status = {}
         self.active_audio_text = ""
@@ -143,6 +149,30 @@ class HangGateRunner:
             self._log_fh.flush()
             return chunk
         return b""
+
+    def _read_status(self, settle_s=0.35, grace_s=0.15):
+        """Read until the console goes quiet, returning all accumulated text.
+
+        The status commands print over ~100-200 ms; a single in_waiting
+        read catches only a partial block and the parser then misses the
+        Counters line.  Drain until no new bytes arrive for grace_s.
+        """
+        self._clear_buf()
+        deadline = time.monotonic() + settle_s
+        while time.monotonic() < deadline:
+            if self._ser.in_waiting:
+                self._read_all()
+            time.sleep(0.02)
+        quiet = 0.0
+        while quiet < grace_s:
+            before = len(self._recv_buf)
+            self._read_all()
+            if len(self._recv_buf) == before:
+                quiet += 0.05
+            else:
+                quiet = 0.0
+            time.sleep(0.05)
+        return self._all_text()
 
     def _all_text(self):
         return self._recv_buf.decode("utf-8", errors="replace")
@@ -348,6 +378,12 @@ class HangGateRunner:
 
             result.baseline_epoch = st["epoch"]
             result.baseline_success = st["success"]
+            result.baseline_recovery_attempts = st["recovery_attempts"]
+            result.baseline_runtime_restarts = st["runtime_restarts"]
+            result.baseline_runtime_fails = st["runtime_fails"]
+            result.baseline_relapses = st["relapses"]
+            result.baseline_exhaustion = st["exhaustion"]
+            result.baseline_probation_cleared = st["probation_cleared"]
             print(
                 f"[{datetime.now().strftime('%H:%M:%S')}] ACTIVE with success={st['success']}, "
                 f"epoch={st['epoch']}. Injecting flpr hang..."
@@ -455,10 +491,7 @@ class HangGateRunner:
                 f"Capturing active-stream status..."
             )
             self._send_cmd("flpr offload")
-            time.sleep(0.05)
-            self._clear_buf()
-            self._read_all()
-            active_st = self.parse_offload(self._all_text())
+            active_st = self.parse_offload(self._read_status())
             result.active_status = active_st
             print(
                 f"  State={active_st['state']} submit={active_st['submit']} "
@@ -509,12 +542,10 @@ class HangGateRunner:
 
             result.full_log = self._all_text()
 
-            # Parse final status
+            # Parse final status (read until quiet so the Counters line is
+            # not lost to the 50 ms single-read race)
             self._send_cmd("flpr offload")
-            time.sleep(0.05)
-            self._clear_buf()
-            self._read_all()
-            st_final = self.parse_offload(self._all_text())
+            st_final = self.parse_offload(self._read_status())
             result.final_status = st_final
 
             # Parse ASRC section
@@ -532,13 +563,17 @@ class HangGateRunner:
 
             # Gate: exactly one recovery (attempts >= 1, no multiple)
             attempts = st_final["recovery_attempts"]
-            checks["recovery_attempts_eq_1"] = attempts == 1
+            checks["recovery_attempts_eq_1"] = (
+                attempts - result.baseline_recovery_attempts
+            ) == 1
             if attempts != 1:
                 print(f"  WARNING: recovery_attempts={attempts} (expected 1)")
 
             # Gate: exactly one runtime restart (restarts==1)
             restarts = st_final["runtime_restarts"]
-            checks["runtime_restarts_eq_1"] = restarts == 1
+            checks["runtime_restarts_eq_1"] = (
+                restarts - result.baseline_runtime_restarts
+            ) == 1
             if restarts != 1:
                 print(f"  WARNING: runtime_restarts={restarts} (expected 1)")
 
@@ -547,7 +582,9 @@ class HangGateRunner:
             checks["exhaustion_zero"] = exhaustion == 0
 
             # Gate: probation cleared
-            checks["probation_cleared"] = st_final["probation_cleared"] >= 1
+            checks["probation_cleared"] = (
+                st_final["probation_cleared"] - result.baseline_probation_cleared
+            ) >= 1
 
             # Gate: back to ACTIVE (use active-stream snapshot, final state is
             # STOPPED after disconnect)
