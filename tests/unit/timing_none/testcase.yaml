@@ -1,0 +1,4 @@
+tests:
+  unit.timing_none:
+    platform_allow: native_sim/native/64
+    tags: audio timing

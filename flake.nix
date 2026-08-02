@@ -31,10 +31,13 @@
           # via D-Bus). These land on the shell's nixpkgs python — the NCS
           # toolchain python stays scoped inside the west wrapper, so there is
           # no collision with the firmware build toolchain.
-          packages = with pkgs.python3Packages; [
+          packages = [
+            pkgs.gcovr
+          ]
+          ++ (with pkgs.python3Packages; [
             dbus-python
             pygobject3
-          ];
+          ]);
         };
       }
     );
