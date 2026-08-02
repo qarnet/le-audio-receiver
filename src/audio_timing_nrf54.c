@@ -253,6 +253,7 @@ static void diag_work_handler(struct k_work *work)
 }
 
 #ifdef AUDIO_TIMING_NRF54_TEST
+/* GCOVR_EXCL_START — test seams, absent from production builds */
 /*
  * Test seams (tests/unit/timing_nrf54):
  *  - audio_timing_submit_diag_work() captures the work item instead of
@@ -308,6 +309,7 @@ void audio_timing_test_state_reset(void)
 	diag_fifo_len = 0;
 	test_captured_work = NULL;
 }
+/* GCOVR_EXCL_STOP */
 #else
 static void audio_timing_submit_diag_work(void)
 {

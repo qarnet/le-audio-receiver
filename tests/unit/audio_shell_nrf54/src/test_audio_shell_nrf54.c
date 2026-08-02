@@ -522,3 +522,354 @@ ZTEST(audio_shell_nrf54, test_wrapper_seam_flpr)
 	const char *out = run_cmd("flpr status", NULL);
 	assert_output_has_line(out, "  Epoch        : 9 (ready=0 reboot=0)");
 }
+
+/* ── FLPR command handlers (T7 Stage 2) ─────────────────────────────
+ * cmd_flpr_stress / ring test / ring reset / ring init / producer
+ * stall / stall_flpr / stall_flpr_ms / ring acceptance / hang —
+ * production shell handlers executed through the real shell registry.
+ * Outcomes reachable before physical FLPR transport are locked here;
+ * long-running successful acceptance stays hardware evidence. */
+
+ZTEST(audio_shell_nrf54, test_flpr_stress_not_ready)
+{
+	test_flpr_reset();
+	struct flpr_status s = {.ready = false, .acked = false};
+
+	test_flpr_set_status(&s);
+	int rc = 0;
+	const char *out = run_cmd("flpr stress", &rc);
+
+	zassert_equal(rc, -EAGAIN);
+	assert_output_contains(out, "FLPR not ready/acked — stress rejected");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_stress_already_active)
+{
+	test_flpr_reset();
+	struct flpr_status s = {.ready = true, .acked = true, .stress_active = true};
+
+	test_flpr_set_status(&s);
+	int rc = 0;
+	const char *out = run_cmd("flpr stress", &rc);
+
+	zassert_equal(rc, -EBUSY);
+	assert_output_contains(out, "Stress already in progress");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_stress_success_summary)
+{
+	test_flpr_reset();
+	struct flpr_status s = {
+		.ready = true,
+		.acked = true,
+		.stress_active = false,
+		.stress_sent = 5,
+		.stress_recv = 4,
+		.stress_timeouts = 1,
+		.stress_stale = 0,
+		.stress_mismatch = 0,
+		.stress_err_send = 0,
+	};
+
+	test_flpr_set_status(&s);
+	int rc = 0;
+	const char *out = run_cmd("flpr stress 5", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Starting 5 ping/pong stress...");
+	assert_output_contains(out, "Sent=5 Recv=4 Timeout=1 Stale=0 Mismatch=0 ErrSend=0 (of 5 requested)");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_ring_test_invalid_count)
+{
+	test_flpr_reset();
+	int rc = 0;
+	const char *out = run_cmd("flpr ring test 0", &rc);
+
+	zassert_equal(rc, -EINVAL);
+	assert_output_contains(out, "Block count must be 1");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_ring_test_uninitialized)
+{
+	test_flpr_reset();
+	struct flpr_ring_status s = {.initialized = false, .epoch = 0};
+
+	test_flpr_set_ring_status(&s);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring test 10", &rc);
+
+	zassert_equal(rc, -EAGAIN);
+	assert_output_contains(out, "Rings not initialized — init/reset first");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_ring_test_delegated_success)
+{
+	test_flpr_reset();
+	struct flpr_ring_status s = {
+		.initialized = true,
+		.epoch = 7,
+		.test_blocks_sent = 1,
+		.test_blocks_recv = 1,
+		.test_crc_errors = 0,
+		.test_payload_errors = 0,
+		.test_stale_events = 0,
+		.test_producer_blocks = 0,
+		.test_output_full = 0,
+	};
+
+	test_flpr_set_ring_status(&s);
+	test_flpr_set_ring_test_result(0);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring test 1", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Starting ring test: 1 blocks");
+	assert_output_contains(out, "PASS: all 1 blocks transferred, zero errors");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_ring_test_delegated_failure)
+{
+	test_flpr_reset();
+	struct flpr_ring_status s = {
+		.initialized = true,
+		.epoch = 7,
+		.test_blocks_sent = 0,
+		.test_blocks_recv = 0,
+	};
+
+	test_flpr_set_ring_status(&s);
+	test_flpr_set_ring_test_result(-EIO);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring test 1", &rc);
+
+	zassert_equal(rc, 0); /* handler reports failure via FAIL: warn line */
+	assert_output_contains(out, "FAIL: sent=0/1 recv=0");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_ring_test_rate_delegated)
+{
+	test_flpr_reset();
+	struct flpr_ring_status s = {
+		.initialized = true,
+		.epoch = 7,
+		.test_blocks_sent = 1,
+		.test_blocks_recv = 1,
+	};
+
+	test_flpr_set_ring_status(&s);
+	test_flpr_set_ring_test_result(0);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring test 1 10", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Starting rate-limited ring test: 1 blocks, 10 blk/s");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_ring_reset_success)
+{
+	test_flpr_reset();
+	test_flpr_set_reset_result(0);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring reset", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Coordinated ring reset OK");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_ring_reset_failure)
+{
+	test_flpr_reset();
+	test_flpr_set_reset_result(-EIO);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring reset", &rc);
+
+	zassert_equal(rc, -EIO);
+	assert_output_contains(out, "Coordinated ring reset failed: -5");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_ring_init_success)
+{
+	test_flpr_reset();
+	test_flpr_set_init_result(0);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring init", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "PCM rings initialized.");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_ring_init_failure)
+{
+	test_flpr_reset();
+	test_flpr_set_init_result(-ENODEV);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring init", &rc);
+
+	zassert_equal(rc, -ENODEV);
+	assert_output_contains(out, "Ring init failed: -19");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_producer_stall_on)
+{
+	test_flpr_reset();
+	zassert_false(test_flpr_stall_producer_called(), "no stall before command");
+
+	int rc = 0;
+	const char *out = run_cmd("flpr ring stall", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Producer stall: ON");
+	zassert_true(test_flpr_stall_producer_called(), "stall side effect");
+	zassert_true(test_flpr_stall_producer_value(), "stall=true");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_producer_stall_off)
+{
+	test_flpr_reset();
+	int rc = 0;
+	const char *out = run_cmd("flpr ring stall off", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Producer stall: OFF");
+	zassert_true(test_flpr_stall_producer_called(), "stall side effect");
+	zassert_false(test_flpr_stall_producer_value(), "stall=false");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_stall_flpr_success)
+{
+	test_flpr_reset();
+	test_flpr_set_stall_result(0);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring stall_flpr 3", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "FLPR stall applied: 0x03 (cons_in=1 prod_out=1)");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_stall_flpr_failure)
+{
+	test_flpr_reset();
+	test_flpr_set_stall_result(-EIO);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring stall_flpr 1", &rc);
+
+	zassert_equal(rc, -EIO);
+	assert_output_contains(out, "FLPR stall failed: -5");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_stall_flpr_ms_usage)
+{
+	test_flpr_reset();
+	int rc = 0;
+	const char *out = run_cmd("flpr ring stall_flpr_ms 1", &rc);
+
+	zassert_equal(rc, -EINVAL);
+	assert_output_contains(out, "Usage: flpr ring stall_flpr_ms <bits> <duration_ms>");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_stall_flpr_ms_zero_mask_rejected)
+{
+	test_flpr_reset();
+	int rc = 0;
+	const char *out = run_cmd("flpr ring stall_flpr_ms 0 100", &rc);
+
+	zassert_equal(rc, -EINVAL);
+	assert_output_contains(out, "Timed stall with zero mask rejected");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_stall_flpr_ms_duration_overflow)
+{
+	test_flpr_reset();
+	int rc = 0;
+	const char *out = run_cmd("flpr ring stall_flpr_ms 1 16777216", &rc);
+
+	zassert_equal(rc, -EINVAL);
+	assert_output_contains(out, "exceeds max 16777215 ms");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_stall_flpr_ms_success)
+{
+	test_flpr_reset();
+	test_flpr_set_stall_timed_result(0);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring stall_flpr_ms 1 500", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "FLPR timed stall applied: bits=0x01 duration=500 ms");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_stall_flpr_ms_failure)
+{
+	test_flpr_reset();
+	test_flpr_set_stall_timed_result(-EIO);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring stall_flpr_ms 1 500", &rc);
+
+	zassert_equal(rc, -EIO);
+	assert_output_contains(out, "FLPR timed stall failed: -5");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_ring_acceptance_invalid_count)
+{
+	test_flpr_reset();
+	int rc = 0;
+	const char *out = run_cmd("flpr ring acceptance 0", &rc);
+
+	zassert_equal(rc, -EINVAL);
+	assert_output_contains(out, "Block count must be 1");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_ring_acceptance_uninitialized)
+{
+	test_flpr_reset();
+	struct flpr_ring_status s = {.initialized = false};
+
+	test_flpr_set_ring_status(&s);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring acceptance 100", &rc);
+
+	zassert_equal(rc, -EAGAIN);
+	assert_output_contains(out, "Rings not initialized");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_hang_not_ready)
+{
+	test_flpr_reset();
+	struct flpr_status s = {.ready = true, .acked = false};
+
+	test_flpr_set_status(&s);
+	int rc = 0;
+	const char *out = run_cmd("flpr hang", &rc);
+
+	zassert_equal(rc, -EAGAIN);
+	assert_output_contains(out, "FLPR not ready/acked — hang rejected");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_hang_ack_success)
+{
+	test_flpr_reset();
+	struct flpr_status s = {.ready = true, .acked = true};
+
+	test_flpr_set_status(&s);
+	test_flpr_set_hang_result(0);
+	int rc = 0;
+	const char *out = run_cmd("flpr hang", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "FAULT_HANG_ACK received — FLPR hang imminent.");
+}
+
+ZTEST(audio_shell_nrf54, test_flpr_hang_failure_errno)
+{
+	test_flpr_reset();
+	struct flpr_status s = {.ready = true, .acked = true};
+
+	test_flpr_set_status(&s);
+	test_flpr_set_hang_result(-EIO);
+	int rc = 0;
+	const char *out = run_cmd("flpr hang", &rc);
+
+	zassert_equal(rc, -EIO);
+	assert_output_contains(out, "FAULT_HANG failed: -5 (no ACK)");
+}

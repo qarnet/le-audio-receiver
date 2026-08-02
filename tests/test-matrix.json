@@ -4,342 +4,903 @@
       "source": "src/app_lifecycle.c",
       "classification": "direct",
       "suites": [
-        {"name": "app_lifecycle", "evidence": "direct"}
+        {
+          "name": "app_lifecycle",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "app_lifecycle_boot", "outcome": "success", "witness": "test_boot_all_success_with_platform"},
-        {"api": "app_lifecycle_boot", "outcome": "error-class", "witness": "test_boot_watchdog_failure"},
-        {"api": "app_lifecycle_restart_advertising", "outcome": "success", "witness": "test_restart_success"},
-        {"api": "app_lifecycle_restart_advertising", "outcome": "error-class", "witness": "test_restart_failure"}
+        {
+          "api": "app_lifecycle_boot",
+          "outcome": "0",
+          "witness": "test_boot_all_success_with_platform"
+        },
+        {
+          "api": "app_lifecycle_boot",
+          "outcome": "-ENODEV",
+          "witness": "test_boot_watchdog_failure"
+        },
+        {
+          "api": "app_lifecycle_boot",
+          "outcome": "-EHOSTDOWN",
+          "witness": "test_boot_bluetooth_failure"
+        },
+        {
+          "api": "app_lifecycle_boot",
+          "outcome": "-EIO",
+          "witness": "test_boot_settings_failure"
+        },
+        {
+          "api": "app_lifecycle_boot",
+          "outcome": "-ENOMEM",
+          "witness": "test_boot_volume_failure"
+        },
+        {
+          "api": "app_lifecycle_boot",
+          "outcome": "-EAGAIN",
+          "witness": "test_boot_bap_failure"
+        },
+        {
+          "api": "app_lifecycle_restart_advertising",
+          "outcome": "0",
+          "witness": "test_restart_success"
+        },
+        {
+          "api": "app_lifecycle_restart_advertising",
+          "outcome": "-EIO",
+          "witness": "test_restart_failure"
+        }
       ],
       "state_transitions": [
-        {"transition": "boot->restart-advertising", "witness": "test_restart_success"}
+        {
+          "transition": "boot->restart-advertising",
+          "witness": "test_restart_success"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/audio_asrc.c",
       "classification": "direct",
       "suites": [
-        {"name": "asrc", "evidence": "direct"},
-        {"name": "audio_offload", "evidence": "direct"},
-        {"name": "offload_asrc", "evidence": "direct"},
-        {"name": "flpr_audio_process", "evidence": "direct"}
+        {
+          "name": "asrc",
+          "evidence": "direct"
+        },
+        {
+          "name": "audio_offload",
+          "evidence": "direct"
+        },
+        {
+          "name": "offload_asrc",
+          "evidence": "direct"
+        },
+        {
+          "name": "flpr_audio_process",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_asrc_init", "outcome": "success", "witness": "test_init_rate_bounds"},
-        {"api": "audio_asrc_init", "outcome": "error-class", "witness": "test_init_null_rejected"},
-        {"api": "audio_asrc_process", "outcome": "success", "witness": "test_deterministic_60000"},
-        {"api": "audio_asrc_process", "outcome": "error-class", "witness": "test_process_null_args"},
-        {"api": "audio_asrc_reset", "outcome": "success", "witness": "test_reset_clears_phase"}
+        {
+          "api": "audio_asrc_init",
+          "outcome": "0",
+          "witness": "test_init_rate_bounds"
+        },
+        {
+          "api": "audio_asrc_init",
+          "outcome": "-EINVAL",
+          "witness": "test_init_null_rejected"
+        },
+        {
+          "api": "audio_asrc_process",
+          "outcome": "0",
+          "witness": "test_deterministic_60000"
+        },
+        {
+          "api": "audio_asrc_process",
+          "outcome": "-EINVAL",
+          "witness": "test_process_ppm_bounds"
+        },
+        {
+          "api": "audio_asrc_reset",
+          "outcome": "void",
+          "witness": "test_reset_clears_phase"
+        },
+        {
+          "api": "audio_asrc_state_export",
+          "outcome": "0",
+          "witness": "test_state_export_import_roundtrip"
+        },
+        {
+          "api": "audio_asrc_state_import",
+          "outcome": "0",
+          "witness": "test_state_export_import_roundtrip"
+        }
       ],
       "state_transitions": [
-        {"transition": "active->idle", "witness": "test_reset_clears_phase"}
+        {
+          "transition": "active->idle",
+          "witness": "test_reset_clears_phase"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/audio_clock_actuator_apll.c",
       "classification": "direct",
       "suites": [
-        {"name": "actuator_apll", "evidence": "direct"},
-        {"name": "actuator_apll_nohfclk", "evidence": "direct"}
+        {
+          "name": "actuator_apll",
+          "evidence": "direct"
+        },
+        {
+          "name": "actuator_apll_nohfclk",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_clock_actuator_init", "outcome": "success", "witness": "test_init_writes_center"},
-        {"api": "audio_clock_actuator_apply_ppm", "outcome": "success", "witness": "test_exact_positive_conversion"},
-        {"api": "audio_clock_actuator_reset", "outcome": "success", "witness": "test_reset_writes_center"},
-        {"api": "audio_clock_actuator_consume_sample_adjustment", "outcome": "success", "witness": "test_repeated_calls_and_consume"}
+        {
+          "api": "audio_clock_actuator_init",
+          "outcome": "0",
+          "witness": "test_init_writes_center"
+        },
+        {
+          "api": "audio_clock_actuator_apply_ppm",
+          "outcome": "0",
+          "witness": "test_exact_positive_conversion"
+        },
+        {
+          "api": "audio_clock_actuator_reset",
+          "outcome": "void",
+          "witness": "test_reset_writes_center"
+        },
+        {
+          "api": "audio_clock_actuator_consume_sample_adjustment",
+          "outcome": "0",
+          "witness": "test_repeated_calls_and_consume"
+        }
       ],
       "state_transitions": [
-        {"transition": "trimmed->center", "witness": "test_reset_writes_center"}
+        {
+          "transition": "trimmed->center",
+          "witness": "test_reset_writes_center"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/audio_clock_actuator_none.c",
       "classification": "direct",
       "suites": [
-        {"name": "actuator_none", "evidence": "direct"}
+        {
+          "name": "actuator_none",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_clock_actuator_init", "outcome": "success", "witness": "test_all_returns_zero"},
-        {"api": "audio_clock_actuator_apply_ppm", "outcome": "success", "witness": "test_all_returns_zero"},
-        {"api": "audio_clock_actuator_reset", "outcome": "success", "witness": "test_all_returns_zero"},
-        {"api": "audio_clock_actuator_consume_sample_adjustment", "outcome": "success", "witness": "test_all_returns_zero"}
+        {
+          "api": "audio_clock_actuator_init",
+          "outcome": "0",
+          "witness": "test_all_returns_zero"
+        },
+        {
+          "api": "audio_clock_actuator_apply_ppm",
+          "outcome": "0",
+          "witness": "test_all_returns_zero"
+        },
+        {
+          "api": "audio_clock_actuator_reset",
+          "outcome": "void",
+          "witness": "test_all_returns_zero"
+        },
+        {
+          "api": "audio_clock_actuator_consume_sample_adjustment",
+          "outcome": "0",
+          "witness": "test_all_returns_zero"
+        }
       ],
       "state_transitions": [],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": false
     },
     {
       "source": "src/audio_clock_actuator_sample_adjust.c",
       "classification": "historical-retired",
-      "reason": "retired non-production sample insert/drop actuator retained for regression comparison only (coverage-matrix.md weak-test fact 1)",
-      "excluded_from_numeric": true,
       "suites": [
-        {"name": "actuator_sample_adjust_historical", "evidence": "historical"}
+        {
+          "name": "actuator_sample_adjust_historical",
+          "evidence": "historical"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_clock_actuator_apply_ppm", "outcome": "success", "witness": "test_zero_ppm_no_adjustment"},
-        {"api": "audio_clock_actuator_reset", "outcome": "success", "witness": "test_reset_clears_state"}
+        {
+          "api": "audio_clock_actuator_apply_ppm",
+          "outcome": "0",
+          "witness": "test_zero_ppm_no_adjustment"
+        },
+        {
+          "api": "audio_clock_actuator_reset",
+          "outcome": "void",
+          "witness": "test_reset_clears_state"
+        }
       ],
       "state_transitions": [
-        {"transition": "pending->cleared", "witness": "test_consume_clears_pending"}
+        {
+          "transition": "pending->cleared",
+          "witness": "test_consume_clears_pending"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true,
+      "reason": "retired non-production sample insert/drop actuator retained for regression comparison only (coverage-matrix.md weak-test fact 1)",
+      "excluded_from_numeric": true
     },
     {
       "source": "src/audio_decode.c",
       "classification": "direct",
       "suites": [
-        {"name": "decode", "evidence": "direct"},
-        {"name": "bsim:stage1", "evidence": "integration"}
+        {
+          "name": "decode",
+          "evidence": "direct"
+        },
+        {
+          "name": "bsim:stage1",
+          "evidence": "integration"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_decode_config", "outcome": "success", "witness": "test_config_mono_10ms"},
-        {"api": "audio_decode_config", "outcome": "error-class", "witness": "test_config_rejects"},
-        {"api": "audio_decode_sdu", "outcome": "success", "witness": "test_golden_mono_10ms"},
-        {"api": "audio_decode_sdu", "outcome": "error-class", "witness": "test_sdu_huge_lengths_rejected"},
-        {"api": "audio_decode_reset", "outcome": "success", "witness": "test_reset_clears_everything"},
-        {"api": "audio_decode_interleave", "outcome": "success", "witness": "test_interleave"},
-        {"api": "audio_decode_mono_to_stereo", "outcome": "success", "witness": "test_mono_to_stereo_separate_buffers"}
+        {
+          "api": "audio_decode_config",
+          "outcome": "0",
+          "witness": "test_config_mono_10ms"
+        },
+        {
+          "api": "audio_decode_config",
+          "outcome": "-EINVAL",
+          "witness": "test_config_rejects"
+        },
+        {
+          "api": "audio_decode_sdu",
+          "outcome": "0",
+          "witness": "test_golden_mono_10ms"
+        },
+        {
+          "api": "audio_decode_sdu",
+          "outcome": "-EINVAL",
+          "witness": "test_sdu_huge_lengths_rejected"
+        },
+        {
+          "api": "audio_decode_reset",
+          "outcome": "void",
+          "witness": "test_reset_clears_everything"
+        },
+        {
+          "api": "audio_decode_interleave",
+          "outcome": "void",
+          "witness": "test_interleave"
+        },
+        {
+          "api": "audio_decode_mono_to_stereo",
+          "outcome": "void",
+          "witness": "test_mono_to_stereo_separate_buffers"
+        }
       ],
       "state_transitions": [
-        {"transition": "configured->idle", "witness": "test_reset_clears_everything"}
+        {
+          "transition": "configured->idle",
+          "witness": "test_reset_clears_everything"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/audio_drift.c",
       "classification": "direct",
       "suites": [
-        {"name": "drift", "evidence": "direct"},
-        {"name": "bsim:stage1", "evidence": "build"}
+        {
+          "name": "drift",
+          "evidence": "direct"
+        },
+        {
+          "name": "bsim:stage1",
+          "evidence": "build"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_drift_controller_update", "outcome": "success", "witness": "test_zero_feedforward_phase_only"},
-        {"api": "audio_drift_frequency_error_update", "outcome": "success", "witness": "test_positive_frequency_negative_correction"},
-        {"api": "audio_drift_get_ppm", "outcome": "success", "witness": "test_output_clamp_positive"},
-        {"api": "audio_drift_reset", "outcome": "success", "witness": "test_reset_clears_all_state"}
+        {
+          "api": "audio_drift_controller_update",
+          "outcome": "0",
+          "witness": "test_zero_feedforward_phase_only"
+        },
+        {
+          "api": "audio_drift_frequency_error_update",
+          "outcome": "void",
+          "witness": "test_positive_frequency_negative_correction"
+        },
+        {
+          "api": "audio_drift_get_ppm",
+          "outcome": "0",
+          "witness": "test_reset_clears_all_state"
+        },
+        {
+          "api": "audio_drift_reset",
+          "outcome": "void",
+          "witness": "test_reset_clears_all_state"
+        },
+        {
+          "api": "audio_drift_state_str",
+          "outcome": "\"ACTIVE\"",
+          "witness": "test_init_returns_zero_first_call"
+        },
+        {
+          "api": "audio_drift_state_str",
+          "outcome": "\"INIT\"",
+          "witness": "test_reset_clears_all_state"
+        }
       ],
       "state_transitions": [
-        {"transition": "active->reset", "witness": "test_reset_clears_all_state"}
+        {
+          "transition": "active->reset",
+          "witness": "test_reset_clears_all_state"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/audio_i2s.c",
       "classification": "direct",
       "suites": [
-        {"name": "audio_i2s", "evidence": "direct"},
-        {"name": "audio_i2s_identity", "evidence": "direct"}
+        {
+          "name": "audio_i2s",
+          "evidence": "direct"
+        },
+        {
+          "name": "audio_i2s_identity",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_sink_init", "outcome": "success", "witness": "test_init_success_configured_after_all_stages"},
-        {"api": "audio_sink_init", "outcome": "error-class", "witness": "test_timing_init_error_propagates"},
-        {"api": "audio_sink_push", "outcome": "success", "witness": "test_push_after_stop_starts_fresh_prefill"},
-        {"api": "audio_sink_push", "outcome": "error-class", "witness": "test_push_before_init_eio"},
-        {"api": "audio_sink_stop", "outcome": "success", "witness": "test_stop_started_order_prepare_then_drop"}
+        {
+          "api": "audio_sink_init",
+          "outcome": "0",
+          "witness": "test_init_success_configured_after_all_stages"
+        },
+        {
+          "api": "audio_sink_init",
+          "outcome": "-EIO",
+          "witness": "test_timing_init_error_propagates"
+        },
+        {
+          "api": "audio_sink_push",
+          "outcome": "0",
+          "witness": "test_push_after_stop_starts_fresh_prefill"
+        },
+        {
+          "api": "audio_sink_push",
+          "outcome": "-EIO",
+          "witness": "test_push_before_init_eio"
+        },
+        {
+          "api": "audio_sink_stop",
+          "outcome": "void",
+          "witness": "test_stop_started_order_prepare_then_drop"
+        },
+        {
+          "api": "audio_sink_set_input_frames",
+          "outcome": "void",
+          "witness": "test_input_frames_setter_supported"
+        }
       ],
       "state_transitions": [
-        {"transition": "error->ready", "witness": "test_eio_write_prepare_recovery"},
-        {"transition": "stopped->started", "witness": "test_push_after_stop_starts_fresh_prefill"}
+        {
+          "transition": "error->ready",
+          "witness": "test_eio_write_prepare_recovery"
+        },
+        {
+          "transition": "stopped->started",
+          "witness": "test_push_after_stop_starts_fresh_prefill"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/audio_offload.c",
       "classification": "direct",
       "suites": [
-        {"name": "audio_offload", "evidence": "direct"},
-        {"name": "offload_asrc", "evidence": "direct"},
-        {"name": "bsim:stage1", "evidence": "build"}
+        {
+          "name": "audio_offload",
+          "evidence": "direct"
+        },
+        {
+          "name": "offload_asrc",
+          "evidence": "direct"
+        },
+        {
+          "name": "bsim:stage1",
+          "evidence": "build"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_offload_init", "outcome": "success", "witness": "test_reconnect"},
-        {"api": "audio_offload_process_asrc", "outcome": "success", "witness": "test_asrc_success"},
-        {"api": "audio_offload_process_asrc", "outcome": "error-class", "witness": "test_asrc_invalid_frames"},
-        {"api": "audio_offload_is_healthy", "outcome": "success", "witness": "test_is_healthy"},
-        {"api": "audio_offload_stream_start", "outcome": "success", "witness": "test_new_stream_resets_counters"},
-        {"api": "audio_offload_stream_stop", "outcome": "success", "witness": "test_stop_during_recovery"},
-        {"api": "audio_offload_remote_unavailable", "outcome": "success", "witness": "test_fallback_state"}
+        {
+          "api": "audio_offload_init",
+          "outcome": "0",
+          "witness": "test_reconnect"
+        },
+        {
+          "api": "audio_offload_process_asrc",
+          "outcome": "0",
+          "witness": "test_asrc_success"
+        },
+        {
+          "api": "audio_offload_process_asrc",
+          "outcome": "-EAGAIN",
+          "witness": "test_timeout_triggers_recovery"
+        },
+        {
+          "api": "audio_offload_process_asrc",
+          "outcome": "-EINVAL",
+          "witness": "test_asrc_invalid_frames"
+        },
+        {
+          "api": "audio_offload_is_healthy",
+          "outcome": "true",
+          "witness": "test_is_healthy"
+        },
+        {
+          "api": "audio_offload_is_healthy",
+          "outcome": "false",
+          "witness": "test_fallback_state"
+        },
+        {
+          "api": "audio_offload_is_stopped",
+          "outcome": "true",
+          "witness": "test_is_stopped_true_uninitialized"
+        },
+        {
+          "api": "audio_offload_is_stopped",
+          "outcome": "false",
+          "witness": "test_is_stopped_false_recovering"
+        },
+        {
+          "api": "audio_offload_stream_start",
+          "outcome": "void",
+          "witness": "test_new_stream_resets_counters"
+        },
+        {
+          "api": "audio_offload_stream_stop",
+          "outcome": "void",
+          "witness": "test_stop_during_recovery"
+        },
+        {
+          "api": "audio_offload_remote_unavailable",
+          "outcome": "void",
+          "witness": "test_fallback_state"
+        },
+        {
+          "api": "audio_offload_get_status",
+          "outcome": "void",
+          "witness": "test_fallback_state"
+        },
+        {
+          "api": "audio_offload_get_asrc_stats",
+          "outcome": "void",
+          "witness": "test_new_stream_resets_counters"
+        },
+        {
+          "api": "prep_work_fn",
+          "outcome": "void",
+          "witness": "test_prep_retry_then_active"
+        },
+        {
+          "api": "recovery_work_fn",
+          "outcome": "void",
+          "witness": "test_recovery_success"
+        }
       ],
       "state_transitions": [
-        {"transition": "preparing->active", "witness": "test_prep_retry_then_active"},
-        {"transition": "healthy->recovering", "witness": "test_timeout_triggers_recovery"},
-        {"transition": "probation->recovering", "witness": "test_probation_relapse_exhaustion"}
+        {
+          "transition": "preparing->active",
+          "witness": "test_prep_retry_then_active"
+        },
+        {
+          "transition": "healthy->recovering",
+          "witness": "test_timeout_triggers_recovery"
+        },
+        {
+          "transition": "probation->recovering",
+          "witness": "test_probation_relapse_exhaustion"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/audio_perf.c",
       "classification": "direct",
       "suites": [
-        {"name": "perf", "evidence": "direct"},
-        {"name": "audio_shell", "evidence": "direct"},
-        {"name": "audio_shell_nrf54", "evidence": "direct"},
-        {"name": "volume", "evidence": "direct"}
+        {
+          "name": "perf",
+          "evidence": "direct"
+        },
+        {
+          "name": "audio_shell",
+          "evidence": "direct"
+        },
+        {
+          "name": "audio_shell_nrf54",
+          "evidence": "direct"
+        },
+        {
+          "name": "volume",
+          "evidence": "direct"
+        },
+        {
+          "name": "audio_i2s_identity",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_perf_cycle_start", "outcome": "success", "witness": "test_inject_accumulates_total"},
-        {"api": "audio_perf_cycle_end", "outcome": "success", "witness": "test_inject_below_deadline_no_overrun"},
-        {"api": "audio_perf_push_failure", "outcome": "success", "witness": "test_push_failure_increments"},
-        {"api": "audio_perf_queue_sample", "outcome": "success", "witness": "test_queue_sample_min_max_first"},
-        {"api": "audio_perf_repeat_fallback", "outcome": "success", "witness": "test_repeat_fallback_increments"},
-        {"api": "audio_perf_reset", "outcome": "success", "witness": "test_reset_clears_cycle_counters"},
-        {"api": "audio_perf_snapshot", "outcome": "success", "witness": "test_snapshot_matches_state"}
+        {
+          "api": "audio_perf_cycle_start",
+          "outcome": "void",
+          "witness": "test_perf_push_timing_started_pushes"
+        },
+        {
+          "api": "audio_perf_cycle_end",
+          "outcome": "void",
+          "witness": "test_perf_push_timing_started_pushes"
+        },
+        {
+          "api": "audio_perf_push_failure",
+          "outcome": "void",
+          "witness": "test_startup_data_write_fail"
+        },
+        {
+          "api": "audio_perf_queue_sample",
+          "outcome": "void",
+          "witness": "test_queue_sample_min_max_first"
+        },
+        {
+          "api": "audio_perf_repeat_fallback",
+          "outcome": "void",
+          "witness": "test_repeat_fallback_at_threshold"
+        },
+        {
+          "api": "audio_perf_asrc_capacity_failure",
+          "outcome": "void",
+          "witness": "test_perf_exact_values_and_labels"
+        },
+        {
+          "api": "audio_perf_reset",
+          "outcome": "void",
+          "witness": "test_reset_clears_cycle_counters"
+        },
+        {
+          "api": "audio_perf_snapshot",
+          "outcome": "void",
+          "witness": "test_snapshot_matches_state"
+        }
       ],
       "state_transitions": [],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": false
     },
     {
       "source": "src/audio_rate_convert.c",
       "classification": "direct",
       "suites": [
-        {"name": "rate_convert", "evidence": "direct"},
-        {"name": "bsim:stage1", "evidence": "build"}
+        {
+          "name": "rate_convert",
+          "evidence": "direct"
+        },
+        {
+          "name": "bsim:stage1",
+          "evidence": "build"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_rate_converter_init", "outcome": "success", "witness": "test_reinit_resets"},
-        {"api": "audio_rate_converter_nearest_stereo", "outcome": "success", "witness": "test_nearest_stereo_lr_pairing"},
-        {"api": "audio_rate_converter_next_frames", "outcome": "success", "witness": "test_identity_100_blocks"}
+        {
+          "api": "audio_rate_converter_init",
+          "outcome": "void",
+          "witness": "test_reinit_resets"
+        },
+        {
+          "api": "audio_rate_converter_nearest_stereo",
+          "outcome": "void",
+          "witness": "test_nearest_stereo_lr_pairing"
+        },
+        {
+          "api": "audio_rate_converter_next_frames",
+          "outcome": "0",
+          "witness": "test_identity_100_blocks"
+        }
       ],
       "state_transitions": [
-        {"transition": "configured->reset", "witness": "test_reinit_resets"}
+        {
+          "transition": "configured->reset",
+          "witness": "test_reinit_resets"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/audio_shell.c",
       "classification": "direct",
       "suites": [
-        {"name": "audio_shell", "evidence": "direct"},
-        {"name": "audio_shell_noperf", "evidence": "direct"},
-        {"name": "audio_shell_nrf54", "evidence": "direct"}
+        {
+          "name": "audio_shell",
+          "evidence": "direct"
+        },
+        {
+          "name": "audio_shell_noperf",
+          "evidence": "direct"
+        },
+        {
+          "name": "audio_shell_nrf54",
+          "evidence": "direct"
+        }
       ],
-      "public_outcomes": [
-        {"api": "audio_shell_test_cmd_status", "outcome": "success", "witness": "test_status_exact_fields"},
-        {"api": "audio_shell_test_cmd_reset_stats", "outcome": "success", "witness": "test_reset_stats_exactly_once"},
-        {"api": "audio_shell_test_cmd_perf", "outcome": "success", "witness": "test_perf_exact_values_and_labels"},
-        {"api": "audio_shell_test_cmd_bt_unpair", "outcome": "error-class", "witness": "test_bt_unpair_error_propagation"},
-        {"api": "audio_shell_test_cmd_flpr_status", "outcome": "success", "witness": "test_flpr_status_exact_fields"},
-        {"api": "audio_shell_test_cmd_flpr_ring_status", "outcome": "success", "witness": "test_flpr_ring_status_exact_fields"},
-        {"api": "audio_shell_test_cmd_offload_status", "outcome": "success", "witness": "test_offload_status_exact_fields"},
-        {"api": "audio_shell_test_cmd_flpr_runtime_status", "outcome": "success", "witness": "test_flpr_runtime_status_exact_fields"}
-      ],
+      "public_outcomes": [],
       "state_transitions": [],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": false
     },
     {
       "source": "src/audio_stats.c",
       "classification": "direct",
       "suites": [
-        {"name": "stats", "evidence": "direct"},
-        {"name": "decode", "evidence": "direct"},
-        {"name": "bsim:stage1", "evidence": "integration"}
+        {
+          "name": "stats",
+          "evidence": "direct"
+        },
+        {
+          "name": "decode",
+          "evidence": "direct"
+        },
+        {
+          "name": "bsim:stage1",
+          "evidence": "integration"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_stats_frame_decoded", "outcome": "success", "witness": "test_frame_decoded_increments_total_only"},
-        {"api": "audio_stats_frame_plc", "outcome": "success", "witness": "test_plc_increments_plc_and_total_once"},
-        {"api": "audio_stats_decode_error", "outcome": "success", "witness": "test_decode_error_does_not_increment_total"},
-        {"api": "audio_stats_i2s_underrun", "outcome": "success", "witness": "test_underrun_and_reset_increment_own_counters"},
-        {"api": "audio_stats_get", "outcome": "success", "witness": "test_snapshot_by_value_no_mutation"},
-        {"api": "audio_stats_reset", "outcome": "success", "witness": "test_reset_after_nonzero_clears_every_counter"},
-        {"api": "audio_stats_stream_reset", "outcome": "success", "witness": "test_underrun_and_reset_increment_own_counters"}
+        {
+          "api": "audio_stats_frame_decoded",
+          "outcome": "void",
+          "witness": "test_frame_decoded_increments_total_only"
+        },
+        {
+          "api": "audio_stats_frame_plc",
+          "outcome": "void",
+          "witness": "test_plc_increments_plc_and_total_once"
+        },
+        {
+          "api": "audio_stats_decode_error",
+          "outcome": "void",
+          "witness": "test_decode_error_does_not_increment_total"
+        },
+        {
+          "api": "audio_stats_i2s_underrun",
+          "outcome": "void",
+          "witness": "test_underrun_and_reset_increment_own_counters"
+        },
+        {
+          "api": "audio_stats_get",
+          "outcome": "void",
+          "witness": "test_snapshot_by_value_no_mutation"
+        },
+        {
+          "api": "audio_stats_reset",
+          "outcome": "void",
+          "witness": "test_reset_after_nonzero_clears_every_counter"
+        },
+        {
+          "api": "audio_stats_stream_reset",
+          "outcome": "void",
+          "witness": "test_underrun_and_reset_increment_own_counters"
+        }
       ],
       "state_transitions": [
-        {"transition": "streaming->reset", "witness": "test_reset_after_nonzero_clears_every_counter"}
+        {
+          "transition": "streaming->reset",
+          "witness": "test_reset_after_nonzero_clears_every_counter"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/audio_timing_math.c",
       "classification": "direct",
       "suites": [
-        {"name": "timing", "evidence": "direct"},
-        {"name": "timing_nrf54", "evidence": "direct"},
-        {"name": "bsim:stage1", "evidence": "build"}
+        {
+          "name": "timing",
+          "evidence": "direct"
+        },
+        {
+          "name": "timing_nrf54",
+          "evidence": "direct"
+        },
+        {
+          "name": "bsim:stage1",
+          "evidence": "build"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_timing_compute_ppm", "outcome": "success", "witness": "test_ppm_16m_exact"},
-        {"api": "audio_timing_counter_delta_u32", "outcome": "success", "witness": "test_counter_delta_u32_normal"}
+        {
+          "api": "audio_timing_compute_ppm",
+          "outcome": "0",
+          "witness": "test_ppm_16m_exact"
+        },
+        {
+          "api": "audio_timing_counter_delta_u32",
+          "outcome": "0",
+          "witness": "test_counter_delta_u32_zero"
+        },
+        {
+          "api": "audio_timing_iso_ts_to_grtc64",
+          "outcome": "0x0000000190000000",
+          "witness": "test_iso_ts_no_wrap"
+        },
+        {
+          "api": "audio_timing_anchor_to_grtc64",
+          "outcome": "0x0000000600000010",
+          "witness": "test_anchor_ts_pd_wraps_32bit"
+        }
       ],
       "state_transitions": [],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": false
     },
     {
       "source": "src/audio_timing_none.c",
       "classification": "direct",
       "suites": [
-        {"name": "timing_none", "evidence": "direct"},
-        {"name": "bsim:stage1", "evidence": "integration"}
+        {
+          "name": "timing_none",
+          "evidence": "direct"
+        },
+        {
+          "name": "bsim:stage1",
+          "evidence": "integration"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_timing_init", "outcome": "success", "witness": "test_init_returns_zero"},
-        {"api": "audio_timing_sdu_ref_update", "outcome": "success", "witness": "test_sdu_ref_update_typical_values"},
-        {"api": "audio_timing_reset", "outcome": "success", "witness": "test_reset_repeated"}
+        {
+          "api": "audio_timing_init",
+          "outcome": "0",
+          "witness": "test_init_returns_zero"
+        },
+        {
+          "api": "audio_timing_sdu_ref_update",
+          "outcome": "void",
+          "witness": "test_sdu_ref_update_typical_values"
+        },
+        {
+          "api": "audio_timing_reset",
+          "outcome": "void",
+          "witness": "test_reset_repeated"
+        }
       ],
       "state_transitions": [],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": false
     },
     {
       "source": "src/audio_timing_nrf54.c",
       "classification": "direct",
       "suites": [
-        {"name": "timing_nrf54", "evidence": "direct"}
+        {
+          "name": "timing_nrf54",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_timing_init", "outcome": "success", "witness": "test_init_success_sequence_and_idempotent"},
-        {"api": "audio_timing_init", "outcome": "error-class", "witness": "test_grtc_alloc_failure_returns_exact_error_no_setup"},
-        {"api": "audio_timing_sdu_ref_update", "outcome": "success", "witness": "test_first_valid_ts_single_anchor_no_reschedule"},
-        {"api": "audio_timing_reset", "outcome": "success", "witness": "test_reset_clears_session_disables_cc_generation_permits_new_anchor"}
+        {
+          "api": "audio_timing_init",
+          "outcome": "0",
+          "witness": "test_init_success_sequence_and_idempotent"
+        },
+        {
+          "api": "audio_timing_init",
+          "outcome": "-ENOMEM",
+          "witness": "test_grtc_alloc_failure_returns_exact_error_no_setup"
+        },
+        {
+          "api": "audio_timing_sdu_ref_update",
+          "outcome": "void",
+          "witness": "test_first_valid_ts_single_anchor_no_reschedule"
+        },
+        {
+          "api": "audio_timing_reset",
+          "outcome": "void",
+          "witness": "test_reset_clears_session_disables_cc_generation_permits_new_anchor"
+        }
       ],
       "state_transitions": [
-        {"transition": "active->idle", "witness": "test_reset_clears_session_disables_cc_generation_permits_new_anchor"}
+        {
+          "transition": "active->idle",
+          "witness": "test_reset_clears_session_disables_cc_generation_permits_new_anchor"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/audio_volume.c",
       "classification": "direct",
       "suites": [
-        {"name": "volume", "evidence": "direct"},
-        {"name": "bsim:stage1", "evidence": "integration"}
+        {
+          "name": "volume",
+          "evidence": "direct"
+        },
+        {
+          "name": "bsim:stage1",
+          "evidence": "integration"
+        }
       ],
       "public_outcomes": [
-        {"api": "audio_volume_init", "outcome": "success", "witness": "test_init_success_registers_defaults"},
-        {"api": "audio_volume_init", "outcome": "error-class", "witness": "test_init_failure_propagated_state_deterministic"},
-        {"api": "audio_volume_apply", "outcome": "success", "witness": "test_volume_255_bit_exact_unity"},
-        {"api": "audio_volume_get", "outcome": "success", "witness": "test_intermediate_volume_matches_truncating_formula"},
-        {"api": "audio_volume_is_muted", "outcome": "success", "witness": "test_mute_zeroes_regardless_of_volume"}
+        {
+          "api": "audio_volume_init",
+          "outcome": "0",
+          "witness": "test_init_success_registers_defaults"
+        },
+        {
+          "api": "audio_volume_init",
+          "outcome": "-EACCES",
+          "witness": "test_init_failure_propagated_state_deterministic"
+        },
+        {
+          "api": "audio_volume_apply",
+          "outcome": "void",
+          "witness": "test_volume_255_bit_exact_unity"
+        },
+        {
+          "api": "audio_volume_get",
+          "outcome": "195",
+          "witness": "test_init_success_registers_defaults"
+        },
+        {
+          "api": "audio_volume_is_muted",
+          "outcome": "true",
+          "witness": "test_mute_zeroes_regardless_of_volume"
+        }
       ],
       "state_transitions": [],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": false
     },
     {
       "source": "src/bt_bap.c",
       "classification": "integration-only",
-      "reason": "BAP unicast server, ASCS/PACS, pairing: integration-only through the accepted T4 BabbleSim 15-scenario matrix; no native unit suite exists",
-      "excluded_from_numeric": true,
       "suites": [
-        {"name": "bsim:stage1", "evidence": "integration"}
+        {
+          "name": "bsim:stage1",
+          "evidence": "integration"
+        }
       ],
       "public_outcomes": [],
       "state_transitions": [],
@@ -348,145 +909,506 @@
         "scripts/bsim-stage1-run.sh",
         "docs/development/bsim-stage1-results.md",
         "scripts/bap_central.py"
-      ]
+      ],
+      "stateful": false,
+      "reason": "BAP unicast server, ASCS/PACS, pairing: integration-only through the accepted T4 BabbleSim 15-scenario matrix (mono 7.5/10 ms, Mode A incl. reverse start, Mode B, malformed-SDU rejection + resume, first-ASE stop, release-without-disable, disconnect-while-streaming, reconnect, source-direction rejection, NO_MEM third sink, nine invalid-codec-field rejections, two successes) with strict PCM oracle; no native unit suite exists",
+      "excluded_from_numeric": true
     },
     {
       "source": "src/flpr_audio_process.c",
       "classification": "direct",
       "suites": [
-        {"name": "flpr_audio_process", "evidence": "direct"}
+        {
+          "name": "flpr_audio_process",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "flpr_audio_process", "outcome": "success", "witness": "test_identity_bit_exact"},
-        {"api": "flpr_audio_process", "outcome": "error-class", "witness": "test_reject_null_meta"}
+        {
+          "api": "flpr_audio_process",
+          "outcome": "0",
+          "witness": "test_identity_bit_exact"
+        },
+        {
+          "api": "flpr_audio_process",
+          "outcome": "-EINVAL",
+          "witness": "test_reject_null_meta"
+        }
       ],
       "state_transitions": [],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": false
     },
     {
       "source": "src/flpr_cache.c",
       "classification": "direct",
       "suites": [
-        {"name": "flpr_ring", "evidence": "direct"},
-        {"name": "flpr_ring_mgr", "evidence": "direct"},
-        {"name": "flpr_runtime", "evidence": "direct"},
-        {"name": "flpr_audio_process", "evidence": "direct"}
+        {
+          "name": "flpr_ring",
+          "evidence": "direct"
+        },
+        {
+          "name": "flpr_ring_mgr",
+          "evidence": "direct"
+        },
+        {
+          "name": "flpr_runtime",
+          "evidence": "direct"
+        },
+        {
+          "name": "flpr_audio_process",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "flpr_cache_write_barrier", "outcome": "success", "witness": "test_cache_flush_and_barriers_after_copy"},
-        {"api": "flpr_cache_read_barrier", "outcome": "success", "witness": "test_cache_flush_and_barriers_after_copy"},
-        {"api": "flpr_cache_full_barrier", "outcome": "success", "witness": "test_cache_flush_and_barriers_after_copy"}
+        {
+          "api": "flpr_cache_write_barrier",
+          "outcome": "void",
+          "witness": "test_cache_flush_and_barriers_after_copy"
+        },
+        {
+          "api": "flpr_cache_read_barrier",
+          "outcome": "void",
+          "witness": "test_cache_flush_and_barriers_after_copy"
+        },
+        {
+          "api": "flpr_cache_full_barrier",
+          "outcome": "void",
+          "witness": "test_cache_flush_and_barriers_after_copy"
+        }
       ],
       "state_transitions": [],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": false
     },
     {
       "source": "src/flpr_handshake.c",
       "classification": "direct",
       "suites": [
-        {"name": "flpr_handshake", "evidence": "direct"}
+        {
+          "name": "flpr_handshake",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "flpr_handshake_init", "outcome": "success", "witness": "test_init_open_register_success"},
-        {"api": "flpr_handshake_init", "outcome": "error-class", "witness": "test_init_open_failure_propagated"},
-        {"api": "flpr_handshake_send_msg", "outcome": "success", "witness": "test_heartbeat_success_increments_tx_seq"},
-        {"api": "flpr_handshake_send_msg", "outcome": "error-class", "witness": "test_send_msg_null_and_error_accounting"},
-        {"api": "flpr_handshake_wait_new_ready", "outcome": "success", "witness": "test_wait_new_ready_semantics"},
-        {"api": "flpr_handshake_wait_bound", "outcome": "success", "witness": "test_wait_bound_semantics"},
-        {"api": "flpr_handshake_disconnect", "outcome": "success", "witness": "test_disconnect_drains_and_propagates"},
-        {"api": "flpr_handshake_reconnect", "outcome": "success", "witness": "test_reconnect_drains_and_marks_available"}
+        {
+          "api": "flpr_handshake_init",
+          "outcome": "0",
+          "witness": "test_init_open_register_success"
+        },
+        {
+          "api": "flpr_handshake_init",
+          "outcome": "-EIO",
+          "witness": "test_init_open_failure_propagated"
+        },
+        {
+          "api": "flpr_handshake_init",
+          "outcome": "-ENOMEM",
+          "witness": "test_init_register_failure_propagated"
+        },
+        {
+          "api": "flpr_handshake_send_msg",
+          "outcome": "0",
+          "witness": "test_heartbeat_success_increments_tx_seq"
+        },
+        {
+          "api": "flpr_handshake_send_msg",
+          "outcome": "-EINVAL",
+          "witness": "test_send_msg_null_and_error_accounting"
+        },
+        {
+          "api": "flpr_handshake_send_fault_hang",
+          "outcome": "0",
+          "witness": "test_fault_hang_ack_signals_waiter"
+        },
+        {
+          "api": "flpr_handshake_send_fault_hang",
+          "outcome": "-EIO",
+          "witness": "test_fault_hang_send_failure"
+        },
+        {
+          "api": "flpr_handshake_stress",
+          "outcome": "void",
+          "witness": "test_stress_pong_match_signals_waiter"
+        },
+        {
+          "api": "flpr_handshake_wait_bound",
+          "outcome": "0",
+          "witness": "test_wait_bound_semantics"
+        },
+        {
+          "api": "flpr_handshake_wait_new_ready",
+          "outcome": "0",
+          "witness": "test_wait_new_ready_semantics"
+        },
+        {
+          "api": "flpr_handshake_disconnect",
+          "outcome": "0",
+          "witness": "test_disconnect_drains_and_propagates"
+        },
+        {
+          "api": "flpr_handshake_reconnect",
+          "outcome": "0",
+          "witness": "test_reconnect_drains_and_marks_available"
+        },
+        {
+          "api": "flpr_handshake_get_status",
+          "outcome": "void",
+          "witness": "test_heartbeat_ack_tracking"
+        },
+        {
+          "api": "flpr_handshake_register_health_cb",
+          "outcome": "void",
+          "witness": "test_health_cb_unregister"
+        },
+        {
+          "api": "flpr_handshake_register_ring_handlers",
+          "outcome": "void",
+          "witness": "test_ring_handler_unregistration"
+        }
       ],
       "state_transitions": [
-        {"transition": "unbound->bound", "witness": "test_init_open_register_success"},
-        {"transition": "ready->reconnecting", "witness": "test_reconnect_drains_and_marks_available"}
+        {
+          "transition": "unbound->bound",
+          "witness": "test_init_open_register_success"
+        },
+        {
+          "transition": "ready->reconnecting",
+          "witness": "test_reconnect_drains_and_marks_available"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/flpr_ring.c",
       "classification": "direct",
       "suites": [
-        {"name": "flpr_ring", "evidence": "direct"},
-        {"name": "flpr_ring_mgr", "evidence": "direct"},
-        {"name": "flpr_runtime", "evidence": "direct"},
-        {"name": "flpr_audio_process", "evidence": "direct"},
-        {"name": "audio_offload", "evidence": "direct"},
-        {"name": "offload_asrc", "evidence": "direct"}
+        {
+          "name": "flpr_ring",
+          "evidence": "direct"
+        },
+        {
+          "name": "flpr_ring_mgr",
+          "evidence": "direct"
+        },
+        {
+          "name": "flpr_runtime",
+          "evidence": "direct"
+        },
+        {
+          "name": "flpr_audio_process",
+          "evidence": "direct"
+        },
+        {
+          "name": "audio_offload",
+          "evidence": "direct"
+        },
+        {
+          "name": "offload_asrc",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "flpr_ring_init", "outcome": "success", "witness": "test_ring_init_sets_magic"},
-        {"api": "flpr_ring_produce_begin", "outcome": "success", "witness": "test_produce_consume_one"},
-        {"api": "flpr_ring_produce_commit", "outcome": "success", "witness": "test_produce_consume_wrap"},
-        {"api": "flpr_ring_consume_begin", "outcome": "success", "witness": "test_produce_consume_one"},
-        {"api": "flpr_ring_consume_done", "outcome": "success", "witness": "test_count_equals_used"},
-        {"api": "flpr_ring_crc32", "outcome": "success", "witness": "test_crc32_known"},
-        {"api": "flpr_ring_gen_payload", "outcome": "success", "witness": "test_gen_payload_deterministic"},
-        {"api": "flpr_ring_reset_epoch", "outcome": "success", "witness": "test_reset_epoch"},
-        {"api": "flpr_ring_validate", "outcome": "success", "witness": "test_validate_ok"},
-        {"api": "flpr_ring_validate", "outcome": "error-class", "witness": "test_validate_bad_version"},
-        {"api": "flpr_ring_verify_payload", "outcome": "error-class", "witness": "test_verify_payload_mismatch"}
+        {
+          "api": "flpr_ring_init",
+          "outcome": "void",
+          "witness": "test_ring_init_sets_magic"
+        },
+        {
+          "api": "flpr_ring_produce_begin",
+          "outcome": "0",
+          "witness": "test_produce_consume_one"
+        },
+        {
+          "api": "flpr_ring_produce_commit",
+          "outcome": "void",
+          "witness": "test_produce_consume_wrap"
+        },
+        {
+          "api": "flpr_ring_consume_begin",
+          "outcome": "0",
+          "witness": "test_produce_consume_one"
+        },
+        {
+          "api": "flpr_ring_consume_done",
+          "outcome": "void",
+          "witness": "test_count_equals_used"
+        },
+        {
+          "api": "flpr_ring_crc32",
+          "outcome": "0xCBF43926",
+          "witness": "test_crc32_known"
+        },
+        {
+          "api": "flpr_ring_reset_epoch",
+          "outcome": "0",
+          "witness": "test_reset_epoch"
+        },
+        {
+          "api": "flpr_ring_validate",
+          "outcome": "true",
+          "witness": "test_validate_ok"
+        },
+        {
+          "api": "flpr_ring_validate",
+          "outcome": "false",
+          "witness": "test_validate_bad_version"
+        }
       ],
       "state_transitions": [
-        {"transition": "epoch->new-epoch", "witness": "test_reset_epoch"},
-        {"transition": "full->space", "witness": "test_consume_empty"}
+        {
+          "transition": "epoch->new-epoch",
+          "witness": "test_reset_epoch"
+        },
+        {
+          "transition": "full->space",
+          "witness": "test_consume_empty"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/flpr_ring_mgr.c",
       "classification": "direct",
       "suites": [
-        {"name": "flpr_ring_mgr", "evidence": "direct"}
+        {
+          "name": "flpr_ring_mgr",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "flpr_ring_mgr_init", "outcome": "success", "witness": "test_init_registers_and_inits_rings"},
-        {"api": "flpr_ring_mgr_init", "outcome": "error-class", "witness": "test_init_rejects_remote_not_ready"},
-        {"api": "flpr_ring_mgr_produce_block", "outcome": "success", "witness": "test_produce_exact_metadata_crc_remainder"},
-        {"api": "flpr_ring_mgr_consume_block", "outcome": "success", "witness": "test_consume_valid_fills_outputs"},
-        {"api": "flpr_ring_mgr_consume_asrc_result", "outcome": "success", "witness": "test_consume_asrc_success"},
-        {"api": "flpr_ring_mgr_coordinated_reset", "outcome": "success", "witness": "test_coordinated_reset_rejects_unhealthy_peer"},
-        {"api": "flpr_ring_mgr_notify_producer", "outcome": "success", "witness": "test_notify_message_fields_and_counters"},
-        {"api": "flpr_ring_mgr_remote_restarted", "outcome": "success", "witness": "test_remote_restarted_invalidates_and_requires_reset"},
-        {"api": "flpr_ring_mgr_flpr_stall", "outcome": "success", "witness": "test_stall_exact_ack"},
-        {"api": "flpr_ring_mgr_get_status", "outcome": "success", "witness": "test_status_before_after_init"},
-        {"api": "flpr_ring_mgr_reset", "outcome": "success", "witness": "test_reset_ack_exact_match"}
+        {
+          "api": "flpr_ring_mgr_init",
+          "outcome": "0",
+          "witness": "test_init_registers_and_inits_rings"
+        },
+        {
+          "api": "flpr_ring_mgr_init",
+          "outcome": "-EAGAIN",
+          "witness": "test_init_rejects_remote_not_ready"
+        },
+        {
+          "api": "flpr_ring_mgr_produce_block",
+          "outcome": "FLPR_PRODUCE_OK",
+          "witness": "test_produce_exact_metadata_crc_remainder"
+        },
+        {
+          "api": "flpr_ring_mgr_consume_block",
+          "outcome": "FLPR_CONSUME_OK",
+          "witness": "test_consume_valid_fills_outputs"
+        },
+        {
+          "api": "flpr_ring_mgr_consume_asrc_result",
+          "outcome": "FLPR_CONSUME_OK",
+          "witness": "test_consume_asrc_success"
+        },
+        {
+          "api": "flpr_ring_mgr_consume_asrc_result",
+          "outcome": "FLPR_CONSUME_INVALID",
+          "witness": "test_consume_asrc_state_corruption"
+        },
+        {
+          "api": "flpr_ring_mgr_coordinated_reset",
+          "outcome": "0",
+          "witness": "test_reset_ack_exact_match"
+        },
+        {
+          "api": "flpr_ring_mgr_coordinated_reset",
+          "outcome": "-EAGAIN",
+          "witness": "test_coordinated_reset_rejects_unhealthy_peer"
+        },
+        {
+          "api": "flpr_ring_mgr_notify_producer",
+          "outcome": "0",
+          "witness": "test_notify_message_fields_and_counters"
+        },
+        {
+          "api": "flpr_ring_mgr_remote_restarted",
+          "outcome": "0",
+          "witness": "test_remote_restarted_invalidates_and_requires_reset"
+        },
+        {
+          "api": "flpr_ring_mgr_flpr_stall",
+          "outcome": "0",
+          "witness": "test_stall_exact_ack"
+        },
+        {
+          "api": "flpr_ring_mgr_flpr_stall_timed",
+          "outcome": "0",
+          "witness": "test_stall_timed_packing"
+        },
+        {
+          "api": "flpr_ring_mgr_flpr_stall_timed",
+          "outcome": "-EINVAL",
+          "witness": "test_stall_timed_zero_mask_rejected"
+        },
+        {
+          "api": "flpr_ring_mgr_flpr_stall_acked",
+          "outcome": "0",
+          "witness": "test_stall_ack_timeout"
+        },
+        {
+          "api": "flpr_ring_mgr_get_status",
+          "outcome": "void",
+          "witness": "test_status_before_after_init"
+        },
+        {
+          "api": "flpr_ring_mgr_reset",
+          "outcome": "0",
+          "witness": "test_reset_ack_exact_match"
+        },
+        {
+          "api": "flpr_ring_mgr_set_consume_cb",
+          "outcome": "void",
+          "witness": "test_set_consume_cb_noop"
+        },
+        {
+          "api": "flpr_ring_mgr_stall_producer",
+          "outcome": "void",
+          "witness": "test_producer_stall_full_backpressure"
+        },
+        {
+          "api": "flpr_ring_mgr_produce_asrc",
+          "outcome": "FLPR_PRODUCE_OK",
+          "witness": "test_produce_asrc_metadata_prestate_crc"
+        },
+        {
+          "api": "flpr_ring_mgr_produce_asrc",
+          "outcome": "FLPR_PRODUCE_INVALID",
+          "witness": "test_produce_asrc_invalid_args"
+        },
+        {
+          "api": "flpr_ring_mgr_produce_stale_test",
+          "outcome": "0",
+          "witness": "test_stale_slot_advances"
+        },
+        {
+          "api": "flpr_ring_mgr_test_run",
+          "outcome": "0",
+          "witness": "test_ring_test_run_success_bounded"
+        },
+        {
+          "api": "flpr_ring_mgr_test_run",
+          "outcome": "-EAGAIN",
+          "witness": "test_ring_test_run_pre_init_eagain"
+        },
+        {
+          "api": "flpr_ring_mgr_test_run",
+          "outcome": "-EBUSY",
+          "witness": "test_ring_test_run_active_ebusy"
+        },
+        {
+          "api": "flpr_ring_mgr_test_run_rate",
+          "outcome": "0",
+          "witness": "test_ring_test_run_rate_success_bounded"
+        },
+        {
+          "api": "flpr_ring_mgr_test_run_rate",
+          "outcome": "-EAGAIN",
+          "witness": "test_ring_test_run_rate_pre_init_eagain"
+        },
+        {
+          "api": "flpr_ring_mgr_test_run_rate",
+          "outcome": "-EBUSY",
+          "witness": "test_ring_test_run_rate_active_ebusy"
+        },
+        {
+          "api": "flpr_ring_mgr_wait_consume",
+          "outcome": "-EBUSY",
+          "witness": "test_wait_consume_zero_timeout"
+        },
+        {
+          "api": "flpr_ring_mgr_wait_consume",
+          "outcome": "-EAGAIN",
+          "witness": "test_wait_consume_short_timeout"
+        },
+        {
+          "api": "flpr_ring_mgr_wait_consume",
+          "outcome": "0",
+          "witness": "docs/development/phase6-stage1-results.md"
+        }
       ],
       "state_transitions": [
-        {"transition": "reset->acked", "witness": "test_reset_ack_exact_match"},
-        {"transition": "healthy->stalled", "witness": "test_stall_exact_ack"}
+        {
+          "transition": "reset->acked",
+          "witness": "test_reset_ack_exact_match"
+        },
+        {
+          "transition": "healthy->stalled",
+          "witness": "test_stall_exact_ack"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/flpr_runtime.c",
       "classification": "direct",
       "suites": [
-        {"name": "flpr_runtime", "evidence": "direct"}
+        {
+          "name": "flpr_runtime",
+          "evidence": "direct"
+        }
       ],
       "public_outcomes": [
-        {"api": "flpr_runtime_init", "outcome": "success", "witness": "test_init_success"},
-        {"api": "flpr_runtime_restart", "outcome": "success", "witness": "test_full_success_event_order"},
-        {"api": "flpr_runtime_restart", "outcome": "error-class", "witness": "test_mutex_busy_ebusy"},
-        {"api": "flpr_runtime_get_status", "outcome": "success", "witness": "test_counters_exact"}
+        {
+          "api": "flpr_runtime_init",
+          "outcome": "0",
+          "witness": "test_init_success"
+        },
+        {
+          "api": "flpr_runtime_restart",
+          "outcome": "0",
+          "witness": "test_full_success_event_order"
+        },
+        {
+          "api": "flpr_runtime_restart",
+          "outcome": "-EBUSY",
+          "witness": "test_mutex_busy_ebusy"
+        },
+        {
+          "api": "flpr_runtime_get_status",
+          "outcome": "void",
+          "witness": "test_counters_exact"
+        }
       ],
-      "state_transitions": [],
+      "state_transitions": [
+        {
+          "transition": "idle->restarting",
+          "witness": "test_full_success_event_order"
+        },
+        {
+          "transition": "restarting->idle",
+          "witness": "test_full_success_event_order"
+        }
+      ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/main.c",
       "classification": "delegated-glue",
-      "reason": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by production builds and boot logs",
-      "excluded_from_numeric": true,
       "suites": [
-        {"name": "fw-build-5340", "evidence": "build"},
-        {"name": "fw-build-54l15", "evidence": "build"},
-        {"name": "monitor.sh", "evidence": "hardware"}
+        {
+          "name": "fw-build-5340",
+          "evidence": "build"
+        },
+        {
+          "name": "fw-build-54l15",
+          "evidence": "build"
+        },
+        {
+          "name": "monitor.sh",
+          "evidence": "hardware"
+        }
       ],
       "public_outcomes": [],
       "state_transitions": [],
@@ -496,39 +1418,91 @@
         "fw-build-54l15",
         "scripts/monitor.sh",
         "docs/development/phase5-hardware-acceptance-results.md"
-      ]
+      ],
+      "stateful": false,
+      "reason": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by production builds and boot logs",
+      "excluded_from_numeric": true
     },
     {
       "source": "src/stream_lifecycle.c",
       "classification": "direct",
       "suites": [
-        {"name": "lifecycle", "evidence": "direct"},
-        {"name": "bsim:stage1", "evidence": "integration"}
+        {
+          "name": "lifecycle",
+          "evidence": "direct"
+        },
+        {
+          "name": "bsim:stage1",
+          "evidence": "integration"
+        }
       ],
       "public_outcomes": [
-        {"api": "stream_lifecycle_sink_configured", "outcome": "success", "witness": "test_configure_start_close_reconfigure_start"},
-        {"api": "stream_lifecycle_sink_started", "outcome": "success", "witness": "test_mono_single_ase_opens"},
-        {"api": "stream_lifecycle_audio_path_close", "outcome": "success", "witness": "test_mode_b_gate_close_idempotent"},
-        {"api": "stream_lifecycle_audio_path_is_open", "outcome": "success", "witness": "test_mode_a_both_ase_open_gate"},
-        {"api": "stream_lifecycle_sink_release", "outcome": "success", "witness": "test_release_then_slot_reuse"},
-        {"api": "stream_lifecycle_reset", "outcome": "success", "witness": "test_reset_clears_all_state"}
+        {
+          "api": "stream_lifecycle_sink_configured",
+          "outcome": "void",
+          "witness": "test_configure_start_close_reconfigure_start"
+        },
+        {
+          "api": "stream_lifecycle_sink_started",
+          "outcome": "true",
+          "witness": "test_mono_single_ase_opens"
+        },
+        {
+          "api": "stream_lifecycle_sink_started",
+          "outcome": "false",
+          "witness": "test_mode_b_gate_close_idempotent"
+        },
+        {
+          "api": "stream_lifecycle_audio_path_close",
+          "outcome": "true",
+          "witness": "test_mode_b_gate_close_idempotent"
+        },
+        {
+          "api": "stream_lifecycle_audio_path_is_open",
+          "outcome": "true",
+          "witness": "test_mode_a_both_ase_open_gate"
+        },
+        {
+          "api": "stream_lifecycle_sink_release",
+          "outcome": "void",
+          "witness": "test_release_then_slot_reuse"
+        },
+        {
+          "api": "stream_lifecycle_reset",
+          "outcome": "void",
+          "witness": "test_reset_clears_all_state"
+        }
       ],
       "state_transitions": [
-        {"transition": "configured->open", "witness": "test_mono_single_ase_opens"},
-        {"transition": "open->closed", "witness": "test_mode_b_gate_close_idempotent"},
-        {"transition": "open->released", "witness": "test_release_then_slot_reuse"}
+        {
+          "transition": "configured->open",
+          "witness": "test_mono_single_ase_opens"
+        },
+        {
+          "transition": "open->closed",
+          "witness": "test_mode_b_gate_close_idempotent"
+        },
+        {
+          "transition": "open->released",
+          "witness": "test_release_then_slot_reuse"
+        }
       ],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/flpr/main.c",
       "classification": "hardware-only",
-      "reason": "FLPR firmware entry point (RISC-V VPR): no RISC-V simulator infrastructure exists in this repo; hardware-only by design",
-      "excluded_from_numeric": true,
       "suites": [
-        {"name": "fw-build-54l15", "evidence": "build"},
-        {"name": "monitor.sh", "evidence": "hardware"}
+        {
+          "name": "fw-build-54l15",
+          "evidence": "build"
+        },
+        {
+          "name": "monitor.sh",
+          "evidence": "hardware"
+        }
       ],
       "public_outcomes": [],
       "state_transitions": [],
@@ -538,16 +1512,23 @@
         "scripts/monitor.sh",
         "docs/development/phase6-stage4b-acceptance-results.md",
         "docs/development/phase6-stage5-results.md"
-      ]
+      ],
+      "stateful": false,
+      "reason": "FLPR firmware entry point (RISC-V VPR): no RISC-V simulator infrastructure exists in this repo; hardware-only by design",
+      "excluded_from_numeric": true
     },
     {
       "source": "dongle/hci_ipc/src/main.c",
       "classification": "hardware-only",
-      "reason": "hci_uart dongle firmware entry with compile-time identity C0:AA:BB:CC:DD:EE; lab dongle used for all central/hardware testing; outside src/ numeric population",
-      "excluded_from_numeric": true,
       "suites": [
-        {"name": "fw-build-dongle", "evidence": "build"},
-        {"name": "bap_central.py", "evidence": "hardware"}
+        {
+          "name": "fw-build-dongle",
+          "evidence": "build"
+        },
+        {
+          "name": "bap_central.py",
+          "evidence": "hardware"
+        }
       ],
       "public_outcomes": [],
       "state_transitions": [],
@@ -556,20 +1537,27 @@
         "fw-build-dongle",
         "bap_central.py",
         "scripts/bsim-official-smoke.sh"
-      ]
+      ],
+      "stateful": false,
+      "reason": "hci_uart dongle firmware entry with compile-time identity C0:AA:BB:CC:DD:EE; lab dongle used for all central/hardware testing; outside src/ numeric population",
+      "excluded_from_numeric": true
     },
     {
       "source": "src/flpr_protocol.h",
       "classification": "header-structural",
-      "reason": "shared protocol header with static-inline helpers; structural suite validates constants, offsets, sizes and inline behavior",
-      "excluded_from_numeric": true,
       "suites": [
-        {"name": "flpr_protocol", "evidence": "structural"}
+        {
+          "name": "flpr_protocol",
+          "evidence": "structural"
+        }
       ],
       "public_outcomes": [],
       "state_transitions": [],
       "function_exclusions": [],
-      "hardware_acceptance": []
+      "hardware_acceptance": [],
+      "stateful": false,
+      "reason": "shared protocol header with static-inline helpers; structural suite validates constants, offsets, sizes and inline behavior",
+      "excluded_from_numeric": true
     }
   ]
 }

@@ -21,10 +21,18 @@
 
 /* ---- handshake ---- */
 void test_flpr_set_status(const struct flpr_status *s);
+void test_flpr_set_hang_result(int result);
 
 /* ---- ring manager ---- */
 void test_flpr_set_ring_status(const struct flpr_ring_status *s);
 void test_flpr_set_stall_acked(uint32_t value);
+void test_flpr_set_ring_test_result(int result);
+void test_flpr_set_reset_result(int result);
+void test_flpr_set_init_result(int result);
+void test_flpr_set_stall_result(int result);
+void test_flpr_set_stall_timed_result(int result);
+bool test_flpr_stall_producer_called(void);
+bool test_flpr_stall_producer_value(void);
 
 /* ---- offload ---- */
 void test_flpr_set_offload_status(const struct audio_offload_status *s);

@@ -1299,6 +1299,7 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 }
 
 #if defined(FLPR_RING_MGR_NATIVE_TEST)
+/* GCOVR_EXCL_START — test-only helpers, absent from production builds */
 
 /* ── Test-only helpers ─────────────────────────────────────────────
  * Compiled only under FLPR_RING_MGR_NATIVE_TEST (native_sim suite).
@@ -1380,5 +1381,6 @@ uint32_t flpr_ring_mgr_test_stall_ack_sem_count(void)
 {
 	return k_sem_count_get(&stall_ack_sem);
 }
+/* GCOVR_EXCL_STOP */
 
 #endif /* FLPR_RING_MGR_NATIVE_TEST */

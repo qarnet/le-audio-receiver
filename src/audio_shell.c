@@ -146,9 +146,9 @@ static int cmd_bt_unpair(const struct shell *sh, size_t argc, char **argv)
 
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	audio_cmds, SHELL_CMD_ARG(status, NULL, "Print audio stats and state.", cmd_status, 1, 0),
-	SHELL_CMD_ARG(reset-stats, NULL, "Clear all counters.", cmd_reset_stats, 1, 0),
+	SHELL_CMD_ARG(reset - stats, NULL, "Clear all counters.", cmd_reset_stats, 1, 0),
 	SHELL_CMD_ARG(perf, NULL, "Print performance instrumentation.", cmd_perf, 1, 0),
-	SHELL_CMD_ARG(perf-reset, NULL, "Clear performance counters.", cmd_perf_reset, 1, 0),
+	SHELL_CMD_ARG(perf - reset, NULL, "Clear performance counters.", cmd_perf_reset, 1, 0),
 	SHELL_CMD_ARG(stop, NULL, "Stop I2S and reset drift.", cmd_stop, 1, 0),
 	SHELL_SUBCMD_SET_END);
 
@@ -1114,6 +1114,7 @@ SHELL_CMD_REGISTER(flpr, &flpr_cmds, "FLPR co-processor commands.", NULL);
 #endif /* CONFIG_SOC_NRF54L15 */
 
 #if defined(AUDIO_SHELL_TEST)
+/* GCOVR_EXCL_START — test seam wrappers, absent from production builds */
 /*
  * Narrow test seams for tests/unit/audio_shell*.  Expose otherwise-static
  * command handlers to the test suites so real production command bodies
@@ -1176,5 +1177,6 @@ int audio_shell_test_cmd_flpr_restart(const struct shell *sh, size_t argc, char 
 	return cmd_flpr_restart(sh, argc, argv);
 }
 #endif /* CONFIG_SOC_NRF54L15 */
+/* GCOVR_EXCL_STOP */
 
 #endif /* AUDIO_SHELL_TEST */

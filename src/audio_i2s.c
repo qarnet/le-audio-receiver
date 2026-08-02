@@ -542,7 +542,7 @@ void audio_sink_stop(void)
  * read production module-static state directly.
  */
 #if defined(AUDIO_I2S_NATIVE_TEST)
-
+/* GCOVR_EXCL_START — test-only helpers, absent from production builds */
 static bool test_device_ready = true;
 static bool test_inject_slab_alloc_fail;
 
@@ -643,5 +643,6 @@ struct k_mem_slab *audio_i2s_test_get_slab(void)
 {
 	return &i2s_slab;
 }
+/* GCOVR_EXCL_STOP */
 
 #endif /* AUDIO_I2S_NATIVE_TEST */

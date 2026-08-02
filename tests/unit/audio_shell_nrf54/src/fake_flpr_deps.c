@@ -35,10 +35,17 @@ void flpr_handshake_stress(uint32_t count, struct flpr_status *out)
 	*out = test_hs_status;
 }
 
+static int test_hang_result;
+
 int flpr_handshake_send_fault_hang(uint32_t timeout_ms)
 {
 	(void)timeout_ms;
-	return -ENOTSUP;
+	return test_hang_result;
+}
+
+void test_flpr_set_hang_result(int result)
+{
+	test_hang_result = result;
 }
 
 void test_flpr_set_status(const struct flpr_status *s)
@@ -50,6 +57,13 @@ void test_flpr_set_status(const struct flpr_status *s)
 
 static struct flpr_ring_status test_ring_status;
 static uint32_t test_stall_acked;
+static int test_ring_test_result;
+static int test_reset_result;
+static int test_init_result;
+static int test_flpr_stall_result;
+static int test_flpr_stall_timed_result;
+static bool test_stall_producer_value;
+static bool test_stall_producer_called;
 
 void flpr_ring_mgr_get_status(struct flpr_ring_status *status)
 {
@@ -66,7 +80,7 @@ int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flp
 	(void)block_count;
 	(void)timeout_ms;
 	*out = test_ring_status;
-	return 0;
+	return test_ring_test_result;
 }
 
 int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint32_t rate_per_sec,
@@ -76,31 +90,32 @@ int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint3
 	(void)timeout_ms;
 	(void)rate_per_sec;
 	*out = test_ring_status;
-	return 0;
+	return test_ring_test_result;
 }
 
 int flpr_ring_mgr_coordinated_reset(uint32_t new_epoch, uint32_t timeout_ms)
 {
 	(void)new_epoch;
 	(void)timeout_ms;
-	return 0;
+	return test_reset_result;
 }
 
 int flpr_ring_mgr_init(void)
 {
-	return 0;
+	return test_init_result;
 }
 
 void flpr_ring_mgr_stall_producer(bool stall)
 {
-	(void)stall;
+	test_stall_producer_value = stall;
+	test_stall_producer_called = true;
 }
 
 int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms)
 {
 	(void)stall_bits;
 	(void)timeout_ms;
-	return 0;
+	return test_flpr_stall_result;
 }
 
 int flpr_ring_mgr_flpr_stall_timed(uint8_t stall_bits, uint32_t duration_ms, uint32_t timeout_ms)
@@ -108,7 +123,42 @@ int flpr_ring_mgr_flpr_stall_timed(uint8_t stall_bits, uint32_t duration_ms, uin
 	(void)stall_bits;
 	(void)duration_ms;
 	(void)timeout_ms;
-	return 0;
+	return test_flpr_stall_timed_result;
+}
+
+void test_flpr_set_ring_test_result(int result)
+{
+	test_ring_test_result = result;
+}
+
+void test_flpr_set_reset_result(int result)
+{
+	test_reset_result = result;
+}
+
+void test_flpr_set_init_result(int result)
+{
+	test_init_result = result;
+}
+
+void test_flpr_set_stall_result(int result)
+{
+	test_flpr_stall_result = result;
+}
+
+void test_flpr_set_stall_timed_result(int result)
+{
+	test_flpr_stall_timed_result = result;
+}
+
+bool test_flpr_stall_producer_called(void)
+{
+	return test_stall_producer_called;
+}
+
+bool test_flpr_stall_producer_value(void)
+{
+	return test_stall_producer_value;
 }
 
 int flpr_ring_mgr_produce_stale_test(uint32_t stale_epoch)
@@ -244,4 +294,12 @@ void test_flpr_reset(void)
 	test_offload_healthy = false;
 	test_restart_result = 0;
 	test_restart_calls = 0;
+	test_hang_result = -ENOTSUP;
+	test_ring_test_result = 0;
+	test_reset_result = 0;
+	test_init_result = 0;
+	test_flpr_stall_result = 0;
+	test_flpr_stall_timed_result = 0;
+	test_stall_producer_called = false;
+	test_stall_producer_value = false;
 }

@@ -397,6 +397,7 @@ void flpr_runtime_get_status(struct flpr_runtime_status *out)
 }
 
 #if defined(FLPR_RUNTIME_NATIVE_TEST)
+/* GCOVR_EXCL_START — test-only helpers, absent from production builds */
 
 /* ── Test-only helpers ─────────────────────────────────────────────
  * Compiled only under FLPR_RUNTIME_NATIVE_TEST (native_sim suite).
@@ -445,6 +446,7 @@ void flpr_runtime_test_release_mutex(void)
 	k_sem_give(&rt_busy_release_sem);
 	k_thread_join(&rt_busy_thread, K_FOREVER);
 }
+/* GCOVR_EXCL_STOP */
 
 #endif /* FLPR_RUNTIME_NATIVE_TEST */
 

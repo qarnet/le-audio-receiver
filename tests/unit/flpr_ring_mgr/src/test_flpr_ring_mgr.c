@@ -77,7 +77,6 @@ static void arrange_output_slot(uint32_t epoch, uint32_t seq, uint16_t vf, uint1
 	flpr_ring_produce_commit(ring, idx);
 }
 
-
 /* Assert every result byte AFTER output_frames keeps the sentinel fill
  * (the documented exception: output_frames is zeroed on failure). */
 static void assert_result_untouched(const struct flpr_consume_asrc_result *res, uint8_t fill)
@@ -879,10 +878,9 @@ ZTEST(flpr_ring_mgr, test_consume_asrc_transactional_output)
 		struct flpr_consume_asrc_result res;
 		memset(&res, 0xA5, sizeof(res));
 
-		zassert_equal(
-			flpr_ring_mgr_consume_asrc_result(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES,
-							  &res),
-			FLPR_CONSUME_INVALID, "%s rejected", cases[c].label);
+		zassert_equal(flpr_ring_mgr_consume_asrc_result(
+				      out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, &res),
+			      FLPR_CONSUME_INVALID, "%s rejected", cases[c].label);
 		zassert_equal(res.output_frames, 0, "%s: output_frames zeroed", cases[c].label);
 		assert_pcm_sentinel(out, FLPR_RING_PAYLOAD_CAPACITY_FRAMES, 0x5A5A);
 		assert_result_untouched(&res, 0xA5);
@@ -1096,6 +1094,103 @@ ZTEST(flpr_ring_mgr, test_remote_restarted_invalidates_and_requires_reset)
 	zassert_ok(flpr_ring_mgr_coordinated_reset(43, 100), "coordinated reset after restart");
 	flpr_ring_mgr_get_status(&st);
 	zassert_equal(st.epoch, 43, "epoch re-established");
+}
+
+/* ── flpr_ring_mgr_test_run / test_run_rate / wait_consume ─────────
+ * T7 Stage 2: production ring-test entry points.  Pre-init -EAGAIN,
+ * active-test -EBUSY, zero-timeout wait, and a bounded single-block
+ * success loop driven entirely by host rings + handshake mock. */
+
+ZTEST(flpr_ring_mgr, test_ring_test_run_pre_init_eagain)
+{
+	struct flpr_ring_status out;
+
+	zassert_equal(flpr_ring_mgr_test_run(1, 1000, &out), -EAGAIN,
+		      "uninitialized rings rejected");
+	zassert_equal(out.initialized, false, "status reflects uninitialized");
+}
+
+ZTEST(flpr_ring_mgr, test_ring_test_run_rate_pre_init_eagain)
+{
+	struct flpr_ring_status out;
+
+	zassert_equal(flpr_ring_mgr_test_run_rate(1, 1000, 0, &out), -EAGAIN,
+		      "uninitialized rings rejected (rate path)");
+}
+
+ZTEST(flpr_ring_mgr, test_ring_test_run_active_ebusy)
+{
+	rm_init_and_reset(42);
+	flpr_ring_mgr_test_set_test_active(true);
+
+	struct flpr_ring_status out;
+	zassert_equal(flpr_ring_mgr_test_run(1, 1000, &out), -EBUSY, "active test rejected");
+	zassert_equal(out.test_active, true, "status reports test active");
+
+	flpr_ring_mgr_test_set_test_active(false);
+}
+
+ZTEST(flpr_ring_mgr, test_ring_test_run_rate_active_ebusy)
+{
+	rm_init_and_reset(42);
+	flpr_ring_mgr_test_set_test_active(true);
+
+	struct flpr_ring_status out;
+	zassert_equal(flpr_ring_mgr_test_run_rate(1, 1000, 0, &out), -EBUSY,
+		      "active test rejected (rate path)");
+
+	flpr_ring_mgr_test_set_test_active(false);
+}
+
+ZTEST(flpr_ring_mgr, test_ring_test_run_success_bounded)
+{
+	rm_init_and_reset(42);
+
+	/* Pre-fill one valid output slot so the final drain observes a
+	 * received block without a remote FLPR worker.  The payload must
+	 * match the deterministic gen_payload pattern for its sequence —
+	 * consume_block verifies CRC and regenerates the payload when
+	 * test_active. */
+	uint8_t pcm[100 * 4U];
+	flpr_ring_gen_payload(pcm, sizeof(pcm), 1);
+	uint32_t crc = flpr_ring_crc32(pcm, sizeof(pcm));
+	arrange_output_slot(42, 1, 100, FLPR_SLOT_FLAG_VALID, 0, crc, 0, 0, 0, pcm, NULL);
+
+	struct flpr_ring_status out;
+	zassert_equal(flpr_ring_mgr_test_run(1, 5000, &out), 0, "bounded ring test succeeds");
+	zassert_equal(out.test_blocks_sent, 1, "one block sent");
+	zassert_equal(out.test_blocks_recv, 1, "one block received");
+	zassert_equal(out.test_active, false, "test_active cleared");
+}
+
+ZTEST(flpr_ring_mgr, test_ring_test_run_rate_success_bounded)
+{
+	rm_init_and_reset(42);
+
+	uint8_t pcm[100 * 4U];
+	flpr_ring_gen_payload(pcm, sizeof(pcm), 1);
+	uint32_t crc = flpr_ring_crc32(pcm, sizeof(pcm));
+	arrange_output_slot(42, 1, 100, FLPR_SLOT_FLAG_VALID, 0, crc, 0, 0, 0, pcm, NULL);
+
+	struct flpr_ring_status out;
+	zassert_equal(flpr_ring_mgr_test_run_rate(1, 5000, 0, &out), 0,
+		      "bounded rate-limited ring test succeeds");
+	zassert_equal(out.test_blocks_sent, 1, "one block sent");
+	zassert_equal(out.test_blocks_recv, 1, "one block received");
+}
+
+ZTEST(flpr_ring_mgr, test_wait_consume_zero_timeout)
+{
+	/* k_sem_take with K_NO_WAIT on an empty semaphore returns -EBUSY
+	 * (Zephyr no-wait semantics); short timeouts return -EAGAIN. */
+	zassert_equal(flpr_ring_mgr_wait_consume(0), -EBUSY,
+		      "zero-timeout wait on empty semaphore");
+}
+
+ZTEST(flpr_ring_mgr, test_wait_consume_short_timeout)
+{
+	zassert_equal(flpr_ring_mgr_wait_consume(5), -EAGAIN,
+		      "short-timeout wait on empty semaphore");
 }
 
 ZTEST_SUITE(flpr_ring_mgr, NULL, NULL, rm_setup, NULL, NULL);

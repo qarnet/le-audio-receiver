@@ -791,6 +791,7 @@ int flpr_handshake_send_fault_hang(uint32_t timeout_ms)
 }
 
 #if defined(FLPR_HANDSHAKE_NATIVE_TEST)
+/* GCOVR_EXCL_START — test-only helpers, absent from production builds */
 
 /* ── Test-only helpers ─────────────────────────────────────────────
  * Compiled only under FLPR_HANDSHAKE_NATIVE_TEST (native_sim suite).
@@ -902,5 +903,6 @@ uint32_t flpr_handshake_test_hang_ack_sem_count(void)
 {
 	return k_sem_count_get(&hang_ack_sem);
 }
+/* GCOVR_EXCL_STOP */
 
 #endif /* FLPR_HANDSHAKE_NATIVE_TEST */

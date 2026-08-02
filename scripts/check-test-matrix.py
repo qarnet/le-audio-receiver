@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""T7 Stage 1: test-matrix manifest checker (stdlib only).
+"""T7 Stage 2: test-matrix manifest checker (stdlib only).
 
 Validates tests/test-matrix.json against the production source inventory
-and the current test suites.  See docs/pre-refactor-testing-t7-stage1-handoff.md
-section 4 and docs/testing/coverage-matrix.md for the classification and
-evidence semantics.
+and the current test suites.  See docs/development/pre-refactor-testing-t7-stage2-handoff.md
+section 3 and docs/testing/coverage-matrix.md for the classification,
+evidence, outcome-ledger and state-transition semantics.
 
 Rules enforced (all checked, deterministic sorted output, nonzero exit):
   1. exact source inventory completeness (no missing/duplicate/stale path)
@@ -18,8 +18,17 @@ Rules enforced (all checked, deterministic sorted output, nonzero exit):
   6. header-structural entry names a structural suite
   7. every manifest witness string exists in referenced test source
   8. every listed public API exists in its production source/header
-  9. no empty outcome/transition/exclusion placeholders
- 10. with --coverage-json: every numeric-population direct source appears and
+  9. no empty outcome/transition/exclusion placeholders; no duplicate
+     (api,outcome) records; no generic/vague outcome labels ("error-class"
+     is forbidden — outcomes must be exact: 0/success, exact negative
+     errno, exact enum/status result, true/false, or void)
+ 10. every top-level non-static function definition in a direct source
+     (test-only macro blocks stripped) appears in public_outcomes; direct
+     sources with public APIs cannot have empty outcome lists
+ 11. stateful entries (stateful: true) require a nonempty, duplicate-free
+     transition list with concrete from->to names and witnesses; stateless
+     entries must not carry transitions
+ 12. with --coverage-json: every numeric-population direct source appears and
      every compiled function executes at least once, unless a precise function
      exclusion carries reason + evidence; duplicate variant records grouped by
      source/function — any executed variant satisfies, zero-hit alternate
@@ -54,6 +63,27 @@ ALLOWED_EVIDENCE = {
     "historical",
 }
 
+# Test-only macro blocks stripped from public-API discovery.  These blocks
+# are also marked GCOVR_EXCL_START/STOP in the production sources, so they
+# never enter numeric metrics or the public API ledger.
+TEST_ONLY_MACROS = {
+    "AUDIO_I2S_NATIVE_TEST",
+    "AUDIO_SHELL_TEST",
+    "AUDIO_TIMING_NRF54_TEST",
+    "FLPR_HANDSHAKE_NATIVE_TEST",
+    "FLPR_RING_MGR_NATIVE_TEST",
+    "FLPR_RUNTIME_NATIVE_TEST",
+    "CONFIG_ZTEST",
+}
+
+# Exact outcome ledger: "error-class" and any other vague label is
+# forbidden.  Exact forms: 0/success, exact negative errno (-E*),
+# exact enum/status constant (ALL_CAPS), true/false, void.
+OUTCOME_RE = re.compile(
+    r"^(?:0|[1-9][0-9]*|0x[0-9A-Fa-f]+|success|void|true|false|-E[A-Z0-9_]+|"
+    r'[A-Z][A-Z0-9_]*|"[^"]*")$'
+)
+
 BUILD_COMMANDS = {"fw-build-5340", "fw-build-54l15", "fw-build-dongle"}
 
 REQUIRED_REASON_CLASSES = {"integration-only", "delegated-glue", "hardware-only"}
@@ -61,6 +91,78 @@ REQUIRED_REASON_CLASSES = {"integration-only", "delegated-glue", "hardware-only"
 PRODUCTION_BUILD_COMMANDS = {"fw-build-5340", "fw-build-54l15", "fw-build-dongle"}
 
 SOURCE_FILE_RE = re.compile(r"\.c$")
+
+_CONTROL_KEYWORDS = {
+    "if",
+    "while",
+    "for",
+    "switch",
+    "return",
+    "sizeof",
+    "catch",
+    "do",
+}
+
+
+def _strip_test_blocks(text):
+    """Remove #if(defined TESTMACRO)/#ifdef TESTMACRO branches; keep the
+    #else production branch.  Handles nesting.  Comment/string-safe enough
+    for this repo's style (preprocessor directives are line-based)."""
+    lines = text.split("\n")
+    out = []
+    stack = []  # (skip_this_branch, in_else)
+    for line in lines:
+        m = re.match(r"^\s*#\s*if(?:def|ndef)?\s+(.*)$", line)
+        if m:
+            macs = set()
+            for mm in re.finditer(
+                r"defined\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", m.group(1)
+            ):
+                macs.add(mm.group(1))
+            for mm in re.finditer(
+                r"\b(?:ifdef|ifndef)\s+([A-Za-z_][A-Za-z0-9_]*)", line
+            ):
+                macs.add(mm.group(1))
+            parent_skip = stack[-1][0] if stack else False
+            # A branch is test-only when every macro in its condition is a
+            # known test macro (e.g. #if defined(AUDIO_SHELL_TEST)).  Guards
+            # mixing production and test macros (e.g. flpr_runtime.c's
+            # CONFIG_SOC_NRF54L15 || FLPR_RUNTIME_NATIVE_TEST) are kept; the
+            # nested pure-test sub-branches are stripped recursively.
+            is_test = bool(macs) and macs <= TEST_ONLY_MACROS
+            stack.append([parent_skip or is_test, False])
+            continue
+        if re.match(r"^\s*#\s*else", line):
+            if stack:
+                stack[-1][1] = True
+            continue
+        if re.match(r"^\s*#\s*endif", line):
+            if stack:
+                stack.pop()
+            continue
+        if stack and stack[-1][0] and not stack[-1][1]:
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def public_function_definitions(source_text):
+    """Top-level non-static function definitions (test-only blocks and
+    comments stripped).  Returns a sorted list of function names."""
+    text = re.sub(r"/\*.*?\*/", "", source_text, flags=re.S)
+    text = re.sub(r"//[^\n]*", "", text)
+    text = _strip_test_blocks(text)
+    funcs = []
+    for m in re.finditer(r"([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*\{", text):
+        name = m.group(1)
+        if name in _CONTROL_KEYWORDS or name in ("struct", "union", "enum"):
+            continue
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        prefix = text[line_start : m.start()]
+        if "static" in prefix or "define" in prefix or "#" in prefix:
+            continue
+        funcs.append(name)
+    return sorted(set(funcs))
 
 
 def _api_pattern(api):
@@ -203,6 +305,7 @@ class Checker:
     # ---------- checks ----------
     def check(self):
         self._check_inventory_and_schema()
+        self._check_public_api_inventory()
         self._check_witnesses_and_apis()
         if self.coverage_path:
             self._check_coverage()
@@ -317,6 +420,7 @@ class Checker:
                             continue
                         self.error("unresolvable acceptance: %s: %s" % (source, item))
 
+            outcome_pairs = set()
             for idx, outcome in enumerate(entry.get("public_outcomes", [])):
                 if not isinstance(outcome, dict):
                     self.error("malformed outcome: %s: index %d" % (source, idx))
@@ -327,7 +431,32 @@ class Checker:
                             "empty outcome placeholder: %s: outcome %d (%s)"
                             % (source, idx, field)
                         )
-            for idx, trans in enumerate(entry.get("state_transitions", [])):
+                if outcome.get("api") and outcome.get("outcome"):
+                    pair = (outcome["api"], outcome["outcome"])
+                    if pair in outcome_pairs:
+                        self.error(
+                            "duplicate outcome record: %s: %s/%s"
+                            % (source, pair[0], pair[1])
+                        )
+                    outcome_pairs.add(pair)
+                    if not OUTCOME_RE.match(outcome["outcome"]):
+                        self.error(
+                            "vague outcome label: %s: %s/%s (must be exact: "
+                            "0, success, -E<NAME>, enum constant, true, false, void)"
+                            % (source, outcome["api"], outcome["outcome"])
+                        )
+            stateful = entry.get("stateful")
+            if not isinstance(stateful, bool):
+                self.error("missing stateful flag: %s (bool required)" % source)
+            transitions = entry.get("state_transitions", [])
+            if stateful is True:
+                if not isinstance(transitions, list) or not transitions:
+                    self.error("stateful entry without transitions: %s" % source)
+            elif stateful is False:
+                if isinstance(transitions, list) and transitions:
+                    self.error("stateless entry with invented transitions: %s" % source)
+            trans_seen = set()
+            for idx, trans in enumerate(transitions):
                 if not isinstance(trans, dict):
                     self.error("malformed transition: %s: index %d" % (source, idx))
                     continue
@@ -336,6 +465,15 @@ class Checker:
                         self.error(
                             "empty transition placeholder: %s: transition %d (%s)"
                             % (source, idx, field)
+                        )
+                tname = trans.get("transition")
+                if tname:
+                    if tname in trans_seen:
+                        self.error("duplicate transition: %s: %s" % (source, tname))
+                    trans_seen.add(tname)
+                    if "->" not in tname:
+                        self.error(
+                            "transition without from->to form: %s: %s" % (source, tname)
                         )
             for idx, excl in enumerate(entry.get("function_exclusions", [])):
                 if not isinstance(excl, dict):
@@ -347,6 +485,53 @@ class Checker:
                             "empty exclusion placeholder: %s: exclusion %d (%s)"
                             % (source, idx, field)
                         )
+
+    # ---------- rule 10: public API inventory completeness ----------
+    def _check_public_api_inventory(self):
+        for entry in self.entries:
+            source = entry.get("source")
+            if not isinstance(source, str) or not source.endswith(".c"):
+                continue
+            if entry.get("classification") != "direct":
+                continue
+            path = os.path.join(self.repo_root, source)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            discovered = public_function_definitions(text)
+            listed = {
+                o.get("api")
+                for o in entry.get("public_outcomes", [])
+                if isinstance(o, dict) and isinstance(o.get("api"), str)
+            }
+            for api in discovered:
+                if api not in listed:
+                    self.error("public API missing outcome: %s: %s" % (source, api))
+            if discovered and not listed:
+                self.error("direct public APIs without outcomes: %s" % source)
+            for api in sorted(a for a in (listed - set(discovered)) if a is not None):
+                if not self.api_exists(source, api):
+                    continue
+                # API exists in source/header but not as a definition in this
+                # TU (e.g. declared in header, defined elsewhere): keep the
+                # rule-8 existence check only.
+                self.note(
+                    "listed API not defined in TU (header-declared?): %s: %s"
+                    % (source, api)
+                )
+
+    def _is_evidence_path(self, witness):
+        """True when the witness names an existing repo file (hardware
+        script or evidence doc) rather than a unit test name."""
+        if not isinstance(witness, str) or not witness:
+            return False
+        if self.resolve_suite(witness) is not None:
+            return True
+        return os.path.isfile(os.path.join(self.repo_root, witness))
 
     # ---------- rules 7, 8 ----------
     def _check_witnesses_and_apis(self):
@@ -378,10 +563,14 @@ class Checker:
 
             for witness in witnesses:
                 if not suite_sources:
-                    self.error(
-                        "witness without test source: %s: %r" % (source, witness)
-                    )
-                elif witness not in all_text:
+                    # Hardware-dependent outcomes may cite an existing
+                    # evidence path (docs/, scripts/) instead of a unit
+                    # test name — the path itself is the witness.
+                    if not self._is_evidence_path(witness):
+                        self.error(
+                            "witness without test source: %s: %r" % (source, witness)
+                        )
+                elif witness not in all_text and not self._is_evidence_path(witness):
                     self.error("invented witness: %s: %r" % (source, witness))
 
             for outcome in entry.get("public_outcomes", []):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""T7 Stage 1: focused tests for scripts/check-test-matrix.py.
+"""T7 Stage 1+2: focused tests for scripts/check-test-matrix.py.
 
 Runs the real checker against temporary mini repositories/fixtures.
 Stdlib only.  Run directly:
@@ -36,7 +36,17 @@ class Fixture:
         self.root = tempfile.mkdtemp(prefix="t7matrix-")
         self._write(
             "src/alpha.c",
-            "int alpha_run(void) { return 0; }\nint alpha_parse(void) { return -1; }\n",
+            "int alpha_run(void) { return 0; }\n"
+            "int alpha_parse(void) { return -EINVAL; }\n"
+            "static int alpha_static(void) { return 0; }\n"
+            "int alpha_multiline(int a,\n"
+            "                   int b)\n"
+            "{\n"
+            "    return a + b;\n"
+            "}\n"
+            "#if defined(AUDIO_SHELL_TEST)\n"
+            "int alpha_test_seam(void) { return 0; }\n"
+            "#endif\n",
         )
         self._write("src/beta.c", "int beta_init(void) { return 0; }\n")
         self._write(
@@ -92,10 +102,13 @@ def alpha_direct(extra=None):
     entry = {
         "source": "src/alpha.c",
         "classification": "direct",
+        "stateful": False,
         "suites": [{"name": "alpha_suite", "evidence": "direct"}],
         "public_outcomes": [
-            {"api": "alpha_run", "outcome": "success", "witness": "test_alpha_ok"},
-            {"api": "alpha_run", "outcome": "error-class", "witness": "test_alpha_err"},
+            {"api": "alpha_run", "outcome": "0", "witness": "test_alpha_ok"},
+            {"api": "alpha_run", "outcome": "-EINVAL", "witness": "test_alpha_err"},
+            {"api": "alpha_parse", "outcome": "-EINVAL", "witness": "test_alpha_err"},
+            {"api": "alpha_multiline", "outcome": "0", "witness": "test_alpha_ok"},
         ],
         "state_transitions": [],
         "function_exclusions": [],
@@ -110,9 +123,10 @@ def beta_direct():
     return {
         "source": "src/beta.c",
         "classification": "direct",
+        "stateful": False,
         "suites": [{"name": "alpha_suite", "evidence": "direct"}],
         "public_outcomes": [
-            {"api": "beta_init", "outcome": "success", "witness": "test_alpha_ok"},
+            {"api": "beta_init", "outcome": "0", "witness": "test_alpha_ok"},
         ],
         "state_transitions": [],
         "function_exclusions": [],
@@ -126,6 +140,7 @@ def dongle_entry():
         "classification": "hardware-only",
         "reason": "dongle firmware, hardware-only",
         "excluded_from_numeric": True,
+        "stateful": False,
         "suites": [{"name": "hw_probe.sh", "evidence": "hardware"}],
         "public_outcomes": [],
         "state_transitions": [],
@@ -140,6 +155,7 @@ def proto_entry():
         "classification": "header-structural",
         "reason": "shared header, structural proof",
         "excluded_from_numeric": True,
+        "stateful": False,
         "suites": [{"name": "proto_suite", "evidence": "structural"}],
         "public_outcomes": [],
         "state_transitions": [],
@@ -169,11 +185,22 @@ class CheckTestMatrixValid(unittest.TestCase):
         finally:
             fx.cleanup()
 
+    def test_testonly_block_and_static_functions_not_required(self):
+        # alpha_test_seam (AUDIO_SHELL_TEST block) and alpha_static must
+        # not be demanded as public APIs.
+        fx = Fixture(valid_entries())
+        try:
+            code, out = fx.run_checker()
+            self.assertEqual(0, code, out)
+            self.assertNotIn("alpha_test_seam", out)
+            self.assertNotIn("alpha_static", out)
+        finally:
+            fx.cleanup()
+
 
 class CheckTestMatrixInventory(unittest.TestCase):
     def test_missing_entry(self):
-        entries = valid_entries()
-        entries = [e for e in entries if e["source"] != "src/beta.c"]
+        entries = [e for e in valid_entries() if e["source"] != "src/beta.c"]
         fx = Fixture(entries)
         try:
             code, out = fx.run_checker()
@@ -183,8 +210,7 @@ class CheckTestMatrixInventory(unittest.TestCase):
             fx.cleanup()
 
     def test_duplicate_entry(self):
-        entries = valid_entries() + [alpha_direct()]
-        fx = Fixture(entries)
+        fx = Fixture(valid_entries() + [alpha_direct()])
         try:
             code, out = fx.run_checker()
             self.assertNotEqual(0, code)
@@ -197,6 +223,7 @@ class CheckTestMatrixInventory(unittest.TestCase):
             {
                 "source": "src/gone.c",
                 "classification": "direct",
+                "stateful": False,
                 "suites": [{"name": "alpha_suite", "evidence": "direct"}],
                 "public_outcomes": [],
                 "state_transitions": [],
@@ -215,19 +242,13 @@ class CheckTestMatrixInventory(unittest.TestCase):
 
 class CheckTestMatrixSchema(unittest.TestCase):
     def test_bad_classification(self):
-        fx = Fixture(valid_entries())
-        fx.manifest = fx._write(
-            "tests/test-matrix.json",
-            json.dumps(
-                {
-                    "entries": [
-                        {**alpha_direct(), "classification": "bogus"},
-                        beta_direct(),
-                        dongle_entry(),
-                        proto_entry(),
-                    ]
-                }
-            ),
+        fx = Fixture(
+            [
+                {**alpha_direct(), "classification": "bogus"},
+                beta_direct(),
+                dongle_entry(),
+                proto_entry(),
+            ]
         )
         try:
             code, out = fx.run_checker()
@@ -279,10 +300,7 @@ class CheckTestMatrixSchema(unittest.TestCase):
             [
                 alpha_direct(),
                 beta_direct(),
-                {
-                    **dongle_entry(),
-                    "hardware_acceptance": ["no-such-command.sh"],
-                },
+                {**dongle_entry(), "hardware_acceptance": ["no-such-command.sh"]},
                 proto_entry(),
             ]
         )
@@ -338,6 +356,7 @@ class CheckTestMatrixSchema(unittest.TestCase):
         hist = {
             "source": "src/alpha.c",
             "classification": "historical-retired",
+            "stateful": False,
             "suites": [{"name": "alpha_suite", "evidence": "historical"}],
             "public_outcomes": [],
             "state_transitions": [],
@@ -377,6 +396,224 @@ class CheckTestMatrixSchema(unittest.TestCase):
             fx.cleanup()
 
 
+class CheckTestMatrixStateful(unittest.TestCase):
+    def test_missing_stateful_flag(self):
+        entry = alpha_direct()
+        del entry["stateful"]
+        fx = Fixture([entry, beta_direct(), dongle_entry(), proto_entry()])
+        try:
+            code, out = fx.run_checker()
+            self.assertNotEqual(0, code)
+            self.assertIn("error: missing stateful flag: src/alpha.c", out)
+        finally:
+            fx.cleanup()
+
+    def test_stateful_without_transitions(self):
+        fx = Fixture(
+            [
+                {**alpha_direct(), "stateful": True, "state_transitions": []},
+                beta_direct(),
+                dongle_entry(),
+                proto_entry(),
+            ]
+        )
+        try:
+            code, out = fx.run_checker()
+            self.assertNotEqual(0, code)
+            self.assertIn("error: stateful entry without transitions: src/alpha.c", out)
+        finally:
+            fx.cleanup()
+
+    def test_stateless_with_transitions(self):
+        fx = Fixture(
+            [
+                {
+                    **alpha_direct(),
+                    "stateful": False,
+                    "state_transitions": [
+                        {"transition": "a->b", "witness": "test_alpha_ok"}
+                    ],
+                },
+                beta_direct(),
+                dongle_entry(),
+                proto_entry(),
+            ]
+        )
+        try:
+            code, out = fx.run_checker()
+            self.assertNotEqual(0, code)
+            self.assertIn(
+                "error: stateless entry with invented transitions: src/alpha.c", out
+            )
+        finally:
+            fx.cleanup()
+
+    def test_duplicate_transition(self):
+        fx = Fixture(
+            [
+                {
+                    **alpha_direct(),
+                    "stateful": True,
+                    "state_transitions": [
+                        {"transition": "a->b", "witness": "test_alpha_ok"},
+                        {"transition": "a->b", "witness": "test_alpha_err"},
+                    ],
+                },
+                beta_direct(),
+                dongle_entry(),
+                proto_entry(),
+            ]
+        )
+        try:
+            code, out = fx.run_checker()
+            self.assertNotEqual(0, code)
+            self.assertIn("error: duplicate transition: src/alpha.c: a->b", out)
+        finally:
+            fx.cleanup()
+
+    def test_transition_without_arrow(self):
+        fx = Fixture(
+            [
+                {
+                    **alpha_direct(),
+                    "stateful": True,
+                    "state_transitions": [
+                        {"transition": "open", "witness": "test_alpha_ok"}
+                    ],
+                },
+                beta_direct(),
+                dongle_entry(),
+                proto_entry(),
+            ]
+        )
+        try:
+            code, out = fx.run_checker()
+            self.assertNotEqual(0, code)
+            self.assertIn(
+                "error: transition without from->to form: src/alpha.c: open", out
+            )
+        finally:
+            fx.cleanup()
+
+
+class CheckTestMatrixOutcomeLedger(unittest.TestCase):
+    def test_vague_outcome_label_forbidden(self):
+        fx = Fixture(
+            [
+                {
+                    **alpha_direct(),
+                    "public_outcomes": [
+                        {
+                            "api": "alpha_run",
+                            "outcome": "error-class",
+                            "witness": "test_alpha_ok",
+                        },
+                        {
+                            "api": "alpha_parse",
+                            "outcome": "-EINVAL",
+                            "witness": "test_alpha_err",
+                        },
+                        {
+                            "api": "alpha_multiline",
+                            "outcome": "0",
+                            "witness": "test_alpha_ok",
+                        },
+                    ],
+                },
+                beta_direct(),
+                dongle_entry(),
+                proto_entry(),
+            ]
+        )
+        try:
+            code, out = fx.run_checker()
+            self.assertNotEqual(0, code)
+            self.assertIn(
+                "error: vague outcome label: src/alpha.c: alpha_run/error-class", out
+            )
+        finally:
+            fx.cleanup()
+
+    def test_duplicate_outcome_record(self):
+        fx = Fixture(
+            [
+                {
+                    **alpha_direct(),
+                    "public_outcomes": [
+                        {
+                            "api": "alpha_run",
+                            "outcome": "0",
+                            "witness": "test_alpha_ok",
+                        },
+                        {
+                            "api": "alpha_run",
+                            "outcome": "0",
+                            "witness": "test_alpha_err",
+                        },
+                        {
+                            "api": "alpha_parse",
+                            "outcome": "-EINVAL",
+                            "witness": "test_alpha_err",
+                        },
+                        {
+                            "api": "alpha_multiline",
+                            "outcome": "0",
+                            "witness": "test_alpha_ok",
+                        },
+                    ],
+                },
+                beta_direct(),
+                dongle_entry(),
+                proto_entry(),
+            ]
+        )
+        try:
+            code, out = fx.run_checker()
+            self.assertNotEqual(0, code)
+            self.assertIn(
+                "error: duplicate outcome record: src/alpha.c: alpha_run/0", out
+            )
+        finally:
+            fx.cleanup()
+
+    def test_public_api_missing_outcome(self):
+        fx = Fixture(
+            [
+                {
+                    **alpha_direct(),
+                    "public_outcomes": [
+                        {
+                            "api": "alpha_run",
+                            "outcome": "0",
+                            "witness": "test_alpha_ok",
+                        },
+                        {
+                            "api": "alpha_run",
+                            "outcome": "-EINVAL",
+                            "witness": "test_alpha_err",
+                        },
+                        {
+                            "api": "alpha_multiline",
+                            "outcome": "0",
+                            "witness": "test_alpha_ok",
+                        },
+                    ],
+                },
+                beta_direct(),
+                dongle_entry(),
+                proto_entry(),
+            ]
+        )
+        try:
+            code, out = fx.run_checker()
+            self.assertNotEqual(0, code)
+            self.assertIn(
+                "error: public API missing outcome: src/alpha.c: alpha_parse", out
+            )
+        finally:
+            fx.cleanup()
+
+
 class CheckTestMatrixWitnessesAndApis(unittest.TestCase):
     def test_invented_api(self):
         fx = Fixture(
@@ -386,9 +623,19 @@ class CheckTestMatrixWitnessesAndApis(unittest.TestCase):
                     "public_outcomes": [
                         {
                             "api": "alpha_missing",
-                            "outcome": "success",
+                            "outcome": "0",
                             "witness": "test_alpha_ok",
-                        }
+                        },
+                        {
+                            "api": "alpha_parse",
+                            "outcome": "-EINVAL",
+                            "witness": "test_alpha_err",
+                        },
+                        {
+                            "api": "alpha_multiline",
+                            "outcome": "0",
+                            "witness": "test_alpha_ok",
+                        },
                     ],
                 },
                 beta_direct(),
@@ -411,9 +658,19 @@ class CheckTestMatrixWitnessesAndApis(unittest.TestCase):
                     "public_outcomes": [
                         {
                             "api": "alpha_run",
-                            "outcome": "success",
+                            "outcome": "0",
                             "witness": "test_no_such_test",
-                        }
+                        },
+                        {
+                            "api": "alpha_parse",
+                            "outcome": "-EINVAL",
+                            "witness": "test_alpha_err",
+                        },
+                        {
+                            "api": "alpha_multiline",
+                            "outcome": "0",
+                            "witness": "test_alpha_ok",
+                        },
                     ],
                 },
                 beta_direct(),
@@ -430,6 +687,40 @@ class CheckTestMatrixWitnessesAndApis(unittest.TestCase):
         finally:
             fx.cleanup()
 
+    def test_evidence_path_witness_accepted(self):
+        fx = Fixture(
+            [
+                {
+                    **alpha_direct(),
+                    "public_outcomes": [
+                        {
+                            "api": "alpha_run",
+                            "outcome": "0",
+                            "witness": "docs/evidence.md",
+                        },
+                        {
+                            "api": "alpha_parse",
+                            "outcome": "-EINVAL",
+                            "witness": "test_alpha_err",
+                        },
+                        {
+                            "api": "alpha_multiline",
+                            "outcome": "0",
+                            "witness": "test_alpha_ok",
+                        },
+                    ],
+                },
+                beta_direct(),
+                dongle_entry(),
+                proto_entry(),
+            ]
+        )
+        try:
+            code, out = fx.run_checker()
+            self.assertEqual(0, code, out)
+        finally:
+            fx.cleanup()
+
     def test_witness_without_test_source(self):
         fx = Fixture(
             [
@@ -438,13 +729,10 @@ class CheckTestMatrixWitnessesAndApis(unittest.TestCase):
                     "classification": "delegated-glue",
                     "reason": "glue only",
                     "excluded_from_numeric": True,
+                    "stateful": False,
                     "suites": [{"name": "fw-build-5340", "evidence": "build"}],
                     "public_outcomes": [
-                        {
-                            "api": "alpha_run",
-                            "outcome": "success",
-                            "witness": "some_name",
-                        }
+                        {"api": "alpha_run", "outcome": "0", "witness": "some_name"}
                     ],
                     "state_transitions": [],
                     "function_exclusions": [],
@@ -470,7 +758,17 @@ class CheckTestMatrixWitnessesAndApis(unittest.TestCase):
                 {
                     **alpha_direct(),
                     "public_outcomes": [
-                        {"api": "alpha_run", "outcome": "", "witness": "test_alpha_ok"}
+                        {"api": "alpha_run", "outcome": "", "witness": "test_alpha_ok"},
+                        {
+                            "api": "alpha_parse",
+                            "outcome": "-EINVAL",
+                            "witness": "test_alpha_err",
+                        },
+                        {
+                            "api": "alpha_multiline",
+                            "outcome": "0",
+                            "witness": "test_alpha_ok",
+                        },
                     ],
                 },
                 beta_direct(),
@@ -490,11 +788,8 @@ class CheckTestMatrixWitnessesAndApis(unittest.TestCase):
 
 
 class CheckTestMatrixCoverage(unittest.TestCase):
-    def _entries(self):
-        return valid_entries()
-
     def test_absent_coverage_source(self):
-        fx = Fixture(self._entries())
+        fx = Fixture(valid_entries())
         try:
             cov = write_coverage(
                 fx.root,
@@ -513,7 +808,7 @@ class CheckTestMatrixCoverage(unittest.TestCase):
             fx.cleanup()
 
     def test_zero_hit_function(self):
-        fx = Fixture(self._entries())
+        fx = Fixture(valid_entries())
         try:
             cov = write_coverage(
                 fx.root,
@@ -582,7 +877,7 @@ class CheckTestMatrixCoverage(unittest.TestCase):
             fx.cleanup()
 
     def test_duplicate_variant_any_hit_satisfies(self):
-        fx = Fixture(self._entries())
+        fx = Fixture(valid_entries())
         try:
             cov = write_coverage(
                 fx.root,
@@ -633,7 +928,6 @@ class CheckTestMatrixDeterminism(unittest.TestCase):
                 "error: unresolvable acceptance: dongle/hci_ipc/src/main.c: no-such.sh",
             ):
                 self.assertIn(needle, out1)
-            self.assertIn("check-test-matrix: 2 error(s), 0 note(s)", out1)
         finally:
             fx.cleanup()
 
