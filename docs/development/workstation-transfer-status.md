@@ -56,7 +56,7 @@ bounded steps and final commands are.
 
 ## Key T7 commit chain
 
-Code/tooling (oldest → newest), per `git log` on `4a31324`:
+Code/tooling (oldest → newest), per `git log` on `8f7bfca`:
 
 - `e3f97d9` — T7 Stage 1: coverage tooling, `timing_none` suite,
   test-matrix manifest/checker.
@@ -70,8 +70,14 @@ Code/tooling (oldest → newest), per `git log` on `4a31324`:
   was generated** (`generated_commit` in `tests/coverage-baseline.json` =
   `c6adce8209c24d67c65acd9813f014714aaca6b3`).
 - `4a31324` — gate: commit first honest coverage baseline, wire coverage +
-  matrix into `test-all.sh`.  **Exact final T7 code commit.**  Default
-  enforcement reran on clean `4a31324` with identical ratios.
+  matrix into `test-all.sh`.  Default enforcement reran on clean `4a31324`
+  with identical ratios.
+- `8f7bfca` — test: drop `CONFIG_LOG=n` from the shell unit test suites.
+  **Exact accepted T7 code commit.**  Removes the two contradictory
+  `CONFIG_LOG=n` lines that the accepted run's review classified as Kconfig
+  assigned-value warnings (the shell subsystem forces `LOG=y`); the
+  canonical gate on this commit emits zero such warnings.  Test-config-only
+  change; baseline coverage identical.
 - `042290c` (historical branch HEAD on `test/pre-refactor-behavior`) —
   docs: record T7 acceptance evidence, baseline numbers, and gate
   contracts.  Docs only; introduced the acceptance wording that was later
@@ -79,9 +85,15 @@ Code/tooling (oldest → newest), per `git log` on `4a31324`:
 - `98e4920` (transfer anchor on `handoff/workstation-transfer`) — docs:
   prepare pre-refactor work for workstation transfer.  Committed the
   qualified T7 status, the provenance corrections, and this document.
-- T7 evidence-fix commit (current `handoff/workstation-transfer` HEAD) —
-  docs: record the exact canonical gate evidence (41/41 on `4a31324`) and
-  mark T7 ACCEPTED, T8 NOT STARTED.
+- `b342aae` (review-intermediate evidence, superseded) — docs: record the
+  first exact canonical gate evidence (41/41 on `4a31324`) and mark T7
+  ACCEPTED.  That record classified 2 Kconfig assigned-value warnings as
+  accepted; review rejected the classification under the repo hard-warning
+  policy, and the warning-fix commit `8f7bfca` plus the canonical re-run on
+  it supersede that record (see "Exact canonical gate evidence" below).
+- current HEAD (this docs-only update) — record the accepted gate evidence
+  on `8f7bfca` with zero Kconfig assigned-value warnings; T7 ACCEPTED,
+  T8 NOT STARTED.
 
 ## T7 metrics (committed baseline, never lowered)
 
@@ -102,30 +114,36 @@ reports zero errors).  Per-file records live in
 
 T7 final acceptance is **granted** with exact observed evidence:
 
-- The canonical `test-all.sh` gate was run on the exact T7 commit
-  `4a31324` from a detached worktree clone on `thomas-workstation`
-  (HEAD == `4a31324cf4df4073857f198c042378c3e860510e`, worktree clean).
+- The canonical `test-all.sh` gate was run on the exact accepted commit
+  `8f7bfca` from a detached fresh clone on `thomas-workstation` (HEAD ==
+  `8f7bfcadde2cfd6446f5493bff7b88c6aa9d5a02`, worktree clean), in the flake
+  dev shell (`nix develop`, which provides `gcovr` for the coverage child).
   A `git worktree` cannot host the gate because `test-coverage.sh` requires
   a real `.git` directory (`[ -d .git ]`), so the detached checkout is a
   fresh clone.
 - Observed exact result: **`Gate complete: 41 PASS / 0 FAIL / 41 TOTAL`**,
-  script exit 0, elapsed **`real 14m51,504s`** (user 28m12,129s, sys
-  8m56,381s).  Composition: 25 Twister C + 4 exec-only C + 9 Python +
-  coverage + matrix + BSim (see "Canonical gate composition").
-- Log provenance: stdout/stderr captured to transient `/tmp/...` log during
-  the run and removed after evidence extraction; the committed evidence
-  (exact line, exit code, runtime, commit, date) in `STATUS.md` is the
-  durable record.  A prior workstation run of the same exact commit
-  (`/tmp/t7-canonical-gate.log`, `GATE_EXIT=0`, `real 13m52,920s`) produced
-  the identical 41/41 result and corroborates it independently.
-- Warnings in the accepted run (all classified): 29 native_sim
-  `Using a test - not safe - entropy source` notices (pre-existing,
-  every twister suite) and 2 upstream Zephyr Kconfig `LOG`
-  assigned-`n`-got-`y` messages from `audio_shell`/`audio_shell_nrf54`
-  (`CONFIG_LOG=n` overridden by the shell subsystem's `select LOG_OUTPUT`;
-  deterministic, identical in the retained prior run, present since T6).
-  All `<wrn>`/`<err>` lines are deliberate failure-injection output of
-  negative-path tests.
+  script exit 0, elapsed **816 s (13m36s)**.  Composition: 25 Twister C + 4
+  exec-only C + 9 Python + coverage + matrix + BSim (see "Canonical gate
+  composition").  The coverage child enforced the committed baseline on the
+  test-config-only commit with zero drift.
+- Warning-fix context: the review-intermediate record (commit `b342aae`)
+  classified 2 upstream Zephyr Kconfig `LOG` assigned-`n`-got-`y`
+  messages from `audio_shell`/`audio_shell_nrf54` (`CONFIG_LOG=n` in those
+  suites' `prj.conf` overridden by the shell subsystem's `select
+  LOG_OUTPUT`) as accepted; review rejected the classification under the
+  repo hard-warning policy.  Commit `8f7bfca` removed the two
+  contradictory `CONFIG_LOG=n` lines; the canonical gate on `8f7bfca`
+  emits **zero Kconfig assigned-value warnings** (and zero compiler
+  warnings).
+- Log provenance: full stdout/stderr captured to a transient `/tmp` log
+  during the run and removed after evidence extraction; the committed
+  evidence (exact line, exit code, runtime, commit, date) in `STATUS.md`
+  is the durable record.
+- Warnings in the accepted run (all classified): 30 native_sim
+  `Using a test - not safe - entropy source` notices (pre-existing
+  informational line, every twister suite) and **zero Kconfig
+  assigned-value warnings**.  All `<wrn>`/`<err>` lines are deliberate
+  failure-injection output of negative-path tests.
 
 ## Historical dirty files (committed in `98e4920`, the transfer anchor)
 
@@ -146,10 +164,16 @@ Before the transfer commit, these files were dirty on
   expected, marked pending.
 
 The transfer commit `98e4920` committed those edits, making the tree clean.
-The T7 evidence-fix commit (current HEAD) then records the exact accepted
-gate evidence and marks T7 ACCEPTED / T8 NOT STARTED.
+The T7 evidence-fix commit `b342aae` then recorded the first exact accepted
+gate evidence (41/41 on `4a31324`) and marked T7 ACCEPTED / T8 NOT
+STARTED; that record's classification of 2 Kconfig assigned-value warnings
+was superseded by the warning-fix commit `8f7bfca` and the docs-only update
+at HEAD, which record the accepted gate evidence on `8f7bfca` with zero
+such warnings.
 
-No production code, scripts, tests, baseline, or configs changed.
+No production code, scripts, tests, or baseline changed; the only config
+change in the T7 chain is the warning-only test-config fix in `8f7bfca`
+(the two `CONFIG_LOG=n` lines removed from the shell test suites).
 
 ## No running task
 
@@ -198,10 +222,11 @@ From `scripts/test-all.sh` (header + run order):
 ## Final commands (T7 gate + T8 preconditions)
 
 ```bash
-# Canonical full gate (exact T7 commit 4a31324; detached clone — a git
+# Canonical full gate (exact T7 commit 8f7bfca; detached clone — a git
 # worktree cannot host the gate because test-coverage.sh requires a real
-# .git directory).  Recorded ACCEPTED: 41 PASS / 0 FAIL / 41 TOTAL,
-# exit 0, real 14m51,504s (2026-08-02).
+# .git directory; run in the flake dev shell so gcovr is present).
+# Recorded ACCEPTED: 41 PASS / 0 FAIL / 41 TOTAL, exit 0, elapsed 816 s
+# (13m36s), zero Kconfig assigned-value warnings (2026-08-02).
 ./scripts/test-all.sh          # observed 41 PASS / 0 FAIL / 41 TOTAL
 ./scripts/test-coverage.sh     # default mode: baseline enforcement
 # matrix checker consumes the coverage run's coverage.json; inside
@@ -301,7 +326,8 @@ Per `docs/development/pre-refactor-testing-t0-review-fix-handoff.md`
 **T7 gate note (2026-08-02):** step 6 must use a detached **clone**, not a
 `git worktree` — `scripts/test-coverage.sh` requires a real `.git`
 directory (`[ -d .git ]`), which a worktree does not have.  The accepted
-T7 gate ran from a detached clone at exact `4a31324`.
+T7 gate ran from a detached clone at exact `8f7bfca` (in the flake dev
+shell, so `gcovr` is on PATH for the coverage child).
 
 ## Bundle caveat — historical (resolved by the transfer commit)
 

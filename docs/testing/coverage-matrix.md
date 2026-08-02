@@ -64,11 +64,13 @@ production behavior.
 
 > **T7 canonical gate ACCEPTED (2026-08-02).**  The 41-child composition
 > (25 twister + 4 exec-only + 9 Python + coverage + matrix + BSim) was
-> observed on the exact T7 commit `4a31324` from a detached worktree clone
-> on `thomas-workstation`: **`41 PASS / 0 FAIL / 41 TOTAL`**, script exit
-> 0, elapsed `real 14m51,504s`.  Observed evidence, warning
-> classification, and log provenance: `STATUS.md` (T7 section) and
-> `docs/development/workstation-transfer-status.md`.
+> observed on the exact accepted T7 commit `8f7bfca` (the warning-fix
+> commit; baseline commits `c6adce8`/`4a31324`) from a detached fresh
+> clone on `thomas-workstation` in the flake dev shell: **`41 PASS /
+> 0 FAIL / 41 TOTAL`**, script exit 0, elapsed 816 s (13m36s), **zero
+> Kconfig assigned-value warnings** and zero compiler warnings.  Observed
+> evidence, warning classification, and log provenance: `STATUS.md` (T7
+> section) and `docs/development/workstation-transfer-status.md`.
 
 ## Explicit weak-test facts
 
@@ -164,6 +166,7 @@ exact-outcome ledger, and that stateful entries carry transitions.
 Both are ordered children of `scripts/test-all.sh` before the mandatory
 BSim child.  These ratios and checker results are implementation evidence
 on the exact commits `c6adce8`/`4a31324`; the canonical 41-child gate
-acceptance on `4a31324` is **ACCEPTED (2026-08-02)**: observed exact
-`41 PASS / 0 FAIL / 41 TOTAL` with elapsed runtime `real 14m51,504s` (see
-`STATUS.md` T7 section and `docs/development/workstation-transfer-status.md`).
+acceptance on `8f7bfca` (warning-fix commit) is **ACCEPTED (2026-08-02)**:
+observed exact `41 PASS / 0 FAIL / 41 TOTAL`, elapsed 816 s (13m36s),
+zero Kconfig assigned-value warnings (see `STATUS.md` T7 section and
+`docs/development/workstation-transfer-status.md`).

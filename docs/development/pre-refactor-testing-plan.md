@@ -326,14 +326,19 @@ python3 scripts/check-build-contract.py \
 
 ## Phase T7 — Coverage enforcement — ACCEPTED (2026-08-02)
 
-Implementation complete on exact code commit `4a31324`; baseline generated
-on the clean commit `c6adce8`, committed in `4a31324`, default enforcement
-rerun on clean `4a31324` with identical ratios.  **ACCEPTED (2026-08-02)**:
-full canonical gate observed on the exact commit `4a31324` from a detached
-worktree clone on `thomas-workstation` — **41 PASS / 0 FAIL / 41 TOTAL**
-(25 twister + 4 exec-only + 9 Python + coverage + matrix + BSim), script
-exit 0, elapsed `real 14m51,504s`.  Observed evidence, warning
-classification, and provenance: `STATUS.md` (T7 section),
+Implementation complete on exact code commit `4a31324` (baseline + gate
+wiring); baseline generated on the clean commit `c6adce8`, committed in
+`4a31324`, default enforcement rerun on clean `4a31324` with identical
+ratios.  A warning-only test-config correction then removed
+the two contradictory `CONFIG_LOG=n` lines in the shell test suites that
+the accepted run's review had classified as Kconfig assigned-value
+warnings.  **ACCEPTED (2026-08-02)**: full canonical gate observed on the
+exact commit `8f7bfca` from a detached fresh clone on
+`thomas-workstation` — **41 PASS / 0 FAIL / 41 TOTAL** (25 twister +
+4 exec-only + 9 Python + coverage + matrix + BSim), script exit 0,
+elapsed 816 s (13m36s), **zero Kconfig assigned-value warnings**, zero
+compiler warnings.  Observed evidence, warning classification, and
+provenance: `STATUS.md` (T7 section),
 `docs/development/workstation-transfer-status.md`,
 `docs/testing/coverage-matrix.md` (numeric baseline).
 Committed `tests/coverage-baseline.json`: lines 3070/3503, branches
@@ -425,8 +430,9 @@ state-machine improvements, readability work, and diagnostic improvements.
 5. T4 — BAP/BabbleSim matrix.
 6. T5 — lifecycle, timing, drift, and actuators.
 7. T6 — boot, shell, and build contracts.
-8. T7 — coverage enforcement → ACCEPTED (2026-08-02, commit `4a31324`);
-   canonical gate observed exact `41 PASS / 0 FAIL / 41 TOTAL`, exit 0,
-   `real 14m51,504s` (see `STATUS.md` T7 section and
-   `docs/development/workstation-transfer-status.md`).
+8. T7 — coverage enforcement → ACCEPTED (2026-08-02; baseline commits
+   `c6adce8`/`4a31324`, warning-fix commit `8f7bfca`); canonical gate
+    observed exact `41 PASS / 0 FAIL / 41 TOTAL`, exit 0, elapsed 816 s
+    (13m36s), zero Kconfig assigned-value warnings (see `STATUS.md` T7
+   section and `docs/development/workstation-transfer-status.md`).
 9. T8 — hardware baseline freeze — NOT STARTED.

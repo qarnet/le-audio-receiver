@@ -5,6 +5,22 @@ exact canonical gate evidence: **41 PASS / 0 FAIL / 41 TOTAL** observed on
 the exact T7 code commit `4a31324` (see `STATUS.md` T7 section and
 `docs/development/workstation-transfer-status.md`).
 
+> **Superseded (2026-08-02, warning-fix review round):** review found the
+> accepted `4a31324` run emitted 2 Kconfig assigned-value warnings
+> (`CONFIG_LOG=n` in the `audio_shell`/`audio_shell_nrf54` test
+> `prj.conf` overridden by the shell subsystem's `select LOG_OUTPUT`),
+> violating the repo hard-warning policy.  Commit `8f7bfca` removed the
+> two contradictory `CONFIG_LOG=n` lines (test-config-only; no behavior or
+> coverage change), and the canonical gate was re-run on `8f7bfca` from a
+> detached fresh clone on `thomas-workstation` (flake dev shell):
+> **`Gate complete: 41 PASS / 0 FAIL / 41 TOTAL`**, exit 0, elapsed
+> 816 s (13m36s), **zero Kconfig assigned-value warnings**, zero compiler
+> warnings.  `b342aae` (which recorded the 41/41 on `4a31324` with the 2
+> warnings classified) is review-intermediate evidence, superseded by the
+> `8f7bfca` record in `STATUS.md`.  Focused pre-commit suites on
+> `8f7bfca`: `audio_shell` 13/13 and `audio_shell_nrf54` 42/42, both
+> warning-free.
+
 ## Goal
 
 Correct two review findings without changing coverage code, tests, baseline, or
