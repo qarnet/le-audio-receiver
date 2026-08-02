@@ -795,3 +795,61 @@ accepted:
 - Arbitrary malformed LC3 recovery beyond safe rejection or PLC.
 - nRF54L15 recovery from APPROTECT lock (no recovery path exists in current
   tooling; APPROTECT is not the nRF5340 soft-branch design).
+
+## Coverage and test-matrix gate contract (`CV-*`)
+
+Version: T7, 2026-08-02.  Enforced by `scripts/test-coverage.sh` (default
+mode) and `scripts/check-test-matrix.py --coverage-json`, both ordered
+children of `scripts/test-all.sh`.
+
+### CV-001 — Numeric coverage never decreases
+
+The committed `tests/coverage-baseline.json` (schema v1, generated on
+`4a31324`; lines 3070/3503, branches 1332/1921, functions 182/182 in the
+23-file numeric population) is enforced with integer cross multiplication:
+`current_covered/current_total >= baseline_covered/baseline_total` for the
+overall lines and branches totals and for every per-file lines, branches,
+and functions record.  Lowering the baseline is a regression.
+
+### CV-002 — Population drift is a hard failure
+
+Every file in the baseline population must still be in the manifest
+numeric population and vice versa.  Adding a direct source requires an
+intentional manifest + baseline update; removing one requires the same.
+No automatic exclusion exists.
+
+### CV-003 — Every compiled production function executes
+
+`check-test-matrix.py --coverage-json` reports a zero-hit function error
+for any compiled production function (test-only blocks excluded via
+`GCOVR_EXCL_START`/`GCOVR_EXCL_STOP` markers are not production metrics)
+that does not execute at least once across the native suites.  Precise
+`function_exclusions` require a reason and hardware/structural evidence.
+
+### CV-004 — Public API outcome ledger
+
+Every top-level non-static function definition in a direct source must
+appear in `public_outcomes` with an exact observable outcome — `0`/success,
+an exact negative errno, an exact enum/status constant, `true`/`false`,
+`void`, or an exact hex/string literal.  `error-class` and vague labels are
+forbidden, as are duplicate `(api,outcome)` records and empty placeholders.
+
+### CV-005 — State transitions
+
+Stateful entries (`stateful: true`) must carry a nonempty, duplicate-free
+`from->to` transition list with witnesses; stateless entries must not carry
+transitions.
+
+### CV-006 — Witnesses are real
+
+Every witness string must exist in the referenced test source (or name an
+existing hardware script/evidence doc for hardware-dependent outcomes).
+Invented witnesses fail the gate.
+
+### CV-007 — Worktree hygiene
+
+Baseline write and enforcement require a clean worktree; the run manifest
+records the exact `HEAD` and `dirty` state.  `--report-only` may run dirty
+but can never create or update a committed baseline, and the output
+directory is only ever cleaned with `--clean-output` inside an allowed
+`/tmp` or `$HOME` tree.

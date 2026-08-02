@@ -324,7 +324,13 @@ python3 scripts/check-build-contract.py \
   --nrf54l15 build/nrf54l15
 ```
 
-## Phase T7 — Coverage enforcement
+## Phase T7 — Coverage enforcement — ACCEPTED (2026-08-02)
+
+Exact acceptance commit `4a31324`; evidence in `STATUS.md` (T7 acceptance
+section) and `docs/testing/coverage-matrix.md` (numeric baseline).
+Committed `tests/coverage-baseline.json`: lines 3070/3503, branches
+1332/1921, functions 182/182 (100%) in the 23-file numeric population.
+Coverage and matrix checks are canonical `test-all.sh` children.
 
 Add `gcovr` to `flake.nix`, create `scripts/test-coverage.sh` and
 `scripts/check-test-matrix.py`, and integrate them into the canonical gate.
@@ -411,5 +417,5 @@ state-machine improvements, readability work, and diagnostic improvements.
 5. T4 — BAP/BabbleSim matrix.
 6. T5 — lifecycle, timing, drift, and actuators.
 7. T6 — boot, shell, and build contracts.
-8. T7 — coverage enforcement.
+8. ~~T7 — coverage enforcement~~ → COMPLETE (2026-08-02, commit `4a31324`).
 9. T8 — hardware baseline freeze.
