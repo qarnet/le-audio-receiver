@@ -1,0 +1,383 @@
+{
+  "exclusions": {
+    "numeric_population": [
+      "src/audio_clock_actuator_sample_adjust.c",
+      "src/bt_bap.c",
+      "src/flpr/main.c",
+      "src/main.c"
+    ],
+    "reasons": {
+      "src/audio_clock_actuator_sample_adjust.c": "retired non-production sample insert/drop actuator retained for regression comparison only (coverage-matrix.md weak-test fact 1)",
+      "src/bt_bap.c": "BAP unicast server, ASCS/PACS, pairing: integration-only through the accepted T4 BabbleSim 15-scenario matrix (mono 7.5/10 ms, Mode A incl. reverse start, Mode B, malformed-SDU rejection + resume, first-ASE stop, release-without-disable, disconnect-while-streaming, reconnect, source-direction rejection, NO_MEM third sink, nine invalid-codec-field rejections, two successes) with strict PCM oracle; no native unit suite exists",
+      "src/flpr/main.c": "FLPR firmware entry point (RISC-V VPR): no RISC-V simulator infrastructure exists in this repo; hardware-only by design",
+      "src/main.c": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by production builds and boot logs"
+    }
+  },
+  "files": {
+    "src/app_lifecycle.c": {
+      "branches": [
+        50,
+        54
+      ],
+      "functions": [
+        4,
+        4
+      ],
+      "lines": [
+        47,
+        47
+      ]
+    },
+    "src/audio_asrc.c": {
+      "branches": [
+        76,
+        98
+      ],
+      "functions": [
+        7,
+        7
+      ],
+      "lines": [
+        112,
+        120
+      ]
+    },
+    "src/audio_clock_actuator_apll.c": {
+      "branches": [
+        4,
+        4
+      ],
+      "functions": [
+        4,
+        4
+      ],
+      "lines": [
+        17,
+        17
+      ]
+    },
+    "src/audio_clock_actuator_none.c": {
+      "branches": [
+        0,
+        0
+      ],
+      "functions": [
+        4,
+        4
+      ],
+      "lines": [
+        8,
+        8
+      ]
+    },
+    "src/audio_decode.c": {
+      "branches": [
+        100,
+        102
+      ],
+      "functions": [
+        5,
+        5
+      ],
+      "lines": [
+        121,
+        125
+      ]
+    },
+    "src/audio_drift.c": {
+      "branches": [
+        28,
+        31
+      ],
+      "functions": [
+        5,
+        5
+      ],
+      "lines": [
+        65,
+        68
+      ]
+    },
+    "src/audio_i2s.c": {
+      "branches": [
+        132,
+        176
+      ],
+      "functions": [
+        10,
+        10
+      ],
+      "lines": [
+        203,
+        209
+      ]
+    },
+    "src/audio_offload.c": {
+      "branches": [
+        223,
+        377
+      ],
+      "functions": [
+        18,
+        18
+      ],
+      "lines": [
+        588,
+        714
+      ]
+    },
+    "src/audio_perf.c": {
+      "branches": [
+        19,
+        22
+      ],
+      "functions": [
+        8,
+        8
+      ],
+      "lines": [
+        82,
+        85
+      ]
+    },
+    "src/audio_rate_convert.c": {
+      "branches": [
+        14,
+        16
+      ],
+      "functions": [
+        3,
+        3
+      ],
+      "lines": [
+        30,
+        32
+      ]
+    },
+    "src/audio_shell.c": {
+      "branches": [
+        124,
+        274
+      ],
+      "functions": [
+        23,
+        23
+      ],
+      "lines": [
+        302,
+        519
+      ]
+    },
+    "src/audio_stats.c": {
+      "branches": [
+        0,
+        0
+      ],
+      "functions": [
+        7,
+        7
+      ],
+      "lines": [
+        30,
+        30
+      ]
+    },
+    "src/audio_timing_math.c": {
+      "branches": [
+        4,
+        4
+      ],
+      "functions": [
+        4,
+        4
+      ],
+      "lines": [
+        16,
+        16
+      ]
+    },
+    "src/audio_timing_none.c": {
+      "branches": [
+        0,
+        0
+      ],
+      "functions": [
+        3,
+        3
+      ],
+      "lines": [
+        6,
+        6
+      ]
+    },
+    "src/audio_timing_nrf54.c": {
+      "branches": [
+        56,
+        78
+      ],
+      "functions": [
+        7,
+        7
+      ],
+      "lines": [
+        131,
+        135
+      ]
+    },
+    "src/audio_volume.c": {
+      "branches": [
+        24,
+        32
+      ],
+      "functions": [
+        5,
+        5
+      ],
+      "lines": [
+        36,
+        36
+      ]
+    },
+    "src/flpr_audio_process.c": {
+      "branches": [
+        46,
+        58
+      ],
+      "functions": [
+        4,
+        4
+      ],
+      "lines": [
+        97,
+        104
+      ]
+    },
+    "src/flpr_cache.c": {
+      "branches": [
+        0,
+        0
+      ],
+      "functions": [
+        3,
+        3
+      ],
+      "lines": [
+        9,
+        9
+      ]
+    },
+    "src/flpr_handshake.c": {
+      "branches": [
+        134,
+        181
+      ],
+      "functions": [
+        17,
+        17
+      ],
+      "lines": [
+        357,
+        369
+      ]
+    },
+    "src/flpr_ring.c": {
+      "branches": [
+        28,
+        32
+      ],
+      "functions": [
+        8,
+        8
+      ],
+      "lines": [
+        86,
+        87
+      ]
+    },
+    "src/flpr_ring_mgr.c": {
+      "branches": [
+        214,
+        312
+      ],
+      "functions": [
+        24,
+        24
+      ],
+      "lines": [
+        559,
+        599
+      ]
+    },
+    "src/flpr_runtime.c": {
+      "branches": [
+        34,
+        46
+      ],
+      "functions": [
+        3,
+        3
+      ],
+      "lines": [
+        126,
+        126
+      ]
+    },
+    "src/stream_lifecycle.c": {
+      "branches": [
+        22,
+        24
+      ],
+      "functions": [
+        6,
+        6
+      ],
+      "lines": [
+        42,
+        42
+      ]
+    }
+  },
+  "gcov_version": "gcov (GCC) 14.3.0",
+  "gcovr_version": "gcovr 8.4",
+  "generated_commit": "c6adce8209c24d67c65acd9813f014714aaca6b3",
+  "population": [
+    "src/app_lifecycle.c",
+    "src/audio_asrc.c",
+    "src/audio_clock_actuator_apll.c",
+    "src/audio_clock_actuator_none.c",
+    "src/audio_decode.c",
+    "src/audio_drift.c",
+    "src/audio_i2s.c",
+    "src/audio_offload.c",
+    "src/audio_perf.c",
+    "src/audio_rate_convert.c",
+    "src/audio_shell.c",
+    "src/audio_stats.c",
+    "src/audio_timing_math.c",
+    "src/audio_timing_none.c",
+    "src/audio_timing_nrf54.c",
+    "src/audio_volume.c",
+    "src/flpr_audio_process.c",
+    "src/flpr_cache.c",
+    "src/flpr_handshake.c",
+    "src/flpr_ring.c",
+    "src/flpr_ring_mgr.c",
+    "src/flpr_runtime.c",
+    "src/stream_lifecycle.c"
+  ],
+  "schema_version": 1,
+  "totals": {
+    "branches": [
+      1332,
+      1921
+    ],
+    "functions": [
+      182,
+      182
+    ],
+    "lines": [
+      3070,
+      3503
+    ]
+  }
+}
