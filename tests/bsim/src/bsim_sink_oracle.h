@@ -34,7 +34,15 @@ enum bsim_sink_scenario {
 	BSIM_SCN_UNSUPPORTED_SOURCE_DIRECTION,
 	BSIM_SCN_NO_FREE_SINK_SLOT,
 	BSIM_SCN_INVALID_CODEC_FIELDS,
+	BSIM_SCN_MODEA_ONE_CIS_LOSS_10MS,
 };
+
+/* Scheduled single-CIS losses in the Mode A one-CIS-loss scenario
+ * (client side pauses the right stream mid-stream for a bounded
+ * window, so its CIS loses those events).  The oracle uses this exact
+ * count for the post-start concealed-push and post-start PLC
+ * accounting. */
+#define BSIM_MODEA_LOSS_COUNT 18
 
 /** Per-segment strict record. */
 struct bsim_sink_segment {

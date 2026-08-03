@@ -55,6 +55,8 @@ static bool stopped;
 static bool first_nonzero_seen;   /* per segment */
 static bool boundary_closed;      /* per segment: first nonzero source-valid push */
 static uint32_t after_stop_total; /* cumulative, never hidden */
+static uint32_t concealed_pushes; /* Mode A one-CIS-loss scenario: post-boundary
+				     pushes with exactly one valid half (PLC) */
 
 static uint16_t required_samples = 960; /* 48 kHz × 10 ms × 2 ch */
 
@@ -164,6 +166,7 @@ void audio_sink_test_begin(enum bsim_sink_scenario scn, int dec_calls)
 	dec_calls_per_push = (dec_calls > 0) ? dec_calls : 1;
 	stopped = false;
 	after_stop_total = 0U;
+	concealed_pushes = 0U;
 	segment_count = 0;
 	current_seg = -1;
 	goal_finalized = false;
@@ -246,7 +249,11 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 	}
 
 	const int32_t energy = l_energy + r_energy;
-	const bool src_valid = bsim_observer_get_last_push_src_valid();
+	const bool l_valid = bsim_observer_get_last_push_l_valid();
+	const bool r_valid = bsim_observer_get_last_push_r_valid();
+	const bool src_valid = l_valid && r_valid;
+	const bool concealed =
+		scenario == BSIM_SCN_MODEA_ONE_CIS_LOSS_10MS && !(l_valid && r_valid);
 
 	/*
 	 * Strict startup boundary: startup stays open until the first
@@ -255,7 +262,11 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 	 * is updated after each transient push.  After the boundary
 	 * closes, any source-invalid push, any zero-energy push, and any
 	 * post-start PLC (plc_frames != startup_plc at finalize) is a
-	 * fault.
+	 * fault — EXCEPT the one-CIS-loss scenario, where exactly
+	 * BSIM_MODEA_LOSS_COUNT post-boundary pushes carry one valid half
+	 * and one concealed (PLC) half (the unaffected channel stays
+	 * valid; a push with BOTH halves invalid after the boundary is
+	 * still an immediate fault).
 	 */
 	if (!boundary_closed) {
 		if (energy == 0) {
@@ -276,7 +287,24 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 			return 0;
 		}
 	} else {
-		if (!src_valid) {
+		if (concealed) {
+			/* Post-boundary single-channel concealment: expected
+			 * in the one-CIS-loss scenario, bounded by the
+			 * scheduled loss count. */
+			concealed_pushes++;
+			if (concealed_pushes > BSIM_MODEA_LOSS_COUNT) {
+				FAIL("le_audio_receiver: concealed pushes %u > %d — "
+				     "unexpected losses\n",
+				     (unsigned int)concealed_pushes, BSIM_MODEA_LOSS_COUNT);
+				return -EINVAL;
+			}
+			if (!l_valid && !r_valid) {
+				FAIL("le_audio_receiver: both halves invalid after boundary — "
+				     "push#%u\n",
+				     (unsigned int)cur()->pushes);
+				return -EINVAL;
+			}
+		} else if (!src_valid) {
 			FAIL("le_audio_receiver: source-invalid push after valid boundary — "
 			     "push#%u immediate FAIL\n",
 			     (unsigned int)cur()->pushes);
@@ -346,6 +374,7 @@ bool audio_sink_test_goal_reached(void)
 	case BSIM_SCN_MODEA_REVERSE_START_10MS:
 	case BSIM_SCN_MODEB_10MS:
 	case BSIM_SCN_MODEB_7P5MS:
+	case BSIM_SCN_MODEA_ONE_CIS_LOSS_10MS:
 		return segment_count >= 1 && segments[0].finalized &&
 		       segments[0].pushes == NORMAL_GOAL_PUSHES;
 
@@ -403,9 +432,25 @@ bool audio_sink_test_validate(void)
 			     s->decode_errors, expected_err);
 			return false;
 		}
-		/* Zero post-start PLC: every PLC frame happened during the
-		 * startup phase (source-valid boundary), exactly. */
-		if (s->plc_frames != s->startup_plc) {
+		/* Post-start PLC: every PLC frame happened during the
+		 * startup phase (source-valid boundary) — except the
+		 * one-CIS-loss scenario, which expects exactly
+		 * BSIM_MODEA_LOSS_COUNT post-start PLC frames (one per
+		 * scheduled single-CIS loss) and exactly that many
+		 * concealed pushes. */
+		if (scenario == BSIM_SCN_MODEA_ONE_CIS_LOSS_10MS) {
+			if (s->plc_frames != s->startup_plc + BSIM_MODEA_LOSS_COUNT) {
+				FAIL("le_audio_receiver: segment %d plc=%u != startup_plc=%u "
+				     "+ %d (loss scenario)\n",
+				     i, s->plc_frames, s->startup_plc, BSIM_MODEA_LOSS_COUNT);
+				return false;
+			}
+			if (concealed_pushes != BSIM_MODEA_LOSS_COUNT) {
+				FAIL("le_audio_receiver: concealed pushes %u != %d\n",
+				     (unsigned int)concealed_pushes, BSIM_MODEA_LOSS_COUNT);
+				return false;
+			}
+		} else if (s->plc_frames != s->startup_plc) {
 			FAIL("le_audio_receiver: segment %d plc=%u != startup_plc=%u "
 			     "(post-start PLC)\n",
 			     i, s->plc_frames, s->startup_plc);

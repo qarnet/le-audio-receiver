@@ -138,4 +138,30 @@ config AUDIO_OFFLOAD_ASRC_VERIFY
 	  Production builds must disable this option.  Development and
 	  acceptance testing enable it for cross-validation.
 
+config AUDIO_MODEA_MAX_FRAME_OCTETS
+	int "Mode A pending frame block size (octets per mono frame)"
+	default 120
+	range 20 240
+	help
+	  Bounded compressed-SDU buffer size for one Mode A half frame
+	  block held pending by the Mode A event assembler (audio_modea).
+	  The receiver advertises 20..120 octets per frame at 48 kHz and
+	  rejects any larger validated shape, so 120 covers every accepted
+	  Mode A mono configuration; the range ceiling exists only so the
+	  option can be raised without a code change.
+
+config AUDIO_MODEA_PENDING_DEPTH
+	int "Mode A pending halves per channel (fixed-depth queue)"
+	default 2
+	range 1 4
+	help
+	  Maximum unresolved half events buffered per Mode A channel by
+	  the event assembler.  Depth 2 covers the measured <=1-event
+	  cross-CIS callback skew plus single-SDU losses and a one-event
+	  loss burst on one channel while the other keeps delivering.  A
+	  third concurrent unresolved event on one channel (the other
+	  channel stalled >=2 events) overflows: the oldest entry is
+	  dropped and counted in the assembler stats (never silent).
+	  Bounded static state; no heap.
+
 source "Kconfig.zephyr"

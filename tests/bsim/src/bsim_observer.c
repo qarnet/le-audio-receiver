@@ -39,6 +39,8 @@ static atomic_uint rel_ss_seq;
 static atomic_uint mts_cnt;
 static atomic_uint disc_seq;
 static atomic_bool last_push_src_valid;
+static atomic_bool last_push_l_valid;
+static atomic_bool last_push_r_valid;
 
 static uint32_t obs_next_event(void)
 {
@@ -129,14 +131,26 @@ void bsim_observer_missing_ts(void)
 	printk("OBS missing ts\n");
 }
 
-void bsim_observer_pre_push(bool src_valid)
+void bsim_observer_pre_push(bool l_valid, bool r_valid)
 {
-	atomic_store(&last_push_src_valid, src_valid);
+	atomic_store(&last_push_l_valid, l_valid);
+	atomic_store(&last_push_r_valid, r_valid);
+	atomic_store(&last_push_src_valid, l_valid && r_valid);
 }
 
 bool bsim_observer_get_last_push_src_valid(void)
 {
 	return atomic_load(&last_push_src_valid);
+}
+
+bool bsim_observer_get_last_push_l_valid(void)
+{
+	return atomic_load(&last_push_l_valid);
+}
+
+bool bsim_observer_get_last_push_r_valid(void)
+{
+	return atomic_load(&last_push_r_valid);
 }
 
 uint32_t bsim_observer_get_config_accepted(void)

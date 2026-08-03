@@ -37,6 +37,7 @@
 #include "audio_sink.h"
 #include "audio_timing.h"
 #include "audio_decode.h"
+#include "audio_modea.h"
 #include "audio_stats.h"
 #include "audio_perf.h"
 #include "audio_volume.h"
@@ -122,8 +123,7 @@ struct bt_sink {
 	uint32_t pd_us; /* negotiated presentation delay */
 	struct audio_decode_ctx decode;
 
-	/*
-	 * Validated codec shape, stored at Config time.  Enable re-validates
+	/* Validated codec shape, stored at Config time.  Enable re-validates
 	 * the retained codec config against this shape and fails safely on
 	 * mismatch.  SDU length validation in stream_recv uses these fields.
 	 */
@@ -133,18 +133,10 @@ struct bt_sink {
 	uint8_t frame_blocks_per_sdu;
 	uint8_t chan_count;
 
-	/* Mode A pair identity.  half_ts is the ISO SDU reference time
-	 * (BT_ISO_FLAGS_TS): both CISes of one CIG carry the same SDU
-	 * reference at the same CIG event, so equal half_ts values pair the
-	 * two halves of the same audio frame.  half_seq tracks the
-	 * controller-reported ISO seq_num (offset between CISes by their
-	 * activation delay — useless as a pairing key); half_idx counts
-	 * this half's received SDUs since stream start (diagnostics). */
-	bool half_valid;
-	bool half_valid_src; /* original BT_ISO_FLAGS_VALID of this half's SDU */
-	uint32_t half_ts;
-	uint16_t half_seq;
-	uint16_t half_idx;
+	/* Mode A pair identity lives in the shared event assembler
+	 * (audio_modea.c): bounded per-channel pending compressed halves +
+	 * ISO SDU reference-time pairing.  Per-sink decoder state stays
+	 * here; the assembler holds no decoder state. */
 };
 
 /*
@@ -194,12 +186,16 @@ static int16_t l_buf[SAMPLES_PER_CHANNEL_MAX];
 static int16_t r_buf[SAMPLES_PER_CHANNEL_MAX];
 static int16_t stereo_out[STEREO_OUT_MAX];
 
+/* Mode A event assembler: bounded per-channel pending compressed halves,
+ * ISO SDU reference-time pairing, and per-channel PLC synthesis for
+ * missing CIS SDUs.  One event buffer (decoded immediately at
+ * resolution, before the next store) plus per-channel queues. */
+static struct modea_state modea_state;
+static struct modea_event modea_ev;
+
 static void mode_a_halves_clear(void)
 {
-	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
-		sinks[i].half_valid = false;
-		sinks[i].half_idx = 0U;
-	}
+	modea_reset(&modea_state);
 }
 
 #endif /* CONFIG_LIBLC3 */
@@ -445,8 +441,6 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 	sinks[idx].octets_per_frame = shape.octets_per_frame;
 	sinks[idx].frame_blocks_per_sdu = shape.frame_blocks_per_sdu;
 	sinks[idx].chan_count = shape.chan_count;
-	sinks[idx].half_valid = false;
-	sinks[idx].half_idx = 0U;
 	num_sink_ase++;
 
 	LOG_INF("  ASE[%zu] configured: num_sink_ase=%zu chan_count=%u freq=%u dur=%u octets=%u",
@@ -520,6 +514,12 @@ static int lc3_enable(struct bt_bap_stream *stream, const uint8_t meta[], size_t
 	}
 	LOG_INF("LC3 decoder[%zu]: %d Hz %d us ch=%d", idx, sinks[idx].freq_hz,
 		sinks[idx].frame_dur_us, sinks[idx].chan_count);
+
+	/* Mode A assembler: predicted LOST-event positions advance by the
+	 * SDU interval (frame duration).  Configured once per stream shape
+	 * (both sinks share the same interval; a Mode A stream has two
+	 * mono ASEs so this runs for each). */
+	modea_config(&modea_state, sinks[idx].frame_dur_us);
 
 	/* Tell the audio sink the expected stereo frames per push
 	 * (depends on frame duration: 360 for 7.5 ms, 480 for 10 ms).
@@ -622,8 +622,6 @@ static void sink_release_slot(size_t idx)
 	sinks[idx].octets_per_frame = 0;
 	sinks[idx].frame_blocks_per_sdu = 0;
 	sinks[idx].chan_count = 0;
-	sinks[idx].half_valid = false;
-	sinks[idx].half_idx = 0U;
 	stream_lifecycle_sink_release(idx);
 	if (num_sink_ase > 0) {
 		num_sink_ase--;
@@ -671,7 +669,6 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	struct bt_sink *as = &sinks[idx];
 	const bool valid = (info->flags & BT_ISO_FLAGS_VALID) != 0;
 	const bool has_ts = (info->flags & BT_ISO_FLAGS_TS) != 0;
-	const int f_per_sdu = as->decode.frames_per_sdu;
 	const int spc = as->decode.samples_per_ch;
 
 	/* Phase 4b.1: feed validated timestamp + presentation delay to
@@ -770,7 +767,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		audio_volume_apply(stereo_out, spc * 2);
 
 #if defined(CONFIG_BSIM_OBSERVER)
-		bsim_observer_pre_push(valid);
+		bsim_observer_pre_push(valid, valid);
 #endif
 		if (audio_sink_push(stereo_out, spc * 2) < 0) {
 			audio_perf_push_failure();
@@ -799,21 +796,72 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 			return;
 		}
 
-		const int octets_per_frame = f_per_sdu > 0 ? (buf->len / f_per_sdu) : buf->len;
-		int16_t *dest = (idx == 0) ? l_buf : r_buf;
+		/*
+		 * Mode A: 2 mono ASEs.  The event assembler owns bounded
+		 * pending COMPRESSED halves per channel plus ISO SDU
+		 * reference-time pairing, and resolves each CIG event exactly
+		 * once — synthesizing PLC for a missing channel so output
+		 * cadence continues under one-CIS loss.  Decode is deferred
+		 * to event resolution, which keeps every channel's decoder
+		 * chronological (a PLC for a missing older event is always
+		 * generated before that channel's newer packet is decoded).
+		 * The assembler holds no net_buf pointers and no decoder
+		 * state; the per-sink decoders stay here.
+		 */
+		enum modea_action act =
+			modea_store(&modea_state, (enum modea_channel)idx, valid ? buf->data : NULL,
+				    buf->len, valid, has_ts, info->ts, info->seq_num, &modea_ev);
+
+		if (act == MODEA_ACTION_DROP) {
+			struct modea_stats st;
+
+			modea_get_stats(&modea_state, &st);
+			LOG_INF("Mode A: half dropped (overflow=%u rejects=%u)", st.overflow_drops,
+				st.rejects);
+#if defined(CONFIG_BSIM_OBSERVER)
+			bsim_observer_stale_half();
+#endif
+			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
+			return;
+		}
+		if (act != MODEA_ACTION_EMIT) {
+			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
+			return;
+		}
+
+		/* Both sink decoders must exist to render the resolved event
+		 * (the emit may decode the OTHER channel's pending half). */
+		if (sinks[0].decode.decoder == NULL || sinks[1].decode.decoder == NULL) {
+			LOG_WRN("Mode A: decoder not ready for resolved event");
+			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
+			return;
+		}
+
+		/*
+		 * Decode each half with ITS OWN channel's decoder, in
+		 * channel order (both halves belong to the same CIG event,
+		 * so both decoders advance exactly one event).  A missing
+		 * half is decoded as PLC (NULL input, same octets as the
+		 * event's carried half).  A hard decode error on either
+		 * half skips the unsafe output and counts the existing
+		 * decode-error evidence.
+		 */
 		bool decoded_ok = true;
 
-		for (int i = 0; i < f_per_sdu; i++) {
+		for (int ch = 0; ch < MODEA_CHANNELS; ch++) {
+			const bool have = modea_ev.half_valid[ch];
+			const size_t octets = have ? modea_ev.len[ch] : modea_ev.len[1 - ch];
+			int16_t *dest = (ch == MODEA_CH_LEFT) ? l_buf : r_buf;
 			uint32_t t1 = audio_perf_cycle_start();
-			const int err =
-				lc3_decode(as->decode.decoder,
-					   valid ? net_buf_pull_mem(buf, octets_per_frame) : NULL,
-					   octets_per_frame, LC3_PCM_FORMAT_S16, dest, 1);
+			const int err = lc3_decode(sinks[ch].decode.decoder,
+						   have ? modea_ev.data[ch] : NULL, octets,
+						   LC3_PCM_FORMAT_S16, dest, 1);
+
 			audio_perf_cycle_end(t1, AUDIO_PERF_PATH_LC3_DECODE);
 			if (err == 1) {
 				audio_stats_frame_plc();
 			} else if (err < 0) {
-				LOG_WRN("[%zu:%d]: LC3 decode error %d", idx, i, err);
+				LOG_WRN("[%d]: LC3 decode error %d", ch, err);
 				audio_stats_decode_error();
 				decoded_ok = false;
 			} else {
@@ -821,74 +869,25 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 			}
 		}
 		if (!decoded_ok) {
-			/* Hard decoder error: this half cannot pair.  Leave
-			 * half-valid state untouched so a stale half can
-			 * never pair with the failed one. */
+			/* Hard decoder error: skip the unsafe interleaved
+			 * output (the event is consumed; the failure is
+			 * counted above). */
 			audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
 			return;
 		}
 
-		/*
-		 * Mode A pair identity: interleave and push only when both
-		 * halves belong to the same CIG event.  The SW Split LL
-		 * numbers each CIS from a CIG-global counter, so the two
-		 * CIS seq spaces carry a constant offset (their activation
-		 * delay) that no client-side TX hold can remove — exact
-		 * seq or per-half-index pairing cannot match.  Both CISes
-		 * of one CIG share the ISO SDU reference time at each
-		 * event, so equal half_ts values identify the two halves of
-		 * the same audio frame; a wrap-safe 32-bit comparison
-		 * discards only the older unmatched half.  Each half's
-		 * original ISO-valid flag is stored separately from the
-		 * decoder result: a push is source-valid only when BOTH
-		 * paired halves had VALID set (the test oracle's startup
-		 * boundary uses this).  The controller-reported ISO
-		 * seq_num stays tracked per half.
-		 */
-		as->half_valid = true;
-		as->half_valid_src = valid;
-		as->half_ts = info->ts;
-		as->half_seq = info->seq_num;
-		as->half_idx++;
-
-		const size_t other = (idx == 0) ? 1 : 0;
-
-		if (sinks[other].half_valid) {
-			const uint32_t diff = (uint32_t)(as->half_ts - sinks[other].half_ts);
-
-			if (diff == 0U) {
-				/* Same CIG event — pair and push. */
-				audio_decode_interleave(l_buf, r_buf, stereo_out, spc);
-				audio_volume_apply(stereo_out, spc * 2);
+		/* Interleave + push once per resolved event.  Source
+		 * validity for the oracle: both halves of this event had
+		 * VALID set (a PLC half is never source-valid). */
+		audio_decode_interleave(l_buf, r_buf, stereo_out, spc);
+		audio_volume_apply(stereo_out, spc * 2);
 
 #if defined(CONFIG_BSIM_OBSERVER)
-				bsim_observer_pre_push(sinks[0].half_valid_src &&
-						       sinks[1].half_valid_src);
+		bsim_observer_pre_push(modea_ev.half_src[MODEA_CH_LEFT],
+				       modea_ev.half_src[MODEA_CH_RIGHT]);
 #endif
-				if (audio_sink_push(stereo_out, spc * 2) < 0) {
-					audio_perf_push_failure();
-				}
-				as->half_valid = false;
-				sinks[other].half_valid = false;
-			} else if (diff < 0x80000000U) {
-				/* This half is newer (larger ts) — discard the older half. */
-				LOG_INF("Mode A: stale half discarded (ts %u < %u, seq %u < %u)",
-					sinks[other].half_ts, as->half_ts, sinks[other].half_seq,
-					as->half_seq);
-				sinks[other].half_valid = false;
-#if defined(CONFIG_BSIM_OBSERVER)
-				bsim_observer_stale_half();
-#endif
-			} else {
-				/* Other half is newer — discard this (older) half. */
-				LOG_INF("Mode A: stale half discarded (ts %u < %u, seq %u < %u)",
-					as->half_ts, sinks[other].half_ts, as->half_seq,
-					sinks[other].half_seq);
-				as->half_valid = false;
-#if defined(CONFIG_BSIM_OBSERVER)
-				bsim_observer_stale_half();
-#endif
-			}
+		if (audio_sink_push(stereo_out, spc * 2) < 0) {
+			audio_perf_push_failure();
 		}
 
 	} else {
@@ -907,7 +906,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 		audio_volume_apply(stereo_out, spc * 2);
 
 #if defined(CONFIG_BSIM_OBSERVER)
-		bsim_observer_pre_push(valid);
+		bsim_observer_pre_push(valid, valid);
 #endif
 		if (audio_sink_push(stereo_out, spc * 2) < 0) {
 			audio_perf_push_failure();

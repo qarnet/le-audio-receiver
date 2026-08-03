@@ -52,15 +52,22 @@ void bsim_observer_release_sink_stop(void);
 void bsim_observer_missing_ts(void);
 
 /**
- * Record the source-validity of the SDU about to be pushed (called by
- * the production receive path immediately before audio_sink_push):
- * mono/Mode B = packet BT_ISO_FLAGS_VALID; Mode A = both paired halves
- * had VALID set.  Affects only the test oracle, never production state.
+ * Record the source-validity of the two halves about to be pushed
+ * (called by the production receive path immediately before
+ * audio_sink_push): mono/Mode B = packet BT_ISO_FLAGS_VALID for both
+ * halves; Mode A = each half's own original VALID flag (a PLC half is
+ * never source-valid).  Affects only the test oracle, never production
+ * state.
  */
-void bsim_observer_pre_push(bool src_valid);
+void bsim_observer_pre_push(bool l_valid, bool r_valid);
 
-/** Source validity of the most recently recorded pre-push SDU. */
+/** Source validity of the most recently recorded pre-push SDU (both
+ *  halves valid). */
 bool bsim_observer_get_last_push_src_valid(void);
+
+/** Per-half source validity of the most recently recorded pre-push SDU. */
+bool bsim_observer_get_last_push_l_valid(void);
+bool bsim_observer_get_last_push_r_valid(void);
 
 /* ── queries for the receiver scenario driver ────────────────────── */
 

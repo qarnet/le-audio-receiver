@@ -38,7 +38,15 @@ SCENARIOS = {
     "unsupported_source_direction": (1, "mono", 1),
     "no_free_sink_slot": (1, "mono", 1),
     "invalid_codec_fields": (1, "mono", 1),
+    "modea_one_cis_loss_10ms": (2, "stereo", 2),
 }
+
+# Scheduled single-CIS losses in the Mode A one-CIS-loss scenario: the
+# right stream pauses mid-stream for a bounded window and its CIS loses
+# exactly this many events; the receiver emits exactly this many
+# post-start concealed pushes and post-start PLC frames (the unaffected
+# channel stays valid).
+MODEA_LOSS_COUNT = 18
 
 # ── log parsing ──────────────────────────────────────────────────────
 
@@ -201,6 +209,7 @@ def check_scenario(scenario, recv, cli, known):
         "modeb_10ms",
         "modeb_7p5ms",
         "invalid_sdu_resume_10ms",
+        "modea_one_cis_loss_10ms",
     ):
         if seg != 1:
             errs.append("seg %d != 1" % seg)
@@ -224,6 +233,23 @@ def check_scenario(scenario, recv, cli, known):
                 errs.append("derr1 %s != 0" % r.get("derr1"))
             if r.get("obs_mal") != 0:
                 errs.append("obs_mal %s != 0" % r.get("obs_mal"))
+
+        if scenario == "modea_one_cis_loss_10ms":
+            # Exactly the scheduled losses produced post-start PLC and
+            # concealed pushes (the unaffected channel stays valid).
+            if r.get("plc1", 0) != r.get("splc1", 0) + MODEA_LOSS_COUNT:
+                errs.append(
+                    "post-start PLC (plc1 %s != splc1 %s + %d)"
+                    % (r.get("plc1"), r.get("splc1"), MODEA_LOSS_COUNT)
+                )
+        else:
+            # Zero post-start PLC: every PLC frame happened during the
+            # startup phase (source-valid boundary).
+            if r.get("plc1", 0) != r.get("splc1", 0):
+                errs.append(
+                    "post-start PLC (plc1 %s != splc1 %s)"
+                    % (r.get("plc1"), r.get("splc1"))
+                )
 
         # Exact known hashes.
         for field, key in (("full", "h1"), ("l", "lh1"), ("r", "rh1")):
@@ -258,12 +284,8 @@ def check_scenario(scenario, recv, cli, known):
                 errs.append(
                     "total1 %s != pinned %d" % (r.get("total1"), known["known_total"])
                 )
-        # Zero post-start PLC: every PLC frame happened during the
-        # startup phase (source-valid boundary).
-        if r.get("plc1", 0) != r.get("splc1", 0):
-            errs.append("post-start PLC (plc1 %s != splc1 %s)"
-                        % (r.get("plc1"), r.get("splc1")))
-        # No missing-TS events in any audio scenario.
+        # No missing-TS events in any audio scenario (the loss scenario's
+        # post-start PLC is checked above).
         if r.get("obs_mts", 0) != 0:
             errs.append("obs_mts %d != 0 (missing ISO TS flag)" % r.get("obs_mts"))
 
@@ -278,6 +300,14 @@ def check_scenario(scenario, recv, cli, known):
             if c["sends0"] != 110 or c["sends1"] != 110:
                 errs.append(
                     "client sends %d/%d != 110/110" % (c["sends0"], c["sends1"])
+                )
+        elif scenario == "modea_one_cis_loss_10ms":
+            # The right stream pauses mid-stream for a bounded window
+            # (its CIS loses those events); both streams still send 110.
+            if c["sends0"] != 110 or c["sends1"] != 110:
+                errs.append(
+                    "client sends %d/%d != 110/110 (loss scenario)"
+                    % (c["sends0"], c["sends1"])
                 )
         else:
             if c["sends0"] != 100:
@@ -319,11 +349,15 @@ def check_scenario(scenario, recv, cli, known):
         # Sink-stop ordering proof: the release path stopped the sink
         # (segment finalize) before the ACL disconnect, by event sequence.
         if r.get("obs_rel_ss", -1) != 1:
-            errs.append("obs_rel_ss %s != 1 (release must stop the sink)"
-                        % r.get("obs_rel_ss", -1))
+            errs.append(
+                "obs_rel_ss %s != 1 (release must stop the sink)"
+                % r.get("obs_rel_ss", -1)
+            )
         if r.get("rel_ss_seq", -1) >= r.get("disc_seq", -1):
-            errs.append("release sink-stop seq %s not before disconnect seq %s"
-                        % (r.get("rel_ss_seq", -1), r.get("disc_seq", -1)))
+            errs.append(
+                "release sink-stop seq %s not before disconnect seq %s"
+                % (r.get("rel_ss_seq", -1), r.get("disc_seq", -1))
+            )
         if c["sends0"] < 20:
             errs.append("client sends0 %d < 20" % c["sends0"])
         if c["relrsps"] != 1:

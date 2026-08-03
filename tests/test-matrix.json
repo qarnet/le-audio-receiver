@@ -418,6 +418,65 @@
       "stateful": true
     },
     {
+      "source": "src/audio_modea.c",
+      "classification": "direct",
+      "suites": [
+        {
+          "name": "modea",
+          "evidence": "direct"
+        }
+      ],
+      "public_outcomes": [
+        {
+          "api": "modea_config",
+          "outcome": "void",
+          "witness": "test_equal_ts_pairs_and_emits_once"
+        },
+        {
+          "api": "modea_reset",
+          "outcome": "void",
+          "witness": "test_reset_clears_all"
+        },
+        {
+          "api": "modea_store",
+          "outcome": "MODEA_ACTION_EMIT",
+          "witness": "test_equal_ts_pairs_and_emits_once"
+        },
+        {
+          "api": "modea_store",
+          "outcome": "MODEA_ACTION_NONE",
+          "witness": "test_consecutive_losses"
+        },
+        {
+          "api": "modea_store",
+          "outcome": "MODEA_ACTION_DROP",
+          "witness": "test_queue_overflow_drops_oldest"
+        },
+        {
+          "api": "modea_get_stats",
+          "outcome": "void",
+          "witness": "test_push_plc_accounting"
+        }
+      ],
+      "state_transitions": [
+        {
+          "transition": "both-halves-pending->resolved-equal-ts",
+          "witness": "test_equal_ts_pairs_and_emits_once"
+        },
+        {
+          "transition": "older-half-confirmed-missing->resolved-plc-backed",
+          "witness": "test_right_missing_lost_callback"
+        },
+        {
+          "transition": "queue-full->overflow-drop-counted",
+          "witness": "test_queue_overflow_drops_oldest"
+        }
+      ],
+      "function_exclusions": [],
+      "hardware_acceptance": [],
+      "stateful": true
+    },
+    {
       "source": "src/audio_offload.c",
       "classification": "direct",
       "suites": [
@@ -915,94 +974,94 @@
       "excluded_from_numeric": true
     },
     {
-        "source": "src/bt_pairing_policy.c",
-        "classification": "direct",
-        "suites": [
-            {
-                "name": "bt_pairing_policy",
-                "evidence": "direct"
-            }
-        ],
-        "public_outcomes": [
-            {
-                "api": "bt_pairing_policy_init",
-                "outcome": "void",
-                "witness": "test_init_open_default"
-            },
-            {
-                "api": "bt_pairing_policy_set_bonds",
-                "outcome": "0",
-                "witness": "test_set_bonds_bonded_only"
-            },
-            {
-                "api": "bt_pairing_policy_set_bonds",
-                "outcome": "-ENOMEM",
-                "witness": "test_set_bonds_overflow_atomic"
-            },
-            {
-                "api": "bt_pairing_policy_get_mode",
-                "outcome": "BT_PAIRING_POLICY_MODE_OPEN",
-                "witness": "test_init_open_default"
-            },
-            {
-                "api": "bt_pairing_policy_get_mode",
-                "outcome": "BT_PAIRING_POLICY_MODE_BONDED_ONLY",
-                "witness": "test_set_bonds_bonded_only"
-            },
-            {
-                "api": "bt_pairing_policy_get_entry_count",
-                "outcome": "0",
-                "witness": "test_init_open_default"
-            },
-            {
-                "api": "bt_pairing_policy_get_entry_count",
-                "outcome": "2",
-                "witness": "test_set_bonds_bonded_only"
-            },
-            {
-                "api": "bt_pairing_policy_pairing_accept",
-                "outcome": "BT_PAIRING_POLICY_ACCEPT",
-                "witness": "test_pairing_accept_open_accepts_any"
-            },
-            {
-                "api": "bt_pairing_policy_pairing_accept",
-                "outcome": "BT_PAIRING_POLICY_REJECT",
-                "witness": "test_pairing_accept_bonded_only_rejects_unbonded"
-            },
-            {
-                "api": "bt_pairing_policy_mark_bonded",
-                "outcome": "0",
-                "witness": "test_mark_bonded_adds_and_sets_bonded_only"
-            },
-            {
-                "api": "bt_pairing_policy_mark_bonded",
-                "outcome": "-ENOMEM",
-                "witness": "test_mark_bonded_full_snapshot"
-            },
-            {
-                "api": "bt_pairing_policy_request_open",
-                "outcome": "void",
-                "witness": "test_request_open_resets_to_open"
-            },
-            {
-                "api": "bt_pairing_policy_snapshot",
-                "outcome": "void",
-                "witness": "test_snapshot_atomic"
-            }
-        ],
-        "state_transitions": [
-            {
-                "transition": "open->bonded-only",
-                "witness": "test_set_bonds_bonded_only"
-            },
-            {
-                "transition": "bonded-only->open",
-                "witness": "test_request_open_resets_to_open"
-            }
-        ],
-        "function_exclusions": [],
-        "hardware_acceptance": [],
-        "stateful": true
+      "source": "src/bt_pairing_policy.c",
+      "classification": "direct",
+      "suites": [
+        {
+          "name": "bt_pairing_policy",
+          "evidence": "direct"
+        }
+      ],
+      "public_outcomes": [
+        {
+          "api": "bt_pairing_policy_init",
+          "outcome": "void",
+          "witness": "test_init_open_default"
+        },
+        {
+          "api": "bt_pairing_policy_set_bonds",
+          "outcome": "0",
+          "witness": "test_set_bonds_bonded_only"
+        },
+        {
+          "api": "bt_pairing_policy_set_bonds",
+          "outcome": "-ENOMEM",
+          "witness": "test_set_bonds_overflow_atomic"
+        },
+        {
+          "api": "bt_pairing_policy_get_mode",
+          "outcome": "BT_PAIRING_POLICY_MODE_OPEN",
+          "witness": "test_init_open_default"
+        },
+        {
+          "api": "bt_pairing_policy_get_mode",
+          "outcome": "BT_PAIRING_POLICY_MODE_BONDED_ONLY",
+          "witness": "test_set_bonds_bonded_only"
+        },
+        {
+          "api": "bt_pairing_policy_get_entry_count",
+          "outcome": "0",
+          "witness": "test_init_open_default"
+        },
+        {
+          "api": "bt_pairing_policy_get_entry_count",
+          "outcome": "2",
+          "witness": "test_set_bonds_bonded_only"
+        },
+        {
+          "api": "bt_pairing_policy_pairing_accept",
+          "outcome": "BT_PAIRING_POLICY_ACCEPT",
+          "witness": "test_pairing_accept_open_accepts_any"
+        },
+        {
+          "api": "bt_pairing_policy_pairing_accept",
+          "outcome": "BT_PAIRING_POLICY_REJECT",
+          "witness": "test_pairing_accept_bonded_only_rejects_unbonded"
+        },
+        {
+          "api": "bt_pairing_policy_mark_bonded",
+          "outcome": "0",
+          "witness": "test_mark_bonded_adds_and_sets_bonded_only"
+        },
+        {
+          "api": "bt_pairing_policy_mark_bonded",
+          "outcome": "-ENOMEM",
+          "witness": "test_mark_bonded_full_snapshot"
+        },
+        {
+          "api": "bt_pairing_policy_request_open",
+          "outcome": "void",
+          "witness": "test_request_open_resets_to_open"
+        },
+        {
+          "api": "bt_pairing_policy_snapshot",
+          "outcome": "void",
+          "witness": "test_snapshot_atomic"
+        }
+      ],
+      "state_transitions": [
+        {
+          "transition": "open->bonded-only",
+          "witness": "test_set_bonds_bonded_only"
+        },
+        {
+          "transition": "bonded-only->open",
+          "witness": "test_request_open_resets_to_open"
+        }
+      ],
+      "function_exclusions": [],
+      "hardware_acceptance": [],
+      "stateful": true
     },
     {
       "source": "src/flpr_audio_process.c",

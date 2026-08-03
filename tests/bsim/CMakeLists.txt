@@ -7,6 +7,7 @@ target_sources(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/bt_bap.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/bt_pairing_policy.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio_decode.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio_modea.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio_stats.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio_drift.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio_rate_convert.c

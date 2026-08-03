@@ -43,6 +43,7 @@ static const char *scenario_names[] = {
 	"unsupported_source_direction", /* 13 */
 	"no_free_sink_slot",            /* 14 */
 	"invalid_codec_fields",         /* 15 */
+	"modea_one_cis_loss_10ms",      /* 16 */
 };
 
 static void test_init_f(void)
@@ -95,18 +96,6 @@ static bool scenario_observer_ok(enum bsim_sink_scenario scn)
 	default:
 		return true;
 	}
-}
-
-static void emit_segment_fields(const char *suffix, const struct bsim_sink_segment *s)
-{
-	printk("pushes%s=%u szero%s=%u splc%s=%u total%s=%u derr%s=%u mal%s=%u "
-	       "h%s=0x%08X lh%s=0x%08X rh%s=0x%08X lemin%s=%d lemax%s=%d "
-	       "remin%s=%d remax%s=%d samples%s=%u\n",
-	       suffix, s->pushes, suffix, s->startup_zero, suffix, s->startup_plc, suffix,
-	       s->total_frames, suffix, s->decode_errors, suffix, s->malformed_samples, suffix,
-	       s->full_hash, suffix, s->l_hash, suffix, s->r_hash, suffix, s->l_energy_min, suffix,
-	       s->l_energy_max, suffix, s->r_energy_min, suffix, s->r_energy_max, suffix,
-	       s->configured_samples);
 }
 
 static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
@@ -280,6 +269,7 @@ SCENARIO_MAIN(BSIM_SCN_RECONNECT_SECOND_STREAM_10MS, 1)
 SCENARIO_MAIN(BSIM_SCN_UNSUPPORTED_SOURCE_DIRECTION, 1)
 SCENARIO_MAIN(BSIM_SCN_NO_FREE_SINK_SLOT, 1)
 SCENARIO_MAIN(BSIM_SCN_INVALID_CODEC_FIELDS, 1)
+SCENARIO_MAIN(BSIM_SCN_MODEA_ONE_CIS_LOSS_10MS, 2)
 
 static const struct bst_test_instance test_def[] = {
 	{
@@ -315,6 +305,13 @@ static const struct bst_test_instance test_def[] = {
 		.test_descr = "T4 Mode A 10 ms reverse start",
 		.test_pre_init_f = test_init_f,
 		.test_main_f = test_main_BSIM_SCN_MODEA_REVERSE_START_10MS,
+		.test_tick_f = test_tick_f,
+	},
+	{
+		.test_id = "modea_one_cis_loss_10ms",
+		.test_descr = "T4 Mode A 10 ms with 3 scheduled right-CIS losses",
+		.test_pre_init_f = test_init_f,
+		.test_main_f = test_main_BSIM_SCN_MODEA_ONE_CIS_LOSS_10MS,
 		.test_tick_f = test_tick_f,
 	},
 	{

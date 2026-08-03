@@ -68,6 +68,7 @@ enum bsim_scenario {
 	SCN_UNSUPPORTED_SOURCE_DIRECTION,
 	SCN_NO_FREE_SINK_SLOT,
 	SCN_INVALID_CODEC_FIELDS,
+	SCN_MODEA_ONE_CIS_LOSS_10MS,
 };
 
 /* ── globals ─────────────────────────────────────────────────────── */
@@ -1232,10 +1233,8 @@ static void scn15_build_base(void)
 	 *   FRAME_LEN = 0x03 0x04 <2 bytes LE16>    (120)
 	 * No frame-blocks LTV (omitted when 1). */
 	uint8_t base[16] = {
-		0x02, 0x01, 0x08,
-		0x02, 0x02, 0x01,
-		0x05, 0x03, 0x01, 0x00, 0x00, 0x00,
-		0x03, 0x04, 0x78, 0x00,
+		0x02, 0x01, 0x08, 0x02, 0x02, 0x01, 0x05, 0x03,
+		0x01, 0x00, 0x00, 0x00, 0x03, 0x04, 0x78, 0x00,
 	};
 
 	scn15_base_len = sizeof(base);
@@ -1608,6 +1607,86 @@ static void test_main_normal_modea_reverse_start(void)
 	}
 }
 
+/*
+ * Scenario 16: Mode A with a bounded mid-stream pause on the right
+ * stream (TX paused ~200 ms of sim time after the first 50 sends).  The
+ * controller keeps the CIG running, so the right CIS transmits no data
+ * for those events and the receiver's ISOAL delivers LOST callbacks on
+ * the right channel only — the same observable single-CIS loss as an
+ * RF-erased burst.  The receiver's Mode A event assembler must keep
+ * output cadence: every lost right event is concealed (PLC) and paired
+ * with its left half, so the receiver still produces 100 pushes.  The
+ * unaffected left channel stays byte-identical to the lossless modea
+ * oracle (pinned L hash).  Both streams send 110 SDUs (the pause only
+ * delays the right stream).
+ */
+static void test_main_normal_modea_one_cis_loss(void)
+{
+	struct tx_param tx[2] = {
+		{.octets_per_frame = 120,
+		 .freq_hz = 48000,
+		 .frame_duration_us = 10000,
+		 .chan_count = 1,
+		 .channel_idx = 0},
+		{.octets_per_frame = 120,
+		 .freq_hz = 48000,
+		 .frame_duration_us = 10000,
+		 .chan_count = 1,
+		 .channel_idx = 1},
+	};
+	struct bt_bap_lc3_preset *presets[] = {&preset_48_4_1_fl, &preset_48_4_1_fr};
+	int err = client_setup();
+
+	if (err == 0) {
+		err = scan_and_connect();
+	}
+	if (err == 0) {
+		err = discover_sinks();
+	}
+	if (err == 0) {
+		bsim_tx_set_required_streams(2);
+		for (size_t i = 0U; i < 2U; i++) {
+			err = tx_register(i, &tx[i]);
+			if (err != 0) {
+				break;
+			}
+			bsim_tx_set_send_limit(&streams[i], 110);
+		}
+	}
+	if (err == 0) {
+		err = stream_up(presets, 2, false);
+	}
+	if (err == 0) {
+		/* Mid-stream, both channels flowing: pause the right stream
+		 * for a bounded window so its CIS loses those events. */
+		err = wait_for_sends(0, 50);
+	}
+	if (err == 0) {
+		err = wait_for_sends(1, 50);
+	}
+	if (err == 0) {
+		bsim_tx_pause(&streams[1]);
+		printk("CLI right stream paused (loss window)\n");
+		k_sleep(K_MSEC(200));
+		bsim_tx_resume(&streams[1]);
+		printk("CLI right stream resumed\n");
+	}
+	if (err == 0) {
+		err = wait_for_sends(0, 110);
+	}
+	if (err == 0) {
+		err = wait_for_sends(1, 110);
+	}
+	if (err == 0) {
+		/* Let the in-flight SDUs drain to the receiver. */
+		k_sleep(K_MSEC(TEARDOWN_MARGIN_MS));
+		client_pass("modea_one_cis_loss_10ms");
+	}
+	if (err != 0 && bst_result != Failed) {
+		FAIL("bsim_client: modea_one_cis_loss_10ms failed: %d\n", err);
+	}
+}
+
 static void test_main_normal_modeb_10ms(void)
 {
 	struct tx_param tx = {.octets_per_frame = 120,
@@ -1678,6 +1757,13 @@ static const struct bst_test_instance test_def[] = {
 		.test_descr = "T4 Mode A 10 ms reverse start",
 		.test_pre_init_f = test_init_f,
 		.test_main_f = test_main_normal_modea_reverse_start,
+		.test_tick_f = test_tick_f,
+	},
+	{
+		.test_id = "modea_one_cis_loss_10ms",
+		.test_descr = "T4 Mode A 10 ms with 3 scheduled right-CIS losses",
+		.test_pre_init_f = test_init_f,
+		.test_main_f = test_main_normal_modea_one_cis_loss,
 		.test_tick_f = test_tick_f,
 	},
 	{

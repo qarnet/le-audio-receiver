@@ -51,44 +51,61 @@ declare -A KNOWN_FULL=(
     [mono_10ms]=0x22AB5C0D
     [mono_7p5ms]=0x01A3EB05
     [modea_10ms]=0xBAE24F7E
-    [modea_7p5ms]=0x00A5D3F9
+    [modea_7p5ms]=0x2D95D15C
     [modea_reverse_start_10ms]=0xBAE24F7E
     [modeb_10ms]=0xBAE24F7E
     [modeb_7p5ms]=0xFF82CADB
     [invalid_sdu_resume_10ms]=0x0C61918D
+    [modea_one_cis_loss_10ms]=0x30D6BAF0
     [reconnect_second_stream_10ms]=0x22AB5C0D
 )
 declare -A KNOWN_L=(
     [mono_10ms]=0x32777D65
     [mono_7p5ms]=0x30F0308C
     [modea_10ms]=0x32777D65
-    [modea_7p5ms]=0xEE461704
+    [modea_7p5ms]=0xE1D60E7B
     [modea_reverse_start_10ms]=0x32777D65
     [modeb_10ms]=0x32777D65
     [modeb_7p5ms]=0x30F0308C
+    [modea_one_cis_loss_10ms]=0x32777D65
 )
 declare -A KNOWN_R=(
     [mono_10ms]=0x32777D65
     [mono_7p5ms]=0x30F0308C
     [modea_10ms]=0xD3EE3722
-    [modea_7p5ms]=0x37E155C8
+    [modea_7p5ms]=0xA219B61E
     [modea_reverse_start_10ms]=0xD3EE3722
     [modeb_10ms]=0xD3EE3722
     [modeb_7p5ms]=0x129591EE
+    [modea_one_cis_loss_10ms]=0x9859F1D8
 )
 
 # Pinned exact total decoder invocations per scenario (deterministic,
 # including unpaired-half decodes at the CIS activation skew).
+#
+# NOTE (Mode A re-baseline): the Mode A event assembler (audio_modea)
+# defers decode to event resolution and synthesizes PLC for a missing
+# channel, so Mode A totals are now exactly 2*(pushes+transients) — the
+# old immediate-decode design wasted one decode per unpaired half.  The
+# 7.5 ms startup transients re-shuffle under sentinel pairing (trans
+# 9→13, splc 22→24, zero post-start PLC preserved), so its hashes and
+# total changed (0x00A5D3F9/0xEE461704/0x37E155C8/236 →
+# 0x2D95D15C/0xE1D60E7B/0xA219B61E/226); modea_10ms/reverse/first_stop
+# totals rose by exactly 1 (215→216, 215→216, 85→86) with hashes
+# unchanged.  The one-CIS-loss scenario pins the lossless-mode left
+# hash (0x32777D65 — the unaffected channel is byte-identical) and a
+# deterministic right hash with 18 PLC concealments (0x9859F1D8).
 declare -A KNOWN_TOTAL=(
     [mono_10ms]=108
     [mono_7p5ms]=111
-    [modea_10ms]=215
-    [modea_7p5ms]=236
-    [modea_reverse_start_10ms]=215
+    [modea_10ms]=216
+    [modea_7p5ms]=226
+    [modea_reverse_start_10ms]=216
     [modeb_10ms]=216
     [modeb_7p5ms]=222
     [invalid_sdu_resume_10ms]=108
-    [modea_first_stop_10ms]=85
+    [modea_one_cis_loss_10ms]=216
+    [modea_first_stop_10ms]=86
     [release_without_disable_10ms]=56
     [disconnect_streaming_10ms]=63
     [reconnect_second_stream_10ms]=63
@@ -104,6 +121,7 @@ MATRIX=(
     "modeb_10ms 2"
     "modeb_7p5ms 2"
     "invalid_sdu_resume_10ms 2"
+    "modea_one_cis_loss_10ms 2"
     "modea_first_stop_10ms 1"
     "release_without_disable_10ms 1"
     "disconnect_streaming_10ms 1"
@@ -358,7 +376,7 @@ done
 echo ""
 echo "Known full/L/R hashes (pinned):"
 for scn in mono_10ms mono_7p5ms modea_10ms modea_7p5ms modea_reverse_start_10ms \
-           modeb_10ms modeb_7p5ms invalid_sdu_resume_10ms; do
+           modeb_10ms modeb_7p5ms invalid_sdu_resume_10ms modea_one_cis_loss_10ms; do
     printf "  %-28s full=%-12s L=%-12s R=%-12s\n" "$scn" "${KNOWN_FULL[$scn]:-0x00000000}" \
         "${KNOWN_L[$scn]:-0x00000000}" "${KNOWN_R[$scn]:-0x00000000}"
 done
@@ -367,7 +385,7 @@ if [ "$BASELINE" = "1" ]; then
     echo ""
     echo "=== BASELINE HASHES (pin these into KNOWN_* after two identical runs) ==="
     for scn in mono_10ms mono_7p5ms modea_10ms modea_7p5ms modea_reverse_start_10ms \
-               modeb_10ms modeb_7p5ms invalid_sdu_resume_10ms; do
+               modeb_10ms modeb_7p5ms invalid_sdu_resume_10ms modea_one_cis_loss_10ms; do
         printf "  %-28s full=%-12s L=%-12s R=%-12s\n" "$scn" "${H_RUN1[$scn]:-FAIL}" \
             "${H_L1[$scn]:-FAIL}" "${H_R1[$scn]:-FAIL}"
     done

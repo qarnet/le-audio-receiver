@@ -202,6 +202,7 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 			seq = s->seq_num;
 			inject = s->inject_pending && s->seq_num == s->inject_at_seq;
 			gen = s->generation;
+
 			s->in_flight++;
 			k_mutex_unlock(&tx_lock);
 
