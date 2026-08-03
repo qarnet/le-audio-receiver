@@ -127,31 +127,31 @@ class TestReceiverSerialMocked(unittest.TestCase):
         """Lines containing 'error' or 'fail' should go to stderr."""
         self.mock_ser.reset_input_buffer = MagicMock()
         self.mock_ser.read.side_effect = [
-            b"bt unpair\r\nbt_unpair failed: -5\r\nuart:~$ ",
+            b"bt unpair\r\nbt_bap_pairing_reset failed: -5\r\nuart:~$ ",
             b"",
         ]
 
         stdout, stderr = self.rs.send_command("bt unpair", wait_ms=100)
-        self.assertIn("bt_unpair failed", stderr)
+        self.assertIn("bt_bap_pairing_reset failed", stderr)
         self.assertEqual(stdout, "")
 
     def test_bt_unpair_success(self):
-        """bt_unpair with 'All bonds cleared' returns True."""
+        """bt_unpair with reset success text returns True."""
         self.mock_ser.reset_input_buffer = MagicMock()
         self.mock_ser.read.side_effect = [
-            b"bt unpair\r\nAll bonds cleared.\r\nuart:~$ ",
+            b"bt unpair\r\nPairing mode reset: bonds cleared; open pairing enabled.\r\nuart:~$ ",
             b"",
         ]
 
         success, output = self.rs.bt_unpair()
         self.assertTrue(success)
-        self.assertIn("All bonds cleared", output)
+        self.assertIn("Pairing mode reset", output)
 
     def test_bt_unpair_failure(self):
         """bt_unpair with error returns False."""
         self.mock_ser.reset_input_buffer = MagicMock()
         self.mock_ser.read.side_effect = [
-            b"bt unpair\r\nbt_unpair failed: -5\r\nuart:~$ ",
+            b"bt unpair\r\nbt_bap_pairing_reset failed: -5\r\nuart:~$ ",
             b"",
         ]
 
@@ -669,7 +669,7 @@ class TestFailureModeClassification(unittest.TestCase):
         rs._get_serial = MagicMock(return_value=mock_ser)
         mock_ser.reset_input_buffer = MagicMock()
         mock_ser.read.side_effect = [
-            b"bt unpair\r\nbt_unpair failed: -5\r\nuart:~$ ",
+            b"bt unpair\r\nbt_bap_pairing_reset failed: -5\r\nuart:~$ ",
             b"",
         ]
         success, _ = rs.bt_unpair()

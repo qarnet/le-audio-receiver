@@ -22,6 +22,7 @@ target_sources(app PRIVATE
   src/main.c
   src/app_lifecycle.c
   src/bt_bap.c
+  src/bt_pairing_policy.c
   src/audio_decode.c
   src/audio_i2s.c
   src/audio_drift.c

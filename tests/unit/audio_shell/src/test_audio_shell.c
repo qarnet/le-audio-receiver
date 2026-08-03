@@ -292,7 +292,7 @@ ZTEST(audio_shell, test_stop_exactly_once)
 	zassert_equal(test_shell_sink_stop_calls(), 1);
 }
 
-/* bt unpair success: zero result and success text. */
+/* bt unpair success: zero result and stable pairing-reset text. */
 ZTEST(audio_shell, test_bt_unpair_success)
 {
 	test_shell_reset_counters();
@@ -302,7 +302,7 @@ ZTEST(audio_shell, test_bt_unpair_success)
 	const char *out = run_cmd("bt unpair", &rc);
 
 	zassert_equal(rc, 0);
-	assert_output_has_line(out, "All bonds cleared.");
+	assert_output_has_line(out, "Pairing mode reset: bonds cleared; open pairing enabled.");
 	zassert_equal(test_shell_unpair_calls(), 1);
 }
 
@@ -316,7 +316,7 @@ ZTEST(audio_shell, test_bt_unpair_error_propagation)
 	const char *out = run_cmd("bt unpair", &rc);
 
 	zassert_equal(rc, -EACCES);
-	assert_output_contains(out, "bt_unpair failed: -13");
+	assert_output_contains(out, "bt_bap_pairing_reset failed: -13");
 }
 
 /* The AUDIO_SHELL_TEST wrapper seam behaves identically to the

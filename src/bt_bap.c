@@ -41,6 +41,7 @@
 #include "audio_perf.h"
 #include "audio_volume.h"
 #include "audio_offload.h"
+#include "bt_pairing_policy.h"
 #include "stream_lifecycle.h"
 
 #if defined(CONFIG_BSIM_OBSERVER)
@@ -100,6 +101,12 @@ static const struct bt_audio_codec_cap lc3_source_codec_cap =
 #endif /* CONFIG_BSIM_SOURCE_ASE */
 
 static struct bt_conn *default_conn;
+
+/* Pairing-mode policy (OPEN / BONDED_ONLY) and the lock serializing the
+ * advertising set and controller-filter state between the main thread,
+ * the shell thread, and future button work handlers. */
+static struct bt_pairing_policy pairing_policy;
+static K_MUTEX_DEFINE(pairing_adv_lock);
 
 /* stream ops — defined below; sink_release_slot re-registers them */
 static struct bt_bap_stream_ops stream_ops;
@@ -1147,6 +1154,18 @@ static int set_available_contexts(void)
 static enum bt_security_err pairing_accept(struct bt_conn *conn,
 					   const struct bt_conn_pairing_feat *const feat)
 {
+	const bt_addr_le_t *addr = bt_conn_get_dst(conn);
+
+	/* Runs on the BT RX workqueue (cooperative): pure policy check only,
+	 * no HCI commands here.  The controller filter is the primary
+	 * enforcement; this is defense in depth. */
+	if (bt_pairing_policy_pairing_accept(&pairing_policy, addr) == BT_PAIRING_POLICY_REJECT) {
+		char a[BT_ADDR_LE_STR_LEN];
+
+		bt_addr_le_to_str(addr, a, sizeof(a));
+		LOG_WRN("Pairing rejected (BONDED_ONLY): unbonded peer %s", a);
+		return BT_SECURITY_ERR_PAIR_NOT_ALLOWED;
+	}
 	LOG_INF("Pairing accepted");
 	return BT_SECURITY_ERR_SUCCESS;
 }
@@ -1154,6 +1173,18 @@ static enum bt_security_err pairing_accept(struct bt_conn *conn,
 static void pairing_complete(struct bt_conn *conn, bool bonded)
 {
 	LOG_INF("Pairing complete, bonded: %d", bonded);
+	if (bonded) {
+		/* Mark desired policy state only — no HCI from this
+		 * callback.  The controller filter is rebuilt at the next
+		 * advertising restart from thread context. */
+		int err = bt_pairing_policy_mark_bonded(&pairing_policy, bt_conn_get_dst(conn));
+
+		if (err) {
+			LOG_WRN("Pairing policy full (%d): new bond not on the "
+				"controller filter until the next rebuild",
+				err);
+		}
+	}
 }
 
 static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
@@ -1170,10 +1201,108 @@ static struct bt_conn_auth_cb conn_auth_cb = {
 	.pairing_accept = pairing_accept,
 };
 
+/* ── pairing-mode filter / advertising restart helpers ────────────── */
+
+struct bond_collector {
+	bt_addr_le_t addrs[BT_PAIRING_POLICY_MAX_ENTRIES];
+	size_t count;
+};
+
+static void collect_bond(const struct bt_bond_info *info, void *user_data)
+{
+	struct bond_collector *c = user_data;
+
+	/* Deleted identities surface as BT_ADDR_LE_ANY (all-zero address);
+	 * they can never enter the controller filter and are not stored. */
+	if (bt_addr_le_cmp(&info->addr, BT_ADDR_LE_ANY) == 0) {
+		return;
+	}
+	if (c->count < BT_PAIRING_POLICY_MAX_ENTRIES) {
+		bt_addr_le_copy(&c->addrs[c->count], &info->addr);
+		c->count++;
+	}
+}
+
+static void find_connected_peer(struct bt_conn *conn, void *data)
+{
+	struct bt_conn **peer = data;
+	struct bt_conn_info info;
+
+	if (*peer == NULL && bt_conn_get_info(conn, &info) == 0 &&
+	    info.state == BT_CONN_STATE_CONNECTED) {
+		*peer = bt_conn_ref(conn);
+	}
+}
+
+/*
+ * Advertising restart with the pairing-mode filter, assuming
+ * pairing_adv_lock is held.  Sequence:
+ *   1. stop active advertising (already-stopped is benign, no warning);
+ *   2. clear the controller filter accept list while no role uses it;
+ *   3. enumerate persisted bonds and rebuild the policy snapshot;
+ *   4. select OPEN or BONDED_ONLY parameters (filter connections only,
+ *      scan responses stay visible);
+ *   5. update extended-advertising parameters while stopped;
+ *   6. start advertising.
+ * Every failure propagates — no step reports false success.
+ */
+static int bt_bap_restart_advertising_locked(void)
+{
+	int err;
+
+	err = bt_le_ext_adv_stop(adv);
+	if (err) {
+		LOG_ERR("Adv stop failed: %d", err);
+		return err;
+	}
+
+	err = bt_le_filter_accept_list_clear();
+	if (err) {
+		LOG_ERR("Filter accept list clear failed: %d", err);
+		return err;
+	}
+
+	struct bond_collector collector = {0};
+
+	bt_foreach_bond(BT_ID_DEFAULT, collect_bond, &collector);
+	err = bt_pairing_policy_set_bonds(&pairing_policy, collector.addrs, collector.count);
+	if (err) {
+		LOG_ERR("Pairing policy rebuild failed: %d (%zu bonds)", err, collector.count);
+		return err;
+	}
+
+	struct bt_le_adv_param param = *BT_BAP_ADV_PARAM_CONN_QUICK;
+
+	if (bt_pairing_policy_get_mode(&pairing_policy) == BT_PAIRING_POLICY_MODE_BONDED_ONLY) {
+		param.options |= BT_LE_ADV_OPT_FILTER_CONN;
+		for (size_t i = 0; i < bt_pairing_policy_get_entry_count(&pairing_policy); i++) {
+			err = bt_le_filter_accept_list_add(
+				bt_pairing_policy_get_entry(&pairing_policy, i));
+			if (err) {
+				LOG_ERR("Filter accept list add failed: %d", err);
+				return err;
+			}
+		}
+	}
+
+	err = bt_le_ext_adv_update_param(adv, &param);
+	if (err) {
+		LOG_ERR("Adv param update failed: %d", err);
+		return err;
+	}
+	err = bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
+	if (err) {
+		LOG_ERR("Adv start failed: %d", err);
+	}
+	return err;
+}
+
 /* ── public API ───────────────────────────────────────────────────── */
 
 int bt_bap_init(void)
 {
+	bt_pairing_policy_init(&pairing_policy);
+
 	const struct bt_pacs_register_param pacs_param = {
 		.snk_pac = true,
 		.snk_loc = true,
@@ -1244,10 +1373,65 @@ int bt_bap_init(void)
 
 int bt_bap_restart_advertising(void)
 {
-	return bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
+	int err;
+
+	k_mutex_lock(&pairing_adv_lock, K_FOREVER);
+	err = bt_bap_restart_advertising_locked();
+	k_mutex_unlock(&pairing_adv_lock);
+	return err;
 }
 
 void bt_bap_wait_disconnect(void)
 {
 	k_sem_take(&sem_disconnected, K_FOREVER);
+}
+
+int bt_bap_pairing_reset(void)
+{
+	struct bt_conn *peer = NULL;
+	int err;
+	int rc = 0;
+
+	/* Desired state -> OPEN; the controller filter is cleared at the
+	 * next advertising restart (or by the immediate restart below). */
+	bt_pairing_policy_request_open(&pairing_policy);
+
+	/* Clear all persisted bonds. */
+	err = bt_unpair(BT_ID_DEFAULT, BT_ADDR_LE_ANY);
+	if (err) {
+		LOG_ERR("Pairing reset: bt_unpair failed: %d", err);
+		rc = err;
+	}
+
+	/* Disconnect the current peer, if any.  bt_conn_foreach() holds a
+	 * reference for the callback and find_connected_peer takes its own,
+	 * so the disconnect cannot race a teardown on the RX workqueue. */
+	bt_conn_foreach(BT_CONN_TYPE_LE, find_connected_peer, &peer);
+	if (peer != NULL) {
+		err = bt_conn_disconnect(peer, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+		bt_conn_unref(peer);
+		if (err) {
+			LOG_ERR("Pairing reset: disconnect failed: %d", err);
+			if (rc == 0) {
+				rc = err;
+			}
+		}
+	}
+
+	/* No active connection: restart advertising in OPEN mode now.
+	 * With an active peer the main loop restarts advertising (OPEN)
+	 * after the disconnect completes. */
+	if (peer == NULL) {
+		k_mutex_lock(&pairing_adv_lock, K_FOREVER);
+		err = bt_bap_restart_advertising_locked();
+		k_mutex_unlock(&pairing_adv_lock);
+		if (err) {
+			LOG_ERR("Pairing reset: advertising restart failed: %d", err);
+			if (rc == 0) {
+				rc = err;
+			}
+		}
+	}
+
+	return rc;
 }

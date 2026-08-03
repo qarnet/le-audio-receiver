@@ -27,6 +27,7 @@ import struct
 import subprocess
 import sys
 import time
+import bap_central_policy
 
 # Force unbuffered stdout so errors in D-Bus callbacks are visible.
 try:
@@ -733,6 +734,13 @@ def main():
         "Skips BlueZ discovery; connects directly via raw HCI. "
         "Required when controller BD_ADDR is all-zero (prevents scanning).",
     )
+    parser.add_argument(
+        "--preserve-bond",
+        action="store_true",
+        help="Reconnect with an existing bond: skip BlueZ RemoveDevice and "
+        "re-pairing, and require paired/encrypted connected state before "
+        "BAP configuration (T8 reconnect rows).",
+    )
     args = parser.parse_args()
     hci_path = "/org/bluez/" + args.adapter
 
@@ -936,14 +944,19 @@ def main():
         # Own address stays public (dongle has compiled public BD_ADDR).
         # Peer address type is random (receiver uses random static address).
 
-        # 5a. Clear any stale BlueZ device before connecting.
-        try:
-            adapter.RemoveDevice(dev_path)
-            print("[main] Removed stale BlueZ device cache")
-            time.sleep(0.5)
-        except _dbus.exceptions.DBusException as e:
-            # No cached device — expected on first run.
-            print("[main] RemoveDevice: no cached device (ok)")
+        # 5a. Clear any stale BlueZ device before connecting — unless
+        # --preserve-bond: the cached Device1 record (with its bond) must
+        # survive so the next session reconnects without re-pairing.
+        if args.preserve_bond:
+            print("[main] --preserve-bond: keeping existing BlueZ device record")
+        else:
+            try:
+                adapter.RemoveDevice(dev_path)
+                print("[main] Removed stale BlueZ device cache")
+                time.sleep(0.5)
+            except _dbus.exceptions.DBusException as e:
+                # No cached device — expected on first run.
+                print("[main] RemoveDevice: no cached device (ok)")
 
         addr = args.peer_addr
         hold_secs = args.duration + 120
@@ -1059,6 +1072,60 @@ def main():
             "org.freedesktop.DBus.Properties",
         )
 
+        # 5ab. Preserve-bond gate: read paired/encrypted state and decide
+        # whether Pair() is required.  With --preserve-bond the host bond
+        # must already exist and the link must be encrypted/paired before
+        # any BAP configuration.
+        try:
+            dev_paired = bool(dev_props.Get("org.bluez.Device1", "Paired"))
+            dev_connected = bool(dev_props.Get("org.bluez.Device1", "Connected"))
+            try:
+                dev_encrypted = bool(dev_props.Get("org.bluez.Device1", "Encrypted"))
+            except _dbus.exceptions.DBusException:
+                dev_encrypted = False
+            print(
+                "[main] Device state: Paired={}, Connected={}, Encrypted={}".format(
+                    dev_paired, dev_connected, dev_encrypted
+                )
+            )
+        except _dbus.exceptions.DBusException as e:
+            print("[main] Could not read device state: {}".format(e))
+            raw_connect_proc.terminate()
+            try:
+                raw_connect_proc.wait(timeout=3)
+            except Exception:
+                pass
+            sys.exit(1)
+
+        action, action_detail = bap_central_policy.pair_action(
+            args.preserve_bond, dev_paired
+        )
+        if action == "fail":
+            print("[error] {}".format(action_detail))
+            raw_connect_proc.terminate()
+            try:
+                raw_connect_proc.wait(timeout=3)
+            except Exception:
+                pass
+            sys.exit(1)
+        if action == "skip":
+            print("[main] {}".format(action_detail))
+            pair_skip = True
+        else:
+            pair_skip = False
+
+        secure_ok, secure_reason = bap_central_policy.require_secure_state(
+            args.preserve_bond, dev_paired, dev_connected, dev_encrypted
+        )
+        if not secure_ok:
+            print("[error] {}".format(secure_reason))
+            raw_connect_proc.terminate()
+            try:
+                raw_connect_proc.wait(timeout=3)
+            except Exception:
+                pass
+            sys.exit(1)
+
         # 5b. Set Pairable so bonding can proceed.
         try:
             adapter_props.Set("org.bluez.Adapter1", "Pairable", _dbus.Boolean(True))
@@ -1092,11 +1159,16 @@ def main():
             pair_done[0] = True
             print("[main] Pair() async error: {}".format(error))
 
-        device.Pair(
-            reply_handler=_on_pair_ok,
-            error_handler=_on_pair_err,
-            timeout=30000,
-        )
+        if pair_skip:
+            pair_result[0] = True
+            pair_done[0] = True
+            print("[main] Pair() skipped (--preserve-bond, bond already present)")
+        else:
+            device.Pair(
+                reply_handler=_on_pair_ok,
+                error_handler=_on_pair_err,
+                timeout=30000,
+            )
         # Iterate GLib: Agent1 RequestAuthorization dispatches here.
         pair_deadline = time.monotonic() + 35
         while not pair_done[0] and time.monotonic() < pair_deadline:
@@ -1148,6 +1220,22 @@ def main():
         except _dbus.exceptions.DBusException as e:
             print("[main] Trust set error: {}".format(e))
 
+        # 5bc. Preserve-bond gate: with --preserve-bond the host bond must
+        # already exist; skip Pair() when it does.
+        try:
+            dev_paired_norm = bool(dev_props.Get("org.bluez.Device1", "Paired"))
+        except _dbus.exceptions.DBusException:
+            dev_paired_norm = False
+        action_norm, detail_norm = bap_central_policy.pair_action(
+            args.preserve_bond, dev_paired_norm
+        )
+        if action_norm == "fail":
+            print("[error] {}".format(detail_norm))
+            sys.exit(1)
+        pair_skip_norm = action_norm == "skip"
+        if pair_skip_norm:
+            print("[main] {}".format(detail_norm))
+
         # 5c. Async Pair() while disconnected — BlueZ creates ACL, runs
         # SMP, and auto-accepts Just Works without Agent1 callback.
         pair_result = [None]
@@ -1164,11 +1252,16 @@ def main():
             pair_done[0] = True
             print("[main] Pair() async error: {}".format(error))
 
-        device.Pair(
-            reply_handler=_on_pair_ok_norm,
-            error_handler=_on_pair_err_norm,
-            timeout=30000,
-        )
+        if pair_skip_norm:
+            pair_result[0] = True
+            pair_done[0] = True
+            print("[main] Pair() skipped (--preserve-bond, bond already present)")
+        else:
+            device.Pair(
+                reply_handler=_on_pair_ok_norm,
+                error_handler=_on_pair_err_norm,
+                timeout=30000,
+            )
         # Iterate GLib: Agent1 dispatch happens here during Pair().
         pair_deadline = time.monotonic() + 35
         while not pair_done[0] and time.monotonic() < pair_deadline:

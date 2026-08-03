@@ -706,6 +706,12 @@ def run_nrf5340_checks(
         "net bt_hci_sdc status disabled",
         "status %r" % (sdc.status() if sdc else None),
     )
+    result.add(
+        config_enabled(app_cfg, "CONFIG_BT_FILTER_ACCEPT_LIST"),
+        "5340-028",
+        "app CONFIG_BT_FILTER_ACCEPT_LIST=y",
+        "got %r" % app_cfg.get("CONFIG_BT_FILTER_ACCEPT_LIST"),
+    )
 
 
 def run_nrf54_checks(
@@ -906,6 +912,12 @@ def run_nrf54_checks(
     )
     result.add(
         fl == 0x18000, "54l15-033", "FLPR CONFIG_FLASH_LOAD_SIZE=0x18000", "got %r" % fl
+    )
+    result.add(
+        config_enabled(app_cfg, "CONFIG_BT_FILTER_ACCEPT_LIST"),
+        "54l15-034",
+        "app CONFIG_BT_FILTER_ACCEPT_LIST=y",
+        "got %r" % app_cfg.get("CONFIG_BT_FILTER_ACCEPT_LIST"),
     )
 
 

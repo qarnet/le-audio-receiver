@@ -8,6 +8,7 @@
 #include "audio_perf.h"
 #include "audio_volume.h"
 #include "audio_sink.h"
+#include "bt_bap.h"
 
 #if defined(CONFIG_SOC_NRF54L15)
 #include "flpr_handshake.h"
@@ -132,14 +133,15 @@ static int cmd_perf_reset(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
-/* bt unpair — test-only, no confirmation, clears all bonds. */
+/* bt unpair — production pairing-mode reset: clear bonds, disconnect the
+ * current peer, and return the receiver to open pairing mode. */
 static int cmd_bt_unpair(const struct shell *sh, size_t argc, char **argv)
 {
-	int ret = bt_unpair(BT_ID_DEFAULT, BT_ADDR_LE_ANY);
+	int ret = bt_bap_pairing_reset();
 	if (ret == 0) {
-		shell_print(sh, "All bonds cleared.");
+		shell_print(sh, "Pairing mode reset: bonds cleared; open pairing enabled.");
 	} else {
-		shell_error(sh, "bt_unpair failed: %d", ret);
+		shell_error(sh, "bt_bap_pairing_reset failed: %d", ret);
 	}
 	return ret;
 }
@@ -156,7 +158,8 @@ SHELL_CMD_REGISTER(audio, &audio_cmds, "LE Audio sink commands.", NULL);
 
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	bt_cmds,
-	SHELL_CMD_ARG(unpair, NULL, "Clear all Bluetooth bonds (test-only, no confirmation).",
+	SHELL_CMD_ARG(unpair, NULL,
+		      "Reset pairing mode: clear bonds, disconnect peer, open pairing.",
 		      cmd_bt_unpair, 1, 0),
 	SHELL_SUBCMD_SET_END);
 

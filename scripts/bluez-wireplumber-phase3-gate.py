@@ -185,10 +185,10 @@ class ReceiverSerial:
         return ("\n".join(stdout_lines), "\n".join(stderr_lines))
 
     def bt_unpair(self) -> Tuple[bool, str]:
-        """Send 'bt unpair' command. Returns (success, output)."""
+        """Send 'bt unpair' (production pairing-mode reset). Returns (success, output)."""
         stdout, stderr = self.send_command("bt unpair", wait_ms=2000)
         output = stdout + ("\n" + stderr if stderr else "")
-        if "All bonds cleared" in output:
+        if "Pairing mode reset" in output:
             return (True, output)
         return (False, output)
 

@@ -27,4 +27,19 @@ int bt_bap_restart_advertising(void);
  */
 void bt_bap_wait_disconnect(void);
 
+/**
+ * Production pairing-mode reset: clear all persisted bonds, disconnect the
+ * current peer, and return the receiver to open pairing mode.
+ *
+ * Safe to call from shell/work/thread context.  On success the receiver
+ * advertises in OPEN mode (no connection filtering) — immediately when no
+ * connection is active, otherwise on the advertising restart that follows
+ * the disconnect.
+ *
+ * @retval 0   full success
+ * @retval <0  first negative errno of the failing step (partial failure is
+ *             reported, never claimed as success)
+ */
+int bt_bap_pairing_reset(void);
+
 #endif /* BT_BAP_H */

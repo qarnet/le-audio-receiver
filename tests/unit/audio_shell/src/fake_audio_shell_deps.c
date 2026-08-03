@@ -10,9 +10,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <zephyr/bluetooth/addr.h>
-#include <zephyr/bluetooth/bluetooth.h>
-
 #include "audio_drift.h"
 #include "audio_sink.h"
 #include "audio_stats.h"
@@ -113,17 +110,10 @@ int test_shell_sink_stop_calls(void)
 	return sink_stop_calls;
 }
 
-/* ---- bt unpair ---- */
+/* ---- bt unpair (production pairing-mode reset) ---- */
 
-/* BT_ADDR_LE_ANY expands to &bt_addr_le_any; with CONFIG_BT=n the host
- * stack (which normally provides this global) is not compiled, so the
- * test build supplies it. */
-const bt_addr_le_t bt_addr_le_any = {0};
-
-int bt_unpair(uint8_t id, const bt_addr_le_t *addr)
+int bt_bap_pairing_reset(void)
 {
-	(void)id;
-	(void)addr;
 	unpair_calls++;
 	return unpair_result;
 }

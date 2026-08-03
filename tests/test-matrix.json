@@ -915,6 +915,96 @@
       "excluded_from_numeric": true
     },
     {
+        "source": "src/bt_pairing_policy.c",
+        "classification": "direct",
+        "suites": [
+            {
+                "name": "bt_pairing_policy",
+                "evidence": "direct"
+            }
+        ],
+        "public_outcomes": [
+            {
+                "api": "bt_pairing_policy_init",
+                "outcome": "void",
+                "witness": "test_init_open_default"
+            },
+            {
+                "api": "bt_pairing_policy_set_bonds",
+                "outcome": "0",
+                "witness": "test_set_bonds_bonded_only"
+            },
+            {
+                "api": "bt_pairing_policy_set_bonds",
+                "outcome": "-ENOMEM",
+                "witness": "test_set_bonds_overflow_atomic"
+            },
+            {
+                "api": "bt_pairing_policy_get_mode",
+                "outcome": "BT_PAIRING_POLICY_MODE_OPEN",
+                "witness": "test_init_open_default"
+            },
+            {
+                "api": "bt_pairing_policy_get_mode",
+                "outcome": "BT_PAIRING_POLICY_MODE_BONDED_ONLY",
+                "witness": "test_set_bonds_bonded_only"
+            },
+            {
+                "api": "bt_pairing_policy_get_entry_count",
+                "outcome": "0",
+                "witness": "test_init_open_default"
+            },
+            {
+                "api": "bt_pairing_policy_get_entry_count",
+                "outcome": "2",
+                "witness": "test_set_bonds_bonded_only"
+            },
+            {
+                "api": "bt_pairing_policy_get_entry",
+                "outcome": "NULL",
+                "witness": "test_get_entry_out_of_range"
+            },
+            {
+                "api": "bt_pairing_policy_pairing_accept",
+                "outcome": "BT_PAIRING_POLICY_ACCEPT",
+                "witness": "test_pairing_accept_open_accepts_any"
+            },
+            {
+                "api": "bt_pairing_policy_pairing_accept",
+                "outcome": "BT_PAIRING_POLICY_REJECT",
+                "witness": "test_pairing_accept_bonded_only_rejects_unbonded"
+            },
+            {
+                "api": "bt_pairing_policy_mark_bonded",
+                "outcome": "0",
+                "witness": "test_mark_bonded_adds_and_sets_bonded_only"
+            },
+            {
+                "api": "bt_pairing_policy_mark_bonded",
+                "outcome": "-ENOMEM",
+                "witness": "test_mark_bonded_full_snapshot"
+            },
+            {
+                "api": "bt_pairing_policy_request_open",
+                "outcome": "void",
+                "witness": "test_request_open_resets_to_open"
+            }
+        ],
+        "state_transitions": [
+            {
+                "transition": "open->bonded-only",
+                "witness": "test_set_bonds_bonded_only"
+            },
+            {
+                "transition": "bonded-only->open",
+                "witness": "test_request_open_resets_to_open"
+            }
+        ],
+        "function_exclusions": [],
+        "hardware_acceptance": [],
+        "stateful": true
+    },
+    {
       "source": "src/flpr_audio_process.c",
       "classification": "direct",
       "suites": [
