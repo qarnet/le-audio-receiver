@@ -1223,13 +1223,17 @@ static void collect_bond(const struct bt_bond_info *info, void *user_data)
 	}
 }
 
-static void find_connected_peer(struct bt_conn *conn, void *data)
+static void find_live_peer(struct bt_conn *conn, void *data)
 {
 	struct bt_conn **peer = data;
 	struct bt_conn_info info;
 
 	if (*peer == NULL && bt_conn_get_info(conn, &info) == 0 &&
-	    info.state == BT_CONN_STATE_CONNECTED) {
+	    (info.state == BT_CONN_STATE_CONNECTED || info.state == BT_CONN_STATE_DISCONNECTING)) {
+		/* CONNECTED and DISCONNECTING both count as an active connection:
+		 * restarting advertising while the controller tears down a link
+		 * fails (ENOMEM), so the OPEN restart is deferred to the main loop
+		 * when either state is present. */
 		*peer = bt_conn_ref(conn);
 	}
 }
@@ -1389,6 +1393,8 @@ void bt_bap_wait_disconnect(void)
 int bt_bap_pairing_reset(void)
 {
 	struct bt_conn *peer = NULL;
+	struct bt_conn_info info;
+	bool conn_active;
 	int err;
 	int rc = 0;
 
@@ -1396,32 +1402,38 @@ int bt_bap_pairing_reset(void)
 	 * next advertising restart (or by the immediate restart below). */
 	bt_pairing_policy_request_open(&pairing_policy);
 
-	/* Clear all persisted bonds. */
+	/* Clear all persisted bonds.  bt_unpair() also disconnects any
+	 * connected bonded peer (REMOTE_USER_TERM_CONN). */
 	err = bt_unpair(BT_ID_DEFAULT, BT_ADDR_LE_ANY);
 	if (err) {
 		LOG_ERR("Pairing reset: bt_unpair failed: %d", err);
 		rc = err;
 	}
 
-	/* Disconnect the current peer, if any.  bt_conn_foreach() holds a
-	 * reference for the callback and find_connected_peer takes its own,
-	 * so the disconnect cannot race a teardown on the RX workqueue. */
-	bt_conn_foreach(BT_CONN_TYPE_LE, find_connected_peer, &peer);
+	/* Any live connection (CONNECTED or already DISCONNECTING) means the
+	 * main loop will perform the OPEN advertising restart once the link
+	 * is gone; restarting now would race the controller teardown.  A
+	 * connected but unbonded peer (OPEN-mode edge case) is disconnected
+	 * here. */
+	bt_conn_foreach(BT_CONN_TYPE_LE, find_live_peer, &peer);
 	if (peer != NULL) {
-		err = bt_conn_disconnect(peer, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-		bt_conn_unref(peer);
-		if (err) {
-			LOG_ERR("Pairing reset: disconnect failed: %d", err);
-			if (rc == 0) {
-				rc = err;
+		conn_active = true;
+		if (bt_conn_get_info(peer, &info) == 0 && info.state == BT_CONN_STATE_CONNECTED) {
+			err = bt_conn_disconnect(peer, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+			if (err) {
+				LOG_ERR("Pairing reset: disconnect failed: %d", err);
+				if (rc == 0) {
+					rc = err;
+				}
 			}
 		}
+		bt_conn_unref(peer);
+	} else {
+		conn_active = false;
 	}
 
-	/* No active connection: restart advertising in OPEN mode now.
-	 * With an active peer the main loop restarts advertising (OPEN)
-	 * after the disconnect completes. */
-	if (peer == NULL) {
+	/* No connection at all: restart advertising in OPEN mode now. */
+	if (!conn_active) {
 		k_mutex_lock(&pairing_adv_lock, K_FOREVER);
 		err = bt_bap_restart_advertising_locked();
 		k_mutex_unlock(&pairing_adv_lock);
