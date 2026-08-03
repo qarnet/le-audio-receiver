@@ -145,10 +145,11 @@ class GateResult:
 class HangGateRunner:
     """Hang gate logic with pyserial console transport."""
 
-    def __init__(self, port, baud, log_path):
+    def __init__(self, port, baud, log_path, peer_addr=None):
         self.port = port
         self.baud = baud
         self.log_path = log_path
+        self.peer_addr = peer_addr
         self._ser = None
         self._log_fh = None
         self._recv_buf = bytearray()
@@ -367,6 +368,11 @@ class HangGateRunner:
             ]
             if stereo:
                 bap_args.append("--stereo")
+            if self.peer_addr:
+                # Target one specific receiver: with several LE Audio
+                # Receiver boards on the bench, discovery may attach the
+                # wrong one.  --peer-addr pins the exact peer.
+                bap_args += ["--peer-addr", self.peer_addr]
 
             print(
                 f"[{datetime.now().strftime('%H:%M:%S')}] Running: {' '.join(bap_args)}"
@@ -724,6 +730,13 @@ def main():
         default=None,
         help="Log file path (default: flpr_hang_gate_<mode>_<dur>s.log)",
     )
+    parser.add_argument(
+        "--peer-addr",
+        default=None,
+        help="Receiver BLE address to pass through to bap_central.py "
+        "(--peer-addr).  Required when several LE Audio Receiver boards "
+        "are on the bench so the gate targets the exact receiver.",
+    )
     args = parser.parse_args()
 
     if args.log is None:
@@ -741,7 +754,7 @@ def main():
     print(f"[gate] Log:  {log_full}")
     print(f"{'=' * 70}")
 
-    runner = HangGateRunner(args.port, args.baud, log_full)
+    runner = HangGateRunner(args.port, args.baud, log_full, peer_addr=args.peer_addr)
     runner.open()
     try:
         result = runner.run(args.duration, stereo=args.stereo)

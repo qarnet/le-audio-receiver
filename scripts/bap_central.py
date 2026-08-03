@@ -1634,19 +1634,27 @@ def main():
     # let the I2S pipeline underrun between the last SDU and the
     # Release/Disable transition.  Exact duration accounting stays
     # separate from the bounded teardown tail.
+    #
+    # Snapshot the transports here: the writer thread reads only this
+    # list, never the main thread's `endpoint.transports` (which section
+    # 9 empties), so teardown can never race a mid-frame read.  The fd
+    # values are fixed once acquired; the release path closes them and
+    # the writer stops on the resulting OSError.
+    transports = list(endpoint.transports)
+
     def encode_frame():
         if stream_mode == "stereo_b":
             sdu = enc_L.encode(pcm_L) + enc_R.encode(pcm_R)
-            return [(endpoint.transports[0]["fd"], sdu)]
+            return [(transports[0]["fd"], sdu)]
         if stream_mode == "stereo_a":
             frame_L = enc_L.encode(pcm_L)
             frame_R = enc_R.encode(pcm_R)
             return [
-                (endpoint.transports[0]["fd"], frame_L),
-                (endpoint.transports[1]["fd"], frame_R),
+                (transports[0]["fd"], frame_L),
+                (transports[1]["fd"], frame_R),
             ]
         sdu = enc.encode(pcm_L)
-        return [(endpoint.transports[0]["fd"], sdu)]
+        return [(transports[0]["fd"], sdu)]
 
     writer = PacedWriter(encode_frame, args.duration)
     writer.start()
