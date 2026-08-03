@@ -396,11 +396,13 @@ class HangGateRunner:
                         f"bap_central.py exited early (code={bap_proc.returncode}):\n{bap_out[-500:]}"
                     )
 
+                # Read until the console goes quiet and parse the LAST
+                # complete block: a single in_waiting read can catch only
+                # a partial status block, and the baseline Runtime line
+                # (the last line of the block) then parses as -1, making
+                # the runtime_restarts baseline-diff fail by one.
                 self._send_cmd("flpr offload")
-                time.sleep(0.08)
-                self._clear_buf()
-                self._read_all()
-                st = self.parse_offload(self._all_text())
+                st = self.parse_offload(parse_last_offload_block(self._read_status()))
                 if st["state"] == "ACTIVE" and st["success"] >= inject_threshold:
                     break
                 time.sleep(0.4)
