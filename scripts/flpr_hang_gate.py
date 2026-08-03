@@ -415,8 +415,11 @@ class HangGateRunner:
             result.baseline_epoch = st["epoch"]
             result.baseline_success = st["success"]
             result.baseline_recovery_attempts = st["recovery_attempts"]
-            result.baseline_runtime_restarts = st["runtime_restarts"]
-            result.baseline_runtime_fails = st["runtime_fails"]
+            # The Runtime line is only printed after the first restart,
+            # so a pre-injection ACTIVE snapshot has no Runtime line and
+            # the parser leaves the -1 sentinel: the absence means zero.
+            result.baseline_runtime_restarts = max(0, st["runtime_restarts"])
+            result.baseline_runtime_fails = max(0, st["runtime_fails"])
             result.baseline_relapses = st["relapses"]
             result.baseline_exhaustion = st["exhaustion"]
             result.baseline_probation_cleared = st["probation_cleared"]
