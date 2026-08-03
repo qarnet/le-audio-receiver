@@ -26,6 +26,8 @@ from flpr_hang_gate import (  # noqa: E402
     RE_FAULT_HANG_ACK,
     RE_FAULT_HANG_FAIL,
     RE_RUNTIME_RESTART_OK,
+    parse_last_offload_block,
+    split_offload_blocks,
 )
 
 # Exact production line shape: src/audio_shell.c cmd_flpr_restart prints
@@ -122,6 +124,60 @@ class TestSiblingGateRegexes(unittest.TestCase):
         m = RE_FAULT_HANG_FAIL.search("FAULT_HANG failed: -5 (no ACK)")
         self.assertIsNotNone(m)
         self.assertEqual(m.group(1), "-5")
+
+
+BLOCK_STOPPED = (
+    "--- Audio offload ---\n"
+    "  State       : STOPPED / epoch=0 gen=29\n"
+    "  Counters    : submit=16809 success=16767 fallback=42 busy=0\n"
+    "  Runtime     : restarts=1 fails=0 last_ms=231 remote_epoch=1\n"
+)
+BLOCK_ACTIVE_STALE = (
+    "--- Audio offload ---\n"
+    "  State       : ACTIVE / epoch=2 gen=27\n"
+    "  Counters    : submit=1240 success=1198 fallback=42 busy=0\n"
+    "  Runtime     : restarts=1 fails=0 last_ms=231 remote_epoch=1\n"
+)
+FLOOD_LINE = (
+    "uart:~$ [00:00:42.530,879] <inf> bt_bap: Mode A: stale half discarded "
+    "(ts 123 < 124, seq 5 < 6)\r\n"
+)
+
+
+class TestOffloadBlockSelection(unittest.TestCase):
+    """The Mode A stale-half console flood must not make the gate parse a
+    stale mid-stream status as the final post-stream status."""
+
+    def test_single_block_returns_itself(self):
+        blocks = split_offload_blocks(BLOCK_STOPPED)
+        self.assertEqual(len(blocks), 1)
+        self.assertIn("submit=16809", blocks[0])
+
+    def test_accumulated_blocks_take_last(self):
+        text = FLOOD_LINE + BLOCK_ACTIVE_STALE + FLOOD_LINE + BLOCK_STOPPED
+        blocks = split_offload_blocks(text)
+        self.assertEqual(len(blocks), 2)
+        last = parse_last_offload_block(text)
+        self.assertIn("STOPPED", last)
+        self.assertIn("submit=16809", last)
+        self.assertNotIn("ACTIVE", last)
+
+    def test_flood_interleaved_keeps_last_block_complete(self):
+        # Flood lines land between the two responses; the last block must
+        # still be selected intact.
+        text = FLOOD_LINE + BLOCK_ACTIVE_STALE + FLOOD_LINE + FLOOD_LINE + BLOCK_STOPPED
+        last = parse_last_offload_block(text)
+        self.assertIn("STOPPED", last)
+        self.assertIn("submit=16809", last)
+
+    def test_no_separator_falls_back_to_whole_text(self):
+        self.assertEqual(parse_last_offload_block("no block here"), "no block here")
+
+    def test_trailing_fragment_without_state_dropped(self):
+        text = BLOCK_STOPPED + FLOOD_LINE
+        last = parse_last_offload_block(text)
+        self.assertIn("STOPPED", last)
+        self.assertIn("submit=16809", last)
 
 
 if __name__ == "__main__":

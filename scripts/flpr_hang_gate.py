@@ -59,6 +59,34 @@ RE_FAULT_HANG_FAIL = re.compile(r"FAULT_HANG failed:\s*(-?\d+)\s+\(no ACK\)")
 RE_RECOVERY_OK = re.compile(r"offload recovery OK:")
 RE_OFFLOAD_RECOVERING = re.compile(r"State\s*:\s*RECOVERING")
 
+
+def split_offload_blocks(text):
+    """Split accumulated console text into individual '--- Audio offload ---'
+    response blocks (the leading fragment before the first separator is
+    discarded; a trailing fragment is kept only when it carries a State
+    line, i.e. it is a complete response)."""
+    parts = re.split(r"--- Audio offload ---", text)
+    blocks = []
+    for part in parts[1:]:
+        if RE_STATE_LINE.search(part):
+            blocks.append(part)
+    return blocks
+
+
+def parse_last_offload_block(text):
+    """Return the LAST complete '--- Audio offload ---' block in text.
+
+    During a Mode A stream the receiver floods the console with 'Mode A:
+    stale half discarded' INF lines (RTN retransmission duplicates).  The
+    flood can delay the final status response and leave several earlier
+    'flpr offload' responses accumulated in the read buffer; parsing the
+    first match then yields a stale mid-stream snapshot.  Taking the last
+    complete block returns the newest state.  Falls back to the whole
+    text when no block separator is present."""
+    blocks = split_offload_blocks(text)
+    return blocks[-1] if blocks else text
+
+
 # ASRC stats (shadow-verify gate)
 RE_ASRC_COUNTERS = re.compile(
     r"Counters\s*:\s*submit=(\d+)\s+success=(\d+)\s+fallback=(\d+)"
@@ -491,7 +519,9 @@ class HangGateRunner:
                 f"Capturing active-stream status..."
             )
             self._send_cmd("flpr offload")
-            active_st = self.parse_offload(self._read_status())
+            active_st = self.parse_offload(
+                parse_last_offload_block(self._read_status())
+            )
             result.active_status = active_st
             print(
                 f"  State={active_st['state']} submit={active_st['submit']} "
@@ -545,11 +575,11 @@ class HangGateRunner:
             # Parse final status (read until quiet so the Counters line is
             # not lost to the 50 ms single-read race)
             self._send_cmd("flpr offload")
-            st_final = self.parse_offload(self._read_status())
+            st_final = self.parse_offload(parse_last_offload_block(self._read_status()))
             result.final_status = st_final
 
             # Parse ASRC section
-            asrc = self.parse_asrc(result.full_log)
+            asrc = self.parse_asrc(parse_last_offload_block(result.full_log))
             result.asrc_status = asrc
 
             # ── Step 9: Verify all gates ──
