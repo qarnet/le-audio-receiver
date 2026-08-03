@@ -28,12 +28,15 @@ import subprocess
 import sys
 import time
 import bap_central_policy
+import bap_central_writer
 
 # Force unbuffered stdout so errors in D-Bus callbacks are visible.
 try:
     sys.stdout.reconfigure(line_buffering=True)
 except Exception:
     pass
+
+PacedWriter = bap_central_writer.PacedWriter
 
 # ── Constants ───────────────────────────────────────────────────────────────
 
@@ -1624,61 +1627,58 @@ def main():
     pcm_L = _gen_sine(args.freq, SR_HZ, FRAME_SAMPLES, amplitude=10000)
     pcm_R = _gen_sine(args.freq, SR_HZ, FRAME_SAMPLES, amplitude=10000)
 
-    start = time.monotonic()
-    next_ts = start
-    frame_count = 0
+    # The PacedWriter owns the paced fd writes (10 ms cadence) and keeps
+    # feeding the receiver while the main thread performs the
+    # MediaTransport Release / endpoint cleanup in section 9 — the
+    # previous design stopped writing at the exact duration deadline and
+    # let the I2S pipeline underrun between the last SDU and the
+    # Release/Disable transition.  Exact duration accounting stays
+    # separate from the bounded teardown tail.
+    def encode_frame():
+        if stream_mode == "stereo_b":
+            sdu = enc_L.encode(pcm_L) + enc_R.encode(pcm_R)
+            return [(endpoint.transports[0]["fd"], sdu)]
+        if stream_mode == "stereo_a":
+            frame_L = enc_L.encode(pcm_L)
+            frame_R = enc_R.encode(pcm_R)
+            return [
+                (endpoint.transports[0]["fd"], frame_L),
+                (endpoint.transports[1]["fd"], frame_R),
+            ]
+        sdu = enc.encode(pcm_L)
+        return [(endpoint.transports[0]["fd"], sdu)]
+
+    writer = PacedWriter(encode_frame, args.duration)
+    writer.start()
+
+    # Main thread: run for the requested duration (the writer paces the
+    # frames).  Bounded by the duration; a writer error stops it early
+    # and is reported below.
     try:
-        while time.monotonic() - start < args.duration:
-            if stream_mode == "stereo_b":
-                frame_L = enc_L.encode(pcm_L)
-                frame_R = enc_R.encode(pcm_R)
-                sdu = frame_L + frame_R
-                try:
-                    os.write(endpoint.transports[0]["fd"], sdu)
-                except OSError as e:
-                    print("[error] os.write failed: {}".format(e))
-                    break
-            elif stream_mode == "stereo_a":
-                frame_L = enc_L.encode(pcm_L)
-                frame_R = enc_R.encode(pcm_R)
-                try:
-                    os.write(endpoint.transports[0]["fd"], frame_L)
-                    os.write(endpoint.transports[1]["fd"], frame_R)
-                except OSError as e:
-                    print("[error] os.write failed: {}".format(e))
-                    break
-            else:  # mono
-                sdu = enc.encode(pcm_L)
-                try:
-                    os.write(endpoint.transports[0]["fd"], sdu)
-                except OSError as e:
-                    print("[error] os.write failed: {}".format(e))
-                    break
-
-            frame_count += 1
-
-            # Pace: 10 ms cadence
-            next_ts += 0.010
-            sleep_for = next_ts - time.monotonic()
-            if sleep_for > 0:
-                time.sleep(sleep_for)
-            else:
-                next_ts = time.monotonic()
+        time.sleep(args.duration)
     except KeyboardInterrupt:
         print("\n[main] Interrupted during streaming")
 
-    elapsed = time.monotonic() - start
-    if frame_count > 0:
-        fps = frame_count / elapsed if elapsed > 0 else 0
-        print(
-            "[main] Done: {} frames in {:.2f} s ({:.1f} fps)".format(
-                frame_count, elapsed, fps
-            )
+    writer_error = writer.error
+    if writer_error is not None:
+        print("[error] SDU writer failed: {}".format(writer_error))
+        # Teardown still runs below so the link is released cleanly.
+
+    print(
+        "[main] Done: {} frames in {:.2f} s ({:.1f} fps)".format(
+            writer.frames,
+            args.duration,
+            writer.frames / args.duration if args.duration > 0 else 0,
         )
+    )
 
     # ── 9. Cleanup ───────────────────────────────────────────────────────
     print("[cleanup] Releasing resources...")
 
+    # Feed the receiver until the transports are actually released: the
+    # writer keeps writing while we Release each MediaTransport and close
+    # its fd.  Once every fd is closed the writer stops on its own
+    # (stopped_by_fd); we then join it with a hard bound.
     for t in endpoint.transports:
         try:
             transport_obj = bus.get_object("org.bluez", t["path"])
@@ -1694,6 +1694,23 @@ def main():
         except OSError:
             pass
     endpoint.transports = []
+
+    # Stop/join the writer only after the transports are released and
+    # the fds are invalid (or the bounded join timeout expires).
+    if not writer.join(timeout_s=5.0):
+        print("[cleanup] SDU writer still alive after 5 s — forcing stop")
+        writer.stop()
+        writer.join(timeout_s=1.0)
+    else:
+        if writer.error is not None and writer_error is None:
+            writer_error = writer.error
+        if writer_error is not None:
+            print("[cleanup] SDU writer error: {}".format(writer_error))
+        elif writer.tail_frames > 0:
+            print(
+                "[cleanup] Teardown tail: {} frames written after the "
+                "duration (release window)".format(writer.tail_frames)
+            )
 
     try:
         media.UnregisterEndpoint(ENDPOINT_PATH)

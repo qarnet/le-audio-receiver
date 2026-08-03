@@ -7,12 +7,14 @@
 #      timing_none)
 #   2. Exec-only C unit suites (4 suites: audio_offload, flpr_audio_process,
 #      flpr_ring, offload_asrc)
-#   3. Python unit suites (11: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py,
+#   3. Python unit suites (12: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py,
 #      flpr_hang_gate/test_flpr_hang_gate.py,
 #      bluez_wp_gate/test_bluez_wireplumber_gate.py, bluez_wp_phase3_gate/test_bluez_wireplumber_phase3_gate.py,
 #      bsim_runner/test_bsim_stage1_parse.py, build_contract/test_build_contract.py,
 #      hci_raw_connect/test_hci_raw_connect.py,
-#      bap_central_policy/test_bap_central_policy.py, test_matrix/test_check_test_matrix.py,
+#      bap_central_policy/test_bap_central_policy.py,
+#      bap_central_writer/test_bap_central_writer.py,
+#      test_matrix/test_check_test_matrix.py,
 #      test_coverage_runner/test_test_coverage_runner.py)
 #   4. Coverage (T7): rebuilds all native C suites with CONFIG_COVERAGE=y
 #      and enforces the committed tests/coverage-baseline.json
@@ -137,6 +139,9 @@ run_python_suites() {
     run_one "python: bap_central_policy" \
         env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
         python3 "$REPO_ROOT/tests/unit/bap_central_policy/test_bap_central_policy.py" || true
+    run_one "python: bap_central_writer" \
+        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
+        python3 "$REPO_ROOT/tests/unit/bap_central_writer/test_bap_central_writer.py" || true
     run_one "python: test_matrix" \
         python3 "$REPO_ROOT/tests/unit/test_matrix/test_check_test_matrix.py" || true
     run_one "python: test_coverage_runner" \
