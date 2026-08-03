@@ -112,6 +112,20 @@
         209
       ]
     },
+    "src/audio_modea.c": {
+      "branches": [
+        60,
+        76
+      ],
+      "functions": [
+        11,
+        11
+      ],
+      "lines": [
+        109,
+        115
+      ]
+    },
     "src/audio_offload.c": {
       "branches": [
         223,
@@ -248,8 +262,8 @@
         8
       ],
       "lines": [
-        65,
-        65
+        66,
+        66
       ]
     },
     "src/flpr_audio_process.c": {
@@ -353,7 +367,7 @@
   },
   "gcov_version": "gcov (GCC) 14.3.0",
   "gcovr_version": "gcovr 8.4",
-  "generated_commit": "8fd7bb01fc477d8766d905739cc2d88aceb5c3a3",
+  "generated_commit": "9b78d87d85b6db3a1dcb7e42808b7e0e64b425e9",
   "population": [
     "src/app_lifecycle.c",
     "src/audio_asrc.c",
@@ -362,6 +376,7 @@
     "src/audio_decode.c",
     "src/audio_drift.c",
     "src/audio_i2s.c",
+    "src/audio_modea.c",
     "src/audio_offload.c",
     "src/audio_perf.c",
     "src/audio_rate_convert.c",
@@ -383,16 +398,16 @@
   "schema_version": 1,
   "totals": {
     "branches": [
-      1352,
-      1941
+      1412,
+      2017
     ],
     "functions": [
-      190,
-      190
+      201,
+      201
     ],
     "lines": [
-      3135,
-      3568
+      3245,
+      3684
     ]
   }
 }
