@@ -738,8 +738,8 @@ def main():
         "--preserve-bond",
         action="store_true",
         help="Reconnect with an existing bond: skip BlueZ RemoveDevice and "
-        "re-pairing, and require paired/encrypted connected state before "
-        "BAP configuration (T8 reconnect rows).",
+        "re-pairing, and require Paired + Connected state before BAP "
+        "configuration (T8 reconnect rows).",
     )
     args = parser.parse_args()
     hci_path = "/org/bluez/" + args.adapter
@@ -958,112 +958,198 @@ def main():
                 # No cached device — expected on first run.
                 print("[main] RemoveDevice: no cached device (ok)")
 
-        addr = args.peer_addr
-        hold_secs = args.duration + 120
-        print(
-            "[main] Creating persistent ACL via raw HCI (hold={:.0f}s)...".format(
-                hold_secs
+        if args.preserve_bond:
+            # ── Preserve-bond transport: BlueZ Device1.Connect() ──────────
+            # Do NOT launch the raw-HCI helper here: for a paired device
+            # BlueZ's own auto-connect owns the controller initiator, and a
+            # concurrent raw-HCI LE Extended Create Connection fails with
+            # 0x0d (Limited Resources).  Connect through BlueZ instead.
+            try:
+                dev_paired = bool(dev_props.Get("org.bluez.Device1", "Paired"))
+                dev_connected = bool(dev_props.Get("org.bluez.Device1", "Connected"))
+            except _dbus.exceptions.DBusException as e:
+                print("[error] Could not read Device1 state: {}".format(e))
+                sys.exit(1)
+            print(
+                "[main] Preserve-bond device state: Paired={}, Connected={}".format(
+                    dev_paired, dev_connected
+                )
             )
-        )
-        raw_connect_proc = subprocess.Popen(
-            [
-                "sudo",
-                "-n",
-                "python3",
-                RAW_CONNECT_HELPER,
-                addr,
-                str(hold_secs),
-                "--addr-type",
-                "public",
-                "--peer-addr-type",
-                "random",
-                "--connect-deadline",
-                "30",
-                "--device",
-                str(hci_dev),
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
 
-        # Gate 1: wait for the helper's machine-readable confirmed-connect
-        # line (bounded; the helper retries internally until its connect
-        # deadline).
-        raw_connect_stdout = raw_connect_proc.stdout
-        assert raw_connect_stdout is not None
-        helper_deadline = time.monotonic() + 40.0
-        ready, detail, helper_lines = wait_for_helper_ready(
-            raw_connect_stdout,
-            lambda: raw_connect_proc.poll() is None,
-            helper_deadline,
-        )
-        if not ready:
-            # Drain any remaining helper stdout (e.g. an HCI_CONNECT_FAIL
-            # line) so the failure reason is not lost.
-            if raw_connect_proc.poll() is not None:
-                try:
-                    rest = raw_connect_stdout.read(4096)
-                except Exception:
-                    rest = b""
-                for rl in rest.split(b"\n"):
-                    rl = rl.strip()
-                    if rl:
-                        helper_lines.append(rl)
-                        print(
-                            "[helper] {}".format(rl.decode(errors="replace")),
-                            flush=True,
+            strategy, strategy_detail = bap_central_policy.connection_strategy(
+                args.preserve_bond, dev_paired
+            )
+            if strategy == "fail":
+                print("[error] {}".format(strategy_detail))
+                sys.exit(1)
+            print("[main] {}".format(strategy_detail))
+
+            if bap_central_policy.should_connect(dev_connected, strategy):
+                conn_ok = [False]
+                conn_err = [None]
+
+                def _on_connect_ok():
+                    conn_ok[0] = True
+                    print("[main] Device1.Connect() async reply: OK")
+
+                def _on_connect_err(error):
+                    conn_err[0] = error
+                    print("[main] Device1.Connect() async error: {}".format(error))
+
+                device.Connect(
+                    reply_handler=_on_connect_ok,
+                    error_handler=_on_connect_err,
+                    timeout=30000,
+                )
+                conn_deadline = time.monotonic() + 35
+                while (
+                    not conn_ok[0]
+                    and conn_err[0] is None
+                    and time.monotonic() < conn_deadline
+                ):
+                    _GLib.MainContext.default().iteration(False)
+                    time.sleep(0.05)
+                outcome = bap_central_policy.connect_outcome(conn_ok[0], conn_err[0])
+                if outcome == "error":
+                    print("[error] Device1.Connect() failed: {}".format(conn_err[0]))
+                    sys.exit(1)
+                if outcome == "timeout":
+                    print("[error] Device1.Connect() timed out (35 s)")
+                    sys.exit(1)
+
+                # Wait for the exact Device1 Connected property (bounded).
+                cdeadline = time.monotonic() + 15
+                connected_pb = False
+                while time.monotonic() < cdeadline:
+                    try:
+                        if bool(dev_props.Get("org.bluez.Device1", "Connected")):
+                            connected_pb = True
+                            break
+                    except _dbus.exceptions.DBusException:
+                        pass
+                    _GLib.MainContext.default().iteration(False)
+                    time.sleep(0.1)
+                if not connected_pb:
+                    print("[error] Device1 Connected not true after Connect()")
+                    sys.exit(1)
+                print(
+                    "[main] Device1 Connected confirmed (preserve-bond, BlueZ transport)"
+                )
+            else:
+                print("[main] Device1 already connected; skipping Connect()")
+
+            # No security gate here: Paired/Connected are re-read below
+            # (after the transport step) and checked there with fresh state.
+        else:
+            # ── Fresh-pair transport: confirmed raw-HCI helper ─────────────
+            addr = args.peer_addr
+            hold_secs = args.duration + 120
+            print(
+                "[main] Creating persistent ACL via raw HCI (hold={:.0f}s)...".format(
+                    hold_secs
+                )
+            )
+            raw_connect_proc = subprocess.Popen(
+                [
+                    "sudo",
+                    "-n",
+                    "python3",
+                    RAW_CONNECT_HELPER,
+                    addr,
+                    str(hold_secs),
+                    "--addr-type",
+                    "public",
+                    "--peer-addr-type",
+                    "random",
+                    "--connect-deadline",
+                    "30",
+                    "--device",
+                    str(hci_dev),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            # Gate 1: wait for the helper's machine-readable confirmed-connect
+            # line (bounded; the helper retries internally until its connect
+            # deadline).
+            raw_connect_stdout = raw_connect_proc.stdout
+            assert raw_connect_stdout is not None
+            helper_deadline = time.monotonic() + 40.0
+            ready, detail, helper_lines = wait_for_helper_ready(
+                raw_connect_stdout,
+                lambda: raw_connect_proc.poll() is None,
+                helper_deadline,
+            )
+            if not ready:
+                # Drain any remaining helper stdout (e.g. an HCI_CONNECT_FAIL
+                # line) so the failure reason is not lost.
+                if raw_connect_proc.poll() is not None:
+                    try:
+                        rest = raw_connect_stdout.read(4096)
+                    except Exception:
+                        rest = b""
+                    for rl in rest.split(b"\n"):
+                        rl = rl.strip()
+                        if rl:
+                            helper_lines.append(rl)
+                            print(
+                                "[helper] {}".format(rl.decode(errors="replace")),
+                                flush=True,
+                            )
+                if (
+                    raw_connect_proc.poll() is not None
+                    and raw_connect_proc.stderr is not None
+                ):
+                    try:
+                        err = raw_connect_proc.stderr.read(4096).decode(
+                            errors="replace"
                         )
-            if (
-                raw_connect_proc.poll() is not None
-                and raw_connect_proc.stderr is not None
-            ):
+                    except Exception:
+                        err = ""
+                    if err:
+                        print("[error] helper stderr: {}".format(err[:2000]))
+                if helper_lines:
+                    print("[error] helper stdout tail: {}".format(helper_lines[-3:]))
+                print("[error] Raw HCI connect failed: {}".format(detail))
+                raw_connect_proc.terminate()
                 try:
-                    err = raw_connect_proc.stderr.read(4096).decode(errors="replace")
+                    raw_connect_proc.wait(timeout=3)
                 except Exception:
-                    err = ""
-                if err:
-                    print("[error] helper stderr: {}".format(err[:2000]))
-            if helper_lines:
-                print("[error] helper stdout tail: {}".format(helper_lines[-3:]))
-            print("[error] Raw HCI connect failed: {}".format(detail))
-            raw_connect_proc.terminate()
-            try:
-                raw_connect_proc.wait(timeout=3)
-            except Exception:
-                pass
-            sys.exit(1)
-        print("[main] Raw HCI link confirmed: {}".format(detail))
+                    pass
+                sys.exit(1)
+            print("[main] Raw HCI link confirmed: {}".format(detail))
 
-        # Gate 2: BlueZ must observe the link (Device1 Connected) before
-        # pairing proceeds.
-        dev_props0 = _dbus.Interface(
-            bus.get_object("org.bluez", dev_path),
-            "org.freedesktop.DBus.Properties",
-        )
-        conn_deadline = time.monotonic() + 10
-        connected = False
-        while time.monotonic() < conn_deadline:
-            try:
-                if bool(dev_props0.Get("org.bluez.Device1", "Connected")):
-                    connected = True
-                    break
-            except _dbus.exceptions.DBusException:
-                pass
-            _GLib.MainContext.default().iteration(False)
-            time.sleep(0.1)
-        if not connected:
-            print("[error] Device1 not Connected after confirmed raw HCI link")
-            raw_connect_proc.terminate()
-            try:
-                raw_connect_proc.wait(timeout=3)
-            except Exception:
-                pass
-            sys.exit(1)
-        print("[main] Device1 Connected confirmed")
+            # Gate 2: BlueZ must observe the link (Device1 Connected) before
+            # pairing proceeds.
+            dev_props0 = _dbus.Interface(
+                bus.get_object("org.bluez", dev_path),
+                "org.freedesktop.DBus.Properties",
+            )
+            conn_deadline = time.monotonic() + 10
+            connected = False
+            while time.monotonic() < conn_deadline:
+                try:
+                    if bool(dev_props0.Get("org.bluez.Device1", "Connected")):
+                        connected = True
+                        break
+                except _dbus.exceptions.DBusException:
+                    pass
+                _GLib.MainContext.default().iteration(False)
+                time.sleep(0.1)
+            if not connected:
+                print("[error] Device1 not Connected after confirmed raw HCI link")
+                raw_connect_proc.terminate()
+                try:
+                    raw_connect_proc.wait(timeout=3)
+                except Exception:
+                    pass
+                sys.exit(1)
+            print("[main] Device1 Connected confirmed")
 
-        # After RemoveDevice + raw HCI reconnect, recreate proxies from the
-        # live bus.  Pre-existing proxies may be stale after RemoveDevice
-        # tears down and recreates the D-Bus object.
+        # After RemoveDevice + raw HCI reconnect (fresh mode), recreate
+        # proxies from the live bus.  Pre-existing proxies may be stale
+        # after RemoveDevice tears down and recreates the D-Bus object.
         device = _dbus.Interface(
             bus.get_object("org.bluez", dev_path), "org.bluez.Device1"
         )
@@ -1072,29 +1158,28 @@ def main():
             "org.freedesktop.DBus.Properties",
         )
 
-        # 5ab. Preserve-bond gate: read paired/encrypted state and decide
-        # whether Pair() is required.  With --preserve-bond the host bond
-        # must already exist and the link must be encrypted/paired before
-        # any BAP configuration.
+        # 5ab. Read fresh Paired/Connected state (after the transport step
+        # above) and decide whether Pair() is required.  With --preserve-bond
+        # the host bond must already exist and the link must be Paired +
+        # Connected before any BAP configuration; successful encrypted
+        # PACS/ASCS access is the security proof (BlueZ Device1 has no
+        # portable Encrypted property).
         try:
             dev_paired = bool(dev_props.Get("org.bluez.Device1", "Paired"))
             dev_connected = bool(dev_props.Get("org.bluez.Device1", "Connected"))
-            try:
-                dev_encrypted = bool(dev_props.Get("org.bluez.Device1", "Encrypted"))
-            except _dbus.exceptions.DBusException:
-                dev_encrypted = False
             print(
-                "[main] Device state: Paired={}, Connected={}, Encrypted={}".format(
-                    dev_paired, dev_connected, dev_encrypted
+                "[main] Device state: Paired={}, Connected={}".format(
+                    dev_paired, dev_connected
                 )
             )
         except _dbus.exceptions.DBusException as e:
             print("[main] Could not read device state: {}".format(e))
-            raw_connect_proc.terminate()
-            try:
-                raw_connect_proc.wait(timeout=3)
-            except Exception:
-                pass
+            if raw_connect_proc is not None:
+                raw_connect_proc.terminate()
+                try:
+                    raw_connect_proc.wait(timeout=3)
+                except Exception:
+                    pass
             sys.exit(1)
 
         action, action_detail = bap_central_policy.pair_action(
@@ -1102,11 +1187,12 @@ def main():
         )
         if action == "fail":
             print("[error] {}".format(action_detail))
-            raw_connect_proc.terminate()
-            try:
-                raw_connect_proc.wait(timeout=3)
-            except Exception:
-                pass
+            if raw_connect_proc is not None:
+                raw_connect_proc.terminate()
+                try:
+                    raw_connect_proc.wait(timeout=3)
+                except Exception:
+                    pass
             sys.exit(1)
         if action == "skip":
             print("[main] {}".format(action_detail))
@@ -1115,15 +1201,16 @@ def main():
             pair_skip = False
 
         secure_ok, secure_reason = bap_central_policy.require_secure_state(
-            args.preserve_bond, dev_paired, dev_connected, dev_encrypted
+            args.preserve_bond, dev_paired, dev_connected
         )
         if not secure_ok:
             print("[error] {}".format(secure_reason))
-            raw_connect_proc.terminate()
-            try:
-                raw_connect_proc.wait(timeout=3)
-            except Exception:
-                pass
+            if raw_connect_proc is not None:
+                raw_connect_proc.terminate()
+                try:
+                    raw_connect_proc.wait(timeout=3)
+                except Exception:
+                    pass
             sys.exit(1)
 
         # 5b. Set Pairable so bonding can proceed.
