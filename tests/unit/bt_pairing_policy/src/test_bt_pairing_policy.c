@@ -42,6 +42,7 @@ ZTEST(bt_pairing_policy, test_init_open_default)
 ZTEST(bt_pairing_policy, test_set_bonds_bonded_only)
 {
 	struct bt_pairing_policy p;
+	struct bt_pairing_policy_snapshot snap;
 	bt_addr_le_t bonds[2];
 
 	bonds[0] = make_addr(BT_ADDR_LE_RANDOM, 0xaa, 0x0c, 0x05, 0xa2, 0xaa, 0xdb);
@@ -51,13 +52,11 @@ ZTEST(bt_pairing_policy, test_set_bonds_bonded_only)
 	zassert_equal(bt_pairing_policy_set_bonds(&p, bonds, 2), 0);
 	zassert_equal(bt_pairing_policy_get_mode(&p), BT_PAIRING_POLICY_MODE_BONDED_ONLY);
 	zassert_equal(bt_pairing_policy_get_entry_count(&p), 2);
-	const bt_addr_le_t *e0 = bt_pairing_policy_get_entry(&p, 0);
-	const bt_addr_le_t *e1 = bt_pairing_policy_get_entry(&p, 1);
-
-	zassert_not_null(e0);
-	zassert_not_null(e1);
-	zassert_equal(bt_addr_le_cmp(e0, &bonds[0]), 0);
-	zassert_equal(bt_addr_le_cmp(e1, &bonds[1]), 0);
+	bt_pairing_policy_snapshot(&p, &snap);
+	zassert_equal(snap.mode, BT_PAIRING_POLICY_MODE_BONDED_ONLY);
+	zassert_equal(snap.count, 2);
+	zassert_equal(bt_addr_le_cmp(&snap.entries[0], &bonds[0]), 0);
+	zassert_equal(bt_addr_le_cmp(&snap.entries[1], &bonds[1]), 0);
 }
 
 /* set_bonds(0) selects OPEN (rebuild after reset). */
@@ -82,16 +81,6 @@ ZTEST(bt_pairing_policy, test_set_bonds_overflow_atomic)
 		      -ENOMEM);
 	zassert_equal(bt_pairing_policy_get_mode(&p), BT_PAIRING_POLICY_MODE_OPEN);
 	zassert_equal(bt_pairing_policy_get_entry_count(&p), 0);
-}
-
-/* Out-of-range entry access returns NULL. */
-ZTEST(bt_pairing_policy, test_get_entry_out_of_range)
-{
-	struct bt_pairing_policy p;
-
-	bt_pairing_policy_init(&p);
-	zassert_is_null(bt_pairing_policy_get_entry(&p, 0));
-	zassert_is_null(bt_pairing_policy_get_entry(&p, 99));
 }
 
 /* OPEN accepts any peer. */
@@ -168,4 +157,39 @@ ZTEST(bt_pairing_policy, test_request_open_resets_to_open)
 	/* Idempotent: a second reset stays OPEN. */
 	bt_pairing_policy_request_open(&p);
 	zassert_equal(bt_pairing_policy_get_mode(&p), BT_PAIRING_POLICY_MODE_OPEN);
+}
+
+/* Snapshot copies mode, count, and exact entries atomically. */
+ZTEST(bt_pairing_policy, test_snapshot_atomic)
+{
+	struct bt_pairing_policy p;
+	struct bt_pairing_policy_snapshot snap;
+	bt_addr_le_t bonds[2];
+
+	bonds[0] = make_addr(BT_ADDR_LE_RANDOM, 0xaa, 0x0c, 0x05, 0xa2, 0xaa, 0xdb);
+	bonds[1] = make_addr(BT_ADDR_LE_PUBLIC, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x01);
+
+	bt_pairing_policy_init(&p);
+	zassert_equal(bt_pairing_policy_set_bonds(&p, bonds, 2), 0);
+	bt_pairing_policy_snapshot(&p, &snap);
+	zassert_equal(snap.mode, BT_PAIRING_POLICY_MODE_BONDED_ONLY);
+	zassert_equal(snap.count, 2);
+	zassert_equal(bt_addr_le_cmp(&snap.entries[0], &bonds[0]), 0);
+	zassert_equal(bt_addr_le_cmp(&snap.entries[1], &bonds[1]), 0);
+}
+
+/* Snapshot of a reset policy is OPEN with zero entries. */
+ZTEST(bt_pairing_policy, test_snapshot_empty)
+{
+	struct bt_pairing_policy p;
+	struct bt_pairing_policy_snapshot snap;
+	bt_addr_le_t bonds[1];
+
+	bonds[0] = make_addr(BT_ADDR_LE_RANDOM, 1, 2, 3, 4, 5, 6);
+	bt_pairing_policy_init(&p);
+	zassert_equal(bt_pairing_policy_set_bonds(&p, bonds, 1), 0);
+	bt_pairing_policy_request_open(&p);
+	bt_pairing_policy_snapshot(&p, &snap);
+	zassert_equal(snap.mode, BT_PAIRING_POLICY_MODE_OPEN);
+	zassert_equal(snap.count, 0);
 }

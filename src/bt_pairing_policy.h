@@ -80,11 +80,6 @@ enum bt_pairing_policy_mode bt_pairing_policy_get_mode(struct bt_pairing_policy 
 size_t bt_pairing_policy_get_entry_count(struct bt_pairing_policy *policy);
 
 /**
- * @brief Snapshot entry by index, or NULL when out of range.
- */
-const bt_addr_le_t *bt_pairing_policy_get_entry(struct bt_pairing_policy *policy, size_t index);
-
-/**
  * @brief Defense-in-depth pairing gate.
  *
  * OPEN accepts every peer.  BONDED_ONLY accepts only addresses present in
@@ -111,5 +106,24 @@ int bt_pairing_policy_mark_bonded(struct bt_pairing_policy *policy, const bt_add
  * The controller filter is cleared at the next advertising restart.
  */
 void bt_pairing_policy_request_open(struct bt_pairing_policy *policy);
+
+struct bt_pairing_policy_snapshot {
+	enum bt_pairing_policy_mode mode;
+	bt_addr_le_t entries[BT_PAIRING_POLICY_MAX_ENTRIES];
+	size_t count;
+};
+
+/**
+ * @brief Atomic snapshot of mode and bond entries.
+ *
+ * Copies the full policy state under one spinlock hold so a concurrent
+ * writer (pairing_complete's mark_bonded on the BT RX workqueue) can never
+ * yield a torn mode/entries view during a controller-filter rebuild.
+ *
+ * @param policy  Policy to snapshot.
+ * @param snap    Output snapshot.
+ */
+void bt_pairing_policy_snapshot(struct bt_pairing_policy *policy,
+				struct bt_pairing_policy_snapshot *snap);
 
 #endif /* BT_PAIRING_POLICY_H */

@@ -63,20 +63,6 @@ size_t bt_pairing_policy_get_entry_count(struct bt_pairing_policy *policy)
 	return count;
 }
 
-const bt_addr_le_t *bt_pairing_policy_get_entry(struct bt_pairing_policy *policy, size_t index)
-{
-	const bt_addr_le_t *entry;
-	k_spinlock_key_t key = k_spin_lock(&policy->lock);
-
-	if (index < policy->entry_count) {
-		entry = &policy->entries[index];
-	} else {
-		entry = NULL;
-	}
-	k_spin_unlock(&policy->lock, key);
-	return entry;
-}
-
 enum bt_pairing_policy_decision bt_pairing_policy_pairing_accept(struct bt_pairing_policy *policy,
 								 const bt_addr_le_t *addr)
 {
@@ -122,6 +108,19 @@ int bt_pairing_policy_mark_bonded(struct bt_pairing_policy *policy, const bt_add
 	policy->mode = BT_PAIRING_POLICY_MODE_BONDED_ONLY;
 	k_spin_unlock(&policy->lock, key);
 	return ret;
+}
+
+void bt_pairing_policy_snapshot(struct bt_pairing_policy *policy,
+				struct bt_pairing_policy_snapshot *snap)
+{
+	k_spinlock_key_t key = k_spin_lock(&policy->lock);
+
+	snap->mode = policy->mode;
+	snap->count = policy->entry_count;
+	for (size_t i = 0; i < policy->entry_count; i++) {
+		bt_addr_le_copy(&snap->entries[i], &policy->entries[i]);
+	}
+	k_spin_unlock(&policy->lock, key);
 }
 
 void bt_pairing_policy_request_open(struct bt_pairing_policy *policy)

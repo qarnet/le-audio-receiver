@@ -960,11 +960,6 @@
                 "witness": "test_set_bonds_bonded_only"
             },
             {
-                "api": "bt_pairing_policy_get_entry",
-                "outcome": "NULL",
-                "witness": "test_get_entry_out_of_range"
-            },
-            {
                 "api": "bt_pairing_policy_pairing_accept",
                 "outcome": "BT_PAIRING_POLICY_ACCEPT",
                 "witness": "test_pairing_accept_open_accepts_any"
@@ -988,6 +983,11 @@
                 "api": "bt_pairing_policy_request_open",
                 "outcome": "void",
                 "witness": "test_request_open_resets_to_open"
+            },
+            {
+                "api": "bt_pairing_policy_snapshot",
+                "outcome": "void",
+                "witness": "test_snapshot_atomic"
             }
         ],
         "state_transitions": [

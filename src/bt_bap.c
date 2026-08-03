@@ -1275,13 +1275,17 @@ static int bt_bap_restart_advertising_locked(void)
 		return err;
 	}
 
+	struct bt_pairing_policy_snapshot snap;
 	struct bt_le_adv_param param = *BT_BAP_ADV_PARAM_CONN_QUICK;
 
-	if (bt_pairing_policy_get_mode(&pairing_policy) == BT_PAIRING_POLICY_MODE_BONDED_ONLY) {
+	/* One atomic snapshot: repeated get_mode/get_entry accessor calls could
+	 * interleave with pairing_complete()'s mark_bonded on the RX workqueue
+	 * and yield a torn mode/entries view during the filter rebuild. */
+	bt_pairing_policy_snapshot(&pairing_policy, &snap);
+	if (snap.mode == BT_PAIRING_POLICY_MODE_BONDED_ONLY) {
 		param.options |= BT_LE_ADV_OPT_FILTER_CONN;
-		for (size_t i = 0; i < bt_pairing_policy_get_entry_count(&pairing_policy); i++) {
-			err = bt_le_filter_accept_list_add(
-				bt_pairing_policy_get_entry(&pairing_policy, i));
+		for (size_t i = 0; i < snap.count; i++) {
+			err = bt_le_filter_accept_list_add(&snap.entries[i]);
 			if (err) {
 				LOG_ERR("Filter accept list add failed: %d", err);
 				return err;
@@ -1399,8 +1403,12 @@ int bt_bap_pairing_reset(void)
 	int rc = 0;
 
 	/* Desired state -> OPEN; the controller filter is cleared at the
-	 * next advertising restart (or by the immediate restart below). */
+	 * next advertising restart (or by the immediate restart below).
+	 * request_open runs under pairing_adv_lock so it cannot interleave
+	 * with an in-flight advertising-restart rebuild of the filter. */
+	k_mutex_lock(&pairing_adv_lock, K_FOREVER);
 	bt_pairing_policy_request_open(&pairing_policy);
+	k_mutex_unlock(&pairing_adv_lock);
 
 	/* Clear all persisted bonds.  bt_unpair() also disconnects any
 	 * connected bonded peer (REMOTE_USER_TERM_CONN). */
