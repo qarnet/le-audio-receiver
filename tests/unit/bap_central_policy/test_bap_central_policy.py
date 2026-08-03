@@ -42,6 +42,18 @@ class TestShouldConnect(unittest.TestCase):
         self.assertFalse(p.should_connect(False, "raw_hci"))
 
 
+class TestNeedsFreshReconnect(unittest.TestCase):
+    def test_connected_bluez_needs_fresh_reconnect(self):
+        self.assertTrue(p.needs_fresh_reconnect(True, "bluez_connect"))
+
+    def test_disconnected_bluez_connects_directly(self):
+        self.assertFalse(p.needs_fresh_reconnect(False, "bluez_connect"))
+
+    def test_raw_hci_never_disconnects_first(self):
+        self.assertFalse(p.needs_fresh_reconnect(True, "raw_hci"))
+        self.assertFalse(p.needs_fresh_reconnect(False, "raw_hci"))
+
+
 class TestConnectOutcome(unittest.TestCase):
     def test_reply_ok(self):
         self.assertEqual(p.connect_outcome(True, None), "ok")

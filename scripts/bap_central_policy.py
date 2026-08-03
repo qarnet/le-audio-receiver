@@ -34,6 +34,19 @@ def should_connect(already_connected, strategy):
     return strategy == "bluez_connect" and not already_connected
 
 
+def needs_fresh_reconnect(already_connected, strategy):
+    """True when the already-connected device must be disconnected first.
+
+    BlueZ runs BAP auto-configuration (SetConfiguration) only for a
+    connection it freshly establishes while a source endpoint is
+    registered.  An ACL created outside this session (e.g. BlueZ
+    auto-connect of a trusted paired device) never triggers it, so the
+    preserve-bond flow tears that stale ACL down and reconnects via
+    Device1.Connect() to get a fresh connection event.
+    """
+    return strategy == "bluez_connect" and already_connected
+
+
 def connect_outcome(reply_ok, error):
     """Decide the outcome of the bounded Device1.Connect() wait.
 

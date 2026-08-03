@@ -984,7 +984,35 @@ def main():
                 sys.exit(1)
             print("[main] {}".format(strategy_detail))
 
-            if bap_central_policy.should_connect(dev_connected, strategy):
+            if bap_central_policy.needs_fresh_reconnect(dev_connected, strategy):
+                # Already connected (e.g. BlueZ auto-connected a trusted
+                # paired device): BlueZ runs BAP auto-configuration only
+                # for a connection it freshly establishes, so tear this
+                # stale ACL down first.  Connect() below then creates a
+                # fresh connection that triggers SetConfiguration.
+                print(
+                    "[main] Device1 already connected; disconnecting and "
+                    "reconnecting fresh so BlueZ configures BAP"
+                )
+                try:
+                    device.Disconnect()
+                except _dbus.exceptions.DBusException as e:
+                    print("[main]   Disconnect ignored: {}".format(e))
+                disc_deadline = time.monotonic() + 10
+                while time.monotonic() < disc_deadline:
+                    try:
+                        if not bool(dev_props.Get("org.bluez.Device1", "Connected")):
+                            break
+                    except _dbus.exceptions.DBusException:
+                        break
+                    _GLib.MainContext.default().iteration(False)
+                    time.sleep(0.1)
+            # Fresh mode (raw_hci strategy) needs no BlueZ Connect() — the
+            # raw-HCI helper below creates the ACL.
+
+            if bap_central_policy.should_connect(dev_connected, strategy) or (
+                bap_central_policy.needs_fresh_reconnect(dev_connected, strategy)
+            ):
                 conn_ok = [False]
                 conn_err = [None]
 
@@ -1035,8 +1063,6 @@ def main():
                 print(
                     "[main] Device1 Connected confirmed (preserve-bond, BlueZ transport)"
                 )
-            else:
-                print("[main] Device1 already connected; skipping Connect()")
 
             # No security gate here: Paired/Connected are re-read below
             # (after the transport step) and checked there with fresh state.
