@@ -150,6 +150,15 @@ class TestRegexParsing(unittest.TestCase):
         st = GateRunner.parse_offload(OFFLOAD_ACTIVE_EXHAUSTION)
         self.assertEqual(st["state"], "FALLBACK")
         self.assertEqual(st["exhaustion"], 1)
+        # R3 migration (obsolete gate child): max-exhaustion Recovery line
+        # without Counters/Probation still parses attempts + exhaustion.
+        st2 = GateRunner.parse_offload(
+            "State       : FALLBACK / epoch=12345 gen=3\n"
+            "Recovery    : attempts=10 fail=2 relapses=1 exhaustion=1\n"
+            "Probation   : active=1 success=0 cleared=0\n"
+        )
+        self.assertEqual(st2["recovery_attempts"], 10)
+        self.assertEqual(st2["exhaustion"], 1)
 
     def test_parse_offload_evidence(self):
         st = GateRunner.parse_offload(OFFLOAD_EVIDENCE)
@@ -164,6 +173,140 @@ class TestRegexParsing(unittest.TestCase):
         st = GateRunner.parse_offload(OFFLOAD_BASELINE)
         self.assertEqual(st["success"], 530)
         self.assertEqual(st["fallback"], 30)
+
+    # ── R3 migration from the retired tests/unit/gate child ────────────
+    # These cases come from the obsolete gate suite; equivalent assertions
+    # were merged, unique inputs preserved.
+
+    def test_parse_offload_active(self):
+        st = GateRunner.parse_offload(
+            "State       : ACTIVE / epoch=12345 gen=3\n"
+            "Counters    : submit=2000 success=1500 fallback=5 busy=10\n"
+            "Recovery    : attempts=3 fail=0 relapses=0 exhaustion=0\n"
+            "Probation   : active=0 success=200 cleared=1\n"
+        )
+        self.assertEqual(st["state"], "ACTIVE")
+        self.assertEqual(st["success"], 1500)
+        self.assertEqual(st["fallback"], 5)
+        self.assertEqual(st["recovery_attempts"], 3)
+        self.assertEqual(st["exhaustion"], 0)
+        self.assertEqual(st["probation_cleared"], 1)
+        self.assertEqual(st["probation_active"], 0)
+
+    def test_parse_offload_fallback(self):
+        st = GateRunner.parse_offload(
+            "State       : FALLBACK / epoch=12345 gen=3\n"
+            "Counters    : submit=500 success=400 fallback=12 busy=3\n"
+            "Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+            "Probation   : active=1 success=50 cleared=0\n"
+        )
+        self.assertEqual(st["state"], "FALLBACK")
+        self.assertEqual(st["fallback"], 12)
+        self.assertEqual(st["probation_active"], 1)
+
+    def test_parse_offload_faults(self):
+        st = GateRunner.parse_offload(
+            "Faults      : timeout=0 full=1 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+        )
+        self.assertEqual(st["fault_full"], 1)
+        self.assertEqual(st["fault_timeout"], 0)
+
+    def test_parse_offload_zero_faults(self):
+        st = GateRunner.parse_offload(
+            "Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+        )
+        for key in (
+            "fault_timeout",
+            "fault_full",
+            "fault_stale",
+            "fault_seq",
+            "fault_frame",
+            "fault_crc",
+            "fault_payload",
+        ):
+            self.assertEqual(st[key], 0)
+
+    def test_timed_stall_ack_multiple(self):
+        text = (
+            "FLPR timed stall applied: bits=0x01 duration=60 ms (cons_in=1 prod_out=0)\n"
+            "another line\n"
+        )
+        m = RE_STALL_TIMED_ACK.search(text)
+        self.assertIsNotNone(m)
+        self.assertEqual(int(m.group(1), 16), 0x01)
+        self.assertEqual(int(m.group(2)), 60)
+
+    def test_timed_ack_wrong_duration_rejected(self):
+        text = "FLPR timed stall applied: bits=0x01 duration=999 ms (cons_in=1 prod_out=0)\n"
+        m = RE_STALL_TIMED_ACK.search(text)
+        self.assertIsNotNone(m)
+        mask_val = int(m.group(1), 16)
+        dur_val = int(m.group(2))
+        self.assertFalse(mask_val == 0x01 and dur_val == 60)
+
+    def test_timeout_full_pass_gate(self):
+        """timeout=1 + full=1 are valid stall evidence; NOT integrity faults."""
+        st = GateRunner.parse_offload(
+            "Faults      : timeout=1 full=1 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+        )
+        self.assertEqual(st["fault_timeout"], 1)
+        self.assertEqual(st["fault_full"], 1)
+        integrity_faults = (
+            st["fault_stale"]
+            or st["fault_seq"]
+            or st["fault_frame"]
+            or st["fault_crc"]
+            or st["fault_payload"]
+        )
+        self.assertFalse(integrity_faults)
+
+    def test_integrity_faults_rejected(self):
+        """Each integrity fault (stale, seq, frame, crc, payload) is detected."""
+        cases = [
+            (
+                "stale=1",
+                "Faults      : timeout=0 full=0 stale=1 seq=0 frame=0 crc=0 payload=0\n",
+            ),
+            (
+                "seq=1",
+                "Faults      : timeout=0 full=0 stale=0 seq=1 frame=0 crc=0 payload=0\n",
+            ),
+            (
+                "frame=1",
+                "Faults      : timeout=0 full=0 stale=0 seq=0 frame=1 crc=0 payload=0\n",
+            ),
+            (
+                "crc=1",
+                "Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=1 payload=0\n",
+            ),
+            (
+                "payload=1",
+                "Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=1\n",
+            ),
+        ]
+        for label, text in cases:
+            st = GateRunner.parse_offload(text)
+            integrity = (
+                st["fault_stale"]
+                or st["fault_seq"]
+                or st["fault_frame"]
+                or st["fault_crc"]
+                or st["fault_payload"]
+            )
+            self.assertTrue(integrity, "%s must be detected as integrity fault" % label)
+        # Comprehensive: timeout+full are fine; seq/frame/crc/payload all 1
+        # must still trip the integrity rejection.
+        st = GateRunner.parse_offload(
+            "Faults      : timeout=1 full=1 stale=0 seq=1 frame=1 crc=1 payload=1\n"
+        )
+        integrity = (
+            st["fault_stale"]
+            or st["fault_seq"]
+            or st["fault_frame"]
+            or st["fault_crc"]
+            or st["fault_payload"]
+        )
+        self.assertTrue(integrity)
 
 
 class TestFakeSerial(unittest.TestCase):
@@ -381,6 +524,128 @@ class TestGateBaselineCapturedImmediately(unittest.TestCase):
         self.assertGreaterEqual(
             result.final_status.get("success", -1), result.baseline_success + 100
         )
+
+
+class TestGateMigratedRunnerBehavior(unittest.TestCase):
+    """R3: runner-level cases migrated from the retired tests/unit/gate
+    child (unique transports preserved; equivalent cases merged)."""
+
+    @patch("flpr_stall_gate.time.sleep")
+    @patch("flpr_stall_gate.time.monotonic")
+    def test_gate_timeout_on_stale_state(self, mock_mono, mock_sleep):
+        """Gate times out when state never becomes ACTIVE with success>=500."""
+        mock_sleep.return_value = None
+        gen = _mono_steady(1000.0, 0.02)
+        mock_mono.side_effect = lambda: next(gen)
+
+        schedule = {
+            0: "State       : PREPARING / epoch=1 gen=1\nCounters    : submit=0 success=0 fallback=0 busy=0\n",
+            1: "State       : PREPARING / epoch=1 gen=1\nCounters    : submit=0 success=0 fallback=0 busy=0\n",
+        }
+        runner = GateRunner(
+            FakeSerial(schedule), total_timeout=0.5, status_interval=0.1
+        )
+        result = runner.run()
+        self.assertFalse(result.passed)
+        self.assertTrue("ACTIVE" in result.error or "Timeout" in result.error)
+
+    @patch("flpr_stall_gate.time.sleep")
+    @patch("flpr_stall_gate.time.monotonic")
+    def test_gate_success_with_timeout_fault(self, mock_mono, mock_sleep):
+        """Full gate run passes even with timeout=1 (expected stall evidence)."""
+        mock_sleep.return_value = None
+        gen = _mono_steady(1000.0, 0.02)
+        mock_mono.side_effect = lambda: next(gen)
+
+        class TimeoutFaultTransport(FakeSerial):
+            def __init__(self):
+                super().__init__({})
+                self._idx = 0
+
+            def read_all(self) -> bytes:
+                self._idx += 1
+                if self._idx <= 2:
+                    return (
+                        "State       : ACTIVE / epoch=1 gen=1\n"
+                        "Counters    : submit=1000 success=600 fallback=0 busy=0\n"
+                        "Recovery    : attempts=0 fail=0 relapses=0 exhaustion=0\n"
+                        "Probation   : active=0 success=0 cleared=0\n"
+                        "Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+                    ).encode("utf-8")
+                elif self._idx == 3:
+                    return (
+                        "FLPR timed stall applied: bits=0x01 duration=60 ms (cons_in=1 prod_out=0)\n"
+                    ).encode("utf-8")
+                elif self._idx == 4:
+                    return (
+                        "State       : ACTIVE / epoch=1 gen=1\n"
+                        "Counters    : submit=1000 success=600 fallback=5 busy=0\n"
+                        "Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+                        "Probation   : active=0 success=0 cleared=0\n"
+                    ).encode("utf-8")
+                else:
+                    return (
+                        "State       : ACTIVE / epoch=1 gen=1\n"
+                        "Counters    : submit=1200 success=750 fallback=5 busy=0\n"
+                        "Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+                        "Probation   : active=0 success=100 cleared=1\n"
+                        "Faults      : timeout=1 full=0 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+                    ).encode("utf-8")
+
+        runner = GateRunner(
+            TimeoutFaultTransport(), total_timeout=5.0, status_interval=0.05
+        )
+        result = runner.run()
+        self.assertTrue(result.passed, f"Gate must PASS with timeout=1: {result.error}")
+
+    @patch("flpr_stall_gate.time.sleep")
+    @patch("flpr_stall_gate.time.monotonic")
+    def test_seq_fault_fails_gate(self, mock_mono, mock_sleep):
+        """Gate must fail when seq=1 (integrity fault)."""
+        mock_sleep.return_value = None
+        gen = _mono_steady(1000.0, 0.02)
+        mock_mono.side_effect = lambda: next(gen)
+
+        class SeqFaultTransport(FakeSerial):
+            def __init__(self):
+                super().__init__({})
+                self._idx = 0
+
+            def read_all(self) -> bytes:
+                self._idx += 1
+                if self._idx <= 2:
+                    return (
+                        "State       : ACTIVE / epoch=1 gen=1\n"
+                        "Counters    : submit=1000 success=600 fallback=0 busy=0\n"
+                        "Recovery    : attempts=0 fail=0 relapses=0 exhaustion=0\n"
+                        "Probation   : active=0 success=0 cleared=0\n"
+                        "Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+                    ).encode("utf-8")
+                elif self._idx == 3:
+                    return (
+                        "FLPR timed stall applied: bits=0x01 duration=60 ms (cons_in=1 prod_out=0)\n"
+                    ).encode("utf-8")
+                elif self._idx == 4:
+                    return (
+                        "State       : ACTIVE / epoch=1 gen=1\n"
+                        "Counters    : submit=1000 success=600 fallback=5 busy=0\n"
+                        "Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+                        "Probation   : active=0 success=0 cleared=0\n"
+                    ).encode("utf-8")
+                else:
+                    return (
+                        "State       : ACTIVE / epoch=1 gen=1\n"
+                        "Counters    : submit=1200 success=750 fallback=5 busy=0\n"
+                        "Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+                        "Probation   : active=0 success=100 cleared=1\n"
+                        "Faults      : timeout=0 full=0 stale=0 seq=1 frame=0 crc=0 payload=0\n"
+                    ).encode("utf-8")
+
+        runner = GateRunner(
+            SeqFaultTransport(), total_timeout=5.0, status_interval=0.05
+        )
+        result = runner.run()
+        self.assertFalse(result.passed, "Gate must FAIL with seq=1 integrity fault")
 
 
 if __name__ == "__main__":

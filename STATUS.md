@@ -1412,9 +1412,9 @@ to OpenOCD J-Link auto-detection with an optional validated
 `FW_DONGLE_JLINK_SERIAL` override; `scripts/probe-serial.local` and
 `nrf-probes` are no longer used (they select CMSIS-DAP receiver targets).
 Behavior covered by 5 new public-execution tests in
-`tests/unit/gate/test_gate.py` (default argv, explicit serial, invalid
+`tests/unit/fw_flash_dongle/test_fw_flash_dongle.py` (default argv, explicit serial, invalid
 serial, missing-artifact and missing-dev-shell errors; fake openocd records
-argv, fake nrf-probes fails loudly if called) — 22/22 pass.  Hardware
+argv, fake nrf-probes fails loudly if called) — 5/5 pass.  Hardware
 verification on the committed script: onboard J-Link auto-detected
 (`J-Link OB-nRF5340-NordicSemi`, SWD DPIDR `0x6ba02477`, VTarget 3.300 V),
 net core programmed+verified first (nRF5340-QKAA 256 kB Flash), app core

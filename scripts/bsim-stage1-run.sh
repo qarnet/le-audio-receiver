@@ -8,10 +8,15 @@
 #   (first-ASE stop, release-without-disable, disconnect-while-streaming,
 #   reconnect, source rejection, NO_MEM, invalid codec fields) run once.
 #
+# The scenario matrix, run counts, and pinned hashes/counts all come from
+# tests/bsim/stage1-scenarios.json (single versioned data source shared
+# with scripts/bsim_stage1_parse.py) — the shell no longer copies any of
+# those tables.
+#
 # Every run is checked by scripts/bsim_stage1_parse.py, which parses
 # every named field of the receiver/client PASS records and asserts the
 # scenario contract (exact counts, responses, hashes, channel-hash
-# relations, no fault markers; see the pinned tables below).
+# relations, no fault markers; pins from the versioned data file).
 #
 # A flock around the shared ${ZEPHYR_BASE}/bsim_out tree stops concurrent
 # gates from corrupting shared generated build files.  Logs go to one
@@ -32,104 +37,78 @@ set -ueo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+DATA_FILE="$REPO_ROOT/tests/bsim/stage1-scenarios.json"
 
 # Source BSIM environment (derives BSIM_OUT_PATH, BOARD defaults)
 source "${SCRIPT_DIR}/bsim-env.sh"
 
 BOARD_TS="${BOARD//\//_}"
 
-# ── Pinned known hashes (full / left / right) ────────────────────────
-# Baselined 2026-08-01 from two identical post-review-fix workstation
-# runs of the FNV-corrected oracle (samples converted to uint16_t before
-# byte extraction; full/L/R prepend the 4-byte LE frame index).
-# reconnect_second_stream_10ms pins its second segment, which must equal
-# a fresh mono 10 ms oracle.
-declare -A KNOWN_FULL=(
-    [mono_10ms]=0x22AB5C0D
-    [mono_7p5ms]=0x01A3EB05
-    [modea_10ms]=0xBAE24F7E
-    [modea_7p5ms]=0x2D95D15C
-    [modea_reverse_start_10ms]=0xBAE24F7E
-    [modeb_10ms]=0xBAE24F7E
-    [modeb_7p5ms]=0xFF82CADB
-    [invalid_sdu_resume_10ms]=0x0C61918D
-    [modea_one_cis_loss_10ms]=0x30D6BAF0
-    [reconnect_second_stream_10ms]=0x22AB5C0D
-)
-declare -A KNOWN_L=(
-    [mono_10ms]=0x32777D65
-    [mono_7p5ms]=0x30F0308C
-    [modea_10ms]=0x32777D65
-    [modea_7p5ms]=0xE1D60E7B
-    [modea_reverse_start_10ms]=0x32777D65
-    [modeb_10ms]=0x32777D65
-    [modeb_7p5ms]=0x30F0308C
-    [modea_one_cis_loss_10ms]=0x32777D65
-)
-declare -A KNOWN_R=(
-    [mono_10ms]=0x32777D65
-    [mono_7p5ms]=0x30F0308C
-    [modea_10ms]=0xD3EE3722
-    [modea_7p5ms]=0xA219B61E
-    [modea_reverse_start_10ms]=0xD3EE3722
-    [modeb_10ms]=0xD3EE3722
-    [modeb_7p5ms]=0x129591EE
-    [modea_one_cis_loss_10ms]=0x9859F1D8
-)
-
-# Pinned exact total decoder invocations per scenario (deterministic,
-# including unpaired-half decodes at the CIS activation skew).
-#
-# NOTE (Mode A re-baseline): the Mode A event assembler (audio_modea)
-# defers decode to event resolution and synthesizes PLC for a missing
-# channel, so Mode A totals are now exactly 2*(pushes+transients) — the
-# old immediate-decode design wasted one decode per unpaired half.  The
-# 7.5 ms startup transients re-shuffle under sentinel pairing (trans
-# 9→13, splc 22→24, zero post-start PLC preserved), so its hashes and
-# total changed (0x00A5D3F9/0xEE461704/0x37E155C8/236 →
-# 0x2D95D15C/0xE1D60E7B/0xA219B61E/226); modea_10ms/reverse/first_stop
-# totals rose by exactly 1 (215→216, 215→216, 85→86) with hashes
-# unchanged.  The one-CIS-loss scenario pins the lossless-mode left
-# hash (0x32777D65 — the unaffected channel is byte-identical) and a
-# deterministic right hash with 18 PLC concealments (0x9859F1D8).
-declare -A KNOWN_TOTAL=(
-    [mono_10ms]=108
-    [mono_7p5ms]=111
-    [modea_10ms]=216
-    [modea_7p5ms]=226
-    [modea_reverse_start_10ms]=216
-    [modeb_10ms]=216
-    [modeb_7p5ms]=222
-    [invalid_sdu_resume_10ms]=108
-    [modea_one_cis_loss_10ms]=216
-    [modea_first_stop_10ms]=86
-    [release_without_disable_10ms]=56
-    [disconnect_streaming_10ms]=63
-    [reconnect_second_stream_10ms]=63
-)
-
-# Scenario matrix: name runs
-MATRIX=(
-    "mono_10ms 2"
-    "mono_7p5ms 2"
-    "modea_10ms 2"
-    "modea_7p5ms 2"
-    "modea_reverse_start_10ms 2"
-    "modeb_10ms 2"
-    "modeb_7p5ms 2"
-    "invalid_sdu_resume_10ms 2"
-    "modea_one_cis_loss_10ms 2"
-    "modea_first_stop_10ms 1"
-    "release_without_disable_10ms 1"
-    "disconnect_streaming_10ms 1"
-    "reconnect_second_stream_10ms 1"
-    "unsupported_source_direction 1"
-    "no_free_sink_slot 1"
-    "invalid_codec_fields 1"
-)
-
 BASELINE="${BSIM_BASELINE:-0}"
 KEEP_LOGS="${BSIM_KEEP_LOGS:-0}"
+
+# ── Versioned scenario data (single source: stage1-scenarios.json) ─────
+# Validate schema early and fail clearly; never proceed on a malformed,
+# missing, or duplicate matrix.
+
+if ! python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from bsim_stage1_parse import load_scenarios
+load_scenarios(sys.argv[2])
+' "$SCRIPT_DIR" "$DATA_FILE" 2>/dev/null; then
+    echo "ERROR: invalid stage1-scenarios.json — run python3 scripts/bsim_stage1_parse.py --help for the schema" >&2
+    echo "  $(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from bsim_stage1_parse import load_scenarios
+try:
+    load_scenarios(sys.argv[2])
+except Exception as e:
+    print(e)
+' "$SCRIPT_DIR" "$DATA_FILE")" >&2
+    exit 1
+fi
+
+# Matrix: "name runs" entries (names contain no spaces — no word-splitting
+# risk).
+mapfile -t MATRIX < <(python3 - "$DATA_FILE" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+for s in data["scenarios"]:
+    print("%s %d" % (s["name"], s["runs"]))
+PY
+)
+
+# Pinned known hashes/counts: scenario|kind|value lines into assoc arrays.
+declare -A KNOWN_FULL KNOWN_L KNOWN_R KNOWN_TOTAL
+while IFS='|' read -r scn kind val; do
+    case "$kind" in
+        full) KNOWN_FULL["$scn"]="$val" ;;
+        l) KNOWN_L["$scn"]="$val" ;;
+        r) KNOWN_R["$scn"]="$val" ;;
+        total) KNOWN_TOTAL["$scn"]="$val" ;;
+    esac
+done < <(python3 - "$DATA_FILE" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+for s in data["scenarios"]:
+    for key in ("full", "l", "r", "total"):
+        val = (s.get("known") or {}).get(key)
+        if val is not None:
+            print("%s|%s|%s" % (s["name"], key, val))
+PY
+)
+
+# Scenarios that pin a full hash (summary + baseline sections).
+mapfile -t KNOWN_SCNS < <(python3 - "$DATA_FILE" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+for s in data["scenarios"]:
+    if "full" in (s.get("known") or {}):
+        print(s["name"])
+PY
+)
 
 # --- Toolchain ---
 if ! command -v nrfutil &>/dev/null; then
@@ -274,7 +253,10 @@ run_one() {
 
     # Strict scenario check via the Python parser.
     local _known_args=()
-    if [ "$BASELINE" != "1" ]; then
+    if [ "$BASELINE" = "1" ]; then
+        # Baseline mode: print hashes, skip all known-value asserts.
+        _known_args+=(--no-known)
+    else
         [ "${KNOWN_FULL[$_scn]:-0x00000000}" != "0x00000000" ] && \
             _known_args+=(--known-full "${KNOWN_FULL[$_scn]}")
         [ "${KNOWN_L[$_scn]:-0x00000000}" != "0x00000000" ] && \
@@ -371,18 +353,16 @@ for entry in "${MATRIX[@]}"; do
 done
 
 echo ""
-echo "Known full/L/R hashes (pinned):"
-for scn in mono_10ms mono_7p5ms modea_10ms modea_7p5ms modea_reverse_start_10ms \
-           modeb_10ms modeb_7p5ms invalid_sdu_resume_10ms modea_one_cis_loss_10ms; do
+echo "Known full/L/R hashes (pinned, from tests/bsim/stage1-scenarios.json):"
+for scn in "${KNOWN_SCNS[@]}"; do
     printf "  %-28s full=%-12s L=%-12s R=%-12s\n" "$scn" "${KNOWN_FULL[$scn]:-0x00000000}" \
         "${KNOWN_L[$scn]:-0x00000000}" "${KNOWN_R[$scn]:-0x00000000}"
 done
 
 if [ "$BASELINE" = "1" ]; then
     echo ""
-    echo "=== BASELINE HASHES (pin these into KNOWN_* after two identical runs) ==="
-    for scn in mono_10ms mono_7p5ms modea_10ms modea_7p5ms modea_reverse_start_10ms \
-               modeb_10ms modeb_7p5ms invalid_sdu_resume_10ms modea_one_cis_loss_10ms; do
+    echo "=== BASELINE HASHES (pin these into stage1-scenarios.json after two identical runs) ==="
+    for scn in "${KNOWN_SCNS[@]}"; do
         printf "  %-28s full=%-12s L=%-12s R=%-12s\n" "$scn" "${H_RUN1[$scn]:-FAIL}" \
             "${H_L1[$scn]:-FAIL}" "${H_R1[$scn]:-FAIL}"
     done

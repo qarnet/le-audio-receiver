@@ -20,6 +20,7 @@ import unittest
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 RUNNER_SRC = os.path.join(REPO_ROOT, "scripts", "test-coverage.sh")
+INVENTORY_SRC = os.path.join(REPO_ROOT, "scripts", "test_inventory.py")
 
 FAKE_WEST = """#!/usr/bin/env bash
 d=""
@@ -120,28 +121,49 @@ MANIFEST = {
 
 
 class RunnerFixture:
-    def __init__(self, dirty=False, manifest=None):
+    def __init__(self, dirty=False, manifest=None, exec_suite=None, no_c_suites=False):
         self.root = tempfile.mkdtemp(prefix="t7covrun-")
         self.repo = os.path.join(self.root, "repo")
         os.makedirs(os.path.join(self.repo, "scripts"))
-        os.makedirs(os.path.join(self.repo, "tests", "unit", "fake_suite"))
         shutil.copy(RUNNER_SRC, os.path.join(self.repo, "scripts", "test-coverage.sh"))
         os.chmod(
             os.path.join(self.repo, "scripts", "test-coverage.sh"),
             os.stat(os.path.join(self.repo, "scripts", "test-coverage.sh")).st_mode
             | stat.S_IXUSR,
         )
-        with open(
-            os.path.join(self.repo, "tests", "unit", "fake_suite", "testcase.yaml"), "w"
-        ) as fh:
-            fh.write(
-                "tests:\n  unit.fake_suite:\n    platform_allow: native_sim/native/64\n"
-            )
-        with open(
-            os.path.join(self.repo, "tests", "unit", "fake_suite", "CMakeLists.txt"),
-            "w",
-        ) as fh:
-            fh.write("cmake_minimum_required(VERSION 3.20.0)\nproject(x)\n")
+        # The runner discovers suites through the shared inventory module;
+        # the fixture repo must carry it too.
+        shutil.copy(
+            INVENTORY_SRC, os.path.join(self.repo, "scripts", "test_inventory.py")
+        )
+        if not no_c_suites:
+            os.makedirs(os.path.join(self.repo, "tests", "unit", "fake_suite"))
+            with open(
+                os.path.join(self.repo, "tests", "unit", "fake_suite", "testcase.yaml"),
+                "w",
+            ) as fh:
+                fh.write(
+                    "tests:\n  unit.fake_suite:\n    platform_allow: native_sim/native/64\n"
+                )
+            with open(
+                os.path.join(
+                    self.repo, "tests", "unit", "fake_suite", "CMakeLists.txt"
+                ),
+                "w",
+            ) as fh:
+                fh.write("cmake_minimum_required(VERSION 3.20.0)\nproject(x)\n")
+            if exec_suite:
+                # A CMakeLists-only dir is an exec-only C suite (no
+                # testcase.yaml) — the empty-category side of the fixture.
+                os.makedirs(os.path.join(self.repo, "tests", "unit", exec_suite))
+                with open(
+                    os.path.join(
+                        self.repo, "tests", "unit", exec_suite, "CMakeLists.txt"
+                    ),
+                    "w",
+                ) as fh:
+                    fh.write("cmake_minimum_required(VERSION 3.20.0)\nproject(x)\n")
+        os.makedirs(os.path.join(self.repo, "tests"), exist_ok=True)
         with open(os.path.join(self.repo, "tests", "test-matrix.json"), "w") as fh:
             json.dump(manifest or MANIFEST, fh)
         os.makedirs(os.path.join(self.repo, "src"))
@@ -503,6 +525,49 @@ class RunnerToolVersionEnforcement(unittest.TestCase):
         )
         rc, out, _ = fx.run("--report-only", output=os.path.join(fx.root, "out2"))
         self.assertEqual(0, rc, out)
+
+
+class RunnerInventoryDiscovery(unittest.TestCase):
+    """R3: suite discovery comes from the shared scripts/test_inventory.py
+    module (not copied shell lists); empty categories are valid, but at
+    least one C suite is still required."""
+
+    def test_exec_only_suite_discovered_via_inventory(self):
+        fx = RunnerFixture(exec_suite="exec_suite")
+        self.addCleanup(fx.cleanup)
+        rc, out, out_dir = fx.run("--report-only")
+        self.assertEqual(0, rc, out)
+        with open(os.path.join(out_dir, "run-manifest.json")) as fh:
+            manifest = json.load(fh)
+        names = {s["name"]: s["kind"] for s in manifest["suites"]}
+        self.assertEqual(names, {"fake_suite": "twister", "exec_suite": "exec-only"})
+
+    def test_empty_category_is_valid_but_no_c_suites_fails(self):
+        # fake_suite (twister) present, exec category empty: valid.
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        rc, out, out_dir = fx.run("--report-only")
+        self.assertEqual(0, rc, out)
+        with open(os.path.join(out_dir, "run-manifest.json")) as fh:
+            manifest = json.load(fh)
+        self.assertEqual([s["name"] for s in manifest["suites"]], ["fake_suite"])
+
+        # No C suites at all: the runner must refuse loudly.
+        fx2 = RunnerFixture(no_c_suites=True)
+        self.addCleanup(fx2.cleanup)
+        rc2, out2, _ = fx2.run("--report-only")
+        self.assertNotEqual(0, rc2)
+        self.assertIn("no suites discovered", out2)
+
+    def test_missing_inventory_module_fails_clearly(self):
+        # If the shared inventory module is absent the runner must fail
+        # with a clear message instead of silently building nothing.
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        os.remove(os.path.join(fx.repo, "scripts", "test_inventory.py"))
+        rc, out, _ = fx.run("--report-only")
+        self.assertNotEqual(0, rc)
+        self.assertIn("test_inventory.py", out)
 
 
 if __name__ == "__main__":

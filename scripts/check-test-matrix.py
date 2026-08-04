@@ -45,6 +45,12 @@ import os
 import re
 import sys
 
+# Shared suite inventory (single filesystem classification source, also
+# consumed by test-all.sh and test-coverage.sh).  Its discovery invariants
+# are validated below; the checker never re-parses shell hardcodes.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import test_inventory  # noqa: E402
+
 ALLOWED_CLASSIFICATIONS = {
     "direct",
     "integration-only",
@@ -307,6 +313,7 @@ class Checker:
         self._check_inventory_and_schema()
         self._check_public_api_inventory()
         self._check_witnesses_and_apis()
+        self._check_test_inventory()
         if self.coverage_path:
             self._check_coverage()
         self.messages.sort()
@@ -577,6 +584,64 @@ class Checker:
                 if isinstance(outcome, dict) and outcome.get("api"):
                     if not self.api_exists(source, outcome["api"]):
                         self.error("invented API: %s: %r" % (source, outcome["api"]))
+
+    # ---------- rule 13: shared suite inventory consistency ----------
+    def _check_test_inventory(self):
+        """Validate the shared inventory module's discovery on this repo.
+
+        The canonical gate and the coverage runner consume
+        scripts/test_inventory.py directly, so the checker validates that
+        module's output instead of re-deriving suite lists: duplicate
+        python labels/paths are impossible (the module raises), paths must
+        exist, and categories must obey the filesystem shape.  Adding a
+        suite that the module cannot see (or that the module classifies
+        wrongly) is caught here.
+        """
+        try:
+            inv = test_inventory.discover(self.repo_root)
+        except test_inventory.InventoryError as exc:
+            self.error("test inventory invalid: %s" % exc)
+            return
+        except OSError as exc:
+            self.error("test inventory unreadable: %s" % exc)
+            return
+
+        for name in inv.twister:
+            unit = os.path.join(self.repo_root, "tests", "unit", name)
+            if not os.path.isfile(os.path.join(unit, "testcase.yaml")):
+                self.error("inventory twister suite missing testcase.yaml: %s" % name)
+
+        for name in inv.exec_only:
+            unit = os.path.join(self.repo_root, "tests", "unit", name)
+            if not os.path.isfile(os.path.join(unit, "CMakeLists.txt")):
+                self.error(
+                    "inventory exec-only suite missing CMakeLists.txt: %s" % name
+                )
+            if os.path.isfile(os.path.join(unit, "testcase.yaml")):
+                self.error(
+                    "inventory exec-only suite has testcase.yaml: %s "
+                    "(must be classified twister)" % name
+                )
+
+        seen_labels = set()
+        for child in inv.python_children:
+            full = os.path.join(self.repo_root, child.path)
+            if not os.path.isfile(full):
+                self.error("inventory python child missing: %s" % child.path)
+                continue
+            if child.label in seen_labels:
+                self.error("duplicate inventory python child label: %s" % child.label)
+            seen_labels.add(child.label)
+            if child.path.startswith("tests/unit/"):
+                unit_dir = os.path.dirname(full)
+                if os.path.isfile(
+                    os.path.join(unit_dir, "CMakeLists.txt")
+                ) or os.path.isfile(os.path.join(unit_dir, "testcase.yaml")):
+                    self.error("python child inside a C suite dir: %s" % child.path)
+            elif child.path.startswith("scripts/"):
+                pass
+            else:
+                self.error("python child outside expected roots: %s" % child.path)
 
     # ---------- rule 10 ----------
     def _check_coverage(self):

@@ -1035,5 +1035,170 @@ class CheckTestMatrixDeterminism(unittest.TestCase):
             fx.cleanup()
 
 
+INVENTORY_PATH = os.path.join(REPO_ROOT, "scripts", "test_inventory.py")
+_inv_spec = importlib.util.spec_from_file_location("test_inventory", INVENTORY_PATH)
+assert _inv_spec is not None and _inv_spec.loader is not None, "inventory import failed"
+ti = importlib.util.module_from_spec(_inv_spec)
+_inv_spec.loader.exec_module(ti)
+
+
+def _make_repo(root, files):
+    for rel, text in files.items():
+        full = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    return root
+
+
+def _inv_cli(root, *args):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = ti.main(["--repo-root", root] + list(args))
+    return code, buf.getvalue()
+
+
+class TestInventoryDiscovery(unittest.TestCase):
+    """R3: shared deterministic suite discovery (scripts/test_inventory.py)
+    is the sole classification source; the checker validates its output."""
+
+    def test_classification_shape(self):
+        with tempfile.TemporaryDirectory() as root:
+            _make_repo(
+                root,
+                {
+                    "tests/unit/tw_suite/testcase.yaml": "tests:\n",
+                    "tests/unit/exec_suite/CMakeLists.txt": "cmake_minimum_required(VERSION 3.20.0)\n",
+                    "tests/unit/py_suite/test_py_suite.py": "print('x')\n",
+                    "tests/unit/py_suite/__init__.py": "",
+                    "tests/unit/helper_dir/README.txt": "not a suite\n",
+                    "scripts/test_bluez_extra.py": "print('x')\n",
+                },
+            )
+            inv = ti.discover(root)
+            self.assertEqual(inv.twister, ("tw_suite",))
+            self.assertEqual(inv.exec_only, ("exec_suite",))
+            labels = {c.label: c.path for c in inv.python_children}
+            self.assertEqual(
+                labels,
+                {
+                    "py_suite": "tests/unit/py_suite/test_py_suite.py",
+                    "bluez_extra": "scripts/test_bluez_extra.py",
+                },
+            )
+            self.assertEqual(inv.total(), 4)
+            for child in inv.python_children:
+                self.assertTrue(os.path.isfile(os.path.join(root, child.path)))
+
+    def test_missing_markers_are_not_suites(self):
+        with tempfile.TemporaryDirectory() as root:
+            _make_repo(
+                root,
+                {
+                    "tests/unit/helper_dir/README.txt": "x",
+                    "tests/unit/helper_dir/test_note.txt": "x",
+                },
+            )
+            inv = ti.discover(root)
+            self.assertEqual(inv.twister, ())
+            self.assertEqual(inv.exec_only, ())
+            self.assertEqual(inv.python_children, ())
+
+    def test_cmake_dir_test_file_not_a_python_child(self):
+        # A test_*.py inside a C suite dir (has CMakeLists.txt) must not be
+        # discovered as a python child: the dir is an exec-only C suite.
+        with tempfile.TemporaryDirectory() as root:
+            _make_repo(
+                root,
+                {
+                    "tests/unit/exec_suite/CMakeLists.txt": "cmake_minimum_required(VERSION 3.20.0)\n",
+                    "tests/unit/exec_suite/test_something.py": "print('x')\n",
+                },
+            )
+            inv = ti.discover(root)
+            self.assertEqual(inv.exec_only, ("exec_suite",))
+            self.assertEqual(inv.python_children, ())
+
+    def test_duplicate_python_label_raises(self):
+        # Unit-dir label (dirname) collides with a scripts child label
+        # (stem minus test_) → the module must refuse, never emit a
+        # silently ambiguous child.
+        with tempfile.TemporaryDirectory() as root:
+            _make_repo(
+                root,
+                {
+                    "tests/unit/bluez_wireplumber_gate/test_x.py": "print('x')\n",
+                    "scripts/test_bluez_wireplumber_gate.py": "print('x')\n",
+                },
+            )
+            with self.assertRaises(ti.InventoryError):
+                ti.discover(root)
+
+    def test_cli_count_and_json(self):
+        with tempfile.TemporaryDirectory() as root:
+            _make_repo(
+                root,
+                {
+                    "tests/unit/tw_suite/testcase.yaml": "tests:\n",
+                    "tests/unit/py_suite/test_py_suite.py": "print('x')\n",
+                },
+            )
+            code, out = _inv_cli(root, "--count")
+            self.assertEqual(0, code)
+            self.assertEqual(out.strip(), "2")
+            code, out = _inv_cli(root, "--json")
+            self.assertEqual(0, code)
+            record = json.loads(out)
+            self.assertEqual(record["total"], 2)
+            self.assertEqual(record["twister"], ["tw_suite"])
+            self.assertEqual(record["python_children"][0]["label"], "py_suite")
+
+    def test_cli_twister_and_python_lines(self):
+        with tempfile.TemporaryDirectory() as root:
+            _make_repo(
+                root,
+                {
+                    "tests/unit/tw_suite/testcase.yaml": "tests:\n",
+                    "tests/unit/py_suite/test_py_suite.py": "print('x')\n",
+                },
+            )
+            code, out = _inv_cli(root, "--twister")
+            self.assertEqual(0, code)
+            self.assertEqual(out.strip().splitlines(), ["tw_suite"])
+            code, out = _inv_cli(root, "--python")
+            self.assertEqual(0, code)
+            self.assertEqual(
+                out.strip().splitlines(),
+                ["py_suite\ttests/unit/py_suite/test_py_suite.py"],
+            )
+
+
+class CheckTestInventoryConsistency(unittest.TestCase):
+    """R3: the checker validates the shared inventory module output."""
+
+    def test_checker_validates_python_children(self):
+        fx = Fixture(valid_entries())
+        try:
+            fx._write("tests/unit/py_only/test_py_only.py", "print('x')\n")
+            fx._write("scripts/test_extra_gate.py", "print('x')\n")
+            code, out = fx.run_checker()
+            self.assertEqual(0, code, out)
+            self.assertNotIn("inventory", out)
+        finally:
+            fx.cleanup()
+
+    def test_checker_duplicate_python_label_fails(self):
+        fx = Fixture(valid_entries())
+        try:
+            fx._write("tests/unit/bluez_wireplumber_gate/test_x.py", "print('x')\n")
+            fx._write("scripts/test_bluez_wireplumber_gate.py", "print('x')\n")
+            code, out = fx.run_checker()
+            self.assertNotEqual(0, code)
+            self.assertIn("test inventory invalid", out)
+            self.assertIn("duplicate python child label", out)
+        finally:
+            fx.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

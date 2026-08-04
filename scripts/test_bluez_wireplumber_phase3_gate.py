@@ -498,6 +498,38 @@ class TestServiceResolutionMocked(unittest.TestCase):
             self.assertFalse(result["VCS"])
 
 
+class TestSharedRemoteUuids(unittest.TestCase):
+    """R3: phase3's remote-UUID check reads the base module's REMOTE_UUIDS
+    (one source of truth for PACS/ASCS/VCS shared with the Phase 2 gate)."""
+
+    def test_phase3_remote_uuids_come_from_base_module(self):
+        with tempfile.TemporaryDirectory() as td:
+            gate = Phase3Gate(log_dir=os.path.join(td, "uuids_shared"))
+            try:
+                # A UUID injected ONLY into _bg.REMOTE_UUIDS must be the
+                # one the phase3 check resolves against — proving the
+                # function reads the shared dict, not an inline copy.
+                fake_uuid = "00001899-0000-1000-8000-00805f9b34fb"
+                mock_props = MagicMock()
+                mock_props.Get.return_value = [fake_uuid]
+                mock_iface = MagicMock(return_value=mock_props)
+                with patch("dbus.SystemBus"), patch("dbus.Interface", mock_iface):
+                    with patch.object(
+                        _bg,
+                        "REMOTE_UUIDS",
+                        {"PACS": fake_uuid, "ASCS": "x", "VCS": "y"},
+                    ):
+                        result = gate.check_remote_uuids("AA:BB:CC:DD:EE:FF")
+                self.assertTrue(result["PACS"])
+                self.assertFalse(result["ASCS"])
+                self.assertFalse(result["VCS"])
+            finally:
+                try:
+                    gate.cleanup()
+                except Exception:
+                    pass
+
+
 class TestLogScoping(unittest.TestCase):
     """Test independent log capture per playback run."""
 

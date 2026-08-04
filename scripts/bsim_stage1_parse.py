@@ -16,30 +16,129 @@ PASS substring — every named field is parsed and asserted.
 """
 
 import argparse
+import json
+import os
 import re
 import sys
 
-# ── scenario metadata ────────────────────────────────────────────────
+# ── scenario metadata (versioned data file) ────────────────────────────
+# tests/bsim/stage1-scenarios.json is the single source for scenario
+# metadata (dec_calls / channel mode / runs) and the pinned known values.
+# scripts/bsim-stage1-run.sh derives its matrix/hashes/counts from the same
+# file; explicit CLI --known-* flags override the file defaults, and
+# --no-known disables known assertions entirely (baseline mode).
+
+_SCENARIOS_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "tests",
+    "bsim",
+    "stage1-scenarios.json",
+)
+
+CHANNEL_MODES = ("mono", "stereo")
+KNOWN_KEYS = ("full", "l", "r", "total")
+_HEX_RE = re.compile(r"^0x[0-9A-Fa-f]+$")
+
+
+class ScenarioDataError(ValueError):
+    """Raised when the versioned scenario data file is malformed."""
+
+
+def load_scenarios(path=None):
+    """Load and validate the versioned scenario data file.
+
+    Returns the parsed JSON object (a dict with a "scenarios" list).
+    Raises ScenarioDataError with a clear message on missing file, invalid
+    JSON, missing/unknown fields, duplicate scenario names, or invalid
+    values — never silently ignores a malformed matrix.
+    """
+    data_path = path or _SCENARIOS_FILE
+    if not os.path.isfile(data_path):
+        raise ScenarioDataError("scenario data file not found: %s" % data_path)
+    try:
+        with open(data_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise ScenarioDataError("cannot read %s: %s" % (data_path, exc))
+
+    if not isinstance(data, dict) or not isinstance(data.get("scenarios"), list):
+        raise ScenarioDataError(
+            "%s: must be an object with a 'scenarios' list" % data_path
+        )
+    if data.get("schema_version") != 1:
+        raise ScenarioDataError(
+            "%s: missing/unsupported schema_version (expected 1)" % data_path
+        )
+    if not data["scenarios"]:
+        raise ScenarioDataError("%s: empty 'scenarios' list" % data_path)
+
+    seen = set()
+    for idx, entry in enumerate(data["scenarios"]):
+        where = "%s: scenario[%d]" % (data_path, idx)
+        if not isinstance(entry, dict):
+            raise ScenarioDataError("%s: not an object" % where)
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            raise ScenarioDataError("%s: missing/empty 'name'" % where)
+        if name in seen:
+            raise ScenarioDataError("%s: duplicate scenario name %r" % (where, name))
+        seen.add(name)
+        runs = entry.get("runs")
+        if not isinstance(runs, int) or runs < 1:
+            raise ScenarioDataError("%s: 'runs' must be a positive int" % where)
+        dec_calls = entry.get("dec_calls")
+        if not isinstance(dec_calls, int) or dec_calls < 1:
+            raise ScenarioDataError("%s: 'dec_calls' must be a positive int" % where)
+        if entry.get("channel_mode") not in CHANNEL_MODES:
+            raise ScenarioDataError(
+                "%s: 'channel_mode' must be one of %s"
+                % (where, ", ".join(CHANNEL_MODES))
+            )
+        known = entry.get("known", {})
+        if known is None:
+            known = {}
+        if not isinstance(known, dict):
+            raise ScenarioDataError("%s: 'known' must be an object" % where)
+        for key, val in known.items():
+            if key not in KNOWN_KEYS:
+                raise ScenarioDataError("%s: unknown known key %r" % (where, key))
+            if key == "total":
+                if not isinstance(val, int) or val < 0:
+                    raise ScenarioDataError(
+                        "%s: known.total must be a non-negative int" % where
+                    )
+            else:
+                if not (isinstance(val, str) and _HEX_RE.match(val)):
+                    raise ScenarioDataError(
+                        "%s: known.%s must be a 0x-hex string" % (where, key)
+                    )
+    return data
+
 
 # Scenario name -> (decoder calls per push, mono or stereo, runs in matrix)
 SCENARIOS = {
-    "mono_10ms": (1, "mono", 2),
-    "mono_7p5ms": (1, "mono", 2),
-    "modea_10ms": (2, "stereo", 2),
-    "modea_7p5ms": (2, "stereo", 2),
-    "modea_reverse_start_10ms": (2, "stereo", 2),
-    "modeb_10ms": (2, "stereo", 2),
-    "modeb_7p5ms": (2, "stereo", 2),
-    "invalid_sdu_resume_10ms": (1, "mono", 2),
-    "modea_first_stop_10ms": (2, "stereo", 1),
-    "release_without_disable_10ms": (1, "mono", 1),
-    "disconnect_streaming_10ms": (1, "mono", 1),
-    "reconnect_second_stream_10ms": (1, "mono", 1),
-    "unsupported_source_direction": (1, "mono", 1),
-    "no_free_sink_slot": (1, "mono", 1),
-    "invalid_codec_fields": (1, "mono", 1),
-    "modea_one_cis_loss_10ms": (2, "stereo", 2),
+    entry["name"]: (entry["dec_calls"], entry["channel_mode"], entry["runs"])
+    for entry in load_scenarios()["scenarios"]
 }
+
+# Scenario name -> pinned known values (ints) from the versioned file.
+KNOWN_VALUES = {}
+for _entry in load_scenarios()["scenarios"]:
+    _known = _entry.get("known") or {}
+    _val = {}
+    for _key in ("full", "l", "r"):
+        if _key in _known:
+            _val[_key] = int(_known[_key], 16)
+    if "total" in _known:
+        _val["total"] = _known["total"]
+    if _val:
+        KNOWN_VALUES[_entry["name"]] = _val
+
+
+def known_values(scenario):
+    """Pinned known values for a scenario (empty dict when none pinned)."""
+    return dict(KNOWN_VALUES.get(scenario, {}))
+
 
 # Scheduled single-CIS losses in the Mode A one-CIS-loss scenario: the
 # right stream pauses mid-stream for a bounded window and its CIS loses
@@ -510,17 +609,28 @@ def main(argv):
     ap.add_argument("--known-l", default=None)
     ap.add_argument("--known-r", default=None)
     ap.add_argument("--known-total", default=None)
+    ap.add_argument(
+        "--no-known",
+        action="store_true",
+        help="disable all known-value assertions (baseline mode; hashes printed only)",
+    )
     args = ap.parse_args(argv)
 
+    # Known-value precedence (documented): --no-known > explicit --known-*
+    # flags > versioned file defaults (tests/bsim/stage1-scenarios.json).
     known = {}
-    for key, val in (
-        ("known_full", args.known_full),
-        ("known_l", args.known_l),
-        ("known_r", args.known_r),
-    ):
-        known[key] = int(val, 16) if val else None
-
-    known["known_total"] = int(args.known_total) if args.known_total else None
+    if not args.no_known:
+        known = known_values(args.scenario)
+        for key, val in (
+            ("known_full", args.known_full),
+            ("known_l", args.known_l),
+            ("known_r", args.known_r),
+        ):
+            if val is not None:
+                known[key[6:]] = int(val, 16)
+        if args.known_total is not None:
+            known["total"] = int(args.known_total)
+    known = {"known_%s" % k: v for k, v in known.items()}
 
     try:
         check(args.scenario, args.receiver, args.client, known)

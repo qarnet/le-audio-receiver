@@ -548,17 +548,16 @@ class Phase3Gate:
         return False
 
     def check_remote_uuids(self, addr: str) -> Dict[str, bool]:
-        """Check which required BAP UUIDs are present on remote device."""
+        """Check which required BAP UUIDs are present on remote device.
+
+        UUID values come from the base module's REMOTE_UUIDS (single source
+        shared with the Phase 2 gate)."""
         result: Dict[str, bool] = {
             "PACS": False,
             "ASCS": False,
             "VCS": False,
         }
-        remote_uuids = {
-            "PACS": "00001850-0000-1000-8000-00805f9b34fb",
-            "ASCS": "0000184e-0000-1000-8000-00805f9b34fb",
-            "VCS": "00001844-0000-1000-8000-00805f9b34fb",
-        }
+        remote_uuids = _bg.REMOTE_UUIDS
         try:
             import dbus
 

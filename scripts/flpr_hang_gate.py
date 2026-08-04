@@ -30,33 +30,31 @@ import re
 import subprocess
 import sys
 import time
+from abc import ABC, abstractmethod
 from datetime import datetime
 
+# Shared offload-status grammar (flpr_status.py is the single source of
+# truth for the console status block; both hardware gates consume it).
+from flpr_status import (  # noqa: E402
+    RE_COUNTERS,
+    RE_FAULTS,
+    RE_HB_DEDUP,
+    RE_PROBATION,
+    RE_RECOVERY,
+    RE_RECOVERY_OK,
+    RE_RUNTIME,
+    RE_STATE_LINE,
+    parse_offload_status,
+)
 
-# ── Regex patterns ─────────────────────────────────────────────────────
 
-RE_STATE_LINE = re.compile(r"State\s*:\s*(\w+)\s*/\s*epoch=(\d+)\s+gen=(\d+)")
-RE_COUNTERS = re.compile(
-    r"Counters\s*:\s*submit=(\d+)\s+success=(\d+)\s+fallback=(\d+)\s+busy=(\d+)"
-)
-RE_RECOVERY = re.compile(
-    r"Recovery\s*:\s*attempts=(\d+)\s+fail=(\d+)\s+relapses=(\d+)\s+exhaustion=(\d+)"
-)
-RE_PROBATION = re.compile(
-    r"Probation\s*:\s*active=(\d+)\s+success=(\d+)\s+cleared=(\d+)"
-)
-RE_FAULTS = re.compile(
-    r"Faults\s*:\s*timeout=(\d+)\s+full=(\d+)\s+stale=(\d+)\s+seq=(\d+)\s+frame=(\d+)\s+crc=(\d+)\s+payload=(\d+)"
-)
-RE_RUNTIME = re.compile(
-    r"Runtime\s*:\s*restarts=(\d+)\s+fails=(\d+)\s+last_ms=(\d+)\s+remote_epoch=(\d+)"
-)
+# ── Command-specific regexes (hang gate owns these) ─────────────────────
+
 RE_RUNTIME_RESTART_OK = re.compile(
     r"FLPR restart OK: epoch\s+(\d+)→(\d+)\s+crc=0x([0-9a-fA-F]+)\s+duration=total\s+(\d+)\s+ms"
 )
 RE_FAULT_HANG_ACK = re.compile(r"FAULT_HANG_ACK received")
 RE_FAULT_HANG_FAIL = re.compile(r"FAULT_HANG failed:\s*(-?\d+)\s+\(no ACK\)")
-RE_RECOVERY_OK = re.compile(r"offload recovery OK:")
 RE_OFFLOAD_RECOVERING = re.compile(r"State\s*:\s*RECOVERING")
 
 
@@ -139,43 +137,139 @@ class GateResult:
         self.full_log = ""
 
 
-# ── Gate runner ────────────────────────────────────────────────────────
+# ── Console transport interface (fakeable boundary) ─────────────────────
 
 
-class HangGateRunner:
-    """Hang gate logic with pyserial console transport."""
+class HangTransport(ABC):
+    """Serial console boundary for the hang gate.
 
-    def __init__(self, port, baud, log_path, peer_addr=None):
-        self.port = port
-        self.baud = baud
-        self.log_path = log_path
-        self.peer_addr = peer_addr
+    The production backend is RealHangSerial (lazy pyserial); unit tests
+    inject a scripted fake, exactly like the stall gate's Transport.
+    """
+
+    @abstractmethod
+    def open(self, port, baud): ...
+    @abstractmethod
+    def write(self, data): ...
+    @abstractmethod
+    def flush(self): ...
+    @abstractmethod
+    def read(self, size) -> bytes: ...
+    @property
+    @abstractmethod
+    def in_waiting(self) -> int: ...
+    @abstractmethod
+    def reset_input(self): ...
+    @abstractmethod
+    def close(self): ...
+
+
+class RealHangSerial(HangTransport):
+    """pyserial backend — imported lazily so the module stays importable
+    (and unit-testable) without pyserial."""
+
+    def __init__(self):
         self._ser = None
-        self._log_fh = None
-        self._recv_buf = bytearray()
 
-    def open(self):
-        # pyserial is imported lazily (same pattern as the sibling gate
-        # scripts) so the module stays importable without it — the parser
-        # unit suite runs on stdlib-only python3.
+    def open(self, port, baud):
         import serial
 
-        self._ser = serial.Serial(self.port, self.baud, timeout=0.05)
-        self._log_fh = open(self.log_path, "w", buffering=1)
+        self._ser = serial.Serial(port, baud, timeout=0.05)
+
+    def write(self, data):
+        self._ser.write(data)
+
+    def flush(self):
+        self._ser.flush()
+
+    def read(self, size) -> bytes:
+        return self._ser.read(size)
+
+    @property
+    def in_waiting(self) -> int:
+        return self._ser.in_waiting
+
+    def reset_input(self):
+        self._ser.reset_input_buffer()
 
     def close(self):
         if self._ser and self._ser.is_open:
             self._ser.close()
+        self._ser = None
+
+
+# ── BAP process launcher (fakeable boundary) ─────────────────────────────
+
+
+def launch_bap_central(duration_s, stereo, peer_addr):
+    """Production launcher: Popen bap_central.py with the same argv the
+    pre-R3 gate built inline.  Returns a Popen with poll/communicate/
+    kill/wait/returncode."""
+    repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    bap_script = os.path.join(repo_dir, "scripts", "bap_central.py")
+    bap_args = [
+        "python3",
+        bap_script,
+        "--duration",
+        str(duration_s),
+    ]
+    if stereo:
+        bap_args.append("--stereo")
+    if peer_addr:
+        # Target one specific receiver: with several LE Audio
+        # Receiver boards on the bench, discovery may attach the
+        # wrong one.  --peer-addr pins the exact peer.
+        bap_args += ["--peer-addr", peer_addr]
+    return subprocess.Popen(
+        bap_args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+
+# ── Gate runner ────────────────────────────────────────────────────────
+
+
+class HangGateRunner:
+    """Hang gate logic with injectable console transport and BAP launcher.
+
+    Production defaults (RealHangSerial + launch_bap_central) retain the
+    exact pyserial/subprocess behavior of the pre-R3 gate; unit tests
+    inject scripted fakes for both boundaries.
+    """
+
+    def __init__(
+        self, port, baud, log_path, peer_addr=None, transport=None, launcher=None
+    ):
+        self.port = port
+        self.baud = baud
+        self.log_path = log_path
+        self.peer_addr = peer_addr
+        self._tr = transport if transport is not None else RealHangSerial()
+        self._launcher = launcher if launcher is not None else launch_bap_central
+        self._recv_buf = bytearray()
+        self._log_fh = None
+
+    def open(self):
+        self._tr.open(self.port, self.baud)
+        self._log_fh = open(self.log_path, "w", buffering=1)
+
+    def close(self):
         if self._log_fh:
             self._log_fh.close()
+            self._log_fh = None
+        self._tr.close()
 
     def _read_all(self):
-        waiting = self._ser.in_waiting
+        waiting = self._tr.in_waiting
         if waiting:
-            chunk = self._ser.read(waiting)
+            chunk = self._tr.read(waiting)
             self._recv_buf.extend(chunk)
-            self._log_fh.write(chunk.decode("utf-8", errors="replace"))
-            self._log_fh.flush()
+            if self._log_fh:
+                self._log_fh.write(chunk.decode("utf-8", errors="replace"))
+                self._log_fh.flush()
             return chunk
         return b""
 
@@ -189,7 +283,7 @@ class HangGateRunner:
         self._clear_buf()
         deadline = time.monotonic() + settle_s
         while time.monotonic() < deadline:
-            if self._ser.in_waiting:
+            if self._tr.in_waiting:
                 self._read_all()
             time.sleep(0.02)
         quiet = 0.0
@@ -210,81 +304,13 @@ class HangGateRunner:
         self._recv_buf.clear()
 
     def _send_cmd(self, cmd):
-        self._ser.write((cmd + "\n").encode("utf-8"))
-        self._ser.flush()
+        self._tr.write((cmd + "\n").encode("utf-8"))
+        self._tr.flush()
         time.sleep(0.05)
 
     def parse_offload(self, text):
-        """Parse flpr offload status output into a dict."""
-        result = {
-            "state": None,
-            "epoch": -1,
-            "gen": -1,
-            "submit": -1,
-            "success": -1,
-            "fallback": -1,
-            "busy": -1,
-            "recovery_attempts": -1,
-            "recovery_fail": -1,
-            "relapses": -1,
-            "exhaustion": -1,
-            "probation_active": -1,
-            "probation_success": -1,
-            "probation_cleared": -1,
-            "fault_timeout": -1,
-            "fault_full": -1,
-            "fault_stale": -1,
-            "fault_seq": -1,
-            "fault_frame": -1,
-            "fault_crc": -1,
-            "fault_payload": -1,
-            "runtime_restarts": -1,
-            "runtime_fails": -1,
-            "runtime_last_ms": -1,
-            "remote_epoch": -1,
-            "hb_dedup": -1,
-        }
-        m = RE_STATE_LINE.search(text)
-        if m:
-            result["state"] = m.group(1)
-            result["epoch"] = int(m.group(2))
-            result["gen"] = int(m.group(3))
-        m = RE_COUNTERS.search(text)
-        if m:
-            result["submit"] = int(m.group(1))
-            result["success"] = int(m.group(2))
-            result["fallback"] = int(m.group(3))
-            result["busy"] = int(m.group(4))
-        m = RE_RECOVERY.search(text)
-        if m:
-            result["recovery_attempts"] = int(m.group(1))
-            result["recovery_fail"] = int(m.group(2))
-            result["relapses"] = int(m.group(3))
-            result["exhaustion"] = int(m.group(4))
-        m = RE_PROBATION.search(text)
-        if m:
-            result["probation_active"] = int(m.group(1))
-            result["probation_success"] = int(m.group(2))
-            result["probation_cleared"] = int(m.group(3))
-        m = RE_FAULTS.search(text)
-        if m:
-            result["fault_timeout"] = int(m.group(1))
-            result["fault_full"] = int(m.group(2))
-            result["fault_stale"] = int(m.group(3))
-            result["fault_seq"] = int(m.group(4))
-            result["fault_frame"] = int(m.group(5))
-            result["fault_crc"] = int(m.group(6))
-            result["fault_payload"] = int(m.group(7))
-        m = RE_RUNTIME.search(text)
-        if m:
-            result["runtime_restarts"] = int(m.group(1))
-            result["runtime_fails"] = int(m.group(2))
-            result["runtime_last_ms"] = int(m.group(3))
-            result["remote_epoch"] = int(m.group(4))
-        m = RE_HB_DEDUP.search(text)
-        if m:
-            result["hb_dedup"] = int(m.group(1))
-        return result
+        """Parse flpr offload status output into the shared superset dict."""
+        return parse_offload_status(text)
 
     def parse_asrc(self, text):
         """Parse ASRC offload section."""
@@ -329,14 +355,14 @@ class HangGateRunner:
         total_deadline = time.monotonic() + total_timeout_s
 
         try:
-            self._ser.reset_input_buffer()
+            self._tr.reset_input()
             self._clear_buf()
 
             # ── Step 1: Wait for device console to be responsive ──
             # Probe via shell command (don't rely on boot messages which may
             # have scrolled past before we opened the port).
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Probing device console...")
-            self._ser.reset_input_buffer()
+            self._tr.reset_input()
             self._clear_buf()
             console_ready = False
             probe_deadline = time.monotonic() + 15
@@ -358,31 +384,10 @@ class HangGateRunner:
             )
 
             # ── Step 2: Launch bap_central.py in background ──
-            repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            bap_script = os.path.join(repo_dir, "scripts", "bap_central.py")
-            bap_args = [
-                "python3",
-                bap_script,
-                "--duration",
-                str(duration_s),
-            ]
-            if stereo:
-                bap_args.append("--stereo")
-            if self.peer_addr:
-                # Target one specific receiver: with several LE Audio
-                # Receiver boards on the bench, discovery may attach the
-                # wrong one.  --peer-addr pins the exact peer.
-                bap_args += ["--peer-addr", self.peer_addr]
-
+            bap_proc = self._launcher(duration_s, stereo, self.peer_addr)
             print(
-                f"[{datetime.now().strftime('%H:%M:%S')}] Running: {' '.join(bap_args)}"
-            )
-            bap_proc = subprocess.Popen(
-                bap_args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
+                f"[{datetime.now().strftime('%H:%M:%S')}] Running bap_central "
+                f"(duration={duration_s}s{' stereo' if stereo else ''})"
             )
 
             # ── Step 3: Wait for ACTIVE + success >= 1000 ──

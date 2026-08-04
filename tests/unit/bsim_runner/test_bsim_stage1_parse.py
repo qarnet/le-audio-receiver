@@ -6,16 +6,23 @@ fault-marker scanning with allowlists, and every major failure mode.
 No BabbleSim or hardware needed.
 """
 
+import json
 import os
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts"))
 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
 from bsim_stage1_parse import (  # noqa: E402
     ParseError,
+    ScenarioDataError,
     check,
     extract_pass_line,
+    known_values,
+    load_scenarios,
+    main as bsim_main,
     parse_client_pass,
     parse_receiver_pass,
     parse_tokens,
@@ -144,14 +151,18 @@ def test_modea_lr_distinct():
     recv = recv.replace("lh1=0x12345678", "lh1=0x11111111").replace(
         "rh1=0x12345678", "rh1=0x22222222"
     )
-    ok = run_check(root, "modea_10ms", recv, cli_pass("modea_10ms", sends0=110, sends1=110), {})
+    ok = run_check(
+        root, "modea_10ms", recv, cli_pass("modea_10ms", sends0=110, sends1=110), {}
+    )
     report("modea L!=R ok", ok)
 
 
 def test_modea_lr_equal_rejected():
     root = tempfile.mkdtemp()
     recv = recv_pass("modea_10ms", total1=216)
-    ok = run_check(root, "modea_10ms", recv, cli_pass("modea_10ms", sends0=110, sends1=110), {})
+    ok = run_check(
+        root, "modea_10ms", recv, cli_pass("modea_10ms", sends0=110, sends1=110), {}
+    )
     report("modea L==R rejected", not ok)
 
 
@@ -501,6 +512,264 @@ def test_receiver_pass_parse():
     )
 
 
+# ── R3: versioned scenario data (tests/bsim/stage1-scenarios.json) ──────
+
+PRODUCTION_DATA = os.path.join(REPO_ROOT, "tests", "bsim", "stage1-scenarios.json")
+
+
+def test_production_pins_load_unchanged():
+    """All 16 production pins load from the versioned file, unchanged."""
+    data = load_scenarios()
+    scenarios = data["scenarios"]
+    report("production pin count", len(scenarios) == 16)
+
+    # Every scenario has the full metadata contract.
+    ok = True
+    for s in scenarios:
+        ok = ok and isinstance(s["name"], str) and s["name"]
+        ok = ok and isinstance(s["runs"], int) and s["runs"] >= 1
+        ok = ok and isinstance(s["dec_calls"], int) and s["dec_calls"] >= 1
+        ok = ok and s["channel_mode"] in ("mono", "stereo")
+    report("production scenario metadata shape", ok)
+
+    # Exact pinned values from the pre-R3 shell tables (no repinning).
+    expected = {
+        "mono_10ms": {
+            "full": 0x22AB5C0D,
+            "l": 0x32777D65,
+            "r": 0x32777D65,
+            "total": 108,
+        },
+        "mono_7p5ms": {
+            "full": 0x01A3EB05,
+            "l": 0x30F0308C,
+            "r": 0x30F0308C,
+            "total": 111,
+        },
+        "modea_10ms": {
+            "full": 0xBAE24F7E,
+            "l": 0x32777D65,
+            "r": 0xD3EE3722,
+            "total": 216,
+        },
+        "modea_7p5ms": {
+            "full": 0x2D95D15C,
+            "l": 0xE1D60E7B,
+            "r": 0xA219B61E,
+            "total": 226,
+        },
+        "modea_reverse_start_10ms": {
+            "full": 0xBAE24F7E,
+            "l": 0x32777D65,
+            "r": 0xD3EE3722,
+            "total": 216,
+        },
+        "modeb_10ms": {
+            "full": 0xBAE24F7E,
+            "l": 0x32777D65,
+            "r": 0xD3EE3722,
+            "total": 216,
+        },
+        "modeb_7p5ms": {
+            "full": 0xFF82CADB,
+            "l": 0x30F0308C,
+            "r": 0x129591EE,
+            "total": 222,
+        },
+        "invalid_sdu_resume_10ms": {"full": 0x0C61918D, "total": 108},
+        "modea_one_cis_loss_10ms": {
+            "full": 0x30D6BAF0,
+            "l": 0x32777D65,
+            "r": 0x9859F1D8,
+            "total": 216,
+        },
+        "modea_first_stop_10ms": {"total": 86},
+        "release_without_disable_10ms": {"total": 56},
+        "disconnect_streaming_10ms": {"total": 63},
+        "reconnect_second_stream_10ms": {"full": 0x22AB5C0D, "total": 63},
+    }
+    pins_ok = True
+    for name, want in expected.items():
+        got = known_values(name)
+        if got != want:
+            pins_ok = False
+            report("pin %s" % name, False, "got %r want %r" % (got, want))
+    report("production pins unchanged (no repinning)", pins_ok)
+
+    unpinned = {
+        "unsupported_source_direction",
+        "no_free_sink_slot",
+        "invalid_codec_fields",
+    }
+    unpinned_ok = all(known_values(n) == {} for n in unpinned)
+    report("unpinned scenarios stay unpinned", unpinned_ok)
+
+
+def _write_scenario_file(root, payload):
+    path = os.path.join(root, "scenarios.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        if isinstance(payload, str):
+            fh.write(payload)
+        else:
+            json.dump(payload, fh)
+    return path
+
+
+def _valid_scenario(name="scn", runs=1, dec_calls=1, channel_mode="mono", known=None):
+    entry = {
+        "name": name,
+        "runs": runs,
+        "dec_calls": dec_calls,
+        "channel_mode": channel_mode,
+    }
+    if known:
+        entry["known"] = known
+    return entry
+
+
+def test_schema_missing_file():
+    root = tempfile.mkdtemp()
+    try:
+        load_scenarios(os.path.join(root, "nope.json"))
+        report("schema missing file rejected", False)
+    except ScenarioDataError:
+        report("schema missing file rejected", True)
+
+
+def test_schema_invalid_json():
+    root = tempfile.mkdtemp()
+    p = _write_scenario_file(root, "{not json")
+    try:
+        load_scenarios(p)
+        report("schema invalid json rejected", False)
+    except ScenarioDataError:
+        report("schema invalid json rejected", True)
+
+
+def test_schema_shape_errors():
+    root = tempfile.mkdtemp()
+    cases = [
+        ("missing schema_version", {"scenarios": [_valid_scenario()]}),
+        ("empty scenarios", {"schema_version": 1, "scenarios": []}),
+        ("missing scenarios key", {"schema_version": 1}),
+    ]
+    for label, payload in cases:
+        p = _write_scenario_file(root, payload)
+        try:
+            load_scenarios(p)
+            report("schema %s rejected" % label, False)
+        except ScenarioDataError:
+            report("schema %s rejected" % label, True)
+
+
+def test_schema_entry_errors():
+    root = tempfile.mkdtemp()
+    dup = _write_scenario_file(
+        root,
+        {
+            "schema_version": 1,
+            "scenarios": [_valid_scenario("dup"), _valid_scenario("dup")],
+        },
+    )
+    try:
+        load_scenarios(dup)
+        report("schema duplicate name rejected", False)
+    except ScenarioDataError:
+        report("schema duplicate name rejected", True)
+
+    bad_chan = _write_scenario_file(
+        root,
+        {"schema_version": 1, "scenarios": [_valid_scenario(channel_mode="jazz")]},
+    )
+    try:
+        load_scenarios(bad_chan)
+        report("schema bad channel_mode rejected", False)
+    except ScenarioDataError:
+        report("schema bad channel_mode rejected", True)
+
+    bad_runs = _write_scenario_file(
+        root, {"schema_version": 1, "scenarios": [_valid_scenario(runs=0)]}
+    )
+    try:
+        load_scenarios(bad_runs)
+        report("schema non-positive runs rejected", False)
+    except ScenarioDataError:
+        report("schema non-positive runs rejected", True)
+
+    bad_known = _write_scenario_file(
+        root,
+        {"schema_version": 1, "scenarios": [_valid_scenario(known={"full": "nope"})]},
+    )
+    try:
+        load_scenarios(bad_known)
+        report("schema bad known hex rejected", False)
+    except ScenarioDataError:
+        report("schema bad known hex rejected", True)
+
+    unknown_key = _write_scenario_file(
+        root,
+        {"schema_version": 1, "scenarios": [_valid_scenario(known={"floof": "0x1"})]},
+    )
+    try:
+        load_scenarios(unknown_key)
+        report("schema unknown known key rejected", False)
+    except ScenarioDataError:
+        report("schema unknown known key rejected", True)
+
+    missing_name = _write_scenario_file(
+        root,
+        {
+            "schema_version": 1,
+            "scenarios": [{"runs": 1, "dec_calls": 1, "channel_mode": "mono"}],
+        },
+    )
+    try:
+        load_scenarios(missing_name)
+        report("schema missing name rejected", False)
+    except ScenarioDataError:
+        report("schema missing name rejected", True)
+
+
+def _run_cli(args):
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = bsim_main(args)
+    return code, buf.getvalue()
+
+
+def test_cli_known_precedence():
+    """CLI precedence: --no-known > explicit --known-* > file defaults."""
+    root = tempfile.mkdtemp()
+    # mono_10ms with the REAL pinned hashes (from the versioned file).
+    # Replace lh1/rh1 before h1: "h1=..." is a substring of "lh1=...".
+    recv = write_log(
+        root,
+        "receiver.log",
+        recv_pass("mono_10ms")
+        .replace("lh1=0x12345678", "lh1=0x32777D65")
+        .replace("rh1=0x12345678", "rh1=0x32777D65")
+        .replace("h1=0x12345678", "h1=0x22AB5C0D"),
+    )
+    cli = write_log(root, "client.log", cli_pass("mono_10ms"))
+    base = ["check", "--scenario", "mono_10ms", "--receiver", recv, "--client", cli]
+
+    code, _ = _run_cli(base)
+    report("cli file-default pins pass", code == 0)
+
+    code, _ = _run_cli(base + ["--known-full", "0xDEADBEEF"])
+    report("cli explicit override wins (mismatch fails)", code != 0)
+
+    code, _ = _run_cli(base + ["--no-known"])
+    report("cli --no-known disables pins", code == 0)
+
+    # Explicit total override still applies when no --no-known.
+    code, _ = _run_cli(base + ["--known-total", "200"])
+    report("cli --known-total override fails on mismatch", code != 0)
+
+
 def main():
     print("=== bsim_stage1_parse unit tests ===")
     test_tokens()
@@ -524,6 +793,12 @@ def main():
     test_fault_scan()
     test_client_pass_parse()
     test_receiver_pass_parse()
+    test_production_pins_load_unchanged()
+    test_schema_missing_file()
+    test_schema_invalid_json()
+    test_schema_shape_errors()
+    test_schema_entry_errors()
+    test_cli_known_precedence()
     print("=== %d PASS / %d FAIL ===" % (PASSES, FAILURES))
     return 0 if FAILURES == 0 else 1
 

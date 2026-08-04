@@ -2,25 +2,26 @@
 # Canonical full local gate script for le-audio-receiver.
 #
 # Runs every test suite:
-#   1. Twister C unit suites (28 suites with testcase.yaml: the 25 prior
-#      suites plus bt_pairing_policy, iso_seq, modea)
-#   2. Exec-only C unit suites (4 suites: audio_offload, flpr_audio_process,
+#   1. Twister C unit suites (testcase.yaml under tests/unit/ — currently 28)
+#   2. Exec-only C unit suites (CMakeLists.txt without testcase.yaml under
+#      tests/unit/ — currently 4: audio_offload, flpr_audio_process,
 #      flpr_ring, offload_asrc)
-#   3. Python unit suites (12: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py,
-#      flpr_hang_gate/test_flpr_hang_gate.py,
-#      bluez_wp_gate/test_bluez_wireplumber_gate.py, bluez_wp_phase3_gate/test_bluez_wireplumber_phase3_gate.py,
-#      bsim_runner/test_bsim_stage1_parse.py, build_contract/test_build_contract.py,
-#      hci_raw_connect/test_hci_raw_connect.py,
-#      bap_central_policy/test_bap_central_policy.py,
-#      bap_central_writer/test_bap_central_writer.py,
-#      test_matrix/test_check_test_matrix.py,
-#      test_coverage_runner/test_test_coverage_runner.py)
+#   3. Python unit suites (12: tests/unit/*/test_*.py in CMake-less dirs
+#      plus scripts/test_*.py — fw_flash_dongle, flpr_stall_gate,
+#      flpr_hang_gate, bluez_wireplumber_gate, bluez_wireplumber_phase3_gate,
+#      bsim_runner, build_contract, hci_raw_connect, bap_central_policy,
+#      bap_central_writer, test_matrix, test_coverage_runner)
 #   4. Coverage (T7): rebuilds all native C suites with CONFIG_COVERAGE=y
 #      and enforces the committed tests/coverage-baseline.json
 #   5. Test-matrix checker (T7): consumes the coverage run's coverage.json
 #      — zero-hit function enforcement, public API inventory, outcome ledger
 #   6. BabbleSim Stage 1 (canonical 16-scenario T4 BAP matrix, scenarios
 #      1–9 run twice, remaining seven once; deterministic across runs)
+#
+# All suite discovery comes from scripts/test_inventory.py (the single
+# filesystem classification source shared with test-coverage.sh and
+# check-test-matrix.py) — adding a suite cannot silently omit it from the
+# gate.
 #
 # Required: NCS v3.3.0 dev shell (nix develop / direnv allow).
 #   ZEPHYR_BASE must be set. BabbleSim dependencies must be provisioned;
@@ -45,6 +46,10 @@ TOTAL=0
 TMP_ROOT=""
 
 die() { echo "FATAL: $*" >&2; exit 1; }
+
+inventory() { # flag -> stdout lines (one per line)
+    python3 "$SCRIPT_DIR/test_inventory.py" "$@" || die "test_inventory.py $* failed"
+}
 
 resolve_ncs() {
     # Resolve ZEPHYR_BASE if not set — prefer nrfutil toolchain env.
@@ -76,12 +81,13 @@ run_one() {
 
 # ---------- twister C suites ----------
 run_twister_suites() {
-    # Collect all testcase.yaml-based suites from tests/unit/
-    local suites=()
-    for d in "$REPO_ROOT"/tests/unit/*/; do
-        [ -f "$d/testcase.yaml" ] || continue
-        suites+=("$(basename "$d")")
-    done
+    # Collect all testcase.yaml-based suites from tests/unit/ via the
+    # shared inventory module.
+    local suites=() line
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        suites+=("$line")
+    done <<<"$(inventory --twister)"
 
     if [ ${#suites[@]} -eq 0 ]; then
         die "No twister suites found in tests/unit/"
@@ -101,7 +107,11 @@ run_twister_suites() {
 
 # ---------- exec-only C suites (no testcase.yaml) ----------
 run_exec_suites() {
-    local suites=(audio_offload flpr_audio_process flpr_ring offload_asrc)
+    local suites=() line
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        suites+=("$line")
+    done <<<"$(inventory --exec-only)"
 
     for suite in "${suites[@]}"; do
         run_one "exec: $suite" \
@@ -115,37 +125,14 @@ run_exec_suites() {
 
 # ---------- Python suites ----------
 run_python_suites() {
-    run_one "python: gate" \
-        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
-        python3 "$REPO_ROOT/tests/unit/gate/test_gate.py" || true
-    run_one "python: flpr_stall_gate" \
-        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
-        python3 "$REPO_ROOT/tests/unit/flpr_stall_gate/test_flpr_stall_gate.py" || true
-    run_one "python: flpr_hang_gate" \
-        python3 "$REPO_ROOT/tests/unit/flpr_hang_gate/test_flpr_hang_gate.py" || true
-    run_one "python: bluez_wp_gate" \
-        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
-        python3 "$REPO_ROOT/scripts/test_bluez_wireplumber_gate.py" || true
-    run_one "python: bluez_wp_phase3_gate" \
-        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
-        python3 "$REPO_ROOT/scripts/test_bluez_wireplumber_phase3_gate.py" || true
-    run_one "python: bsim_runner" \
-        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
-        python3 "$REPO_ROOT/tests/unit/bsim_runner/test_bsim_stage1_parse.py" || true
-    run_one "python: build_contract" \
-        python3 "$REPO_ROOT/tests/unit/build_contract/test_build_contract.py" || true
-    run_one "python: hci_raw_connect" \
-        python3 "$REPO_ROOT/tests/unit/hci_raw_connect/test_hci_raw_connect.py" || true
-    run_one "python: bap_central_policy" \
-        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
-        python3 "$REPO_ROOT/tests/unit/bap_central_policy/test_bap_central_policy.py" || true
-    run_one "python: bap_central_writer" \
-        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
-        python3 "$REPO_ROOT/tests/unit/bap_central_writer/test_bap_central_writer.py" || true
-    run_one "python: test_matrix" \
-        python3 "$REPO_ROOT/tests/unit/test_matrix/test_check_test_matrix.py" || true
-    run_one "python: test_coverage_runner" \
-        python3 "$REPO_ROOT/tests/unit/test_coverage_runner/test_test_coverage_runner.py" || true
+    # One run_one child per discovered python file (label<TAB>relpath).
+    local line label path
+    while IFS=$'\t' read -r label path; do
+        [ -n "$label" ] || continue
+        run_one "python: $label" \
+            env PYTHONPATH="$REPO_ROOT/scripts:${PYTHONPATH:-}" \
+            python3 "$REPO_ROOT/$path" || true
+    done <<<"$(inventory --python)"
 }
 
 # ---------- coverage (T7): rebuilds all native C suites, enforces baseline ----------

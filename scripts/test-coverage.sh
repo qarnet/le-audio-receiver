@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # T7 Stage 2: honest native coverage runner for le-audio-receiver.
 #
-# Builds every Twister/native suite under tests/unit/ (testcase.yaml,
-# exactly as test-all.sh discovers them) plus the four exec-only suites
-# (audio_offload, flpr_audio_process, flpr_ring, offload_asrc) with
+# Builds every C suite discovered by scripts/test_inventory.py (twister
+# suites under tests/unit/ with testcase.yaml, plus exec-only suites with
+# CMakeLists.txt but no testcase.yaml — currently 28 + 4) with
 # CONFIG_COVERAGE=y, runs each native executable to normal exit so host
 # libgcov writes .gcda, then produces gcovr 8.x reports.
 #
@@ -165,14 +165,23 @@ fi
 TRACE_DIR="$TMP_ROOT/traces"
 mkdir -p "$TRACE_DIR"
 
-# ---------- suite discovery (mirrors test-all.sh) ----------
+# ---------- suite discovery (shared inventory module) ----------
+# Both categories come from scripts/test_inventory.py — the single
+# filesystem classification source also used by test-all.sh and
+# check-test-matrix.py.  An empty category is valid; the runner still
+# requires at least one C suite overall.
 twister_suites=()
-for d in tests/unit/*/; do
-    if [ -f "$d/testcase.yaml" ]; then
-        twister_suites+=("$(basename "$d")")
-    fi
-done
-exec_suites=(audio_offload flpr_audio_process flpr_ring offload_asrc)
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    twister_suites+=("$line")
+done <<<"$(python3 "$SCRIPT_DIR/test_inventory.py" --twister)" \
+    || die "test_inventory.py --twister failed"
+exec_suites=()
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    exec_suites+=("$line")
+done <<<"$(python3 "$SCRIPT_DIR/test_inventory.py" --exec-only)" \
+    || die "test_inventory.py --exec-only failed"
 all_suites=("${twister_suites[@]}" "${exec_suites[@]}")
 [ ${#all_suites[@]} -gt 0 ] || die "no suites discovered"
 
@@ -354,14 +363,21 @@ PYEOF
 
 # ---------- run manifest ----------
 if ! python3 - "$OUTPUT_DIR" "$SOURCE_COMMIT" "$GCOVR_VERSION" "$GCOV_VERSION" "$REPO_ROOT" "$WORKTREE_DIRTY" "$MODE" <<'PYEOF'
-import json, os, sys, glob
+import json, os, sys
 
 out_dir, commit, gcovr_ver, gcov_ver, repo, dirty, mode = sys.argv[1:8]
 
-twister = sorted(os.path.basename(d) for d in glob.glob(os.path.join(repo, "tests/unit/*/"))
-                 if os.path.isfile(os.path.join(d, "testcase.yaml")))
-exec_only = ["audio_offload", "flpr_audio_process", "flpr_ring", "offload_asrc"]
-suites = twister + exec_only
+# Never write __pycache__ into the (possibly fixture) repo when importing
+# the shared inventory module — a generated .pyc would dirty the worktree
+# and break baseline enforcement on the next run.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(repo, "scripts"))
+import test_inventory  # noqa: E402 — shared suite classification
+
+inv = test_inventory.discover(repo)
+twister = inv.twister
+exec_only = set(inv.exec_only)
+suites = inv.all_c_suites()
 
 manifest = {
     "tool": "test-coverage.sh (T7 Stage 2)",

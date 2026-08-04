@@ -27,31 +27,24 @@ import sys
 import time
 from abc import ABC, abstractmethod
 
+# Shared offload-status grammar (flpr_status.py is the single source of
+# truth for the console status block; both hardware gates consume it).
+from flpr_status import (  # noqa: E402
+    RE_COUNTERS,
+    RE_FAULTS,
+    RE_PROBATION,
+    RE_RECOVERY,
+    RE_RECOVERY_OK,
+    RE_STATE_LINE,
+    parse_offload_status,
+)
 
-# ── Regex patterns against current shell/log output ─────────────────
-
-RE_STATE_LINE = re.compile(r"State\s*:\s*(\w+)\s*/\s*epoch=\d+\s+gen=\d+")
-RE_COUNTERS = re.compile(
-    r"Counters\s*:\s*submit=(\d+)\s+success=(\d+)\s+fallback=(\d+)\s+busy=(\d+)"
-)
-RE_RECOVERY = re.compile(
-    r"Recovery\s*:\s*attempts=(\d+)\s+fail=(\d+)\s+relapses=(\d+)\s+exhaustion=(\d+)"
-)
-RE_PROBATION = re.compile(
-    r"Probation\s*:\s*active=(\d+)\s+success=(\d+)\s+cleared=(\d+)"
-)
+# ── Regex patterns against current shell/log output ─────────────────────
 
 # Stage 2 timed stall ACK: "FLPR timed stall applied: bits=0x01 duration=60 ms"
 RE_STALL_TIMED_ACK = re.compile(
     r"FLPR timed stall applied:\s*bits=0x([0-9a-fA-F]+)\s+duration=(\d+)\s+ms"
 )
-
-# Fault counters (must be zero at end).
-RE_FAULTS = re.compile(
-    r"Faults\s*:\s*timeout=(\d+)\s+full=(\d+)\s+stale=(\d+)\s+seq=(\d+)\s+frame=(\d+)\s+crc=(\d+)\s+payload=(\d+)"
-)
-
-RE_RECOVERY_OK = re.compile(r"offload recovery OK:")
 
 
 class StallGateError(Exception):
@@ -186,58 +179,8 @@ class GateRunner:
 
     @staticmethod
     def parse_offload(text):
-        """Parse flpr offload status output into a dict."""
-        result = {
-            "state": None,
-            "submit": -1,
-            "success": -1,
-            "fallback": -1,
-            "busy": -1,
-            "recovery_attempts": -1,
-            "recovery_fail": -1,
-            "relapses": -1,
-            "exhaustion": -1,
-            "probation_active": -1,
-            "probation_success": -1,
-            "probation_cleared": -1,
-            "fault_timeout": -1,
-            "fault_full": -1,
-            "fault_stale": -1,
-            "fault_seq": -1,
-            "fault_frame": -1,
-            "fault_crc": -1,
-            "fault_payload": -1,
-        }
-        m = RE_STATE_LINE.search(text)
-        if m:
-            result["state"] = m.group(1)
-        m = RE_COUNTERS.search(text)
-        if m:
-            result["submit"] = int(m.group(1))
-            result["success"] = int(m.group(2))
-            result["fallback"] = int(m.group(3))
-            result["busy"] = int(m.group(4))
-        m = RE_RECOVERY.search(text)
-        if m:
-            result["recovery_attempts"] = int(m.group(1))
-            result["recovery_fail"] = int(m.group(2))
-            result["relapses"] = int(m.group(3))
-            result["exhaustion"] = int(m.group(4))
-        m = RE_PROBATION.search(text)
-        if m:
-            result["probation_active"] = int(m.group(1))
-            result["probation_success"] = int(m.group(2))
-            result["probation_cleared"] = int(m.group(3))
-        m = RE_FAULTS.search(text)
-        if m:
-            result["fault_timeout"] = int(m.group(1))
-            result["fault_full"] = int(m.group(2))
-            result["fault_stale"] = int(m.group(3))
-            result["fault_seq"] = int(m.group(4))
-            result["fault_frame"] = int(m.group(5))
-            result["fault_crc"] = int(m.group(6))
-            result["fault_payload"] = int(m.group(7))
-        return result
+        """Parse flpr offload status output into the shared superset dict."""
+        return parse_offload_status(text)
 
     def __init__(
         self, transport: Transport, total_timeout: float, status_interval: float = 0.5

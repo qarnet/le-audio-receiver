@@ -262,9 +262,8 @@ before reflashing — `west flash` does not erase the settings partition.
 | `prj.conf` | App Kconfig |
 | `sysbuild.cmake` | Applies SW Split DT + Kconfig overlays to `hci_ipc` |
 | `tests/unit/` | 28 twister C suites + 4 exec-only C suites + 12 Python suites (47 gate children total) |
-| `tests/bsim/` | BabbleSim Stage 1: 16-scenario T4 BAP matrix (accepted regular local gate) |
-| `tests/hardware/` | Hardware validation scripts (I2S, GPIO, fault recovery) |
-| `scripts/test-all.sh` | Canonical full local gate (all C + Python + BSim Stage 1) |
+| `tests/bsim/` | BabbleSim Stage 1: 16-scenario T4 BAP matrix (accepted regular local gate); scenario matrix, run counts, and pinned hashes live in `tests/bsim/stage1-scenarios.json` |
+| `scripts/test-all.sh` | Canonical full local gate (all C + Python + BSim Stage 1); suite discovery via `scripts/test_inventory.py` (single source shared with `test-coverage.sh` and `check-test-matrix.py`) |
 | `docs/design.md` | Historical architecture and evidence document (Phases 0–6); active plan of record is `docs/development/refactor-plan.md` |
 | `docs/flashing.md` | Dual-core flash workflow in depth |
 | `STATUS.md` | Current status, build diagnostics, test results, open issues |

@@ -55,11 +55,21 @@ production behavior.
 
 ## Current suite inventory
 
+R3 (2026-08-04): all suite discovery now flows through
+`scripts/test_inventory.py` — the single filesystem classification source
+consumed by `scripts/test-all.sh`, `scripts/test-coverage.sh`, and
+`scripts/check-test-matrix.py` (which validates the inventory).  Adding a
+suite cannot silently omit it from the gate or coverage.  The BabbleSim
+Stage 1 matrix, run counts, and pinned hashes live in
+`tests/bsim/stage1-scenarios.json` (shared by `bsim-stage1-run.sh` and
+`bsim_stage1_parse.py`); FLPR status parsing is shared via
+`scripts/flpr_status.py` (stall + hang gates).
+
 | Category | Count | Suites |
 |----------|-------|--------|
 | Twister C (testcase.yaml) | 28 | actuator_apll, actuator_apll_nohfclk, actuator_none, actuator_sample_adjust_historical, app_lifecycle, asrc, audio_i2s, audio_i2s_identity, audio_shell, audio_shell_noperf, audio_shell_nrf54, bt_pairing_policy, decode, drift, flpr_handshake, flpr_protocol, flpr_ring_mgr, flpr_runtime, iso_seq, lifecycle, modea, perf, rate_convert, stats, timing, timing_none, timing_nrf54, volume |
 | Exec-only C (CMakeLists.txt, no testcase.yaml) | 4 | audio_offload, flpr_audio_process, flpr_ring, offload_asrc |
-| Python | 12 | gate (test_gate.py), flpr_stall_gate (test_flpr_stall_gate.py), flpr_hang_gate (test_flpr_hang_gate.py, 10 parser tests), bluez_wp_gate (test_bluez_wireplumber_gate.py), bluez_wp_phase3_gate (test_bluez_wireplumber_phase3_gate.py), bsim_runner (test_bsim_stage1_parse.py, 36 tests), build_contract (test_build_contract.py, 30 tests), hci_raw_connect (test_hci_raw_connect.py), bap_central_policy (test_bap_central_policy.py), bap_central_writer (test_bap_central_writer.py), test_matrix (test_check_test_matrix.py, 34 tests), test_coverage_runner (test_test_coverage_runner.py, 21 tests) |
+| Python | 12 | fw_flash_dongle (test_fw_flash_dongle.py), flpr_stall_gate (test_flpr_stall_gate.py), flpr_hang_gate (test_flpr_hang_gate.py), bluez_wireplumber_gate (test_bluez_wireplumber_gate.py), bluez_wireplumber_phase3_gate (test_bluez_wireplumber_phase3_gate.py), bsim_runner (test_bsim_stage1_parse.py), build_contract (test_build_contract.py), hci_raw_connect (test_hci_raw_connect.py), bap_central_policy (test_bap_central_policy.py), bap_central_writer (test_bap_central_writer.py), test_matrix (test_check_test_matrix.py), test_coverage_runner (test_test_coverage_runner.py) |
 | Coverage | 1 | coverage (test-coverage.sh default mode: rebuilds the 28 twister + 4 exec suites with CONFIG_COVERAGE=y, enforces the committed baseline) |
 | Test-matrix checker | 1 | matrix (check-test-matrix.py --coverage-json on the coverage run's coverage.json) |
 | BabbleSim | 1 | bsim_stage1 (T4 16-scenario BAP matrix, scenarios 1–9 twice, remaining seven once) |

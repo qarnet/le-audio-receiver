@@ -224,7 +224,10 @@ at the final docs HEAD (evidence-fix commit; T8 ACCEPTED).
 
 ## Canonical gate composition (47 children)
 
-From `scripts/test-all.sh` (header + run order):
+From `scripts/test-all.sh` (discovery via `scripts/test_inventory.py`, the
+single filesystem classification source shared with `test-coverage.sh` and
+`check-test-matrix.py`; BSim scenario data from
+`tests/bsim/stage1-scenarios.json`):
 
 - **28 Twister C suites** (testcase.yaml): actuator_apll,
   actuator_apll_nohfclk, actuator_none, actuator_sample_adjust_historical,
@@ -235,9 +238,9 @@ From `scripts/test-all.sh` (header + run order):
   timing_none, timing_nrf54, volume.
 - **4 exec-only C suites** (CMakeLists.txt, no testcase.yaml):
   audio_offload, flpr_audio_process, flpr_ring, offload_asrc.
-- **12 Python suites**: gate, flpr_stall_gate, flpr_hang_gate,
-  bluez_wp_gate, bluez_wp_phase3_gate, bsim_runner, build_contract,
-  hci_raw_connect (T8), bap_central_policy (T8), bap_central_writer (T8),
+- **12 Python suites**: fw_flash_dongle, flpr_stall_gate, flpr_hang_gate,
+  bluez_wireplumber_gate, bluez_wireplumber_phase3_gate, bsim_runner,
+  build_contract, hci_raw_connect, bap_central_policy, bap_central_writer,
   test_matrix, test_coverage_runner.
 - **1 coverage child**: `test-coverage.sh` default mode (rebuilds the
   twister + exec suites with `CONFIG_COVERAGE=y`, enforces the committed

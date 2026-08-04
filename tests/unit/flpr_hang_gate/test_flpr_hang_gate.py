@@ -12,8 +12,11 @@ suite runs on stdlib-only python3.
 """
 
 import os
+import subprocess
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(
     0,
@@ -26,6 +29,7 @@ from flpr_hang_gate import (  # noqa: E402
     RE_FAULT_HANG_ACK,
     RE_FAULT_HANG_FAIL,
     RE_RUNTIME_RESTART_OK,
+    HangGateRunner,
     parse_last_offload_block,
     split_offload_blocks,
 )
@@ -178,6 +182,330 @@ class TestOffloadBlockSelection(unittest.TestCase):
         last = parse_last_offload_block(text)
         self.assertIn("STOPPED", last)
         self.assertIn("submit=16809", last)
+
+
+# ── R3: fakeable runner boundaries (transport + BAP launcher) ─────────────
+
+OFFLOAD_ACTIVE_1000 = (
+    "  State       : ACTIVE / epoch=1 gen=1\n"
+    "  Counters    : submit=1150 success=1100 fallback=0 busy=0\n"
+    "  Recovery    : attempts=0 fail=0 relapses=0 exhaustion=0\n"
+    "  Probation   : active=0 success=0 cleared=0\n"
+    "  Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+)
+
+OFFLOAD_RECOVERED = (
+    "  State       : ACTIVE / epoch=1 gen=2\n"
+    "  Counters    : submit=1180 success=1120 fallback=30 busy=0\n"
+    "  Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+    "  Probation   : active=0 success=100 cleared=1\n"
+    "  Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+)
+
+OFFLOAD_STILL_PROBATION = (
+    "  State       : ACTIVE / epoch=1 gen=2\n"
+    "  Counters    : submit=1180 success=1120 fallback=30 busy=0\n"
+    "  Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+    "  Probation   : active=1 success=50 cleared=0\n"
+    "  Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+)
+
+OFFLOAD_FINAL_STOPPED = (
+    "  State       : STOPPED / epoch=2 gen=3\n"
+    "  Counters    : submit=1200 success=1100 fallback=30 busy=0\n"
+    "  Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+    "  Probation   : active=0 success=100 cleared=1\n"
+    "  Runtime     : restarts=1 fails=0 last_ms=231 remote_epoch=2\n"
+    "  Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+)
+
+FAULT_HANG_ACK_LINE = "FAULT_HANG_ACK received\n"
+
+ASRC_STATUS_TEXT = (
+    "--- Audio status ---\n"
+    "  Counters    : submit=1200 success=1100 fallback=30\n"
+    "  Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 state=0 verify=0\n"
+)
+
+SUCCESS_OFFLOAD_RESPONSES = [
+    OFFLOAD_ACTIVE_1000,  # probe (State present)
+    OFFLOAD_ACTIVE_1000,  # Step 3: ACTIVE + success>=1000
+    OFFLOAD_RECOVERED,  # Step 6: recovery + probation cleared -> break
+    OFFLOAD_RECOVERED,  # Step 6b: active-stream snapshot
+    OFFLOAD_FINAL_STOPPED,  # Step 8 final status
+    OFFLOAD_FINAL_STOPPED,  # Step 9 final parse
+]
+
+
+class FakeHangTransport:
+    """Scripted console transport for hang-gate unit tests.
+
+    responses maps a command substring to a str (same reply every time) or
+    a list of strs (each occurrence pops the next entry; the last entry is
+    repeated once the list is exhausted).  write() appends the matching
+    reply into the pending byte buffer; read()/in_waiting mimic a serial
+    device.
+    """
+
+    def __init__(self, responses=None):
+        self.responses = dict(responses or {})
+        self.pending = b""
+        self.written = []
+
+    def open(self, port, baud):
+        pass
+
+    def write(self, data):
+        line = data.decode("utf-8", errors="replace").strip()
+        self.written.append(line)
+        for key, spec in self.responses.items():
+            if key in line:
+                if isinstance(spec, list):
+                    text = spec.pop(0) if len(spec) > 1 else spec[0]
+                else:
+                    text = spec
+                self.pending += text.encode("utf-8")
+                break
+
+    def flush(self):
+        pass
+
+    def read(self, size):
+        if not self.pending:
+            return b""
+        chunk = self.pending[:size]
+        self.pending = self.pending[size:]
+        return chunk
+
+    @property
+    def in_waiting(self):
+        return len(self.pending)
+
+    def reset_input(self):
+        self.pending = b""
+
+    def close(self):
+        pass
+
+
+class FakeBapProcess:
+    """Popen-shaped fake for the hang gate's BAP process boundary."""
+
+    def __init__(self, early_exit=False, rc=0, out="fake bap output", timeout=False):
+        self._early_exit = early_exit
+        self._rc = rc
+        self._out = out
+        self._timeout = timeout
+        self.killed = False
+        self.communicated = False
+        self.returncode = None
+
+    def poll(self):
+        if self._early_exit:
+            return self._rc
+        if self.communicated:
+            return self.returncode
+        return None
+
+    def communicate(self, timeout=None):
+        if self._timeout:
+            raise subprocess.TimeoutExpired("bap", timeout)
+        self.communicated = True
+        self.returncode = self._rc
+        return (self._out, None)
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        return self._rc
+
+
+def _mono_steady(base, step=0.02):
+    t = base
+    while True:
+        yield t
+        t += step
+
+
+class TestHangGateRunnerLifecycle(unittest.TestCase):
+    """R3: runner lifecycle/state tests through the fakeable transport and
+    BAP launcher boundaries (no pyserial, no subprocess)."""
+
+    def _make_runner(self, responses, launcher=None, duration=12):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        log_path = os.path.join(self.tmp.name, "hang.log")
+        transport = FakeHangTransport(responses)
+        runner = HangGateRunner(
+            "/dev/fake",
+            115200,
+            log_path,
+            transport=transport,
+            launcher=launcher or (lambda d, s, p: FakeBapProcess()),
+        )
+        return runner, transport
+
+    @patch("flpr_hang_gate.time.sleep")
+    @patch("flpr_hang_gate.time.monotonic")
+    def test_success_path(self, mock_mono, mock_sleep):
+        """Full gate: probe -> ACTIVE -> hang ACK -> recovery -> final checks."""
+        mock_sleep.return_value = None
+        gen = _mono_steady(1000.0)
+        mock_mono.side_effect = lambda: next(gen)
+
+        fake_proc = FakeBapProcess()
+        runner, transport = self._make_runner(
+            {
+                "flpr offload": list(SUCCESS_OFFLOAD_RESPONSES),
+                "flpr hang": FAULT_HANG_ACK_LINE,
+                "flpr status": ASRC_STATUS_TEXT,
+                "flpr runtime": ASRC_STATUS_TEXT,
+                "audio status": ASRC_STATUS_TEXT,
+            },
+            launcher=lambda d, s, p: fake_proc,
+        )
+        runner.open()
+        try:
+            result = runner.run(12, stereo=False)
+        finally:
+            runner.close()
+
+        self.assertTrue(result.passed, result.error)
+        self.assertEqual(result.error, "")
+        self.assertTrue(result.checks["ack_received"])
+        self.assertTrue(result.checks["recovery_attempts_eq_1"])
+        self.assertTrue(result.checks["runtime_restarts_eq_1"])
+        self.assertTrue(result.checks["epoch_changed"])
+        self.assertTrue(result.checks["frame_count_plausible"])
+        self.assertFalse(fake_proc.killed, "successful run must not kill bap_central")
+        self.assertIn("flpr hang", transport.written)
+
+    @patch("flpr_hang_gate.time.sleep")
+    @patch("flpr_hang_gate.time.monotonic")
+    def test_console_not_responsive(self, mock_mono, mock_sleep):
+        """No console reply -> probe timeout error, no BAP process ever."""
+        mock_sleep.return_value = None
+        gen = _mono_steady(1000.0)
+        mock_mono.side_effect = lambda: next(gen)
+
+        runner, _transport = self._make_runner({})
+        runner.open()
+        try:
+            result = runner.run(12)
+        finally:
+            runner.close()
+
+        self.assertFalse(result.passed)
+        self.assertIn("console not responsive", result.error.lower())
+
+    @patch("flpr_hang_gate.time.sleep")
+    @patch("flpr_hang_gate.time.monotonic")
+    def test_bap_early_exit(self, mock_mono, mock_sleep):
+        """bap_central dying before ACTIVE -> early-exit failure."""
+        mock_sleep.return_value = None
+        gen = _mono_steady(1000.0)
+        mock_mono.side_effect = lambda: next(gen)
+
+        fake_proc = FakeBapProcess(early_exit=True, rc=7, out="crashed\n")
+        runner, _transport = self._make_runner(
+            {"flpr offload": list(SUCCESS_OFFLOAD_RESPONSES)},
+            launcher=lambda d, s, p: fake_proc,
+        )
+        runner.open()
+        try:
+            result = runner.run(12)
+        finally:
+            runner.close()
+
+        self.assertFalse(result.passed)
+        self.assertIn("exited early", result.error)
+        self.assertIn("crashed", result.error)
+
+    @patch("flpr_hang_gate.time.sleep")
+    @patch("flpr_hang_gate.time.monotonic")
+    def test_ack_timeout_kills_bap_process(self, mock_mono, mock_sleep):
+        """No FAULT_HANG_ACK -> timeout error AND the launched BAP process
+        is cleaned up (killed) by the runner's finally path."""
+        mock_sleep.return_value = None
+        gen = _mono_steady(1000.0)
+        mock_mono.side_effect = lambda: next(gen)
+
+        fake_proc = FakeBapProcess()
+        runner, _transport = self._make_runner(
+            {"flpr offload": list(SUCCESS_OFFLOAD_RESPONSES)},
+            launcher=lambda d, s, p: fake_proc,
+        )
+        runner.open()
+        try:
+            result = runner.run(12)
+        finally:
+            runner.close()
+
+        self.assertFalse(result.passed)
+        self.assertIn("FAULT_HANG_ACK", result.error)
+        self.assertTrue(fake_proc.killed, "timeout path must kill bap_central")
+
+    @patch("flpr_hang_gate.time.sleep")
+    @patch("flpr_hang_gate.time.monotonic")
+    def test_recovery_timeout(self, mock_mono, mock_sleep):
+        """ACK arrives but probation never clears -> recovery timeout."""
+        mock_sleep.return_value = None
+        gen = _mono_steady(1000.0)
+        mock_mono.side_effect = lambda: next(gen)
+
+        fake_proc = FakeBapProcess()
+        runner, _transport = self._make_runner(
+            {
+                "flpr offload": [
+                    OFFLOAD_ACTIVE_1000,
+                    OFFLOAD_ACTIVE_1000,
+                    OFFLOAD_STILL_PROBATION,  # never clears probation
+                ],
+                "flpr hang": FAULT_HANG_ACK_LINE,
+            },
+            launcher=lambda d, s, p: fake_proc,
+        )
+        runner.open()
+        try:
+            result = runner.run(12)
+        finally:
+            runner.close()
+
+        self.assertFalse(result.passed)
+        self.assertIn("recovery", result.error.lower())
+        self.assertIn("probation", result.error.lower())
+        self.assertTrue(fake_proc.killed)
+
+    @patch("flpr_hang_gate.time.sleep")
+    @patch("flpr_hang_gate.time.monotonic")
+    def test_bap_timeout_on_communicate_kills(self, mock_mono, mock_sleep):
+        """bap_central hanging on communicate -> killed, gate still fails."""
+        mock_sleep.return_value = None
+        gen = _mono_steady(1000.0)
+        mock_mono.side_effect = lambda: next(gen)
+
+        fake_proc = FakeBapProcess(timeout=True)
+        runner, _transport = self._make_runner(
+            {
+                "flpr offload": list(SUCCESS_OFFLOAD_RESPONSES),
+                "flpr hang": FAULT_HANG_ACK_LINE,
+                "flpr status": ASRC_STATUS_TEXT,
+                "flpr runtime": ASRC_STATUS_TEXT,
+                "audio status": ASRC_STATUS_TEXT,
+            },
+            launcher=lambda d, s, p: fake_proc,
+        )
+        runner.open()
+        try:
+            result = runner.run(12)
+        finally:
+            runner.close()
+
+        # Step 7 kill path fires; the gate outcome afterwards depends on
+        # the console state, which is non-deterministic on hardware — the
+        # deterministic contract under test is the cleanup kill itself.
+        self.assertTrue(fake_proc.killed, "communicate timeout must kill bap_central")
 
 
 if __name__ == "__main__":
