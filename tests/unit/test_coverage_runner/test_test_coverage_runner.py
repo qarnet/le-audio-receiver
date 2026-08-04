@@ -382,5 +382,88 @@ class RunnerBaseline(unittest.TestCase):
         self.assertIn("baseline file missing from current population: src/bar.c", out)
 
 
+class RunnerToolVersionEnforcement(unittest.TestCase):
+    """Baseline gcovr/gcov version enforcement (R0): recorded versions are
+    compared in baseline mode, absent fields stay accepted, --write-baseline
+    records current versions, and --report-only never enforces versions."""
+
+    def _write_baseline(self, fx, mutate=None):
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(0, rc, out)
+        self.assertTrue(os.path.exists(baseline))
+        with open(baseline) as fh:
+            bl = json.load(fh)
+        # --write-baseline records the fake current tool versions.
+        self.assertEqual(bl["gcovr_version"], "gcovr 8.4")
+        self.assertEqual(bl["gcov_version"], "gcov (GCC) 14.3.0")
+        if mutate is not None:
+            mutate(bl)
+            with open(baseline, "w") as fh:
+                json.dump(bl, fh)
+        return baseline
+
+    def test_matching_versions_pass(self):
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        baseline = self._write_baseline(fx)
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertEqual(0, rc, out)
+        self.assertIn("baseline enforcement PASS", out)
+
+    def test_gcovr_version_mismatch_fails_with_diagnostic(self):
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        baseline = self._write_baseline(
+            fx, mutate=lambda bl: bl.__setitem__("gcovr_version", "gcovr 8.3")
+        )
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertNotEqual(0, rc)
+        self.assertIn(
+            "error: gcovr version mismatch: current 'gcovr 8.4' vs "
+            "baseline 'gcovr 8.3' (refresh intentionally with "
+            "--write-baseline %s)" % baseline,
+            out,
+        )
+
+    def test_gcov_version_mismatch_fails_with_diagnostic(self):
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        baseline = self._write_baseline(
+            fx, mutate=lambda bl: bl.__setitem__("gcov_version", "gcov (GCC) 14.2.0")
+        )
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertNotEqual(0, rc)
+        self.assertIn(
+            "error: gcov version mismatch: current 'gcov (GCC) 14.3.0' vs "
+            "baseline 'gcov (GCC) 14.2.0' (refresh intentionally with "
+            "--write-baseline %s)" % baseline,
+            out,
+        )
+
+    def test_absent_version_fields_remain_accepted(self):
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        baseline = self._write_baseline(
+            fx,
+            mutate=lambda bl: (
+                bl.pop("gcovr_version", None),
+                bl.pop("gcov_version", None),
+            ),
+        )
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertEqual(0, rc, out)
+        self.assertIn("baseline enforcement PASS", out)
+
+    def test_report_only_does_not_enforce_versions(self):
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        baseline = self._write_baseline(
+            fx, mutate=lambda bl: bl.__setitem__("gcovr_version", "gcovr 0.0")
+        )
+        rc, out, _ = fx.run("--report-only", output=os.path.join(fx.root, "out2"))
+        self.assertEqual(0, rc, out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

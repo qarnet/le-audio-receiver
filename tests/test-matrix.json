@@ -1639,7 +1639,7 @@
           "evidence": "build"
         },
         {
-          "name": "monitor.sh",
+          "name": "read_acm.py",
           "evidence": "hardware"
         }
       ],
@@ -1649,8 +1649,8 @@
       "hardware_acceptance": [
         "fw-build-5340",
         "fw-build-54l15",
-        "scripts/monitor.sh",
-        "docs/development/phase5-hardware-acceptance-results.md"
+        "scripts/read_acm.py",
+        "docs/testing/pre-refactor-hardware-baseline.md"
       ],
       "stateful": false,
       "reason": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by production builds and boot logs",
@@ -1733,7 +1733,7 @@
           "evidence": "build"
         },
         {
-          "name": "monitor.sh",
+          "name": "read_acm.py",
           "evidence": "hardware"
         }
       ],
@@ -1742,7 +1742,7 @@
       "function_exclusions": [],
       "hardware_acceptance": [
         "fw-build-54l15",
-        "scripts/monitor.sh",
+        "scripts/read_acm.py",
         "docs/development/phase6-stage4b-acceptance-results.md",
         "docs/development/phase6-stage5-results.md"
       ],
@@ -1769,7 +1769,7 @@
       "hardware_acceptance": [
         "fw-build-dongle",
         "bap_central.py",
-        "scripts/bsim-official-smoke.sh"
+        "docs/testing/pre-refactor-hardware-baseline.md"
       ],
       "stateful": false,
       "reason": "hci_uart dongle firmware entry with compile-time identity C0:AA:BB:CC:DD:EE; lab dongle used for all central/hardware testing; outside src/ numeric population",

@@ -29,6 +29,14 @@
 # record.  Population drift (new or missing population file) is a hard
 # failure until manifest/baseline are intentionally updated.
 #
+# Tool-version enforcement (baseline mode only): the current gcovr/gcov
+# version first lines are compared with the baseline's recorded
+# gcovr_version/gcov_version when those fields are present (old baselines
+# that omit either field remain accepted).  A mismatch is a hard error
+# that directs the operator to refresh intentionally with
+# --write-baseline.  --write-baseline always records the current
+# versions; --report-only never enforces them.
+#
 # Usage:
 #   scripts/test-coverage.sh (--report-only|--write-baseline PATH|--baseline PATH)
 #                            --output DIR [--clean-output] [--keep-builds]
@@ -98,7 +106,7 @@ done
 [ -n "$MODE" ] || MODE="baseline"
 [ "$MODE" = "report-only" ] || [ -n "$BASELINE_PATH" ] || BASELINE_PATH="$REPO_ROOT/tests/coverage-baseline.json"
 
-command -v gcovr >/dev/null 2>&1 || die "gcovr not found — add pkgs.gcovr to flake.nix and re-enter the dev shell"
+command -v gcovr >/dev/null 2>&1 || die "gcovr not found — re-enter the dev shell (flake.nix provides gcovr)"
 command -v gcov >/dev/null 2>&1 || die "gcov not found in dev shell"
 command -v west >/dev/null 2>&1 || die "west not found in dev shell"
 command -v python3 >/dev/null 2>&1 || die "python3 not found in dev shell"
@@ -408,7 +416,7 @@ PYEOF
     fi
 elif [ "$MODE" = "baseline" ]; then
     [ -f "$BASELINE_PATH" ] || die "baseline not found: $BASELINE_PATH"
-    python3 - "$OUTPUT_DIR/numeric-summary.json" "$BASELINE_PATH" <<'PYEOF' || die "baseline enforcement failed"
+    python3 - "$OUTPUT_DIR/numeric-summary.json" "$BASELINE_PATH" "$GCOVR_VERSION" "$GCOV_VERSION" <<'PYEOF' || die "baseline enforcement failed"
 import json, sys
 
 
@@ -417,13 +425,30 @@ def ge(a, b):
     return a[0] * b[1] >= b[0] * a[1]
 
 
-summary_path, baseline_path = sys.argv[1:3]
+summary_path, baseline_path, cur_gcovr, cur_gcov = sys.argv[1:5]
 with open(summary_path, "r", encoding="utf-8") as fh:
     cur = json.load(fh)
 with open(baseline_path, "r", encoding="utf-8") as fh:
     base = json.load(fh)
 
 errors = []
+
+# Tool-version enforcement: current first-line versions must equal the
+# baseline's recorded versions when present (old baselines that omit
+# either field remain accepted).  Comparison is case-sensitive equality.
+for tool, cur_ver, base_key in (
+    ("gcovr", cur_gcovr, "gcovr_version"),
+    ("gcov", cur_gcov, "gcov_version"),
+):
+    base_ver = base.get(base_key)
+    if base_ver is None:
+        continue
+    if cur_ver != base_ver:
+        errors.append(
+            "%s version mismatch: current '%s' vs baseline '%s' "
+            "(refresh intentionally with --write-baseline %s)"
+            % (tool, cur_ver, base_ver, baseline_path)
+        )
 
 cur_pop = set(cur["population"])
 base_pop = set(base["population"])
