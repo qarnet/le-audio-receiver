@@ -229,12 +229,21 @@ contract correction; never re-pin unexplained output.
 
 # Phased plan
 
-## R0 — Canonical truth and gate inventory
+## R0 — Canonical truth and gate inventory — **ACCEPTED (2026-08-04)**
 
 ### Goal
 
 Make repository documentation and gate metadata describe current T8 state
 before structural edits begin.
+
+### Results
+
+Exact implementation commit `7ab4b39` (docs + tooling/metadata commits
+`2de5e33` → `7ab4b39`); full G1 passed on that clean commit (47 PASS /
+0 FAIL / 47 TOTAL, coverage exact against `1a5842d`, builds 3/3, build
+contract 76/76, zero actionable warnings, BSim hashes unchanged).  Full
+results, commands, runtimes, composition, and warning disposition:
+`docs/development/refactor-r0-results.md`.
 
 ### Files
 
