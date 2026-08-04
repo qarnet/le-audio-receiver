@@ -14,6 +14,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+struct k_sem;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -63,6 +65,13 @@ extern bool mock_grtc_cc_abs_last_irq;
 extern int mock_grtc_cc_disable_calls;
 extern uint8_t mock_grtc_cc_disable_last_channel;
 extern uint32_t mock_grtc_event_addr; /* fake GRTC event address base */
+
+/* R1: deterministic one-shot gate on the FIRST compare programming after
+ * arming (entered/release semaphores).  The update thread blocks inside
+ * nrfx_grtc_syscounter_cc_absolute_set while holding the production
+ * control mutex; the reset thread then proves it cannot disable/reset
+ * until the compare is released.  Cleared by mock_hal_reset(). */
+void mock_grtc_block_first_cc_abs(struct k_sem *entered, struct k_sem *release);
 
 /* ── TIMER ───────────────────────────────────────────────────────── */
 

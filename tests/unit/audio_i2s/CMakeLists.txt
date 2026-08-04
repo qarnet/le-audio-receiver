@@ -19,6 +19,7 @@ target_sources(app PRIVATE
   ${COMMON_DIR}/test_sink_common.c
   ${COMMON_DIR}/test_sink_startup.c
   ${COMMON_DIR}/test_sink_stop.c
+  ${COMMON_DIR}/test_sink_concurrent.c
   ${COMMON_DIR}/test_support.c
   ${SRC_DIR}/audio_i2s.c
   ${COMMON_DIR}/fake_i2s.c

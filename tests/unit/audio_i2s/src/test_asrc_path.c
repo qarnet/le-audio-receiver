@@ -338,7 +338,8 @@ ZTEST(audio_i2s, test_stop_resets_asrc_context)
 	zassert_equal(audio_i2s_test_offload_sequence(), 0, "sequence cleared");
 	zassert_equal(mock_asrc_reset_calls, 1, "asrc reset called");
 
-	/* Next push exports the reset first-block phase. */
+	/* Reconnect: BAP gate closed→open restores push admission. */
+	zassert_equal(audio_sink_stream_open(), 0, "stream open");
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0, "post-stop push");
 	zassert_equal(mock_asrc_last_export_phase, ASRC_Q32_ONE,
 		      "asrc context reset to first-block phase");

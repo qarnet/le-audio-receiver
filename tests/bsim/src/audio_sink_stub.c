@@ -52,6 +52,7 @@ static struct bsim_sink_segment segments[BSIM_SINK_MAX_SEGMENTS];
 static int segment_count; /* finalized segments */
 static int current_seg;   /* open segment index */
 static bool stopped;
+static bool accepting;            /* R1: push admission (restored only by open) */
 static bool first_nonzero_seen;   /* per segment */
 static bool boundary_closed;      /* per segment: first nonzero source-valid push */
 static uint32_t after_stop_total; /* cumulative, never hidden */
@@ -177,7 +178,23 @@ void audio_sink_test_begin(enum bsim_sink_scenario scn, int dec_calls)
 
 int audio_sink_init(void)
 {
+	/* R1: configured=true but push admission closed; only
+	 * audio_sink_stream_open() (BAP gate closed→open) restores it. */
+	accepting = false;
 	return 0;
+}
+
+int audio_sink_stream_open(void)
+{
+	/* Alone restores admission for the current/new segment. */
+	accepting = true;
+	return 0;
+}
+
+void audio_sink_stream_close(void)
+{
+	/* Future stub pushes return -EBUSY non-destructively. */
+	accepting = false;
 }
 
 void audio_sink_stop(void)
@@ -193,6 +210,8 @@ void audio_sink_stop(void)
 
 void audio_sink_set_input_frames(uint16_t frames)
 {
+	/* R1: never enables admission — only audio_sink_stream_open() does.
+	 * The segment heuristics below stay unchanged. */
 	uint16_t samples = (uint16_t)(frames * 2); /* stereo: frames → samples */
 
 	if (samples == 0) {
@@ -218,6 +237,12 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 	if (goal_finalized) {
 		/* Scenario goal already reached: ignore any later push. */
 		return 0;
+	}
+
+	/* R1: closed admission rejects pushes without touching oracle
+	 * state (the stream_recv gate normally blocks these earlier). */
+	if (!accepting) {
+		return -EBUSY;
 	}
 
 	if (stopped) {

@@ -50,6 +50,20 @@ void stream_lifecycle_sink_release(size_t idx);
  */
 bool stream_lifecycle_audio_path_close(void);
 
+/**
+ * Force-close the audio-path gate (shell stop).  Closes the gate and
+ * latches it closed for the current configured slot set: later
+ * `stream_lifecycle_sink_started()` calls (duplicates, second-ASE
+ * starts, stream-start callbacks) never open it.  `stream_lifecycle_reset()`
+ * clears the latch; releasing the LAST configured slot clears it so a
+ * later reconfigure/start lifecycle can open (releasing only one Mode A
+ * slot does not).
+ *
+ * @return true if the gate was open before force-close (first-close
+ *         observer emission), false if already closed.
+ */
+bool stream_lifecycle_force_close(void);
+
 /** Query whether the audio-path gate is open. */
 bool stream_lifecycle_audio_path_is_open(void);
 

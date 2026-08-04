@@ -352,3 +352,38 @@ ZTEST(audio_i2s, test_push_before_init_eio)
 	zassert_equal(mock_stats_underrun_calls, 0, "no underrun");
 	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS, "no slab allocation");
 }
+
+/* Successful init alone leaves configured=true but admission CLOSED: only
+ * a valid BAP gate closed→open transition calls audio_sink_stream_open().
+ * A configured-but-closed valid push returns -EBUSY (I2S-001) with zero
+ * allocation/write/state/counter mutation. */
+ZTEST(audio_i2s, test_init_alone_leaves_admission_closed)
+{
+	zassert_equal(audio_sink_init(), 0, "init");
+	zassert_true(audio_i2s_test_is_configured(), "configured after init");
+	zassert_false(audio_i2s_test_is_accepting(), "admission closed after init");
+
+	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), -EBUSY,
+		      "configured-but-closed push rejected");
+
+	zassert_equal(fake_i2s_write_calls(), 0, "no writes");
+	zassert_equal(fake_i2s_queued_count(), 0, "nothing queued");
+	zassert_equal(mock_drift_update_calls, 0, "no drift");
+	zassert_equal(mock_stats_underrun_calls, 0, "no underrun");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS, "no slab allocation");
+	zassert_equal(audio_i2s_test_active_pushes(), 0, "no admitted push");
+
+	/* Explicit open restores admission (no re-init side effects). */
+	zassert_equal(audio_sink_stream_open(), 0, "open after init");
+	zassert_true(audio_i2s_test_is_accepting(), "admission open");
+	zassert_equal(fake_i2s_configure_calls(), 1, "no re-configure");
+	zassert_equal(fake_i2s_trigger_calls(), 0, "no triggers from open");
+	zassert_false(audio_i2s_test_is_started(), "open never starts DMA");
+}
+
+/* Open before init returns -EIO and enables nothing. */
+ZTEST(audio_i2s, test_stream_open_before_init_eio)
+{
+	zassert_equal(audio_sink_stream_open(), -EIO, "open before init");
+	zassert_false(audio_i2s_test_is_accepting(), "admission stays closed");
+}

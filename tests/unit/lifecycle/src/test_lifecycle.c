@@ -366,6 +366,119 @@ ZTEST(lifecycle, test_negative_chan_count_inert)
 	zassert_false(stream_lifecycle_audio_path_is_open(), "gate stays closed");
 }
 
+/* ── R1: forced close (shell stop) ───────────────────────────────── */
+
+ZTEST(lifecycle, test_force_close_returns_was_open)
+{
+	stream_lifecycle_reset();
+	stream_lifecycle_sink_configured(0, 2);
+	stream_lifecycle_sink_started(0);
+	zassert_true(stream_lifecycle_audio_path_is_open(), "open");
+
+	zassert_true(stream_lifecycle_force_close(), "first force close reports was-open");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "gate closed");
+
+	zassert_false(stream_lifecycle_force_close(), "second force close reports already closed");
+}
+
+ZTEST(lifecycle, test_force_close_blocks_later_starts_for_slot_set)
+{
+	stream_lifecycle_reset();
+	stream_lifecycle_sink_configured(0, 2);
+	zassert_true(stream_lifecycle_sink_started(0), "first start opens gate");
+	zassert_true(stream_lifecycle_force_close(), "forced close");
+
+	/* Later starts (duplicates / stream-start callbacks) stay closed. */
+	zassert_false(stream_lifecycle_sink_started(0), "duplicate start stays closed");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "gate stays closed");
+	zassert_false(stream_lifecycle_sink_started(0), "third start still closed");
+}
+
+ZTEST(lifecycle, test_force_close_mode_a_second_ase_stays_closed)
+{
+	stream_lifecycle_reset();
+	stream_lifecycle_sink_configured(0, 1);
+	stream_lifecycle_sink_configured(1, 1);
+	zassert_false(stream_lifecycle_sink_started(0), "first Mode A ASE alone not open");
+	zassert_true(stream_lifecycle_sink_started(1), "pair completes");
+	zassert_true(stream_lifecycle_force_close(), "forced close");
+
+	/* start(slot0) -> force_close -> start(slot1) stays closed. */
+	stream_lifecycle_reset();
+	stream_lifecycle_sink_configured(0, 1);
+	stream_lifecycle_sink_configured(1, 1);
+	zassert_false(stream_lifecycle_sink_started(0), "partial");
+	zassert_false(stream_lifecycle_force_close(),
+		      "force close while gate already closed reports false");
+	zassert_false(stream_lifecycle_sink_started(1),
+		      "second ASE start after forced close stays closed");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "gate never opens");
+}
+
+ZTEST(lifecycle, test_force_close_one_slot_release_does_not_unblock)
+{
+	stream_lifecycle_reset();
+	stream_lifecycle_sink_configured(0, 1);
+	stream_lifecycle_sink_configured(1, 1);
+	stream_lifecycle_sink_started(0);
+	zassert_true(stream_lifecycle_sink_started(1), "pair opens");
+	zassert_true(stream_lifecycle_force_close(), "forced close");
+
+	/* Releasing only one Mode A slot must not clear the latch while
+	 * another slot remains configured. */
+	stream_lifecycle_sink_release(0);
+	zassert_false(stream_lifecycle_sink_started(1), "other slot start still blocked");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "gate stays closed");
+}
+
+ZTEST(lifecycle, test_force_close_final_release_and_reconfigure_permits_open)
+{
+	stream_lifecycle_reset();
+	stream_lifecycle_sink_configured(0, 1);
+	stream_lifecycle_sink_configured(1, 1);
+	stream_lifecycle_sink_started(0);
+	stream_lifecycle_sink_started(1);
+	zassert_true(stream_lifecycle_force_close(), "forced close");
+
+	/* Release both slots: the latch clears. */
+	stream_lifecycle_sink_release(0);
+	zassert_false(stream_lifecycle_sink_started(1), "still blocked (slot 1 configured)");
+	stream_lifecycle_sink_release(1);
+
+	/* Later reconfigure/start lifecycle can open. */
+	stream_lifecycle_sink_configured(0, 2);
+	zassert_true(stream_lifecycle_sink_started(0), "fresh lifecycle opens after final release");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate open");
+}
+
+ZTEST(lifecycle, test_reset_clears_force_close_latch)
+{
+	stream_lifecycle_reset();
+	stream_lifecycle_sink_configured(0, 2);
+	stream_lifecycle_sink_started(0);
+	zassert_true(stream_lifecycle_force_close(), "forced close");
+
+	stream_lifecycle_reset();
+	zassert_false(stream_lifecycle_audio_path_is_open(), "closed after reset");
+
+	stream_lifecycle_sink_configured(0, 2);
+	zassert_true(stream_lifecycle_sink_started(0), "reset permits fresh open");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate open after reset");
+}
+
+ZTEST(lifecycle, test_force_close_does_not_affect_ordinary_close)
+{
+	stream_lifecycle_reset();
+	stream_lifecycle_sink_configured(0, 2);
+	stream_lifecycle_sink_started(0);
+
+	/* Ordinary close does NOT latch: a later start reopens (LIFE-003
+	 * close-then-start edge is preserved). */
+	zassert_true(stream_lifecycle_audio_path_close(), "ordinary close");
+	zassert_true(stream_lifecycle_sink_started(0), "ordinary close allows reopen");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "reopened");
+}
+
 /* ── Suite entry ─────────────────────────────────────────────────── */
 
 ZTEST_SUITE(lifecycle, NULL, NULL, NULL, NULL, NULL);

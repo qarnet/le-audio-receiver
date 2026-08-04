@@ -131,6 +131,25 @@ static inline uint16_t flpr_seq_gap(uint16_t after, uint16_t before)
 	return (uint16_t)(after - before);
 }
 
+/* ── Control ACK constructor (R1) ──────────────────────────────────
+ * Builds the ACK for a control request (RING_RESET_ACK / RING_STALL_ACK):
+ * copies the request sequence token and the current protocol version, so
+ * the requester can correlate the ACK by sequence and reject late/stale
+ * ACKs.  Message layout/version/constants are unchanged.
+ */
+static inline struct flpr_msg flpr_control_ack_make(const struct flpr_msg *request,
+						    uint8_t ack_type, uint32_t data)
+{
+	struct flpr_msg ack = {
+		.type = ack_type,
+		.version = FLPR_PROTOCOL_VERSION,
+		.seq = request->seq,
+		.data = data,
+	};
+
+	return ack;
+}
+
 /* ── Per-peer state tracking ─────────────────────────────────────
  * One instance tracks the remote peer. NOT thread-safe — caller
  * must serialize access (spinlock on CPUAPP, single-threaded on FLPR).

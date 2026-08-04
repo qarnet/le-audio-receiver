@@ -91,6 +91,11 @@ static inline void test_init_ok(void)
 	zassert_equal(audio_sink_init(), 0, "init");
 	zassert_true(audio_i2s_test_is_configured(), "configured after init");
 	zassert_equal(fake_i2s_configure_calls(), 1, "configure called once");
+	/* Normal tests drive the BAP gate: admission opens after init so
+	 * pushes are accepted.  A dedicated test proves init alone leaves
+	 * admission closed. */
+	zassert_equal(audio_sink_stream_open(), 0, "admission opened after init");
+	zassert_true(audio_i2s_test_is_accepting(), "admission open");
 }
 
 /** Full startup: init + first push (six silence + data + START). */

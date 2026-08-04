@@ -57,11 +57,33 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_AUDIO_CLOCK_ACTUATOR_NONE),
 #define INPUT_FRAMES_7MS5 360
 static uint16_t input_frames = INPUT_FRAMES_10MS;
 
+/* ── Stream admission / drain state ────────────────────────────────
+ * One short mutex + condvar serialize push admission, stop drain, and
+ * the open waiter (R1).  The mutex is held only around state changes;
+ * never across allocation, decode, offload, I2S, or Bluetooth calls.
+ *
+ *   stream_accepting  push admission open (BAP gate closed→open only)
+ *   active_pushes     admitted pushes currently running (drained by stop)
+ *   stop_callers      overlapping stop callers; owner finalizes once
+ *   stop_finalizing   owner between drain and finalization; late joiners
+ *                     wait on this instead of re-running the reset
+ */
+static K_MUTEX_DEFINE(stream_mutex);
+static K_CONDVAR_DEFINE(stream_condvar);
+static bool stream_accepting;
+static uint32_t active_pushes;
+static uint32_t stop_callers;
+static bool stop_finalizing;
+
 void audio_sink_set_input_frames(uint16_t frames)
 {
-	input_frames = (frames == INPUT_FRAMES_7MS5 || frames == INPUT_FRAMES_10MS)
-			       ? frames
-			       : INPUT_FRAMES_10MS;
+	uint16_t v = (frames == INPUT_FRAMES_7MS5 || frames == INPUT_FRAMES_10MS)
+			     ? frames
+			     : INPUT_FRAMES_10MS;
+
+	k_mutex_lock(&stream_mutex, K_FOREVER);
+	input_frames = v;
+	k_mutex_unlock(&stream_mutex);
 }
 
 /*
@@ -202,32 +224,12 @@ static void perf_finalize_push(bool measuring, uint32_t t0)
 	}
 }
 
-static int validate_push_input(const int16_t *stereo_data, size_t sample_count)
-{
-	if (!stereo_data) {
-		return -EINVAL;
-	}
-	if (sample_count == 0) {
-		return -EINVAL;
-	}
-	if (sample_count & 1u) {
-		return -EINVAL;
-	}
-	/* Strict frame count: the decoder produces input_frames stereo
-	 * frames per SDU (dynamic, depends on frame duration).
-	 */
-	if (sample_count / CHANNELS != (size_t)input_frames) {
-		return -EINVAL;
-	}
-	return 0;
-}
-
 /* ── resampler-specific block fill ───────────────────────────────── */
 
 #if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
 
-static int fill_block_asrc(const int16_t *stereo_data, int32_t ppm, void **block,
-			   size_t *output_frames)
+static int fill_block_asrc(uint16_t input_frames_snapshot, const int16_t *stereo_data, int32_t ppm,
+			   void **block, size_t *output_frames)
 {
 	int ret = k_mem_slab_alloc(&i2s_slab, block, K_NO_WAIT);
 
@@ -252,9 +254,9 @@ static int fill_block_asrc(const int16_t *stereo_data, int32_t ppm, void **block
 	struct audio_offload_asrc_result off_result;
 	memset(&off_result, 0, sizeof(off_result));
 
-	int off_ret = audio_offload_process_asrc(stereo_data, input_frames, offload_sequence, ppm,
-						 &cpu_state, (int16_t *)*block, MAX_OUTPUT_FRAMES,
-						 &off_result);
+	int off_ret = audio_offload_process_asrc(stereo_data, input_frames_snapshot,
+						 offload_sequence, ppm, &cpu_state,
+						 (int16_t *)*block, MAX_OUTPUT_FRAMES, &off_result);
 
 	/* Only a validated round trip with output in [1, 481] is usable.
 	 * Zero-frame (valid FLPR error response) and oversized outputs must
@@ -292,10 +294,10 @@ static int fill_block_asrc(const int16_t *stereo_data, int32_t ppm, void **block
 		/* ── CPU fallback: run ASRC from unchanged pre-state ── */
 		size_t consumed;
 		uint32_t t_asrc = audio_perf_cycle_start();
-		int asrc_ret =
-			audio_asrc_process(&asrc_ctx, stereo_data, input_frames, (int16_t *)*block,
-					   MAX_OUTPUT_FRAMES, ppm, asrc_prev_l, asrc_prev_r,
-					   asrc_prev_valid, &consumed, &produced, &next_l, &next_r);
+		int asrc_ret = audio_asrc_process(&asrc_ctx, stereo_data, input_frames_snapshot,
+						  (int16_t *)*block, MAX_OUTPUT_FRAMES, ppm,
+						  asrc_prev_l, asrc_prev_r, asrc_prev_valid,
+						  &consumed, &produced, &next_l, &next_r);
 		audio_perf_cycle_end(t_asrc, AUDIO_PERF_PATH_ASRC);
 
 		if (asrc_ret != 0) {
@@ -330,8 +332,8 @@ static int fill_block_asrc(const int16_t *stereo_data, int32_t ppm, void **block
 
 #else /* AUDIO_RESAMPLER_IDENTITY */
 
-static int fill_block_identity(const int16_t *stereo_data, int32_t ppm_unused, void **block,
-			       size_t *output_frames)
+static int fill_block_identity(uint16_t input_frames_snapshot, const int16_t *stereo_data,
+			       int32_t ppm_unused, void **block, size_t *output_frames)
 {
 	(void)ppm_unused;
 
@@ -343,10 +345,10 @@ static int fill_block_identity(const int16_t *stereo_data, int32_t ppm_unused, v
 		return ret;
 	}
 
-	size_t bytes = (size_t)input_frames * CHANNELS * (BIT_WIDTH / 8);
+	size_t bytes = (size_t)input_frames_snapshot * CHANNELS * (BIT_WIDTH / 8);
 
 	memcpy(*block, stereo_data, bytes);
-	*output_frames = input_frames;
+	*output_frames = input_frames_snapshot;
 	return 0;
 }
 
@@ -354,18 +356,16 @@ static int fill_block_identity(const int16_t *stereo_data, int32_t ppm_unused, v
 
 /* ── audio_sink_push ──────────────────────────────────────────────── */
 
-int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
+/*
+ * Admitted-push body.  Runs entirely without the stream mutex: drift,
+ * slab allocation/free, ASRC/offload, and i2s_write/trigger may block or
+ * take long paths, and stop waits for the drain instead of racing them.
+ * Every return passes through the common exit in audio_sink_push() so
+ * active_pushes is decremented exactly once per admitted call.
+ */
+static int do_push(uint16_t input_frames_snapshot, const int16_t *stereo_data, size_t sample_count)
 {
 	int ret;
-
-	ret = validate_push_input(stereo_data, sample_count);
-	if (ret < 0) {
-		return ret;
-	}
-
-	if (!configured) {
-		return -EIO;
-	}
 
 	bool measuring = started;
 	uint32_t t0 = measuring ? audio_perf_cycle_start() : 0;
@@ -387,9 +387,9 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	size_t output_frames = 0;
 
 #if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
-	ret = fill_block_asrc(stereo_data, ppm, &block, &output_frames);
+	ret = fill_block_asrc(input_frames_snapshot, stereo_data, ppm, &block, &output_frames);
 #else
-	ret = fill_block_identity(stereo_data, ppm, &block, &output_frames);
+	ret = fill_block_identity(input_frames_snapshot, stereo_data, ppm, &block, &output_frames);
 #endif
 	if (ret < 0) {
 		perf_finalize_push(measuring, t0);
@@ -422,7 +422,7 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 		 */
 		for (int pre = 0; pre < 6; pre++) {
 			size_t pre_frames =
-				audio_rate_converter_next_frames(&rate_ctx, input_frames);
+				audio_rate_converter_next_frames(&rate_ctx, input_frames_snapshot);
 
 			if (pre_frames < 1 || pre_frames > MAX_OUTPUT_FRAMES) {
 				/* Converter produced an impossible frame count:
@@ -516,18 +516,138 @@ int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 	return 0;
 }
 
-void audio_sink_stop(void)
+int audio_sink_push(const int16_t *stereo_data, size_t sample_count)
 {
-	drift_reset();
-	audio_timing_reset();
-
-	if (!started) {
-		return;
+	/* Basic validation first (null / empty / odd), preserving the
+	 * malformed-input -EINVAL precedence over configured/open checks. */
+	if (!stereo_data || sample_count == 0 || (sample_count & 1u)) {
+		return -EINVAL;
 	}
 
-	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_PREPARE);
-	i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
-	started = false;
+	/* Admission + one local input-frame snapshot under the stream mutex.
+	 * The exact sample-count validation runs against the snapshot BEFORE
+	 * the configured/open checks (same -EINVAL precedence as before);
+	 * fill/prefill/rate conversion use only the snapshot afterwards, so
+	 * even an unexpected setter call cannot change a block mid-push. */
+	k_mutex_lock(&stream_mutex, K_FOREVER);
+
+	uint16_t snapshot = input_frames;
+
+	if (sample_count / CHANNELS != (size_t)snapshot) {
+		k_mutex_unlock(&stream_mutex);
+		return -EINVAL;
+	}
+	if (!configured) {
+		k_mutex_unlock(&stream_mutex);
+		return -EIO;
+	}
+	if (!stream_accepting) {
+		k_mutex_unlock(&stream_mutex);
+		return -EBUSY;
+	}
+	active_pushes++;
+	k_mutex_unlock(&stream_mutex);
+
+	int ret = do_push(snapshot, stereo_data, sample_count);
+
+	/* One common exit: every admitted push decrements exactly once; the
+	 * transition to zero broadcasts so a draining stop can proceed. */
+	k_mutex_lock(&stream_mutex, K_FOREVER);
+	__ASSERT(active_pushes > 0, "push exit without admission");
+	active_pushes--;
+	if (active_pushes == 0) {
+		k_condvar_broadcast(&stream_condvar);
+	}
+	k_mutex_unlock(&stream_mutex);
+
+	return ret;
+}
+
+void audio_sink_stop(void)
+{
+	k_mutex_lock(&stream_mutex, K_FOREVER);
+
+	/* Rule 3: close admission, claim the owner role from the
+	 * pre-increment caller count, and set finalizing before waiting. */
+	stream_accepting = false;
+
+	bool owner = (stop_callers == 0);
+
+	stop_callers++;
+	if (owner) {
+		stop_finalizing = true;
+	}
+
+	if (owner) {
+		/* Rule 5: wait for every admitted push to fully exit (the
+		 * condition wait releases the mutex).  No timeout-and-proceed:
+		 * proceeding to DROP while a push still runs recreates the
+		 * corruption this phase removes. */
+		while (active_pushes != 0) {
+			k_condvar_wait(&stream_condvar, &stream_mutex, K_FOREVER);
+		}
+
+		/* Snapshot/clear started while protected, then run the
+		 * existing drift/timing reset and PREPARE/DROP outside the
+		 * mutex (they may take long paths). */
+		bool was_started = started;
+
+		started = false;
+		k_mutex_unlock(&stream_mutex);
+
+		drift_reset();
+		audio_timing_reset();
+
+		if (was_started) {
+			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_PREPARE);
+			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
+		}
+
+		k_mutex_lock(&stream_mutex, K_FOREVER);
+		stop_finalizing = false;
+	} else {
+		/* Rule 4: an early joiner waits for the owner's finalization;
+		 * a late joiner arriving after it skips the loop. */
+		while (stop_finalizing) {
+			k_condvar_wait(&stream_condvar, &stream_mutex, K_FOREVER);
+		}
+	}
+
+	/* Every caller decrements exactly once; the last caller broadcasts
+	 * so a waiting open() cannot sleep past the cohort completion. */
+	stop_callers--;
+	if (stop_callers == 0) {
+		k_condvar_broadcast(&stream_condvar);
+	}
+	k_mutex_unlock(&stream_mutex);
+}
+
+int audio_sink_stream_open(void)
+{
+	k_mutex_lock(&stream_mutex, K_FOREVER);
+
+	if (!configured) {
+		k_mutex_unlock(&stream_mutex);
+		return -EIO;
+	}
+
+	/* Wait for any overlapping stop cohort to fully finish (including
+	 * the owner's DROP/reset, which runs before it decrements), so a
+	 * reopen can never land between drain completion and DROP/reset. */
+	while (stop_callers != 0) {
+		k_condvar_wait(&stream_condvar, &stream_mutex, K_FOREVER);
+	}
+
+	stream_accepting = true;
+	k_mutex_unlock(&stream_mutex);
+	return 0;
+}
+
+void audio_sink_stream_close(void)
+{
+	k_mutex_lock(&stream_mutex, K_FOREVER);
+	stream_accepting = false;
+	k_mutex_unlock(&stream_mutex);
 }
 
 /* ── Narrow test hooks (AUDIO_I2S_NATIVE_TEST only) ────────────────
@@ -569,10 +689,16 @@ void audio_i2s_test_set_slab_alloc_failure(bool fail)
 
 void audio_i2s_test_reset_module_state(void)
 {
+	k_mutex_lock(&stream_mutex, K_FOREVER);
 	configured = false;
 	started = false;
 	input_frames = INPUT_FRAMES_10MS;
 	saved_frame_len = 0;
+	stream_accepting = false;
+	active_pushes = 0;
+	stop_callers = 0;
+	stop_finalizing = false;
+	k_mutex_unlock(&stream_mutex);
 	memset(&rate_ctx, 0, sizeof(rate_ctx));
 #if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
 	memset(&asrc_ctx, 0, sizeof(asrc_ctx));
@@ -591,6 +717,39 @@ bool audio_i2s_test_is_configured(void)
 bool audio_i2s_test_is_started(void)
 {
 	return started;
+}
+
+/* Lock-protected admission/drain snapshots (R1 concurrency tests). */
+bool audio_i2s_test_is_accepting(void)
+{
+	k_mutex_lock(&stream_mutex, K_FOREVER);
+	bool v = stream_accepting;
+	k_mutex_unlock(&stream_mutex);
+	return v;
+}
+
+uint32_t audio_i2s_test_active_pushes(void)
+{
+	k_mutex_lock(&stream_mutex, K_FOREVER);
+	uint32_t v = active_pushes;
+	k_mutex_unlock(&stream_mutex);
+	return v;
+}
+
+uint32_t audio_i2s_test_stop_callers(void)
+{
+	k_mutex_lock(&stream_mutex, K_FOREVER);
+	uint32_t v = stop_callers;
+	k_mutex_unlock(&stream_mutex);
+	return v;
+}
+
+bool audio_i2s_test_stop_finalizing(void)
+{
+	k_mutex_lock(&stream_mutex, K_FOREVER);
+	bool v = stop_finalizing;
+	k_mutex_unlock(&stream_mutex);
+	return v;
 }
 
 uint16_t audio_i2s_test_input_frames(void)

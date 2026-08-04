@@ -382,12 +382,11 @@ static void ep_received(const void *data, size_t len, void *priv)
 	case FLPR_MSG_RING_RESET: {
 		uint32_t epoch = msg->data;
 		int ret = ring_reset_with_epoch(epoch);
-		struct flpr_msg ack = {
-			.type = FLPR_MSG_RING_RESET_ACK,
-			.version = FLPR_PROTOCOL_VERSION,
-			.seq = 0,
-			.data = (ret == 0) ? epoch : 0U,
-		};
+		/* R1: ACK echoes the request sequence token so the cpuapp
+		 * side can correlate by sequence (late/stale ACKs are
+		 * rejected there). */
+		struct flpr_msg ack = flpr_control_ack_make(msg, FLPR_MSG_RING_RESET_ACK,
+							    (ret == 0) ? epoch : 0U);
 		(void)send_msg(&ack);
 		break;
 	}
@@ -493,13 +492,10 @@ static void ep_received(const void *data, size_t len, void *priv)
 			diag_timed_stall_start_count++;
 		}
 
-		/* ACK with packed value (exact echo). */
-		struct flpr_msg ack = {
-			.type = FLPR_MSG_RING_STALL_ACK,
-			.version = FLPR_PROTOCOL_VERSION,
-			.seq = 0,
-			.data = msg->data, /* echo packed mask+duration */
-		};
+		/* ACK with packed value (exact echo, R1: request sequence
+		 * token echoed for correlation). */
+		struct flpr_msg ack =
+			flpr_control_ack_make(msg, FLPR_MSG_RING_STALL_ACK, msg->data);
 		(void)send_msg(&ack);
 		break;
 	}

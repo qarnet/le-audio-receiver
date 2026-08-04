@@ -20,6 +20,7 @@
 static int sink_stop_calls;
 static int unpair_result;
 static int unpair_calls;
+static int bap_path_stop_calls;
 
 /* ---- stats ---- */
 
@@ -54,6 +55,7 @@ void test_shell_reset_counters(void)
 	sink_stop_calls = 0;
 	unpair_calls = 0;
 	unpair_result = 0;
+	bap_path_stop_calls = 0;
 }
 
 /* ---- drift ---- */
@@ -108,6 +110,18 @@ void audio_sink_stop(void)
 int test_shell_sink_stop_calls(void)
 {
 	return sink_stop_calls;
+}
+
+/* ---- BAP audio-path stop (R1: shell 'audio stop' routes through it) ---- */
+
+void bt_bap_audio_path_stop(void)
+{
+	bap_path_stop_calls++;
+}
+
+int test_shell_bap_path_stop_calls(void)
+{
+	return bap_path_stop_calls;
 }
 
 /* ---- bt unpair (production pairing-mode reset) ---- */

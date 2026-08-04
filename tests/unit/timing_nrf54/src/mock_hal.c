@@ -13,6 +13,7 @@
 
 #include <stddef.h>
 
+#include <zephyr/kernel.h>
 #include <hal/nrf_grtc.h>
 #include <hal/nrf_timer.h>
 #include <helpers/nrfx_gppi.h>
@@ -97,6 +98,19 @@ uint32_t mock_gppi_last_eep = 0;
 uint32_t mock_gppi_last_tep = 0;
 int mock_gppi_conn_enable_calls = 0;
 
+/* ── R1 compare-programming gate ─────────────────────────────────── */
+
+static struct k_sem *cc_abs_entered;
+static struct k_sem *cc_abs_release;
+static bool cc_abs_gate_armed;
+
+void mock_grtc_block_first_cc_abs(struct k_sem *entered, struct k_sem *release)
+{
+	cc_abs_gate_armed = (entered != NULL && release != NULL);
+	cc_abs_entered = entered;
+	cc_abs_release = release;
+}
+
 void mock_hal_reset(void)
 {
 	mock_log_len = 0;
@@ -127,6 +141,9 @@ void mock_hal_reset(void)
 	mock_gppi_last_eep = 0;
 	mock_gppi_last_tep = 0;
 	mock_gppi_conn_enable_calls = 0;
+	cc_abs_entered = NULL;
+	cc_abs_release = NULL;
+	cc_abs_gate_armed = false;
 }
 
 /* ── nrfx_grtc ───────────────────────────────────────────────────── */
@@ -165,6 +182,17 @@ int nrfx_grtc_syscounter_cc_absolute_set(nrfx_grtc_channel_t *p_chan_data, uint6
 	mock_grtc_cc_abs_last_value = val;
 	mock_grtc_cc_abs_last_channel = p_chan_data->channel;
 	mock_grtc_cc_abs_last_irq = enable_irq;
+
+	/* R1: one-shot deterministic block on the first compare after
+	 * arming (the production update thread holds the control mutex
+	 * across this call). */
+	if (cc_abs_gate_armed) {
+		cc_abs_gate_armed = false;
+		if (cc_abs_entered != NULL && cc_abs_release != NULL) {
+			k_sem_give(cc_abs_entered);
+			k_sem_take(cc_abs_release, K_FOREVER);
+		}
+	}
 	return mock_grtc_cc_abs_ret;
 }
 

@@ -793,4 +793,54 @@ ZTEST(flpr_protocol, test_stall_pack_roundtrip)
 	zassert_equal(FLPR_STALL_DURATION(packed), (packed >> 8) & 0x00FFFFFFU);
 }
 
+/* ── R1: control ACK constructor ────────────────────────────────────
+ * RESET_ACK and STALL_ACK echo the exact request sequence token, data,
+ * type, and current protocol version (request correlation). */
+
+static struct flpr_msg make_request(uint8_t type, uint16_t seq, uint32_t data)
+{
+	struct flpr_msg m = {
+		.type = type,
+		.version = FLPR_PROTOCOL_VERSION,
+		.seq = seq,
+		.data = data,
+	};
+
+	return m;
+}
+
+ZTEST(flpr_protocol, test_control_ack_reset_echoes_seq_data_type_version)
+{
+	struct flpr_msg req = make_request(FLPR_MSG_RING_RESET, 0xBEEF, 42);
+	struct flpr_msg ack = flpr_control_ack_make(&req, FLPR_MSG_RING_RESET_ACK, 42);
+
+	zassert_equal(ack.type, FLPR_MSG_RING_RESET_ACK, "ack type");
+	zassert_equal(ack.version, FLPR_PROTOCOL_VERSION, "ack version");
+	zassert_equal(ack.seq, 0xBEEF, "ack echoes request sequence");
+	zassert_equal(ack.data, 42, "ack data");
+}
+
+ZTEST(flpr_protocol, test_control_ack_stall_echoes_seq_data_type_version)
+{
+	struct flpr_msg req =
+		make_request(FLPR_MSG_RING_STALL, 0x1234, FLPR_STALL_PACK(0x03, 5000));
+	struct flpr_msg ack = flpr_control_ack_make(&req, FLPR_MSG_RING_STALL_ACK, req.data);
+
+	zassert_equal(ack.type, FLPR_MSG_RING_STALL_ACK, "ack type");
+	zassert_equal(ack.version, FLPR_PROTOCOL_VERSION, "ack version");
+	zassert_equal(ack.seq, 0x1234, "ack echoes request sequence");
+	zassert_equal(ack.data, FLPR_STALL_PACK(0x03, 5000), "ack data (exact packed echo)");
+}
+
+ZTEST(flpr_protocol, test_control_ack_distinct_seq_and_data_fields)
+{
+	/* Acknowledging a different epoch/data than the request is
+	 * representable: seq comes from the request, data is caller data. */
+	struct flpr_msg req = make_request(FLPR_MSG_RING_RESET, 7, 100);
+	struct flpr_msg ack = flpr_control_ack_make(&req, FLPR_MSG_RING_RESET_ACK, 0);
+
+	zassert_equal(ack.seq, 7, "sequence always from request");
+	zassert_equal(ack.data, 0, "data supplied by caller (e.g. failure epoch)");
+}
+
 ZTEST_SUITE(flpr_protocol, NULL, NULL, NULL, NULL, NULL);

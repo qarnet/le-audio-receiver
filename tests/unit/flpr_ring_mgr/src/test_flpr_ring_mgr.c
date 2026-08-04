@@ -1194,3 +1194,221 @@ ZTEST(flpr_ring_mgr, test_wait_consume_short_timeout)
 }
 
 ZTEST_SUITE(flpr_ring_mgr, NULL, NULL, rm_setup, NULL, NULL);
+
+/* ── R1: data-lock barrier and ACK correlation ───────────────────── */
+
+static K_THREAD_STACK_DEFINE(rm_stack, 4096);
+static struct k_thread rm_thread;
+static K_THREAD_STACK_DEFINE(rm_stack_b, 4096);
+static struct k_thread rm_thread_b;
+static K_SEM_DEFINE(rm_done_sem, 0, 2);
+static K_SEM_DEFINE(rm_pause_entered, 0, 1);
+static K_SEM_DEFINE(rm_pause_release, 0, 1);
+static int rm_result;
+
+static void rm_reset_worker(void *arg_p, void *u1, void *u2)
+{
+	(void)u1;
+	(void)u2;
+	rm_result = flpr_ring_mgr_coordinated_reset((uint32_t)(uintptr_t)arg_p, 500);
+	k_sem_give(&rm_done_sem);
+}
+
+static void rm_produce_worker(void *arg_p, void *u1, void *u2)
+{
+	(void)arg_p;
+	(void)u1;
+	(void)u2;
+	rm_result = flpr_ring_mgr_produce_block(NULL, 480, 1, 0, false);
+	k_sem_give(&rm_done_sem);
+}
+
+static bool rm_worker2_returned;
+
+static void rm_local_reset_worker(void *arg_p, void *u1, void *u2)
+{
+	(void)arg_p;
+	(void)u1;
+	(void)u2;
+	rm_result = flpr_ring_mgr_reset(43);
+	rm_worker2_returned = true;
+	k_sem_give(&rm_done_sem);
+}
+
+static bool rm_wait_until(bool (*cond)(void *), void *arg, uint32_t timeout_ms)
+{
+	uint32_t deadline = k_uptime_get_32() + timeout_ms;
+
+	while (!cond(arg)) {
+		if (k_uptime_get_32() >= deadline) {
+			return false;
+		}
+		k_sleep(K_MSEC(1));
+	}
+	return true;
+}
+
+static bool rm_reset_req_seq_cond(void *arg)
+{
+	uint16_t want = (uint16_t)(uintptr_t)arg;
+
+	for (uint32_t i = 0; i < mock_hs_sent_count(); i++) {
+		const struct flpr_msg *m = mock_hs_sent_at(i);
+
+		if (m->type == FLPR_MSG_RING_RESET && m->seq == want) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Request A times out (token 1).  Request B reuses the same data (token
+ * 2).  A late ACK A arriving after B is armed is ignored by sequence;
+ * the matching ACK B completes B. */
+ZTEST(flpr_ring_mgr, test_reset_ack_retry_late_ack_ignored_by_sequence)
+{
+	rm_init_and_reset(42);
+
+	/* Request A: no ACK → timeout. */
+	mock_hs_set_auto_ack(false);
+	zassert_equal(flpr_ring_mgr_coordinated_reset(42, 50), -ETIMEDOUT, "request A times out");
+
+	/* Request B (same data) in a worker so ACKs can be injected while
+	 * it waits on the ACK semaphore. */
+	k_sem_reset(&rm_done_sem);
+	k_thread_create(&rm_thread, rm_stack, K_THREAD_STACK_SIZEOF(rm_stack), rm_reset_worker,
+			(void *)(uintptr_t)42, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
+	zassert_true(rm_wait_until(rm_reset_req_seq_cond, (void *)(uintptr_t)2, 5000),
+		     "request B (token 2) sent");
+
+	/* Late ACK A: stale sequence while B is armed → ignored/counted. */
+	struct flpr_msg late_a = {
+		.type = FLPR_MSG_RING_RESET_ACK,
+		.version = FLPR_PROTOCOL_VERSION,
+		.seq = 1,
+		.data = 42,
+	};
+	mock_hs_invoke_reset_ack(&late_a);
+
+	/* ACK B: matching sequence → completes B. */
+	struct flpr_msg ack_b = {
+		.type = FLPR_MSG_RING_RESET_ACK,
+		.version = FLPR_PROTOCOL_VERSION,
+		.seq = 2,
+		.data = 42,
+	};
+	mock_hs_invoke_reset_ack(&ack_b);
+
+	zassert_true(k_sem_take(&rm_done_sem, K_MSEC(5000)) == 0, "request B joined");
+	zassert_ok(rm_result, "request B completes after the matching ACK");
+	zassert_equal(flpr_ring_mgr_test_stale_ack_count(), 1, "late ACK A counted stale");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.epoch, 42, "epoch re-established by request B");
+}
+
+/* Token space: 0xFFFF succeeds, the next request overflows with
+ * -EOVERFLOW, and a remote restart (known quiescence boundary) resets
+ * the counter so token 1 is allocated again. */
+ZTEST(flpr_ring_mgr, test_ack_token_boundary_overflow_and_remote_restart)
+{
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init");
+
+	/* Force the next reset token to 0xFFFF: that request succeeds. */
+	flpr_ring_mgr_test_set_next_reset_token(0xFFFF);
+	mock_hs_set_auto_ack(true);
+	zassert_ok(flpr_ring_mgr_coordinated_reset(42, 100), "token 0xFFFF succeeds");
+
+	/* Next request: token space exhausted this session → -EOVERFLOW. */
+	zassert_equal(flpr_ring_mgr_coordinated_reset(43, 100), -EOVERFLOW,
+		      "no token after 0xFFFF");
+
+	/* Remote restart clears ACK state and resets the token counter:
+	 * the next request allocates token 1 and succeeds. */
+	zassert_ok(flpr_ring_mgr_remote_restarted(), "remote restart");
+	mock_hs_set_auto_ack(true);
+	zassert_ok(flpr_ring_mgr_coordinated_reset(44, 100), "token 1 after remote restart");
+
+	/* Same state machine applies to the stall ACK: 0xFFFF succeeds,
+	 * the next stalls overflows, remote restart permits token 1. */
+	flpr_ring_mgr_test_set_next_stall_token(0xFFFF);
+	zassert_ok(flpr_ring_mgr_flpr_stall(0x01, 100), "stall token 0xFFFF succeeds");
+	zassert_equal(flpr_ring_mgr_flpr_stall(0x01, 100), -EOVERFLOW,
+		      "stall token space exhausted");
+	zassert_equal(flpr_ring_mgr_flpr_stall_timed(0x01, 0, 100), -EOVERFLOW,
+		      "timed stall token space exhausted");
+	zassert_ok(flpr_ring_mgr_remote_restarted(), "remote restart (stall tokens)");
+	zassert_ok(flpr_ring_mgr_flpr_stall(0x01, 100), "stall token 1 after remote restart");
+}
+
+/* Produce before any epoch agreement (ring_stream_epoch == 0) returns
+ * INVALID without mutating a slot. */
+ZTEST(flpr_ring_mgr, test_produce_epoch_zero_invalid_before_slot_mutation)
+{
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init"); /* epoch still 0 */
+
+	zassert_equal(flpr_ring_mgr_produce_block(NULL, 480, 1, 0, false), FLPR_PRODUCE_INVALID,
+		      "produce before epoch agreement rejected");
+	zassert_equal(flpr_ring_producer(flpr_ring_mgr_test_input_ring()), 0,
+		      "no slot mutation at epoch 0");
+
+	struct audio_asrc_state st;
+	memset(&st, 0, sizeof(st));
+	zassert_equal(flpr_ring_mgr_produce_asrc(NULL, 480, 1, 0, &st), FLPR_PRODUCE_INVALID,
+		      "produce_asrc before epoch agreement rejected");
+	zassert_equal(flpr_ring_producer(flpr_ring_mgr_test_input_ring()), 0,
+		      "no slot mutation at epoch 0 (asrc)");
+}
+
+/* Barrier: a producer paused after produce begin holds ring_data_lock;
+ * the reset thread must not return or mutate epoch/header until the
+ * producer releases.  After release the reset completes with the exact
+ * new epoch and empty rings — no corruption or deadlock. */
+ZTEST(flpr_ring_mgr, test_reset_barrier_waits_for_produce_hold)
+{
+	rm_init_and_reset(42);
+	rm_worker2_returned = false;
+	k_sem_reset(&rm_pause_entered);
+	k_sem_reset(&rm_pause_release);
+
+	flpr_ring_mgr_test_arm_pause_after_produce_begin(&rm_pause_entered, &rm_pause_release);
+
+	k_sem_reset(&rm_done_sem);
+	k_thread_create(&rm_thread, rm_stack, K_THREAD_STACK_SIZEOF(rm_stack), rm_produce_worker,
+			NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
+	zassert_true(k_sem_take(&rm_pause_entered, K_MSEC(5000)) == 0,
+		     "producer paused after produce begin");
+
+	/* Reset thread: must not return or mutate epoch/header until the
+	 * producer releases the data lock.  The ring header is read
+	 * directly (no ring_data_lock — the paused producer owns it; the
+	 * producer has not mutated anything yet and reset cannot run). */
+	k_thread_create(&rm_thread_b, rm_stack_b, K_THREAD_STACK_SIZEOF(rm_stack_b),
+			rm_local_reset_worker, NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0,
+			K_NO_WAIT);
+	k_sleep(K_MSEC(100));
+
+	zassert_false(rm_worker2_returned, "reset blocked on ring_data_lock");
+	zassert_equal(flpr_ring_epoch(flpr_ring_mgr_test_input_ring()), 42,
+		      "ring epoch not mutated before release");
+	zassert_equal(flpr_ring_producer(flpr_ring_mgr_test_input_ring()), 0,
+		      "producer index not advanced before release");
+
+	/* Release: producer exits, reset completes. */
+	k_sem_give(&rm_pause_release);
+	zassert_true(k_sem_take(&rm_done_sem, K_MSEC(5000)) == 0, "producer joined");
+	zassert_true(k_sem_take(&rm_done_sem, K_MSEC(5000)) == 0, "reset joined");
+	zassert_ok(rm_result, "producer returned OK");
+	zassert_true(rm_worker2_returned, "reset completed after release");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.epoch, 43, "new epoch exact after reset");
+	zassert_equal(st.in_producer, 0, "input ring empty after reset");
+	zassert_equal(st.in_consumer, 0, "input consumer 0");
+	zassert_equal(st.out_producer, 0, "output ring empty after reset");
+	zassert_equal(st.out_consumer, 0, "output consumer 0");
+}

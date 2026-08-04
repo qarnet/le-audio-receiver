@@ -592,3 +592,119 @@ ZTEST(timing_nrf54, test_fifo_overflow_fault_drains_accepted_stops)
 	zassert_equal(mock_drift_ppm_count(), count_after, "no delivery while inactive");
 	zassert_equal(mock_grtc_cc_abs_calls, abs_after, "no reschedule while inactive");
 }
+
+/* ── 17. R1: update/reset serialized by the control mutex ───────────
+ * The update thread holds the control mutex across the (blocked) first
+ * compare programming; the reset thread cannot disable/reset until the
+ * compare is released.  After release both join and a fresh anchor
+ * succeeds. */
+
+static K_THREAD_STACK_DEFINE(ctl_stack_a, 2048);
+static K_THREAD_STACK_DEFINE(ctl_stack_b, 2048);
+static struct k_thread ctl_thread_a;
+static struct k_thread ctl_thread_b;
+static K_SEM_DEFINE(ctl_cc_entered, 0, 1);
+static K_SEM_DEFINE(ctl_cc_release, 0, 1);
+static K_SEM_DEFINE(ctl_done_sem, 0, 2);
+static bool ctl_reset_returned;
+
+static void ctl_update_worker(void *u1, void *u2, void *u3)
+{
+	(void)u1;
+	(void)u2;
+	(void)u3;
+	audio_timing_sdu_ref_update(2000000, 0);
+	k_sem_give(&ctl_done_sem);
+}
+
+static void ctl_reset_worker(void *u1, void *u2, void *u3)
+{
+	(void)u1;
+	(void)u2;
+	(void)u3;
+	audio_timing_reset();
+	ctl_reset_returned = true;
+	k_sem_give(&ctl_done_sem);
+}
+
+ZTEST(timing_nrf54, test_reset_waits_for_control_mutex_held_by_update)
+{
+	init_ok();
+	mock_grtc_now = 1000000ULL;
+
+	k_sem_reset(&ctl_cc_entered);
+	k_sem_reset(&ctl_cc_release);
+	k_sem_reset(&ctl_done_sem);
+	ctl_reset_returned = false;
+	mock_grtc_block_first_cc_abs(&ctl_cc_entered, &ctl_cc_release);
+
+	/* Update thread enters the blocked first compare while holding the
+	 * control mutex. */
+	k_thread_create(&ctl_thread_a, ctl_stack_a, K_THREAD_STACK_SIZEOF(ctl_stack_a),
+			ctl_update_worker, NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
+	zassert_true(k_sem_take(&ctl_cc_entered, K_MSEC(5000)) == 0,
+		     "update blocked inside compare programming");
+	zassert_equal(mock_grtc_cc_abs_calls, 1, "one compare programmed");
+
+	/* Reset thread begins but cannot disable/reset until release. */
+	k_thread_create(&ctl_thread_b, ctl_stack_b, K_THREAD_STACK_SIZEOF(ctl_stack_b),
+			ctl_reset_worker, NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
+	k_sleep(K_MSEC(100));
+	zassert_false(ctl_reset_returned, "reset cannot run while update holds ctl mutex");
+	zassert_equal(mock_grtc_cc_disable_calls, 0, "compare not disabled yet");
+
+	/* Release the compare: update commits, unlocks, reset runs. */
+	k_sem_give(&ctl_cc_release);
+
+	zassert_true(k_sem_take(&ctl_done_sem, K_MSEC(5000)) == 0, "update joined");
+	zassert_true(k_sem_take(&ctl_done_sem, K_MSEC(5000)) == 0, "reset joined");
+	zassert_true(ctl_reset_returned, "reset completed after release");
+
+	/* Final state: inactive, generation incremented, compare disabled,
+	 * and a fresh anchor succeeds. */
+	zassert_false(audio_timing_test_is_active(), "inactive after reset");
+	zassert_equal(audio_timing_test_generation(), 1, "generation incremented");
+	zassert_equal(mock_grtc_cc_disable_calls, 1, "compare disabled");
+
+	int abs_before = mock_grtc_cc_abs_calls;
+
+	mock_grtc_now = 1000000ULL;
+	audio_timing_sdu_ref_update(2000000, 0);
+	zassert_equal(mock_grtc_cc_abs_calls, abs_before + 1, "fresh anchor scheduled");
+	zassert_true(audio_timing_test_is_active(), "new session active");
+}
+
+/* ── 18. R1: first-compare failure releases the control mutex ─────── */
+
+ZTEST(timing_nrf54, test_first_compare_failure_releases_control_mutex)
+{
+	init_ok();
+	mock_grtc_now = 1000000ULL;
+	mock_grtc_cc_abs_ret = -ECANCELED;
+
+	audio_timing_sdu_ref_update(2000000, 0);
+
+	zassert_equal(mock_grtc_cc_abs_calls, 1, "one compare attempted");
+	zassert_false(audio_timing_test_is_active(), "not active after first-compare failure");
+	zassert_equal(mock_grtc_cc_disable_calls, 0, "no disable on first-compare failure");
+
+	/* The mutex was released on the error path: a later reset must not
+	 * deadlock, and a fresh anchor after clearing the failure works. */
+	audio_timing_reset();
+	mock_grtc_cc_abs_ret = 0;
+	mock_grtc_now = 1000000ULL;
+	audio_timing_sdu_ref_update(2000000, 0);
+	zassert_equal(mock_grtc_cc_abs_calls, 2, "fresh anchor scheduled");
+	zassert_true(audio_timing_test_is_active(), "new session active");
+}
+
+/* ── 19. R1: reset before init is a clean no-op ───────────────────── */
+
+ZTEST(timing_nrf54, test_reset_before_init_noop)
+{
+	audio_timing_reset();
+	zassert_equal(mock_grtc_cc_disable_calls, 0, "nothing to disable");
+
+	/* Later init still works. */
+	init_ok();
+}

@@ -110,6 +110,20 @@ static struct bt_conn *default_conn;
 static struct bt_pairing_policy pairing_policy;
 static K_MUTEX_DEFINE(pairing_adv_lock);
 
+/* R1: short lifecycle lock serializing every stream_lifecycle_* call and
+ * the audio-path transition generation between the BT RX thread and the
+ * shell thread.  Fixed nesting is lifecycle_lock then sink mutex; never
+ * reversed.  No lifecycle_lock hold spans offload cancellation/scheduling,
+ * sink drain/I2S, decode, logging, or Bluetooth stack calls. */
+static K_MUTEX_DEFINE(lifecycle_lock);
+
+/* Audio-path transition generation: incremented on every closed→open and
+ * open→closed gate transition.  stream_started() captures it when opening
+ * and rechecks after its outside-lock open work so a shell stop that lands
+ * in between invalidates the (offload-start) work and leaves final state
+ * closed. */
+static uint32_t audio_path_generation;
+
 /* stream ops — defined below; sink_release_slot re-registers them */
 static struct bt_bap_stream_ops stream_ops;
 
@@ -466,7 +480,9 @@ static int lc3_config(struct bt_conn *conn, const struct bt_bap_ep *ep, enum bt_
 	 * so the started callback can distinguish Mode A (two mono ASEs)
 	 * from Mode B / mono (single ASE).
 	 */
+	k_mutex_lock(&lifecycle_lock, K_FOREVER);
 	stream_lifecycle_sink_configured(idx, sinks[idx].chan_count);
+	k_mutex_unlock(&lifecycle_lock);
 
 #if defined(CONFIG_BSIM_OBSERVER)
 	bsim_observer_config(true, dir, BT_BAP_ASCS_RSP_CODE_SUCCESS, BT_BAP_ASCS_REASON_NONE);
@@ -573,25 +589,49 @@ static int lc3_disable(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp
 
 /*
  * Centralized audio-path close: used by stop/disabled/release/disconnect
- * so teardown diverges as little as possible.  Closes the gate FIRST (no
- * later receive callback can decode/push), stops offload exactly once
- * through the idempotent API, clears pending Mode A halves, and emits the
- * gate-close observer event on the open→closed transition.  Safe to call
- * repeatedly.
+ * (normal, BT-RX-thread callbacks) and by the shell stop (forced).  Closes
+ * the gate FIRST under the lifecycle lock (no later receive callback can
+ * decode/push), increments the transition generation, and closes sink push
+ * admission nonblocking; offload stop and Mode A half clearing stay on the
+ * normal-callback path only — the shell thread must not clear BT-RX-owned
+ * Mode A/decoder/sequence state, and its offload stop runs after the sink
+ * drain.  Emits the gate-close observer event on the open→closed
+ * transition.  Safe to call repeatedly.
  */
-static bool sink_close_audio_path(void)
+static bool sink_close_audio_path(bool forced)
 {
-	bool was_open = stream_lifecycle_audio_path_close();
+	bool was_open;
+
+	k_mutex_lock(&lifecycle_lock, K_FOREVER);
+	if (forced) {
+		was_open = stream_lifecycle_force_close();
+	} else {
+		was_open = stream_lifecycle_audio_path_close();
+	}
+	if (was_open) {
+		audio_path_generation++;
+	}
+	audio_sink_stream_close();
+	k_mutex_unlock(&lifecycle_lock);
 
 	if (was_open) {
 		LOG_INF("Audio path gate CLOSED");
-		audio_offload_stream_stop();
+		if (!forced) {
+			/* Normal callback runs on the same BT RX thread as
+			 * pushes; offload stop is safe here.  The shell path
+			 * stops offload only after audio_sink_stop() drains. */
+			audio_offload_stream_stop();
+		}
 #if defined(CONFIG_BSIM_OBSERVER)
 		bsim_observer_gate_close();
 #endif
 	}
 #if defined(CONFIG_LIBLC3)
-	mode_a_halves_clear();
+	if (!forced) {
+		/* Mode A/sequence state is BT-RX-owned; only callbacks on
+		 * the BT RX thread may clear it. */
+		mode_a_halves_clear();
+	}
 #endif
 	return was_open;
 }
@@ -610,7 +650,7 @@ static bool sink_close_audio_path(void)
  */
 static void sink_release_slot(size_t idx)
 {
-	bool was_open = sink_close_audio_path();
+	bool was_open = sink_close_audio_path(false);
 
 	if (was_open) {
 		/* Stop the audio sink immediately on Release, before
@@ -637,7 +677,9 @@ static void sink_release_slot(size_t idx)
 	sinks[idx].octets_per_frame = 0;
 	sinks[idx].frame_blocks_per_sdu = 0;
 	sinks[idx].chan_count = 0;
+	k_mutex_lock(&lifecycle_lock, K_FOREVER);
 	stream_lifecycle_sink_release(idx);
+	k_mutex_unlock(&lifecycle_lock);
 	if (num_sink_ase > 0) {
 		num_sink_ase--;
 	}
@@ -649,7 +691,7 @@ static void sink_release_slot(size_t idx)
 static int lc3_stop(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
 {
 	LOG_INF("Stop: stream %p", stream);
-	sink_close_audio_path();
+	sink_close_audio_path(false);
 	return 0;
 }
 
@@ -807,6 +849,14 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	const bool has_ts = (info->flags & BT_ISO_FLAGS_TS) != 0;
 	const int spc = as->decode.samples_per_ch;
 
+	/* R1: one gate snapshot under the lifecycle lock for the whole
+	 * callback; the shell thread can force-close concurrently. */
+	bool gate_open;
+
+	k_mutex_lock(&lifecycle_lock, K_FOREVER);
+	gate_open = stream_lifecycle_audio_path_is_open();
+	k_mutex_unlock(&lifecycle_lock);
+
 	/* Phase 4b.1: feed validated timestamp + presentation delay to
 	 * hardware timing measurement (nRF54L15 GRTC path).  Only stream 0
 	 * is used as the timing reference.  Gated behind audio-path-open
@@ -817,7 +867,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	 * audio_sink_push(), driven by PCLK feedforward + buffer-phase PI.
 	 * ISO timestamps go ONLY to audio_timing for GRTC scheduling.
 	 */
-	if (idx == 0 && valid && has_ts && stream_lifecycle_audio_path_is_open()) {
+	if (idx == 0 && valid && has_ts && gate_open) {
 		audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
 	}
 
@@ -838,7 +888,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	 * interleave, push, or update audio timing/drift — any of
 	 * these can restart I2S DMA.
 	 */
-	if (!stream_lifecycle_audio_path_is_open()) {
+	if (!gate_open) {
 		static size_t gate_blocked;
 		if (gate_blocked < 3 && valid) {
 			LOG_INF("stream_recv[%zu]: gate closed, skipping decode", idx);
@@ -1027,7 +1077,12 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 
 		/* Phase 4b.1: timing measurement for stream 0 */
 		size_t idx = sink_idx(stream);
-		if (idx == 0 && has_ts && stream_lifecycle_audio_path_is_open()) {
+		bool gate_open;
+
+		k_mutex_lock(&lifecycle_lock, K_FOREVER);
+		gate_open = stream_lifecycle_audio_path_is_open();
+		k_mutex_unlock(&lifecycle_lock);
+		if (idx == 0 && has_ts && gate_open) {
 			audio_timing_sdu_ref_update(info->ts, sinks[0].pd_us);
 		}
 	}
@@ -1047,7 +1102,7 @@ static void stream_stopped(struct bt_bap_stream *s, uint8_t reason)
 	/* Close audio path gate on stop (idempotent).  The disabled
 	 * callback may fire later and close it again harmlessly.
 	 */
-	sink_close_audio_path();
+	sink_close_audio_path(false);
 }
 
 static void stream_started(struct bt_bap_stream *s)
@@ -1060,8 +1115,39 @@ static void stream_started(struct bt_bap_stream *s)
 		info.unicast.cis_id);
 	sinks[idx].recv_cnt = 0U;
 
-	/* Lifecycle gate: open audio path when all required ASEs are started. */
-	bool gate_opened = stream_lifecycle_sink_started(idx);
+	/* R1 open transition:
+	 *  1. under lifecycle lock: run stream_lifecycle_sink_started();
+	 *  2. on closed→open: bump/capture the transition generation and
+	 *     call audio_sink_stream_open() under the fixed lifecycle→sink
+	 *     lock order;
+	 *  3. if sink open fails (-EIO), roll the lifecycle gate back to
+	 *     closed, bump the generation again, keep sink admission closed,
+	 *     and skip the open work;
+	 *  4. otherwise release the lock, run the existing open work outside
+	 *     it, then recheck lifecycle-open + generation so a shell stop
+	 *     that landed in between leaves final state closed. */
+	bool gate_opened = false;
+	uint32_t open_gen = 0;
+	bool sink_open_failed = false;
+
+	k_mutex_lock(&lifecycle_lock, K_FOREVER);
+	gate_opened = stream_lifecycle_sink_started(idx);
+	if (gate_opened) {
+		audio_path_generation++;
+		open_gen = audio_path_generation;
+		if (audio_sink_stream_open() < 0) {
+			stream_lifecycle_audio_path_close();
+			audio_path_generation++;
+			gate_opened = false;
+			sink_open_failed = true;
+		}
+	}
+	k_mutex_unlock(&lifecycle_lock);
+
+	if (sink_open_failed) {
+		LOG_ERR("Audio path open failed: sink admission unavailable");
+		return;
+	}
 
 	if (gate_opened) {
 		LOG_INF("Audio path gate OPEN (stream[%zu] completed the set)", idx);
@@ -1081,6 +1167,21 @@ static void stream_started(struct bt_bap_stream *s)
 #if defined(CONFIG_BSIM_OBSERVER)
 		bsim_observer_gate_open();
 #endif
+
+		/* Recheck: a shell stop that ran while the open work executed
+		 * (or a later ordinary close) invalidates this open; stop the
+		 * offload again so final state is closed. */
+		bool stale_open = false;
+
+		k_mutex_lock(&lifecycle_lock, K_FOREVER);
+		if (!stream_lifecycle_audio_path_is_open() || audio_path_generation != open_gen) {
+			stale_open = true;
+		}
+		k_mutex_unlock(&lifecycle_lock);
+
+		if (stale_open) {
+			audio_offload_stream_stop();
+		}
 	}
 }
 
@@ -1106,7 +1207,7 @@ static void stream_disabled_cb(struct bt_bap_stream *s)
 	 * closes.  The centralized close clears pending Mode A halves
 	 * on the same transition so stale halves cannot pair.
 	 */
-	bool was_open = sink_close_audio_path();
+	bool was_open = sink_close_audio_path(false);
 	if (was_open) {
 		LOG_INF("Audio path gate CLOSED (first disable)");
 	}
@@ -1178,8 +1279,10 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	 * per-sink started flags so reconnect works without re-running
 	 * audio_sink_init().
 	 */
-	sink_close_audio_path();
+	sink_close_audio_path(false);
+	k_mutex_lock(&lifecycle_lock, K_FOREVER);
 	stream_lifecycle_reset();
+	k_mutex_unlock(&lifecycle_lock);
 	audio_offload_stream_stop();
 
 #if defined(CONFIG_LIBLC3)
@@ -1551,4 +1654,20 @@ int bt_bap_pairing_reset(void)
 	}
 
 	return rc;
+}
+
+void bt_bap_audio_path_stop(void)
+{
+	/* R1 shell stop order (outside lifecycle lock):
+	 *   1. force-close the lifecycle gate and sink push admission
+	 *      (forced close latches the gate: stream-started callbacks
+	 *      cannot reopen this configured slot set);
+	 *   2. audio_sink_stop() drains every admitted push, then DROPs;
+	 *   3. audio_offload_stream_stop() only after the drain, so an
+	 *      admitted push can never race the offload reset.
+	 * The shell thread never clears/resets Mode A, decoder, sequence,
+	 * stats, or any other BT-RX-owned state. */
+	sink_close_audio_path(true);
+	audio_sink_stop();
+	audio_offload_stream_stop();
 }

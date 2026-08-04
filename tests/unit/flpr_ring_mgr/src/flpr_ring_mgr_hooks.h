@@ -48,6 +48,18 @@ uint32_t flpr_ring_mgr_test_consume_sem_count(void);
 uint32_t flpr_ring_mgr_test_reset_ack_sem_count(void);
 uint32_t flpr_ring_mgr_test_stall_ack_sem_count(void);
 
+/* R1 barrier-test gate: when armed, the next produce_block/produce_asrc
+ * signals @p entered after produce begin (while still holding
+ * ring_data_lock) and waits on @p release.  One-shot; reset clears it. */
+void flpr_ring_mgr_test_arm_pause_after_produce_begin(struct k_sem *entered, struct k_sem *release);
+/* Called by production produce paths under the test define (void). */
+void flpr_ring_mgr_test_pause_after_produce_begin(void);
+
+/* R1 ACK correlation observability. */
+uint32_t flpr_ring_mgr_test_stale_ack_count(void);
+void flpr_ring_mgr_test_set_next_reset_token(uint16_t token);
+void flpr_ring_mgr_test_set_next_stall_token(uint16_t token);
+
 #ifdef __cplusplus
 }
 #endif

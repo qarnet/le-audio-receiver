@@ -31,6 +31,9 @@ void test_shell_set_volume(uint8_t vol, bool muted);
 /* ---- sink ---- */
 int test_shell_sink_stop_calls(void);
 
+/* ---- BAP audio-path stop (R1) ---- */
+int test_shell_bap_path_stop_calls(void);
+
 /* ---- bt unpair ---- */
 void test_shell_set_unpair_result(int result);
 int test_shell_unpair_calls(void);

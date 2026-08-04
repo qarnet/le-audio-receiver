@@ -12,6 +12,7 @@
 static bool sink_started[MAX_SINK_ASE];
 static int sink_chan_count[MAX_SINK_ASE];
 static bool audio_path_open;
+static bool force_closed; /* R1: forced-close latch (shell stop) */
 
 void stream_lifecycle_reset(void)
 {
@@ -20,6 +21,7 @@ void stream_lifecycle_reset(void)
 		sink_chan_count[i] = 0;
 	}
 	audio_path_open = false;
+	force_closed = false;
 }
 
 void stream_lifecycle_sink_configured(size_t idx, int chan_count)
@@ -33,6 +35,13 @@ void stream_lifecycle_sink_configured(size_t idx, int chan_count)
 bool stream_lifecycle_sink_started(size_t idx)
 {
 	if (idx >= MAX_SINK_ASE) {
+		return false;
+	}
+	if (force_closed) {
+		/* R1: a forced (shell) close latches until the current
+		 * configured slot set is released or a full reset; later
+		 * duplicate/second-ASE start requests and stream-start
+		 * callbacks can never reopen this lifecycle. */
 		return false;
 	}
 	sink_started[idx] = true;
@@ -80,6 +89,21 @@ void stream_lifecycle_sink_release(size_t idx)
 		sink_chan_count[idx] = 0;
 		sink_started[idx] = false;
 	}
+
+	/* R1: releasing the LAST configured slot clears the forced-close
+	 * latch so a later reconfigure/start lifecycle can open.  Releasing
+	 * only one Mode A slot (another remains configured) does not. */
+	bool any_configured = false;
+
+	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
+		if (sink_chan_count[i] > 0) {
+			any_configured = true;
+			break;
+		}
+	}
+	if (!any_configured) {
+		force_closed = false;
+	}
 }
 
 bool stream_lifecycle_audio_path_close(void)
@@ -87,6 +111,19 @@ bool stream_lifecycle_audio_path_close(void)
 	bool was_open = audio_path_open;
 
 	audio_path_open = false;
+	return was_open;
+}
+
+bool stream_lifecycle_force_close(void)
+{
+	/* R1: close the gate AND latch it closed for the current configured
+	 * slot set.  Returns whether the gate was open before force-close
+	 * so the caller can emit the first-close observer event exactly
+	 * once. */
+	bool was_open = audio_path_open;
+
+	audio_path_open = false;
+	force_closed = true;
 	return was_open;
 }
 

@@ -141,17 +141,28 @@ static void hb_work_fn(struct k_work *work)
 		int ret = send_msg(&msg);
 		if (ret >= 0) {
 			bool now_unhealthy = false;
+			flpr_health_transition_cb_t cb;
+			void *cb_ud;
 
 			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 			flpr.tx_seq++;
 			/* Periodic health check of remote (FLPR) heartbeats. */
 			(void)flpr_peer_check_health(&flpr, now_ms);
 			now_unhealthy = !flpr.healthy;
+			/* R1: snapshot the health callback + user-data under the
+			 * lock together with the transition state, then invoke
+			 * OUTSIDE the lock. */
+			if (was_healthy && now_unhealthy) {
+				cb = health_cb;
+				cb_ud = health_cb_user_data;
+			} else {
+				cb = NULL;
+				cb_ud = NULL;
+			}
 			k_spin_unlock(&flpr_lock, key);
 
-			/* Invoke health transition callback OUTSIDE lock. */
-			if (was_healthy && now_unhealthy && health_cb) {
-				health_cb(health_cb_user_data);
+			if (cb) {
+				cb(cb_ud);
 			}
 		}
 		/* On send error: tx_seq not incremented, counted in err_send.
@@ -159,6 +170,10 @@ static void hb_work_fn(struct k_work *work)
 	}
 
 reschedule:
+	/* R1 note: cancelling the heartbeat from inside its own running
+	 * work item cannot prevent this final reschedule; that is by design.
+	 * A later wake after teardown is a no-op because the inactive
+	 * checks (acked/session_available) gate every send. */
 	FLPR_HS_WORK_RESCHEDULE();
 }
 
@@ -214,8 +229,16 @@ static void ep_received(const void *data, size_t len, void *priv)
 	ARG_UNUSED(priv);
 	uint32_t now_ms = k_uptime_get_32();
 
-	/* Shared validation — rejects short/oversize and wrong version. */
-	if (!flpr_msg_validate((const struct flpr_msg *)data, len, &flpr)) {
+	/* R1: shared validation runs under flpr_lock because it mutates
+	 * err_len/err_version read by flpr_handshake_get_status(). */
+	bool valid;
+
+	{
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+		valid = flpr_msg_validate((const struct flpr_msg *)data, len, &flpr);
+		k_spin_unlock(&flpr_lock, key);
+	}
+	if (!valid) {
 		return;
 	}
 
@@ -228,10 +251,14 @@ static void ep_received(const void *data, size_t len, void *priv)
 		bool is_new_epoch;
 		bool start_hb_now = false;
 		bool give_new_ready = false;
+		uint32_t ready_count;
 
 		{
 			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 			is_new_epoch = flpr_peer_handle_ready(&flpr, epoch);
+			/* R1: capture the READY count under the lock so the log
+			 * below never reads a concurrently mutated counter. */
+			ready_count = flpr.ready_count;
 			if (session_available && !hb_started) {
 				hb_started = true;
 				start_hb_now = true;
@@ -243,7 +270,7 @@ static void ep_received(const void *data, size_t len, void *priv)
 			k_spin_unlock(&flpr_lock, key);
 		}
 
-		LOG_INF("FLPR READY (epoch=%u, count=%u, %s)", epoch, flpr.ready_count,
+		LOG_INF("FLPR READY (epoch=%u, count=%u, %s)", epoch, ready_count,
 			is_new_epoch ? "new" : "duplicate");
 
 		/* Send READY_ACK outside lock. */
@@ -363,33 +390,82 @@ static void ep_received(const void *data, size_t len, void *priv)
 		/* CPUAPP receives these — unexpected but not errors. */
 		break;
 
-	/* ── Stage 1: ring control — route to ring manager ──────── */
-	case FLPR_MSG_RING_RESET_ACK:
-		if (ring_reset_ack_fn) {
-			ring_reset_ack_fn(msg, ring_handler_user_data);
-		}
-		break;
-	case FLPR_MSG_RING_CONSUMER:
-		if (ring_consumer_fn) {
-			ring_consumer_fn(msg, ring_handler_user_data);
-		}
-		break;
-	case FLPR_MSG_RING_TEST_REPORT:
-		if (ring_report_fn) {
-			ring_report_fn(msg, ring_handler_user_data);
-		}
-		break;
-	case FLPR_MSG_RING_STALL_ACK:
-		if (ring_stall_ack_fn) {
-			ring_stall_ack_fn(msg, ring_handler_user_data);
-		}
-		break;
+	/* ── Stage 1: ring control — route to ring manager ────────
+	 * R1: snapshot the handler function + shared user-data under
+	 * flpr_lock, then invoke OUTSIDE the lock (a handler may call
+	 * back into get_status / take ring locks). */
+	case FLPR_MSG_RING_RESET_ACK: {
+		flpr_handshake_ring_handler_t fn;
+		void *ud;
 
-	/* ── Stage 4B: fault hang ACK ───────────────────────── */
-	case FLPR_MSG_FAULT_HANG_ACK:
+		{
+			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+			fn = ring_reset_ack_fn;
+			ud = ring_handler_user_data;
+			k_spin_unlock(&flpr_lock, key);
+		}
+		if (fn) {
+			fn(msg, ud);
+		}
+		break;
+	}
+	case FLPR_MSG_RING_CONSUMER: {
+		flpr_handshake_ring_handler_t fn;
+		void *ud;
+
+		{
+			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+			fn = ring_consumer_fn;
+			ud = ring_handler_user_data;
+			k_spin_unlock(&flpr_lock, key);
+		}
+		if (fn) {
+			fn(msg, ud);
+		}
+		break;
+	}
+	case FLPR_MSG_RING_TEST_REPORT: {
+		flpr_handshake_ring_handler_t fn;
+		void *ud;
+
+		{
+			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+			fn = ring_report_fn;
+			ud = ring_handler_user_data;
+			k_spin_unlock(&flpr_lock, key);
+		}
+		if (fn) {
+			fn(msg, ud);
+		}
+		break;
+	}
+	case FLPR_MSG_RING_STALL_ACK: {
+		flpr_handshake_ring_handler_t fn;
+		void *ud;
+
+		{
+			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+			fn = ring_stall_ack_fn;
+			ud = ring_handler_user_data;
+			k_spin_unlock(&flpr_lock, key);
+		}
+		if (fn) {
+			fn(msg, ud);
+		}
+		break;
+	}
+
+	/* ── Stage 4B: fault hang ACK ─────────────────────────
+	 * R1: publish under flpr_lock, give the semaphore after (keeps
+	 * payload-before-give ordering); the waiter reads under the lock
+	 * (take-before-read ordering). */
+	case FLPR_MSG_FAULT_HANG_ACK: {
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 		hang_ack_received = true;
+		k_spin_unlock(&flpr_lock, key);
 		k_sem_give(&hang_ack_sem);
 		break;
+	}
 
 	default: {
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
@@ -758,7 +834,11 @@ int flpr_handshake_send_fault_hang(uint32_t timeout_ms)
 	/* Drain any stale semaphore give. */
 	while (k_sem_take(&hang_ack_sem, K_NO_WAIT) == 0) {
 	}
-	hang_ack_received = false;
+	{
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+		hang_ack_received = false;
+		k_spin_unlock(&flpr_lock, key);
+	}
 
 	struct flpr_msg hang_msg = {
 		.type = FLPR_MSG_FAULT_HANG,
@@ -782,8 +862,16 @@ int flpr_handshake_send_fault_hang(uint32_t timeout_ms)
 		return -ETIMEDOUT;
 	}
 
-	if (!hang_ack_received) {
-		return -EIO;
+	/* R1: read the published flag under the lock after the take
+	 * (take-before-read ordering). */
+	{
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+		bool received = hang_ack_received;
+		k_spin_unlock(&flpr_lock, key);
+
+		if (!received) {
+			return -EIO;
+		}
 	}
 
 	LOG_INF("FAULT_HANG_ACK received — FLPR hang imminent");

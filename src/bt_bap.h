@@ -42,4 +42,15 @@ void bt_bap_wait_disconnect(void);
  */
 int bt_bap_pairing_reset(void);
 
+/**
+ * Shell-routable audio-path stop (R1): force-close the BAP lifecycle gate
+ * and sink push admission, drain every admitted push and DROP the DMA,
+ * then stop the offload pipeline only after the drain.
+ *
+ * Thread-context and idempotent.  The shell thread never clears/resets
+ * Mode A, decoder, sequence, stats, or any other BT-RX-owned state; the
+ * gate-close observer event fires exactly once (first open→closed).
+ */
+void bt_bap_audio_path_stop(void);
+
 #endif /* BT_BAP_H */

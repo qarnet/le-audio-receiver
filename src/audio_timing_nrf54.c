@@ -86,6 +86,15 @@ struct timing_state {
 
 static struct timing_state ts;
 
+/* R1: thread-context control mutex serializing the anchor decision,
+ * GRTC first-compare programming, and anchor/active commit in
+ * audio_timing_sdu_ref_update() against the inactive/generation
+ * transition, compare disable, and anchor/last-state reset in
+ * audio_timing_reset().  The GRTC ISR NEVER takes this mutex (single-core
+ * nRF54L15: the reset thread cannot run while the ISR itself executes;
+ * generation stays the queued-work staleness proof). */
+static K_MUTEX_DEFINE(ctl_mutex);
+
 /* Active flag: cleared before hardware is disabled in reset,
  * checked in ISR and work handler to prevent stale callbacks.
  */
@@ -329,6 +338,11 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 		return;
 	}
 
+	/* R1: capture the generation exactly once at ISR entry and carry
+	 * that captured value in every payload, so a callback accepted
+	 * under one session can never be labeled as a later generation. */
+	atomic_val_t gen = atomic_get(&generation);
+
 	/* Read captured TIMER20 count — hardware snapshotted at
 	 * the compare instant via GPPI, so this value is jitter-free.
 	 */
@@ -362,7 +376,7 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 			.is_error = true,
 			.schedule_err = ret,
 			.seq = ts.diag_seq,
-			.gen = atomic_get(&generation),
+			.gen = gen,
 		};
 
 		diag_publish(&diag);
@@ -390,7 +404,7 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 			.elapsed_us = elapsed_us,
 			.nominal_hz = timer_nominal_hz,
 			.seq = ts.diag_seq,
-			.gen = atomic_get(&generation),
+			.gen = gen,
 		};
 
 		diag_publish(&diag);
@@ -477,11 +491,15 @@ int audio_timing_init(void)
 
 void audio_timing_sdu_ref_update(uint32_t sdu_ts_us, uint32_t pd_us)
 {
+	k_mutex_lock(&ctl_mutex, K_FOREVER);
+
 	if (!ts.init_done) {
+		k_mutex_unlock(&ctl_mutex);
 		return;
 	}
 
 	if (sdu_ts_us == 0) {
+		k_mutex_unlock(&ctl_mutex);
 		return;
 	}
 
@@ -489,6 +507,7 @@ void audio_timing_sdu_ref_update(uint32_t sdu_ts_us, uint32_t pd_us)
 		/* Already anchored — one compare at a time, skip
 		 * subsequent SDUs until Phase 4b.2.
 		 */
+		k_mutex_unlock(&ctl_mutex);
 		return;
 	}
 
@@ -517,6 +536,7 @@ void audio_timing_sdu_ref_update(uint32_t sdu_ts_us, uint32_t pd_us)
 	int ret = nrfx_grtc_syscounter_cc_absolute_set(&chan_data, first_cmp, true);
 	if (ret < 0) {
 		LOG_ERR("First GRTC compare set failed: %d", ret);
+		k_mutex_unlock(&ctl_mutex);
 		return;
 	}
 
@@ -531,11 +551,16 @@ void audio_timing_sdu_ref_update(uint32_t sdu_ts_us, uint32_t pd_us)
 	LOG_INF("Timing anchor: ts=%" PRIu32 " pd=%" PRIu32 " anchor_grtc=%" PRIu64
 		" first_cmp=%" PRIu64,
 		sdu_ts_us, pd_us, anchor, first_cmp);
+
+	k_mutex_unlock(&ctl_mutex);
 }
 
 void audio_timing_reset(void)
 {
+	k_mutex_lock(&ctl_mutex, K_FOREVER);
+
 	if (!ts.init_done) {
+		k_mutex_unlock(&ctl_mutex);
 		return;
 	}
 
@@ -543,7 +568,8 @@ void audio_timing_reset(void)
 	 * any concurrent ISR sees a consistent state.  Already-queued
 	 * payloads are NOT rewritten: deferred work rejects them as
 	 * stale by generation, and new-session payloads may follow old
-	 * payloads in the FIFO and still deliver.
+	 * payloads in the FIFO and still deliver.  diag_lock is released
+	 * before the nrfx HAL call below.
 	 */
 	k_spinlock_key_t key = k_spin_lock(&diag_lock);
 
@@ -559,4 +585,6 @@ void audio_timing_reset(void)
 	ts.anchor_set = false;
 	ts.last_compare_us = 0;
 	ts.last_cap = 0;
+
+	k_mutex_unlock(&ctl_mutex);
 }

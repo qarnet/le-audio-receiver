@@ -278,10 +278,12 @@ ZTEST(audio_shell, test_reset_stats_exactly_once)
 	zassert_equal(test_shell_stats_reset_calls(), 1);
 }
 
-/* audio stop: calls the sink exactly once, stable confirmation. */
+/* audio stop: calls the BAP audio-path stop exactly once; the old direct
+ * sink stop is no longer called; output and return stay exact. */
 ZTEST(audio_shell, test_stop_exactly_once)
 {
 	test_shell_reset_counters();
+	zassert_equal(test_shell_bap_path_stop_calls(), 0);
 	zassert_equal(test_shell_sink_stop_calls(), 0);
 
 	int rc = -1;
@@ -289,7 +291,8 @@ ZTEST(audio_shell, test_stop_exactly_once)
 
 	zassert_equal(rc, 0);
 	assert_output_has_line(out, "I2S stopped; drift reset.");
-	zassert_equal(test_shell_sink_stop_calls(), 1);
+	zassert_equal(test_shell_bap_path_stop_calls(), 1, "BAP path stop called exactly once");
+	zassert_equal(test_shell_sink_stop_calls(), 0, "direct sink stop not called");
 }
 
 /* bt unpair success: zero result and stable pairing-reset text. */

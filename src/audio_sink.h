@@ -43,14 +43,50 @@ int audio_sink_init(void);
  *
  * @retval 0 on success
  * @retval -EIO if sink not initialized
+ * @retval -EBUSY if sink is configured but push admission is closed
  * @retval -ENOMEM if no free DMA slot (underrun; drop frame, PLC fills gap)
  */
 int audio_sink_push(const int16_t *stereo_data, size_t sample_count);
 
 /**
  * @brief Stop audio sink output (DROP trigger, frees in-flight buffers).
+ *
+ * Closes push admission, waits until every already-admitted push fully
+ * exits (including the emergency repeat fallback), then finalizes the
+ * stop exactly once: resets timing/drift/actuator/rate-converter/ASRC
+ * state and issues PREPARE-then-DROP when the DMA stream was started.
+ * Overlapping stop callers share one finalization; every caller returns
+ * only after the drain completes.
+ *
+ * `configured` stays true so reconnect works without re-calling
+ * `audio_sink_init()`.  Sequential repeated stops rerun the software
+ * resets but issue no extra I2S triggers.
  */
 void audio_sink_stop(void);
+
+/**
+ * @brief Enable push admission for one stream session.
+ *
+ * Waits for any overlapping stop finalizer to complete, then enables
+ * admission.  Does not reset or start DMA and does not alter saved
+ * frame, frame duration, ASRC, rate, drift, or offload state.
+ *
+ * Idempotent while already open.  Only a valid BAP gate closed→open
+ * transition may call this; a direct sink stop must not leave the BAP
+ * gate open.
+ *
+ * @retval 0      admission enabled
+ * @retval -EIO   sink is not configured
+ */
+int audio_sink_stream_open(void);
+
+/**
+ * @brief Atomically reject new pushes without waiting.
+ *
+ * Closes push admission; already-admitted pushes run to completion.
+ * Safe from shell/BT thread context.  Idempotent.
+ */
+void audio_sink_stream_close(void);
 
 /**
  * @brief Set the expected input stereo frames per push call.

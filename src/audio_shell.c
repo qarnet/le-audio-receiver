@@ -71,7 +71,11 @@ static int cmd_reset_stats(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_stop(const struct shell *sh, size_t argc, char **argv)
 {
-	audio_sink_stop();
+	/* R1: route through the BAP audio-path stop so the lifecycle gate
+	 * and sink admission close first, every admitted push drains, and
+	 * the offload pipeline stops only after the drain.  Output and
+	 * return behavior stay exact. */
+	bt_bap_audio_path_stop();
 	shell_print(sh, "I2S stopped; drift reset.");
 	return 0;
 }

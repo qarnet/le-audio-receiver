@@ -66,6 +66,15 @@ void fake_i2s_set_configure_ret(int ret);
 /** Fail the write with this call index (0-based); -1 = never.  Default -1. */
 void fake_i2s_fail_write_at(int call_index);
 
+/**
+ * Deterministic write gate (R1 concurrency tests): for the selected
+ * successful write index (0-based), transfer ownership/queue the block
+ * as today, signal @p entered, then wait on @p release before returning.
+ * -1 = never (default).  Reset clears the gate.  Test files own the
+ * semaphores and threads; production gets no pause hook.
+ */
+void fake_i2s_block_write_at(int call_index, struct k_sem *entered, struct k_sem *release);
+
 /** errno used for injected write failures; default -EIO. */
 void fake_i2s_set_write_fail_errno(int err);
 

@@ -151,7 +151,10 @@ void flpr_ring_mgr_set_consume_cb(flpr_ring_consume_cb_t cb, void *user_data);
  *
  * @param new_epoch  Non-zero epoch (if 0, one is generated from k_cycle_get_32).
  * @param timeout_ms Maximum wait for ACK.
- * @return 0 on success, -ETIMEDOUT if no ACK, -EIO on send failure.
+ * @return 0 on success, -ETIMEDOUT if no ACK, -EIO on send failure or ACK
+ *         data mismatch, -EOVERFLOW when the 16-bit request-token space of
+ *         the current FLPR session is exhausted (cleared only by
+ *         flpr_ring_mgr_remote_restarted()).
  */
 int flpr_ring_mgr_coordinated_reset(uint32_t new_epoch, uint32_t timeout_ms);
 
@@ -231,7 +234,10 @@ void flpr_ring_mgr_stall_producer(bool stall);
  *
  * @param stall_bits  Bitmask of stalls to apply (persistent, duration=0).
  * @param timeout_ms  Max wait for STALL_ACK.
- * @return 0 on success, negative on error.
+ * @return 0 on success, -ETIMEDOUT if no ACK, -EIO on ACK data mismatch,
+ *         -EOVERFLOW when the 16-bit request-token space of the current
+ *         FLPR session is exhausted (cleared only by
+ *         flpr_ring_mgr_remote_restarted()).
  */
 int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms);
 
@@ -246,7 +252,10 @@ int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms);
  * @param stall_bits  Bitmask of stalls to apply (must be nonzero).
  * @param duration_ms Auto-clear duration in milliseconds (1 .. 0x00FFFFFF).
  * @param timeout_ms  Max wait for STALL_ACK from FLPR.
- * @return 0 on success, negative on error.
+ * @return 0 on success, -ETIMEDOUT if no ACK, -EIO on ACK data mismatch,
+ *         -EOVERFLOW when the 16-bit request-token space of the current
+ *         FLPR session is exhausted (cleared only by
+ *         flpr_ring_mgr_remote_restarted()).
  */
 int flpr_ring_mgr_flpr_stall_timed(uint8_t stall_bits, uint32_t duration_ms, uint32_t timeout_ms);
 

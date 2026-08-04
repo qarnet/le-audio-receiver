@@ -1047,3 +1047,69 @@ ZTEST(flpr_handshake, test_fault_hang_ack_timeout)
 }
 
 ZTEST_SUITE(flpr_handshake, NULL, NULL, hs_setup, hs_teardown, NULL);
+
+/* ── R1: validation counters under concurrent status reads ──────────
+ * ep_received now validates under flpr_lock (it mutates err_len /
+ * err_version that get_status reads).  A reader thread polls status
+ * while the main thread injects invalid messages; the counter pair must
+ * stay monotonic and end exact. */
+
+static K_THREAD_STACK_DEFINE(rd_stack, 2048);
+static struct k_thread rd_thread;
+static K_SEM_DEFINE(rd_done_sem, 0, 1);
+static bool rd_stop;
+static bool rd_monotonic_violation;
+static uint32_t rd_last_sum;
+
+static void status_reader_worker(void *u1, void *u2, void *u3)
+{
+	(void)u1;
+	(void)u2;
+	(void)u3;
+
+	while (!rd_stop) {
+		struct flpr_status st;
+
+		flpr_handshake_get_status(&st);
+		uint32_t sum = st.err_len + st.err_version;
+
+		if (sum < rd_last_sum) {
+			rd_monotonic_violation = true;
+		}
+		rd_last_sum = sum;
+	}
+	k_sem_give(&rd_done_sem);
+}
+
+ZTEST(flpr_handshake, test_validation_counters_consistent_under_concurrent_status_reads)
+{
+	zassert_ok(flpr_handshake_init(), "init");
+
+	k_sem_reset(&rd_done_sem);
+	rd_stop = false;
+	rd_monotonic_violation = false;
+	rd_last_sum = 0;
+	k_thread_create(&rd_thread, rd_stack, K_THREAD_STACK_SIZEOF(rd_stack),
+			status_reader_worker, NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
+
+	/* Inject a bounded mix of short/oversized/wrong-version messages
+	 * while the reader polls. */
+	uint8_t short_msg[4] = {0};
+	uint8_t big_msg[16] = {0};
+	struct flpr_msg bad_ver = {.type = FLPR_MSG_READY, .version = FLPR_PROTOCOL_VERSION - 1};
+
+	for (int i = 0; i < 50; i++) {
+		fake_ipc_receive(short_msg, sizeof(short_msg));
+		fake_ipc_receive(big_msg, sizeof(big_msg));
+		fake_ipc_receive(&bad_ver, sizeof(bad_ver));
+	}
+
+	rd_stop = true;
+	zassert_true(k_sem_take(&rd_done_sem, K_MSEC(5000)) == 0, "reader joined");
+	zassert_false(rd_monotonic_violation, "counter pair never torn/decreasing");
+
+	struct flpr_status st;
+	flpr_handshake_get_status(&st);
+	zassert_equal(st.err_len, 100, "err_len exact (50 short + 50 oversized)");
+	zassert_equal(st.err_version, 50, "err_version exact");
+}

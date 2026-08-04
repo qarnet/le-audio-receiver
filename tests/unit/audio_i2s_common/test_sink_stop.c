@@ -83,6 +83,21 @@ ZTEST(audio_i2s, test_push_after_stop_starts_fresh_prefill)
 
 	fake_i2s_reset(); /* clear records; nothing queued after stop */
 
+	/* After stop, admission is closed: a valid push is rejected
+	 * (-EBUSY) with zero allocation/write/state/counter mutation. */
+	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), -EBUSY,
+		      "push after stop rejected");
+
+	zassert_equal(fake_i2s_write_calls(), 0, "no writes while closed");
+	zassert_equal(fake_i2s_queued_count(), 0, "nothing queued");
+	zassert_equal(mock_drift_update_calls, 0, "no drift");
+	zassert_equal(audio_i2s_test_active_pushes(), 0, "no admitted push");
+	zassert_false(audio_i2s_test_is_started(), "still stopped");
+	zassert_true(audio_i2s_test_is_configured(), "configured retained");
+
+	/* Explicit stream open (BAP gate closed→open) then reconnects. */
+	zassert_equal(audio_sink_stream_open(), 0, "stream open");
+
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0,
 		      "push after stop without re-init");
 

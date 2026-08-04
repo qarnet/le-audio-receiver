@@ -41,6 +41,15 @@ static int write_fail_at = -1;
 static int write_fail_errno = -EIO;
 static int trigger_ret[4]; /* indexed by i2s_trigger_cmd value */
 
+/* Deterministic write gate (R1 concurrency tests): when armed, the
+ * selected successful write transfers ownership/queues the block as
+ * today, signals `entered`, then waits on `release` before returning.
+ * The gate is cleared by fake_i2s_reset().  Production gets no pause
+ * hook; tests own the semaphores and threads. */
+static int block_write_at = -1;
+static struct k_sem *block_entered;
+static struct k_sem *block_release;
+
 static void purge_queue(void)
 {
 	while (queued_count > 0) {
@@ -85,6 +94,7 @@ static int fake_i2s_write(const struct device *dev, void *mem_block, size_t size
 	}
 
 	struct fake_i2s_write_rec *rec = &writes[write_count];
+	const int rec_idx = write_count;
 
 	rec->ptr = mem_block;
 	rec->size = size;
@@ -113,6 +123,12 @@ static int fake_i2s_write(const struct device *dev, void *mem_block, size_t size
 
 	queue[queued_count++] = mem_block; /* ownership transferred */
 	write_count++;
+
+	/* Deterministic pause gate for concurrency tests (see header). */
+	if (rec_idx == block_write_at && block_entered != NULL && block_release != NULL) {
+		k_sem_give(block_entered);
+		k_sem_take(block_release, K_FOREVER);
+	}
 	return 0;
 }
 
@@ -187,6 +203,9 @@ void fake_i2s_reset(void)
 	write_fail_at = -1;
 	write_fail_errno = -EIO;
 	memset(trigger_ret, 0, sizeof(trigger_ret));
+	block_write_at = -1;
+	block_entered = NULL;
+	block_release = NULL;
 	/* The captured slab is deliberately RETAINED across reset: a real
 	 * driver keeps its configured mem_slab even when the stream stops
 	 * and restarts without re-configuration (audio_sink_stop keeps
@@ -202,6 +221,13 @@ void fake_i2s_set_configure_ret(int ret)
 void fake_i2s_fail_write_at(int call_index)
 {
 	write_fail_at = call_index;
+}
+
+void fake_i2s_block_write_at(int call_index, struct k_sem *entered, struct k_sem *release)
+{
+	block_write_at = call_index;
+	block_entered = entered;
+	block_release = release;
 }
 
 void fake_i2s_set_write_fail_errno(int err)
