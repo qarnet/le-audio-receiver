@@ -387,7 +387,17 @@ earlier `a79ac71` closure evidence is superseded.
 Every cross-thread mutable field has one documented owner or synchronization
 primitive; no lock spans blocking offload/I2S operations.
 
-## R2 — Dead API and historical-source cleanup
+## R2 — Dead API and historical-source cleanup — **ACCEPTED (2026-08-04)**
+
+> Acceptance: code commit `1343c35` (`refactor: remove dead APIs and isolate
+> historical actuator`), baseline commit `b8052b2` (`coverage: migrate
+> baseline after R2 dead-code cleanup`), docs commit (this document's
+> commit).  G1 on
+> clean `b8052b2`: **47 PASS / 0 FAIL / 47 TOTAL**, coverage population 26
+> with zero surviving per-file/aggregate ratio regression (gcovr 8.4 / gcov
+> GCC 14.3.0), builds 3/3, build contract 76/76, BSim hashes unchanged,
+> zero new/actionable warnings, worktree clean.  Full evidence in
+> `docs/development/refactor-r2-results.md`.
 
 ### Goal
 
