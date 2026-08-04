@@ -1,8 +1,10 @@
 #!/usr/bin/env nix-shell
 #!nix-shell -i python3 -p "python3Packages.pyserial"
 """
-Unit tests for flpr_stall_gate.py — timed 60ms gate parser and runner.
-Uses FakeSerial transport; no hardware needed.
+Unit tests for the gate test child: the flpr_stall_gate.py timed 60ms gate
+parser and runner (FakeSerial transport) plus fw-flash-dongle probe-selection
+behavior, tested through public script execution with fake west/openocd/
+nrf-probes. No hardware needed.
 """
 
 import os

@@ -1327,6 +1327,27 @@ manager aligns partitions to `0x4000` (nRF5340 4 KB flash pages); neither
 extended range crosses a partition boundary; `flash write_image` completes
 with exit 0 and zero Error lines (validated programming).
 
+**Dongle (nRF5340DK) flashing diagnostics (`fw-flash-dongle`, commit
+`7c50c27`, log `dongle-flash-7c50c27.log`):**
+
+Same page-tail erase extension, with per-core page sizes: the nRF5340
+network core has **2 kB** flash pages and the application core **4 kB**
+(nRF5340 Product Specification memory table; OpenOCD's `nrf5` driver sizes
+its sectors per core from FICR INFO.CODEPAGESIZE — `0x800` net, `0x1000`
+app — and `flash/nor/core.c` tail-pads the erase to the containing page).
+Proven from build artifacts and the two observed warnings:
+
+| Observed range | Why | Containment |
+|---|---|---|
+| `Warn : Adding extra erase range, 0x0102c23c .. 0x0102c7ff` (net core) | hci_ipc image ends at `0x0102C23B` (build/dongle/hci_ipc/zephyr/zephyr.hex last data byte; sections `0x01000000..0x0102B313` + `0x0102B320..0x0102C23B`); OpenOCD extends erase to the containing 2 kB page end `0x0102C7FF` (page `0x0102C000..0x0102C7FF`, extension `0x5C4` = 1476 B) | image and extended range wholly inside cpunet flash `0x01000000..0x01040000` (256 kB).  Standalone hci_ipc build has no partition map — physical core-flash containment; sysbuild `partitions_CPUNET.yml` maps the entire net flash as one `app`/`empty_net_core` span `0x01000000..0x01040000` |
+| `Warn : Adding extra erase range, 0x0000a040 .. 0x0000afff` (app core) | hci_uart image ends at `0x0000A03F` (build/dongle/hci_uart/zephyr/zephyr.hex last data byte; sections `0x00000000..0x0000933B` + `0x00009340..0x0000A03F`); OpenOCD extends erase to the containing 4 kB page end `0x0000AFFF` (page `0x0000A000..0x0000AFFF`, extension `0xFC0` = 4032 B) | image and extended range wholly inside `app` partition `0x00000000..0x00100000` (build/dongle/partitions.yml, flash_primary) |
+
+Both extended ranges stay inside the single page containing the last image
+byte, that page lies entirely within the core's own flash region, and the
+`program ... verify` steps for both cores completed with `** Verified OK **`
+and exit 0, zero Error lines (validated readback over the full written run —
+no image or physical flash boundary crossed).
+
 ## Hardware in use
 
 Probe identities resolved at runtime via `nrf-probes` — no static serials in docs.
@@ -1397,9 +1418,12 @@ argv, fake nrf-probes fails loudly if called) — 22/22 pass.  Hardware
 verification on the committed script: onboard J-Link auto-detected
 (`J-Link OB-nRF5340-NordicSemi`, SWD DPIDR `0x6ba02477`, VTarget 3.300 V),
 net core programmed+verified first (nRF5340-QKAA 256 kB Flash), app core
-second (1024 kB Flash), both `Verified OK`, `reset run`, exit 0; only the
-documented expected page-tail `Warn : Adding extra erase range` flashing
-diagnostics (see "OpenOCD flashing diagnostics" table).  See
+second (1024 kB Flash), both `Verified OK`, `reset run`, exit 0; the only
+diagnostics are the expected page-tail `Warn : Adding extra erase range`
+flashing messages, classified for the dongle in the OpenOCD flashing
+diagnostics table above (net `0x0102c23c .. 0x0102c7ff`, 2 kB net-core
+page; app `0x0000a040 .. 0x0000afff`, 4 kB app-core page; both wholly
+inside their core's flash region).  See
 `docs/development/fw-flash-dongle-probe-fix-handoff.md`.
 
 ### I2S20 hardware evidence
