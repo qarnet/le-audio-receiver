@@ -236,3 +236,60 @@ failure-injection unit suites (expected negative-path test output); 2
 native_sim test-entropy notices (pre-existing informational line).  The
 log is transient (NOT repository-retained); this committed record is the
 durable evidence.
+
+## R2 baseline migration (2026-08-04) — dead-code deletion, population 26
+
+The pre-R2 per-file rows above (generated at `1a5842d`) are the historical
+record.  R2 deleted covered-but-dead production APIs (no production caller;
+caller proof in `docs/development/refactor-r2-results.md`), which changes
+source denominators, so the baseline was regenerated per the coverage
+migration rule (refactor-plan.md) on the exact clean code commit
+**`1343c35`** via `scripts/test-coverage.sh --write-baseline`; the committed
+baseline now records that candidate.  Tool versions unchanged: **gcovr 8.4 /
+gcov (GCC) 14.3.0**.
+
+**Population stays 26** — the moved historical source was already excluded
+from the numeric population, so its relocation out of `src/` changes only the
+exclusion provenance, not the population.  The numeric exclusion list drops
+`src/audio_clock_actuator_sample_adjust.c` (now a test-local file under
+`tests/unit/actuator_sample_adjust_historical/src/`), leaving `bt_bap.c`,
+`src/flpr/main.c`, and `main.c`.
+
+Aggregate (old `1a5842d` → new `1343c35`):
+
+| Metric | Old | New |
+|--------|-----|-----|
+| lines | 3281/3722 (88.2%) | 3505/3946 (88.8%) |
+| branches | 1433/2041 (70.2%) | 1467/2067 (71.0%) |
+| functions | 205/205 (100.0%) | 209/209 (100.0%) |
+
+Per-file old → new for R2-affected surviving files (covered/total):
+
+| File | Metric | Old | New | Denominator explanation |
+|------|--------|-----|-----|--------------------------|
+| `audio_clock_actuator_apll.c` | lines | 17/17 | 15/15 | removed `audio_clock_actuator_consume_sample_adjustment()` (1 line, fully covered, zero callers) |
+| | branches | 4/4 | 4/4 | unchanged |
+| | functions | 4/4 | 3/3 | removed function |
+| `audio_clock_actuator_none.c` | lines | 8/8 | 6/6 | removed consume implementation (2 lines, fully covered, zero callers) |
+| | branches | 0/0 | 0/0 | unchanged |
+| | functions | 4/4 | 3/3 | removed function |
+| `audio_rate_convert.c` | lines | 30/32 | 10/10 | removed `audio_rate_converter_nearest_stereo()` (zero callers; 2 previously-uncovered lines were inside it) |
+| | branches | 14/16 | 0/0 | all branches were in the removed function |
+| | functions | 3/3 | 2/2 | removed function |
+| `flpr_ring_mgr.c` | lines | 559/599 | 694/741 | removed no-op `flpr_ring_mgr_set_consume_cb()` (2 lines, fully covered, zero callers); R1-era ring-manager tests were previously un-migrated and are absorbed here |
+| | branches | 214/312 | 230/326 | no-op added no branches; R1-era tests absorbed |
+| | functions | 24/24 | 29/29 | removed function; R1-era additions absorbed |
+| `audio_offload.c` | lines | 588/714 | 583/707 | removed `audio_offload_is_stopped()` (7 measured lines, fully covered, zero callers); surviving `get_status(NULL)` null-guard now covered by a probe added to `test_is_healthy` (migration rule step 4: ratio otherwise decreases) |
+| | branches | 223/377 | 223/375 | removed is_stopped branch slots (2), gained NULL-guard branch slot (1) |
+| | functions | 18/18 | 17/17 | removed nRF54 + stub implementations (2 functions) |
+| `audio_volume.c` | all | 36/36 L, 24/32 B, 5/5 F | unchanged | `DEFAULT_VOL` macro removal produces no executable lines |
+
+Unchanged files remain at or above their `1a5842d` records.  The larger
+increases in `audio_i2s.c`, `flpr_handshake.c`, `stream_lifecycle.c`, and
+`audio_timing_nrf54.c` are R1-era test additions (accepted after `1a5842d`
+with enforcement passing because current ≥ baseline) absorbed into the
+baseline at this migration; they are not R2 changes.  No covered live
+behavior was deleted to improve a percentage.
+
+Canonical enforcement reran on the clean baseline commit (see
+`docs/development/refactor-r2-results.md`): **47 PASS / 0 FAIL / 47 TOTAL**.

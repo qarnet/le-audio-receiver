@@ -1,13 +1,11 @@
 {
   "exclusions": {
     "numeric_population": [
-      "src/audio_clock_actuator_sample_adjust.c",
       "src/bt_bap.c",
       "src/flpr/main.c",
       "src/main.c"
     ],
     "reasons": {
-      "src/audio_clock_actuator_sample_adjust.c": "retired non-production sample insert/drop actuator retained for regression comparison only (coverage-matrix.md weak-test fact 1)",
       "src/bt_bap.c": "BAP unicast server, ASCS/PACS, pairing: integration-only through the accepted T4 BabbleSim 16-scenario matrix (mono 7.5/10 ms, Mode A incl. reverse start, Mode B, malformed-SDU rejection + resume, one-CIS-loss, first-ASE stop, release-without-disable, disconnect-while-streaming, reconnect, source-direction rejection, NO_MEM third sink, nine invalid-codec-field rejections, two successes) with strict PCM oracle; no native unit suite exists",
       "src/flpr/main.c": "FLPR firmware entry point (RISC-V VPR): no RISC-V simulator infrastructure exists in this repo; hardware-only by design",
       "src/main.c": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by production builds and boot logs"
@@ -48,12 +46,12 @@
         4
       ],
       "functions": [
-        4,
-        4
+        3,
+        3
       ],
       "lines": [
-        17,
-        17
+        15,
+        15
       ]
     },
     "src/audio_clock_actuator_none.c": {
@@ -62,12 +60,12 @@
         0
       ],
       "functions": [
-        4,
-        4
+        3,
+        3
       ],
       "lines": [
-        8,
-        8
+        6,
+        6
       ]
     },
     "src/audio_decode.c": {
@@ -100,16 +98,16 @@
     },
     "src/audio_i2s.c": {
       "branches": [
-        132,
-        176
+        148,
+        194
       ],
       "functions": [
-        10,
-        10
+        12,
+        12
       ],
       "lines": [
-        203,
-        209
+        258,
+        264
       ]
     },
     "src/audio_iso_seq.c": {
@@ -143,15 +141,15 @@
     "src/audio_offload.c": {
       "branches": [
         223,
-        377
+        375
       ],
       "functions": [
-        18,
-        18
+        17,
+        17
       ],
       "lines": [
-        588,
-        714
+        583,
+        707
       ]
     },
     "src/audio_perf.c": {
@@ -170,16 +168,16 @@
     },
     "src/audio_rate_convert.c": {
       "branches": [
-        14,
-        16
+        0,
+        0
       ],
       "functions": [
-        3,
-        3
+        2,
+        2
       ],
       "lines": [
-        30,
-        32
+        10,
+        10
       ]
     },
     "src/audio_shell.c": {
@@ -240,7 +238,7 @@
     },
     "src/audio_timing_nrf54.c": {
       "branches": [
-        56,
+        60,
         78
       ],
       "functions": [
@@ -248,8 +246,8 @@
         7
       ],
       "lines": [
-        131,
-        135
+        142,
+        143
       ]
     },
     "src/audio_volume.c": {
@@ -318,8 +316,8 @@
         17
       ],
       "lines": [
-        357,
-        369
+        389,
+        401
       ]
     },
     "src/flpr_ring.c": {
@@ -338,16 +336,16 @@
     },
     "src/flpr_ring_mgr.c": {
       "branches": [
-        214,
-        312
+        230,
+        326
       ],
       "functions": [
-        24,
-        24
+        29,
+        29
       ],
       "lines": [
-        559,
-        599
+        694,
+        741
       ]
     },
     "src/flpr_runtime.c": {
@@ -366,22 +364,22 @@
     },
     "src/stream_lifecycle.c": {
       "branches": [
-        22,
-        24
+        34,
+        36
       ],
       "functions": [
-        6,
-        6
+        7,
+        7
       ],
       "lines": [
-        42,
-        42
+        62,
+        62
       ]
     }
   },
   "gcov_version": "gcov (GCC) 14.3.0",
   "gcovr_version": "gcovr 8.4",
-  "generated_commit": "971e6a4549fd83c893ff964ea79a201f000359f2",
+  "generated_commit": "1343c35fb8ac1ce210389ee39886dc885dd2d04e",
   "population": [
     "src/app_lifecycle.c",
     "src/audio_asrc.c",
@@ -413,16 +411,16 @@
   "schema_version": 1,
   "totals": {
     "branches": [
-      1433,
-      2041
+      1467,
+      2067
     ],
     "functions": [
-      205,
-      205
+      209,
+      209
     ],
     "lines": [
-      3281,
-      3722
+      3505,
+      3946
     ]
   }
 }
