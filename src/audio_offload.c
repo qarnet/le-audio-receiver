@@ -11,7 +11,10 @@
  *
  * Dedicated offload work queue (own stack via k_work_queue_start) handles
  * all long-running or blocking operations: initial ring preparation and
- * post-fault recovery.  stream_start() only sets PREPARING + bumps
+ * post-fault recovery.  stream_start() transitions to PREPARING
+ * (healthy=false), advances the generation, resets prep/recovery/probation
+ * state, and schedules preparation work on the dedicated offload work
+ * queue — nonblocking, the caller (stream_started callback) is not blocked.
  *
  * Accounting:
  *   - submit_count: valid calls after initialization in a non-STOPPED

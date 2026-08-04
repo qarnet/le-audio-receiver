@@ -585,7 +585,7 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA, 48 kHz stereo) — implements audio_sink.h |
 | `src/audio_drift.c` | PI clock recovery controller (dual-term, ppm output) |
 | `src/audio_drift.h` | Controller API + APLL register constants |
-| `src/audio_rate_convert.c` | Nearest-neighbor rate converter (PCLK32M mismatch fix) |
+| `src/audio_rate_convert.c` | Fixed-rate frame-count/remainder converter (I2S drain-rate matching; init/next_frames only, no resampling/copy API) |
 | `src/audio_rate_convert.h` | Rate converter public API (unit-testable) |
 | `src/audio_timing.h` | Platform timing interface (frequency error, GRTC scheduling) |
 | `src/audio_timing_math.c` | Timing math shared across platforms |

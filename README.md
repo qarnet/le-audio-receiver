@@ -232,7 +232,7 @@ before reflashing — `west flash` does not erase the settings partition.
 | `src/audio_drift.h` | Controller API + APLL register constants |
 | `src/audio_asrc.c` | Fixed-point linear stereo ASRC (cpuapp path, FLPR fallback) |
 | `src/audio_asrc.h` | ASRC public API |
-| `src/audio_rate_convert.c` | Nearest-neighbor rate converter (PCLK32M mismatch fix) |
+| `src/audio_rate_convert.c` | Fixed-rate frame-count/remainder converter (I2S drain-rate matching; init/next_frames only, no resampling/copy API) |
 | `src/audio_rate_convert.h` | Rate converter public API |
 | `src/audio_offload.c` | FLPR offload manager (handshake, IPC routing, fallback) |
 | `src/audio_offload.h` | Offload manager public API |

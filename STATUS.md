@@ -1617,7 +1617,7 @@ on close).
 | Actuators | `audio_clock_actuator_apll.c`, `audio_clock_actuator_none.c` | APLL (nRF5340) or NONE (nRF54L15, ASRC consumes ppm) |
 | ASRC | `audio_asrc.{c,h}` | Fixed-point linear stereo ASRC (cpuapp + FLPR fallback) |
 | Offload | `audio_offload.{c,h}`, `flpr_*.{c,h}`, `src/flpr/` | FLPR offload manager + firmware |
-| Rate conversion | `audio_rate_convert.c` | Nearest-neighbor, 480→476/477 frames/block for PCLK32M mismatch |
+| Rate conversion | `audio_rate_convert.c` | Fixed-rate frame-count/remainder converter (init/next_frames), 480→476/477 frames/block for I2S drain-rate matching (PCLK32M mismatch) |
 | Timing (nRF54L15) | `audio_timing_nrf54.c` | TIMER20-vs-GRTC PCLK freq measurement, 1 s intervals |
 | Central driver | `scripts/bap_central.py`, `scripts/hci_raw_connect.py` | Raw-HCI address bootstrap, BlueZ-owned connection, asynchronous `Device.Pair()`, NINO agent |
 | Dongle firmware | `dongle/hci_uart/{app,netcore}.conf`, `scripts/bin/fw-build-dongle`, `scripts/bin/fw-flash-dongle` | nRF5340DK hci_uart central, ISO capable |
