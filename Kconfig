@@ -164,4 +164,26 @@ config AUDIO_MODEA_PENDING_DEPTH
 	  dropped and counted in the assembler stats (never silent).
 	  Bounded static state; no heap.
 
+config AUDIO_ISO_SEQ_MAX_CONCEAL
+	int "Per-CIS sequence-gap concealment bound (omitted SDUs per callback)"
+	default 8
+	range 1 64
+	help
+	  Maximum SDUs concealed as PLC per delivered callback when the
+	  ISO stack omits callbacks for lost SDUs (observed on the
+	  nRF5340 SW Split controller: no VALID and no LOST callback for
+	  some lost events; the next callback's Packet_Sequence_Number
+	  then jumps).  audio_iso_seq tracks each CIS's delivered
+	  sequences and reports the omitted count; the receive path
+	  conceals up to this many omitted SDUs as PLC before processing
+	  the current SDU, keeping I2S output cadence.
+
+	  8 omitted SDUs = 80 ms at 10 ms frames, half the 16-block I2S
+	  slab budget (~160 ms), so a bound-sized gap still fits the
+	  audio buffering while the drift controller re-converges.  A
+	  forward jump beyond this bound is treated as a discontinuity:
+	  the tracker resyncs and the receive path logs the evidence
+	  instead of synthesizing unbounded work (duplicates and
+	  backward sequences are likewise explicit resync outcomes).
+
 source "Kconfig.zephyr"

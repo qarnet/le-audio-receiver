@@ -418,6 +418,90 @@
       "stateful": true
     },
     {
+      "source": "src/audio_iso_seq.c",
+      "classification": "direct",
+      "suites": [
+        {
+          "name": "iso_seq",
+          "evidence": "direct"
+        }
+      ],
+      "public_outcomes": [
+        {
+          "api": "audio_iso_seq_reset",
+          "outcome": "void",
+          "witness": "test_reset_clears_all"
+        },
+        {
+          "api": "audio_iso_seq_update",
+          "outcome": "AUDIO_ISO_SEQ_RES_FIRST",
+          "witness": "test_first_no_gap"
+        },
+        {
+          "api": "audio_iso_seq_update",
+          "outcome": "AUDIO_ISO_SEQ_RES_CONTIG",
+          "witness": "test_contiguous_no_gap"
+        },
+        {
+          "api": "audio_iso_seq_update",
+          "outcome": "AUDIO_ISO_SEQ_RES_GAP",
+          "witness": "test_single_gap"
+        },
+        {
+          "api": "audio_iso_seq_update",
+          "outcome": "AUDIO_ISO_SEQ_RES_RESYNC",
+          "witness": "test_over_bound_gap_is_resync"
+        },
+        {
+          "api": "audio_iso_seq_get_concealed",
+          "outcome": "UINT32",
+          "witness": "test_single_gap"
+        },
+        {
+          "api": "audio_iso_seq_get_resyncs",
+          "outcome": "UINT32",
+          "witness": "test_duplicate_is_explicit_resync"
+        }
+      ],
+      "state_transitions": [
+        {
+          "transition": "uninitialized->first-delivery",
+          "witness": "test_first_no_gap"
+        },
+        {
+          "transition": "delivered->contiguous",
+          "witness": "test_contiguous_no_gap"
+        },
+        {
+          "transition": "delivered->gap-omitted-concealed",
+          "witness": "test_single_gap"
+        },
+        {
+          "transition": "delivered->wrap-safe-gap",
+          "witness": "test_wrap_handles_ffff_to_0001"
+        },
+        {
+          "transition": "delivered->duplicate-resync",
+          "witness": "test_duplicate_is_explicit_resync"
+        },
+        {
+          "transition": "delivered->backward-resync",
+          "witness": "test_backward_is_explicit_resync"
+        },
+        {
+          "transition": "delivered->over-bound-resync",
+          "witness": "test_over_bound_gap_is_resync"
+        },
+        {
+          "transition": "any->reset",
+          "witness": "test_reset_clears_all"
+        }
+      ],
+      "function_exclusions": [],
+      "hardware_acceptance": [],
+      "stateful": true
+    },
+    {
       "source": "src/audio_modea.c",
       "classification": "direct",
       "suites": [
