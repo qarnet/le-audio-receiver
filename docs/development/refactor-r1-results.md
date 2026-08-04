@@ -1,20 +1,115 @@
 # Refactor R1 results — ownership and concurrency hardening
 
-Status: **REOPENED — repair verification pending (2026-08-04)**.
+Status: **ACCEPTED (2026-08-04, fresh revalidation)**.
 
-**This page is historical evidence for the original R1 commit pair
-(`bcd623b` + `4f426f3`).  The counts, G1/G2 claims, and raw-log inventory
-below are SUPERSEDED and are NOT accepted evidence.**  Review of that
-evidence found ten grounded defects (sink stop wakeup; sink init
-publication; lifecycle idle force-close latch; FLPR READY-epoch ACK state;
-ring-manager init serialization; BSim oracle admission order; three
-test-only gaps; metadata truth problems — focused counts inconsistent with
-one observed suite execution, nRF54 receiver-side stream evidence absent
-from `/tmp/r1-g2-54l15-console.log`, and raw probe/controller evidence not
-preserved).  The review-fix repair commit addresses every finding; fresh
-counts and fresh G1/G2 evidence with preserved raw logs are required before
-any re-acceptance.  Review findings and repair scope:
-`docs/development/refactor-r1-review-fix-handoff.md`.
+Repair chain: **`e7b222e`** (`fix: repair R1 concurrency review findings`),
+**`9c67281`** (`fix: close remaining R1 review gaps`), **`b0b4399`**
+(`docs: correct R1 lifecycle test count`).  Revalidation gate defined by
+**`be8fac1`** (`docs: define repaired R1 revalidation gate`) on branch
+`handoff/workstation-transfer`; validation HEAD **`be8fac1e918de3ca70345759c185b5d690393756`**,
+repair tip `b0b4399`.  Full clean G1 on `be8fac1` and autonomous G2 on both
+receivers passed; complete evidence and raw logs below.
+
+The earlier `a79ac71` acceptance evidence is **superseded** (its focused
+counts did not match one observed suite execution, its nRF54 receiver-side
+stream evidence was absent from the preserved console log, and raw
+probe/controller evidence was not preserved).  This page is now the
+accepted evidence for repaired R1.
+
+## Revalidation — clean G1 (2026-08-04, on `be8fac1`, worktree clean)
+
+```bash
+./scripts/test-all.sh 2>&1 | tee /tmp/r1-reval-g1-testall.log        # exit 0
+./scripts/test-coverage.sh --output /tmp/r1-reval-coverage \
+  --clean-output 2>&1 | tee /tmp/r1-reval-g1-coverage.log            # exit 0
+fw-build-5340  | tee /tmp/r1-reval-g1-build-5340.log                 # exit 0
+fw-build-54l15 | tee /tmp/r1-reval-g1-build-54l15.log                # exit 0
+fw-build-dongle| tee /tmp/r1-reval-g1-build-dongle.log               # exit 0
+python3 scripts/check-build-contract.py --nrf5340 build/nrf5340 \
+  --nrf54l15 build/nrf54l15 | tee /tmp/r1-reval-g1-build-contract.log # exit 0
+git diff --check                                                     # clean
+```
+
+- Canonical gate: **47 PASS / 0 FAIL / 47 TOTAL** (28 twister + 4 exec-only
+  + 12 Python + coverage + matrix + bsim:stage1).  `test-all.sh` completed
+  18:46:21Z; standalone coverage 18:52:57Z; builds 18:53:23–18:54:23Z;
+  contract 18:54:30Z (≈2 h total gate runtime).
+- Coverage: population **exactly 26 files**; numeric lines 3536/3981
+  (88.8%), branches 1481/2085 (71.0%), functions 214/214 (100.0%);
+  **gcovr 8.4 / gcov (GCC) 14.3.0**; baseline enforcement PASS against
+  `tests/coverage-baseline.json`; no baseline rewrite.  Focused counts
+  (fresh): audio_i2s 60, audio_i2s_identity 58, lifecycle 31,
+  flpr_handshake 46, flpr_ring_mgr 67.
+- Builds 3/3 PASS (nRF5340/E83, nRF54L15/Xiao, dongle) with zero compiler
+  warnings; build contract **76/76 PASS**.
+- BSim Stage 1 (16-scenario T4 matrix, first nine twice): **PASS** —
+  hashes, totals, observer and segment counts byte-identical to the pinned
+  values (mono `0x22AB5C0D`, modea `0xBAE24F7E`, modeb_7p5ms `0xFF82CADB`,
+  reconnect second segment = fresh mono oracle, etc.).
+- Warning classification: only the documented non-actionable NCS v3.3.0 set
+  (`PARTITION_MANAGER`/sysbuild deprecations, `BT_CTLR_CONN_ISO_LOW_LATENCY_POLICY`
+  choice gap, experimental `BT_LL_SW_SPLIT`/`BT_CTLR_SET_HOST_FEATURE`/
+  `BT_CTLR_PERIPHERAL_ISO`, `__ASSERT()` informational, dongle partition-manager
+  deprecations).  Zero actionable/new warnings.
+
+## Revalidation — autonomous G2 (both receivers, 2026-08-04)
+
+Evidence directory: **`/tmp/r1-reval-g2-20260804-165447/`** with a SHA-256
+manifest (`manifest.txt`) covering every raw log.  Central: repository
+nRF5340DK `hci_uart` dongle (`C0:AA:BB:CC:DD:EE`, `powered le secure-conn
+cis-central`); no human-operated central.  All four streams via
+`scripts/bap_central.py`; Mode B used the documented `--preserve-bond` path
+for the bonded peer (keeps the bond between Mode A and Mode B; avoids the
+raw-HCI/BlueZ initiator conflict).
+
+Receiver identities (accepted boot logs): Xiao `DB:A6:0C:05:A2:AA`
+(random); E83 `E8:54:F0:E0:D9:42`.  Probes (`nrf-probes` table +
+OpenOCD DPIDR cross-confirmation; nrf-probes CLI has no AP-IDR verbose mode
+— tool limitation recorded in `nrf-probes-help.txt`): Xiao probe
+`8EE9B3FF` / DPIDR `0x6ba02477` / PART `0x00054b15` / VARIANT AAC0; E83
+probe `E6635C08CB1F502B` / DPIDR `0x6ba02477` / PART `0x00005340` / VARIANT
+QKAA; dongle J-Link `OB-nRF5340-NordicSemi` / DPIDR `0x6ba02477`.
+
+Receiver-side evidence (one continuous console log per receiver, from
+before flash through both modes plus final disconnect/advertising restart;
+see `54l15-accepted-receiver.log` and `e83-accepted-receiver.log`):
+
+| Stream | Central exit | Receiver counters |
+|---|---|---|
+| Xiao Mode A | 0 (3000 frames) | two mono ASEs, gate OPEN, `offload prep OK ... state=ACTIVE`, `I2S DMA started`; Stream[0] SDUs=2835 decoded=6054 plc=385 decode_err=0 i2s_underrun=0 stream_reset=0; Stream[1] SDUs=2851 decode_err=0; clean disconnect + advertising restart |
+| Xiao Mode B | 0 (3000 frames) | single stereo ASE (chan_count=2), gate OPEN, `offload ... state=ACTIVE`, `I2S DMA started`; Stream[0] SDUs=2920 decoded=6054 plc=214 decode_err=0 i2s_underrun=0 stream_reset=0; clean disconnect + advertising restart |
+| E83 Mode A | 0 (3000 frames) | two mono ASEs, gate OPEN, `I2S DMA started`; Stream[0] SDUs=2832 decoded=5664 plc=0 decode_err=0 i2s_underrun=0 stream_reset=0; Stream[1] SDUs=2848 decode_err=0; clean disconnect + advertising restart (APLL path) |
+| E83 Mode B | 0 (3000 frames) | single stereo ASE (chan_count=2), gate OPEN, `I2S DMA started`; Stream[0] SDUs=2918 decoded=5836 plc=0 decode_err=0 i2s_underrun=0 stream_reset=0; clean disconnect + advertising restart (APLL path) |
+
+All four runs: expected boot/advertising, pairing accepted + bonded, correct
+Mode A two-ASE and Mode B single-stereo-ASE shape, gate OPEN/CLOSED and clean
+reconnect, nonzero SDUs/decoded frames, `I2S DMA started`, zero decode
+errors, zero I2S underruns, zero stream resets, zero assertions, zero slab
+faults, zero deadlocks, FLPR offload ACTIVE on both Xiao runs (no
+unexplained cpuapp fallback), APLL stable on both E83 runs, final
+disconnect and advertising restart.  Known 360-frame fallback unchanged;
+default 10 ms runs remained FLPR-offloaded.
+
+Lab-environment diagnosis (recorded, resolved per handoff): the controller
+initially returned `cmd_status_0x0d` for LE Extended Create Connection
+because BlueZ held a live auto-created ACL to the bonded E83
+(`dev_E8_54_F0_E0_D9_42 connected=1`, confirmed via DBus); E83-only
+central-side cache removal + controller power-cycle restored connecting
+(observed fact, evidence preserved incl. raw HCI diagnostics and the
+authorized single HCI Reset).  Pairing was then blocked by receiver-side
+stale bonds (documented AGENTS.md behavior); the documented receiver-side
+`bt unpair` (authorized for this revalidation, raw outputs preserved) was
+performed on both receivers before their accepted captures.  The bench
+device `64:49:7D:E3:53:40` repeatedly attempted connections to the Xiao
+with authentication failures (pre-existing lab noise, recorded in R0/R1,
+did not disturb accepted runs).
+
+## Original implementation record (historical)
+
+The sections below document the original R1 commit pair (`bcd623b` +
+`4f426f3`), the review findings that invalidated it, and the repair chain.
+The G1/G2 claims in the original sections are **superseded by the fresh
+revalidation above**; they are retained only as historical context.
 
 ## Exact commits
 
@@ -68,9 +163,10 @@ Pre-fix (at `f654b58`, no R1 tests): sink had no admission gate, stop raced
 in-flight pushes, lifecycle had no shell force-close latch, FLPR reset/stall
 ACKs were uncorrelated (`seq=0`), timing update/reset were unsynchronized.
 
-Post-fix focused suites (all green, zero warnings) — **counts SUPERSEDED:
-they do not match one observed suite execution and are not accepted
-evidence until re-run on the repair commit**:
+Post-fix focused suites (original-run record at `4f426f3`; the recorded
+counts were later found not to match one observed suite execution — the
+accepted fresh counts from the revalidation G1 are in the status section
+above):
 
 | Suite | Result |
 |---|---|
@@ -94,11 +190,10 @@ ring-manager data-lock barrier, epoch-0 produce rejection, ACK late-ack-by-
 sequence retry, 16-bit token boundary (reset and stall); protocol ACK
 constructor; handshake validation counters under concurrent status reads.
 
-## G1 — canonical gate on clean `4f426f3`
+## G1 — canonical gate on clean `4f426f3` (original run, historical)
 
-**SUPERSEDED / unaccepted evidence** — recorded here only as the historical
-run that was reviewed.  No G1 claim stands until a fresh clean run on the
-repair commit.
+Original-run record at `4f426f3`; the accepted fresh G1 on `be8fac1` is in
+the status section above.
 
 ```bash
 ./scripts/test-all.sh
@@ -140,14 +235,14 @@ R0 warning scan): nRF5340 `PARTITION_MANAGER`/sysbuild deprecations,
 `drivers__watchdog` "No SOURCES given"; dongle partition-manager
 deprecations.  Zero actionable/new warnings.
 
-## G2 — autonomous hardware smoke (both targets)
+## G2 — autonomous hardware smoke (both targets, original run — historical)
 
-**SUPERSEDED / unaccepted evidence.**  The nRF54 receiver-side stream
-evidence claimed below is absent from the preserved console log
-(`/tmp/r1-g2-54l15-console.log` holds only boot output), and raw
-probe/controller evidence was not preserved.  Fresh G2 with preserved raw
-logs is required after the repair commit.  The historical narrative is
-retained verbatim for review context.
+Original-run record at `4f426f3`; the accepted fresh G2 with preserved raw
+logs is in the status section above (the original nRF54 receiver-side
+stream evidence was absent from its preserved console log, and raw
+probe/controller evidence was not preserved — both corrected in the
+revalidation).  The historical narrative is retained verbatim for review
+context.
 
 Central: repository nRF5340DK `hci_uart` dongle, attached at session start,
 `btmgmt --index hci0 info` → `addr C0:AA:BB:CC:DD:EE`, `current settings:
