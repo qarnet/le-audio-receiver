@@ -104,10 +104,11 @@ production behavior.
 6. **BabbleSim** compiles production `bt_bap.c`, `audio_decode.c`,
    `audio_stats.c`, `audio_drift.c`, `audio_rate_convert.c`,
    `audio_timing_math.c`, `audio_timing_none.c`, `stream_lifecycle.c`,
-   `audio_volume.c`, and `audio_offload.c`; the accepted T4 matrix (15
-   scenarios) executes them through real mono/Mode A/Mode B, lifecycle,
-   reconnect, and rejection paths with a strict PCM oracle and no I2S or
-   FLPR stack.  Compilation alone is still not execution evidence for
+    `audio_volume.c`, and `audio_offload.c`; the accepted T4 matrix (16
+    scenarios, incl. one-CIS-loss) executes them through real mono/Mode
+    A/Mode B, lifecycle, reconnect, rejection, and one-CIS-loss paths with
+    a strict PCM oracle and no I2S or FLPR stack.  Compilation alone is
+    still not execution evidence for
    `audio_drift.c`, `audio_rate_convert.c`, and `audio_timing_math.c` —
    those are compiled but never called (their call sites live in
    `audio_i2s.c` and `audio_timing_nrf54.c`, which are excluded from the

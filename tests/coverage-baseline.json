@@ -8,7 +8,7 @@
     ],
     "reasons": {
       "src/audio_clock_actuator_sample_adjust.c": "retired non-production sample insert/drop actuator retained for regression comparison only (coverage-matrix.md weak-test fact 1)",
-      "src/bt_bap.c": "BAP unicast server, ASCS/PACS, pairing: integration-only through the accepted T4 BabbleSim 15-scenario matrix (mono 7.5/10 ms, Mode A incl. reverse start, Mode B, malformed-SDU rejection + resume, first-ASE stop, release-without-disable, disconnect-while-streaming, reconnect, source-direction rejection, NO_MEM third sink, nine invalid-codec-field rejections, two successes) with strict PCM oracle; no native unit suite exists",
+      "src/bt_bap.c": "BAP unicast server, ASCS/PACS, pairing: integration-only through the accepted T4 BabbleSim 16-scenario matrix (mono 7.5/10 ms, Mode A incl. reverse start, Mode B, malformed-SDU rejection + resume, one-CIS-loss, first-ASE stop, release-without-disable, disconnect-while-streaming, reconnect, source-direction rejection, NO_MEM third sink, nine invalid-codec-field rejections, two successes) with strict PCM oracle; no native unit suite exists",
       "src/flpr/main.c": "FLPR firmware entry point (RISC-V VPR): no RISC-V simulator infrastructure exists in this repo; hardware-only by design",
       "src/main.c": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by production builds and boot logs"
     }

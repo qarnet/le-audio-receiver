@@ -75,9 +75,23 @@ python3 tests/unit/test_matrix/test_check_test_matrix.py
 python3 scripts/check-test-matrix.py --repo-root "$PWD"        0 error(s), 0 note(s)
 python3 -m json.tool tests/test-matrix.json >/dev/null         OK
 git diff --check                                               clean
-targeted grep: no active 15-scenario / first-eight / 0xFE0D4245-as-current
-claims; 16-scenario, first-nine, BZ1–BZ4, and corrected 360 witnesses present
+targeted grep (that review's seven docs files): no active
+15-scenario / first-eight / 0xFE0D4245-as-current claims;
+16-scenario, first-nine, BZ1–BZ4, and corrected 360 witnesses present
 ```
+
+**Correction (final focused review, 2026-08-04):** the grep above covered
+only the seven docs files of that review.  A final focused review found
+residual active 15-scenario claims in the runner header comment
+(`scripts/bsim-stage1-run.sh`), the `scripts/test-all.sh` BSim header line
+(still called sink-only), the coverage-matrix weak-test fact 6, the
+`tests/test-matrix.json` `src/bt_bap.c` reason, and the
+`tests/coverage-baseline.json` `src/bt_bap.c` exclusion reason.  All are
+corrected to the truthful 16-scenario / first-nine-twice wording
+(one-CIS-loss included) in the final review-fix implementation commit; the
+coverage-baseline edit is reason-string-only with every other field
+byte-identical.  The runner suite grows to 21 tests with a looped
+empty/non-string present-version regression.
 
 ## G1 — canonical software/build gate on the exact corrected implementation commit `1ee8af7`
 

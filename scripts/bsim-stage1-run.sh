@@ -2,9 +2,10 @@
 # BabbleSim Stage 1 — T4 BAP scenario matrix (canonical gate entry).
 #
 # Compiles the repo receiver and the repo parameterized client once per
-# gate, then runs the 15-scenario BAP matrix:
-#   scenarios 1–7 (normal mono / Mode A / Mode B, 10 ms + 7.5 ms, plus
-#   reverse start) run twice, scenarios 8–15 (malformed SDU, lifecycle,
+# gate, then runs the 16-scenario BAP matrix:
+#   scenarios 1–9 (mono / Mode A / Mode B at 10 ms + 7.5 ms, reverse
+#   start, malformed-SDU resume, one-CIS-loss) run twice, scenarios 10–16
+#   (first-ASE stop, release-without-disable, disconnect-while-streaming,
 #   reconnect, source rejection, NO_MEM, invalid codec fields) run once.
 #
 # Every run is checked by scripts/bsim_stage1_parse.py, which parses

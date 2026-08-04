@@ -472,6 +472,29 @@ class RunnerToolVersionEnforcement(unittest.TestCase):
             out,
         )
 
+    def test_present_empty_or_nonstring_version_fails(self):
+        # A present gcovr_version that is an empty string or a non-string
+        # (e.g. integer) must fail baseline mode with the invalid-version
+        # diagnostic naming the actual value, the expected non-empty
+        # string, and the intentional --write-baseline refresh instruction.
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        baseline = self._write_baseline(fx)
+        with open(baseline) as fh:
+            bl = json.load(fh)
+        for bad in ("", 42):
+            bl["gcovr_version"] = bad
+            with open(baseline, "w") as fh:
+                json.dump(bl, fh)
+            rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+            self.assertNotEqual(0, rc, "present gcovr_version %r must fail" % (bad,))
+            self.assertIn(
+                "error: gcovr baseline version invalid: %r (expected non-empty "
+                "string; refresh intentionally with --write-baseline %s)"
+                % (bad, baseline),
+                out,
+            )
+
     def test_report_only_does_not_enforce_versions(self):
         fx = RunnerFixture()
         self.addCleanup(fx.cleanup)
