@@ -3,10 +3,12 @@
 Status: **R0 ACCEPTED (2026-08-04).**  Truth reconciliation only — no
 production firmware source, public firmware behavior, coverage numeric
 baseline, BSim expected value, or hardware configuration changed.  Tested
-implementation commit: **`1ee8af7`** (clean docs/metadata commit).
+implementation commit: **`85bbcf3`** (clean docs/metadata commit).
 
-**Review fix (2026-08-04).**  Focused review of the original implementation
-found four items, fixed in the ordered commits `e462aba` → `1ee8af7`:
+**Review fixes (2026-08-04).**  Two focused review rounds corrected the
+original implementation in the ordered commits below.
+
+Round 1 (`e462aba` → `1ee8af7`):
 
 1. Coverage baseline version enforcement bypassed a present-null recorded
    version (only entirely-omitted legacy fields may skip the check; a
@@ -27,8 +29,25 @@ found four items, fixed in the ordered commits `e462aba` → `1ee8af7`:
    pins general non-480 rejection with current concrete input 240; flpr_ring
    MAX_INPUT asserts pin the 480 contract).
 
-The original `7ab4b39` G1 run below is **superseded** by the review-fix G1
-run on the exact corrected implementation commit `1ee8af7`.
+Round 2 (`85bbcf3`, final focused review):
+
+5. Residual active 15-scenario claims closed: the `scripts/bsim-stage1-run.sh`
+   header comment (now 16 scenarios, scenarios 1–9 twice incl.
+   one-CIS-loss, 10–16 once), the `scripts/test-all.sh` BSim header line
+   (canonical 16-scenario T4 matrix, not sink-only), the coverage-matrix
+   weak-test fact 6, and the `src/bt_bap.c` reasons in `tests/test-matrix.json`
+   and `tests/coverage-baseline.json` (reason-string-only baseline edit;
+   population, per-file records, totals, generated commit, tool versions,
+   and schema byte-identical).  Historical 15-scenario handoffs/evidence
+   preserved.
+6. Invalid-version test completion: looped regression proving a present
+   empty-string or non-string integer `gcovr_version` fails with the
+   invalid-version diagnostic (value, expected non-empty string,
+   --write-baseline refresh instruction); runner suite 20 → 21 tests,
+   null test kept.
+
+The `7ab4b39` and `1ee8af7` G1 runs are **superseded** by the final G1 run
+on the exact corrected implementation commit `85bbcf3` below.
 
 ## Commits
 
@@ -38,8 +57,9 @@ run on the exact corrected implementation commit `1ee8af7`.
 | `7ab4b39` | `docs: reconcile active documentation with accepted T8 state (R0)` | original R0 implementation commit (superseded as tested hash by the review fix, still part of history) |
 | `d7b6873` | `docs: record R0 acceptance evidence and results` | original evidence commit (superseded by the review-fix evidence below) |
 | `e462aba` | `fix: reject invalid recorded coverage tool versions` | `scripts/test-coverage.sh` (present-null/non-string/empty recorded version fails baseline mode with refresh instruction; omitted legacy fields stay accepted; valid-string equality unchanged), `tests/unit/test_coverage_runner/test_test_coverage_runner.py` (19 → 20 tests, present-null regression) |
-| `1ee8af7` | `docs: correct BSim matrix count, BZ labels, and 360-frame witnesses (R0 review fix)` | **corrected R0 implementation commit (tested)** — `AGENTS.md`, `README.md`, `STATUS.md`, `docs/design.md`, `docs/development/refactor-r0-handoff.md`, `docs/development/workstation-transfer-status.md`, `docs/testing/coverage-matrix.md` |
-| evidence | `docs: record R0 review-fix acceptance evidence and results` | this updated file; plan R0 remains ACCEPTED |
+| `1ee8af7` | `docs: correct BSim matrix count, BZ labels, and 360-frame witnesses (R0 review fix)` | review-fix round-1 implementation commit (superseded as tested hash by the final review fix, still part of history) |
+| `85bbcf3` | `fix: complete 16-scenario matrix truth and invalid-version coverage (final R0 review fix)` | **corrected R0 implementation commit (tested)** — `scripts/bsim-stage1-run.sh` header, `scripts/test-all.sh` BSim line, `docs/testing/coverage-matrix.md` weak-test fact 6, `tests/test-matrix.json` + `tests/coverage-baseline.json` `src/bt_bap.c` reasons, `tests/unit/test_coverage_runner/test_test_coverage_runner.py` (20 → 21 tests), `docs/development/refactor-r0-results.md` correction record |
+| evidence | `docs: record R0 final review-fix acceptance evidence and results` | this updated file; plan R0 remains ACCEPTED |
 
 Anchors unchanged: exact production code `971e6a4`, coverage baseline
 `1a5842d` (26 files: 3281/3722 lines, 1433/2041 branches, 205/205
@@ -93,7 +113,29 @@ coverage-baseline edit is reason-string-only with every other field
 byte-identical.  The runner suite grows to 21 tests with a looped
 empty/non-string present-version regression.
 
-## G1 — canonical software/build gate on the exact corrected implementation commit `1ee8af7`
+Final focused run (before `85bbcf3`):
+
+```text
+bash -n scripts/test-all.sh                                PASS
+bash -n scripts/test-coverage.sh                           PASS
+bash -n scripts/bsim-stage1-run.sh                         PASS
+python3 tests/unit/test_coverage_runner/test_test_coverage_runner.py
+    Ran 21 tests in ~10.1 s — OK (20 prior + looped empty/non-string
+    present-version regression; null test kept)
+python3 tests/unit/test_matrix/test_check_test_matrix.py
+    Ran 34 tests in ~0.08 s — OK
+python3 scripts/check-test-matrix.py --repo-root "$PWD"    0 error(s), 0 note(s)
+python3 -m json.tool tests/test-matrix.json >/dev/null    OK
+python3 -m json.tool tests/coverage-baseline.json >/dev/null  OK
+git diff --check                                          clean
+targeted grep: no active 15-scenario / sink-only claims in the runner
+header, test-all.sh BSim line, coverage-matrix weak-test fact 6, or the
+bt_bap.c reasons in test-matrix.json / coverage-baseline.json; historical
+15-scenario handoffs/evidence preserved; baseline diff is the single
+bt_bap.c reason string
+```
+
+## G1 — canonical software/build gate on the exact corrected implementation commit `1ee8af7` (superseded)
 
 Run from the repo root in the NCS v3.3.0 dev shell, worktree clean, on
 `thomas-workstation`, 2026-08-04.  Runtimes measured with the bash `time`
@@ -114,10 +156,34 @@ Logs (transient, not repository-retained): `/tmp/r0-rf-g1-testall.log`,
 `/tmp/r0-rf-g1-coverage.log`, `/tmp/r0-rf-g1-build-{5340,54l15,dongle}.log`;
 reports at `/tmp/r0-review-coverage/`.
 
-Superseded original run: the first implementation commit `7ab4b39` passed
-the identical G1 on 2026-08-04 (47 PASS / 0 FAIL / 47 TOTAL in 970.553 s,
-coverage exact in 384.879 s, builds 3/3, contract 76/76) — recorded here as
-superseded by the review-fix run above, which is the accepted evidence.
+**Superseded by the final G1 run on `85bbcf3` below.**
+
+## G1 — canonical software/build gate on the exact final implementation commit `85bbcf3` (accepted evidence)
+
+Run from the repo root in the NCS v3.3.0 dev shell, worktree clean, on
+`thomas-workstation`, 2026-08-04.  Runtimes measured with the bash `time`
+builtin (`TIMEFORMAT='elapsed_real_seconds %R'`; `/usr/bin/time` not
+installed).
+
+| Command | Result | Elapsed (s) |
+|---|---|---|
+| `./scripts/test-all.sh` | **`Gate complete: 47 PASS / 0 FAIL / 47 TOTAL`**, `PASS`, exit 0 | 974.906 |
+| `./scripts/test-coverage.sh --output /tmp/r0-final-coverage --clean-output` | exit 0, 26-file population, baseline enforcement 0 errors | 385.052 |
+| `fw-build-5340` | PASS, exit 0, zero compiler warnings | 19.888 |
+| `fw-build-54l15` | PASS, exit 0, zero compiler warnings | 18.948 |
+| `fw-build-dongle` | PASS, exit 0, zero compiler warnings | 29.099 |
+| `python3 scripts/check-build-contract.py --nrf5340 build/nrf5340 --nrf54l15 build/nrf54l15` | **`76 assertions, 0 failed`**, `BUILD CONTRACT PASSED`, exit 0 | — |
+| `git diff --check` | clean | — |
+
+Logs (transient, not repository-retained): `/tmp/r0-final-g1-testall.log`,
+`/tmp/r0-final-g1-coverage.log`, `/tmp/r0-final-g1-build-{5340,54l15,dongle}.log`;
+reports at `/tmp/r0-final-coverage/`.
+
+The two earlier G1 runs (original `7ab4b39`: 47/47 in 970.553 s, coverage
+exact in 384.879 s; round-1 review fix `1ee8af7`: 47/47 in 971.190 s,
+coverage exact in 385.461 s; builds 3/3 and contract 76/76 each) are
+**superseded** by this final run on `85bbcf3`, which is the accepted
+evidence.
 
 ### Exact 47-child composition
 
@@ -147,7 +213,7 @@ All 47 children PASS, zero FAIL.
 - `baseline enforcement: 0 error(s)`; `baseline enforcement PASS`.
 - Run-manifest records `gcovr_version: gcovr 8.4`,
   `gcov_version: gcov (GCC) 14.3.0` (matching the baseline), source commit
-  `1ee8af7`, `dirty: False` — the version-enforcement checks passed.
+  `85bbcf3`, `dirty: False` — the version-enforcement checks passed.
 - The gate's own coverage child (enforcement against the same committed
   baseline) also PASSed with identical numbers.
 
@@ -197,11 +263,13 @@ one-CIS-loss `0x30D6BAF0`; reconnect second segment equals the fresh mono
   versions in baseline mode (absent fields still accepted, `--write-baseline`
   records, `--report-only` never enforces); 5 new fake-tool runner tests;
   review-fix `e462aba` additionally rejects a present null/non-string/empty
-  recorded version (+1 runner test, 20 total); `test-all.sh` header
-  inventory corrected to 28 twister suites (runtime discovery untouched, no
-  hardcoded 47 check); `test-matrix.json` evidence paths updated
-  (read_acm.py, pre-refactor hardware baseline, dongle smoke removed from
-  hardware acceptance).
+  recorded version (+1 runner test, 20 total); final review-fix `85bbcf3`
+  adds the looped empty/non-string present-version regression (+1 runner
+  test, 21 total); `test-all.sh` header inventory corrected to 28 twister
+  suites and the BSim header line to the canonical 16-scenario T4 matrix
+  (runtime discovery untouched, no hardcoded 47 check); `test-matrix.json`
+  evidence paths updated (read_acm.py, pre-refactor hardware baseline,
+  dongle smoke removed from hardware acceptance).
 - **Documentation**: plan-of-record moved to `refactor-plan.md` (design.md
   historical); T0–T8 marked COMPLETE/ACCEPTED; BZ1–BZ4 rename of the desktop
   BlueZ/WirePlumber track (completed in the review fix in STATUS/design
@@ -213,9 +281,10 @@ one-CIS-loss `0x30D6BAF0`; reconnect second segment equals the fresh mono
   flpr_ring 480 contract, source constant); undefined "prior T9
   failing-hardware provenance" wording replaced with the precise prior
   8–30% RF-loss hardware sessions; G1 coverage command corrected in the
-  plan; review fix corrected the active BSim matrix count to 16 scenarios
-  (first nine twice) and marked the old Stage-1 sink-only scope/hashes
-  historical/superseded.
+  plan; review fixes corrected the active BSim matrix count to 16 scenarios
+  (first nine twice) everywhere incl. the runner/test-all comments and the
+  bt_bap.c manifest/baseline reasons, and marked the old Stage-1
+  sink-only scope/hashes historical/superseded.
 
 ## Deviations and blockers
 
@@ -230,5 +299,5 @@ assertion was regenerated or weakened.
 
 `git diff --check`, the matrix checker, and the coverage-runner / matrix
 Python suites re-run on the evidence commit (G1 was not rerun solely
-because evidence was added — the corrected implementation commit `1ee8af7`
+because evidence was added — the final implementation commit `85bbcf3`
 is the tested exact hash).
