@@ -33,7 +33,6 @@ ZTEST(actuator_apll_nohfclk, test_all_noop_without_hfclkaudio)
 	zassert_equal(audio_clock_actuator_apply_ppm(INT32_MAX), 0, "INT32_MAX no-op");
 	zassert_equal(audio_clock_actuator_apply_ppm(INT32_MIN), 0, "INT32_MIN no-op");
 	zassert_equal(audio_clock_actuator_reset(), 0, "reset no-op");
-	zassert_equal(audio_clock_actuator_consume_sample_adjustment(), 0, "consume no-op");
 
 	zassert_equal(mock_clock_write_count(), 0, "no register writes without HFCLKAUDIO");
 }

@@ -14,8 +14,13 @@
  * post-fault recovery.  stream_start() only sets PREPARING + bumps
  *
  * Accounting:
- *   - submit_count: every valid call (inc PREPARING/RECOVERING/FALLBACK)
- *   - fallback_count: every nonzero valid submit increments exactly once
+ *   - submit_count: valid calls after initialization in a non-STOPPED
+ *     state increment submit; invalid args and STOPPED/uninitialized
+ *     calls count nothing
+ *   - fallback_count: generic counter follows the existing
+ *     lifecycle/fault helpers (record_fault, lifecycle_check_before_fault,
+ *     non-ACTIVE submit); a failed accepted ASRC submit increments the
+ *     ASRC fallback counter once on its terminal fault path
  *   - Invalid args count nothing
  *   - Recovery NEVER clears fault/fallback/RTT evidence
  *   - New stream_start resets per-stream counters
@@ -887,19 +892,6 @@ bool audio_offload_is_healthy(void)
 	return result;
 }
 
-bool audio_offload_is_stopped(void)
-{
-	if (!g_initialized) {
-		return true;
-	}
-
-	k_spinlock_key_t key = k_spin_lock(&g_lock);
-	bool result = (g_state == AUDIO_OFFLOAD_STOPPED);
-	k_spin_unlock(&g_lock, key);
-
-	return result;
-}
-
 void audio_offload_get_status(struct audio_offload_status *status)
 {
 	if (!status) {
@@ -1543,11 +1535,6 @@ void audio_offload_stream_stop(void)
 }
 
 bool audio_offload_is_healthy(void)
-{
-	return true;
-}
-
-bool audio_offload_is_stopped(void)
 {
 	return true;
 }

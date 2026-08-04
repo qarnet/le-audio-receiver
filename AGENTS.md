@@ -481,10 +481,12 @@ The `AUDIO_CLOCK_ACTUATOR` Kconfig choice selects the actuator. Two production o
 - `NONE` — `audio_clock_actuator_none.c`, nRF54L15 production. ASRC consumes
   controller ppm directly (no physical actuator on nRF54L15).
 
-`audio_clock_actuator_consume_sample_adjustment()` returns ±1/0; both APLL and
-NONE return 0 (data-path adjustment is a no-op for clock-steering actuators).
-Historical SAMPLE_ADJUST actuator source retained for regression testing only;
-no longer selectable in production Kconfig.
+The production actuator API is init/apply_ppm/reset only (clock steering,
+no data-path adjustment).  The historical SAMPLE_ADJUST actuator — including
+its retired `audio_clock_actuator_consume_sample_adjustment()` symbol — is
+retained for regression testing only as a test-local copy under
+`tests/unit/actuator_sample_adjust_historical/src/`; no longer selectable in
+production Kconfig.
 
 ### Drift controller: PCLK feedforward + per-block phase PI (Phase 4b.2)
 
@@ -590,9 +592,9 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 | `src/audio_timing_nrf54.c` | nRF54L15 TIMER20-vs-GRTC PCLK frequency measurement |
 | `src/audio_timing_none.c` | nRF5340 no-op timing (no GRTC/TIMER20) |
 | `src/stream_lifecycle.c` | Stream start/stop lifecycle (unit-testable) |
-| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset, consume_sample_adjustment) |
+| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset) |
 | `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator (ppm → register trim) |
-| `src/audio_clock_actuator_sample_adjust.c` | Historical sample insert/drop actuator (regression testing only) |
+| `tests/unit/actuator_sample_adjust_historical/src/audio_clock_actuator_sample_adjust_historical.c` | Historical sample insert/drop actuator, test-local copy (regression testing only) |
 | `src/audio_clock_actuator_none.c` | nRF54L15 no-op actuator (ASRC consumes ppm directly) |
 | `src/audio_asrc.c` | Fixed-point linear stereo ASRC (cpuapp + FLPR fallback) |
 | `src/audio_offload.c` | FLPR offload manager (handshake, IPC, fallback path) |

@@ -167,53 +167,6 @@ static void trigger_fault_no_recover(void)
 				   TEST_ASRC_CAPACITY, &result);
 }
 
-/* ── audio_offload_is_stopped() ────────────────────────────────────
- * T7 Stage 2: this suite is declared before the main audio_offload
- * suite, so it runs first in the binary and can observe the truly
- * uninitialized module state (g_initialized == false). */
-ZTEST_SUITE(audio_offload_isstopped, NULL, NULL, NULL, NULL, NULL);
-
-ZTEST(audio_offload_isstopped, test_is_stopped_true_uninitialized)
-{
-	zassert_true(audio_offload_is_stopped(), "uninitialized offload must report stopped");
-}
-
-ZTEST(audio_offload_isstopped, test_is_stopped_state_sequence)
-{
-	zassert_true(audio_offload_is_stopped(), "pre-init stopped");
-
-	zassert_equal(0, audio_offload_init(), "init");
-	zassert_true(audio_offload_is_stopped(), "initial state is STOPPED");
-
-	audio_offload_stream_start();
-	zassert_false(audio_offload_is_stopped(), "PREPARING is not stopped");
-
-	run_prep_work();
-	zassert_false(audio_offload_is_stopped(), "ACTIVE is not stopped");
-
-	audio_offload_stream_stop();
-	zassert_true(audio_offload_is_stopped(), "STOPPED after stream_stop");
-}
-
-ZTEST(audio_offload_isstopped, test_is_stopped_false_recovering)
-{
-	zassert_equal(0, audio_offload_init(), "init");
-	audio_offload_stream_start();
-	run_prep_work();
-	zassert_false(audio_offload_is_stopped(), "ACTIVE before fault");
-
-	trigger_fault_no_recover();
-	zassert_false(audio_offload_is_stopped(), "RECOVERING is not stopped");
-
-	/* Recover to ACTIVE and stop, so the following suites start from a
-	 * deterministic STOPPED state. */
-	mock_wait_result = 0;
-	run_recovery_work();
-	zassert_false(audio_offload_is_stopped(), "ACTIVE after recovery");
-	audio_offload_stream_stop();
-	zassert_true(audio_offload_is_stopped(), "STOPPED after cleanup");
-}
-
 /* Trigger a fault and run recovery to completion. Returns updated status. */
 static struct audio_offload_status fault_and_recover(void)
 {
@@ -689,6 +642,11 @@ ZTEST(audio_offload, test_fallback_state)
 ZTEST(audio_offload, test_is_healthy)
 {
 	zassert_true(audio_offload_is_healthy(), "healthy after init+start+prep");
+
+	/* NULL status snapshot is a deterministic no-op (R2: keeps the
+	 * surviving get_status null-guard line covered after the
+	 * is_stopped() deletion). */
+	audio_offload_get_status(NULL);
 
 	trigger_fault_no_recover();
 	zassert_false(audio_offload_is_healthy(), "not healthy after fault");

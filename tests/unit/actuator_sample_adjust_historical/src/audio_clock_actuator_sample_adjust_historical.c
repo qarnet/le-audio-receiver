@@ -2,13 +2,21 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * Sample-insert/drop actuator for platforms without a steerable audio
- * clock (nRF54L15). Integrates the controller's ppm output in a
- * fixed-point accumulator; when |acc| crosses 1 sample, stages a ±1
- * adjustment consumed by audio_i2s before queuing each block.
+ * HISTORICAL / RETIRED sample-insert/drop actuator.
+ *
+ * Retired sample insert/drop actuator retained for regression
+ * comparison only.  It is NOT a production actuator: production clock
+ * steering is audio_clock_actuator_apll.c (nRF5340) and
+ * audio_clock_actuator_none.c (nRF54L15).  This file lives under the
+ * historical test suite (tests/unit/actuator_sample_adjust_historical)
+ * and is not selectable in production Kconfig.
+ *
+ * It integrates the controller's ppm output in a fixed-point
+ * accumulator; when |acc| crosses 1 sample, stages a ±1 adjustment
+ * consumed by the historical consume_sample_adjustment().
  */
 
-#include "audio_clock_actuator.h"
+#include "audio_clock_actuator_sample_adjust_historical.h"
 
 #include <zephyr/sys/util.h>
 

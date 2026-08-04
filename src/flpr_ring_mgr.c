@@ -450,12 +450,6 @@ int flpr_ring_mgr_init(void)
 	return 0;
 }
 
-void flpr_ring_mgr_set_consume_cb(flpr_ring_consume_cb_t cb, void *user_data)
-{
-	(void)cb;
-	(void)user_data;
-}
-
 int flpr_ring_mgr_coordinated_reset(uint32_t new_epoch, uint32_t timeout_ms)
 {
 	struct flpr_status hs;
@@ -1691,8 +1685,7 @@ void flpr_ring_mgr_test_reset_state(void)
 
 /* ── R1 test hooks ─────────────────────────────────────────────── */
 
-void flpr_ring_mgr_test_arm_pause_after_produce_begin(struct k_sem *entered,
-						       struct k_sem *release)
+void flpr_ring_mgr_test_arm_pause_after_produce_begin(struct k_sem *entered, struct k_sem *release)
 {
 	pause_armed = (entered != NULL && release != NULL);
 	pause_entered = entered;

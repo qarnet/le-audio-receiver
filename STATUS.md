@@ -631,8 +631,8 @@ gate evidence below).
   must never be lowered.
 - **Zero zero-hit production functions** — every compiled production
   function executes at least once (checker `--coverage-json` reports zero
-  errors).  Stage 2 closed the real gaps with behavior tests:
-  `audio_offload_is_stopped()` state coverage; the nine FLPR shell handlers
+  errors).  Stage 2 closed the real gaps with behavior tests: the nine FLPR
+  shell handlers
   (`stress`, `ring test/reset/init`, producer stall, `stall_flpr`,
   `stall_flpr_ms`, `ring acceptance` early paths, `hang`) through real
   `shell_execute_cmd` dispatch; `flpr_ring_mgr_test_run`/`test_run_rate`

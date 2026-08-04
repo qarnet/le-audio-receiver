@@ -157,11 +157,6 @@
           "api": "audio_clock_actuator_reset",
           "outcome": "void",
           "witness": "test_reset_writes_center"
-        },
-        {
-          "api": "audio_clock_actuator_consume_sample_adjustment",
-          "outcome": "0",
-          "witness": "test_repeated_calls_and_consume"
         }
       ],
       "state_transitions": [
@@ -198,50 +193,12 @@
           "api": "audio_clock_actuator_reset",
           "outcome": "void",
           "witness": "test_all_returns_zero"
-        },
-        {
-          "api": "audio_clock_actuator_consume_sample_adjustment",
-          "outcome": "0",
-          "witness": "test_all_returns_zero"
         }
       ],
       "state_transitions": [],
       "function_exclusions": [],
       "hardware_acceptance": [],
       "stateful": false
-    },
-    {
-      "source": "src/audio_clock_actuator_sample_adjust.c",
-      "classification": "historical-retired",
-      "suites": [
-        {
-          "name": "actuator_sample_adjust_historical",
-          "evidence": "historical"
-        }
-      ],
-      "public_outcomes": [
-        {
-          "api": "audio_clock_actuator_apply_ppm",
-          "outcome": "0",
-          "witness": "test_zero_ppm_no_adjustment"
-        },
-        {
-          "api": "audio_clock_actuator_reset",
-          "outcome": "void",
-          "witness": "test_reset_clears_state"
-        }
-      ],
-      "state_transitions": [
-        {
-          "transition": "pending->cleared",
-          "witness": "test_consume_clears_pending"
-        }
-      ],
-      "function_exclusions": [],
-      "hardware_acceptance": [],
-      "stateful": true,
-      "reason": "retired non-production sample insert/drop actuator retained for regression comparison only (coverage-matrix.md weak-test fact 1)",
-      "excluded_from_numeric": true
     },
     {
       "source": "src/audio_decode.c",
@@ -641,16 +598,6 @@
           "witness": "test_fallback_state"
         },
         {
-          "api": "audio_offload_is_stopped",
-          "outcome": "true",
-          "witness": "test_is_stopped_true_uninitialized"
-        },
-        {
-          "api": "audio_offload_is_stopped",
-          "outcome": "false",
-          "witness": "test_is_stopped_false_recovering"
-        },
-        {
           "api": "audio_offload_stream_start",
           "outcome": "void",
           "witness": "test_new_stream_resets_counters"
@@ -794,11 +741,6 @@
           "api": "audio_rate_converter_init",
           "outcome": "void",
           "witness": "test_reinit_resets"
-        },
-        {
-          "api": "audio_rate_converter_nearest_stereo",
-          "outcome": "void",
-          "witness": "test_nearest_stereo_lr_pairing"
         },
         {
           "api": "audio_rate_converter_next_frames",
@@ -1527,11 +1469,6 @@
           "api": "flpr_ring_mgr_reset",
           "outcome": "0",
           "witness": "test_reset_ack_exact_match"
-        },
-        {
-          "api": "flpr_ring_mgr_set_consume_cb",
-          "outcome": "void",
-          "witness": "test_set_consume_cb_noop"
         },
         {
           "api": "flpr_ring_mgr_stall_producer",

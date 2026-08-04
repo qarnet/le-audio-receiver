@@ -241,10 +241,10 @@ before reflashing — `west flash` does not erase the settings partition.
 | `src/audio_timing_nrf54.c` | nRF54L15 TIMER20-vs-GRTC PCLK measurement |
 | `src/audio_timing_none.c` | nRF5340 no-op timing (no GRTC/TIMER20) |
 | `src/stream_lifecycle.c` | Stream start/stop lifecycle (unit-testable) |
-| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset, consume_sample_adjustment) |
+| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset) |
 | `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator |
 | `src/audio_clock_actuator_none.c` | nRF54L15 no-op actuator (ASRC consumes ppm directly) |
-| `src/audio_clock_actuator_sample_adjust.c` | Historical sample insert/drop (regression testing only) |
+| `tests/unit/actuator_sample_adjust_historical/src/audio_clock_actuator_sample_adjust_historical.c` | Historical sample insert/drop (regression testing only, test-local copy) |
 | `src/flpr/` | FLPR firmware (RISC-V VPR): ASRC offload, ICMsg/VEVIF IPC |
 | `src/flpr_handshake.{c,h}` | cpuapp↔FLPR boot handshake + VEVIF signalling |
 | `src/flpr_protocol.h` | Shared protocol constants (ring layout, commands) |

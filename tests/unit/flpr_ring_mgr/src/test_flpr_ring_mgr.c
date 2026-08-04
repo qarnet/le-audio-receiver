@@ -723,13 +723,6 @@ ZTEST(flpr_ring_mgr, test_payload_mismatch_accounting)
 	zassert_equal(st.test_crc_errors, 0, "CRC still valid (corrupted after crc)");
 }
 
-ZTEST(flpr_ring_mgr, test_set_consume_cb_noop)
-{
-	/* Documented no-op (refactor-review candidate); must be safe. */
-	flpr_ring_mgr_set_consume_cb(NULL, NULL);
-	flpr_ring_mgr_set_consume_cb((flpr_ring_consume_cb_t)1, (void *)0x1);
-}
-
 /* ── Typed ASRC ──────────────────────────────────────────────────── */
 
 ZTEST(flpr_ring_mgr, test_produce_asrc_invalid_args)

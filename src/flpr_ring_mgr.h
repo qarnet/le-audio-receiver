@@ -119,13 +119,6 @@ struct flpr_ring_status {
 };
 
 /**
- * @brief Callback type for ring consumer notifications.
- * CPUAPP registers this; called from IPC context when FLPR sends
- * FLPR_MSG_RING_CONSUMER (output ring has data).
- */
-typedef void (*flpr_ring_consume_cb_t)(void *user_data);
-
-/**
  * @brief Initialize PCM rings in shared memory.
  *
  * Resolves ring addresses from devicetree, does BUILD_ASSERT for size
@@ -138,12 +131,6 @@ typedef void (*flpr_ring_consume_cb_t)(void *user_data);
  * @return 0 on success, -ENODEV if DT node missing/device not ready.
  */
 int flpr_ring_mgr_init(void);
-
-/**
- * @brief Register callback for output-ring data availability.
- * Called from IPC context when FLPR publishes output data.
- */
-void flpr_ring_mgr_set_consume_cb(flpr_ring_consume_cb_t cb, void *user_data);
 
 /**
  * @brief Coordinated two-phase reset: CPUAPP proposes epoch to FLPR

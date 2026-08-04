@@ -536,8 +536,8 @@ clamps to `[APLL_MIN, APLL_MAX]` — all in `int64_t` — before narrowing to th
 `uint16_t` register value, so `INT32_MIN..INT32_MAX` inputs are defined.
 `tests/unit/actuator_apll` (8 tests) pins init/reset center writes, exact
 positive/negative conversions, ±1..±3 near-zero truncation, exact MIN/MAX
-values, beyond-rail and int32-extreme clamps, repeated calls, and
-`consume_sample_adjustment() == 0`; the no-HFCLKAUDIO variant compiles the
+values, beyond-rail and int32-extreme clamps, and repeated calls; the
+no-HFCLKAUDIO variant compiles the
 same production file with `NRF_CLOCK_HAS_HFCLKAUDIO=0` and proves all no-op
 returns with zero register writes.  `tests/unit/actuator_none` compiles the
 production NONE actuator and pins all-zero returns.  The retired

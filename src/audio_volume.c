@@ -19,10 +19,6 @@ LOG_MODULE_REGISTER(audio_volume, LOG_LEVEL_INF);
 #define VOL_UNPACK_VOL(v)   ((uint8_t)((v) & 0xFFU))
 #define VOL_UNPACK_MUTE(v)  ((uint8_t)(((v) >> 8) & 0x1U))
 
-#define DEFAULT_VOL                                                                                \
-	IS_ENABLED(CONFIG_BT_AUDIO_VOL_DEFAULT)                                                    \
-	? CONFIG_BT_AUDIO_VOL_DEFAULT : 195
-
 static atomic_t vol_state = ATOMIC_INIT(VOL_PACK(195, 0));
 
 #if defined(CONFIG_BT_VCP_VOL_REND)

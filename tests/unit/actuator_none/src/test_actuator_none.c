@@ -26,6 +26,4 @@ ZTEST(actuator_none, test_all_returns_zero)
 	zassert_equal(audio_clock_actuator_apply_ppm(INT32_MAX), 0, "INT32_MAX ppm");
 	zassert_equal(audio_clock_actuator_apply_ppm(INT32_MIN), 0, "INT32_MIN ppm");
 	zassert_equal(audio_clock_actuator_reset(), 0, "reset");
-	zassert_equal(audio_clock_actuator_consume_sample_adjustment(), 0, "consume");
-	zassert_equal(audio_clock_actuator_consume_sample_adjustment(), 0, "consume again");
 }

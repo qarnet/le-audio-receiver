@@ -105,9 +105,9 @@ ZTEST(actuator_apll, test_beyond_rails_clamped)
 	zassert_equal(mock_clock_write_at(3), AUDIO_DRIFT_APLL_MIN, "INT32_MIN clamps to MIN");
 }
 
-/* ── repeated calls and consume_sample_adjustment ────────────────── */
+/* ── repeated calls ──────────────────────────────────────────────── */
 
-ZTEST(actuator_apll, test_repeated_calls_and_consume)
+ZTEST(actuator_apll, test_repeated_calls)
 {
 	for (int i = 0; i < 3; i++) {
 		zassert_equal(audio_clock_actuator_apply_ppm(33), 0, "apply %d", i);
@@ -116,10 +116,4 @@ ZTEST(actuator_apll, test_repeated_calls_and_consume)
 	for (int i = 0; i < 3; i++) {
 		zassert_equal(mock_clock_write_at(i), AUDIO_DRIFT_APLL_CENTER + 10, "write %d", i);
 	}
-
-	/* The APLL actuator steers the clock; the data path never
-	 * consumes a sample adjustment. */
-	zassert_equal(audio_clock_actuator_consume_sample_adjustment(), 0, "consume 0");
-	zassert_equal(audio_clock_actuator_consume_sample_adjustment(), 0, "consume 0 again");
-	zassert_equal(mock_clock_write_count(), 3, "consume writes nothing");
 }

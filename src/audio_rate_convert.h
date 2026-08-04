@@ -41,18 +41,4 @@ void audio_rate_converter_init(struct audio_rate_converter *ctx, uint32_t input_
  */
 size_t audio_rate_converter_next_frames(struct audio_rate_converter *ctx, size_t input_frames);
 
-/**
- * @brief Nearest-neighbor stereo resampling.
- *
- * Maps output stereo pairs to the nearest input stereo pairs, preserving
- * L/R interleaving. Uses integer Bresenham rounding.
- *
- * @param input         Interleaved stereo input [L,R,L,R,…].
- * @param input_frames  Number of input stereo frame pairs.
- * @param output        Output buffer, interleaved stereo.
- * @param output_frames Number of output stereo frame pairs.
- */
-void audio_rate_converter_nearest_stereo(const int16_t *input, size_t input_frames, int16_t *output,
-					 size_t output_frames);
-
 #endif /* AUDIO_RATE_CONVERT_H */

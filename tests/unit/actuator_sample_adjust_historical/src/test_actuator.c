@@ -4,17 +4,17 @@
  *
  * HISTORICAL / RETIRED actuator tests.
  *
- * These tests exercise audio_clock_actuator_sample_adjust.c, the
- * retired sample insert/drop actuator retained for regression
- * comparison only.  It is NOT a production actuator: production clock
- * steering is audio_clock_actuator_apll.c (nRF5340) and
- * audio_clock_actuator_none.c (nRF54L15), tested in
+ * These tests exercise audio_clock_actuator_sample_adjust_historical.c
+ * (test-local copy of the retired sample insert/drop actuator, retained
+ * for regression comparison only).  It is NOT a production actuator:
+ * production clock steering is audio_clock_actuator_apll.c (nRF5340)
+ * and audio_clock_actuator_none.c (nRF54L15), tested in
  * tests/unit/actuator_apll and tests/unit/actuator_none.  This suite
  * stays to preserve the historical behavior contract.
  */
 
 #include <zephyr/ztest.h>
-#include "audio_clock_actuator.h"
+#include "audio_clock_actuator_sample_adjust_historical.h"
 
 static void reset_before_each(void *unused)
 {
