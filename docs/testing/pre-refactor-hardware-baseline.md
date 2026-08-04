@@ -358,15 +358,25 @@ BSim Stage 1.
   production builds — recorded in the committed coverage matrix at
   `3c29421` ("The T8-follow-up canonical gate on `1a5842d` is 47 PASS /
   0 FAIL / 47 TOTAL (28 twister suites including the new `iso_seq`, 4 exec
-  suites, 12 python suites, coverage, matrix, BSim Stage 1)").  The full
-  final run's log and elapsed runtime were **not retained** — the exact
-  elapsed runtime of the 47-child run is **unavailable**; the closest
-  retained full-gate log is `/tmp/opencode/gate1.log`: `Gate complete: 46
-  PASS / 0 FAIL / 46 TOTAL` on `ac1fa06` (2026-08-03 23:36, 46 children
-  before the `iso_seq` twister suite; no elapsed line in the retained
-  tail).  Earlier retained gate logs: `/tmp/t8/gate-final-c056936.log`
-  (44/44 on `c056936`), `/tmp/t8/gate-final-1d90873.log` and `-b.log`
-  (42/42 on `1d90873`) — historical.
+   suites, 12 python suites, coverage, matrix, BSim Stage 1)").  The
+   current authoritative state of the 47-child gate is the exact re-run
+   below: **47 PASS / 0 FAIL / 47 TOTAL**, exit 0, **1016.45 s**, transient
+   log `/tmp/t8-final-47.log` (see the review-fix paragraph that follows).
+
+**Historical `5ceb719` first-closeout evidence gap — superseded.**  The
+   original closeout at `5ceb719` recorded that the full final run's log
+   and elapsed runtime were **not retained** and that the exact elapsed
+   runtime of the 47-child run was **unavailable**.  That claim is
+   **superseded** by the exact 47/47 re-run below (2026-08-04, clean
+   checkout of the current branch at `5ceb719` with production tree
+   identical to the exact accepted `971e6a4`); it is kept here only as
+   historical record of the first-closeout evidence gap.  The
+   pre-re-run retained gate logs remain historical context only:
+   `/tmp/opencode/gate1.log` (`Gate complete: 46 PASS / 0 FAIL / 46 TOTAL`
+   on `ac1fa06`, 2026-08-03 23:36, 46 children before the `iso_seq`
+   twister suite; no elapsed line in the retained tail),
+   `/tmp/t8/gate-final-c056936.log` (44/44 on `c056936`),
+   `/tmp/t8/gate-final-1d90873.log` and `-b.log` (42/42 on `1d90873`).
 
 **Review-fix: the exact final 47-child gate was re-run and the evidence is
 now retained (2026-08-04).**  From a clean checkout of the current branch

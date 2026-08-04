@@ -53,17 +53,27 @@ Defense in depth (host-level):
   `BT_SECURITY_ERR_PAIR_NOT_ALLOWED`.  The callback issues no HCI commands —
   pure policy (`src/bt_bap.c` pairing-policy integration).
 
-Production pairing reset API (used by the shell and available to any future
-caller):
+Public production pairing reset API (used by the shell and available to any
+future caller):
 
-- `bt_pairing_policy_request_open()` — desired state to OPEN, snapshot
-  cleared.
+- `bt_bap_pairing_reset()` — declared in `src/bt_bap.h`; the public
+  production reset: clear all persisted bonds, disconnect the current peer,
+  and return the receiver to open pairing mode.  Safe from
+  shell/work/thread context; on success the receiver advertises in OPEN
+  mode — immediately when no connection is active, otherwise on the
+  advertising restart that follows the disconnect (`src/bt_bap.c` pairing
+  reset path).
+- The policy helper `bt_pairing_policy_request_open()` (desired state to
+  OPEN, snapshot cleared) is an **internal component** of the
+  `src/bt_pairing_policy.{c,h}` module — it is called by
+  `bt_bap_pairing_reset()`, not by the shell.  Do not call it directly from
+  new code.
 - Shell command `bt unpair` (`src/audio_shell.c` `cmd_bt_unpair`) prints
   `Pairing mode reset: bonds cleared; open pairing enabled.` and runs the
-  production reset: clear all persisted bonds (`bt_unpair(BT_ID_DEFAULT,
-  BT_ADDR_LE_ANY)` — also disconnects any active link), set OPEN mode, and
-  restart advertising so the FAL is cleared and fresh pairing is possible
-  (`src/bt_bap.c` pairing reset path).
+  production reset via `bt_bap_pairing_reset()`: clear all persisted bonds
+  (`bt_unpair(BT_ID_DEFAULT, BT_ADDR_LE_ANY)` — also disconnects any active
+  link), set OPEN mode, and restart advertising so the FAL is cleared and
+  fresh pairing is possible.
 - `a40f75e` snapshots the policy state and serializes the reset under the
   advertising lock; `19bec75` defers the pairing-reset restart while a link
   is tearing down so the restart cannot race the disconnect.
@@ -104,10 +114,12 @@ receiver reset.
 
 ## Future physical button — GPIO deferred, no pin assigned
 
-A future physical pairing-reset button is planned to call the **same
-production reset API** already implemented here (the
-`bt_pairing_policy_request_open()` / `bt unpair` reset path above), so no
-new reset logic would be needed.  The button's GPIO wiring is **deferred**
+A future physical pairing-reset button is planned to call the **public
+production pairing reset API** `bt_bap_pairing_reset()` from `src/bt_bap.h`
+— the same entry point the `bt unpair` shell command uses — **NOT** the
+internal `bt_pairing_policy_request_open()` helper (an internal component of
+`src/bt_pairing_policy.{c,h}`), so no new reset logic would be needed.  The
+button's GPIO wiring is **deferred**
 and deliberately **not** specified in this document: no pin, no port, no
 GPIO configuration, and no devicetree overlay are assigned or documented
 here.  Do not invent one.  When the button is implemented, the wiring must
