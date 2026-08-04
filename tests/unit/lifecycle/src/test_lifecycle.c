@@ -505,6 +505,40 @@ ZTEST(lifecycle, test_idle_force_close_does_not_latch_future_configure)
 	zassert_false(stream_lifecycle_audio_path_is_open(), "gate stays closed");
 }
 
+/* ── R1 repair: idle force close clears a STALE latch ────────────────
+ * A force-close latch set while a slot was configured must not survive
+ * configuration being cleared through stream_lifecycle_sink_configured(
+ * idx, 0) (the release() path is not the only way slots disappear).
+ * With the set cleared, an idle force-close reassigns the latch from the
+ * current configured-set truth (false), so a later configure/start can
+ * open. */
+
+ZTEST(lifecycle, test_idle_force_close_clears_stale_latch)
+{
+	stream_lifecycle_reset();
+
+	/* Configure/start opens, then force close latches the set. */
+	stream_lifecycle_sink_configured(0, 2);
+	zassert_true(stream_lifecycle_sink_started(0), "start opens gate");
+	zassert_true(stream_lifecycle_force_close(), "force close latches the set");
+	zassert_false(stream_lifecycle_sink_started(0), "later start stays closed");
+
+	/* Configure the same slot with zero: no configured slots remain,
+	 * but the latch is still true (stale — release() never ran). */
+	stream_lifecycle_sink_configured(0, 0);
+
+	/* An idle force close must clear the stale latch (force_closed =
+	 * any_configured = false) rather than preserving it. */
+	zassert_false(stream_lifecycle_force_close(),
+		      "idle force close reports already-closed gate");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "gate stays closed");
+
+	/* A fresh configure/start must now open. */
+	stream_lifecycle_sink_configured(0, 2);
+	zassert_true(stream_lifecycle_sink_started(0), "configure/start opens after stale latch");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate open");
+}
+
 /* ── Suite entry ─────────────────────────────────────────────────── */
 
 ZTEST_SUITE(lifecycle, NULL, NULL, NULL, NULL, NULL);

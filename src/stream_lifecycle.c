@@ -123,9 +123,12 @@ bool stream_lifecycle_force_close(void)
 	 *
 	 * Repair: with NO slot configured there is no lifecycle to latch —
 	 * a future first configure/start must be able to open normally, so
-	 * the force latch is only set when at least one slot is currently
-	 * configured.  stream_lifecycle_reset() and releasing the last
-	 * configured slot remain the release boundaries for a latched set. */
+	 * the force latch is assigned from the current configured-set
+	 * truth (force_closed = any_configured): a stale true latch that
+	 * survives configuration clearing through
+	 * stream_lifecycle_sink_configured(idx, 0) is also cleared here.
+	 * stream_lifecycle_reset() and releasing the last configured slot
+	 * remain the other release boundaries for a latched set. */
 	bool was_open = audio_path_open;
 
 	audio_path_open = false;
@@ -138,9 +141,7 @@ bool stream_lifecycle_force_close(void)
 			break;
 		}
 	}
-	if (any_configured) {
-		force_closed = true;
-	}
+	force_closed = any_configured;
 	return was_open;
 }
 

@@ -1277,6 +1277,17 @@ static K_SEM_DEFINE(rm_pause_entered, 0, 1);
 static K_SEM_DEFINE(rm_pause_release, 0, 1);
 static int rm_result;
 
+/* R1 repair: dedicated per-worker completion semaphores + result slots
+ * for the two-worker barrier tests.  Each worker publishes its own result
+ * and gives its OWN completion semaphore; the test reads a worker's
+ * result only after a bounded take on that worker's semaphore (no plain
+ * cross-thread flags, no sleep-based "has it returned" polling, no shared
+ * result slot). */
+static K_SEM_DEFINE(rm_prod_done_sem, 0, 1);
+static K_SEM_DEFINE(rm_worker2_done_sem, 0, 1);
+static int rm_prod_result;
+static int rm_worker2_result;
+
 static void rm_reset_worker(void *arg_p, void *u1, void *u2)
 {
 	(void)u1;
@@ -1290,20 +1301,17 @@ static void rm_produce_worker(void *arg_p, void *u1, void *u2)
 	(void)arg_p;
 	(void)u1;
 	(void)u2;
-	rm_result = flpr_ring_mgr_produce_block(NULL, 480, 1, 0, false);
-	k_sem_give(&rm_done_sem);
+	rm_prod_result = flpr_ring_mgr_produce_block(NULL, 480, 1, 0, false);
+	k_sem_give(&rm_prod_done_sem);
 }
-
-static bool rm_worker2_returned;
 
 static void rm_local_reset_worker(void *arg_p, void *u1, void *u2)
 {
 	(void)arg_p;
 	(void)u1;
 	(void)u2;
-	rm_result = flpr_ring_mgr_reset(43);
-	rm_worker2_returned = true;
-	k_sem_give(&rm_done_sem);
+	rm_worker2_result = flpr_ring_mgr_reset(43);
+	k_sem_give(&rm_worker2_done_sem);
 }
 
 static bool rm_wait_until(bool (*cond)(void *), void *arg, uint32_t timeout_ms)
@@ -1437,43 +1445,49 @@ ZTEST(flpr_ring_mgr, test_produce_epoch_zero_invalid_before_slot_mutation)
 /* Barrier: a producer paused after produce begin holds ring_data_lock;
  * the reset thread must not return or mutate epoch/header until the
  * producer releases.  After release the reset completes with the exact
- * new epoch and empty rings — no corruption or deadlock. */
+ * new epoch and empty rings — no corruption or deadlock.
+ *
+ * R1 repair: worker completion is proven with dedicated per-worker
+ * semaphores — while the producer holds the data lock, a bounded take on
+ * the reset worker's completion semaphore times out; after release the
+ * bounded take succeeds, and the result is read only after that take. */
 ZTEST(flpr_ring_mgr, test_reset_barrier_waits_for_produce_hold)
 {
 	rm_init_and_reset(42);
-	rm_worker2_returned = false;
 	k_sem_reset(&rm_pause_entered);
 	k_sem_reset(&rm_pause_release);
 
 	flpr_ring_mgr_test_arm_pause_after_produce_begin(&rm_pause_entered, &rm_pause_release);
 
-	k_sem_reset(&rm_done_sem);
+	k_sem_reset(&rm_prod_done_sem);
+	k_sem_reset(&rm_worker2_done_sem);
 	k_thread_create(&rm_thread, rm_stack, K_THREAD_STACK_SIZEOF(rm_stack), rm_produce_worker,
 			NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
 	zassert_true(k_sem_take(&rm_pause_entered, K_MSEC(5000)) == 0,
 		     "producer paused after produce begin");
 
-	/* Reset thread: must not return or mutate epoch/header until the
-	 * producer releases the data lock.  The ring header is read
-	 * directly (no ring_data_lock — the paused producer owns it; the
-	 * producer has not mutated anything yet and reset cannot run). */
+	/* Reset thread: must not complete (return/mutate epoch/header)
+	 * until the producer releases the data lock.  The ring header is
+	 * read directly (no ring_data_lock — the paused producer owns it;
+	 * the producer has not mutated anything yet and reset cannot run).
+	 * The bounded take on the reset worker's completion semaphore must
+	 * time out while the producer is paused. */
 	k_thread_create(&rm_thread_b, rm_stack_b, K_THREAD_STACK_SIZEOF(rm_stack_b),
-			rm_local_reset_worker, NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0,
-			K_NO_WAIT);
-	k_sleep(K_MSEC(100));
-
-	zassert_false(rm_worker2_returned, "reset blocked on ring_data_lock");
+			rm_local_reset_worker, NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
+	zassert_equal(k_sem_take(&rm_worker2_done_sem, K_MSEC(100)), -EAGAIN,
+		      "reset blocked on ring_data_lock");
 	zassert_equal(flpr_ring_epoch(flpr_ring_mgr_test_input_ring()), 42,
 		      "ring epoch not mutated before release");
 	zassert_equal(flpr_ring_producer(flpr_ring_mgr_test_input_ring()), 0,
 		      "producer index not advanced before release");
 
-	/* Release: producer exits, reset completes. */
+	/* Release: producer exits, reset completes.  Results are read only
+	 * after each worker's own completion take. */
 	k_sem_give(&rm_pause_release);
-	zassert_true(k_sem_take(&rm_done_sem, K_MSEC(5000)) == 0, "producer joined");
-	zassert_true(k_sem_take(&rm_done_sem, K_MSEC(5000)) == 0, "reset joined");
-	zassert_ok(rm_result, "producer returned OK");
-	zassert_true(rm_worker2_returned, "reset completed after release");
+	zassert_true(k_sem_take(&rm_prod_done_sem, K_MSEC(5000)) == 0, "producer joined");
+	zassert_ok(rm_prod_result, "producer returned OK");
+	zassert_true(k_sem_take(&rm_worker2_done_sem, K_MSEC(5000)) == 0, "reset joined");
+	zassert_ok(rm_worker2_result, "reset completed after release");
 
 	struct flpr_ring_status st;
 	flpr_ring_mgr_get_status(&st);
@@ -1488,50 +1502,52 @@ ZTEST(flpr_ring_mgr, test_reset_barrier_waits_for_produce_hold)
  * The producer holds ring_data_lock after produce begin; a concurrent
  * repeated init must block on the same lock (never reinitialize the live
  * rings underneath the producer) and, after the producer releases, both
- * finish with the produced data and epoch intact. */
-
-static int rm_init_result;
+ * finish with the produced data and epoch intact.  Completion is proven
+ * with the dedicated per-worker semaphores (same repair as the reset
+ * barrier test): the bounded take on the init worker's completion
+ * semaphore times out while the producer is paused and succeeds after
+ * release; the init result is read only after that take. */
 
 static void rm_init_worker(void *arg_p, void *u1, void *u2)
 {
 	(void)arg_p;
 	(void)u1;
 	(void)u2;
-	rm_init_result = flpr_ring_mgr_init();
-	rm_worker2_returned = true;
-	k_sem_give(&rm_done_sem);
+	rm_worker2_result = flpr_ring_mgr_init();
+	k_sem_give(&rm_worker2_done_sem);
 }
 
 ZTEST(flpr_ring_mgr, test_repeated_init_blocks_on_paused_produce)
 {
 	rm_init_and_reset(42);
-	rm_worker2_returned = false;
 	k_sem_reset(&rm_pause_entered);
 	k_sem_reset(&rm_pause_release);
 
 	flpr_ring_mgr_test_arm_pause_after_produce_begin(&rm_pause_entered, &rm_pause_release);
 
-	k_sem_reset(&rm_done_sem);
+	k_sem_reset(&rm_prod_done_sem);
+	k_sem_reset(&rm_worker2_done_sem);
 	k_thread_create(&rm_thread, rm_stack, K_THREAD_STACK_SIZEOF(rm_stack), rm_produce_worker,
 			NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
 	zassert_true(k_sem_take(&rm_pause_entered, K_MSEC(5000)) == 0,
 		     "producer paused after produce begin");
 
 	/* Repeated init in a worker: must not complete while the producer
-	 * holds ring_data_lock. */
+	 * holds ring_data_lock — the bounded take on its completion
+	 * semaphore times out. */
 	k_thread_create(&rm_thread_b, rm_stack_b, K_THREAD_STACK_SIZEOF(rm_stack_b), rm_init_worker,
 			NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
-	k_sleep(K_MSEC(100));
-	zassert_false(rm_worker2_returned, "repeated init blocked on ring_data_lock");
+	zassert_equal(k_sem_take(&rm_worker2_done_sem, K_MSEC(100)), -EAGAIN,
+		      "repeated init blocked on ring_data_lock");
 
 	/* Release the producer: both finish; the produced data/epoch
-	 * survive the no-op re-init. */
+	 * survive the no-op re-init.  Results read only after each
+	 * worker's own completion take. */
 	k_sem_give(&rm_pause_release);
-	zassert_true(k_sem_take(&rm_done_sem, K_MSEC(5000)) == 0, "producer joined");
-	zassert_true(k_sem_take(&rm_done_sem, K_MSEC(5000)) == 0, "init joined");
-	zassert_ok(rm_result, "producer returned OK");
-	zassert_ok(rm_init_result, "repeated init returned 0");
-	zassert_true(rm_worker2_returned, "init completed after producer release");
+	zassert_true(k_sem_take(&rm_prod_done_sem, K_MSEC(5000)) == 0, "producer joined");
+	zassert_ok(rm_prod_result, "producer returned OK");
+	zassert_true(k_sem_take(&rm_worker2_done_sem, K_MSEC(5000)) == 0, "init joined");
+	zassert_ok(rm_worker2_result, "repeated init returned 0");
 
 	struct flpr_ring_status st;
 	flpr_ring_mgr_get_status(&st);

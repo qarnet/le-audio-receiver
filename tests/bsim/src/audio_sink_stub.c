@@ -234,8 +234,25 @@ void audio_sink_set_input_frames(uint16_t frames)
 
 int audio_sink_push(const int16_t *data, size_t sample_count)
 {
+	/* Public-boundary order mirrors production audio_sink_push():
+	 * malformed-input validation first (-EINVAL precedence over closed
+	 * admission), then the exact configured sample-count validation
+	 * (malformed BSim traffic still FAILs the oracle), then closed
+	 * admission (-EBUSY, non-destructive), then the scenario-goal fast
+	 * path, then push-after-stop accounting. */
+	if (!data || sample_count == 0 || (sample_count & 1U)) {
+		return -EINVAL;
+	}
+
+	if (sample_count != (size_t)required_samples) {
+		cur()->malformed_samples++;
+		FAIL("le_audio_receiver: malformed sample count — expected %u got %zu push#%u\n",
+		     required_samples, sample_count, (unsigned int)cur()->pushes);
+		return -EINVAL;
+	}
+
 	/* R1 repair: closed admission is checked BEFORE the scenario-goal
-	 * fast path.  A closed valid push returns -EBUSY non-destructively
+	 * fast path.  A valid closed push returns -EBUSY non-destructively
 	 * even after the scenario goal was reached (the goal check must
 	 * not paper over a closed admission).  When admission remains
 	 * open, post-goal pushes may retain the existing ignored-success
@@ -257,13 +274,6 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 		FAIL("le_audio_receiver: push after stop — sample_count=%zu push#%u\n",
 		     sample_count, (unsigned int)segments[current_seg].pushes);
 		return -EIO;
-	}
-
-	if (sample_count != (size_t)required_samples) {
-		cur()->malformed_samples++;
-		FAIL("le_audio_receiver: malformed sample count — expected %u got %zu push#%u\n",
-		     required_samples, sample_count, (unsigned int)cur()->pushes);
-		return -EINVAL;
 	}
 
 	/* Per-channel energy. */
