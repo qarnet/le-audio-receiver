@@ -3,11 +3,19 @@
 Status: **ACCEPTED (2026-08-04)** — executed and closed; this document is
 the historical execution handoff.  Acceptance record, final hardware
 matrix, final software gate (47 PASS / 0 FAIL / 47 TOTAL on the exact final
-code `971e6a4`, coverage-baseline `1a5842d`, final docs `3c29421`), and the
-sequence-gap evidence limitation are in
+code `971e6a4`, coverage-baseline `1a5842d`, coverage docs `3c29421`), and
+the sequence-gap evidence limitation are in
 `docs/testing/pre-refactor-hardware-baseline.md`, `STATUS.md`,
 `docs/development/pre-refactor-testing-plan.md` (Phase T8 row), and
-`docs/development/workstation-transfer-status.md`.  Original execution
+`docs/development/workstation-transfer-status.md`.  Commit anchors: exact
+final production code **`971e6a4`**; coverage baseline **`1a5842d`**;
+coverage docs **`3c29421`**; first T8 acceptance closeout **`5ceb719`**
+(docs-only, records the acceptance and the then-unavailable final gate
+evidence); the **final evidence-fix commit** (docs-only, current docs HEAD)
+replaces the unavailable-evidence claims with the exact observed gate and
+build-contract runs — exact result lines, exit codes, elapsed runtimes, and
+transient log paths are recorded there (see the "Final software gate" /
+build-contract sections of the baseline document).  Original execution
 status at creation: ready for execution after T7 acceptance on `8f7bfca`.
 
 ## Goal

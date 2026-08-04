@@ -17,16 +17,22 @@ bounded steps and final commands are.
 - Branch: `handoff/workstation-transfer`.
 - T0–T8 all ACCEPTED.  Exact accepted production code commit: **`971e6a4`**
   (per-CIS ISO sequence-gap concealment); coverage-baseline commit
-  `1a5842d`; final docs commit `3c29421` (current HEAD).
+  `1a5842d`; coverage docs commit `3c29421`; first T8 acceptance closeout
+  `5ceb719`; final docs HEAD = the evidence-fix commit.
 - Final software gate on the exact final code: **47 PASS / 0 FAIL /
   47 TOTAL** (28 twister + 4 exec + 12 Python + coverage + matrix + BSim);
-  the final run's log/runtime is not retained (closest retained full-gate
-  log: 46/46 on `ac1fa06`, `/tmp/opencode/gate1.log`).  Coverage baseline
-  accepted at `1a5842d` (26 files: lines 3281/3722, branches 1433/2041,
-  functions 205/205); builds 3/3; build contract 76/76; zero actionable
-  warnings.  Full hardware evidence:
-  `docs/testing/pre-refactor-hardware-baseline.md` (T8 ACCEPTED).
-- Working tree **clean** at `3c29421`.
+  exact observed re-run retained: `./scripts/test-all.sh` on
+  2026-08-04T05:26:57+02:00 on `thomas-workstation` (worktree clean,
+  production tree == `971e6a4`), `Gate complete: 47 PASS / 0 FAIL /
+  47 TOTAL`, exit 0, elapsed **1016.45 s** (bash `time` builtin),
+  log `/tmp/t8-final-47.log` (transient through review, NOT
+  repository-retained).  Coverage baseline accepted at `1a5842d` (26 files:
+  lines 3281/3722, branches 1433/2041, functions 205/205); builds 3/3;
+  build contract 76/76 (direct run retained: `76 assertions, 0 failed`,
+  `BUILD CONTRACT PASSED`, exit 0, `/tmp/t8-final-build-contract.log`
+  transient through review); zero actionable warnings.  Full hardware
+  evidence: `docs/testing/pre-refactor-hardware-baseline.md` (T8 ACCEPTED).
+- Working tree **clean** at the final docs HEAD (evidence-fix commit).
 - Base / upstream `main`: `20b37c405835e5c2c747fa7b072c4c0b752b29cd`
   (PR #3 merge, Xiao RF-switch fix).
 
@@ -104,13 +110,16 @@ Code/tooling (oldest → newest), per `git log` on `8f7bfca`:
   closeout below.)*
 - T8 closeout (2026-08-03/04, commits `8fd7bb0`/`6578a9c`/`19bec75`/
   `46100a9`/`a40f75e`/`4488f53`/`c056936`/`7c1205b`/`9b78d87`/`ac1fa06`/
-  `1a4d27f`/`4ef25b2`/`3df6da8`/`971e6a4`/`1a5842d`/`3c29421`) — pairing
-  filter, BlueZ preserve-bond fixes, Mode A assembler, teardown writer,
-  hang-gate baseline hardening, and per-CIS ISO sequence-gap concealment
-  (`971e6a4`, final production code).  Both hardware matrices pass; final
-  software gate 47 PASS / 0 FAIL / 47 TOTAL (final run log/runtime not
-  retained; closest retained full-gate log 46/46 on `ac1fa06`); coverage
-  baseline accepted at `1a5842d`; builds 3/3; build contract 76/76.
+  `1a4d27f`/`4ef25b2`/`3df6da8`/`971e6a4`/`1a5842d`/`3c29421`/`5ceb719`)
+  — pairing filter, BlueZ preserve-bond fixes, Mode A assembler, teardown
+  writer, hang-gate baseline hardening, and per-CIS ISO sequence-gap
+  concealment (`971e6a4`, final production code).  Both hardware matrices
+  pass; final software gate 47 PASS / 0 FAIL / 47 TOTAL — exact observed
+  re-run retained (2026-08-04T05:26:57+02:00, `thomas-workstation`, exit
+  0, elapsed 1016.45 s, `/tmp/t8-final-47.log` transient through review);
+  coverage baseline accepted at `1a5842d`; builds 3/3; build contract
+  76/76 (direct run retained: `76 assertions, 0 failed`, exit 0,
+  `/tmp/t8-final-build-contract.log` transient through review).
   **T8 ACCEPTED (2026-08-04)** — see
   `docs/testing/pre-refactor-hardware-baseline.md`.
 
@@ -199,7 +208,7 @@ change in the T7 chain is the warning-only test-config fix in `8f7bfca`
 At the time of writing there is **no running task**: no long test, no
 hardware session, no build, no flash, no gate run, no commit/push/merge/PR
 in progress.  The workstation repo is clean on `handoff/workstation-transfer`
-at `3c29421` (T8 ACCEPTED).
+at the final docs HEAD (evidence-fix commit; T8 ACCEPTED).
 
 ## Next bounded steps
 
@@ -245,12 +254,14 @@ From `scripts/test-all.sh` (header + run order):
 
 ```bash
 # Final pre-refactor gate (exact final code 971e6a4 / baseline 1a5842d /
-# docs 3c29421; detached clone — a git worktree cannot host the gate
-# because test-coverage.sh requires a real .git directory; run in the
-# flake dev shell so gcovr is present).
-# Recorded ACCEPTED: 47 PASS / 0 FAIL / 47 TOTAL (final run log/runtime
-# not retained; closest retained full-gate log: 46 PASS / 0 FAIL /
-# 46 TOTAL on ac1fa06 in /tmp/opencode/gate1.log, 2026-08-03).
+# coverage docs 3c29421 / first closeout 5ceb719; detached clone — a git
+# worktree cannot host the gate because test-coverage.sh requires a real
+# .git directory; run in the flake dev shell so gcovr is present).
+# Recorded ACCEPTED (evidence-fix re-run, 2026-08-04T05:26:57+02:00,
+# thomas-workstation, worktree clean, production tree == 971e6a4):
+#   Gate complete: 47 PASS / 0 FAIL / 47 TOTAL
+#   PASS, exit 0, elapsed 1016.45 s (bash time builtin)
+#   log /tmp/t8-final-47.log (transient through review, not repo-retained)
 ./scripts/test-all.sh          # observed 47 PASS / 0 FAIL / 47 TOTAL
 ./scripts/test-coverage.sh     # default mode: baseline enforcement
 # matrix checker consumes the coverage run's coverage.json; inside
@@ -264,6 +275,10 @@ fw-build-dongle
 python3 scripts/check-build-contract.py \
   --nrf5340 build/nrf5340 \
   --nrf54l15 build/nrf54l15
+# Recorded ACCEPTED (evidence-fix re-run on the existing final builds,
+# provenance == 971e6a4; no pristine rebuild needed):
+#   76 assertions, 0 failed / BUILD CONTRACT PASSED, exit 0
+#   log /tmp/t8-final-build-contract.log (transient through review)
 ```
 
 ## T8 hardware matrix (from the plan)

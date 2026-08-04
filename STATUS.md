@@ -19,18 +19,28 @@ provenance unchanged: baseline generated on clean `c6adce8`, committed and
 wired in `4a31324`, warning-only test-config correction (`8f7bfca`)
 afterward.  **T8 ACCEPTED (2026-08-04)** — hardware baseline freeze complete
 on the exact final production code commit **`971e6a4`** (per-CIS ISO
-sequence-gap concealment; coverage-baseline commit `1a5842d`, final docs
-commit `3c29421`).  Both hardware matrices pass: nRF54L15 Mode A/B 120 s
-fresh (zero underruns under 21–30% RF loss), bonded reconnect, FLPR hang
-Mode A 16/16, Mode B 16/16 (earlier), Phase 3 full 3/3; nRF5340/E83 Mode A
-120, Mode B 120 fresh + bonded reconnect, Mode B 300, zero
-`i2s_nrfx`/underrun/reset/decode faults, APLL ACTIVE ppm −500, no DAC
-connected and no audibility claim.  Final software gate on the exact final
-code: **47 PASS / 0 FAIL / 47 TOTAL** (28 twister + 4 exec + 12 Python +
-coverage + matrix + BSim; the final run's log/runtime not retained — closest
-retained full-gate log is 46/46 on `ac1fa06`), coverage baseline accepted at
-`1a5842d` (26 files: 3281/3722 lines, 1433/2041 branches, 205/205
-functions), builds 3/3, build contract 76/76, zero actionable warnings.
+sequence-gap concealment; coverage-baseline commit `1a5842d`, coverage
+docs commit `3c29421`, first T8 acceptance closeout `5ceb719`, final docs
+HEAD = the evidence-fix commit).  Both hardware matrices pass: nRF54L15
+Mode A/B 120 s fresh (zero underruns under 21–30% RF loss), bonded
+reconnect, FLPR hang Mode A 16/16, Mode B 16/16 (earlier), Phase 3 full
+3/3; nRF5340/E83 Mode A 120, Mode B 120 fresh + bonded reconnect, Mode B
+300, zero `i2s_nrfx`/underrun/reset/decode faults, APLL ACTIVE ppm −500,
+no DAC connected and no audibility claim.  Final software gate on the
+exact final code: **47 PASS / 0 FAIL / 47 TOTAL** (28 twister + 4 exec +
+12 Python + coverage + matrix + BSim), exact observed re-run retained:
+`./scripts/test-all.sh` on 2026-08-04T05:26:57+02:00 on
+`thomas-workstation`, worktree clean, `Gate complete: 47 PASS / 0 FAIL /
+47 TOTAL`, exit 0, elapsed **1016.45 s** (bash `time` builtin;
+`/usr/bin/time` not installed), log `/tmp/t8-final-47.log` (transient
+through review, NOT repository-retained), zero compiler/Kconfig
+assigned-value warnings, all 85 `<wrn>`/`<err>` lines classified as
+failure-injection test output of the passing negative-path suites.
+Coverage baseline accepted at `1a5842d` (26 files: 3281/3722 lines,
+1433/2041 branches, 205/205 functions), builds 3/3, build contract 76/76
+(direct run retained: `76 assertions, 0 failed`, `BUILD CONTRACT PASSED`,
+exit 0, `/tmp/t8-final-build-contract.log` transient through review),
+zero actionable warnings.
 One explicit evidence limitation: `audio_iso_seq` gap activation was NOT
 observable on hardware (clean E83 link — no SW Split/controller/BSim API can
 induce it deterministically); the exact gap behavior is covered by the
@@ -694,12 +704,19 @@ gate evidence below).
   `fw-build-dongle`) pass with zero warnings; `git diff --check` clean;
   both repos left clean.
 - **T8 (hardware baseline freeze) ACCEPTED (2026-08-04)** — exact final
-  production code commit `971e6a4` (coverage-baseline `1a5842d`, final docs
-  `3c29421`); both hardware matrices pass (see
+  production code commit `971e6a4` (coverage-baseline `1a5842d`, coverage
+  docs `3c29421`, first acceptance closeout `5ceb719`, final docs HEAD =
+  evidence-fix commit); both hardware matrices pass (see
   `docs/testing/pre-refactor-hardware-baseline.md`).  Final software gate
-  47 PASS / 0 FAIL / 47 TOTAL (final run log/runtime not retained; closest
-  retained full-gate log 46/46 on `ac1fa06`); coverage baseline accepted at
-  `1a5842d`; builds 3/3; build contract 76/76; zero actionable warnings.
+  47 PASS / 0 FAIL / 47 TOTAL — exact observed re-run retained:
+  `./scripts/test-all.sh` on 2026-08-04T05:26:57+02:00 on
+  `thomas-workstation` (worktree clean, production tree == `971e6a4`),
+  `Gate complete: 47 PASS / 0 FAIL / 47 TOTAL`, exit 0, elapsed
+  **1016.45 s**, log `/tmp/t8-final-47.log` (transient through review);
+  coverage baseline accepted at `1a5842d`; builds 3/3; build contract
+  76/76 (direct run: `76 assertions, 0 failed`, exit 0,
+  `/tmp/t8-final-build-contract.log` transient through review); zero
+  actionable warnings.
   T8 fixes landed during the phase: pairing filter (`8fd7bb0` BONDED_ONLY
   controller filter + production pairing reset), BlueZ preserve-bond /
   reconnect (`19bec75`, `46100a9`, `a40f75e`, `4488f53`), hang-gate

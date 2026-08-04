@@ -214,3 +214,16 @@ The T8-follow-up canonical gate on `1a5842d` is **47 PASS / 0 FAIL /
 47 TOTAL** (28 twister suites including the new `iso_seq`, 4 exec suites,
 12 python suites, coverage, matrix, BSim Stage 1), zero compiler and
 Kconfig assigned-value warnings in the production builds.
+
+Exact observed re-run of that gate retained (evidence-fix commit,
+2026-08-04): `./scripts/test-all.sh` on `thomas-workstation` at
+2026-08-04T05:26:57+02:00 (worktree clean; production tree identical to
+`971e6a4`), stdout+stderr to `/tmp/t8-final-47.log` — **`Gate complete:
+47 PASS / 0 FAIL / 47 TOTAL`**, `PASS`, exit 0, elapsed **1016.45 s**
+(bash `time` builtin; `/usr/bin/time` not installed).  Warning scan of
+the retained log: zero compiler warnings, zero Kconfig assigned-value
+warnings; 85 `<wrn>`/`<err>` lines all inside deliberately-passing
+failure-injection unit suites (expected negative-path test output); 2
+native_sim test-entropy notices (pre-existing informational line).  The
+log is transient (NOT repository-retained); this committed record is the
+durable evidence.

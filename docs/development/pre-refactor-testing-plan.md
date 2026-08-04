@@ -437,11 +437,18 @@ state-machine improvements, readability work, and diagnostic improvements.
    section and `docs/development/workstation-transfer-status.md`).
 9. T8 — hardware baseline freeze — **ACCEPTED (2026-08-04)** — both
    hardware matrices pass on the exact final production code `971e6a4`
-   (nRF54L15 + nRF5340/E83; coverage-baseline `1a5842d`, final docs
-   `3c29421`); final software gate **47 PASS / 0 FAIL / 47 TOTAL** on the
-   exact final code (final run log/runtime not retained; closest retained
-   full-gate log 46/46 on `ac1fa06`); coverage baseline accepted; builds
-   3/3; build contract 76/76; zero actionable warnings.  See
+   (nRF54L15 + nRF5340/E83; coverage-baseline `1a5842d`, coverage docs
+   `3c29421`, first acceptance closeout `5ceb719`, final docs HEAD = the
+   evidence-fix commit); final software gate **47 PASS / 0 FAIL / 47 TOTAL**
+   on the exact final code — exact observed re-run retained:
+   `./scripts/test-all.sh` on 2026-08-04T05:26:57+02:00 on
+   `thomas-workstation` (worktree clean, production tree == `971e6a4`),
+   `Gate complete: 47 PASS / 0 FAIL / 47 TOTAL`, exit 0, elapsed
+   **1016.45 s**, log `/tmp/t8-final-47.log` (transient through review);
+   coverage baseline accepted; builds 3/3; build contract 76/76 (direct
+   run retained: `76 assertions, 0 failed`, exit 0,
+   `/tmp/t8-final-build-contract.log` transient through review); zero
+   actionable warnings.  See
    `docs/testing/pre-refactor-hardware-baseline.md` (T8 ACCEPTED).  One
    documented evidence limitation: per-CIS ISO sequence-gap activation was
    not observable on hardware (clean E83 link) — covered by the 18-test

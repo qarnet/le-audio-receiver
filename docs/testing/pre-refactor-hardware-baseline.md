@@ -14,11 +14,18 @@ block acceptance.
   both targets).
 - Coverage-baseline commit: `1a5842d` (refresh for `audio_iso_seq`, generated
   on clean `971e6a4`).
-- Final docs commit (this record's HEAD): `3c29421`.
+- Coverage-matrix docs commit: `3c29421` ("docs: record baseline refresh and
+  iso_seq suite in coverage matrix").
+- First T8 acceptance closeout commit: `5ceb719` ("docs: record T8 hardware
+  baseline acceptance and final gate evidence").
+- Final docs commit (this record's HEAD): the **final evidence-fix commit**
+  (docs-only; replaces the unavailable-evidence claims of `5ceb719` with the
+  exact observed gate/build-contract evidence below; hash recorded at commit
+  time via `git rev-parse HEAD`).
 - NCS: v3.3.0 (`/home/thomas-workstation/ncs/v3.3.0`).
 - Final software gate: **47 PASS / 0 FAIL / 47 TOTAL** on the exact final
-  code (see "Final software gate" — exact runtime of the final run is not
-  retained; closest retained full-gate log is 46/46 on `ac1fa06`).
+  code — exact observed command, result line, exit code, and runtime now
+  retained below (see "Final software gate").
 
 ## Worktree / commit history
 
@@ -46,10 +53,16 @@ ac1fa06  coverage: refresh baseline for Mode A assembler module
 3df6da8  fix: hang-gate baseline treats absent Runtime line as zero
 971e6a4  fix: conceal per-CIS ISO sequence gaps from omitted callbacks   (FINAL CODE)
 1a5842d  coverage: refresh baseline for audio_iso_seq module
-3c29421  docs: record baseline refresh and iso_seq suite in coverage matrix   (HEAD)
+3c29421  docs: record baseline refresh and iso_seq suite in coverage matrix
+5ceb719  docs: record T8 hardware baseline acceptance and final gate evidence   (first closeout)
+<final evidence-fix commit>  docs: replace unavailable gate/build-contract evidence with exact observed runs   (HEAD)
 ```
 
-Working tree clean at acceptance time (HEAD `3c29421`).
+Working tree clean at acceptance time (HEAD `3c29421`); clean again on the
+final evidence-fix commit (HEAD recorded at commit time).  The evidence-fix
+commit is docs-only — the production tree at HEAD is identical to
+`971e6a4` (the only non-doc difference in `971e6a4..HEAD` is the
+`tests/coverage-baseline.json` refresh `1a5842d`).
 
 ## Tooling and code fixes landed during T8 (all committed, all verified)
 
@@ -354,6 +367,36 @@ BSim Stage 1.
   tail).  Earlier retained gate logs: `/tmp/t8/gate-final-c056936.log`
   (44/44 on `c056936`), `/tmp/t8/gate-final-1d90873.log` and `-b.log`
   (42/42 on `1d90873`) — historical.
+
+**Review-fix: the exact final 47-child gate was re-run and the evidence is
+now retained (2026-08-04).**  From a clean checkout of the current branch
+at `5ceb719` (production tree identical to the exact accepted `971e6a4`;
+`git diff 971e6a4 HEAD -- src boards prj.conf sysbuild.cmake Kconfig
+Kconfig.sysbuild CMakeLists.txt dongle scripts tests` shows only the
+`tests/coverage-baseline.json` refresh `1a5842d`), in the NCS v3.3.0 dev
+shell (`ZEPHYR_BASE=/home/thomas-workstation/ncs/v3.3.0/zephyr`):
+
+- Command: `./scripts/test-all.sh` (full canonical gate; stdout+stderr
+  captured verbatim).
+- Date / hostname: 2026-08-04T05:26:57+02:00, `thomas-workstation`.
+- Worktree clean at run start (`git status --porcelain` empty).
+- Exact result line: **`Gate complete: 47 PASS / 0 FAIL / 47 TOTAL`**,
+  followed by `PASS`, script exit **0**.
+- Elapsed runtime: **1016.45 s** (measured with the bash `time` builtin,
+  `TIMEFORMAT='elapsed_real_seconds %R'`; `/usr/bin/time` is not installed
+  in this environment).
+- Log: `/tmp/t8-final-47.log` — **transient, NOT repository-retained**;
+  kept through review.  The committed evidence here (exact line, exit code,
+  runtime, commit, date, hostname) is the durable record.
+- Warning scan of the full retained log: 85 `<wrn>`/`<err>` log lines, all
+  inside deliberately-passing failure-injection unit suites
+  (exec audio_offload 32, twister audio_i2s 16, audio_i2s_identity 11,
+  flpr_ring_mgr 10, app_lifecycle 8, timing_nrf54 4, volume 4) — expected
+  negative-path test output, not faults; 2 native_sim `Using a test - not
+  safe - entropy source` notices (pre-existing informational line every
+  twister suite emits); **zero compiler warnings, zero Kconfig
+  assigned-value warnings**; BSim Stage 1 PASS with the pinned deterministic
+  hashes.
 - **Coverage baseline ACCEPTED** at `1a5842d` (generated on clean
   `971e6a4`): 26-file numeric population — lines **3281/3722 (88.2%)**,
   branches **1433/2041 (70.2%)**, functions **205/205 (100.0%)**; the
@@ -372,10 +415,26 @@ BSim Stage 1.
 - **Build contract 76/76** — `scripts/check-build-contract.py` registers
   **76 assertions** at HEAD (verified: the `build_contract` gate child on
   the final-era checker prints `76 assertions, 0 failed / BUILD CONTRACT
-  PASSED` in `/tmp/opencode/gate1.log`).  A real dual-target contract run
-  on the final builds is not among the retained logs; the closest retained
-  real run is `/tmp/t8/build-contract.log` — 74 assertions, 0 failed, on
-  the Aug 2 builds (T7-era count, superseded by the 76-assertion checker).
+  PASSED` in `/tmp/opencode/gate1.log`).
+
+**Review-fix: the direct dual-target build-contract run is now retained
+(2026-08-04).**  Against the current `build/nrf5340` and `build/nrf54l15`
+(the existing T10-session builds, whose provenance matches the exact
+production code `971e6a4` — ELF mtimes 2026-08-04 03:00:53 / 03:01:15,
+after the `971e6a4` commit at 02:18; no firmware source newer than either
+ELF; firmware source tree at HEAD identical to `971e6a4`, so no pristine
+rebuild was required):
+
+- Command: `python3 scripts/check-build-contract.py --nrf5340 build/nrf5340
+  --nrf54l15 build/nrf54l15`.
+- Date / hostname: 2026-08-04, `thomas-workstation`.
+- Exact result line: **`76 assertions, 0 failed`**, then `BUILD CONTRACT
+  PASSED`, exit **0**.
+- Log: `/tmp/t8-final-build-contract.log` — **transient, NOT
+  repository-retained**; kept through review.
+- The earlier retained real run `/tmp/t8/build-contract.log` (74
+  assertions, 0 failed, Aug 2 builds) remains historical/superseded by the
+  76-assertion checker.
 - **Zero actionable warnings** — final warning scans
   (`/tmp/opencode/build-54l15-warn.log`, `dongle-warn.log`, `b5340-final.log`)
   show only the documented non-actionable NCS v3.3.0 diagnostics
@@ -423,6 +482,12 @@ hang_stdout.log / hang3_stdout.log (FLPR hang gate FAILED/PASSED stdout),
 build-54l15-warn.log, dongle-warn.log, b5340-final.log, baseline-new.json,
 cov-report/, cov-write2/.
 
+Review-fix evidence (2026-08-04, transient through review, NOT
+repository-retained): `/tmp/t8-final-47.log` (exact final 47-child gate,
+stdout+stderr, `Gate complete: 47 PASS / 0 FAIL / 47 TOTAL`, exit 0,
+elapsed 1016.45 s), `/tmp/t8-final-build-contract.log` (direct dual-target
+run, `76 assertions, 0 failed`, `BUILD CONTRACT PASSED`, exit 0).
+
 ## Matrix verdict summary
 
 - nRF54L15: builds/flash/boot PASS; Mode A 120 fresh PASS (zero underruns,
@@ -435,8 +500,10 @@ cov-report/, cov-write2/.
 - Sequence-gap activation: NOT observed on hardware (clean-link session);
   covered by direct production-module tests + prior failure provenance —
   documented evidence limitation, not a hardware activation claim.
-- Final software gate: 47 PASS / 0 FAIL / 47 TOTAL (runtime of the final
-  run not retained); coverage baseline accepted; builds 3/3; build
-  contract 76/76 (checker + gate child; real-run log not retained); zero
-  actionable warnings.
+- Final software gate: 47 PASS / 0 FAIL / 47 TOTAL (exact observed re-run
+  retained: `./scripts/test-all.sh`, exit 0, elapsed 1016.45 s, log
+  `/tmp/t8-final-47.log` transient through review, 2026-08-04T05:26:57 on
+  `thomas-workstation`); coverage baseline accepted; builds 3/3; build
+  contract 76/76 (direct run retained: `76 assertions, 0 failed`, exit 0,
+  `/tmp/t8-final-build-contract.log`); zero actionable warnings.
 - **T8: ACCEPTED (2026-08-04).**
