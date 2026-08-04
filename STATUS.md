@@ -1380,15 +1380,27 @@ uses cpuapp ASRC.  This is a known limitation, not a new failure, and not
 permission to implement 360-frame offload (deferred feature — see the
 deferred list in `docs/development/refactor-plan.md`).
 
-### `fw-flash-dongle` probe-selection defect (OPEN follow-up)
+### `fw-flash-dongle` probe-selection defect (RESOLVED)
 
-`scripts/bin/fw-flash-dongle` selects any nRF53 target via
-`nrf-probes --find nrf53` and feeds that serial into `interface/jlink.cfg`
+`scripts/bin/fw-flash-dongle` used to select any nRF53 target via
+`nrf-probes --find nrf53` and feed that serial into `interface/jlink.cfg`
 (the DK's onboard J-Link), so with the lab Pico CMSIS-DAP probe wired to the
-E83 receiver it fails with `No J-Link device found`.  Worked around during
-R1 revalidation by running the identical OpenOCD sequence with J-Link
-auto-detection.  Fixing the script is a **known open follow-up**, deferred
-(outside R1 scope; needs its own tests and gate).
+E83 receiver it failed with `No J-Link device found`.  Fixed in `7c50c27`
+(`fix: select J-Link correctly for dongle flash`): the script now defaults
+to OpenOCD J-Link auto-detection with an optional validated
+`FW_DONGLE_JLINK_SERIAL` override; `scripts/probe-serial.local` and
+`nrf-probes` are no longer used (they select CMSIS-DAP receiver targets).
+Behavior covered by 5 new public-execution tests in
+`tests/unit/gate/test_gate.py` (default argv, explicit serial, invalid
+serial, missing-artifact and missing-dev-shell errors; fake openocd records
+argv, fake nrf-probes fails loudly if called) — 22/22 pass.  Hardware
+verification on the committed script: onboard J-Link auto-detected
+(`J-Link OB-nRF5340-NordicSemi`, SWD DPIDR `0x6ba02477`, VTarget 3.300 V),
+net core programmed+verified first (nRF5340-QKAA 256 kB Flash), app core
+second (1024 kB Flash), both `Verified OK`, `reset run`, exit 0; only the
+documented expected page-tail `Warn : Adding extra erase range` flashing
+diagnostics (see "OpenOCD flashing diagnostics" table).  See
+`docs/development/fw-flash-dongle-probe-fix-handoff.md`.
 
 ### I2S20 hardware evidence
 
