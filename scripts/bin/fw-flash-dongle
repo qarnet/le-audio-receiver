@@ -11,12 +11,14 @@
 # access is ever lost, run an nrf53 CTRL-AP recovery (mass erase) and
 # reflash.
 #
-# The probe is resolved in order:
-#   1. scripts/probe-serial.local (gitignored override, single line serial)
-#   2. nrf-probes --find nrf53 (auto-detect: the probe whose target is an
-#      nRF53 — the DK is normally the only nRF53 on the bench when the
-#      receiver is the nRF54L15)
-#   3. no serial — OpenOCD auto-detects
+# Probe selection:
+#   Default: OpenOCD J-Link auto-detection (the DK's onboard Segger J-Link).
+#   Override: FW_DONGLE_JLINK_SERIAL=<jlink-serial> fw-flash-dongle selects
+#   one specific J-Link by serial (validated against ^[[:alnum:]_.:-]+$).
+#
+# scripts/probe-serial.local and nrf-probes select CMSIS-DAP receiver
+# targets and are NOT used for the dongle — it is programmed over the DK's
+# onboard J-Link.
 #
 # Build dir:  build/dongle
 # Build with: fw-build-dongle
@@ -41,15 +43,19 @@ if [ ! -f "$APP_HEX" ] || [ ! -f "$NET_HEX" ]; then
 	exit 1
 fi
 
-SERIAL=""
-if [ -s "scripts/probe-serial.local" ]; then
-	SERIAL="$(head -n1 scripts/probe-serial.local | tr -d '[:space:]')"
-	printf 'Probe %s (from scripts/probe-serial.local override)\n' "$SERIAL"
-elif SERIAL="$(nrf-probes --find nrf53 2>/dev/null)"; then
-	printf 'Probe %s (auto-detected: target identifies as nRF53)\n' "$SERIAL"
+# Probe selection: default to OpenOCD J-Link auto-detection.  An explicit
+# session-local override (FW_DONGLE_JLINK_SERIAL) selects one J-Link by
+# serial; it is validated before OpenOCD is started.
+JLINK_SERIAL="${FW_DONGLE_JLINK_SERIAL:-}"
+if [ -n "$JLINK_SERIAL" ]; then
+	if ! [[ "$JLINK_SERIAL" =~ ^[[:alnum:]_.:-]+$ ]]; then
+		printf 'Invalid FW_DONGLE_JLINK_SERIAL %q: must match ^[[:alnum:]_.:-]+$\n' \
+			"$JLINK_SERIAL" >&2
+		exit 1
+	fi
+	printf 'Using J-Link override (serial %s)\n' "$JLINK_SERIAL"
 else
-	SERIAL=""
-	printf 'No nRF53 probe identified — letting OpenOCD auto-detect\n' >&2
+	printf 'Using J-Link auto-detection\n'
 fi
 
 # NOTE: openocd -f interface/jlink.cfg (the DK's onboard J-Link), not
@@ -61,8 +67,8 @@ OPENOCD_ARGS=(
 	-c "transport select swd"
 	-c "adapter speed 2000"
 )
-if [ -n "$SERIAL" ]; then
-	OPENOCD_ARGS+=(-c "adapter serial $SERIAL")
+if [ -n "$JLINK_SERIAL" ]; then
+	OPENOCD_ARGS+=(-c "adapter serial $JLINK_SERIAL")
 fi
 OPENOCD_ARGS+=(
 	-f target/nordic/nrf53.cfg

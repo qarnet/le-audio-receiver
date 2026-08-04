@@ -58,6 +58,21 @@ fw-build-dongle     # builds into build/dongle/
 fw-flash-dongle     # flashes both cores via the DK's onboard J-Link
 ```
 
+`fw-flash-dongle` programs over the DK's **onboard Segger J-Link** through
+OpenOCD. By default OpenOCD auto-detects the J-Link (no serial is passed).
+If more than one J-Link is attached, select one explicitly with a
+session-local environment variable:
+
+```bash
+FW_DONGLE_JLINK_SERIAL=<jlink-serial> fw-flash-dongle
+```
+
+The override is validated against `^[[:alnum:]_.:-]+$` before OpenOCD
+starts. Note that `scripts/probe-serial.local` and `nrf-probes` select
+**CMSIS-DAP receiver targets** and are **not** used by the dongle J-Link
+flash — feeding a CMSIS-DAP serial into the J-Link interface fails with
+`No J-Link device found`.
+
 The build compiles two images and merges them:
 1. **hci_ipc netcore**: standalone build (`-b nrf5340dk/nrf5340/cpunet`) from `dongle/hci_ipc/`
 2. **hci_uart app core**: sysbuild with `NETCORE_EMPTY` from upstream sample + `dongle/hci_uart/app.conf`
