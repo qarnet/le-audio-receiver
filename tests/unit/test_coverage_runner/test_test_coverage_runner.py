@@ -455,6 +455,23 @@ class RunnerToolVersionEnforcement(unittest.TestCase):
         self.assertEqual(0, rc, out)
         self.assertIn("baseline enforcement PASS", out)
 
+    def test_present_null_version_fails(self):
+        # A baseline that stores a null version must fail in baseline mode:
+        # only entirely-omitted legacy fields are accepted, never a present
+        # null/non-string/empty value.
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        baseline = self._write_baseline(
+            fx, mutate=lambda bl: bl.__setitem__("gcovr_version", None)
+        )
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertNotEqual(0, rc)
+        self.assertIn(
+            "error: gcovr baseline version invalid: None (expected non-empty "
+            "string; refresh intentionally with --write-baseline %s)" % baseline,
+            out,
+        )
+
     def test_report_only_does_not_enforce_versions(self):
         fx = RunnerFixture()
         self.addCleanup(fx.cleanup)

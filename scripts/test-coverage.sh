@@ -31,11 +31,12 @@
 #
 # Tool-version enforcement (baseline mode only): the current gcovr/gcov
 # version first lines are compared with the baseline's recorded
-# gcovr_version/gcov_version when those fields are present (old baselines
-# that omit either field remain accepted).  A mismatch is a hard error
-# that directs the operator to refresh intentionally with
-# --write-baseline.  --write-baseline always records the current
-# versions; --report-only never enforces them.
+# gcovr_version/gcov_version when those fields are present.  Old baselines
+# that omit either field entirely remain accepted; a present version must
+# be a non-empty string (null/non-string/empty fails).  A mismatch or an
+# invalid present value is a hard error that directs the operator to
+# refresh intentionally with --write-baseline.  --write-baseline always
+# records the current versions; --report-only never enforces them.
 #
 # Usage:
 #   scripts/test-coverage.sh (--report-only|--write-baseline PATH|--baseline PATH)
@@ -434,14 +435,23 @@ with open(baseline_path, "r", encoding="utf-8") as fh:
 errors = []
 
 # Tool-version enforcement: current first-line versions must equal the
-# baseline's recorded versions when present (old baselines that omit
-# either field remain accepted).  Comparison is case-sensitive equality.
+# baseline's recorded versions when present (legacy baselines that omit
+# either field entirely remain accepted).  A present version must be a
+# non-empty string; null/non-string/empty fails with the refresh
+# instruction.  Comparison of valid strings is case-sensitive equality.
 for tool, cur_ver, base_key in (
     ("gcovr", cur_gcovr, "gcovr_version"),
     ("gcov", cur_gcov, "gcov_version"),
 ):
-    base_ver = base.get(base_key)
-    if base_ver is None:
+    if base_key not in base:
+        continue  # legacy baseline without this field stays accepted
+    base_ver = base[base_key]
+    if not isinstance(base_ver, str) or not base_ver:
+        errors.append(
+            "%s baseline version invalid: %r (expected non-empty string; "
+            "refresh intentionally with --write-baseline %s)"
+            % (tool, base_ver, baseline_path)
+        )
         continue
     if cur_ver != base_ver:
         errors.append(
