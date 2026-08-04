@@ -393,9 +393,29 @@
           "witness": "test_push_before_init_eio"
         },
         {
+          "api": "audio_sink_push",
+          "outcome": "-EBUSY",
+          "witness": "test_closed_rejection_and_reconnect"
+        },
+        {
           "api": "audio_sink_stop",
           "outcome": "void",
-          "witness": "test_stop_started_order_prepare_then_drop"
+          "witness": "test_stop_drains_admitted_push"
+        },
+        {
+          "api": "audio_sink_stream_open",
+          "outcome": "0",
+          "witness": "test_init_alone_leaves_admission_closed"
+        },
+        {
+          "api": "audio_sink_stream_open",
+          "outcome": "-EIO",
+          "witness": "test_stream_open_before_init_eio"
+        },
+        {
+          "api": "audio_sink_stream_close",
+          "outcome": "void",
+          "witness": "test_close_is_nonblocking"
         },
         {
           "api": "audio_sink_set_input_frames",
@@ -409,8 +429,20 @@
           "witness": "test_eio_write_prepare_recovery"
         },
         {
-          "transition": "stopped->started",
+          "transition": "stopped->open->started",
           "witness": "test_push_after_stop_starts_fresh_prefill"
+        },
+        {
+          "transition": "closed->open",
+          "witness": "test_init_alone_leaves_admission_closed"
+        },
+        {
+          "transition": "open->closed",
+          "witness": "test_close_is_nonblocking"
+        },
+        {
+          "transition": "open->drained->stopped",
+          "witness": "test_two_overlapping_stops_finalize_once"
         }
       ],
       "function_exclusions": [],
@@ -1565,6 +1597,21 @@
           "api": "flpr_ring_mgr_wait_consume",
           "outcome": "0",
           "witness": "docs/development/phase6-stage1-results.md"
+        },
+        {
+          "api": "flpr_ring_mgr_coordinated_reset",
+          "outcome": "-EOVERFLOW",
+          "witness": "test_ack_token_boundary_overflow_and_remote_restart"
+        },
+        {
+          "api": "flpr_ring_mgr_flpr_stall",
+          "outcome": "-EOVERFLOW",
+          "witness": "test_ack_token_boundary_overflow_and_remote_restart"
+        },
+        {
+          "api": "flpr_ring_mgr_flpr_stall_timed",
+          "outcome": "-EOVERFLOW",
+          "witness": "test_ack_token_boundary_overflow_and_remote_restart"
         }
       ],
       "state_transitions": [
@@ -1683,7 +1730,7 @@
         {
           "api": "stream_lifecycle_sink_started",
           "outcome": "false",
-          "witness": "test_mode_b_gate_close_idempotent"
+          "witness": "test_force_close_blocks_later_starts_for_slot_set"
         },
         {
           "api": "stream_lifecycle_audio_path_close",
@@ -1698,12 +1745,22 @@
         {
           "api": "stream_lifecycle_sink_release",
           "outcome": "void",
-          "witness": "test_release_then_slot_reuse"
+          "witness": "test_force_close_one_slot_release_does_not_unblock"
         },
         {
           "api": "stream_lifecycle_reset",
           "outcome": "void",
-          "witness": "test_reset_clears_all_state"
+          "witness": "test_reset_clears_force_close_latch"
+        },
+        {
+          "api": "stream_lifecycle_force_close",
+          "outcome": "true",
+          "witness": "test_force_close_returns_was_open"
+        },
+        {
+          "api": "stream_lifecycle_force_close",
+          "outcome": "false",
+          "witness": "test_force_close_mode_a_second_ase_stays_closed"
         }
       ],
       "state_transitions": [
@@ -1718,6 +1775,18 @@
         {
           "transition": "open->released",
           "witness": "test_release_then_slot_reuse"
+        },
+        {
+          "transition": "open->force-closed-latched",
+          "witness": "test_force_close_returns_was_open"
+        },
+        {
+          "transition": "force-closed-latched->open-after-final-release",
+          "witness": "test_force_close_final_release_and_reconfigure_permits_open"
+        },
+        {
+          "transition": "force-closed-latched->reset",
+          "witness": "test_reset_clears_force_close_latch"
         }
       ],
       "function_exclusions": [],

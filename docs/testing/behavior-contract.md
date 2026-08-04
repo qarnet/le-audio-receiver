@@ -211,7 +211,9 @@ decode error never counts as a total frame.  Snapshots are returned by
 value; reading them never mutates state.  All counters are atomic and
 exact under concurrent access, including `total = decoded + PLC`.
 
-## Stream lifecycle contract (`LIFE-*`)### LIFE-001 — Mono/Mode B stream open
+## Stream lifecycle contract (`LIFE-*`)
+
+### LIFE-001 — Mono/Mode B stream open
 
 A mono or Mode B stream opens as soon as its single configured ASE enters the
 streaming state (QoS configured → enabling → streaming).
@@ -226,31 +228,53 @@ open (one ASE streaming, second not) does not pass audio.
 
 Stream open is a closed-to-open edge event.  It must fire exactly once per
 stream lifecycle, not re-triggered by every subsequent ASE start notification.
+The closed→open edge also opens sink push admission exactly once
+(`audio_sink_stream_open()`), under the fixed lifecycle→sink lock order; a
+sink open failure rolls the lifecycle gate back to closed and skips the
+one-time open work.
 
 **T5 closed:** `stream_lifecycle_sink_started()` returns true only for a
 closed-to-open transition of the audio-path gate; a duplicate start while
 the gate is already open returns false, so the caller's one-time open work
 (perf reset, offload start, observer event) runs exactly once.  The
-expanded `tests/unit/lifecycle/` matrix (22 tests) pins duplicate starts
+expanded `tests/unit/lifecycle/` matrix (29 tests) pins duplicate starts
 (single-ASE and Mode A), close-then-start edges, configure/start/close/
 reconfigure/start permutations, release-then-slot-reuse, reset from
-closed/partial/open states, repeated open/close cycles, and inert
-invalid/zero/negative configurations.
+closed/partial/open states, repeated open/close cycles, inert
+invalid/zero/negative configurations, and the R1 forced-close latch
+(first-close observer return, later starts blocked for the configured
+slot set, one-slot release does not unblock while another remains, final
+release + reconfigure permits open, reset permits fresh open).
 
 ### LIFE-004 — First close wins
 
-The first stop, disable, release, or disconnect closes the audio path and stops
-offload.  Subsequent redundant close events are no-ops for the audio path.
+The first stop, disable, release, disconnect, or shell stop closes the audio
+path — and, in the same transition, closes sink push admission
+(`audio_sink_stream_close()`, nonblocking) — before any teardown.  Subsequent
+redundant close events are no-ops for the audio path.  A shell (forced) close
+latches the gate closed for the current configured slot set so later
+`stream_started()` callbacks cannot reopen it; releasing the last configured
+slot or a full reset clears the latch.
 
 ### LIFE-005 — Idempotent close
 
 Close, sink stop, and offload stop are idempotent — calling them when already
-stopped/closed returns success without side effects.
+stopped/closed returns success without side effects.  Sequential repeated
+`audio_sink_stop()` calls rerun the software (drift/timing/rate/ASRC) resets
+but issue no extra I2S triggers after the first PREPARE/DROP.  Overlapping
+stop callers share exactly one finalization: one software reset set and one
+PREPARE/DROP pair.
 
 ### LIFE-006 — Late receive after closure
 
 Receive callbacks after the audio path is closed cannot decode, push, update
-timing, or restart DMA.  Late packets are safely discarded.
+timing, or restart DMA.  Late packets are safely discarded; a push that
+reaches the sink after admission closes is rejected with `-EBUSY`.  An RX
+callback that passed the lifecycle query before a forced close may finish
+decode; when it reaches the sink it is either already admitted (the stop
+drains it) or receives `-EBUSY`.  Serialized BT callbacks retain ownership
+of Mode A cleanup — the shell thread never clears Mode A/decoder/sequence/
+stats state.
 
 ### LIFE-007 — Disconnect reinitializes decoder + lifecycle
 
@@ -266,6 +290,13 @@ configuration.  `audio_sink_stop` drops DMA but retains `configured = true`.
 `input_frames` × 2 samples in size.  `input_frames` is a runtime variable set
 by `audio_sink_set_input_frames()` (called from `bt_bap.c` at ASE config time).
 Malformed input is rejected with observable error.
+
+A configured-but-closed sink rejects a valid push with `-EBUSY` and zero
+allocation/write/state/counter mutation.  `-EIO` remains the result for a
+push before initialization (unconfigured).  Admission is closed by default
+after successful init; only a valid BAP gate closed→open transition
+(`audio_sink_stream_open()`) restores it, and `audio_sink_stop()` /
+`audio_sink_stream_close()` close it.
 
 `audio_sink_set_input_frames()` accepts only the supported frame counts 360
 (7.5 ms) and 480 (10 ms).  Any other value — including 0 — safely resets to
@@ -332,12 +363,34 @@ caller block and keeps the stream started.
 
 ### I2S-007 — Stop order
 
-Stop runs: reset timing/drift/actuator/rate-converter/ASRC state and clear
-the saved-frame/offload-sequence state, then `i2s_trigger(PREPARE)` before
+Stop closes push admission first and waits until every admitted push fully
+exits (including the emergency repeat fallback), then runs the software
+reset: timing/drift/actuator/rate-converter/ASRC state and clears the
+saved-frame/offload-sequence state, then `i2s_trigger(PREPARE)` before
 `i2s_trigger(DROP)`.  The configured flag remains true so reconnect works
 without re-calling `audio_sink_init`.  Repeated stop issues no extra triggers
 after the first stop; stop trigger errors never flip `configured` and never
-cause double frees.
+cause double frees.  Overlapping stop callers share one finalization: the
+owner drains and resets, every joiner waits, and every caller decrements the
+caller count exactly once (the last broadcast wakes a waiting open).
+`audio_sink_stop()` never times out and proceeds to DROP against a
+still-running push; a drain that cannot complete stays blocked and becomes
+visible through the watchdog/test timeout.
+
+### I2S-011 — Admission and drain concurrency
+
+`audio_sink_stream_open()` waits for any overlapping stop cohort (including
+the owner's DROP/reset) before enabling admission, so a reopen can never land
+between drain completion and DROP/reset.  `audio_sink_stream_close()` rejects
+new pushes atomically and returns without waiting.  A push admitted before a
+close runs to completion and retains its current return result; every
+admitted push decrements the active-push count exactly once through one
+common exit (startup and steady failure paths included).  Stop drains all
+admitted pushes before finalizing; the fake-driver write gate and the shared
+`tests/unit/audio_i2s_common/test_sink_concurrent.c` suite pin the ordering
+deterministically (stop drains, two stops finalize once, closed rejection and
+reconnect, failure exits release admission, open waits for the full stop
+cohort, close is nonblocking).
 
 ### I2S-008 — Observable failure counters
 

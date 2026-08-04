@@ -322,6 +322,15 @@ Fix real cross-context ownership ambiguities before moving code.
    offload, or I2S calls.  Stop completes after admitted pushes drain and before
    DROP; a push admitted before close may finish, one beginning after close is
    rejected.
+   **Primitive refinement (R1, evidence-backed):** the decided synchronization
+   is one short `k_mutex` plus `k_condvar` in `audio_i2s.c` — not a spinlock
+   plus single semaphore — because multiple overlapping stop callers and an
+   open waiter need broadcast wakeup, and the resolved receiver configuration
+   (`CONFIG_BT_RECV_WORKQ_BT=y`) plus NCS v3.3.0 host source confirm all
+   relevant application callbacks run in thread context where `k_mutex`/
+   `k_condvar` are legal.  The mutex is held only around state changes; never
+   across allocation, decode, offload, I2S, or Bluetooth calls.  Stop never
+   times out and proceeds to DROP against a still-running push.
 2. Add proposed `bt_bap_audio_path_stop()` in `src/bt_bap.c/.h` and route shell
    `audio stop` through it.  It closes `stream_lifecycle` gate, calls
    nonblocking `audio_sink_stream_close()`, calls `audio_sink_stop()` to drain
@@ -644,11 +653,12 @@ session decode state until R7 consolidates teardown orchestration.
    closes admission and waits for admitted RX work before resetting decoder,
    assembler, or sequence state.  No lock spans decode, sink, or Bluetooth
    stack calls.
-7. Introduce `lifecycle_lock` in this phase and serialize config/start/stop/
-   disable/release/disconnect admission transitions.  Fixed nesting is
-   `lifecycle_lock` then session lock; RX never acquires `lifecycle_lock` while
-   holding a session lease.  R7 reuses this contract rather than adding it
-   after session extraction.
+7. Reuse R1's `lifecycle_lock` (introduced in `bt_bap.c` during R1) to
+   serialize config/start/stop/disable/release/disconnect admission
+   transitions in this phase rather than introducing a duplicate lock.
+   Fixed nesting is `lifecycle_lock` then session lock; RX never acquires
+   `lifecycle_lock` while holding a session lease.  R7 reuses this contract
+   rather than adding it after session extraction.
 
 ### Verification
 
