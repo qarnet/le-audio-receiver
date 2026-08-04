@@ -734,10 +734,13 @@ def _run_cli(args):
     import contextlib
     import io
 
+    # Capture both streams: expected-negative CLI runs print FAIL to
+    # stderr, which must not leak into the canonical gate log.
     buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
+    err = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
         code = bsim_main(args)
-    return code, buf.getvalue()
+    return code, buf.getvalue() + err.getvalue()
 
 
 def test_cli_known_precedence():
