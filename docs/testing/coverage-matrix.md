@@ -170,3 +170,47 @@ acceptance on `8f7bfca` (warning-fix commit) is **ACCEPTED (2026-08-02)**:
 observed exact `41 PASS / 0 FAIL / 41 TOTAL`, elapsed 816 s (13m36s),
 zero Kconfig assigned-value warnings (see `STATUS.md` T7 section and
 `docs/development/workstation-transfer-status.md`).
+
+## Baseline refreshes after T7 (never lowered)
+
+The committed baseline was refreshed twice after T7, each time only by
+adding a direct-suite source file (no per-file regression, no population
+removal, enforced by `test-coverage.sh --write-baseline` on a clean
+commit and re-verified by the canonical gate):
+
+- `ac1fa06` (2026-08-03) — added `src/audio_modea.c` (11/11 functions
+  via the `modea` suite); population 23 → 25 files.
+- `6578a9c` (2026-08-03) — added `src/bt_pairing_policy.c` (8/8 functions
+  via the `bt_pairing_policy` suite); population 25 → 26 files.
+- `1a5842d` (2026-08-04, T8 sequence-gap fix follow-up) — added
+  `src/audio_iso_seq.c` (4/4 functions, 36/38 lines, 20/24 branches via
+  the 18-test `iso_seq` suite).  The current numeric population is
+  **26 files**:
+
+| Metric | Covered/Total | Percent |
+|--------|---------------|---------|
+| lines | 3281/3722 | 88.2% |
+| branches | 1433/2041 | 70.2% |
+| functions | 205/205 | 100.0% |
+
+Current per-file (covered/total) on the 26-file population, from
+`tests/coverage-baseline.json` at `1a5842d`: app_lifecycle 47/47 L,
+50/54 B, 4/4 F; audio_asrc 112/120 L, 76/98 B, 7/7 F; actuator_apll 17/17 L,
+4/4 B, 4/4 F; actuator_none 8/8 L, 0/0 B, 4/4 F; audio_decode 121/125 L,
+100/102 B, 5/5 F; audio_drift 65/68 L, 28/31 B, 5/5 F; audio_i2s 203/209 L,
+132/176 B, 10/10 F; audio_iso_seq 36/38 L, 20/24 B, 4/4 F; audio_modea
+109/115 L, 61/76 B, 11/11 F; audio_offload 588/714 L, 223/377 B, 18/18 F;
+audio_perf 82/85 L, 19/22 B, 8/8 F; audio_rate_convert 30/32 L, 14/16 B,
+3/3 F; audio_shell 302/519 L, 124/274 B, 23/23 F; audio_stats 30/30 L, 0/0 B,
+7/7 F; audio_timing_math 16/16 L, 4/4 B, 4/4 F; audio_timing_none 6/6 L,
+0/0 B, 3/3 F; audio_timing_nrf54 131/135 L, 56/78 B, 7/7 F; audio_volume
+36/36 L, 24/32 B, 5/5 F; bt_pairing_policy 66/66 L, 20/20 B, 8/8 F;
+flpr_audio_process 97/104 L, 46/58 B, 4/4 F; flpr_cache 9/9 L, 0/0 B, 3/3 F;
+flpr_handshake 357/369 L, 134/181 B, 17/17 F; flpr_ring 86/87 L, 28/32 B,
+8/8 F; flpr_ring_mgr 559/599 L, 214/312 B, 24/24 F; flpr_runtime 126/126 L,
+34/46 B, 3/3 F; stream_lifecycle 42/42 L, 22/24 B, 6/6 F.
+
+The T8-follow-up canonical gate on `1a5842d` is **47 PASS / 0 FAIL /
+47 TOTAL** (28 twister suites including the new `iso_seq`, 4 exec suites,
+12 python suites, coverage, matrix, BSim Stage 1), zero compiler and
+Kconfig assigned-value warnings in the production builds.
