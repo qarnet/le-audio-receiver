@@ -238,13 +238,13 @@ before structural edits begin.
 
 ### Results
 
-Exact corrected implementation commit **`85bbcf3`** (commit chain
-`2de5e33` → `7ab4b39` → `d7b6873` → `e462aba` → `1ee8af7` → `85bbcf3`;
-`85bbcf3` includes the final focused review-fix corrections); full G1
-passed on the clean `85bbcf3` (47 PASS / 0 FAIL / 47 TOTAL, coverage
-exact against `1a5842d`, builds 3/3, build contract 76/76, zero actionable
-warnings, BSim hashes unchanged).  Full results, commands, runtimes,
-composition, and warning disposition:
+Exact corrected implementation commit **`53d42db`** (commit chain
+`2de5e33` → `7ab4b39` → `d7b6873` → `e462aba` → `1ee8af7` → `85bbcf3` →
+`53d42db`; `53d42db` includes the last focused review-fix corrections);
+full G1 passed on the clean `53d42db` (47 PASS / 0 FAIL / 47 TOTAL,
+coverage exact against `1a5842d`, builds 3/3, build contract 76/76, zero
+actionable warnings, BSim hashes unchanged).  Full results, commands,
+runtimes, composition, and warning disposition:
 `docs/development/refactor-r0-results.md`.
 
 ### Files
