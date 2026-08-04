@@ -310,15 +310,22 @@ on fresh evidence: clean G1 on `be8fac1` passed exactly
 (47 PASS / 0 FAIL / 47 TOTAL, coverage population 26 files with gcovr 8.4 /
 gcov 14.3.0 and no ratio regression or baseline rewrite, builds 3/3, build
 contract 76/76, BSim Stage 1 hashes/counts unchanged, zero actionable
-warnings), and autonomous G2 passed all four streams on both receivers
-(nRF54L15 Mode A/B with FLPR offload ACTIVE; nRF5340/E83 Mode A/B with APLL
-stable; zero decode errors, underruns, resets, faults, assertions, or
-warnings; receiver-side counters and continuous logs preserved).  Full
-commands, suite counts, raw evidence directory and SHA-256 manifest,
-identity/controller proof, and per-run counters:
-`docs/development/refactor-r1-results.md` (status section) and
-`docs/development/refactor-r1-revalidation-handoff.md`.  The earlier
-`a79ac71` closure evidence is superseded.
+compiler/Kconfig/devicetree/build warnings), and autonomous G2 passed all
+four streams on both receivers (nRF54L15 Mode A/B with FLPR offload ACTIVE;
+nRF5340/E83 Mode A/B with APLL stable; zero decode errors, underruns,
+resets, faults, assertions, deadlocks, or runtime warnings; receiver-side
+counters and continuous logs preserved).  The accepted nRF54 capture is the
+warning-free synchronized rerun (`54l15-v3-accepted-receiver.log`); the
+first capture was rejected for a rogue-peer connection warning, and the two
+E83 OpenOCD page-tail erase diagnostics are documented expected flashing
+diagnostics (STATUS.md "Build warning diagnostics" → "OpenOCD flashing
+diagnostics"), kept distinct from the G1 zero-actionable-warning claim.
+`fw-flash-dongle` probe-selection defect recorded as an open follow-up
+(STATUS.md "What does NOT work / open").  Full commands, suite counts, raw
+evidence directory and SHA-256 manifest, identity/controller proof, and
+per-run counters: `docs/development/refactor-r1-results.md` (status
+section) and `docs/development/refactor-r1-revalidation-handoff.md`.  The
+earlier `a79ac71` closure evidence is superseded.
 
 ### Files
 

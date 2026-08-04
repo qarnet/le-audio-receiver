@@ -1309,6 +1309,24 @@ All printed diagnostics are Kconfig/CMake configuration messages.
 | `__ASSERT()` statements globally ENABLED | Zephyr informational | Not a defect |
 | `drivers__watchdog`: No SOURCES given | Zephyr internal: `CONFIG_WATCHDOG=y` but no DT node on nRF54L15 board | WD disabled on nRF54L15 would change firmware behavior (watchdog is desired) and is out of scope for closeout; DT node is board-level, not repo |
 
+**OpenOCD flashing diagnostics (nRF5340/E83, e83-accepted-flash.log):**
+
+`flash write_image` of the two final HEX sections ends inside their last 4 KB
+flash page, so OpenOCD extends the erase to the page boundary before verified
+programming.  Expected, non-actionable flashing diagnostic — not a
+compiler/build warning and not "zero warnings" for the flash step.  Proven
+from build artifacts:
+
+| Observed range | Why | Proven image end |
+|---|---|---|
+| `Warn : Adding extra erase range, 0x0005b3e8 .. 0x0005bfff` (app core) | app image ends at `0x0005B3E8` (merged.hex last section `0x0005B3E0`+8, ELA `0x0005`); OpenOCD extends erase to the containing 4 KB page end `0x0005BFFF` | wholly inside `app` partition `0x00000000..0x000FC000` (build/nrf5340/partitions.yml) |
+| `Warn : Adding extra erase range, 0x01023d5c .. 0x01023fff` (net core) | net image ends at `0x01023D5C` (merged_CPUNET.hex last section `0x01023D50`+12, ELA `0x0102`); extended to page end `0x01023FFF` | wholly inside `hci_ipc` partition `0x01000000..0x01040000` |
+
+Page bases `0x0005B000`/`0x01023000` are `0x1000`-aligned and the partition
+manager aligns partitions to `0x4000` (nRF5340 4 KB flash pages); neither
+extended range crosses a partition boundary; `flash write_image` completes
+with exit 0 and zero Error lines (validated programming).
+
 ## Hardware in use
 
 Probe identities resolved at runtime via `nrf-probes` — no static serials in docs.
@@ -1361,6 +1379,16 @@ general non-480 rejection (its current concrete input is 240);
 uses cpuapp ASRC.  This is a known limitation, not a new failure, and not
 permission to implement 360-frame offload (deferred feature — see the
 deferred list in `docs/development/refactor-plan.md`).
+
+### `fw-flash-dongle` probe-selection defect (OPEN follow-up)
+
+`scripts/bin/fw-flash-dongle` selects any nRF53 target via
+`nrf-probes --find nrf53` and feeds that serial into `interface/jlink.cfg`
+(the DK's onboard J-Link), so with the lab Pico CMSIS-DAP probe wired to the
+E83 receiver it fails with `No J-Link device found`.  Worked around during
+R1 revalidation by running the identical OpenOCD sequence with J-Link
+auto-detection.  Fixing the script is a **known open follow-up**, deferred
+(outside R1 scope; needs its own tests and gate).
 
 ### I2S20 hardware evidence
 
