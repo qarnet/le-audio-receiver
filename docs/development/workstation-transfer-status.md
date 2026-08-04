@@ -1,8 +1,8 @@
 # Workstation transfer status — pre-refactor testing track
 
-Date: 2026-08-02 (updated with the T7 evidence-fix commit).  Documentation-
-only state handoff.  No production code, scripts, tests, baseline, or
-configs were touched by the edits that accompany this document.
+Date: 2026-08-04 (T8 ACCEPTED final update).  Documentation-only state
+handoff.  No production code, scripts, tests, baseline, or configs were
+touched by the edits that accompany this document.
 
 ## Objective
 
@@ -12,19 +12,21 @@ without re-deriving facts: what is accepted, what is implemented-but-unproven,
 what evidence is still missing, which files are dirty, and what the next
 bounded steps and final commands are.
 
-## Current state (2026-08-02, after the T7 evidence-fix commit)
+## Current state (2026-08-04, after the T8 acceptance closeout)
 
 - Branch: `handoff/workstation-transfer`.
-- Transfer anchor: `98e4920788e1b6c6154f25a13e2e4e6ff8e54d62` — "docs:
-  prepare pre-refactor work for workstation transfer" (docs-only).  This
-  document's pre-transfer state was committed there; the T7 evidence-fix
-  commit sits on top of it.
-- Working tree at the time of the acceptance run: **clean** at the
-  transfer anchor (see "Historical dirty files" — the previously dirty
-  edits are now committed in `98e4920`).
-- The T7 evidence-fix commit that records T7 acceptance is the current
-  HEAD of `handoff/workstation-transfer`; the transfer anchor `98e4920` is
-  its parent.
+- T0–T8 all ACCEPTED.  Exact accepted production code commit: **`971e6a4`**
+  (per-CIS ISO sequence-gap concealment); coverage-baseline commit
+  `1a5842d`; final docs commit `3c29421` (current HEAD).
+- Final software gate on the exact final code: **47 PASS / 0 FAIL /
+  47 TOTAL** (28 twister + 4 exec + 12 Python + coverage + matrix + BSim);
+  the final run's log/runtime is not retained (closest retained full-gate
+  log: 46/46 on `ac1fa06`, `/tmp/opencode/gate1.log`).  Coverage baseline
+  accepted at `1a5842d` (26 files: lines 3281/3722, branches 1433/2041,
+  functions 205/205); builds 3/3; build contract 76/76; zero actionable
+  warnings.  Full hardware evidence:
+  `docs/testing/pre-refactor-hardware-baseline.md` (T8 ACCEPTED).
+- Working tree **clean** at `3c29421`.
 - Base / upstream `main`: `20b37c405835e5c2c747fa7b072c4c0b752b29cd`
   (PR #3 merge, Xiao RF-switch fix).
 
@@ -52,7 +54,7 @@ bounded steps and final commands are.
 | T5 — lifecycle, timing, drift, actuators | ACCEPTED (2026-08-01) | `STATUS.md` |
 | T6 — boot, shell, resolved-config contracts | ACCEPTED (2026-08-02) | `STATUS.md`, `docs/development/pre-refactor-testing-t6-handoff.md` |
 | T7 — coverage enforcement | **ACCEPTED (2026-08-02)** | `STATUS.md` (T7 section), `docs/testing/coverage-matrix.md`, `docs/development/pre-refactor-testing-t7-stage1-handoff.md`, `-t7-stage2-handoff.md`, `-t7-evidence-fix-handoff.md` |
-| T8 — hardware baseline freeze | **IN PROGRESS (2026-08-02) — NOT ACCEPTED** | `docs/testing/pre-refactor-hardware-baseline.md` (nRF54L15 Stage 2 complete, one flagged row; nRF5340 Stage 3 not started — hardware absent) |
+| T8 — hardware baseline freeze | **ACCEPTED (2026-08-04)** | `docs/testing/pre-refactor-hardware-baseline.md` — both matrices pass on the exact final code `971e6a4` (nRF54L15 Mode A/B 120, bonded reconnect, FLPR hang Mode A 16/16 + Mode B 16/16 earlier, Phase 3 3/3; E83 Mode A 120, Mode B 120 fresh + bonded, Mode B 300; zero underruns/faults; APLL ppm −500; sequence-gap activation documented as an evidence limitation) |
 
 ## Key T7 commit chain
 
@@ -98,6 +100,19 @@ Code/tooling (oldest → newest), per `git log` on `8f7bfca`:
   `1d90873`) — nRF54L15 Stage 2 run to completion with one flagged row;
   nRF5340 Stage 3 not started (hardware absent).  See
   `docs/testing/pre-refactor-hardware-baseline.md`; T8 NOT ACCEPTED.
+  *(Historical record of the Aug 2 state — superseded by the T8 ACCEPTED
+  closeout below.)*
+- T8 closeout (2026-08-03/04, commits `8fd7bb0`/`6578a9c`/`19bec75`/
+  `46100a9`/`a40f75e`/`4488f53`/`c056936`/`7c1205b`/`9b78d87`/`ac1fa06`/
+  `1a4d27f`/`4ef25b2`/`3df6da8`/`971e6a4`/`1a5842d`/`3c29421`) — pairing
+  filter, BlueZ preserve-bond fixes, Mode A assembler, teardown writer,
+  hang-gate baseline hardening, and per-CIS ISO sequence-gap concealment
+  (`971e6a4`, final production code).  Both hardware matrices pass; final
+  software gate 47 PASS / 0 FAIL / 47 TOTAL (final run log/runtime not
+  retained; closest retained full-gate log 46/46 on `ac1fa06`); coverage
+  baseline accepted at `1a5842d`; builds 3/3; build contract 76/76.
+  **T8 ACCEPTED (2026-08-04)** — see
+  `docs/testing/pre-refactor-hardware-baseline.md`.
 
 ## T7 metrics (committed baseline, never lowered)
 
@@ -184,55 +199,59 @@ change in the T7 chain is the warning-only test-config fix in `8f7bfca`
 At the time of writing there is **no running task**: no long test, no
 hardware session, no build, no flash, no gate run, no commit/push/merge/PR
 in progress.  The workstation repo is clean on `handoff/workstation-transfer`
-after the T7 evidence-fix commit.
+at `3c29421` (T8 ACCEPTED).
 
 ## Next bounded steps
 
-1. T7 is ACCEPTED with exact evidence (above).  Nothing further for T7.
-2. **T8 in progress (2026-08-02)** — nRF54L15 Stage 2 done on `ace13ff`
-   (Mode A/B 120 s ×2 + reconnects, FLPR hang Mode B 16/16, Phase 3 gate
-   exit 0; FLPR hang Mode A 15/16 flagged — `frame_count_plausible` under
-   8-14% RF loss — and Mode A underruns flagged; evidence in
-   `docs/testing/pre-refactor-hardware-baseline.md`).  Remaining before
-   acceptance: orchestrator disposition of the flagged rows, then
-   nRF5340 Stage 3 (E83 probe + `/dev/ttyUSB0` currently absent) and the
-   final acceptance pass.
+1. T7 and T8 are ACCEPTED with exact evidence.  Nothing further for the
+   pre-refactor hardware baseline.  The pre-refactor track (T0–T8) is
+   complete; the final pre-refactor gate (test-all 47/47, coverage, three
+   builds, build contract 76/76) is recorded in
+   `docs/testing/pre-refactor-hardware-baseline.md` and the plan's
+   "Final pre-refactor gate" section.
+2. Refactoring analysis may begin per the plan (duplicate implementations,
+   missing abstractions, ownership/state-machine improvements, readability,
+   diagnostics).
 
-## Canonical gate composition (42 children)
+## Canonical gate composition (47 children)
 
 From `scripts/test-all.sh` (header + run order):
 
-- **25 Twister C suites** (testcase.yaml): actuator_apll,
+- **28 Twister C suites** (testcase.yaml): actuator_apll,
   actuator_apll_nohfclk, actuator_none, actuator_sample_adjust_historical,
   app_lifecycle, asrc, audio_i2s, audio_i2s_identity, audio_shell,
-  audio_shell_noperf, audio_shell_nrf54, decode, drift, flpr_handshake,
-  flpr_protocol, flpr_ring_mgr, flpr_runtime, lifecycle, perf,
-  rate_convert, stats, timing, timing_none, timing_nrf54, volume.
+  audio_shell_noperf, audio_shell_nrf54, bt_pairing_policy (T8), decode,
+  drift, flpr_handshake, flpr_protocol, flpr_ring_mgr, flpr_runtime,
+  iso_seq (T8), lifecycle, modea (T8), perf, rate_convert, stats, timing,
+  timing_none, timing_nrf54, volume.
 - **4 exec-only C suites** (CMakeLists.txt, no testcase.yaml):
   audio_offload, flpr_audio_process, flpr_ring, offload_asrc.
-- **10 Python suites**: gate, flpr_stall_gate, flpr_hang_gate,
+- **12 Python suites**: gate, flpr_stall_gate, flpr_hang_gate,
   bluez_wp_gate, bluez_wp_phase3_gate, bsim_runner, build_contract,
-  hci_raw_connect (T8), test_matrix, test_coverage_runner.
-- **1 coverage child**: `test-coverage.sh` default mode (rebuilds the 25
-  twister + 4 exec suites with `CONFIG_COVERAGE=y`, enforces the committed
-  baseline; requires a clean worktree).
+  hci_raw_connect (T8), bap_central_policy (T8), bap_central_writer (T8),
+  test_matrix, test_coverage_runner.
+- **1 coverage child**: `test-coverage.sh` default mode (rebuilds the
+  twister + exec suites with `CONFIG_COVERAGE=y`, enforces the committed
+  baseline at `1a5842d`; requires a clean worktree).
 - **1 matrix child**: `check-test-matrix.py --coverage-json` on the
   coverage run's `coverage.json` (zero-hit functions, public API outcome
   ledger, state transitions, witnesses).
 - **1 BSim child**: `bsim: stage1` (T4 15-scenario BAP matrix,
   scenarios 1–8 twice, pinned hashes, strict parse).
 
-25 + 4 + 10 + 1 + 1 + 1 = **42**.
+28 + 4 + 12 + 1 + 1 + 1 = **47**.
 
-## Final commands (T7 gate + T8 preconditions)
+## Final commands (T8 final gate + final pre-refactor gate)
 
 ```bash
-# Canonical full gate (exact T7 commit 8f7bfca; detached clone — a git
-# worktree cannot host the gate because test-coverage.sh requires a real
-# .git directory; run in the flake dev shell so gcovr is present).
-# Recorded ACCEPTED: 41 PASS / 0 FAIL / 41 TOTAL, exit 0, elapsed 816 s
-# (13m36s), zero Kconfig assigned-value warnings (2026-08-02).
-./scripts/test-all.sh          # observed 41 PASS / 0 FAIL / 41 TOTAL
+# Final pre-refactor gate (exact final code 971e6a4 / baseline 1a5842d /
+# docs 3c29421; detached clone — a git worktree cannot host the gate
+# because test-coverage.sh requires a real .git directory; run in the
+# flake dev shell so gcovr is present).
+# Recorded ACCEPTED: 47 PASS / 0 FAIL / 47 TOTAL (final run log/runtime
+# not retained; closest retained full-gate log: 46 PASS / 0 FAIL /
+# 46 TOTAL on ac1fa06 in /tmp/opencode/gate1.log, 2026-08-03).
+./scripts/test-all.sh          # observed 47 PASS / 0 FAIL / 47 TOTAL
 ./scripts/test-coverage.sh     # default mode: baseline enforcement
 # matrix checker consumes the coverage run's coverage.json; inside
 # test-all.sh the coverage child writes it under its $TMP_ROOT/coverage
@@ -278,8 +297,8 @@ nRF5340:
 
 Record commands, commits, hashes, counters, logs, durations, and raw probe
 identity evidence in `docs/testing/pre-refactor-hardware-baseline.md`
-(not yet created — T8 not started).  User may add audibility evidence, but
-measurable automated gates do not depend on it.
+(final record: T8 ACCEPTED, 2026-08-04).  User may add audibility evidence,
+but measurable automated gates do not depend on it.
 
 ## Hardware safety / probe / central / serial rules
 
@@ -322,8 +341,9 @@ Per `docs/development/pre-refactor-testing-t0-review-fix-handoff.md`
    ref.
 5. Add a detached temporary worktree from that exact ref under `/tmp`.
 6. Run `./scripts/test-all.sh` in the correct development shell from that
-   worktree.  Require the exact **41 PASS / 0 FAIL / 41 TOTAL** line plus
-   elapsed runtime.
+   worktree.  Require the exact **47 PASS / 0 FAIL / 47 TOTAL** line plus
+   elapsed runtime (the final T8 gate; earlier phases used the then-current
+   child count — 41 at T7).
 7. Return the workstation repo to clean `main`; remove the temporary
    worktree, temporary ref, and bundle artifacts.
 8. Verify the final tested commit hash equals the desktop branch HEAD.

@@ -1,6 +1,14 @@
 # Phase T8 handoff — hardware baseline freeze
 
-Status: ready for execution after T7 acceptance on `8f7bfca`.
+Status: **ACCEPTED (2026-08-04)** — executed and closed; this document is
+the historical execution handoff.  Acceptance record, final hardware
+matrix, final software gate (47 PASS / 0 FAIL / 47 TOTAL on the exact final
+code `971e6a4`, coverage-baseline `1a5842d`, final docs `3c29421`), and the
+sequence-gap evidence limitation are in
+`docs/testing/pre-refactor-hardware-baseline.md`, `STATUS.md`,
+`docs/development/pre-refactor-testing-plan.md` (Phase T8 row), and
+`docs/development/workstation-transfer-status.md`.  Original execution
+status at creation: ready for execution after T7 acceptance on `8f7bfca`.
 
 ## Goal
 

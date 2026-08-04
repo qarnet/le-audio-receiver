@@ -8,7 +8,7 @@
 Test plan accepted: `docs/development/pre-refactor-testing-plan.md`.  Phases
 T0–T8 lock current supported behavior before large-scale refactoring.
 
-**Current status (2026-08-02):** T0–T7 ACCEPTED.  **T7 ACCEPTED** —
+**Current status (2026-08-04):** T0–T8 ACCEPTED.  **T7 ACCEPTED** —
 canonical gate observed exact **41 PASS / 0 FAIL / 41 TOTAL** (25 twister +
 4 exec + 9 Python + coverage + matrix + BSim) on the exact code commit
 `8f7bfca` (the T7 warning-fix commit), script exit 0, elapsed 816 s
@@ -17,15 +17,27 @@ that exact commit, with **zero Kconfig assigned-value warnings and zero
 compiler warnings** (full provenance in the T7 section).  Baseline
 provenance unchanged: baseline generated on clean `c6adce8`, committed and
 wired in `4a31324`, warning-only test-config correction (`8f7bfca`)
-afterward.  **T8 IN PROGRESS — not accepted** — nRF54L15 Stage 2 matrix
-run to completion on `ace13ff` (one flagged row, see
-`docs/testing/pre-refactor-hardware-baseline.md`); nRF5340 Stage 3 not
-started (hardware absent).  Canonical gate on the final T8 code commit
-`1d90873` observed exact **42 PASS / 0 FAIL / 42 TOTAL** (T8 added the
-hci_raw_connect python suite: 25 twister + 4 exec + 10 Python + coverage +
-matrix + BSim), exit 0, zero Kconfig assigned-value warnings; coverage
-baseline enforcement PASS on the committed baseline with zero drift.
-Transfer/status handoff:
+afterward.  **T8 ACCEPTED (2026-08-04)** — hardware baseline freeze complete
+on the exact final production code commit **`971e6a4`** (per-CIS ISO
+sequence-gap concealment; coverage-baseline commit `1a5842d`, final docs
+commit `3c29421`).  Both hardware matrices pass: nRF54L15 Mode A/B 120 s
+fresh (zero underruns under 21–30% RF loss), bonded reconnect, FLPR hang
+Mode A 16/16, Mode B 16/16 (earlier), Phase 3 full 3/3; nRF5340/E83 Mode A
+120, Mode B 120 fresh + bonded reconnect, Mode B 300, zero
+`i2s_nrfx`/underrun/reset/decode faults, APLL ACTIVE ppm −500, no DAC
+connected and no audibility claim.  Final software gate on the exact final
+code: **47 PASS / 0 FAIL / 47 TOTAL** (28 twister + 4 exec + 12 Python +
+coverage + matrix + BSim; the final run's log/runtime not retained — closest
+retained full-gate log is 46/46 on `ac1fa06`), coverage baseline accepted at
+`1a5842d` (26 files: 3281/3722 lines, 1433/2041 branches, 205/205
+functions), builds 3/3, build contract 76/76, zero actionable warnings.
+One explicit evidence limitation: `audio_iso_seq` gap activation was NOT
+observable on hardware (clean E83 link — no SW Split/controller/BSim API can
+induce it deterministically); the exact gap behavior is covered by the
+18-test `iso_seq` production-module suite + prior T9 failing-hardware
+provenance, and the new runs prove zero regressions — documented, not a
+hardware activation claim.  Full evidence:
+`docs/testing/pre-refactor-hardware-baseline.md`.  Transfer/status handoff:
 `docs/development/workstation-transfer-status.md`.
 
 **Phase T0 — behavior contract and honest coverage map** — ACCEPTED (2026-07-31).
@@ -681,19 +693,27 @@ gate evidence below).
   pristine production builds (`fw-build-5340`, `fw-build-54l15`,
   `fw-build-dongle`) pass with zero warnings; `git diff --check` clean;
   both repos left clean.
-- **T8 (hardware baseline freeze) IN PROGRESS — not accepted** — see the
-  plan Phase T8 and `docs/testing/pre-refactor-hardware-baseline.md`.
-  nRF54L15 Stage 2: Mode A/B 120 s x2 + reconnects PASS, FLPR hang gate
-  Mode B PASS (16/16), Phase 3 lifecycle gate PASS (exit 0), FLPR hang
-  gate Mode A 15/16 (flagged: `frame_count_plausible` under 8-14% RF
-  loss, all firmware-recovery checks pass), Mode A underruns flagged
-  (RF-loss starvation, auto-recovered).  Three tooling commits
-  (`2988e1c`, `e8dbc1c`, `1d90873`) and one firmware fix (`ace13ff`:
+- **T8 (hardware baseline freeze) ACCEPTED (2026-08-04)** — exact final
+  production code commit `971e6a4` (coverage-baseline `1a5842d`, final docs
+  `3c29421`); both hardware matrices pass (see
+  `docs/testing/pre-refactor-hardware-baseline.md`).  Final software gate
+  47 PASS / 0 FAIL / 47 TOTAL (final run log/runtime not retained; closest
+  retained full-gate log 46/46 on `ac1fa06`); coverage baseline accepted at
+  `1a5842d`; builds 3/3; build contract 76/76; zero actionable warnings.
+  T8 fixes landed during the phase: pairing filter (`8fd7bb0` BONDED_ONLY
+  controller filter + production pairing reset), BlueZ preserve-bond /
+  reconnect (`19bec75`, `46100a9`, `a40f75e`, `4488f53`), hang-gate
+  baseline hardening (`c056936`, `1a4d27f`, `4ef25b2`, `3df6da8`), Mode A
+  assembler (`7c1205b`), teardown writer (`9b78d87`), and per-CIS ISO
+  sequence-gap concealment (`971e6a4` + 18-test `iso_seq` suite), on top of
+  the earlier T8 tooling/firmware fixes (`2988e1c`, `e8dbc1c`, `ace13ff`:
   keep validated codec shape off the BT RX WQ stack — 18.4 KB local
   overflowed the 4096 B RX stack; fixed with a five-scalar
   `struct codec_shape`, lc3_config 18400→192 B / lc3_enable 18344→144 B
-  per `-fstack-usage`).  nRF5340 Stage 3 NOT STARTED — E83 probe and
-  `/dev/ttyUSB0` absent.
+  per `-fstack-usage`, `1d90873`).  The earlier flagged rows (Mode A
+  underruns, FLPR hang Mode A 15/16) are superseded by the final accepted
+  rows (zero underruns, 16/16) and recorded as historical in the baseline
+  doc.
 
 ### T5 review-fix round (2026-08-01)
 

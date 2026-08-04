@@ -435,7 +435,15 @@ state-machine improvements, readability work, and diagnostic improvements.
     observed exact `41 PASS / 0 FAIL / 41 TOTAL`, exit 0, elapsed 816 s
     (13m36s), zero Kconfig assigned-value warnings (see `STATUS.md` T7
    section and `docs/development/workstation-transfer-status.md`).
-9. T8 — hardware baseline freeze — IN PROGRESS (2026-08-02; nRF54L15 Stage 2
-   rows run on `ace13ff`, one flagged row + Stage 3 pending — see
-   `docs/testing/pre-refactor-hardware-baseline.md`; final gate 42/42 on
-   `1d90873`).
+9. T8 — hardware baseline freeze — **ACCEPTED (2026-08-04)** — both
+   hardware matrices pass on the exact final production code `971e6a4`
+   (nRF54L15 + nRF5340/E83; coverage-baseline `1a5842d`, final docs
+   `3c29421`); final software gate **47 PASS / 0 FAIL / 47 TOTAL** on the
+   exact final code (final run log/runtime not retained; closest retained
+   full-gate log 46/46 on `ac1fa06`); coverage baseline accepted; builds
+   3/3; build contract 76/76; zero actionable warnings.  See
+   `docs/testing/pre-refactor-hardware-baseline.md` (T8 ACCEPTED).  One
+   documented evidence limitation: per-CIS ISO sequence-gap activation was
+   not observable on hardware (clean E83 link) — covered by the 18-test
+   `iso_seq` production-module suite + prior T9 failing-hardware
+   provenance, not a hardware activation claim.

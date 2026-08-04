@@ -1,50 +1,87 @@
-# Pre-refactor hardware baseline — T8 evidence (nRF54L15 complete; nRF5340 pending)
+# Pre-refactor hardware baseline — T8 evidence (ACCEPTED)
 
-Status: **T8 IN PROGRESS — not accepted.**  nRF54L15 Stage 2 matrix run to
-completion with one flagged row; nRF5340 Stage 3 not started (hardware
-absent).  This document records exact commands, commits, counters, logs,
-probe evidence, warning dispositions, and verdicts.
+Status: **T8 ACCEPTED (2026-08-04).**  Final record — supersedes the earlier
+in-progress draft (2026-08-02).  Both hardware matrices (nRF54L15 and
+nRF5340/E83) pass on the exact final production code; every required stream
+row has direct evidence; the only evidence limitation (per-CIS ISO
+sequence-gap activation, see below) is documented explicitly and does not
+block acceptance.
 
-- Date: 2026-08-02 (workstation `thomas-workstation`).
+- Date: 2026-08-04 (workstation `thomas-workstation`).
 - Branch: `handoff/workstation-transfer`.
-- Firmware-under-test commit: **`ace13ff`** (fix: keep validated codec shape
-  off the BT RX WQ stack) — the exact flashed build; docs-only parent
-  `029bde4`; tooling commits `2988e1c`, `e8dbc1c`, `1d90873`.
+- Exact accepted production code commit: **`971e6a4`** — "fix: conceal
+  per-CIS ISO sequence gaps from omitted callbacks" (the flashed build on
+  both targets).
+- Coverage-baseline commit: `1a5842d` (refresh for `audio_iso_seq`, generated
+  on clean `971e6a4`).
+- Final docs commit (this record's HEAD): `3c29421`.
 - NCS: v3.3.0 (`/home/thomas-workstation/ncs/v3.3.0`).
-- Final software gate commit: `1d90873` (scripts-only delta vs `ace13ff`).
+- Final software gate: **47 PASS / 0 FAIL / 47 TOTAL** on the exact final
+  code (see "Final software gate" — exact runtime of the final run is not
+  retained; closest retained full-gate log is 46/46 on `ac1fa06`).
 
 ## Worktree / commit history
 
+Full T8 chain from the T7 base `029bde4` (oldest → newest):
+
 ```
-1d90873 fix: gate reads status until quiet and diffs lifetime recovery counters
-ace13ff  fix: keep validated codec shape off the BT RX WQ stack
-e8dbc1c  fix: correct connect dispatch, HCI filter size, and helper liveness gate
+029bde4  docs: record T7 warning-fix gate evidence on 8f7bfca    (T8 handoff base)
 2988e1c  fix: retry confirmed raw-HCI connect and gate bap_central on ready line
-029bde4  docs: record T7 warning-fix gate evidence on 8f7bfca   (T8 handoff base)
+e8dbc1c  fix: correct connect dispatch, HCI filter size, and helper liveness gate
+ace13ff  fix: keep validated codec shape off the BT RX WQ stack   (stack overflow fix)
+1d90873  fix: gate reads status until quiet and diffs lifetime recovery counters
+3214ce4  docs: record T8 nRF54L15 baseline evidence; T8 in progress   (first draft)
+8fd7bb0  feat: bonded-only controller filter with production pairing reset
+6578a9c  chore: refresh coverage baseline for pairing-policy module
+19bec75  fix: defer pairing-reset restart while a link is tearing down
+46100a9  fix: preserve-bond reconnect via BlueZ Connect, no raw-HCI helper
+a40f75e  fix: snapshot pairing-policy state, serialize reset under adv lock
+4488f53  fix: fresh BlueZ reconnect when device already connected
+c056936  fix: hang gate reads last status block, not first
+7c1205b  fix: Mode A assembler with per-channel PLC for missing CIS SDUs
+9b78d87  fix: keep central writer feeding during BAP teardown
+ac1fa06  coverage: refresh baseline for Mode A assembler module
+1a4d27f  fix: snapshot writer transports; pin hang-gate receiver address
+4ef25b2  fix: hang-gate baseline poll reads status until quiet
+3df6da8  fix: hang-gate baseline treats absent Runtime line as zero
+971e6a4  fix: conceal per-CIS ISO sequence gaps from omitted callbacks   (FINAL CODE)
+1a5842d  coverage: refresh baseline for audio_iso_seq module
+3c29421  docs: record baseline refresh and iso_seq suite in coverage matrix   (HEAD)
 ```
-Working tree clean at acceptance time except the untracked T8 handoff doc.
 
-## Tooling fixes landed during T8 (all committed, all verified)
+Working tree clean at acceptance time (HEAD `3c29421`).
 
-1. `2988e1c` — hci_raw_connect.py confirmed-connect retry helper
+## Tooling and code fixes landed during T8 (all committed, all verified)
+
+1. `2988e1c` — `hci_raw_connect.py` confirmed-connect retry helper
    (LE Extended Create Connection 0x2043, HCI event parsing, per-attempt
    timeout → LE Create Connection Cancel 0x200E → retry, bounded
    `--connect-deadline`, machine-readable `HCI_CONNECT_READY`/
-   `HCI_CONNECT_FAIL` lines); bap_central.py gates on the ready line +
-   helper liveness + BlueZ Device1 Connected; 34-test stdlib unittest
-   suite wired into test-all.sh (python suites 9 → 10).
+   `HCI_CONNECT_FAIL` lines); `bap_central.py` gates on the ready line +
+   helper liveness + BlueZ Device1 Connected.
 2. `e8dbc1c` — four live-test fixes: `_dispatch([begin_attempt()])` list
-   wrap, 16-byte `struct hci_filter` pack, bap_central failure-path stdout
-   drain, and `poll() is None` liveness wrapping (the `wait_for_helper_ready`
-   is_alive contract).
-3. `ace13ff` — firmware: `struct codec_shape` replaces the ~18.4 KB
-   `struct bt_sink shape` locals on the BT RX WQ stack (see root-cause
-   below).
-4. `1d90873` — flpr_hang_gate.py: `_read_status()` (read until quiet, fixes
-   truncated status capture) and baseline-diff of lifetime recovery counters
-   (`recovery_attempts`/`runtime_restarts`/`probation_cleared` are preserved
+   wrap, 16-byte `struct hci_filter` pack, `bap_central` failure-path stdout
+   drain, `poll() is None` liveness wrapping.
+3. `ace13ff` — firmware stack-overflow fix (root cause below).
+4. `1d90873` — `flpr_hang_gate.py` `_read_status()` (read until quiet) and
+   baseline-diff of lifetime recovery counters
+   (`recovery_attempts`/`runtime_restarts`/`probation_cleared` persist
    across stream sessions on the same boot; `== 1` checks failed on repeat
-   runs).
+   runs).  `c056936` (read last status block, not first), `4ef25b2` (poll
+   status until quiet) and `3df6da8` (absent Runtime line treated as zero)
+   complete the hang-gate baseline hardening.
+5. `8fd7bb0` — production pairing filter: bonded-only controller filter with
+   production pairing reset (see "Pairing filter phase").
+6. `19bec75` / `46100a9` / `a40f75e` / `4488f53` — BlueZ preserve-bond and
+   reconnect fixes (see "BlueZ preserve-bond fixes").
+7. `7c1205b` — Mode A assembler with per-channel PLC for missing CIS SDUs
+   (production `src/audio_modea.c` + `modea` suite).
+8. `9b78d87` — central writer keeps feeding during BAP teardown (removes the
+   teardown-boundary `i2s_nrfx: Next buffers not supplied on time` seen on
+   the Aug 3 intermediate E83 run; see superseded rows).
+9. `971e6a4` — per-CIS ISO sequence-gap concealment (production
+   `src/audio_iso_seq.{c,h}` + 18-test `iso_seq` suite); see the evidence
+   limitation below.
 
 ## Root cause: BT RX WQ stack overflow (found by T8, fixed in `ace13ff`)
 
@@ -75,169 +112,331 @@ diagnostic (compiler evidence, not a test):
 lc3_config  18400 -> 192 B   (dynamic,bounded)
 lc3_enable  18344 -> 144 B
 ```
+
 Evidence files: `/tmp/t8/stack-evidence/bt_bap.su` (before/after), the
-compile commands, and probe logs.
+compile commands, and probe logs.  Live verification (fresh pairing,
+controlled central, post-fix): Mode A 120 s completed — `ASE Config` at the
+exact conn/ep addresses from the fault registers, both ASEs configured,
+streams started, 12000 frames @ 100.0 fps, `decode_err=0`, zero faults.
 
-Live verification (fresh pairing, controlled central, post-fix): Mode A 120 s
-completed — `ASE Config` at the exact conn/ep addresses from the fault
-registers, both ASEs configured, streams started, 12000 frames @ 100.0 fps,
-`decode_err=0`, zero faults.
+## Pairing filter phase (2026-08-03, `8fd7bb0` + chain)
 
-## Probe identity evidence (raw, per flash)
+Production pairing-policy module `src/bt_pairing_policy.{c,h}` with the
+bonded-only controller filter:
 
-`nrf-probes` immediately before each flash:
+- When any bond exists the policy is `BONDED_ONLY`: the controller filter
+  accept list (FAL, `CONFIG_BT_FILTER_ACCEPT_LIST=y`, see build contract
+  `[54l15-034]`) is rebuilt at each advertising restart from the bonded
+  entries only (`bt_bap.c` pairing-policy integration).  Unbonded peers are
+  not on the FAL, so the controller filters their connect requests.
+- Defense in depth: the `pairing_accept` callback rejects any unbonded peer
+  with `LOG_WRN("Pairing rejected (BONDED_ONLY): unbonded peer …")` +
+  `BT_SECURITY_ERR_PAIR_NOT_ALLOWED` (no HCI from the callback; pure policy).
+- `bt unpair` on the shell now runs the production pairing reset
+  (`Pairing mode reset: bonds cleared; open pairing enabled.`) → OPEN mode
+  (no FAL) for fresh-pairing sessions; `a40f75e` snapshots the policy state
+  and serializes the reset under the advertising lock; `19bec75` defers the
+  pairing-reset restart while a link is tearing down.
+- Unbonded Intel-BT peer `64:49:7D:E3:53:40` (OUI Intel Corporate MA-L):
+  pre-filter sessions show it connecting and cycling `reason 0x05` auth-fail
+  disconnects every ~2–4 s (e.g. `54l15-modea-06.log`, Aug 2).  In bonded
+  (`BONDED_ONLY`) sessions its connect attempts are absent from the receiver
+  console — the preserve-bond run evidence notes "no Intel peer connect line
+  — filtered" (`54l15-preservebond-120-02-evidence.txt`).  This is the
+  "unbonded peer blocked by BONDED_ONLY FAL" observation.  In OPEN-mode
+  fresh-pair sessions the peer can connect and is rejected at pairing
+  (reason 0x05 / 0x3e disconnect cycles; e.g. the t10 Mode A run at
+  00:28:54 and the Phase 3 debug session) — expected open-mode behavior,
+  not a defect, and it did not disturb the streams (zero underruns/faults,
+  see the final matrix).
+
+Evidence: `/tmp/t8/pairing-filter/` (fresh-pair runs, modea clean/preserve
+runs, 5340/54l15 boots, `nrf-probes-0{1,2,3}.txt`, reset logs).
+
+## BlueZ preserve-bond fixes (2026-08-03)
+
+- `46100a9` — preserve-bond reconnect via BlueZ `Device1.Connect()`, no
+  raw-HCI helper (`--preserve-bond` path).
+- `4488f53` — fresh BlueZ reconnect when the device is already connected
+  (disconnect + `Device1.Connect()`).
+- `19bec75` / `a40f75e` — see pairing filter phase.
+
+Preserve-bond reconnect evidence (`/tmp/t8/54l15-preservebond-120-02-evidence.txt`,
+nRF54L15 on `a40f75e`+`4488f53`):
+`bap_central.py --peer-addr DB:A6:0C:05:A2:AA --preserve-bond --duration 120`;
+12000 frames @ 100.0 fps; receiver `Stream[0] summary: SDUs=12000
+decoded=24038 plc=38 decode_err=0 i2s_underrun=0 stream_reset=0` (SDUs
+12000/12000 — the RTN=2 retransmission duplicates are NOT losses); offload
+`submit=11896 success=11896 fallback=0`, all fault counters 0; `Pair()`
+skipped (bond already present); Warnings: NONE; VERDICT PASS.
+
+## Probe identity evidence (raw, per flash — session evidence only)
+
+`nrf-probes` immediately before each flash; OpenOCD output cross-confirms
+DPIDR.  No static probe→board mapping is recorded anywhere (doc hygiene
+rule); this is the evidence observed during the T8/T9/T10 sessions only.
+
+nRF54L15 (Seeed Xiao, `fw-flash-54l15` flashes 01–05 + t10):
 ```
 SERIAL 8EE9B3FF  Seeed Studio XIAO nrf54 CMSIS-DAP  nRF54L15  DPIDR 0x6ba02477  PART 0x00054b15  VARIANT AAC0
 ```
-OpenOCD (fw-flash-54l15, each of flashes 01-04):
-`CMSIS-DAPv2 VID:PID=0x2886:0x0066 serial=8EE9B3FF`, `SWD DPIDR 0x6ba02477`,
-Cortex-M33 r1p0, cpuapp 508,968 B + FLPR 32,332 B downloaded and verified,
-`reset run`.  AP IDR map: `nrf-probes` has no verbose option (`--help` shows
-only `--find`) — recorded as a tool limitation; DPIDR cross-confirmed in
-OpenOCD output.  No static probe→board table is recorded anywhere.
+OpenOCD: `CMSIS-DAPv2 VID:PID=0x2886:0x0066 serial=8EE9B3FF`, `SWD DPIDR
+0x6ba02477`, Cortex-M33 r1p0, cpuapp + FLPR downloaded and verified.
 
-nRF5340/E83 probe: **absent** — `nrf-probes` lists only the Xiao probe;
-`/dev/ttyUSB0` does not exist.  Stage 3 not run.
+nRF5340 (Ebyte E83, `fw-flash-5340`):
+```
+SERIAL E6635C08CB1F502B  Pico CMSIS-DAP  nRF5340  DPIDR 0x6ba02477  PART 0x00005340  VARIANT QKAA
+```
+OpenOCD (t10 flash log): `CMSIS-DAPv2 VID:PID=0x2e8a:0x000c,
+serial=E6635C08CB1F502B`, `SWD DPIDR 0x6ba02477`, Cortex-M33 r0p4, both
+cores downloaded (`merged.hex` + `merged_CPUNET.hex`) and verified.
+
+AP IDR map: `nrf-probes` has no verbose option (`--help` shows only
+`--find`) — recorded as a tool limitation; DPIDR cross-confirmed in OpenOCD
+output.  Central-side note (not a receiver defect): the DK netcore SDC
+returned HCI 0x0d (Limited Resources) after abortive raw-HCI connects;
+recovery required `btmgmt find` → `hciconfig hci0 reset` before each
+connect session, and the dongle was reflashed via J-Link (serial
+001050023938) twice during the session.
 
 ## Central / environment
 
 - Central: nRF5340DK `hci_uart` attached as hci0 on /dev/ttyACM2 @ 1,000,000
   baud H4; BD_ADDR `C0:AA:BB:CC:DD:EE`; settings
   `powered le secure-conn cis-central`.
-- External Intel-BT peer `64:49:7D:E3:53:40` (OUI 64:49:7D = Intel
-  Corporate, MA-L) present throughout; it attempts a connect every ~2-4 s
-  (auth-fail 0x05 cycles once unbonded).  It was the trigger for the
-  original overflow (pre-fix) and is the dominant RF-interference source
-  (8-14% ISO packet loss; see dispositions).
+- Receiver consoles: nRF54L15 `/dev/ttyACM0`; nRF5340 `/dev/ttyUSB0`, both
+  115200 8N1.  Boot logs captured via `scripts/read_acm.py` before
+  flash/reset; stream-time console captured via serial-mcp (E83 connection
+  `e223c773-d2d1-4c67-9e69-195da70b5968`, nRF54L15
+  `ade859a0-a87d-4523-a26e-9d8fb5b270a7`).
+- External Intel-BT peer `64:49:7D:E3:53:40` present in several sessions;
+  see the pairing filter phase for its disposition.
 
-## Bond handling (authorized actions)
+## Final accepted hardware matrix (2026-08-04, code `971e6a4`)
 
-- `bt unpair` on the receiver shell (repo test command) cleared bonds before
-  fresh-pairing sessions; exact output `All bonds cleared.` captured
-  (`/tmp/t8/unpair-0{1,2,3,4,5,6}.log`).  In-progress pairing deletion
-  (`bt_smp: The in-progress pairing has been deleted!`) observed once as the
-  direct consequence of unpairing mid-pairing — documented, not a defect.
-- Stale workstation BlueZ device record removed once with evidence
-  (`bluetoothctl remove DB:A6:0C:05:A2:AA`; full GATT cache DEL dump shows
-  the stale PACS/ASCS/VCS records) after a gate run failed with
-  `Pair() → AlreadyExists` caused by BlueZ-side paired-flag vs receiver-side
-  bond mismatch.
-- No mass erase, no recovery, no probe-rs, no persistent-setting changes.
-
-## nRF54L15 Stage 2 matrix
-
-Flashes: `fw-flash-54l15` x4 (logs `/tmp/t8/flash-54l15-0{1,2,3,4}.log`).
-Boot acceptance (boot-04 on `ace13ff`): `BLE ready`, `settings_load() OK`,
-`VCP ready`, `Audio timing: GRTC+TIMER20+GPPI ready`, `I2S ready (48 kHz
-nom, 16-bit, stereo, 16 blocks)`, `FLPR handshake init OK`, `FLPR READY`,
-`FLPR READY_ACK sent`, PCM rings 481-frame capacity, `offload init OK`,
-`FLPR runtime init OK`, `Advertising as "LE Audio Receiver"`.  Zero
-warnings/faults at boot.
+### nRF54L15 (SDC controller)
 
 | Row | Command | Result | Receiver evidence |
 |---|---|---|---|
-| Mode A 120 s #1 | `bap_central.py --peer-addr DB:A6:0C:05:A2:AA --duration 120` | **PASS** (exit 0, 12000 frames @ 100.0 fps) | SDUs 10284/10285, decoded 24061 (=SDUs+PLC), plc 3492 (14.3% loss), decode_err 0, stream_reset 4 |
-| Mode A 120 s #2 (reconnect, no reset) | same | **PASS** (exit 0, 12000 frames) | SDUs 10284/10285, plc 3492, decode_err 0, stream_reset 3 |
-| Mode B 120 s #1 | `--stereo --duration 120` | **PASS** (exit 0, 12000 frames) | SDUs 11001, decoded 24040, plc 2038 (8.5%), decode_err 0, stream_reset 0 |
-| Mode B 120 s #2 (reconnect, no reset) | same | **PASS** (exit 0, 12000 frames) | SDUs 11001, decoded 24040, plc 2038, decode_err 0, stream_reset 0 |
-| Status evidence | `audio status`, `flpr offload`, `flpr status` after each run (+ injected mid-stream) | captured | audio: Decode errors 0, ASRC linear; offload: submit/success equal, fallback 0, all fault counters 0, recovery 0, probation 0; flpr: Healthy yes, Ready yes, RX dup/lost/missed/ooo 0, Errors 0 |
-| Mid-stream drift (Mode A reconnect, +60 s) | injected `audio status` | diagnostic | Drift state ACTIVE, Drift ppm −2000 (saturated at nRF54L15 clamp) |
-| Mid-stream perf (Mode B reconnect, +65 s) | injected `audio perf` | diagnostic | Slab free 9/10, Output frames 476/478, Push failures 0 |
-| FLPR hang gate Mode B | `flpr_hang_gate.py --duration 180 --stereo --port /dev/ttyACM0 --log …` | **PASS — 16/16 checks, exit 0** | ack, fallback, epoch change, probation cleared, recovery=1, restarts=1, all fault counters 0, frame_count plausible |
-| FLPR hang gate Mode A | `flpr_hang_gate.py --duration 180 --port /dev/ttyACM0 --log …` | **15/16 — flagged** (see disposition) | all firmware-recovery checks PASS; only `frame_count_plausible` fails |
-| Phase 3 lifecycle | `bluez-wireplumber-phase3-gate.py --receiver "LE Audio Receiver" --serial /dev/ttyACM0 --duration 120 --log-dir /tmp/t8/phase3-54l15 --stage full` | **PASS — exit 0** | 3/3 playbacks, fresh pair, disconnect, bonded reconnect, OpenOCD reset (no erase), bonded reconnect after reset, PACS/ASCS/VCS, WirePlumber sink restored; summaries decode_err 0 / i2s_underrun 0 / stream_reset 0 |
+| Mode A 120 s fresh | `bap_central.py --peer-addr DB:A6:0C:05:A2:AA --duration 120` | **PASS** (central 12000 frames @ 100.0 fps; t10 log) | Stream[0] SDUs=9486 decoded=24044 plc=5073 decode_err=0 i2s_underrun=0 stream_reset=0 (21% RF loss — Intel peer active; **zero underruns**); Stream[1] SDUs=9498 |
+| Mode B 120 s fresh | `--stereo --duration 120` | **PASS** (central 12000 frames; t10 log) | SDUs=8476 decoded=24062 plc=7110 decode_err=0 i2s_underrun=0 stream_reset=0 (30% RF loss; **zero underruns**) |
+| Bonded reconnect Mode A 120 s | `--preserve-bond --duration 120` (t9 run; t8 preserve-bond evidence on `a40f75e`+`4488f53`) | **PASS** (central 12000 frames @ 100.0 fps) | receiver SDUs=12000 decoded=24038 plc=38 decode_err=0 i2s_underrun=0 stream_reset=0; offload submit=11896 success=11896 fallback=0; faults 0 |
+| FLPR hang gate Mode A 180 s | `flpr_hang_gate.py --duration 180 --port /dev/ttyACM0 --log …` | **PASS — 16/16 checks, RESULT PASSED** (retained gate stdout `/tmp/opencode/hang3_stdout.log` → receiver log `/tmp/t9/flpr-hang-mode-a-180-accept3.log`; t10 rerun 16/16 per EVIDENCE-SUMMARY, I2S underruns 0) | ack 150 ms, ACTIVE after 851 ms, epoch changed, probation cleared, recovery attempts=1 / runtime restarts=1 (baseline-diffed), all fault counters 0, frame_count_plausible PASS, state ACTIVE, submit=18024 success=17979 fallback=45 |
+| FLPR hang gate Mode B 180 s (earlier, Aug 2 on `ace13ff`) | `flpr_hang_gate.py --duration 180 --stereo …` | **PASS — 16/16 checks, exit 0** (FLPR hang path unchanged through final code) | ack, fallback, epoch change, probation cleared, recovery=1, restarts=1, all fault counters 0 |
+| Phase 3 lifecycle full | `bluez-wireplumber-phase3-gate.py --stage full` | **PASS — 3/3 playbacks, zero faults** (Aug 3 session, receiver firmware `a40f75e`, pairing-filter era; phase3-54l15-05) | playback1 SDUs=16581 decoded=33468 plc=306; playback2 SDUs=16576 decoded=33444 plc=292; playback3 SDUs=4578 decoded=9458 plc=302; all decode_err=0 i2s_underrun=0 stream_reset=0; fresh pair + bonded reconnect + third playback |
+| Status / offload / hang evidence | `audio status`, `flpr offload`, `flpr status` captured per run | captured | Decode errors 0; offload submit=success, fallback 0, all fault counters 0; flpr Healthy yes, RX dup/lost/missed/ooo 0 |
+| Sequence-gap tracker on healthy path | all t10 runs | silent | Zero `ISO seq gap` / `seq discontinuity` / `i2s_nrfx: Next buffers` lines in all 54L15 final logs (tracker silent when delta == 1) |
 
-### FLPR hang gate Mode A — flagged row disposition
+Boot acceptance (t10 boot, `971e6a4`): `BLE ready`, `Identity:
+DB:A6:0C:05:A2:AA (random)`, `settings_load() OK`, `VCP ready`,
+`Audio timing: GRTC+TIMER20+GPPI ready`, `I2S ready (48 kHz nom, 16-bit,
+stereo, 16 blocks)`, `FLPR handshake init OK`, `FLPR READY`, `FLPR
+READY_ACK sent`, PCM rings 481-frame capacity, `offload init OK`, `FLPR
+runtime init OK`, `Advertising as "LE Audio Receiver"`.  Zero
+warnings/faults at boot.
 
-3 attempts (1 per run; stopped per two-attempt rule), all with every
-firmware-side check PASSING: FAULT_HANG ack, cpuapp fallback (>0), epoch
-change (restart), probation cleared, recovery attempts=1 (baseline-diffed),
-runtime restarts=1, fails=0, relapses=0, exhaustion=0, all integrity fault
-counters 0, state ACTIVE, resumed success.  The sole failing check,
-`frame_count_plausible`, expects `|submit − duration×100| ≤ 100`; observed
-submit 16599-16832 vs 18000 (shortfall ≈ 1200-1400 frames ≈ 12-14 s).
-Cause: 8-14% RF packet loss on the current link interacts with the Mode A
-TS-based half-pairing — a lost SDU on one CIS leaves its mate unpaired and
-it is discarded, so the decode/submit path permanently loses ~7% of frames.
-Mode B (single CIS, no pairing) passes the same check (submit within
-tolerance).  BSim T4 (lossless simulated link) passes Mode A strictly
-(pinned hashes), proving the pairing/decode path is correct.  The gate was
-validated in its Phase-6 era on a near-lossless RF link (no peer present);
-today's loss is environmental (external Intel-BT radio).  No firmware fault
-identified; no test weakened.  Disposition: row flagged, needs orchestrator
-decision (accept-with-documentation vs run in clean RF vs gate tolerance
-review).
+### nRF5340 / E83 (SW Split; the ISO sequence-gap defect target)
 
-### I2S underruns (Mode A only) — disposition
+| Row | Command | Result | Receiver evidence |
+|---|---|---|---|
+| Mode A 120 s fresh (integration recheck) | `bap_central.py --duration 120` | **PASS** (central 12000 frames @ 100.0 fps) | Stream[0] SDUs=11320 decoded=22640 plc=0 decode_err=0 i2s_underrun=0 stream_reset=0; Stream[1] SDUs=11336 |
+| Mode B 120 s fresh | `--stereo --duration 120` | **PASS** (central 12000 frames; t10 log) | SDUs=11659 decoded=23320 plc=2 decode_err=0 i2s_underrun=0 stream_reset=0 |
+| Mode B 120 s bonded reconnect | `--stereo --preserve-bond --duration 120` | **PASS** (central 12000 frames; t10 log) | SDUs=11658 decoded=23318 plc=2 decode_err=0 i2s_underrun=0 stream_reset=0 |
+| Mode B 300 s (extra) | `--stereo --duration 300` | **PASS** (central 30000 frames @ 100.0 fps; t10 log) | SDUs=29151 decoded=58302 plc=0 decode_err=0 i2s_underrun=0 stream_reset=0 |
+| Mid-stream `audio status` | injected (Mode B 60 s session) | diagnostic | Frames decoded 5354, Decode errors 0, I2S underruns 0, Stream resets 0, **Drift state ACTIVE, Drift ppm −500 (APLL steering)**, Resampler identity |
+| Mid-stream `audio perf` | injected | diagnostic | Repeat fb 0 (perf measurement compiled out on the E83 production build; the repeat path's observable effect is i2s_underrun=0 / stream_reset=0, which held everywhere) |
+| Warning/error scan | all final E83 runs | **zero** | Zero `ISO seq gap` / `seq discontinuity` / `i2s_nrfx: Next buffers not supplied on time` lines across ALL E83 runs; underrun/reset/decode faults zero |
 
-Mode A runs: 4 and 3 `i2s_nrfx: Next buffers not supplied on time` +
-`audio_i2s: I2S underrun, restarting DMA` events (auto-recovered via
-TRIGGER_PREPARE per documented policy).  Mode B runs: 0.  Underrun offsets
-scattered (not fixed-period), consistent with loss-burst starvation from the
-14.3% RF loss at 200 ISO pkt/s (Mode B 8.5% loss at 100 pkt/s → no
-starvation).  Accepted Phase 4/6 baselines recorded zero underruns on a
-clean link.  Not a decode/integrity fault (decode_err 0, push failures 0,
-no assert); drift controller saturated at −2000 ppm matches the documented
-PCLK range (+1500..+1837 ppm feedforward, Phase 4b.2/5 evidence).
-Disposition: environmental (RF loss × dual-CIS), auto-recovered; flagged
-for the same orchestrator review.
+APLL evidence: `Drift state ACTIVE, Drift ppm −500` proves the APLL
+actuator is steering (identity rate path; repeat fallback zero in steady
+state per the counters above).
 
-## Warning scan (all Stage-2 logs)
+**No DAC was connected to the E83 and no audibility claim is made** for
+either target — all evidence is measurable receiver/central counters.
 
-Zero `FATAL` / `USAGE FAULT` / `Assert` / overflow post-`ace13ff`.  All
-`<wrn>`/`<err>` lines classified:
-- `flpr_ring: RING_RESET_ACK timeout` + `offload recovery: short ring reset
-  failed (-116), escalating to runtime restart` — expected FAULT_HANG
-  recovery path; runtime restart succeeded (documented policy).
-- `bt_conn: conn … failed to establish. RF noise?` — transient RF connect
-  failure from the external peer.
-- `I2S underrun, restarting DMA` — Mode A loss-burst starvation, auto
-  recovery (see disposition).
-- `bt_smp: The in-progress pairing has been deleted!` — direct consequence
-  of the authorized `bt unpair` mid-pairing.
-- Peer `reason 0x05` auth-fail cycles — normal rejection of the unbonded
-  external peer.
+## ISO sequence-gap concealment (`971e6a4`) — evidence limitation, not a hardware activation claim
 
-## Software gate on final commit `1d90873`
+The original T8 public hardware criteria — zero underruns/faults across the
+required streams on both targets — are met by the final matrix above.  The
+per-CIS ISO sequence-gap path (`src/audio_iso_seq.{c,h}`) could NOT be
+deterministically activated on hardware through the available SW Split /
+controller / BSim APIs:
 
-```
-./scripts/test-all.sh              → Gate complete: 42 PASS / 0 FAIL / 42 TOTAL, exit 0
-./scripts/test-coverage.sh --output /tmp/t8/coverage-final → baseline enforcement PASS,
-                                   lines 3070/3503 (87.6%), branches 1332/1921 (69.3%),
-                                   functions 182/182 (100%) — identical to committed baseline
-fw-build-5340 / fw-build-54l15 / fw-build-dongle → all exit 0
-python3 scripts/check-build-contract.py → 74 assertions, 0 failed, BUILD CONTRACT PASSED
-git diff --check                    → clean
-```
-Kconfig assigned-value warnings: 0.  `native_sim` entropy notices: 29
-(documented informational).  The canonical gate was run twice on
-`ace13ff`/`1d90873` (42/42 both times); one intermediate run failed on disk
-exhaustion (coverage rebuild + BSim logs on a 100%-full filesystem) — root
-cause: 3.9 GB ccache + stale gate temp dirs; purged caches, rerun clean.
+- The E83 RF link was exceptionally clean all session (plc 0–2 per run
+  across ~15 min of streaming; the Intel peer that caused 8–30% loss in the
+  Aug 2/3 sessions was absent/quiet).  With zero RF loss the SW Split
+  controller never omits callbacks, the sequence tracker stayed silent
+  (delta always 1), and no gap concealment fired.  **Gap PLC was NOT
+  observed on the E83.**
+- The concealment behavior is proven by the **18-test `iso_seq` suite**
+  (first, contiguous, single/multi gap, wrap, duplicate, backward,
+  over-bound resync, Mode B exact-PLC pushes, Mode A
+  simultaneous/one-sided omission, decode chronology,
+  no-synthesis-on-resync) plus the integration unit tests covering the
+  exact gap behavior, and BSim Stage 1 (hashes unchanged).
+- Defect provenance is preserved by the prior T9 failing hardware logs
+  (the 8–30% RF-loss sessions where omissions and gap concealment were
+  originally exercised).
+- New hardware runs prove the added code introduces **zero
+  underruns/regressions** (final matrix; zero `ISO seq gap` /
+  `i2s_nrfx` lines; BSim hashes unchanged).
+
+This is recorded as an explicit **evidence limitation** — the sequence-gap
+concealment path is covered by direct production-module tests and prior
+failing-hardware provenance, not by a clean-session hardware activation.
+
+## Superseded / historical rows (retained for provenance, not final evidence)
+
+Clearly distinguished from the accepted final rows:
+
+1. **Stack overflow (pre-`ace13ff`)** — two byte-identical FATAL ERROR 2
+   faults on the BT RX WQ stack; root cause and fix above.  Superseded by
+   `ace13ff`; live re-verification passed.
+2. **Aug 2 nRF54 Mode A underruns (on `ace13ff`)** — 4 and 3
+   `i2s_nrfx: Next buffers not supplied on time` + auto-recovered
+   `I2S underrun, restarting DMA` events under 14.3% RF loss (dual-CIS
+   starvation).  Superseded: the final t10 Mode A/B rows show **zero
+   underruns** even with 21–30% RF loss (single-CIS Mode B and the
+   post-filter link).
+3. **Aug 2 FLPR hang gate Mode A 15/16 flag (on `ace13ff`)** —
+   `frame_count_plausible` failed (submit shortfall ≈ 12–14 s) because the
+   gate compared absolute counters across sessions and the link lost 8–14%
+   of SDUs.  Superseded by the hang-gate baseline-diff commits (`1d90873`,
+   `c056936`, `4ef25b2`, `3df6da8`) plus clean links: the final FLPR hang
+   Mode A runs are **16/16** (retained stdout `/tmp/opencode/hang3_stdout.log`
+   and the t10 rerun).
+4. **Aug 3 E83 intermediate run (`5340-modea-120-pb.log`, 2026-08-03 20:33)**
+   — one `i2s_nrfx: Next buffers not supplied on time` at the stream-end
+   teardown boundary (summary counters still i2s_underrun=0).  Superseded by
+   `9b78d87` (central writer keeps feeding during BAP teardown); the final
+   T10 E83 logs contain zero `i2s_nrfx` error lines.
+5. **Hang-gate `accept2` run (`/tmp/opencode/hang_stdout.log`)** — RESULT
+   FAILED with BlueZ `AuthenticationFailed` during pairing (stale central
+   bond state), before injection.  Central-side transient, not firmware;
+   the immediate rerun (`accept3`) PASSED 16/16.
+6. **Intermediate gate runs** — 42/42 on `1d90873` (Aug 2), 44/44 on
+   `c056936` (Aug 3), 46/46 on `ac1fa06` (Aug 3, retained
+   `/tmp/opencode/gate1.log`) — each at their own commit; the final gate is
+   47/47 (below).
+
+## Warning scan (final logs)
+
+Zero `FATAL` / `USAGE FAULT` / `Assert` / overflow post-`ace13ff` on either
+target.  All `<wrn>`/`<err>` lines in the final session logs classified:
+
+- `Pairing rejected (BONDED_ONLY): unbonded peer …` — deliberate defense-in-
+  depth rejection of the unbonded Intel peer (documented policy).
+- Intel peer `Connected:` + `reason 0x05`/`0x3e` cycles in OPEN-mode fresh-
+  pair sessions — expected rejection of the unbonded peer (see pairing
+  filter phase); absent from bonded sessions.
+- FAULT_HANG recovery lines (ring reset timeout → runtime restart) — the
+  expected FLPR hang-gate recovery path; restart succeeded.
+- No `i2s_nrfx` errors, no decode errors, no integrity faults in any final
+  row.
+
+## Final software gate (exact final code `971e6a4` + `1a5842d`)
+
+Composition at HEAD: **47 children** = 28 twister C suites (incl. the new
+`iso_seq`) + 4 exec-only C suites + 12 Python suites + coverage + matrix +
+BSim Stage 1.
+
+- **Final gate: 47 PASS / 0 FAIL / 47 TOTAL** on the exact final code,
+  zero compiler warnings and zero Kconfig assigned-value warnings in the
+  production builds — recorded in the committed coverage matrix at
+  `3c29421` ("The T8-follow-up canonical gate on `1a5842d` is 47 PASS /
+  0 FAIL / 47 TOTAL (28 twister suites including the new `iso_seq`, 4 exec
+  suites, 12 python suites, coverage, matrix, BSim Stage 1)").  The full
+  final run's log and elapsed runtime were **not retained** — the exact
+  elapsed runtime of the 47-child run is **unavailable**; the closest
+  retained full-gate log is `/tmp/opencode/gate1.log`: `Gate complete: 46
+  PASS / 0 FAIL / 46 TOTAL` on `ac1fa06` (2026-08-03 23:36, 46 children
+  before the `iso_seq` twister suite; no elapsed line in the retained
+  tail).  Earlier retained gate logs: `/tmp/t8/gate-final-c056936.log`
+  (44/44 on `c056936`), `/tmp/t8/gate-final-1d90873.log` and `-b.log`
+  (42/42 on `1d90873`) — historical.
+- **Coverage baseline ACCEPTED** at `1a5842d` (generated on clean
+  `971e6a4`): 26-file numeric population — lines **3281/3722 (88.2%)**,
+  branches **1433/2041 (70.2%)**, functions **205/205 (100.0%)**; the
+  candidate `/tmp/opencode/baseline-new.json` matches the committed
+  `tests/coverage-baseline.json` byte-for-byte in totals.  All three T8-era
+  refreshes (`6578a9c`, `ac1fa06`, `1a5842d`) were honest upward additions
+  (new direct-suite files only).
+- **Builds 3/3 on final code** — pristine builds present for all three
+  targets and flashed/verified in the t10 session:
+  `build/nrf5340/le-audio-receiver/zephyr/zephyr.elf` (2026-08-04
+  03:00:53), `build/nrf54l15/.../zephyr.elf` (03:01:15), dongle build
+  (03:00); `fw-flash-5340` (03:59) and `fw-flash-54l15` (03:23) both
+  flashed and verified (`ninja: no work to do` on the app images —
+  identical to the final build; OpenOCD downloaded and verified both
+  cores / cpuapp+FLPR).
+- **Build contract 76/76** — `scripts/check-build-contract.py` registers
+  **76 assertions** at HEAD (verified: the `build_contract` gate child on
+  the final-era checker prints `76 assertions, 0 failed / BUILD CONTRACT
+  PASSED` in `/tmp/opencode/gate1.log`).  A real dual-target contract run
+  on the final builds is not among the retained logs; the closest retained
+  real run is `/tmp/t8/build-contract.log` — 74 assertions, 0 failed, on
+  the Aug 2 builds (T7-era count, superseded by the 76-assertion checker).
+- **Zero actionable warnings** — final warning scans
+  (`/tmp/opencode/build-54l15-warn.log`, `dongle-warn.log`, `b5340-final.log`)
+  show only the documented non-actionable NCS v3.3.0 diagnostics
+  (simple_bus_reg / avoid_unnecessary_addr_size / UART_CONSOLE
+  assigned-n-got-y / PARTITION_MANAGER deprecation /
+  BT_CTLR_CONN_ISO_LOW_LATENCY_POLICY choice gap / experimental
+  BT_LL_SW_SPLIT + BT_CTLR_SET_HOST_FEATURE + BT_CTLR_PERIPHERAL_ISO);
+  zero compiler warnings.  (The Aug 4 01:34 `build-5340-warn.log` attempt
+  failed board resolution from a wrong cwd and is not evidence.)
+- `git diff --check` clean (final doc commit).
 
 ## Log inventory (preserved)
 
-`/tmp/t8/`: flash-54l15-01..04.log, 54l15-boot-01..04.log, 54l15-modea-07.log,
-54l15-modeb-01.log, 54l15-reconn-modea-01.log, 54l15-reconn-modeb-01.log,
-modea-01..07-central.log, modeb-01-central.log, reconn-*-central.log,
-flpr-hang-mode-a.log, flpr-hang-mode-b.log, phase3-54l15/ (3 playback logs +
-gate_test.wav), status-*.log, unpair-0*.log, gate-tooling.log,
-gate-tooling-2.log, gate-fix-ace13ff.log, gate-final-1d90873.log,
-gate-final-1d90873b.log, gate-cov-1d90873.log, stack-evidence/, nrf-probes-*.txt.
+`/tmp/t8/`: flash-54l15-01..05.log, flash-5340-0{1,2,3}.log,
+54l15-boot-01..04.log, 54l15-modea-0{1,2,3,4,6,7}.log,
+54l15-modeb-01.log, 54l15-reconn-modea/b-01.log,
+54l15-bonded-modea-01.log, 54l15-preservebond-01.log /
+-120-01.log / -120-02.log + `54l15-preservebond-120-02-evidence.txt`,
+modea/modeb/reconn central logs, flpr-hang-mode-a.log, flpr-hang-mode-b.log,
+flpr-hang-mode-a-0{2,3}.log, phase3-54l15/ (3 playback logs + gate_test.wav),
+phase3-54l15-0{2,3,4,5}/ (playback logs + gate_test.wav),
+phase3-54l15-0{3,4,5}-full.log, phase3-playback-debug.log,
+5340-modea-120-pb.log, 5340-flash-03-boot.log, status-*.log, unpair-0*.log,
+pairing-filter/ (fresh-pair, modea-clean/preserve, boots, nrf-probes),
+stack-evidence/, gate-final-1d90873{,b}.log, gate-final-c056936.log,
+gate-cov-1d90873.log, build-*.log, build-contract.log, readacm-*.log,
+nrf-probes-*.txt.
 
-## Remaining work / blockers
+`/tmp/t9/` (Aug 3 23:54 – Aug 4 01:17): 54l15-modea-120-fresh.log,
+54l15-modea-120-bonded.log, 54l15-modeb-120.log,
+flpr-hang-mode-a-180{,b}.log, flpr-hang-mode-a-180-accept{,2,3}.log,
+5340-modea-120{,b}.log, 5340-modea-120-bonded{,2,3,4}.log,
+5340-modeb-120{,b}.log.
 
-1. FLPR hang gate Mode A `frame_count_plausible` + Mode A underruns —
-   orchestrator disposition requested (RF-loss-related; no firmware fault).
-2. nRF5340 Stage 3 — hardware absent (no E83 probe, no /dev/ttyUSB0).
-   Evidence for the nRF54L15 target is complete and preserved.
-3. T8 acceptance and final STATUS.md/plan/transfer-status updates withheld
-   until the flagged row is disposed and Stage 3 runs.
+`/tmp/t10/` (final session, code `971e6a4`): 54l15-boot-t10.log,
+54l15-modea-120-t10.log + -central.log, 54l15-modeb-120-t10.log +
+-central.log + -120b-central.log, 54l15-flpr-hang-mode-a-180-t10.log,
+flash-54l15-t10.log, flash-5340-t10.log, e83-modeb-120-central.log,
+e83-modeb-120-bonded-central.log, e83-modeb-300-central.log,
+e83-modeb-60-{midstream,perf,perf2,perf3}-central.log, btmon{,.2,.3}.log,
+`EVIDENCE-SUMMARY.md`.
+
+`/tmp/opencode/`: gate1.log (46/46 on `ac1fa06`), gate2.log (44/44),
+hang_stdout.log / hang3_stdout.log (FLPR hang gate FAILED/PASSED stdout),
+build-54l15-warn.log, dongle-warn.log, b5340-final.log, baseline-new.json,
+cov-report/, cov-write2/.
 
 ## Matrix verdict summary
 
-- nRF54L15: builds/flash/boot PASS; Mode A ×2 PASS (underrun flag);
-  Mode B ×2 PASS; reconnects PASS; statuses captured; FLPR hang Mode B PASS;
-  FLPR hang Mode A 15/16 (flag); Phase 3 PASS; zero firmware faults.
-- nRF5340: NOT RUN (hardware absent).
-- T8: **open**.
+- nRF54L15: builds/flash/boot PASS; Mode A 120 fresh PASS (zero underruns,
+  21% RF loss); Mode B 120 fresh PASS (zero underruns, 30% RF loss); bonded
+  reconnect PASS; FLPR hang Mode A 16/16 PASS; FLPR hang Mode B 16/16 PASS
+  (earlier); Phase 3 full 3/3 PASS; zero firmware faults.
+- nRF5340/E83: Mode A 120 PASS; Mode B 120 fresh PASS; Mode B 120 bonded
+  reconnect PASS; Mode B 300 PASS; APLL ACTIVE ppm −500; zero
+  `i2s_nrfx`/underrun/reset/decode faults in all final rows.
+- Sequence-gap activation: NOT observed on hardware (clean-link session);
+  covered by direct production-module tests + prior failure provenance —
+  documented evidence limitation, not a hardware activation claim.
+- Final software gate: 47 PASS / 0 FAIL / 47 TOTAL (runtime of the final
+  run not retained); coverage baseline accepted; builds 3/3; build
+  contract 76/76 (checker + gate child; real-run log not retained); zero
+  actionable warnings.
+- **T8: ACCEPTED (2026-08-04).**
