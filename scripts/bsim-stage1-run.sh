@@ -39,10 +39,6 @@ source "${SCRIPT_DIR}/bsim-env.sh"
 BOARD_TS="${BOARD//\//_}"
 
 # ── Pinned known hashes (full / left / right) ────────────────────────
-# Baselined 2026-08-01 from two identical workstation runs of the
-# deterministic multi-channel TX pattern (scenarios 1-8).  0x00000000 =
-# no audio (config-rejection scenarios) or not yet pinned.
-# ── Pinned known hashes (full / left / right) ────────────────────────
 # Baselined 2026-08-01 from two identical post-review-fix workstation
 # runs of the FNV-corrected oracle (samples converted to uint16_t before
 # byte extraction; full/L/R prepend the 4-byte LE frame index).

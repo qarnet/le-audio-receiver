@@ -1,5 +1,18 @@
 # T4 — BAP and Bluetooth behavior matrix (BabbleSim)
 
+> **Status: historical T4 acceptance snapshot (accepted on the exact final
+> T4 code commit `8542f1a`, 2026-08-01).**  Every scenario count, hash,
+> total, simulation count, runtime, and gate number below is dated evidence
+> of that T4 acceptance run — observed then, never fabricated later.  The
+> current post-T4 accepted local gate is the **16-scenario /
+> 25-simulation** T4 matrix in `scripts/bsim-stage1-run.sh`: scenarios 1–9
+> run twice and 10–16 once (25 simulations = 9 × 2 + 7 × 1); the ninth
+> repeated scenario is `modea_one_cis_loss_10ms`, added with the T8 Mode A
+> assembler.  The runner script is the executable truth; current hashes,
+> gate results, and runtimes live in
+> `docs/development/refactor-r0-results.md` and `STATUS.md` (T4/T8
+> sections).
+
 Phase T4 expands the accepted BabbleSim gate from one mono scenario into
 the full BAP matrix: real `src/bt_bap.c`, `src/audio_decode.c`, real
 Zephyr BAP/ASCS/PACS, real ISO transport, and real liblc3 encode/decode.
@@ -66,7 +79,8 @@ gate's long BSim child and no non-BSim code changed after it).
 ## Scenario commands
 
 ```bash
-# Full matrix (canonical gate entry; scenarios 1-8 twice, 9-15 once):
+# Full matrix (canonical gate entry; current script = 16 scenarios,
+# scenarios 1–9 run twice, remaining seven once):
 bash scripts/bsim-stage1-run.sh
 # Baseline mode (prints hashes, skips pinned asserts):
 BSIM_BASELINE=1 bash scripts/bsim-stage1-run.sh
@@ -77,6 +91,12 @@ python3 scripts/bsim_stage1_parse.py check --scenario mono_10ms \
     --receiver R.log --client C.log --known-full 0x22AB5C0D
 ```
 
+The command forms are unchanged since T4; invoking
+`scripts/bsim-stage1-run.sh` today runs the current 16-scenario /
+25-simulation matrix (see the status note at the top).  The matrix table
+below is the **historical T4 15-scenario evidence** of the `8542f1a`
+acceptance run.
+
 The runner acquires a `flock` on `${ZEPHYR_BASE}/bsim_out` (shared
 build/run tree), compiles both binaries once per gate, runs every
 simulation with receiver/client/PHY exit-zero enforcement, parses every
@@ -86,13 +106,15 @@ pinned hashes/totals, and prints the final matrix and known
 hash tables.  Logs live in one private `mktemp -d` root: cleaned on
 success, preserved on failure or `BSIM_KEEP_LOGS=1`.
 
-## Scenario matrix and results
+## Scenario matrix and results (historical T4 evidence)
 
 Each row: exact scenario, BST test IDs (receiver = client), runs per
 gate, receiver PASS summary.  All runs also require client PASS with
 exact send counts and ASCS response counts, zero process exits, zero
 fault markers (with per-scenario allowlists), and PACS contexts never
-NONE (`pacs=1`).
+NONE (`pacs=1`).  These rows document the T4 15-scenario acceptance on
+`8542f1a`; the current runner adds `modea_one_cis_loss_10ms` as a ninth
+repeated scenario (see the status note at the top).
 
 | # | Scenario | Runs | Receiver PASS record (full/L/R hashes, counts) |
 |---|----------|------|-----------------------------------------------|
@@ -252,12 +274,15 @@ rejects every `<wrn> bt_bap:`, `<wrn> bt_ascs:`, and `<err> bt_bap:`
 line with no scenario allowlist; the expected control paths log at INFO.
 Final builds show zero repo compiler warnings.
 
-## Runtime and gate duration
+## Runtime and gate duration (historical T4 snapshot)
 
 - Matrix (22 simulations): ~35 min wall on `thomas-workstation`
   (compiles included); each simulation runs 80 s simulated time.
+  **Historical T4 numbers** — the current runner executes 16 scenarios /
+  25 simulations (9 × 2 + 7 × 1; see the status note at the top).
 - Full gate (`./scripts/test-all.sh`): 26 children, ~45–55 min wall,
-  of which the matrix is the long child.
+  of which the matrix is the long child.  **Historical T4:** the current
+  canonical gate has 47 children.
 - No physical RF/audio hardware was used anywhere in this phase.
 
 ## Acceptance evidence (T4 review-fix round)
