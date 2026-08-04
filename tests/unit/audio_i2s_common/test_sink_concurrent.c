@@ -39,8 +39,14 @@ static K_THREAD_STACK_DEFINE(open_stack, 4096);
 static struct k_thread open_thread;
 
 static K_SEM_DEFINE(conc_done_sem, 0, 8);
-static bool open_started_flag;
-static bool open_returned_flag;
+
+/* Open-waiter observability (R1 repair): worker signals `open_entered_sem`
+ * immediately before calling open and `open_returned_sem` after return;
+ * assertions use bounded semaphore takes instead of plain cross-thread
+ * bool flags (data-race free and proves the waiter actually reached the
+ * open call / returned from it). */
+static K_SEM_DEFINE(open_entered_sem, 0, 1);
+static K_SEM_DEFINE(open_returned_sem, 0, 1);
 
 /* Write-gate semaphores (file scope: K_SEM_DEFINE requires iterable
  * section membership that block scope cannot provide).  Tests reset
@@ -68,8 +74,8 @@ static void spawn_stop_b(void (*fn)(void *, void *, void *), void *arg)
 
 static void spawn_open(void (*fn)(void *, void *, void *), void *arg)
 {
-	open_started_flag = false;
-	open_returned_flag = false;
+	k_sem_reset(&open_entered_sem);
+	k_sem_reset(&open_returned_sem);
 	k_thread_create(&open_thread, open_stack, K_THREAD_STACK_SIZEOF(open_stack), fn, arg, NULL,
 			NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
 }
@@ -127,9 +133,9 @@ static void open_worker_fn(void *ctx_p, void *u1, void *u2)
 	(void)u2;
 	struct open_ctx *c = ctx_p;
 
-	open_started_flag = true;
+	k_sem_give(&open_entered_sem);
 	c->ret = audio_sink_stream_open();
-	open_returned_flag = true;
+	k_sem_give(&open_returned_sem);
 	k_sem_give(&conc_done_sem);
 }
 
@@ -147,10 +153,10 @@ static bool two_stop_cohort_cond(void *arg)
 	return audio_i2s_test_stop_callers() == 2 && audio_i2s_test_stop_finalizing();
 }
 
-static bool open_started_cond(void *arg)
+static bool stop_waiter_cond(void *arg)
 {
 	(void)arg;
-	return open_started_flag;
+	return audio_i2s_test_stop_waiters() >= 1;
 }
 
 /* ── 1. stop drains admitted push ────────────────────────────────── */
@@ -355,9 +361,10 @@ ZTEST(audio_i2s, test_open_waits_for_full_stop_cohort)
 	struct open_ctx oc = {.ret = -1};
 
 	spawn_open(open_worker_fn, &oc);
-	zassert_true(conc_wait_until(open_started_cond, NULL, CONCUR_TIMEOUT_MS),
-		     "open waiter started");
-	zassert_false(open_returned_flag, "open cannot return before cohort completion");
+	zassert_true(k_sem_take(&open_entered_sem, K_MSEC(CONCUR_TIMEOUT_MS)) == 0,
+		     "open waiter reached the open call");
+	zassert_equal(k_sem_take(&open_returned_sem, K_MSEC(100)), -EAGAIN,
+		      "open cannot return before cohort completion");
 
 	k_sem_give(&w_release);
 
@@ -368,7 +375,8 @@ ZTEST(audio_i2s, test_open_waits_for_full_stop_cohort)
 	zassert_true(conc_wait_done(CONCUR_TIMEOUT_MS), "open joined");
 
 	zassert_equal(oc.ret, 0, "open returns 0 after the cohort");
-	zassert_true(open_returned_flag, "open returned");
+	zassert_true(k_sem_take(&open_returned_sem, K_MSEC(CONCUR_TIMEOUT_MS)) == 0,
+		     "open returned after the cohort");
 	zassert_true(audio_i2s_test_is_accepting(), "admission open");
 	zassert_equal(audio_i2s_test_stop_callers(), 0, "caller count zero");
 
@@ -423,4 +431,156 @@ ZTEST(audio_i2s, test_close_is_nonblocking)
 	zassert_true(audio_i2s_test_is_accepting(), "accepting again");
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0,
 		      "push admitted after reopen");
+}
+
+/* ── 7. owner stop wakes a sleeping non-owner (R1 repair) ───────────
+ * With one admitted push, one owner stop, and one non-owner stop: the
+ * owner drains the push and sets stop_finalizing=false; the non-owner is
+ * asleep in the finalization condvar wait.  The owner's broadcast must
+ * wake it even though its own caller-count decrement (2→1) does not hit
+ * the last-caller broadcast.  Deterministic: the push is paused at the
+ * fake-I2S write gate, the non-owner's presence in the wait loop is
+ * proven via the lock-protected stop_waiters counter (no sleeps as
+ * proof), and every join is bounded. */
+
+ZTEST(audio_i2s, test_stop_wakes_sleeping_non_owner)
+{
+	test_start_stream();
+
+	k_sem_reset(&w_entered);
+	k_sem_reset(&w_release);
+	fake_i2s_block_write_at(7, &w_entered, &w_release);
+
+	struct push_ctx pc = {
+		.in = test_input_480(),
+		.samples = TEST_FRAMES_480 * 2,
+		.ret = -1,
+	};
+
+	spawn_push(push_worker_fn, &pc);
+	zassert_true(k_sem_take(&w_entered, K_MSEC(CONCUR_TIMEOUT_MS)) == 0,
+		     "push entered write gate");
+	zassert_equal(audio_i2s_test_active_pushes(), 1, "one admitted push");
+
+	/* Owner stop and one non-owner stop: prove both callers joined the
+	 * cohort AND the non-owner actually reached its condvar wait. */
+	spawn_stop_a(stop_worker_fn, NULL);
+	spawn_stop_b(stop_worker_fn, NULL);
+	zassert_true(conc_wait_until(two_stop_cohort_cond, NULL, CONCUR_TIMEOUT_MS),
+		     "both stops in one cohort with a claimed finalizer");
+	zassert_true(conc_wait_until(stop_waiter_cond, NULL, CONCUR_TIMEOUT_MS),
+		     "non-owner reached the finalization wait loop");
+	zassert_equal(audio_i2s_test_stop_callers(), 2, "two stop callers");
+	zassert_equal(mock_drift_reset_calls, 0, "no reset before drain");
+
+	/* Release the push: it completes first, then the owner finalizes
+	 * with PREPARE/DROP and must wake the sleeping non-owner. */
+	k_sem_give(&w_release);
+
+	zassert_true(conc_wait_done(CONCUR_TIMEOUT_MS), "push joined");
+	zassert_equal(pc.ret, 0, "admitted push returns 0");
+	zassert_true(conc_wait_done(CONCUR_TIMEOUT_MS), "stop A joined");
+	zassert_true(conc_wait_done(CONCUR_TIMEOUT_MS), "stop B joined");
+
+	zassert_equal(mock_drift_reset_calls, 1, "exactly one software reset");
+	zassert_equal(mock_timing_reset_calls, 1, "exactly one timing reset");
+	zassert_equal(fake_i2s_trigger_calls(), 3, "START + one PREPARE/DROP pair");
+	zassert_equal(fake_i2s_trigger_rec(1)->cmd, I2S_TRIGGER_PREPARE, "PREPARE");
+	zassert_equal(fake_i2s_trigger_rec(2)->cmd, I2S_TRIGGER_DROP, "DROP");
+	zassert_equal(audio_i2s_test_stop_callers(), 0, "caller count returns zero");
+	zassert_equal(audio_i2s_test_stop_waiters(), 0, "no waiter left in the loop");
+	zassert_false(audio_i2s_test_stop_finalizing(), "finalizing cleared");
+	zassert_equal(audio_i2s_test_active_pushes(), 0, "zero active pushes");
+	zassert_equal(fake_i2s_queued_count(), 0, "queue purged");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS, "no leak / double free");
+	test_assert_no_duplicate_writes();
+}
+
+/* ── 8. an admitted push uses one input-frames snapshot (R1 repair) ──
+ * Deterministic proof that the snapshot taken at admission is used for
+ * the whole push: pause the first successful startup write of an
+ * admitted 480-frame push, change the frame selection to 360 while the
+ * push is still in flight, release, and prove every block of the
+ * admitted operation retained the 480-frame shape (silence/data sizes
+ * and per-variant output bytes/patterns, plus the rate-converter input
+ * snapshot) with no overflow or corruption.  The next 360-frame push
+ * then uses the new setting and a 480-sample count is rejected by the
+ * exact validation against the new snapshot. */
+
+ZTEST(audio_i2s, test_admitted_push_uses_single_input_frames_snapshot)
+{
+	test_init_ok();
+	audio_sink_set_input_frames(TEST_FRAMES_480);
+
+	k_sem_reset(&w_entered);
+	k_sem_reset(&w_release);
+	fake_i2s_block_write_at(0, &w_entered, &w_release);
+
+	struct push_ctx pc = {
+		.in = test_input_480(),
+		.samples = TEST_FRAMES_480 * 2,
+		.ret = -1,
+	};
+
+	spawn_push(push_worker_fn, &pc);
+	zassert_true(k_sem_take(&w_entered, K_MSEC(CONCUR_TIMEOUT_MS)) == 0,
+		     "push paused at first startup write");
+	zassert_equal(audio_i2s_test_active_pushes(), 1, "push admitted");
+
+	/* Setter runs while the admitted push is in flight: the push must
+	 * keep the 480-frame snapshot taken at admission. */
+	audio_sink_set_input_frames(TEST_FRAMES_360);
+	zassert_equal(audio_i2s_test_input_frames(), TEST_FRAMES_360, "setter applied");
+
+	k_sem_give(&w_release);
+	zassert_true(conc_wait_done(CONCUR_TIMEOUT_MS), "push joined");
+	zassert_equal(pc.ret, 0, "admitted push returns 0");
+
+	/* Every block of the admitted operation retained the 480-frame
+	 * shape: six silence blocks + one 480-frame data block. */
+	zassert_equal(fake_i2s_write_calls(), 7, "seven startup writes");
+	zassert_equal(fake_i2s_trigger_calls(), 1, "one START");
+	zassert_equal(fake_i2s_trigger_rec(0)->cmd, I2S_TRIGGER_START, "START");
+	for (int i = 0; i < 6; i++) {
+		zassert_true(test_rec_silence(fake_i2s_write_rec(i)), "silence block %d", i);
+		zassert_equal(fake_i2s_write_rec(i)->size, TEST_BYTES_480,
+			      "silence size 480 frames %d", i);
+	}
+	zassert_equal(mock_rate_convert_last_input_frames, TEST_FRAMES_480,
+		      "rate converter fed the 480-frame snapshot");
+#if defined(AUDIO_I2S_TEST_MARKER_ASRC)
+	zassert_equal(fake_i2s_write_rec(6)->size, TEST_BYTES_480, "data size 480 output");
+	zassert_true(test_rec_pattern(fake_i2s_write_rec(6), 0xCC, 0x33),
+		     "offload output pattern queued");
+#else
+	zassert_equal(fake_i2s_write_rec(6)->size, TEST_BYTES_480, "data size 480");
+	zassert_true(test_rec_matches_input(fake_i2s_write_rec(6), test_input_480()),
+		     "exact 480-frame input bytes queued");
+#endif
+	zassert_equal(fake_i2s_queued_count(), 7, "seven queued");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 7, "no overflow / leak");
+	zassert_true(audio_i2s_test_is_started(), "started");
+
+	/* Next push uses the NEW 360 setting: a 480-sample count is
+	 * rejected by exact validation against the new snapshot. */
+	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), -EINVAL,
+		      "480 sample count rejected after setter");
+	zassert_equal(fake_i2s_write_calls(), 7, "no writes from rejected push");
+
+	/* A 360-frame push is admitted with the new setting. */
+	zassert_equal(audio_sink_push(test_input_360(), TEST_FRAMES_360 * 2), 0,
+		      "360 push uses new setting");
+	zassert_equal(fake_i2s_write_calls(), 8, "one steady write");
+#if defined(AUDIO_I2S_TEST_MARKER_ASRC)
+	zassert_equal(mock_offload_last_input_frames, TEST_FRAMES_360,
+		      "offload fed the 360-frame snapshot");
+	zassert_equal(fake_i2s_write_rec(7)->size, TEST_BYTES_480, "ASRC output size");
+#else
+	zassert_equal(fake_i2s_write_rec(7)->size, TEST_BYTES_360, "data size 360");
+	zassert_true(test_rec_matches_input(fake_i2s_write_rec(7), test_input_360()),
+		     "exact 360-frame input bytes queued");
+#endif
+	zassert_equal(fake_i2s_queued_count(), 8, "eight queued");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 8, "slab consistent");
+	test_assert_no_duplicate_writes();
 }

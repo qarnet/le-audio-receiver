@@ -230,6 +230,15 @@ static inline bool flpr_peer_handle_ready(struct flpr_peer *peer, uint32_t epoch
 		peer->reboot_count++;
 		peer->healthy = true;
 
+		/* R1 repair: a changed/new epoch invalidates the previous
+		 * session's ACK state — the caller must re-send READY_ACK
+		 * for this epoch before any wait/status may report success.
+		 * Without this, a failed READY_ACK send after a reboot
+		 * would leave stale `acked=true` from the prior epoch and
+		 * flpr_handshake_wait_new_ready() could take the fast path
+		 * against an un-acked epoch. */
+		peer->acked = false;
+
 		/* Reset rx-side tracking for the new boot. */
 		peer->rx_seq = 0;
 		peer->rx_lost = 0;

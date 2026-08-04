@@ -21,6 +21,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include <zephyr/kernel.h> /* struct k_sem declaration (R1 repair: the hook
+			    * signatures take k_sem pointers, so the Zephyr
+			    * kernel type must be declared here) */
+
 #include "flpr_ring.h" /* FLPR_RING_TOTAL_SIZE */
 
 #ifdef __cplusplus

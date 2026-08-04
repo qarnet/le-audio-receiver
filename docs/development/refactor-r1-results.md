@@ -1,6 +1,20 @@
 # Refactor R1 results — ownership and concurrency hardening
 
-Status: **ACCEPTED (2026-08-04)**.
+Status: **REOPENED — repair verification pending (2026-08-04)**.
+
+**This page is historical evidence for the original R1 commit pair
+(`bcd623b` + `4f426f3`).  The counts, G1/G2 claims, and raw-log inventory
+below are SUPERSEDED and are NOT accepted evidence.**  Review of that
+evidence found ten grounded defects (sink stop wakeup; sink init
+publication; lifecycle idle force-close latch; FLPR READY-epoch ACK state;
+ring-manager init serialization; BSim oracle admission order; three
+test-only gaps; metadata truth problems — focused counts inconsistent with
+one observed suite execution, nRF54 receiver-side stream evidence absent
+from `/tmp/r1-g2-54l15-console.log`, and raw probe/controller evidence not
+preserved).  The review-fix repair commit addresses every finding; fresh
+counts and fresh G1/G2 evidence with preserved raw logs are required before
+any re-acceptance.  Review findings and repair scope:
+`docs/development/refactor-r1-review-fix-handoff.md`.
 
 ## Exact commits
 
@@ -54,7 +68,9 @@ Pre-fix (at `f654b58`, no R1 tests): sink had no admission gate, stop raced
 in-flight pushes, lifecycle had no shell force-close latch, FLPR reset/stall
 ACKs were uncorrelated (`seq=0`), timing update/reset were unsynchronized.
 
-Post-fix focused suites (all green, zero warnings):
+Post-fix focused suites (all green, zero warnings) — **counts SUPERSEDED:
+they do not match one observed suite execution and are not accepted
+evidence until re-run on the repair commit**:
 
 | Suite | Result |
 |---|---|
@@ -79,6 +95,10 @@ sequence retry, 16-bit token boundary (reset and stall); protocol ACK
 constructor; handshake validation counters under concurrent status reads.
 
 ## G1 — canonical gate on clean `4f426f3`
+
+**SUPERSEDED / unaccepted evidence** — recorded here only as the historical
+run that was reviewed.  No G1 claim stands until a fresh clean run on the
+repair commit.
 
 ```bash
 ./scripts/test-all.sh
@@ -121,6 +141,13 @@ R0 warning scan): nRF5340 `PARTITION_MANAGER`/sysbuild deprecations,
 deprecations.  Zero actionable/new warnings.
 
 ## G2 — autonomous hardware smoke (both targets)
+
+**SUPERSEDED / unaccepted evidence.**  The nRF54 receiver-side stream
+evidence claimed below is absent from the preserved console log
+(`/tmp/r1-g2-54l15-console.log` holds only boot output), and raw
+probe/controller evidence was not preserved.  Fresh G2 with preserved raw
+logs is required after the repair commit.  The historical narrative is
+retained verbatim for review context.
 
 Central: repository nRF5340DK `hci_uart` dongle, attached at session start,
 `btmgmt --index hci0 info` → `addr C0:AA:BB:CC:DD:EE`, `current settings:

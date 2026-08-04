@@ -294,7 +294,7 @@ handoffs in this phase; link cleanup can happen after the plan is accepted.
 One current plan, one current gate inventory, no contradictory active contract
 IDs/counts/baseline numbers, and all known behavior limitations visible.
 
-## R1 — Ownership and concurrency hardening — **ACCEPTED (2026-08-04)**
+## R1 — Ownership and concurrency hardening — **REOPENED — repair verification pending**
 
 ### Goal
 
@@ -303,15 +303,30 @@ Fix real cross-context ownership ambiguities before moving code.
 ### Results
 
 Exact implementation commits **`bcd623b`** (tests + source) and **`4f426f3`**
-(contracts/metadata), starting from clean `f654b58`; full G1 passed on the
-clean `4f426f3` (47 PASS / 0 FAIL / 47 TOTAL, coverage enforcement exit 0
+(contracts/metadata), starting from clean `f654b58`; a G1 pass was recorded on
+the clean `4f426f3` (47 PASS / 0 FAIL / 47 TOTAL, coverage enforcement exit 0
 with population 26 and no ratio regression, builds 3/3, build contract
-76/76, zero actionable warnings, BSim Stage 1 hashes/counts unchanged);
-autonomous G2 passed on both targets (nRF54L15 Mode A/B and nRF5340/E83
-Mode A/B, FLPR offloaded/ACTIVE and APLL stable, zero decode errors,
-underruns, resets, faults, or warnings).  Full results, commands, runtimes,
-probe evidence, and raw log paths:
-`docs/development/refactor-r1-results.md`.
+76/76, zero actionable warnings, BSim Stage 1 hashes/counts unchanged) and an
+autonomous G2 pass was claimed on both targets (nRF54L15 Mode A/B and
+nRF5340/E83 Mode A/B, FLPR offloaded/ACTIVE and APLL stable, zero decode
+errors, underruns, resets, faults, or warnings).  Those results are **not
+accepted evidence**.
+
+**REOPENED (2026-08-04):** review of the R1 evidence found ten grounded
+defects — five production (sink stop wakeup, sink publication, lifecycle
+idle force-close latch, FLPR READY-epoch ACK state, ring-manager init
+serialization), one BSim oracle admission order, three test-only
+(semaphore-based open-waiter observability, deterministic stop-wakeup and
+input-frame snapshot regression, ring-manager repeated-init witnesses), and
+one metadata truth problem (focused counts inconsistent with one observed
+suite execution; nRF54 receiver-side stream evidence absent from
+`/tmp/r1-g2-54l15-console.log`; raw probe/controller evidence not preserved).
+The repair commit (this handoff's product) fixes all listed defects; final
+acceptance metadata (fresh counts, fresh G1 and both-target G2 evidence with
+preserved raw logs) comes only after the repair commit is reviewed and
+re-run.  Full review findings and repair scope:
+`docs/development/refactor-r1-review-fix-handoff.md`; superseded evidence and
+claims are marked in `docs/development/refactor-r1-results.md`.
 
 ### Files
 

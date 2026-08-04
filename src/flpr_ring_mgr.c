@@ -392,6 +392,29 @@ int flpr_ring_mgr_init(void)
 		return -EAGAIN;
 	}
 
+	/* R1 repair: the full initialization decision and first-init
+	 * mutation run under ring_data_lock so a repeated/concurrent init
+	 * (public contract: repeated calls are safe; the shell exposes
+	 * direct init) can never reinitialize live semaphores, handlers,
+	 * headers, epoch, counters, or queued ring data.  If already
+	 * initialized, init is a non-destructive no-op.  ring_lock is
+	 * taken only for the rings_initialized inspection and the final
+	 * publish — never across k_sem_init, handler registration, or
+	 * ring-memory initialization.  Lock order preserved:
+	 * ring_data_lock → ring_lock. */
+	k_mutex_lock(&ring_data_lock, K_FOREVER);
+
+	{
+		k_spinlock_key_t key = k_spin_lock(&ring_lock);
+		bool already = rings_initialized;
+
+		k_spin_unlock(&ring_lock, key);
+		if (already) {
+			k_mutex_unlock(&ring_data_lock);
+			return 0;
+		}
+	}
+
 	/* Initialize semaphores. */
 	k_sem_init(&consume_sem, 0, 1000001);
 	k_sem_init(&reset_ack_sem, 0, 1);
@@ -407,10 +430,14 @@ int flpr_ring_mgr_init(void)
 	flpr_ring_init(RING_INPUT_BASE, FLPR_RING_CPUAPP_TO_FLPR);
 	flpr_ring_init(RING_OUTPUT_BASE, FLPR_RING_FLPR_TO_CPUAPP);
 
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-	rings_initialized = true;
-	ring_stream_epoch = 0; /* not yet agreed */
-	k_spin_unlock(&ring_lock, key);
+	{
+		k_spinlock_key_t key = k_spin_lock(&ring_lock);
+		rings_initialized = true;
+		ring_stream_epoch = 0; /* not yet agreed */
+		k_spin_unlock(&ring_lock, key);
+	}
+
+	k_mutex_unlock(&ring_data_lock);
 
 #if defined(FLPR_RING_MGR_NATIVE_TEST)
 	LOG_INF("PCM rings at %p (in) / %p (out), 481-frame capacity", (void *)RING_INPUT_BASE,

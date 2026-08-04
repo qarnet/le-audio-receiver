@@ -74,6 +74,12 @@ static bool stream_accepting;
 static uint32_t active_pushes;
 static uint32_t stop_callers;
 static bool stop_finalizing;
+#if defined(AUDIO_I2S_NATIVE_TEST)
+/* Test-only waiter observability: stop callers currently blocked in the
+ * finalization condvar wait (protected by stream_mutex).  Absent from
+ * production builds (compile-time guarded like every other test hook). */
+static uint32_t stop_waiters;
+#endif
 
 void audio_sink_set_input_frames(uint16_t frames)
 {
@@ -158,8 +164,19 @@ int audio_sink_init(void)
 	 * selection, ASRC/offload state, slab ownership, or the I2S queue,
 	 * and without issuing any DROP/PREPARE (stream control belongs to
 	 * audio_sink_stop()).
+	 *
+	 * R1 repair: `configured` is published and checked at the API
+	 * boundaries under the stream mutex (the idempotence read here and
+	 * the successful publication at function end), matching the
+	 * push/stop/open admission checks.  Init stays boot-owned: no
+	 * parallel first-initialization support, no mutex held across the
+	 * device/dependency calls below.
 	 */
-	if (configured) {
+	k_mutex_lock(&stream_mutex, K_FOREVER);
+	bool already_configured = configured;
+
+	k_mutex_unlock(&stream_mutex);
+	if (already_configured) {
 		return 0;
 	}
 
@@ -210,7 +227,14 @@ int audio_sink_init(void)
 		return ret;
 	}
 
+	/* Publish the successful state under the stream mutex at function
+	 * end: configured=true with the default closed admission (only
+	 * audio_sink_stream_open() — the BAP gate closed→open transition —
+	 * restores it).  All failed paths above left configured=false. */
+	k_mutex_lock(&stream_mutex, K_FOREVER);
 	configured = true;
+	stream_accepting = false;
+	k_mutex_unlock(&stream_mutex);
 
 	LOG_INF("I2S ready (%d kHz nom, %d-bit, stereo, %d blocks)", SAMPLE_RATE / 1000, BIT_WIDTH,
 		BLOCK_COUNT);
@@ -605,11 +629,29 @@ void audio_sink_stop(void)
 
 		k_mutex_lock(&stream_mutex, K_FOREVER);
 		stop_finalizing = false;
+
+		/* Wake every overlapping non-owner joiner that slept on the
+		 * finalization flag BEFORE the caller-count decrement: with
+		 * one sleeping non-owner the owner's decrement takes the
+		 * cohort 2→1 and the last-caller broadcast below never
+		 * fires, so without this broadcast that joiner would sleep
+		 * forever.  The last-caller broadcast below remains for
+		 * audio_sink_stream_open() waiters. */
+		k_condvar_broadcast(&stream_condvar);
 	} else {
 		/* Rule 4: an early joiner waits for the owner's finalization;
 		 * a late joiner arriving after it skips the loop. */
 		while (stop_finalizing) {
+#if defined(AUDIO_I2S_NATIVE_TEST)
+			/* Test-only observability: a joiner about to sleep on
+			 * the finalization condvar (stream_mutex held here and
+			 * re-held when the wait returns). */
+			stop_waiters++;
+#endif
 			k_condvar_wait(&stream_condvar, &stream_mutex, K_FOREVER);
+#if defined(AUDIO_I2S_NATIVE_TEST)
+			stop_waiters--;
+#endif
 		}
 	}
 
@@ -698,6 +740,7 @@ void audio_i2s_test_reset_module_state(void)
 	active_pushes = 0;
 	stop_callers = 0;
 	stop_finalizing = false;
+	stop_waiters = 0;
 	k_mutex_unlock(&stream_mutex);
 	memset(&rate_ctx, 0, sizeof(rate_ctx));
 #if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
@@ -748,6 +791,16 @@ bool audio_i2s_test_stop_finalizing(void)
 {
 	k_mutex_lock(&stream_mutex, K_FOREVER);
 	bool v = stop_finalizing;
+	k_mutex_unlock(&stream_mutex);
+	return v;
+}
+
+/* Lock-protected count of stop callers currently sleeping in the
+ * finalization condvar wait (deterministic non-owner-wakeup proof). */
+uint32_t audio_i2s_test_stop_waiters(void)
+{
+	k_mutex_lock(&stream_mutex, K_FOREVER);
+	uint32_t v = stop_waiters;
 	k_mutex_unlock(&stream_mutex);
 	return v;
 }

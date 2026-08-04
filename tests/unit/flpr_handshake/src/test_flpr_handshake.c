@@ -324,6 +324,59 @@ ZTEST(flpr_handshake, test_changed_epoch_ack_success_fast_path)
 		      "same epoch times out");
 }
 
+/* ── R1 repair: changed epoch clears stale ACK state ────────────────
+ * A changed/new epoch invalidates the previous session's ACK state: if
+ * the READY_ACK send for the new epoch fails, wait/status must not
+ * report success off the prior epoch's acked=true.  Previously the stale
+ * ACK let flpr_handshake_wait_new_ready() take its fast path against an
+ * un-acked epoch (flpr_protocol.h flpr_peer_handle_ready now clears
+ * peer->acked on new epoch). */
+
+ZTEST(flpr_handshake, test_changed_epoch_send_failure_clears_ack)
+{
+	/* Complete epoch 42 READY/ACK so acked=true. */
+	hs_ready_flow(42);
+	zassert_ok(flpr_handshake_wait_new_ready(41, K_NO_WAIT), "drain first signal");
+
+	struct flpr_status st;
+
+	flpr_handshake_get_status(&st);
+	zassert_true(st.acked, "acked after successful epoch 42");
+	zassert_equal(st.epoch, 42, "epoch 42 established");
+
+	/* Make the IPC send fail, then inject changed epoch 99 READY. */
+	fake_ipc_set_send_result(-EIO);
+	struct flpr_msg ready = {
+		.type = FLPR_MSG_READY, .version = FLPR_PROTOCOL_VERSION, .seq = 0, .data = 99};
+	fake_ipc_receive(&ready, sizeof(ready));
+
+	flpr_handshake_get_status(&st);
+	zassert_equal(st.epoch, 99, "status epoch 99");
+	zassert_equal(st.ready_count, 2, "ready_count incremented");
+	zassert_equal(st.reboot_count, 2, "reboot count incremented");
+	zassert_false(st.acked, "acked cleared on changed epoch");
+	zassert_equal(st.err_send, 1, "send error incremented");
+	zassert_equal(flpr_handshake_test_new_ready_sem_count(), 0, "no new-ready token");
+
+	/* The stale fast path must NOT succeed: epoch differs from 42 but
+	 * acked=false (K_NO_WAIT → -EBUSY, bounded wait → -EAGAIN). */
+	zassert_equal(flpr_handshake_wait_new_ready(42, K_NO_WAIT), -EBUSY,
+		      "no stale fast path without ack (K_NO_WAIT)");
+	zassert_equal(flpr_handshake_wait_new_ready(42, K_MSEC(50)), -EAGAIN,
+		      "no stale fast path without ack (bounded wait times out)");
+
+	/* A successful duplicate READY for epoch 99 restores ACK and
+	 * permits the expected fast-path result. */
+	fake_ipc_set_send_result(0);
+	fake_ipc_receive(&ready, sizeof(ready)); /* duplicate READY epoch 99, ACK succeeds */
+
+	flpr_handshake_get_status(&st);
+	zassert_true(st.acked, "acked restored after successful duplicate READY");
+	zassert_equal(st.epoch, 99, "epoch still 99");
+	zassert_ok(flpr_handshake_wait_new_ready(42, K_NO_WAIT),
+		   "fast path succeeds only after epoch 99 ACK");
+}
+
 ZTEST(flpr_handshake, test_heartbeat_rx_sequence_and_echo)
 {
 	/* Not acked: rx tracked, no echo. */

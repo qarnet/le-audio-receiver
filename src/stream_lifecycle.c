@@ -119,11 +119,28 @@ bool stream_lifecycle_force_close(void)
 	/* R1: close the gate AND latch it closed for the current configured
 	 * slot set.  Returns whether the gate was open before force-close
 	 * so the caller can emit the first-close observer event exactly
-	 * once. */
+	 * once.
+	 *
+	 * Repair: with NO slot configured there is no lifecycle to latch —
+	 * a future first configure/start must be able to open normally, so
+	 * the force latch is only set when at least one slot is currently
+	 * configured.  stream_lifecycle_reset() and releasing the last
+	 * configured slot remain the release boundaries for a latched set. */
 	bool was_open = audio_path_open;
 
 	audio_path_open = false;
-	force_closed = true;
+
+	bool any_configured = false;
+
+	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
+		if (sink_chan_count[i] > 0) {
+			any_configured = true;
+			break;
+		}
+	}
+	if (any_configured) {
+		force_closed = true;
+	}
 	return was_open;
 }
 

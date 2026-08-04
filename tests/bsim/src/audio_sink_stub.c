@@ -234,6 +234,17 @@ void audio_sink_set_input_frames(uint16_t frames)
 
 int audio_sink_push(const int16_t *data, size_t sample_count)
 {
+	/* R1 repair: closed admission is checked BEFORE the scenario-goal
+	 * fast path.  A closed valid push returns -EBUSY non-destructively
+	 * even after the scenario goal was reached (the goal check must
+	 * not paper over a closed admission).  When admission remains
+	 * open, post-goal pushes may retain the existing ignored-success
+	 * behavior.  Stage 1 hashes/counts are unchanged: the goal path
+	 * still sees the same accepted pushes. */
+	if (!accepting) {
+		return -EBUSY;
+	}
+
 	if (goal_finalized) {
 		/* Scenario goal already reached: ignore any later push. */
 		return 0;
@@ -241,10 +252,6 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 
 	/* R1: closed admission rejects pushes without touching oracle
 	 * state (the stream_recv gate normally blocks these earlier). */
-	if (!accepting) {
-		return -EBUSY;
-	}
-
 	if (stopped) {
 		after_stop_total++;
 		FAIL("le_audio_receiver: push after stop — sample_count=%zu push#%u\n",

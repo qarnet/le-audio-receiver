@@ -60,6 +60,7 @@ bool audio_i2s_test_is_accepting(void);
 uint32_t audio_i2s_test_active_pushes(void);
 uint32_t audio_i2s_test_stop_callers(void);
 bool audio_i2s_test_stop_finalizing(void);
+uint32_t audio_i2s_test_stop_waiters(void);
 
 /* ASRC variants only (compile-time guarded in audio_i2s.c). */
 uint32_t audio_i2s_test_offload_sequence(void);

@@ -159,6 +159,77 @@ ZTEST(flpr_ring_mgr, test_repeated_init_safe)
 	zassert_true(flpr_ring_validate(flpr_ring_mgr_test_output_ring()), "output ring valid");
 }
 
+/* ── R1 repair: repeated init during a live session is a no-op ───────
+ * Public contract says repeated init calls are safe and the shell
+ * exposes direct init, so re-initializing live semaphores, handlers,
+ * headers, epoch, counters, or queued ring data would be destructive.
+ * Establish a nonzero epoch with ring contents/indices and a pending
+ * consume token, call init again, and prove every part is unchanged. */
+
+ZTEST(flpr_ring_mgr, test_repeated_init_preserves_live_state)
+{
+	mock_hs_set_ready_acked(true, true);
+	zassert_ok(flpr_ring_mgr_init(), "init 1");
+	zassert_ok(flpr_ring_mgr_reset(42), "reset to nonzero epoch");
+
+	/* Live traffic: one produced input slot and one pending consume
+	 * token from a matching-epoch consumer notification. */
+	uint8_t pcm[480 * 4U];
+	for (uint32_t i = 0; i < sizeof(pcm); i++) {
+		pcm[i] = (uint8_t)(i * 3U + 7U);
+	}
+	zassert_equal(flpr_ring_mgr_produce_block(pcm, 480, 1, 0, false), FLPR_PRODUCE_OK,
+		      "produce live slot");
+	struct flpr_msg notify = {.type = FLPR_MSG_RING_CONSUMER,
+				  .version = FLPR_PROTOCOL_VERSION,
+				  .seq = 1,
+				  .data = 42};
+	mock_hs_invoke_consumer(&notify);
+	zassert_equal(flpr_ring_mgr_test_consume_sem_count(), 1, "pending token present");
+
+	/* Snapshot the live state. */
+	uint8_t *in_ring = flpr_ring_mgr_test_input_ring();
+	uint8_t *out_ring = flpr_ring_mgr_test_output_ring();
+	uint32_t in_prod = flpr_ring_producer(in_ring);
+	uint32_t in_cons = flpr_ring_consumer(in_ring);
+	uint32_t out_prod = flpr_ring_producer(out_ring);
+	uint32_t out_cons = flpr_ring_consumer(out_ring);
+	uint32_t in_epoch = flpr_ring_epoch(in_ring);
+	uint32_t out_epoch = flpr_ring_epoch(out_ring);
+	struct flpr_ring_slot_meta *meta = last_input_slot();
+	uint8_t slot_snapshot[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
+	memcpy(slot_snapshot, flpr_ring_slot_payload((uint8_t *)meta), sizeof(slot_snapshot));
+	uint32_t slot_seq = meta->sequence;
+	uint32_t slot_epoch = meta->epoch;
+	uint16_t slot_vf = meta->valid_frames;
+
+	/* Repeated init: must be a non-destructive no-op. */
+	zassert_ok(flpr_ring_mgr_init(), "repeated init");
+
+	zassert_equal(flpr_ring_producer(in_ring), in_prod, "input producer index unchanged");
+	zassert_equal(flpr_ring_consumer(in_ring), in_cons, "input consumer index unchanged");
+	zassert_equal(flpr_ring_producer(out_ring), out_prod, "output producer index unchanged");
+	zassert_equal(flpr_ring_consumer(out_ring), out_cons, "output consumer index unchanged");
+	zassert_equal(flpr_ring_epoch(in_ring), in_epoch, "input header epoch unchanged");
+	zassert_equal(flpr_ring_epoch(out_ring), out_epoch, "output header epoch unchanged");
+	zassert_equal(flpr_ring_mgr_test_consume_sem_count(), 1, "pending token unchanged");
+	zassert_true(flpr_ring_validate(in_ring), "input ring still valid");
+	zassert_true(flpr_ring_validate(out_ring), "output ring still valid");
+
+	/* Produced slot contents unchanged. */
+	zassert_equal(meta->sequence, slot_seq, "slot sequence unchanged");
+	zassert_equal(meta->epoch, slot_epoch, "slot epoch unchanged");
+	zassert_equal(meta->valid_frames, slot_vf, "slot valid_frames unchanged");
+	zassert_equal(memcmp(flpr_ring_slot_payload((uint8_t *)meta), slot_snapshot,
+			     sizeof(slot_snapshot)),
+		      0, "slot payload unchanged");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_true(st.initialized, "still initialized");
+	zassert_equal(st.epoch, 42, "stream epoch unchanged");
+}
+
 /* ── Notification and reset ──────────────────────────────────────── */
 
 ZTEST(flpr_ring_mgr, test_notify_message_fields_and_counters)
@@ -1411,4 +1482,62 @@ ZTEST(flpr_ring_mgr, test_reset_barrier_waits_for_produce_hold)
 	zassert_equal(st.in_consumer, 0, "input consumer 0");
 	zassert_equal(st.out_producer, 0, "output ring empty after reset");
 	zassert_equal(st.out_consumer, 0, "output consumer 0");
+}
+
+/* ── R1 repair: repeated init serializes against a paused produce ────
+ * The producer holds ring_data_lock after produce begin; a concurrent
+ * repeated init must block on the same lock (never reinitialize the live
+ * rings underneath the producer) and, after the producer releases, both
+ * finish with the produced data and epoch intact. */
+
+static int rm_init_result;
+
+static void rm_init_worker(void *arg_p, void *u1, void *u2)
+{
+	(void)arg_p;
+	(void)u1;
+	(void)u2;
+	rm_init_result = flpr_ring_mgr_init();
+	rm_worker2_returned = true;
+	k_sem_give(&rm_done_sem);
+}
+
+ZTEST(flpr_ring_mgr, test_repeated_init_blocks_on_paused_produce)
+{
+	rm_init_and_reset(42);
+	rm_worker2_returned = false;
+	k_sem_reset(&rm_pause_entered);
+	k_sem_reset(&rm_pause_release);
+
+	flpr_ring_mgr_test_arm_pause_after_produce_begin(&rm_pause_entered, &rm_pause_release);
+
+	k_sem_reset(&rm_done_sem);
+	k_thread_create(&rm_thread, rm_stack, K_THREAD_STACK_SIZEOF(rm_stack), rm_produce_worker,
+			NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
+	zassert_true(k_sem_take(&rm_pause_entered, K_MSEC(5000)) == 0,
+		     "producer paused after produce begin");
+
+	/* Repeated init in a worker: must not complete while the producer
+	 * holds ring_data_lock. */
+	k_thread_create(&rm_thread_b, rm_stack_b, K_THREAD_STACK_SIZEOF(rm_stack_b), rm_init_worker,
+			NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
+	k_sleep(K_MSEC(100));
+	zassert_false(rm_worker2_returned, "repeated init blocked on ring_data_lock");
+
+	/* Release the producer: both finish; the produced data/epoch
+	 * survive the no-op re-init. */
+	k_sem_give(&rm_pause_release);
+	zassert_true(k_sem_take(&rm_done_sem, K_MSEC(5000)) == 0, "producer joined");
+	zassert_true(k_sem_take(&rm_done_sem, K_MSEC(5000)) == 0, "init joined");
+	zassert_ok(rm_result, "producer returned OK");
+	zassert_ok(rm_init_result, "repeated init returned 0");
+	zassert_true(rm_worker2_returned, "init completed after producer release");
+
+	struct flpr_ring_status st;
+	flpr_ring_mgr_get_status(&st);
+	zassert_equal(st.epoch, 42, "epoch survives the no-op re-init");
+	zassert_equal(st.in_producer, 1, "produced slot survives the no-op re-init");
+	zassert_equal(st.in_consumer, 0, "input consumer 0");
+	zassert_equal(st.out_producer, 0, "output ring untouched");
+	zassert_true(st.initialized, "still initialized");
 }
