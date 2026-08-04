@@ -245,8 +245,8 @@ From `scripts/test-all.sh` (header + run order):
 - **1 matrix child**: `check-test-matrix.py --coverage-json` on the
   coverage run's `coverage.json` (zero-hit functions, public API outcome
   ledger, state transitions, witnesses).
-- **1 BSim child**: `bsim: stage1` (T4 15-scenario BAP matrix,
-  scenarios 1–8 twice, pinned hashes, strict parse).
+- **1 BSim child**: `bsim: stage1` (T4 16-scenario BAP matrix,
+  scenarios 1–9 twice, remaining seven once, pinned hashes, strict parse).
 
 28 + 4 + 12 + 1 + 1 + 1 = **47**.
 

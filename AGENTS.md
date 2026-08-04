@@ -85,18 +85,22 @@ production code `971e6a4`; canonical gate **47 PASS / 0 FAIL / 47 TOTAL**
 baseline `1a5842d` (26 files: 3281/3722 lines, 1433/2041 branches, 205/205
 functions, gcovr 8.4 / gcov (GCC) 14.3.0), builds 3/3, build contract 76/76,
 both hardware matrices pass (`docs/testing/pre-refactor-hardware-baseline.md`).
-**BabbleSim Stage 1 is an accepted regular local gate** — the 15-scenario T4
-BAP matrix via `scripts/bsim-stage1-run.sh`, strict PCM oracle, deterministic
-across runs (mono 10 ms `0x22AB5C0D`, Mode A/B 10 ms `0xBAE24F7E`, reconnect =
-fresh mono oracle). Official upstream smoke remains PARTIAL (documented
-upstream teardown disable-race) and is **not** production acceptance.
+**BabbleSim Stage 1 is an accepted regular local gate** — the 16-scenario T4
+BAP matrix via `scripts/bsim-stage1-run.sh` (first nine scenarios run twice,
+remaining seven once), strict PCM oracle, deterministic across runs (mono
+10 ms `0x22AB5C0D`, Mode A/B 10 ms `0xBAE24F7E`, reconnect = fresh mono
+oracle). Official upstream smoke remains PARTIAL (documented upstream
+teardown disable-race) and is **not** production acceptance.
 
 Known behavior question (see `STATUS.md`): nRF54L15 360-frame (7.5 ms) calls
 fall back to cpuapp ASRC because the FLPR payload contract is 480 frames
-(`FLPR_RING_PAYLOAD_MAX_INPUT == 480U` in `src/flpr_ring.h`, pinned by
-`tests/unit/audio_offload` `test_asrc_invalid_frames` and the
-`tests/unit/flpr_ring` MAX_INPUT assertions). Not a new failure and not
-permission to implement 360-frame offload.
+(`FLPR_RING_PAYLOAD_MAX_INPUT == 480U` in `src/flpr_ring.h`).  Witnesses:
+`tests/unit/audio_i2s` `test_offload_reject_360_input_falls_back` pins the
+exact 360-frame caller fallback; `tests/unit/audio_offload`
+`test_asrc_invalid_frames` pins general non-480 rejection (its current
+concrete input is 240); `tests/unit/flpr_ring` MAX_INPUT assertions pin the
+480 contract.  Not a new failure and not permission to implement 360-frame
+offload.
 
 Consequences for work in this repo today:
 

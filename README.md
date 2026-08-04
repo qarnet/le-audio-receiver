@@ -142,9 +142,10 @@ CJMCU-1334 outputs **line level** (no headphone amp on the breakout). Connect:
 ./scripts/test-all.sh
 
 # Requires: NCS v3.3.0 dev shell (direnv allow / nix develop).
-# BabbleSim Stage 1 is an accepted regular local gate: the 15-scenario T4
-# BAP matrix (scripts/bsim-stage1-run.sh) with a strict PCM oracle and
-# pinned deterministic hashes. scripts/bsim-env.sh derives BSIM_OUT_PATH;
+# BabbleSim Stage 1 is an accepted regular local gate: the 16-scenario T4
+# BAP matrix (scripts/bsim-stage1-run.sh, first nine scenarios run twice,
+# remaining seven once) with a strict PCM oracle and pinned deterministic
+# hashes. scripts/bsim-env.sh derives BSIM_OUT_PATH;
 # missing BabbleSim prerequisites fail the gate.
 # Production firmware and dongle builds are run separately:
 #   fw-build-5340 && fw-build-54l15 && fw-build-dongle
@@ -261,7 +262,7 @@ before reflashing — `west flash` does not erase the settings partition.
 | `prj.conf` | App Kconfig |
 | `sysbuild.cmake` | Applies SW Split DT + Kconfig overlays to `hci_ipc` |
 | `tests/unit/` | 28 twister C suites + 4 exec-only C suites + 12 Python suites (47 gate children total) |
-| `tests/bsim/` | BabbleSim Stage 1: 15-scenario T4 BAP matrix (accepted regular local gate) |
+| `tests/bsim/` | BabbleSim Stage 1: 16-scenario T4 BAP matrix (accepted regular local gate) |
 | `tests/hardware/` | Hardware validation scripts (I2S, GPIO, fault recovery) |
 | `scripts/test-all.sh` | Canonical full local gate (all C + Python + BSim Stage 1) |
 | `docs/design.md` | Historical architecture and evidence document (Phases 0–6); active plan of record is `docs/development/refactor-plan.md` |

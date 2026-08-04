@@ -25,7 +25,7 @@ sequence-gap concealment; coverage-baseline commit `1a5842d`, coverage
 docs commit `3c29421`, first T8 acceptance closeout `5ceb719`, final docs
 HEAD = the evidence-fix commit).  Both hardware matrices pass: nRF54L15
 Mode A/B 120 s fresh (zero underruns under 21–30% RF loss), bonded
-reconnect, FLPR hang Mode A 16/16, Mode B 16/16 (earlier), Phase 3 full
+reconnect, FLPR hang Mode A 16/16, Mode B 16/16 (earlier), BZ3 full
 3/3; nRF5340/E83 Mode A 120, Mode B 120 fresh + bonded reconnect, Mode B
 300, zero `i2s_nrfx`/underrun/reset/decode faults, APLL ACTIVE ppm −500,
 no DAC connected and no audibility claim.  Final software gate on the
@@ -250,10 +250,11 @@ BAP/ASCS/PACS, real ISO transport, and real liblc3.  Evidence:
 `docs/testing/behavior-contract.md` (BT-001, CODEC-007 closed;
 CODEC-011..013 added) and `docs/testing/coverage-matrix.md`.
 
-- One receiver binary and one parameterized client binary carry the 15
+- One receiver binary and one parameterized client binary carry the 16
   BST test IDs (`mono_10ms`, `mono_7p5ms`, `modea_10ms`, `modea_7p5ms`,
   `modea_reverse_start_10ms`, `modeb_10ms`, `modeb_7p5ms`,
-  `invalid_sdu_resume_10ms`, `modea_first_stop_10ms`,
+  `invalid_sdu_resume_10ms`, `modea_one_cis_loss_10ms`,
+  `modea_first_stop_10ms`,
   `release_without_disable_10ms`, `disconnect_streaming_10ms`,
   `reconnect_second_stream_10ms`, `unsupported_source_direction`,
   `no_free_sink_slot`, `invalid_codec_fields`).  The client TX is a
@@ -271,7 +272,7 @@ CODEC-011..013 added) and `docs/testing/coverage-matrix.md`.
   through the real ASCS server.  The runner (`scripts/bsim-stage1-run.sh`,
   name retained) flocks the shared `bsim_out` tree, compiles once per
   gate, uses one private log root (preserved on failure or
-  `BSIM_KEEP_LOGS=1`), runs scenarios 1–8 twice and 9–15 once, and
+  `BSIM_KEEP_LOGS=1`), runs scenarios 1–9 twice and 10–16 once, and
   strict-parses every named PASS field via
   `scripts/bsim_stage1_parse.py` (36 unit tests in
   `tests/unit/bsim_runner`); `BSIM_BASELINE=1` prints hashes for
@@ -645,7 +646,7 @@ gate evidence below).
   direct source, exact outcome ledger (no `error-class`), `stateful`
   transition requirements, duplicate outcome/transition rejection,
   hardware evidence-path witnesses; `bt_bap.c` documents the full
-  15-scenario T4 matrix.
+  16-scenario T4 matrix.
 - **Canonical gate wiring** — `scripts/test-all.sh` now runs the coverage
   child (default baseline enforcement into `$TMP_ROOT/coverage`) followed
   by the matrix checker child consuming its `coverage.json`, before the
@@ -1072,9 +1073,9 @@ Manual connection after RF-switch fix (PR #3, merged
 `20b37c405835e5c2c747fa7b072c4c0b752b29cd`) is recorded as hardware evidence
 in the baseline but is not automated regression protection.
 
-## Phase 3 — BlueZ/WirePlumber pairing and reconnect lifecycle — ACCEPTED (2026-07-31)
+## BZ3 — BlueZ/WirePlumber pairing and reconnect lifecycle — ACCEPTED (2026-07-31)
 
-Phase 3 accepted with three autonomous strict stock playbacks on nRF54L15.
+BZ3 accepted with three autonomous strict stock playbacks on nRF54L15.
 Full 12-step sequence (unpair, remove host device, pair, trust, connect,
 playback, disconnect, reconnect, playback, reset, reconnect, playback) all
 pass without repo harness. Three 30 s playbacks at 7.5 ms frame duration,
@@ -1094,15 +1095,15 @@ Preflight hardened with two corrections landed in final review:
 See `docs/development/phase3-results.md` for acceptance evidence,
 `docs/development/bluez-wireplumber-phase3-final-review-handoff.md` for
 execution handoff, and `docs/development/bluez-wireplumber-interoperability-plan.md`
-for Phase 1–4 plan.
+for BZ1–BZ4 plan.
 
-**Phase 4 compatibility expansion NOT needed.** Bare BAP passed with stock
+**BZ4 compatibility expansion NOT needed.** Bare BAP passed with stock
 WirePlumber main-systemwide playback. CAP/CAS remain disabled; no speculative
 services or custom host policy required.
 
-## Phase 2 — BlueZ/WirePlumber stock desktop gate — ACCEPTED (2026-07-31)
+## BZ2 — BlueZ/WirePlumber stock desktop gate — ACCEPTED (2026-07-31)
 
-Phase 2 accepted with strict nonzero-audio/zero-fault evidence on nRF54L15,
+BZ2 accepted with strict nonzero-audio/zero-fault evidence on nRF54L15,
 stock WirePlumber main-systemwide playback:
 
 - **30 s gate**: SDUs=4578, decoded=4729, decode_err=0, i2s_underrun=0,
@@ -1122,7 +1123,7 @@ See `docs/development/phase2-stock-desktop-gate-results.md` for full evidence
 and `docs/development/bluez-wireplumber-interoperability-plan.md` for Phase
 1–4 plan.
 
-## Phase 1 — BlueZ/WirePlumber PACS availability — DONE (2026-07-30)
+## BZ1 — BlueZ/WirePlumber PACS availability — DONE (2026-07-30)
 
 Sink Available Audio Contexts no longer cleared to `BT_AUDIO_CONTEXT_TYPE_NONE`
 on ACL connect. ACL connection is not ASE ownership — stock desktop policy
@@ -1133,7 +1134,7 @@ at PASS point verifies contexts non-NONE after connection + 100-frame stream).
 Contexts persist from `bt_bap_init()` through connect/disconnect cycles.
 Zephyr PACS restores default on ACL disconnect per spec — no manual restore
 needed. See `docs/development/bluez-wireplumber-interoperability-plan.md` for
-full Phase 1–4 plan and `docs/development/bluez-wireplumber-phase1-handoff.md`
+full BZ1–BZ4 plan and `docs/development/bluez-wireplumber-phase1-handoff.md`
 for execution handoff.
 
 ## Stage 0 — PASS (2026-07-27)
@@ -1157,6 +1158,19 @@ repeat fb=0, ASRC cap fail=0. Zero warnings, zero assertions, zero faults.
 See `docs/development/phase6-stage0-results.md` for full verification evidence.
 
 ## BSIM Stage 1 — PASS + CLEANUP + REPEATED-RUN GATE (2026-07-31)
+
+> **Historical/superseded (2026-08-04).**  This section records the
+> initial sink-only Stage-1 acceptance (single mono ASE, local startup
+> counters, `0xFE0D4245`/`0x5853F445` deterministic hashes) and its
+> "scope stops here: reconnect/Mode A/B/error injection duplicate hardware
+> coverage" boundary — both are historical evidence only.  The current
+> accepted local gate is the **16-scenario T4 BAP matrix** via
+> `scripts/bsim-stage1-run.sh` (first nine scenarios run twice, remaining
+> seven once), covering reconnect, Mode A/B, malformed/error/rejection,
+> lifecycle, and one-CIS-loss scenarios with pinned deterministic hashes
+> (see the T4 section above).  Official upstream smoke remains **PARTIAL**
+> (documented upstream teardown disable-race) and is **not** production
+> acceptance.
 
 > **T2 update (2026-08-01):** the accepted oracle hashes below changed to
 > `0x9225F075` (10 ms) and `0x2011C0F9` (7.5 ms) when the T2B mono
@@ -1338,13 +1352,15 @@ Probe identities resolved at runtime via `nrf-probes` — no static serials in d
 
 nRF54L15 360-frame (7.5 ms) ASRC calls fall back to cpuapp ASRC because the
 FLPR payload contract is 480 frames: `FLPR_RING_PAYLOAD_MAX_INPUT == 480U`
-in `src/flpr_ring.h`, pinned by `tests/unit/audio_offload`
-`test_asrc_invalid_frames` and the `tests/unit/flpr_ring` MAX_INPUT 480
-assertions.  A 360-frame call returns `-EINVAL` from
-`audio_offload_process_asrc()` and uses cpuapp ASRC.  This is a known
-limitation, not a new failure, and not permission to implement 360-frame
-offload (deferred feature — see the deferred list in
-`docs/development/refactor-plan.md`).
+in `src/flpr_ring.h`.  Witnesses: `tests/unit/audio_i2s`
+`test_offload_reject_360_input_falls_back` pins the exact 360-frame caller
+fallback; `tests/unit/audio_offload` `test_asrc_invalid_frames` pins
+general non-480 rejection (its current concrete input is 240);
+`tests/unit/flpr_ring` MAX_INPUT 480 assertions pin the contract.  A
+360-frame call returns `-EINVAL` from `audio_offload_process_asrc()` and
+uses cpuapp ASRC.  This is a known limitation, not a new failure, and not
+permission to implement 360-frame offload (deferred feature — see the
+deferred list in `docs/development/refactor-plan.md`).
 
 ### I2S20 hardware evidence
 
@@ -1375,9 +1391,11 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
      ASRC, 432 unit tests pass, nRF54L15 CPUAPP FLASH 502904 B / RAM 152244 B.
      Hardware: Mode A 120 s + Mode B 120 s at 100 fps, zero faults.
      See `docs/development/phase6-stage5-results.md`.
-   6. **BabbleSim** — cross-cutting verification track (research + implementation).
+   6. ~~**BabbleSim** — cross-cutting verification track (research + implementation).~~
       Provision environment, fix sysbuild/harness, build smallest-useful
       nRF5340bsim dual-core scenario. See `docs/design.md` BabbleSim section.
+      → COMPLETE: Stage 1 accepted (2026-07-29) and expanded at T4 into the
+      current **16-scenario matrix** (see item 7 note and the T4 section).
    7. ~~**BabbleSim Stage 1** — ACCEPTED as regular local gate (2026-07-29).~~
       Production cleanup: startup accounting moved to local sink-stub counters;
       audio_stats.h/.c restored to pre-BSim shape.  Sink-only scenario, strict
@@ -1386,6 +1404,12 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
       smoke remains PARTIAL.  Scope stops here: reconnect/Mode A/B/error injection
       duplicate hardware coverage under unmodeled I2S/FLPR.
       See `docs/development/bsim-stage1-results.md`.
+      **Historical/superseded:** the initial sink-only scope and its
+      `0xFE0D4245` hash are historical evidence.  The current accepted local
+      gate is the **16-scenario T4 matrix** (reconnect, Mode A/B, malformed/
+      error/rejection, lifecycle, one-CIS-loss) via `scripts/bsim-stage1-run.sh` —
+      see the T4 section.  Official upstream smoke remains PARTIAL and is not
+      production acceptance.
    8. ~~**Phase 5 Final Gate (FLPR + cpuapp fallback)**~~ → COMPLETE (Phase 6 Stages 0–5).
       All gates met; 432 unit tests pass; nRF54L15 Mode A/B hardware proven.
 

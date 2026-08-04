@@ -97,7 +97,8 @@ Add current production modules where missing:
 
 Update README/AGENTS/design tables without expanding into optional cleanup.
 Update README active suite inventory to 28 Twister + 4 exec-only + 12 Python,
-47 total gate children.  Describe accepted local BSim as 15-scenario matrix.
+47 total gate children.  Describe accepted local BSim as 16-scenario matrix
+(first nine scenarios run twice, remaining seven once).
 
 ### BSim truth
 
@@ -147,8 +148,12 @@ calls fall back to cpuapp ASRC because FLPR payload contract is 480 frames.
 This is not a new failure and not permission to implement 360-frame offload.
 Cite direct witnesses:
 
+- `tests/unit/audio_i2s/src/test_asrc_path.c`:
+  `test_offload_reject_360_input_falls_back` — pins the exact 360-frame
+  caller fallback behavior.
 - `tests/unit/audio_offload/src/test_audio_offload.c`:
-  `test_asrc_invalid_frames`.
+  `test_asrc_invalid_frames` — pins general non-480 rejection (its current
+  concrete input is 240; do not misstate it as 360).
 - `tests/unit/flpr_ring/src/test_flpr_ring.c`: MAX_INPUT 480 assertions.
 - `src/flpr_ring.h`: `FLPR_RING_PAYLOAD_MAX_INPUT == 480U`.
 

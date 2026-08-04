@@ -1,6 +1,6 @@
 # LE Audio Receiver — Design Document
 
-Status: **historical architecture and evidence** — revised 2026-07-31 (Phase 5 closed — cpuapp ASRC accepted, Mode A+B 600s zero faults; Phase 6 FLPR offload Stages 0–5 complete; Phase 1 BlueZ/WirePlumber PACS availability landed; Phase 2 BlueZ/WirePlumber stock desktop gate accepted; Phase 3 BlueZ/WirePlumber pairing/reconnect lifecycle accepted; Phase 4 compatibility expansion not needed). Earlier history: accepted 2026-07-05.
+Status: **historical architecture and evidence** — revised 2026-07-31 (Phase 5 closed — cpuapp ASRC accepted, Mode A+B 600s zero faults; Phase 6 FLPR offload Stages 0–5 complete; BZ1 BlueZ/WirePlumber PACS availability landed; BZ2 BlueZ/WirePlumber stock desktop gate accepted; BZ3 BlueZ/WirePlumber pairing/reconnect lifecycle accepted; BZ4 compatibility expansion not needed). Earlier history: accepted 2026-07-05.
 
 The accepted plan of record for the current refactoring track (R0–R10) is
 `docs/development/refactor-plan.md`.  The T0–T8 behavior-lock track is
@@ -515,11 +515,11 @@ proven hardware or SDK impossibility that needs an explicit redesign
 
 ## BabbleSim — cross-cutting verification track
 
-BabbleSim Stage 1 is an **accepted regular local gate**: the 15-scenario T4
+BabbleSim Stage 1 is an **accepted regular local gate**: the 16-scenario T4
 BAP matrix over real `src/bt_bap.c`, `src/audio_decode.c`, real Zephyr
 BAP/ASCS/PACS, real ISO transport, and real liblc3
-(`scripts/bsim-stage1-run.sh`), with a strict PCM oracle and pinned
-deterministic hashes.  The official upstream smoke
+(`scripts/bsim-stage1-run.sh`, first nine scenarios run twice, remaining
+seven once), with a strict PCM oracle and pinned deterministic hashes.  The official upstream smoke
 (`scripts/bsim-official-smoke.sh`) remains **PARTIAL** because of the
 documented upstream teardown disable-race and is **not** production
 acceptance.  It complements, never substitutes, native unit tests and
@@ -570,7 +570,7 @@ real-hardware central-driven tests.
 > **Historical (pre-T2 oracle):** this stage-1 acceptance predates the T2B
 > mono overlap-safe expansion fix; the `0xFE0D4245` hash below locked in the
 > forward-expansion collapse defect and was superseded by the corrected T2
-> values and then by the T4 15-scenario matrix (see `STATUS.md` T2/T4
+> values and then by the T4 16-scenario matrix (see `STATUS.md` T2/T4
 > sections and `docs/development/bsim-stage1-results.md`).  Kept as dated
 > evidence only; the current accepted gate is
 > `scripts/bsim-stage1-run.sh`.
@@ -590,8 +590,9 @@ real-hardware central-driven tests.
 ### Planned beyond Stage 1
 
 No further BabbleSim scenario expansion is planned beyond the accepted T4
-15-scenario matrix (mono/Mode A/Mode B 7.5+10 ms, lifecycle, reconnect,
-rejection, and invalid-codec scenarios, run by `scripts/bsim-stage1-run.sh`).
+16-scenario matrix (mono/Mode A/Mode B 7.5+10 ms incl. one-CIS-loss,
+lifecycle, reconnect, rejection, and invalid-codec scenarios, run by
+`scripts/bsim-stage1-run.sh`).
 
 BabbleSim cannot validate ASRC quality, I2S behaviour, SDC realism, FLPR
 offload, or hardware stability — those remain hardware-only gates. It is
