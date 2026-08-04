@@ -294,11 +294,24 @@ handoffs in this phase; link cleanup can happen after the plan is accepted.
 One current plan, one current gate inventory, no contradictory active contract
 IDs/counts/baseline numbers, and all known behavior limitations visible.
 
-## R1 — Ownership and concurrency hardening
+## R1 — Ownership and concurrency hardening — **ACCEPTED (2026-08-04)**
 
 ### Goal
 
 Fix real cross-context ownership ambiguities before moving code.
+
+### Results
+
+Exact implementation commits **`bcd623b`** (tests + source) and **`4f426f3`**
+(contracts/metadata), starting from clean `f654b58`; full G1 passed on the
+clean `4f426f3` (47 PASS / 0 FAIL / 47 TOTAL, coverage enforcement exit 0
+with population 26 and no ratio regression, builds 3/3, build contract
+76/76, zero actionable warnings, BSim Stage 1 hashes/counts unchanged);
+autonomous G2 passed on both targets (nRF54L15 Mode A/B and nRF5340/E83
+Mode A/B, FLPR offloaded/ACTIVE and APLL stable, zero decode errors,
+underruns, resets, faults, or warnings).  Full results, commands, runtimes,
+probe evidence, and raw log paths:
+`docs/development/refactor-r1-results.md`.
 
 ### Files
 
