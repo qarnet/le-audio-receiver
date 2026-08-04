@@ -1,8 +1,20 @@
 # Workstation transfer status — pre-refactor testing track
 
-Date: 2026-08-04 (T8 ACCEPTED final update).  Documentation-only state
-handoff.  No production code, scripts, tests, baseline, or configs were
-touched by the edits that accompany this document.
+Date: 2026-08-04 (T8 ACCEPTED final update; R3 ACCEPTED addendum).
+Documentation-only state handoff.  No production code, scripts, tests,
+baseline, or configs were touched by the edits that accompany this document.
+
+## R3 addendum (2026-08-04)
+
+R3 (test-runner and hardware-gate consolidation) is ACCEPTED; see
+`docs/development/refactor-r3-results.md`.  Host tooling/tests only — no
+production firmware or coverage-baseline change.  Suite discovery now uses
+`scripts/test_inventory.py`; `tests/unit/gate/` retired (tests moved to
+`fw_flash_dongle` + `flpr_stall_gate` with a one-to-one ownership map);
+FLPR status parsing shared via `scripts/flpr_status.py`; BSim pins moved
+unchanged to `tests/bsim/stage1-scenarios.json`; `scripts/monitor.sh` and
+`tests/hardware/` retired.  Canonical gate **47 PASS / 0 FAIL / 47 TOTAL**,
+builds 3/3, build contract 76/76, BSim pins unchanged.
 
 ## Objective
 

@@ -515,6 +515,13 @@ Make gate composition discoverable and remove duplicated parser/test ownership.
 One source of truth per suite/parser/hash set; adding a suite cannot silently
 omit it from gate or coverage.
 
+**R3 COMPLETE/ACCEPTED (2026-08-04)** — see
+`docs/development/refactor-r3-results.md`.  Canonical gate at the R3 docs
+commit: **47 PASS / 0 FAIL / 47 TOTAL** (28 twister + 4 exec + 12 Python +
+coverage + matrix + BSim Stage 1), builds 3/3, build contract 76/76, BSim
+pins unchanged (mono 10 ms `0x22AB5C0D`, Mode A/B 10 ms `0xBAE24F7E`,
+reconnect = fresh mono oracle), zero new/actionable warnings.
+
 ## R4 — Shell and acceptance-harness separation
 
 ### Goal

@@ -3,6 +3,24 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
+## Refactoring track — R3 ACCEPTED (2026-08-04)
+
+R0–R2 ACCEPTED (see `docs/development/refactor-r2-results.md`).  **R3 —
+test-runner and hardware-gate consolidation — ACCEPTED**: one source of
+truth per suite/parser/hash set.  Suite discovery now flows through
+`scripts/test_inventory.py` (sole filesystem classification source for
+`test-all.sh`, `test-coverage.sh`, and `check-test-matrix.py`);
+`tests/unit/gate/` retired with a one-to-one ownership map into
+`tests/unit/fw_flash_dongle/` + `tests/unit/flpr_stall_gate/`; FLPR status
+parsing shared via `scripts/flpr_status.py` (hang gate gained fakeable
+transport/launcher boundaries); BlueZ phase3 reads the base `REMOTE_UUIDS`;
+BSim scenario matrix/run counts/pins moved unchanged into
+`tests/bsim/stage1-scenarios.json`; `scripts/monitor.sh`, `tests/hardware/`,
+and the stale `probe-serial.local.bak` retired.  Canonical gate on the R3
+docs commit: **47 PASS / 0 FAIL / 47 TOTAL**, builds 3/3, build contract
+76/76, BSim pins unchanged, zero new/actionable warnings.  Full evidence:
+`docs/development/refactor-r3-results.md`.
+
 ## Pre-refactor testing track — COMPLETE (T0–T8 ACCEPTED, 2026-08-04)
 
 Test plan accepted: `docs/development/pre-refactor-testing-plan.md`.  Phases
