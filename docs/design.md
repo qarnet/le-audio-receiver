@@ -1,6 +1,13 @@
 # LE Audio Receiver — Design Document
 
-Status: **revised 2026-07-31** (Phase 5 closed — cpuapp ASRC accepted, Mode A+B 600s zero faults; Phase 6 FLPR offload Stages 0–5 complete; Phase 1 BlueZ/WirePlumber PACS availability landed; Phase 2 BlueZ/WirePlumber stock desktop gate accepted; Phase 3 BlueZ/WirePlumber pairing/reconnect lifecycle accepted; Phase 4 compatibility expansion not needed). Earlier history: accepted 2026-07-05.
+Status: **historical architecture and evidence** — revised 2026-07-31 (Phase 5 closed — cpuapp ASRC accepted, Mode A+B 600s zero faults; Phase 6 FLPR offload Stages 0–5 complete; Phase 1 BlueZ/WirePlumber PACS availability landed; Phase 2 BlueZ/WirePlumber stock desktop gate accepted; Phase 3 BlueZ/WirePlumber pairing/reconnect lifecycle accepted; Phase 4 compatibility expansion not needed). Earlier history: accepted 2026-07-05.
+
+The accepted plan of record for the current refactoring track (R0–R10) is
+`docs/development/refactor-plan.md`.  The T0–T8 behavior-lock track is
+COMPLETE/ACCEPTED (canonical gate **47 PASS / 0 FAIL / 47 TOTAL**, coverage
+baseline `1a5842d`, builds 3/3, build contract 76/76, both hardware
+matrices — see `docs/testing/pre-refactor-hardware-baseline.md` and
+`STATUS.md`).
 
 This is the consolidated design doc for the firmware supporting both **nRF5340**
 and **nRF54L15**. It records current state, findings (historical), target
@@ -35,6 +42,12 @@ documents are written per phase when work on it starts.
   faults). Physical audibility UNAVAILABLE — see Phase 4/5 for completed
   measurable gates and evidence.
 - Clean small modules: `audio_stats`, `audio_volume`, `audio_shell`.
+- Current architecture modules: `app_lifecycle.c` (pure fatal boot
+  coordinator — ordered init, cold reboot, advertising restart),
+  `audio_modea.c` (bounded two-CIS event assembler with per-channel PLC),
+  `audio_iso_seq.c` (pure per-CIS omitted-callback sequence tracker),
+  `bt_pairing_policy.c` (pure OPEN/BONDED_ONLY policy snapshot; Bluetooth
+  controller work remains in `bt_bap.c`).
 
 ## Findings (historical — all resolved in Phases 0–4)
 
@@ -502,10 +515,15 @@ proven hardware or SDK impossibility that needs an explicit redesign
 
 ## BabbleSim — cross-cutting verification track
 
-BabbleSim is a planned research-then-implementation track that runs in
-parallel with Phases 5–6. It is not a release blocker until the
-environment is provisioned and the test scenario is valid. It complements,
-never substitutes, native unit tests and real-hardware central-driven tests.
+BabbleSim Stage 1 is an **accepted regular local gate**: the 15-scenario T4
+BAP matrix over real `src/bt_bap.c`, `src/audio_decode.c`, real Zephyr
+BAP/ASCS/PACS, real ISO transport, and real liblc3
+(`scripts/bsim-stage1-run.sh`), with a strict PCM oracle and pinned
+deterministic hashes.  The official upstream smoke
+(`scripts/bsim-official-smoke.sh`) remains **PARTIAL** because of the
+documented upstream teardown disable-race and is **not** production
+acceptance.  It complements, never substitutes, native unit tests and
+real-hardware central-driven tests.
 
 ### Current state (NCS v3.3.0)
 
@@ -547,7 +565,15 @@ never substitutes, native unit tests and real-hardware central-driven tests.
   BAP unicast audio test, exits nonzero on known teardown disable-race → Baseline
   PARTIAL.
 
-### Stage 1 acceptance + cleanup (2026-07-29)
+### Stage 1 acceptance + cleanup (2026-07-29) — historical evidence
+
+> **Historical (pre-T2 oracle):** this stage-1 acceptance predates the T2B
+> mono overlap-safe expansion fix; the `0xFE0D4245` hash below locked in the
+> forward-expansion collapse defect and was superseded by the corrected T2
+> values and then by the T4 15-scenario matrix (see `STATUS.md` T2/T4
+> sections and `docs/development/bsim-stage1-results.md`).  Kept as dated
+> evidence only; the current accepted gate is
+> `scripts/bsim-stage1-run.sh`.
 
 - Advertising → pairing → PACS/ASCS → one sink ASE → CIS start → valid LC3
   fixture (48 kHz, 48_4_1 preset) → 104 client sends → 100 nonzero receiver pushes.
@@ -563,9 +589,9 @@ never substitutes, native unit tests and real-hardware central-driven tests.
 
 ### Planned beyond Stage 1
 
-Scope stops here.  Reconnect, Mode A/B, and error injection duplicate hardware
-coverage and add low value under unmodeled I2S/FLPR.  No further BSIM scenario
-expansion planned.
+No further BabbleSim scenario expansion is planned beyond the accepted T4
+15-scenario matrix (mono/Mode A/Mode B 7.5+10 ms, lifecycle, reconnect,
+rejection, and invalid-codec scenarios, run by `scripts/bsim-stage1-run.sh`).
 
 BabbleSim cannot validate ASRC quality, I2S behaviour, SDC realism, FLPR
 offload, or hardware stability — those remain hardware-only gates. It is

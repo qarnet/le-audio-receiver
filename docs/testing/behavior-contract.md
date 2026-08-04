@@ -1,6 +1,6 @@
 # Behavior contract — pre-refactor baseline
 
-Version: T5, 2026-08-01.  Each contract carries a stable ID.  Breaking a contract
+Version: T8, 2026-08-04.  Each contract carries a stable ID.  Breaking a contract
 without a handoff that updates this document is a regression.
 
 ## Bluetooth and service contract (`BT-*`)
@@ -198,18 +198,6 @@ conn/ep/codec_cfg/iso and clears them at the ASE idle transition;
 wiping them crashes the streaming-exit transition).  Later
 disabled/disconnect paths stay idempotent and must not create a second
 segment or hide pushes.
-
-### CODEC-013 — Release slot semantics
-
-Release without prior Disable closes the audio-path gate before any
-later receive callback can decode/push, stops offload and the audio
-sink exactly once through the idempotent APIs, clears pending Mode A
-halves, clears the released slot's lifecycle configuration, resets the
-decoder and app-owned slot state so the slot is reusable, and preserves
-truthful PACS contexts.  The `bt_bap_stream` struct itself is left to
-the ASCS server (it owns conn/ep/codec_cfg/iso and clears them at the
-ASE idle transition; wiping them crashes the streaming-exit
-transition).
 
 ## Statistics contract (`STAT-*`)
 
@@ -798,20 +786,25 @@ accepted:
 
 ## Coverage and test-matrix gate contract (`CV-*`)
 
-Version: T7, 2026-08-02.  Enforced by `scripts/test-coverage.sh` (default
+Version: T8, 2026-08-04.  Enforced by `scripts/test-coverage.sh` (default
 mode) and `scripts/check-test-matrix.py --coverage-json`, both ordered
 children of `scripts/test-all.sh`.
 
 ### CV-001 — Numeric coverage never decreases
 
 The committed `tests/coverage-baseline.json` (schema v1, generated on the
-clean commit `c6adce8`, committed in `4a31324`, enforcement rerun on clean
-`4a31324` with identical ratios; lines 3070/3503, branches 1332/1921,
-functions 182/182 in the 23-file numeric population) is enforced with
-integer cross multiplication:
+clean commit `971e6a4`, committed in `1a5842d`; lines 3281/3722, branches
+1433/2041, functions 205/205 in the 26-file numeric population) is enforced
+with integer cross multiplication:
 `current_covered/current_total >= baseline_covered/baseline_total` for the
 overall lines and branches totals and for every per-file lines, branches,
-and functions record.  Lowering the baseline is a regression.
+and functions record.  The recorded gcovr/gcov versions are also enforced:
+in baseline mode the current tool version first lines must equal the
+baseline's `gcovr_version`/`gcov_version` when those fields are present
+(old baselines that omit either field remain accepted); a mismatch is a
+hard error directing an intentional `--write-baseline` refresh.
+`--report-only` never enforces versions.  Lowering the baseline is a
+regression.
 
 ### CV-002 — Population drift is a hard failure
 

@@ -3,10 +3,12 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-## Pre-refactor testing track — STARTED (2026-07-31)
+## Pre-refactor testing track — COMPLETE (T0–T8 ACCEPTED, 2026-08-04)
 
 Test plan accepted: `docs/development/pre-refactor-testing-plan.md`.  Phases
-T0–T8 lock current supported behavior before large-scale refactoring.
+T0–T8 locked current supported behavior before large-scale refactoring and
+are all complete/accepted; the plan is superseded by
+`docs/development/refactor-plan.md` (accepted plan of record, R0–R10).
 
 **Current status (2026-08-04):** T0–T8 ACCEPTED.  **T7 ACCEPTED** —
 canonical gate observed exact **41 PASS / 0 FAIL / 41 TOTAL** (25 twister +
@@ -44,8 +46,9 @@ zero actionable warnings.
 One explicit evidence limitation: `audio_iso_seq` gap activation was NOT
 observable on hardware (clean E83 link — no SW Split/controller/BSim API can
 induce it deterministically); the exact gap behavior is covered by the
-18-test `iso_seq` production-module suite + prior T9 failing-hardware
-provenance, and the new runs prove zero regressions — documented, not a
+18-test `iso_seq` production-module suite + the prior 8–30% RF-loss hardware
+sessions documented in `docs/testing/pre-refactor-hardware-baseline.md`, and
+the new runs prove zero regressions — documented, not a
 hardware activation claim.  Full evidence:
 `docs/testing/pre-refactor-hardware-baseline.md`.  Transfer/status handoff:
 `docs/development/workstation-transfer-status.md`.
@@ -1330,6 +1333,18 @@ Probe identities resolved at runtime via `nrf-probes` — no static serials in d
   helper exists for recovery from a crashed run that bypassed cleanup.
 
 ## What does NOT work / open
+
+### 7.5 ms FLPR offload limitation (known behavior question)
+
+nRF54L15 360-frame (7.5 ms) ASRC calls fall back to cpuapp ASRC because the
+FLPR payload contract is 480 frames: `FLPR_RING_PAYLOAD_MAX_INPUT == 480U`
+in `src/flpr_ring.h`, pinned by `tests/unit/audio_offload`
+`test_asrc_invalid_frames` and the `tests/unit/flpr_ring` MAX_INPUT 480
+assertions.  A 360-frame call returns `-EINVAL` from
+`audio_offload_process_asrc()` and uses cpuapp ASRC.  This is a known
+limitation, not a new failure, and not permission to implement 360-frame
+offload (deferred feature — see the deferred list in
+`docs/development/refactor-plan.md`).
 
 ### I2S20 hardware evidence
 

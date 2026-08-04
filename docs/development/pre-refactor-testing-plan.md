@@ -1,6 +1,10 @@
 # Pre-refactor behavior and testing plan
 
-Status: accepted for phased implementation on 2026-07-31.
+Status: **T0–T8 COMPLETE (accepted 2026-07-31..2026-08-04)** — the plan was
+accepted for phased implementation on 2026-07-31 and every phase is now
+complete; it is superseded by `docs/development/refactor-plan.md` (accepted
+plan of record, R0–R10).  The dated phase evidence below (including the
+21-child and 41-child gate records) is preserved as historical evidence.
 
 ## Goal
 
@@ -452,5 +456,7 @@ state-machine improvements, readability work, and diagnostic improvements.
    `docs/testing/pre-refactor-hardware-baseline.md` (T8 ACCEPTED).  One
    documented evidence limitation: per-CIS ISO sequence-gap activation was
    not observable on hardware (clean E83 link) — covered by the 18-test
-   `iso_seq` production-module suite + prior T9 failing-hardware
-   provenance, not a hardware activation claim.
+   `iso_seq` production-module suite + the prior 8–30% RF-loss hardware
+   sessions documented in
+   `docs/testing/pre-refactor-hardware-baseline.md`, not a hardware
+   activation claim.

@@ -1,6 +1,6 @@
 # Honest coverage matrix — pre-refactor baseline
 
-Version: T6, 2026-08-02.  This matrix maps every production source file to the
+Version: T8, 2026-08-04.  This matrix maps every production source file to the
 current test coverage that exercises it.  A test that duplicates production
 logic, compiles a stub, or checks copied constants is NOT counted as proof of
 production behavior.
@@ -29,6 +29,8 @@ production behavior.
 | `audio_decode.c` | LC3 decode + channel routing | `tests/unit/decode/` — 37 tests execute production source against deterministic checked-in 48 kHz LC3 fixtures: byte-exact golden PCM, full/per-channel CRC-32, config rejection (incl. liblc3-untouched), SDU rejection with guard preservation, PLC accounting, overlap-safe mono expansion, Mode B dual-accounting, hard-failure accounting via linker wrap | BSim T4 matrix: exercised through the full mono/Mode A/Mode B routing matrix with exact per-push decoder-invocation accounting and pinned PCM hashes | — | nRF54L15 hardware streaming | No golden PCM for alternate rates/codecs (unsupported by design). | T7 |
 | `audio_drift.c` | PI clock recovery controller | `tests/unit/drift/` — 29 tests compile production source: INT32_MIN/MAX frequency updates, INT_MIN/MAX slab counts, cross-extreme EMA steps, exact rail boundaries, 100k-update long runs at setpoint and both phase extremes, symmetric feedforward-rail phase unwind, real-thread concurrent update/frequency/reset loops with deterministic final reset; focused run UBSan-clean | BSim: compiled only — `audio_drift_controller_update()`/`reset()` call sites live in `audio_i2s.c`, excluded from the BSim build; no BSim execution | Configurable clamps verified through Kconfig | nRF54L15 closed-loop streaming | Long-run boundedness and full-range arithmetic now direct production-source proof. | T5 (closed) |
 | `audio_i2s.c` | I2S DMA + slab + underrun recovery | `tests/unit/audio_i2s/` (ASRC/NONE/offload) + `tests/unit/audio_i2s_identity/` (identity/APLL) — 98 tests execute real production source against a fake I2S driver with nrfx-style block ownership + mocked timing/drift/actuator/rate-converter/ASRC/offload/stats/perf: exact config, all init failures with retry, idempotent re-init preserving active queue/state, input-frame setter bound, push validation with zero side effects, transactional startup (six silence + data + START; every alloc/write/START failure cleanup), distinct-ownership proof, drift/actuator once-per-block, repeat-fallback ownership, `-EIO` PREPARE recovery, ASRC pre-state export/offload fallback for every fault class/invalid frame range/import rejection, offload sequence accounting, stop order/idempotence/state reset | — | — | nRF54L15 + nRF5340 hardware streaming | Physical nrfx DMA timing and I2S electrical behavior remain hardware-only (fake-driver release is explicit test control, not DMA interrupts). Offload/ASRC algorithm math covered by `tests/unit/asrc/` + `tests/unit/offload_asrc/`. | T3, T8 |
+| `audio_iso_seq.c` | Pure per-CIS omitted-callback sequence tracker | `tests/unit/iso_seq/` — 18 tests compile production source: first/contiguous/single/multi gap, 16-bit wrap, duplicate/backward/over-bound explicit resync, boundary gap, lost-callback advance, Mode B omitted-callback exact-PLC pushes and multi-omitted cadence, Mode A simultaneous/one-sided omission, no-synthesis-on-resync, reset | — | — | Clean-session hardware silent (tracker silent when delta == 1); gap activation NOT observable on hardware — documented evidence limitation | Hardware gap activation non-deterministic; direct suite is the primary proof | T8 (closed) |
+| `audio_modea.c` | Bounded two-CIS event assembler and per-channel PLC | `tests/unit/modea/` — compiles production source: equal-TS pairing emits once (order independent), missing-half resolution (right/left lost callback, newer-evidence discard), consecutive/alternating losses, TS wrap, out-of-order cross-channel, no-TS startup sentinel resolution, reset, queue overflow drops oldest, oversized rejection without mutation, hard-decode-error caller contract, PLC push accounting | — | — | nRF54L15 + nRF5340 Mode A 120 s hardware rows | Direct suite covers pairing/overflow/PLC; hardware activation remains per-session | T8 (closed) |
 | `audio_offload.c` | FLPR offload manager | `tests/unit/audio_offload/` — compiles production source | BSim: compiled without CONFIG_SOC_NRF54L15 — only no-op/non-nRF stubs are exercised; not FLPR production-path integration | — | nRF54L15 FLPR healthy + fallback | No known functional gap; branch coverage unmeasured. | T7 |
 | `audio_perf.c` | Performance timers | `tests/unit/perf/` — compiles production `src/audio_perf.c` | — | — | — | Basic tests exist; branch coverage unmeasured. | T7 |
 | `audio_rate_convert.c` | Nearest-neighbor rate converter | `tests/unit/rate_convert/` — Twister suite | BSim: compiled only — rate-converter calls live in `audio_i2s.c`, excluded from the BSim build; no BSim execution | — | nRF54L15 streaming verification | Functional tests exist; branch coverage unmeasured. | T7 |
@@ -40,6 +42,7 @@ production behavior.
 | `audio_timing_nrf54.c` | nRF54L15 GRTC+PCLK timing | `tests/unit/timing_nrf54/` — 18 tests compile production `audio_timing_nrf54.c` + `audio_timing_math.c` against include-shadow mocks of nrfx_grtc/nrfx_gppi/nrf_grtc/nrf_timer and a drift-feedforward mock: alloc-failure exact errors, GPPI-failure cleanup (cc_disable then free, no GPPI free), full init sequence + idempotence, pre-init/zero-ts no-ops, one anchor per session, past/future/wrap first compares, baseline + exact-ppm callbacks incl. TIMER32 wrap, late reschedule, reschedule failure, reset semantics, stale-generation rejection, per-measurement drift delivery, plus the review-fix FIFO contract: 10-payload backlog drained in order from one work invocation, stale-then-fresh mixed generations in one FIFO, and full-FIFO overflow (observable fault, accepted entries drained in order, later callbacks inactive) | — | — | nRF54L15 PCLK diagnostics + feedforward | GRTC compare, GPPI, TIMER20 capture, allocation cleanup, schedule failure, stale generation rejection, and FIFO/backlog/overflow behavior now direct production-source proof (narrow `AUDIO_TIMING_NRF54_TEST` seams only). | T5 (closed) |
 | `audio_volume.c` | Volume control | `tests/unit/volume/` — 12 tests execute production VCP branch against a shadow of the exact NCS v3.3.0 renderer types + fake `bt_vcp_vol_rend_register()` (real `audio_perf.c` compiled for hook balance): registration fields/defaults, failure propagation, callback packing, mute/zero/unity/intermediate scaling incl. signed extremes, zero/null samples, perf-hook balance on all exits, concurrent callback toggling atomic snapshot | BSim: compiled and exercised | — | Hardware streaming at default volume | No known functional gap; branch coverage unmeasured. | T7 |
 | `bt_bap.c` | BAP unicast server, ASCS, PACS, pairing | — | BSim T4 matrix: 15 scenarios over real ASCS/PACS/ISO — mono 7.5/10 ms, Mode A (incl. reverse start), Mode B, malformed-SDU rejection + resume, first-ASE stop, release-without-disable, disconnect-while-streaming, reconnect (second segment equals a fresh mono oracle), source-direction rejection (exact CONF_UNSUPPORTED/NONE), NO_MEM on third sink (resource seam), nine invalid-codec-field rejections (exact CONF_REJECTED/CODEC_DATA) + two successes (valid mono + missing-frame-blocks fallback); strict oracle with FNV-corrected full/L/R hashes, source-valid startup boundary with zero post-start PLC, per-push source validity from production flow, release sink-stop ordering proof, missing-TS validation; all pinned and pairwise deterministic | — | Hardware connection + streaming | No direct unit test; BSim scenarios cover the matrix (T4).  Alternate rates/codecs remain unsupported by design. | T7 |
+| `bt_pairing_policy.c` | Pure OPEN/BONDED_ONLY policy snapshot | `tests/unit/bt_pairing_policy/` — compiles production source: open default, set-bonds bonded-only/zero/overflow-atomic, pairing-accept open/bonded-only, mark-bonded add + bonded-only, full-snapshot overflow, request-open reset, snapshot atomic/empty | — | — | Bonded-only FAL filtering on both targets (hardware baseline pairing-filter phase) | Direct suite covers the pure policy; HCI/controller filter work remains in `bt_bap.c` | T8 (closed) |
 | `flpr_audio_process.c` | FLPR audio block wrapper | `tests/unit/flpr_audio_process/` — compiles production source | — | — | nRF54L15 FLPR streaming | No known functional gap; branch coverage unmeasured. | T7 |
 | `flpr_cache.c` | FLPR cache operations | Compiled by `flpr_ring`, `flpr_audio_process`, and `flpr_ring_mgr` (T1) suites (production source) | — | — | nRF54L15 FLPR activation | native_sim coverage is API/barrier-call proof only — the native branch uses `atomic_thread_fence`; physical cache/barrier semantics remain hardware-only. Branch coverage unmeasured. | T7 |
 | `flpr_handshake.c` | FLPR boot handshake + VEVIF IPC | `tests/unit/flpr_handshake/` — 43 tests compile and execute `src/flpr_handshake.c` against a fake IPC service backend (real `ipc_service_*` APIs, production callbacks) | — | — | nRF54L15 FLPR handshake | Bind/unbind, READY/duplicate/changed epoch, ACK send failures, heartbeat health transitions, ring dispatch, disconnect/reconnect, stress, fault-hang now direct production-source proof. Branch coverage unmeasured. | T7 |
@@ -54,15 +57,16 @@ production behavior.
 
 | Category | Count | Suites |
 |----------|-------|--------|
-| Twister C (testcase.yaml) | 25 | actuator_apll, actuator_apll_nohfclk, actuator_none, actuator_sample_adjust_historical, app_lifecycle, asrc, audio_i2s, audio_i2s_identity, audio_shell, audio_shell_noperf, audio_shell_nrf54, decode, drift, flpr_handshake, flpr_protocol, flpr_ring_mgr, flpr_runtime, lifecycle, perf, rate_convert, stats, timing, timing_none, timing_nrf54, volume |
+| Twister C (testcase.yaml) | 28 | actuator_apll, actuator_apll_nohfclk, actuator_none, actuator_sample_adjust_historical, app_lifecycle, asrc, audio_i2s, audio_i2s_identity, audio_shell, audio_shell_noperf, audio_shell_nrf54, bt_pairing_policy, decode, drift, flpr_handshake, flpr_protocol, flpr_ring_mgr, flpr_runtime, iso_seq, lifecycle, modea, perf, rate_convert, stats, timing, timing_none, timing_nrf54, volume |
 | Exec-only C (CMakeLists.txt, no testcase.yaml) | 4 | audio_offload, flpr_audio_process, flpr_ring, offload_asrc |
-| Python | 9 | gate (test_gate.py), flpr_stall_gate (test_flpr_stall_gate.py), flpr_hang_gate (test_flpr_hang_gate.py, 10 parser tests), bluez_wp_gate (test_bluez_wireplumber_gate.py), bluez_wp_phase3_gate (test_bluez_wireplumber_phase3_gate.py), bsim_runner (test_bsim_stage1_parse.py, 36 tests), build_contract (test_build_contract.py, 30 tests), test_matrix (test_check_test_matrix.py, 34 tests), test_coverage_runner (test_test_coverage_runner.py, 14 tests) |
-| Coverage | 1 | coverage (test-coverage.sh default mode: rebuilds the 25 twister + 4 exec suites with CONFIG_COVERAGE=y, enforces the committed baseline) |
+| Python | 12 | gate (test_gate.py), flpr_stall_gate (test_flpr_stall_gate.py), flpr_hang_gate (test_flpr_hang_gate.py, 10 parser tests), bluez_wp_gate (test_bluez_wireplumber_gate.py), bluez_wp_phase3_gate (test_bluez_wireplumber_phase3_gate.py), bsim_runner (test_bsim_stage1_parse.py, 36 tests), build_contract (test_build_contract.py, 30 tests), hci_raw_connect (test_hci_raw_connect.py), bap_central_policy (test_bap_central_policy.py), bap_central_writer (test_bap_central_writer.py), test_matrix (test_check_test_matrix.py, 34 tests), test_coverage_runner (test_test_coverage_runner.py, 19 tests) |
+| Coverage | 1 | coverage (test-coverage.sh default mode: rebuilds the 28 twister + 4 exec suites with CONFIG_COVERAGE=y, enforces the committed baseline) |
 | Test-matrix checker | 1 | matrix (check-test-matrix.py --coverage-json on the coverage run's coverage.json) |
 | BabbleSim | 1 | bsim_stage1 (T4 15-scenario BAP matrix, scenarios 1-8 twice) |
-| **Total gate children** | **41** | |
+| **Total gate children** | **47** | |
 
-> **T7 canonical gate ACCEPTED (2026-08-02).**  The 41-child composition
+> **T7 canonical gate ACCEPTED (2026-08-02) — historical 41-child evidence.**
+>  The 41-child composition
 > (25 twister + 4 exec-only + 9 Python + coverage + matrix + BSim) was
 > observed on the exact accepted T7 commit `8f7bfca` (the warning-fix
 > commit; baseline commits `c6adce8`/`4a31324`) from a detached fresh
@@ -71,6 +75,8 @@ production behavior.
 > Kconfig assigned-value warnings** and zero compiler warnings.  Observed
 > evidence, warning classification, and log provenance: `STATUS.md` (T7
 > section) and `docs/development/workstation-transfer-status.md`.
+> The current accepted 47-child composition (28 twister + 4 exec-only +
+> 12 Python + coverage + matrix + BSim) is the T8 gate described below.
 
 ## Explicit weak-test facts
 
@@ -98,15 +104,16 @@ production behavior.
 6. **BabbleSim** compiles production `bt_bap.c`, `audio_decode.c`,
    `audio_stats.c`, `audio_drift.c`, `audio_rate_convert.c`,
    `audio_timing_math.c`, `audio_timing_none.c`, `stream_lifecycle.c`,
-   `audio_volume.c`, and `audio_offload.c`, but exercises one mono ASE with a
-   fake sink stub and no I2S or FLPR stack.  Compilation alone is not
-   execution evidence: `audio_drift.c`, `audio_rate_convert.c`, and
-   `audio_timing_math.c` are compiled but never called (their call sites
-   live in `audio_i2s.c` and `audio_timing_nrf54.c`, which are excluded
-   from the BSim build).  `audio_offload.c` runs only its non-nRF54 stub
-   branch (no CONFIG_SOC_NRF54L15).  `audio_asrc.c` and `audio_i2s.c` are
-   not compiled into BSim at all.  Mode A, Mode B, reconnect, packet-loss,
-   and malformed-configuration scenarios are not covered.
+   `audio_volume.c`, and `audio_offload.c`; the accepted T4 matrix (15
+   scenarios) executes them through real mono/Mode A/Mode B, lifecycle,
+   reconnect, and rejection paths with a strict PCM oracle and no I2S or
+   FLPR stack.  Compilation alone is still not execution evidence for
+   `audio_drift.c`, `audio_rate_convert.c`, and `audio_timing_math.c` —
+   those are compiled but never called (their call sites live in
+   `audio_i2s.c` and `audio_timing_nrf54.c`, which are excluded from the
+   BSim build).  `audio_offload.c` runs only its non-nRF54 stub branch
+   (no CONFIG_SOC_NRF54L15).  `audio_asrc.c` and `audio_i2s.c` are not
+   compiled into BSim at all.
 7. **Build contracts are now automatically asserted** by
    `scripts/check-build-contract.py` (T6): resolved `.config` and
    `zephyr.dts` for both targets (app, nRF5340 `hci_ipc` controller, and

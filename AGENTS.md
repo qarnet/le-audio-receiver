@@ -74,19 +74,29 @@ diagnostics", not tolerated as warnings.
 
 ## Plan of record
 
-`docs/design.md` is the accepted design doc and phased plan (Phases 0–6) for
-supporting both nRF5340 and nRF54L15. Read it before structural changes.
-Current status: **Phase 5 landed and closed** — cpuapp fixed-point linear ASRC
-accepted (Mode A + Mode B, each 600 s, zero faults). Actuators reduced to two:
-APLL (nRF5340) and NONE (nRF54L15, ASRC consumes ppm). **Phase 6 (FLPR
-offload) complete** — Stages 0–5 accepted, 432 unit tests pass (396 C + 36
-Python), nRF54L15 hardware Mode A + Mode B 120 s at 100 fps zero faults.
-**BabbleSim Stage 1 accepted as regular local gate** — sink-only scenario,
-strict PCM oracle with local startup counters, fully deterministic across
-runs (hash=0xFE0D4245). Official upstream smoke remains PARTIAL. Scope stops
-here: reconnect/Mode A/B under BabbleSim duplicate hardware coverage.
-See `docs/design.md` for full staged plans and `docs/development/phase5-hardware-acceptance-results.md`
-for Phase 5 acceptance evidence.
+`docs/development/refactor-plan.md` is the accepted plan of record for the
+current refactoring track R0–R10. Read it before structural changes.
+`docs/design.md` remains the historical architecture and evidence document,
+not the active structural plan.
+
+Current status: **T0–T8 COMPLETE/ACCEPTED** — behavior locked on the exact
+production code `971e6a4`; canonical gate **47 PASS / 0 FAIL / 47 TOTAL**
+(28 twister + 4 exec-only + 12 Python + coverage + matrix + BSim), coverage
+baseline `1a5842d` (26 files: 3281/3722 lines, 1433/2041 branches, 205/205
+functions, gcovr 8.4 / gcov (GCC) 14.3.0), builds 3/3, build contract 76/76,
+both hardware matrices pass (`docs/testing/pre-refactor-hardware-baseline.md`).
+**BabbleSim Stage 1 is an accepted regular local gate** — the 15-scenario T4
+BAP matrix via `scripts/bsim-stage1-run.sh`, strict PCM oracle, deterministic
+across runs (mono 10 ms `0x22AB5C0D`, Mode A/B 10 ms `0xBAE24F7E`, reconnect =
+fresh mono oracle). Official upstream smoke remains PARTIAL (documented
+upstream teardown disable-race) and is **not** production acceptance.
+
+Known behavior question (see `STATUS.md`): nRF54L15 360-frame (7.5 ms) calls
+fall back to cpuapp ASRC because the FLPR payload contract is 480 frames
+(`FLPR_RING_PAYLOAD_MAX_INPUT == 480U` in `src/flpr_ring.h`, pinned by
+`tests/unit/audio_offload` `test_asrc_invalid_frames` and the
+`tests/unit/flpr_ring` MAX_INPUT assertions). Not a new failure and not
+permission to implement 360-frame offload.
 
 Consequences for work in this repo today:
 
@@ -558,8 +568,12 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 
 | File | Purpose |
 |------|---------|
-| `src/main.c` | Lifecycle wiring + watchdog + advertising restart loop |
+| `src/main.c` | Hardware wiring, watchdog, and advertising-loop adapter (fatal boot order lives in `app_lifecycle.c`) |
+| `src/app_lifecycle.c` | Pure fatal boot coordinator: ordered init, cold reboot, advertising restart |
 | `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising |
+| `src/bt_pairing_policy.c` | Pure OPEN/BONDED_ONLY policy snapshot; Bluetooth controller work stays in `bt_bap.c` |
+| `src/audio_modea.c` | Bounded two-CIS event assembler and per-channel PLC |
+| `src/audio_iso_seq.c` | Pure per-CIS omitted-callback sequence tracker |
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
 | `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop) |
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA, 48 kHz stereo) — implements audio_sink.h |

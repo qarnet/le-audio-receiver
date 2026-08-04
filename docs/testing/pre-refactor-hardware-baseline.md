@@ -287,9 +287,10 @@ controller / BSim APIs:
   simultaneous/one-sided omission, decode chronology,
   no-synthesis-on-resync) plus the integration unit tests covering the
   exact gap behavior, and BSim Stage 1 (hashes unchanged).
-- Defect provenance is preserved by the prior T9 failing hardware logs
-  (the 8–30% RF-loss sessions where omissions and gap concealment were
-  originally exercised).
+- Defect provenance is preserved by the prior 8–30% RF-loss hardware
+  sessions documented in this baseline (the Aug 2/3 Intel-peer sessions
+  where omissions and gap concealment were originally exercised — see the
+  superseded rows below and the pairing-filter phase).
 - New hardware runs prove the added code introduces **zero
   underruns/regressions** (final matrix; zero `ISO seq gap` /
   `i2s_nrfx` lines; BSim hashes unchanged).

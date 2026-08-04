@@ -18,7 +18,7 @@ socket writes, `--peer-addr`, and raw-HCI connection helpers.
 - Lab harness registers its own endpoint and selects fixed LC3/QoS, so prior
   success did not validate desktop policy.
 
-## Phase 1 — standard PACS availability semantics ✅ DONE (2026-07-30)
+## BZ1 — standard PACS availability semantics ✅ DONE (2026-07-30)
 
 Keep supported/available sink contexts truthful during ACL connection and
 PACS/ASCS discovery. Match upstream bare BAP server behavior: Media remains
@@ -43,14 +43,16 @@ Acceptance:
   non-NONE after connection + 100-frame stream.
 - All existing tests pass; both nRF5340/nRF54L15 builds clean.
 
-## Phase 2 — stock desktop gate ✅ ACCEPTED (2026-07-31)
+## BZ2 — stock desktop gate ✅ ACCEPTED (2026-07-31)
 
 Gate passed with strict nonzero-audio/zero-fault evidence on nRF54L15 using
 stock WirePlumber main-systemwide playback. 30 s (~35.47 s actual) and 120 s
 (~125.41 s actual) runs at 7.5 ms frame duration; both zero decode/I2S/offload
 faults; explicit `I2S DMA started` confirmed; canonical gate 20/20; BSim
 10 ms hash `0xFE0D4245` + 7.5 ms hash `0x5853F445` (run 1293085)
-deterministic.
+deterministic — **historical**: pre-T2 oracle values, superseded by the
+corrected T2/T4 hashes (current pinned values live in
+`scripts/bsim-stage1-run.sh`).
 
 See `docs/development/phase2-stock-desktop-gate-results.md` for full evidence.
 
@@ -71,7 +73,7 @@ Original acceptance criteria (all met):
 Gate must fail loudly when host lacks BAP roles or experimental ISO support;
 host prerequisites cannot be mistaken for receiver failure.
 
-## Phase 3 — pairing and reconnect lifecycle ✅ ACCEPTED (2026-07-31)
+## BZ3 — pairing and reconnect lifecycle ✅ ACCEPTED (2026-07-31)
 
 All 12 autonomous sequence steps pass with three strict stock playbacks at
 7.5 ms frame duration, zero decode/I2S/offload faults. Preflight hardened:
@@ -85,11 +87,11 @@ Two corrections per `docs/development/bluez-wireplumber-phase3-final-review-hand
 
 See `docs/development/phase3-results.md` for full acceptance evidence.
 
-## Phase 4 — compatibility expansion — NOT NEEDED
+## BZ4 — compatibility expansion — NOT NEEDED
 
 Bare BAP passed with stock WirePlumber main-systemwide playback. Three 30 s
 playbacks zero-fault. CAP/CAS remain disabled; no phone interoperability,
-speculative services, or custom host policy required. Phase 4 cancelled.
+speculative services, or custom host policy required. BZ4 cancelled.
 
 ## Final acceptance
 

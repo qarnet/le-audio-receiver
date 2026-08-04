@@ -159,7 +159,7 @@ warning scan.
 
 ```bash
 ./scripts/test-all.sh
-./scripts/test-coverage.sh
+./scripts/test-coverage.sh --output /tmp/r0-coverage --clean-output
 fw-build-5340
 fw-build-54l15
 fw-build-dongle
