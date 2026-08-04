@@ -3,15 +3,43 @@
 Status: **R0 ACCEPTED (2026-08-04).**  Truth reconciliation only — no
 production firmware source, public firmware behavior, coverage numeric
 baseline, BSim expected value, or hardware configuration changed.  Tested
-implementation commit: **`7ab4b39`** (clean docs/metadata commit).
+implementation commit: **`1ee8af7`** (clean docs/metadata commit).
+
+**Review fix (2026-08-04).**  Focused review of the original implementation
+found four items, fixed in the ordered commits `e462aba` → `1ee8af7`:
+
+1. Coverage baseline version enforcement bypassed a present-null recorded
+   version (only entirely-omitted legacy fields may skip the check; a
+   present version must be a non-empty string).  Fixed in `e462aba` with a
+   present-null fake-tool regression (runner suite 19 → 20 tests).
+2. The active BSim matrix is **16 scenarios** (first nine run twice,
+   remaining seven once; `modea_one_cis_loss_10ms` is the ninth repeated
+   scenario), not 15.  All current claims corrected to 16 / first-nine;
+   runner matrix, hashes, totals, and behavior untouched.
+3. The old Stage-1 sink-only scope and its `0xFE0D4245` hashes are now
+   explicitly historical/superseded in STATUS, with the current accepted
+   gate stated as the 16-scenario T4 matrix (reconnect, Mode A/B,
+   malformed/error/rejection, lifecycle, one-CIS-loss); official upstream
+   smoke remains PARTIAL and is not production acceptance.
+4. Desktop BZ1–BZ4 rename finished in STATUS/design active prose, and the
+   360-frame witnesses corrected (audio_i2s `test_offload_reject_360_input_falls_back`
+   pins the exact 360-frame fallback; audio_offload `test_asrc_invalid_frames`
+   pins general non-480 rejection with current concrete input 240; flpr_ring
+   MAX_INPUT asserts pin the 480 contract).
+
+The original `7ab4b39` G1 run below is **superseded** by the review-fix G1
+run on the exact corrected implementation commit `1ee8af7`.
 
 ## Commits
 
 | Commit | Message | Contents |
 |--------|---------|----------|
 | `2de5e33` | `chore: enforce recorded coverage tool versions and refresh gate metadata` | `scripts/test-coverage.sh` (baseline-mode gcovr/gcov version enforcement + re-enter-dev-shell guidance), `tests/unit/test_coverage_runner/test_test_coverage_runner.py` (14 → 19 tests), `scripts/test-all.sh` header (25 → 28 twister), `tests/test-matrix.json` (monitor.sh → read_acm.py, hardware-baseline evidence, dongle smoke removal) |
-| `7ab4b39` | `docs: reconcile active documentation with accepted T8 state (R0)` | `AGENTS.md`, `README.md`, `STATUS.md`, `docs/design.md`, `docs/development/bluez-wireplumber-interoperability-plan.md`, `docs/development/pre-refactor-testing-plan.md`, `docs/development/refactor-plan.md` (G1 coverage command), `docs/development/refactor-r0-handoff.md` (phase record), `docs/testing/behavior-contract.md`, `docs/testing/coverage-matrix.md`, `docs/testing/pre-refactor-hardware-baseline.md` |
-| evidence | `docs: record R0 acceptance evidence and results` | this file, plus the R0 ACCEPTED mark and results link in `docs/development/refactor-plan.md` |
+| `7ab4b39` | `docs: reconcile active documentation with accepted T8 state (R0)` | original R0 implementation commit (superseded as tested hash by the review fix, still part of history) |
+| `d7b6873` | `docs: record R0 acceptance evidence and results` | original evidence commit (superseded by the review-fix evidence below) |
+| `e462aba` | `fix: reject invalid recorded coverage tool versions` | `scripts/test-coverage.sh` (present-null/non-string/empty recorded version fails baseline mode with refresh instruction; omitted legacy fields stay accepted; valid-string equality unchanged), `tests/unit/test_coverage_runner/test_test_coverage_runner.py` (19 → 20 tests, present-null regression) |
+| `1ee8af7` | `docs: correct BSim matrix count, BZ labels, and 360-frame witnesses (R0 review fix)` | **corrected R0 implementation commit (tested)** — `AGENTS.md`, `README.md`, `STATUS.md`, `docs/design.md`, `docs/development/refactor-r0-handoff.md`, `docs/development/workstation-transfer-status.md`, `docs/testing/coverage-matrix.md` |
+| evidence | `docs: record R0 review-fix acceptance evidence and results` | this updated file; plan R0 remains ACCEPTED |
 
 Anchors unchanged: exact production code `971e6a4`, coverage baseline
 `1a5842d` (26 files: 3281/3722 lines, 1433/2041 branches, 205/205
@@ -36,7 +64,22 @@ git diff --check                                               clean
 machine-derived counts: 28 twister + 4 exec-only + 12 Python + 3 = 47
 ```
 
-## G1 — canonical software/build gate on the exact implementation commit `7ab4b39`
+Review-fix focused run (before `e462aba`/`1ee8af7`):
+
+```text
+bash -n scripts/test-coverage.sh                                PASS
+python3 tests/unit/test_coverage_runner/test_test_coverage_runner.py
+    Ran 20 tests in ~8.8 s — OK (19 prior + 1 present-null regression)
+python3 tests/unit/test_matrix/test_check_test_matrix.py
+    Ran 34 tests in ~0.07 s — OK
+python3 scripts/check-test-matrix.py --repo-root "$PWD"        0 error(s), 0 note(s)
+python3 -m json.tool tests/test-matrix.json >/dev/null         OK
+git diff --check                                               clean
+targeted grep: no active 15-scenario / first-eight / 0xFE0D4245-as-current
+claims; 16-scenario, first-nine, BZ1–BZ4, and corrected 360 witnesses present
+```
+
+## G1 — canonical software/build gate on the exact corrected implementation commit `1ee8af7`
 
 Run from the repo root in the NCS v3.3.0 dev shell, worktree clean, on
 `thomas-workstation`, 2026-08-04.  Runtimes measured with the bash `time`
@@ -45,17 +88,22 @@ installed).
 
 | Command | Result | Elapsed (s) |
 |---|---|---|
-| `./scripts/test-all.sh` | **`Gate complete: 47 PASS / 0 FAIL / 47 TOTAL`**, `PASS`, exit 0 | 970.553 |
-| `./scripts/test-coverage.sh --output /tmp/r0-coverage --clean-output` | exit 0, 26-file population, baseline enforcement 0 errors | 384.879 |
-| `fw-build-5340` | PASS, exit 0, zero compiler warnings | 19.839 |
-| `fw-build-54l15` | PASS, exit 0, zero compiler warnings | 19.234 |
-| `fw-build-dongle` | PASS, exit 0, zero compiler warnings | 28.777 |
+| `./scripts/test-all.sh` | **`Gate complete: 47 PASS / 0 FAIL / 47 TOTAL`**, `PASS`, exit 0 | 971.190 |
+| `./scripts/test-coverage.sh --output /tmp/r0-review-coverage --clean-output` | exit 0, 26-file population, baseline enforcement 0 errors | 385.461 |
+| `fw-build-5340` | PASS, exit 0, zero compiler warnings | 19.872 |
+| `fw-build-54l15` | PASS, exit 0, zero compiler warnings | 18.934 |
+| `fw-build-dongle` | PASS, exit 0, zero compiler warnings | 29.107 |
 | `python3 scripts/check-build-contract.py --nrf5340 build/nrf5340 --nrf54l15 build/nrf54l15` | **`76 assertions, 0 failed`**, `BUILD CONTRACT PASSED`, exit 0 | — |
 | `git diff --check` | clean | — |
 
-Logs (transient, not repository-retained): `/tmp/r0-g1-testall.log`,
-`/tmp/r0-g1-coverage.log`, `/tmp/r0-g1-build-{5340,54l15,dongle}.log`;
-reports at `/tmp/r0-coverage/`.
+Logs (transient, not repository-retained): `/tmp/r0-rf-g1-testall.log`,
+`/tmp/r0-rf-g1-coverage.log`, `/tmp/r0-rf-g1-build-{5340,54l15,dongle}.log`;
+reports at `/tmp/r0-review-coverage/`.
+
+Superseded original run: the first implementation commit `7ab4b39` passed
+the identical G1 on 2026-08-04 (47 PASS / 0 FAIL / 47 TOTAL in 970.553 s,
+coverage exact in 384.879 s, builds 3/3, contract 76/76) — recorded here as
+superseded by the review-fix run above, which is the accepted evidence.
 
 ### Exact 47-child composition
 
@@ -85,7 +133,7 @@ All 47 children PASS, zero FAIL.
 - `baseline enforcement: 0 error(s)`; `baseline enforcement PASS`.
 - Run-manifest records `gcovr_version: gcovr 8.4`,
   `gcov_version: gcov (GCC) 14.3.0` (matching the baseline), source commit
-  `7ab4b39`, `dirty: False` — the new version-enforcement checks passed.
+  `1ee8af7`, `dirty: False` — the version-enforcement checks passed.
 - The gate's own coverage child (enforcement against the same committed
   baseline) also PASSed with identical numbers.
 
@@ -134,19 +182,26 @@ one-CIS-loss `0x30D6BAF0`; reconnect second segment equals the fresh mono
 - **Tooling/metadata**: coverage runner now enforces recorded gcovr/gcov
   versions in baseline mode (absent fields still accepted, `--write-baseline`
   records, `--report-only` never enforces); 5 new fake-tool runner tests;
-  `test-all.sh` header inventory corrected to 28 twister suites (runtime
-  discovery untouched, no hardcoded 47 check); `test-matrix.json` evidence
-  paths updated (read_acm.py, pre-refactor hardware baseline, dongle smoke
-  removed from hardware acceptance).
+  review-fix `e462aba` additionally rejects a present null/non-string/empty
+  recorded version (+1 runner test, 20 total); `test-all.sh` header
+  inventory corrected to 28 twister suites (runtime discovery untouched, no
+  hardcoded 47 check); `test-matrix.json` evidence paths updated
+  (read_acm.py, pre-refactor hardware baseline, dongle smoke removed from
+  hardware acceptance).
 - **Documentation**: plan-of-record moved to `refactor-plan.md` (design.md
   historical); T0–T8 marked COMPLETE/ACCEPTED; BZ1–BZ4 rename of the desktop
-  BlueZ/WirePlumber track; 47-child suite inventory; behavior-contract and
+  BlueZ/WirePlumber track (completed in the review fix in STATUS/design
+  active prose); 47-child suite inventory; behavior-contract and
   coverage-matrix versions T8 2026-08-04; duplicate CODEC-013 removed;
   CV-001 updated to the `1a5842d` 26-file baseline; 7.5 ms FLPR offload
-  limitation recorded as a known behavior question with direct witnesses;
-  undefined "prior T9 failing-hardware provenance" wording replaced with the
-  precise prior 8–30% RF-loss hardware sessions; G1 coverage command
-  corrected in the plan.
+  limitation recorded as a known behavior question with the exact witnesses
+  (audio_i2s 360 fallback, audio_offload non-480 rejection with 240 input,
+  flpr_ring 480 contract, source constant); undefined "prior T9
+  failing-hardware provenance" wording replaced with the precise prior
+  8–30% RF-loss hardware sessions; G1 coverage command corrected in the
+  plan; review fix corrected the active BSim matrix count to 16 scenarios
+  (first nine twice) and marked the old Stage-1 sink-only scope/hashes
+  historical/superseded.
 
 ## Deviations and blockers
 
@@ -161,5 +216,5 @@ assertion was regenerated or weakened.
 
 `git diff --check`, the matrix checker, and the coverage-runner / matrix
 Python suites re-run on the evidence commit (G1 was not rerun solely
-because evidence was added — the implementation commit `7ab4b39` is the
-tested exact hash).
+because evidence was added — the corrected implementation commit `1ee8af7`
+is the tested exact hash).
