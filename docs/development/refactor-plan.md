@@ -1,8 +1,8 @@
 # Current-state refactoring plan
 
-Status: **proposed plan of record, 2026-08-04**.  Ready for phased execution
-after review.  This plan replaces any refactoring assumptions made before the
-T0–T8 behavior-lock track.  It does not replace `docs/design.md` as historical
+Status: **accepted plan of record, 2026-08-04**.  Ready for phased execution.
+This plan replaces any refactoring assumptions made before the T0–T8
+behavior-lock track.  It does not replace `docs/design.md` as historical
 architecture/evidence; Phase R0 reconciles that document with current truth.
 
 ## Goal
@@ -238,7 +238,8 @@ before structural edits begin.
 
 ### Files
 
-- Create/establish this document as plan of record.
+- Maintain and link this accepted plan of record; keep the plan current as
+  phases land.
 - Update `AGENTS.md`, `README.md`, `docs/design.md`, `STATUS.md`.
 - Update `docs/testing/behavior-contract.md` and
   `docs/testing/coverage-matrix.md`.
