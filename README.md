@@ -264,7 +264,7 @@ before reflashing — `west flash` does not erase the settings partition.
 | `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2, FLPR IPC SRAM, TIMER20 reserved |
 | `prj.conf` | App Kconfig |
 | `sysbuild.cmake` | Applies SW Split DT + Kconfig overlays to `hci_ipc` |
-| `tests/unit/` | 28 twister C suites + 4 exec-only C suites + 12 Python suites (47 gate children total) |
+| `tests/unit/` | 28 twister C suites + 5 exec-only C suites + 12 Python suites (48 gate children total) |
 | `tests/bsim/` | BabbleSim Stage 1: 16-scenario T4 BAP matrix (accepted regular local gate); scenario matrix, run counts, and pinned hashes live in `tests/bsim/stage1-scenarios.json` |
 | `scripts/test-all.sh` | Canonical full local gate (all C + Python + BSim Stage 1); suite discovery via `scripts/test_inventory.py` (single source shared with `test-coverage.sh` and `check-test-matrix.py`) |
 | `docs/design.md` | Historical architecture and evidence document (Phases 0–6); active plan of record is `docs/development/refactor-plan.md` |
@@ -280,7 +280,7 @@ before reflashing — `west flash` does not erase the settings partition.
   agents read; `CLAUDE.md` is a symlink to it.
 - **`docs/development/refactor-plan.md`** — the accepted plan of record for
   the current refactoring track (R0–R10), including gate levels and the
-  canonical 47-child inventory.
+  canonical 48-child inventory.
 - **`docs/design.md`** — historical architecture and evidence (what works,
   findings, Phases 0–6). Start here for the "why".
 - **`docs/flashing.md`** — OpenOCD, dual-core ordering, APPROTECT, recovery.
