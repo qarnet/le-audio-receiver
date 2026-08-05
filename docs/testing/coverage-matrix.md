@@ -365,3 +365,37 @@ produced.
 Canonical enforcement reran on the clean R4 baseline commit (see
 `docs/development/refactor-r4-results.md`): **47 PASS / 0 FAIL / 47
 TOTAL**.
+
+## R5 (2026-08-05) — offload decomposition, no baseline rewrite
+
+R5 decomposed `audio_offload_process_asrc()` into private static stage
+helpers in `src/audio_offload.c` (no physical split) with one shared
+fault finalizer and one success commit; added the verify-enabled
+exec-only suite `tests/unit/offload_asrc_verify`
+(`CONFIG_AUDIO_OFFLOAD_ASRC_VERIFY=1`), which pulls the shadow code into
+merged `audio_offload.c` totals.  Exec-only inventory 4 → 5; canonical
+gate children 47 → 48.
+
+Per the coverage migration rule and the R5 handoff policy, **no baseline
+rewrite was performed**: population stays **29**, tool versions unchanged
+(gcovr 8.4 / gcov (GCC) 14.3.0), and every per-file + aggregate ratio
+improved over the committed baseline (the runner compares ratios +
+population + tool versions, not exact totals):
+
+| File | metric | committed baseline | current (report-only + gate) |
+|------|--------|--------------------|------------------------------|
+| `audio_offload.c` | lines | 583/707 (82.5%) | **581/633 (91.8%)** |
+| | branches | 223/375 (59.5%) | **236/353 (66.9%)** |
+| | functions | 17/17 | **29/29** |
+| aggregate (29 files) | lines | 3505/3946 (88.8%) | **3503/3872 (90.5%)** |
+| | branches | 1467/2067 (71.0%) | **1480/2045 (72.4%)** |
+| | functions | 209/209 | **221/221** |
+
+The line/branch denominator decrease is the decomposition itself (one
+finalizer replaces ~17 copied fault epilogues; the shadow block newly
+enters the totals via the verify suite); covered live behavior was not
+deleted.  All 29 `audio_offload.c` functions execute (zero-hit check
+clean via `check-test-matrix.py --coverage-json`).  `test-matrix.json`
+records `offload_asrc_verify` as a direct suite for `audio_offload.c`
+and `audio_asrc.c`.  Canonical enforcement on the clean `9dd5108`:
+**48 PASS / 0 FAIL / 48 TOTAL**.

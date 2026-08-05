@@ -590,6 +590,23 @@ normal audio diagnostics no longer compile the acceptance harness by accident.
 
 ## R5 — Offload transaction decomposition
 
+> **R5 COMPLETE/ACCEPTED (2026-08-05)** — handoff `f57016e`,
+> tests+implementation `c27d88b`, inventory-truth docs `9dd5108`, docs
+> commit (this document's commit).  Canonical gate on clean `9dd5108`:
+> **48 PASS / 0 FAIL / 48 TOTAL** (28 twister + **5** exec-only + 12
+> Python + coverage + matrix + BSim Stage 1), coverage population **29**
+> with all per-file/aggregate ratios improved (no baseline rewrite:
+> audio_offload.c 581/633 L, 236/353 B, 29/29 F vs committed 583/707,
+> 223/375, 17/17; totals lines 3503/3872, branches 1480/2045, functions
+> 221/221), builds 3/3, build contract 76/76, BSim pins unchanged, zero
+> new/actionable warnings; nRF54L15 verify-enabled hardware row passed
+> (Mode A/B 120 s with submit=12031 success=12031 fallback=0 and zero
+> verify/state/seq/frame/crc faults across 12031 shadow-verified blocks
+> per stream, flpr hang gate Mode A 16/16 and Mode B 16/16 with
+> asrc_verify_zero, production verify-off image restored and clean).
+> Full evidence: `docs/development/refactor-r5-results.md`; handoff:
+> `docs/development/refactor-r5-handoff.md`.
+
 ### Goal
 
 Make the FLPR ASRC request path auditable without changing one counter,

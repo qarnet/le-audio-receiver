@@ -3,6 +3,40 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
+## Refactoring track — R5 ACCEPTED (2026-08-05)
+
+R0–R4 ACCEPTED.  **R5 — offload transaction decomposition — ACCEPTED**:
+`audio_offload_process_asrc()` (nRF54L15 FLPR ASRC submit path) decomposed
+into private static stage helpers in `src/audio_offload.c` (no physical
+split): one transaction/capture struct, stage helpers for args/pre-check/
+submit-lock/post-mutex-recheck/ring-roundtrip/metadata-validation/
+shadow-verify, **one shared fault finalizer** for every recovery-eligible
+post-lock fault, and **one success commit/linearization point**.  No
+counter, transition, 8 ms deadline, lock/recheck ordering, fallback,
+errno, recovery scheduling, probation, RTT/cycle accounting, protocol, or
+output-mutation change; nRF5340 `-ENOSYS` stub untouched.  New exec-only
+suite `tests/unit/offload_asrc_verify` (production audio_offload.c +
+audio_asrc.c + flpr_ring.c with `CONFIG_AUDIO_OFFLOAD_ASRC_VERIFY=1`;
+mock computes the exact real CPU ASRC result/post-state and injects
+controlled corruptions).  Tests before extraction: honest second-thread
+busy test (replaces placeholder), deterministic CONFIG_ZTEST stage hooks
+pinning post-mutex non-ACTIVE / mutex-timeout-stale / commit-stale,
+16-row table-driven fault snapshots, state_fault_count + RTT assertions,
+ret-level offload_asrc additions.  Canonical gate on `9dd5108`:
+**48 PASS / 0 FAIL / 48 TOTAL** (28 twister + 5 exec-only + 12 Python +
+coverage + matrix + BSim), coverage population **29** with all ratios
+improved (audio_offload.c 581/633 L, 236/353 B, 29/29 F vs committed
+583/707, 223/375, 17/17 — **no baseline rewrite**), builds 3/3, build
+contract 76/76, BSim pins unchanged, zero new/actionable warnings;
+nRF54L15 verify-enabled hardware row passed (Mode A/B 120 s with
+submit=12031 success=12031 fallback=0 and zero verify/state/seq/frame/
+crc faults across 12031 shadow-verified blocks per stream, flpr hang
+gate Mode A 16/16 and Mode B 16/16 with asrc_verify_zero, production
+verify-off image restored with clean boot).  Full evidence:
+`docs/development/refactor-r5-results.md`; handoff:
+`docs/development/refactor-r5-handoff.md`; coverage provenance:
+`docs/testing/coverage-matrix.md` "R5 (no baseline rewrite)".
+
 ## Refactoring track — R4 ACCEPTED (2026-08-05)
 
 R0–R3 ACCEPTED (see `docs/development/refactor-r3-results.md`).  **R4 —
