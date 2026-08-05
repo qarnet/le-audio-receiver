@@ -80,6 +80,10 @@
         {
           "name": "flpr_audio_process",
           "evidence": "direct"
+        },
+        {
+          "name": "offload_asrc_verify",
+          "evidence": "direct"
         }
       ],
       "public_outcomes": [
@@ -564,6 +568,10 @@
         {
           "name": "bsim:stage1",
           "evidence": "build"
+        },
+        {
+          "name": "offload_asrc_verify",
+          "evidence": "direct"
         }
       ],
       "public_outcomes": [

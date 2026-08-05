@@ -317,6 +317,53 @@ ZTEST(offload_asrc, test_consume_stale)
 	zassert_equal(ret, -EAGAIN, "stale fails");
 }
 
+/* ── R5: ret-level dedicated fault coverage ───────────────────────── */
+
+/* Produce returns an unexpected (non-FULL, non-OK) result. */
+ZTEST(offload_asrc, test_produce_other)
+{
+	mock_produce_result = (enum flpr_produce_result)99;
+	fill_output(0x12);
+	struct audio_offload_asrc_result result;
+	memset(&result, 0xFF, sizeof(result));
+
+	int ret = audio_offload_process_asrc(test_input, TEST_BLOCK_FRAMES, 21, 0, &test_pre_state,
+					     test_output, MAX_OUT_FRAMES, &result);
+	zassert_equal(ret, -EAGAIN, "produce-other fails");
+	assert_output_untouched((int16_t)0x1212);
+	zassert_equal(result.output_frames, 0xFFFF, "result untouched");
+}
+
+/* Consume returns an unexpected (non-EMPTY/STALE/OK) result. */
+ZTEST(offload_asrc, test_consume_other)
+{
+	mock_consume_result = (enum flpr_consume_result)99;
+	fill_output(0x34);
+	struct audio_offload_asrc_result result;
+	memset(&result, 0xFF, sizeof(result));
+
+	int ret = audio_offload_process_asrc(test_input, TEST_BLOCK_FRAMES, 22, 0, &test_pre_state,
+					     test_output, MAX_OUT_FRAMES, &result);
+	zassert_equal(ret, -EAGAIN, "consume-other fails");
+	assert_output_untouched((int16_t)0x3434);
+	zassert_equal(result.output_frames, 0xFFFF, "result untouched");
+}
+
+/* FLPR processing_status > 0 with normal output is a validation fault. */
+ZTEST(offload_asrc, test_processing_status_positive)
+{
+	mock_consume_status = 1;
+	fill_output(0x56);
+	struct audio_offload_asrc_result result;
+	memset(&result, 0xFF, sizeof(result));
+
+	int ret = audio_offload_process_asrc(test_input, TEST_BLOCK_FRAMES, 23, 0, &test_pre_state,
+					     test_output, MAX_OUT_FRAMES, &result);
+	zassert_equal(ret, -EAGAIN, "status-positive fails");
+	assert_output_untouched((int16_t)0x5656);
+	zassert_equal(result.output_frames, 0xFFFF, "result untouched");
+}
+
 /* ── Test: FLPR error transport (status<0, frames=0) ─────────────── */
 
 ZTEST(offload_asrc, test_flpr_error_transport)
