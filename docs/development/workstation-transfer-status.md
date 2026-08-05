@@ -1,6 +1,19 @@
 # Workstation transfer status — pre-refactor testing track
 
-Date: 2026-08-05 (T8 ACCEPTED final update; R3 and R4 ACCEPTED addenda).
+Date: 2026-08-05 (T8 ACCEPTED final update; R3–R6 ACCEPTED addenda).
+
+## R6 addendum (2026-08-05)
+
+R6 (BAP receive-pipeline decomposition) is ACCEPTED; see
+`docs/development/refactor-r6-results.md`.  App audio receive/session
+state moved from `bt_bap.c` into `src/audio_stream_session.{c,h}` with an
+admission/lease design; `stream_lifecycle_sink_configured()` narrowed to
+occupancy; new 29-test direct Twister suite; coverage population migrated
+29 → 30; canonical gate **49 PASS / 0 FAIL / 49 TOTAL** on `67d2a18`,
+BSim pins byte-identical; G3 hardware PASS on both targets (nRF54L15
+Mode A/B/reconnect 120 s + nRF5340/E83 Mode A/B/reconnect 120 s, zero
+decode/underrun/reset faults, offload submit==success fallback=0, APLL
+ACTIVE).
 
 ## R4 addendum (2026-08-05)
 

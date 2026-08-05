@@ -236,15 +236,16 @@ one-time open work.
 **T5 closed:** `stream_lifecycle_sink_started()` returns true only for a
 closed-to-open transition of the audio-path gate; a duplicate start while
 the gate is already open returns false, so the caller's one-time open work
-(perf reset, offload start, observer event) runs exactly once.  The
-expanded `tests/unit/lifecycle/` matrix (29 tests) pins duplicate starts
-(single-ASE and Mode A), close-then-start edges, configure/start/close/
-reconfigure/start permutations, release-then-slot-reuse, reset from
-closed/partial/open states, repeated open/close cycles, inert
-invalid/zero/negative configurations, and the R1 forced-close latch
-(first-close observer return, later starts blocked for the configured
-slot set, one-slot release does not unblock while another remains, final
-release + reconfigure permits open, reset permits fresh open).
+(perf reset, offload start, observer event, session receive admission via
+`audio_stream_session_rx_open()`) runs exactly once.  The expanded
+`tests/unit/lifecycle/` matrix (28 tests after the R6 occupancy narrowing)
+pins duplicate starts (single-ASE and Mode A), close-then-start edges,
+configure/start/close/reconfigure/start permutations, release-then-slot-
+reuse, reset from closed/partial/open states, repeated open/close cycles,
+inert unconfigured starts, and the R1 forced-close latch (first-close
+observer return, later starts blocked for the configured slot set, one-slot
+release does not unblock while another remains, final release + reconfigure
+permits open, reset permits fresh open).
 
 ### LIFE-004 — First close wins
 
@@ -272,9 +273,14 @@ timing, or restart DMA.  Late packets are safely discarded; a push that
 reaches the sink after admission closes is rejected with `-EBUSY`.  An RX
 callback that passed the lifecycle query before a forced close may finish
 decode; when it reaches the sink it is either already admitted (the stop
-drains it) or receives `-EBUSY`.  Serialized BT callbacks retain ownership
-of Mode A cleanup — the shell thread never clears Mode A/decoder/sequence/
-stats state.
+drains it) or receives `-EBUSY`.  R6 adds a second admission layer in the
+audio stream session: every close path calls `audio_stream_session_rx_close()`
+(admission off, generation bump, admitted receive leases drained) before any
+decoder/assembler/sequence reset, and only `rx_open()` at a successful
+gate-open edge re-enables receive admission — config/release/reset never
+reopen it.  Serialized BT callbacks retain ownership of Mode A/decoder/
+sequence cleanup — the shell thread never clears that state; a forced close
+preserves it (R1 policy).
 
 ### LIFE-007 — Disconnect reinitializes decoder + lifecycle
 
@@ -288,7 +294,8 @@ configuration.  `audio_sink_stop` drops DMA but retains `configured = true`.
 
 `audio_sink_push` input is non-null, non-empty, stereo-paired, and exactly
 `input_frames` × 2 samples in size.  `input_frames` is a runtime variable set
-by `audio_sink_set_input_frames()` (called from `bt_bap.c` at ASE config time).
+by `audio_sink_set_input_frames()` (called from the audio stream session at
+Enable time).
 Malformed input is rejected with observable error.
 
 A configured-but-closed sink rejects a valid push with `-EBUSY` and zero

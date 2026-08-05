@@ -3,6 +3,60 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
+## Refactoring track — R6 ACCEPTED (2026-08-05)
+
+R0–R5 ACCEPTED.  **R6 — BAP receive-pipeline decomposition — ACCEPTED**:
+app audio receive/session state and the decode/conceal/volume/push
+mechanics moved out of `src/bt_bap.c` into the new
+`src/audio_stream_session.{c,h}`.  The session exclusively owns the
+validated codec shape, decoder contexts, per-CIS ISO sequence trackers,
+the shared Mode A assembler, receive counters, presentation delay, mode
+inference (mono/Mode B/Mode A), malformed-SDU rejection, omitted-callback
+synthesis, and one common decode→volume→observer→sink-push tail, plus an
+admission/lease design (one short mutex + condvar, generation, in-flight
+count): every close path calls `audio_stream_session_rx_close()` (admission
+off, generation bump, admitted receive leases drained) before any
+decoder/assembler/sequence reset, and only `rx_open()` at a successful
+`stream_started` gate-open edge re-enables receive admission — config/
+release/reset never reopen it (LIFE-006 preserved).  `bt_bap.c` retains
+only Bluetooth service/lifecycle orchestration: the `bt_bap_stream` pool,
+ASCS callbacks and config responses, pairing/PACS/advertising, the
+lifecycle gate and transition generation, and a thin recv adapter that
+decomposes ISO info into scalars and owns the ISO_RECV perf wrap, the
+timing-reference update, the gate snapshot, and the gate-blocked
+throttle/observer.  `stream_lifecycle_sink_configured()` narrowed to slot
+occupancy only (chan_count parameter/storage removed; three obsolete
+chan_count-specific lifecycle tests deleted).  New direct Twister suite
+`tests/unit/audio_stream_session` (29 tests) compiles the production
+session against faithful fake sink/volume/observer seams with real liblc3
+decode (checked-in 48 kHz fixtures, `--wrap=lc3_decode` hard-failure
+injection), covering config/accessors/invalid slots, mono/Mode B/Mode A
+classification and golden decode+push, Mode A equal-TS pair / one-sided
+loss / missing-TS rejection, malformed rejection with resume and Mode A
+mutation order, LOST PLC, decoder-not-ready skip, hard decode failures,
+sequence-gap PLC cadence and Mode A synthetic-LOST ordering, resync
+no-synthesis, admission closed/open, rx_close drain of an admitted lease +
+no-lock-across-decode/sink + generation reset (real threads), release slot
+reuse, reset_all, reconnect fresh session, sink-failure perf accounting,
+disable-keeps-shape, gate-independent valid-recv counting, start_clear
+re-base.  Canonical gate on `67d2a18`: **49 PASS / 0 FAIL / 49 TOTAL** (29
+twister + 5 exec-only + 12 Python + coverage + matrix + BSim Stage 1),
+coverage population **30** (deliberate baseline migration; new file
+274/292 L, 131/192 B, 25/25 F; every unchanged file at or above its
+committed record), builds 3/3 (nRF5340, nRF54L15, dongle; zero
+new/actionable warnings), build contract 76/76, BSim pins unchanged (mono
+10 ms `0x22AB5C0D`, Mode A/B 10 ms `0xBAE24F7E`, 7.5 ms set, reconnect =
+fresh mono oracle), `git diff --check` clean.  G3 hardware PASS on both
+targets (nRF54L15 fresh Mode A/B + bonded reconnect Mode A 120 s:
+12000 central frames each, decode_err/i2s_underrun/stream_reset=0,
+offload submit==success fallback=0, all fault counters 0; nRF5340/E83
+fresh Mode A/B + bonded reconnect Mode B 120 s: SDUs 11322–11660 with
+decoded 22644–23320, decode_err/i2s_underrun/stream_reset=0, zero `ISO seq
+gap`/`i2s_nrfx` warning lines, APLL evidence Drift ACTIVE ppm −500
+identity).  Full evidence: `docs/development/refactor-r6-results.md`;
+handoff: `docs/development/refactor-r6-handoff.md`; coverage provenance:
+`docs/testing/coverage-matrix.md` "R6 baseline migration (29 → 30)".
+
 ## Refactoring track — R5 ACCEPTED (2026-08-05)
 
 R0–R4 ACCEPTED.  **R5 — offload transaction decomposition — ACCEPTED**:

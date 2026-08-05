@@ -669,6 +669,25 @@ and hardware counters.
 
 ## R6 — BAP receive-pipeline decomposition
 
+> **R6 COMPLETE/ACCEPTED (2026-08-05)** — handoff `d2b9a91`,
+> tests+implementation `c3b4e7b` + `3c7396a`, coverage migration
+> `67d2a18`, docs commit (this document's commit).  Canonical gate on
+> clean `67d2a18`: **49 PASS / 0 FAIL / 49 TOTAL** (29 twister + 5
+> exec-only + 12 Python + coverage + matrix + BSim Stage 1), coverage
+> population **30** (deliberate baseline migration: new
+> `audio_stream_session.c` 274/292 L, 131/192 B, 25/25 F; every unchanged
+> file at or above its committed record), builds 3/3, build contract
+> 76/76, BSim pins byte-identical (mono 10 ms `0x22AB5C0D`, Mode A/B 10 ms
+> `0xBAE24F7E`, 7.5 ms set, reconnect = fresh mono oracle), zero
+> new/actionable warnings.  G3 hardware PASS on both targets: nRF54L15
+> fresh Mode A/B + bonded reconnect Mode A 120 s (12000 central frames,
+> decode_err/i2s_underrun/stream_reset=0, offload submit==success
+> fallback=0, faults 0); nRF5340/E83 fresh Mode A/B + bonded reconnect
+> Mode B 120 s (SDUs 11322–11660, zero ISO gaps/i2s warnings, APLL
+> ACTIVE ppm −500).  Full evidence:
+> `docs/development/refactor-r6-results.md`; handoff:
+> `docs/development/refactor-r6-handoff.md`.
+
 ### Goal
 
 Reduce `bt_bap.c` to Bluetooth service/lifecycle orchestration and move audio

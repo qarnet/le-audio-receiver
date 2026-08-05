@@ -85,6 +85,11 @@ production code `971e6a4`; canonical gate **47 PASS / 0 FAIL / 47 TOTAL**
 baseline `1a5842d` (26 files: 3281/3722 lines, 1433/2041 branches, 205/205
 functions, gcovr 8.4 / gcov (GCC) 14.3.0), builds 3/3, build contract 76/76,
 both hardware matrices pass (`docs/testing/pre-refactor-hardware-baseline.md`).
+**Refactor track: R0–R6 ACCEPTED** — R6 (BAP receive-pipeline
+decomposition into `src/audio_stream_session.{c,h}`) landed with a
+**49-child canonical gate** (29 twister + 5 exec-only + 12 Python +
+coverage + matrix + BSim) and coverage population **30**; see
+`docs/development/refactor-r6-results.md` and `STATUS.md`.
 **BabbleSim Stage 1 is an accepted regular local gate** — the 16-scenario T4
 BAP matrix via `scripts/bsim-stage1-run.sh` (first nine scenarios run twice,
 remaining seven once), strict PCM oracle, deterministic across runs (mono
@@ -562,6 +567,11 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 ## Stack
 
 - App: BAP Unicast Server sink-only, 2 sink ASEs, LC3 decode → I2S
+- Receive/session: `audio_stream_session.c` (R6 — exclusive owner of app
+  audio receive state: validated codec shape, decoder contexts, per-CIS
+  ISO sequence trackers, Mode A assembler, receive counters, mode
+  inference, decode/conceal/volume/push with admission/lease discipline);
+  `bt_bap.c` keeps only Bluetooth service/lifecycle orchestration
 - Audio: `audio_sink.h` interface → `audio_i2s.c` (slab/DMA backend)
 - Clock recovery: `audio_drift.c` (PI controller, ppm output) → actuator interface (`audio_clock_actuator.h`) → `audio_clock_actuator_apll.c` (nRF5340 APLL) or `audio_clock_actuator_none.c` (nRF54L15, ASRC consumes ppm)
 - ASRC: `audio_asrc.c` (fixed-point linear stereo, cpuapp) + FLPR offload (`src/flpr/`, handshake/runtime/rings)
@@ -576,8 +586,9 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 |------|---------|
 | `src/main.c` | Hardware wiring, watchdog, and advertising-loop adapter (fatal boot order lives in `app_lifecycle.c`) |
 | `src/app_lifecycle.c` | Pure fatal boot coordinator: ordered init, cold reboot, advertising restart |
-| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising |
+| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising, and the thin recv adapter (R6: app audio receive state lives in `audio_stream_session.c`) |
 | `src/bt_pairing_policy.c` | Pure OPEN/BONDED_ONLY policy snapshot; Bluetooth controller work stays in `bt_bap.c` |
+| `src/audio_stream_session.c` | Exclusive owner of app audio receive/session state (R6): validated codec shape, decoder ctx, per-CIS ISO seq trackers, Mode A assembler, recv counters, decode/conceal/volume/push, admission/lease (rx_open/rx_close) |
 | `src/audio_modea.c` | Bounded two-CIS event assembler and per-channel PLC |
 | `src/audio_iso_seq.c` | Pure per-CIS omitted-callback sequence tracker |
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
