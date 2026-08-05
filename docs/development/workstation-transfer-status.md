@@ -1,6 +1,30 @@
 # Workstation transfer status — pre-refactor testing track
 
-Date: 2026-08-05 (T8 ACCEPTED final update; R3–R6 ACCEPTED addenda).
+Date: 2026-08-05 (T8 ACCEPTED final update; R3–R7 ACCEPTED addenda).
+
+## R7 addendum (2026-08-05)
+
+R7 (stream teardown transition owner) is ACCEPTED; see
+`docs/development/refactor-r7-results.md`.  One private teardown
+transition owner in `bt_bap.c` (`teardown_transition` +
+`teardown_close_path`) owns every stop/disable/disabled/release/
+disconnect/shell-stop composition; first close wins, per-slot release
+once with duplicate-release no-op, ASCS stream objects untouched,
+universal close→drain→sink-stop→offload-stop→reset order.  Direct tests
+before implementation (lifecycle 28→33, session 29→35); BSim Stage 1 now
+17 scenarios with a deliberate new `duplicate_release_10ms` pin
+(total=56, two identical baseline runs) and exact strengthened teardown
+asserts — all existing pins byte-identical.  Canonical gate **49 PASS /
+0 FAIL / 49 TOTAL** on `3473127`, coverage population 30 with zero drift
+(no baseline migration), builds 3/3, contract 76/76.  G3: nRF54L15 3/3
+clean (Mode A/B fresh + bonded reconnect Mode A 120 s, offload
+submit==success fallback=0, faults 0); nRF5340/E83 Mode A fresh clean
+(zero warnings); **E83 Mode B / bonded reconnect / APLL rows BLOCKED by
+deterministic environmental RF degradation** (five byte-identical bad
+runs, 75–93 % CIS delivery, i2s_nrfx underruns) — documented with the
+environmental evidence (teardown-only change, Xiao clean at 65 % delivery
+on the same image, E83 Mode A clean when the link was good, pre-existing
+loss→underrun coupling).
 
 ## R6 addendum (2026-08-05)
 

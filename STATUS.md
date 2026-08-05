@@ -3,6 +3,50 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
+## Refactoring track — R7 ACCEPTED (2026-08-05)
+
+R0–R6 ACCEPTED.  **R7 — stream teardown transition owner — ACCEPTED**:
+one explicit private teardown transition owner in `src/bt_bap.c`
+(`teardown_transition(event, slot)` + `teardown_close_path(forced)`).
+Every stop/disable/disabled/release/disconnect/shell-stop composition
+runs through it; thin callbacks only translate into events.  Universal
+order (no lock spans Bluetooth/decode/offload/I2S): close lifecycle gate
++ sink push admission under `lifecycle_lock` → release lock → session RX
+lease drain → sink push drain/stop → offload stop → state reset.  The
+approved delta is implemented: normal BT close now stops the sink BEFORE
+the offload (both normal and forced paths).  First global close wins
+(first-edge return gates generation/sink/offload/gate-close observer;
+duplicates are no-ops); each app slot releases once independently
+(configured-check first — duplicate release of an already-cleaned slot
+is an observable no-op; second Mode A slot cleans while the gate is
+closed); ASCS `bt_bap_stream` objects untouched.  `DISABLE` is
+serialized under `lifecycle_lock`; `DISABLED` preserves the exact
+summary snapshot/log and resets stats once; `DISCONNECT` resets stats
+once and returns the advertising-wake bool; `CLOSE`/`FORCED` retain
+stats (audio status / release semantics).  Direct tests before
+implementation: lifecycle 28→33, audio_stream_session 29→35 (public
+behavior only).  BSim Stage 1 now 17 scenarios (new
+`duplicate_release_10ms`: second Release PDU rejected by the ASCS
+server with `INVALID_ASE_STATE`, cleanup observer stays one, slot
+reuse then cleans a second time; deliberate new pin total=56 from two
+identical baseline runs; all existing pins byte-identical; strengthened
+exact teardown asserts: `obs_gate_c==1`, `obs_rel` exact, `obs_rel_ss`
+release-edge-only, `obs_disc` once).  Canonical gate on `3473127`:
+**49 PASS / 0 FAIL / 49 TOTAL**, coverage population **30** with zero
+drift (no baseline migration), builds 3/3, build contract 76/76, zero
+new/actionable warnings.  G3: nRF54L15 3/3 clean (Mode A/B fresh +
+bonded reconnect Mode A 120 s; offload submit==success fallback=0,
+faults 0, zero decode/i2s/reset faults); nRF5340/E83 Mode A fresh clean
+(zero warnings); **E83 Mode B / bonded reconnect / APLL rows BLOCKED by
+deterministic environmental RF degradation** — five byte-identical bad
+runs (SDUs=9033, stream_reset=113, 226 warnings) across power-cycles,
+75–93 % CIS delivery, i2s_nrfx underruns; evidence it is environmental
+(teardown-only change, Xiao clean on the same R7 image at 65 % delivery,
+E83 Mode A clean when the link was good, E83 loss→underrun coupling is
+the documented pre-R6 behavior).  Full evidence:
+`docs/development/refactor-r7-results.md`; handoff:
+`docs/development/refactor-r7-handoff.md`.
+
 ## Refactoring track — R6 ACCEPTED (2026-08-05)
 
 R0–R5 ACCEPTED.  **R6 — BAP receive-pipeline decomposition — ACCEPTED**:

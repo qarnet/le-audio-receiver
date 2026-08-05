@@ -571,7 +571,9 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
   audio receive state: validated codec shape, decoder contexts, per-CIS
   ISO sequence trackers, Mode A assembler, receive counters, mode
   inference, decode/conceal/volume/push with admission/lease discipline);
-  `bt_bap.c` keeps only Bluetooth service/lifecycle orchestration
+  `bt_bap.c` keeps only Bluetooth service/lifecycle orchestration plus
+  the R7 private teardown transition owner (first close wins, per-slot
+  release once, universal close→drain→sink-stop→offload-stop→reset)
 - Audio: `audio_sink.h` interface → `audio_i2s.c` (slab/DMA backend)
 - Clock recovery: `audio_drift.c` (PI controller, ppm output) → actuator interface (`audio_clock_actuator.h`) → `audio_clock_actuator_apll.c` (nRF5340 APLL) or `audio_clock_actuator_none.c` (nRF54L15, ASRC consumes ppm)
 - ASRC: `audio_asrc.c` (fixed-point linear stereo, cpuapp) + FLPR offload (`src/flpr/`, handshake/runtime/rings)
@@ -586,7 +588,7 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 |------|---------|
 | `src/main.c` | Hardware wiring, watchdog, and advertising-loop adapter (fatal boot order lives in `app_lifecycle.c`) |
 | `src/app_lifecycle.c` | Pure fatal boot coordinator: ordered init, cold reboot, advertising restart |
-| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising, and the thin recv adapter (R6: app audio receive state lives in `audio_stream_session.c`) |
+| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising, the thin recv adapter (R6: app audio receive state lives in `audio_stream_session.c`), and the R7 private teardown transition owner (`teardown_transition`/`teardown_close_path`: first close wins, per-slot release once, universal close→drain→sink-stop→offload-stop→reset order) |
 | `src/bt_pairing_policy.c` | Pure OPEN/BONDED_ONLY policy snapshot; Bluetooth controller work stays in `bt_bap.c` |
 | `src/audio_stream_session.c` | Exclusive owner of app audio receive/session state (R6): validated codec shape, decoder ctx, per-CIS ISO seq trackers, Mode A assembler, recv counters, decode/conceal/volume/push, admission/lease (rx_open/rx_close) |
 | `src/audio_modea.c` | Bounded two-CIS event assembler and per-channel PLC |

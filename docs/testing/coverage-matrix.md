@@ -401,6 +401,17 @@ records `offload_asrc_verify` as a direct suite for `audio_offload.c`
 and `audio_asrc.c`.  Canonical enforcement on the clean `9dd5108`:
 **48 PASS / 0 FAIL / 48 TOTAL**.
 
+## R7 note (2026-08-05) — teardown coordinator, no baseline change
+
+R7 added one private teardown transition owner in `src/bt_bap.c`
+(integration-only, excluded from the numeric population — unchanged).
+No production file split or deletion, so **no baseline migration**: the
+population stays **30** and the coverage child enforced the committed
+baseline with zero drift on the R7 gate.  New direct tests only improve
+the `stream_lifecycle.c` and `audio_stream_session.c` ratios (lifecycle
+28→33 tests, session 29→35 tests); every file remains at or above its
+committed record.
+
 ## R6 baseline migration (2026-08-05) — receive-pipeline split, population 29 → 30
 
 R6 extracted the app audio receive/session state and the

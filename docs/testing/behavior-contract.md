@@ -1,7 +1,8 @@
 # Behavior contract — pre-refactor baseline
 
-Version: T8, 2026-08-04.  Each contract carries a stable ID.  Breaking a contract
-without a handoff that updates this document is a regression.
+Version: T8, 2026-08-04 (R7 ownership clarification 2026-08-05).  Each
+contract carries a stable ID.  Breaking a contract without a handoff that
+updates this document is a regression.
 
 ## Bluetooth and service contract (`BT-*`)
 
@@ -54,6 +55,12 @@ and GATT database state) and before advertising starts.  Skipping
 Disconnect releases the retained connection reference, resets stream lifecycle
 state, stops audio/offload, and wakes the advertising restart loop.  No stale
 connection reference survives disconnect.
+
+**R7 clarified:** the DISCONNECT teardown is owned by the coordinator
+(global close once → lifecycle reset → session reset → stats reset →
+cleanup observer), which returns whether the advertising-restart
+semaphore must fire; the connection callback handles conn unref /
+`default_conn` only.
 
 ## Codec and routing contract (`CODEC-*`)
 
@@ -199,6 +206,14 @@ wiping them crashes the streaming-exit transition).  Later
 disabled/disconnect paths stay idempotent and must not create a second
 segment or hide pushes.
 
+**R7 clarified:** the RELEASE coordinator event checks the session
+configured flag first — a duplicate release of an already-cleaned slot
+is an observable no-op (no observer, no close, no stats, no stream
+touch).  Each slot releases once independently; the second Mode A slot
+cleans while the gate is already closed.  The release-driven first edge
+fires `release_sink_stop` once, at the same relative order (before the
+disconnect cleanup, `rel_ss_seq < disc_seq`).
+
 ## Statistics contract (`STAT-*`)
 
 ### STAT-001 — Counter coupling
@@ -257,6 +272,15 @@ latches the gate closed for the current configured slot set so later
 `stream_started()` callbacks cannot reopen it; releasing the last configured
 slot or a full reset clears the latch.
 
+**R7 closed:** one private teardown transition owner in `bt_bap.c`
+(`teardown_transition` + `teardown_close_path`) owns every
+stop/disable/disabled/release/disconnect/shell-stop composition; the
+close primitive's first-edge return (from `stream_lifecycle_audio_path_close()`
+or `force_close()`) gates the generation bump, `audio_sink_stop()`,
+`audio_offload_stream_stop()`, and the gate-close observer exactly once —
+duplicate events have no global side effect.  No callback composes
+low-level stop/reset calls.
+
 ### LIFE-005 — Idempotent close
 
 Close, sink stop, and offload stop are idempotent — calling them when already
@@ -265,6 +289,10 @@ stopped/closed returns success without side effects.  Sequential repeated
 but issue no extra I2S triggers after the first PREPARE/DROP.  Overlapping
 stop callers share exactly one finalization: one software reset set and one
 PREPARE/DROP pair.
+
+**R7 clarified:** the sink is stopped BEFORE the offload on every close path
+(the approved R7 order); the R7 coordinator calls `audio_sink_stop()` then
+`audio_offload_stream_stop()` once on the first close edge only.
 
 ### LIFE-006 — Late receive after closure
 
@@ -287,6 +315,12 @@ preserves it (R1 policy).
 Disconnect clears configured/started stream lifecycle and decoder state so
 reconnect starts cleanly without reinitializing the I2S peripheral
 configuration.  `audio_sink_stop` drops DMA but retains `configured = true`.
+
+**R7 clarified:** the DISCONNECT coordinator event owns the whole teardown
+(normal global close once, lifecycle reset under `lifecycle_lock`, session
+reset after the drain, stats reset once, disconnect-cleanup observer once)
+and returns whether the advertising-restart semaphore must fire; the
+connection callback keeps only conn unref / `default_conn` handling.
 
 ## Audio sink and I2S contract (`I2S-*`)
 
