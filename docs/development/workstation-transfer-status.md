@@ -1,6 +1,18 @@
 # Workstation transfer status — pre-refactor testing track
 
-Date: 2026-08-04 (T8 ACCEPTED final update; R3 ACCEPTED addendum).
+Date: 2026-08-05 (T8 ACCEPTED final update; R3 and R4 ACCEPTED addenda).
+
+## R4 addendum (2026-08-05)
+
+R4 (shell and acceptance-harness separation) is ACCEPTED; see
+`docs/development/refactor-r4-results.md`.  Shell command ownership split
+by subsystem (audio / bt / flpr diagnostics / flpr acceptance) with no
+command, output, or return change; `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`
+gates the acceptance harness; coverage baseline migrated 26 → 29 with an
+exactly-equal mechanical aggregate.  nRF54L15 focused hardware smoke
+passed (command paths, hang gate, stall gate, `bt unpair` on hardware).
+
+## R3 addendum (2026-08-04)
 Documentation-only state handoff.  No production code, scripts, tests,
 baseline, or configs were touched by the edits that accompany this document.
 

@@ -255,7 +255,10 @@ before reflashing — `west flash` does not erase the settings partition.
 | `src/flpr_cache.c` | Cache maintenance for shared SRAM (ARMv8-M / RISC-V) |
 | `src/audio_perf.{c,h}` | Data-path CPU budget instrumentation |
 | `src/audio_stats.{c,h}` | Streaming statistics (RX, decode, PLC, I2S) |
-| `src/audio_shell.c` | Shell diagnostics (`audio status`, `flpr status`) |
+| `src/audio_shell.c` | Shell diagnostics (`audio status`, `audio perf`, stop/reset commands) |
+| `src/bt_shell.c` | Shell command `bt unpair` (pairing-mode reset, both targets) |
+| `src/flpr_shell.c` | FLPR production diagnostics (`flpr status/offload/runtime/restart`, nRF54L15) |
+| `src/flpr_acceptance_shell.c` | FLPR acceptance harness (`flpr ring *`, `flpr stress`, `flpr hang`) — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated |
 | `src/audio_volume.{c,h}` | VCP volume control |
 | `boards/ebyte/e83_nrf5340/` | Custom nRF5340 board: I2S0 pins, ACLK 12.288 MHz, QSPI disabled |
 | `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2, FLPR IPC SRAM, TIMER20 reserved |

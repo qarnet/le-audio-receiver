@@ -1,25 +1,34 @@
-# STATUS — le-audio-receiver — 2026-08-02
+# STATUS — le-audio-receiver — 2026-08-05
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-## Refactoring track — R3 ACCEPTED (2026-08-04)
+## Refactoring track — R4 ACCEPTED (2026-08-05)
 
-R0–R2 ACCEPTED (see `docs/development/refactor-r2-results.md`).  **R3 —
-test-runner and hardware-gate consolidation — ACCEPTED**: one source of
-truth per suite/parser/hash set.  Suite discovery now flows through
-`scripts/test_inventory.py` (sole filesystem classification source for
-`test-all.sh`, `test-coverage.sh`, and `check-test-matrix.py`);
-`tests/unit/gate/` retired with a one-to-one ownership map into
-`tests/unit/fw_flash_dongle/` + `tests/unit/flpr_stall_gate/`; FLPR status
-parsing shared via `scripts/flpr_status.py` (hang gate gained fakeable
-transport/launcher boundaries); BlueZ phase3 reads the base `REMOTE_UUIDS`;
-BSim scenario matrix/run counts/pins moved unchanged into
-`tests/bsim/stage1-scenarios.json`; `scripts/monitor.sh`, `tests/hardware/`,
-and the stale `probe-serial.local.bak` retired.  Canonical gate on the R3
-docs commit: **47 PASS / 0 FAIL / 47 TOTAL**, builds 3/3, build contract
-76/76, BSim pins unchanged, zero new/actionable warnings.  Full evidence:
-`docs/development/refactor-r3-results.md`.
+R0–R3 ACCEPTED (see `docs/development/refactor-r3-results.md`).  **R4 —
+shell and acceptance-harness separation — ACCEPTED**: shell command
+ownership split mechanically by subsystem with no command name, help, arg
+count, output, or return change.  `src/audio_shell.c` retains only
+`audio status/reset-stats/stop/perf/perf-reset`; new `src/bt_shell.c`
+owns `bt unpair` (both targets); new `src/flpr_shell.c` owns the FLPR
+production diagnostics (`flpr status/offload/runtime/restart`, registered
+via NCS v3.3.0 cross-TU `SHELL_SUBCMD_SET_CREATE`/`SHELL_SUBCMD_ADD`);
+new `src/flpr_acceptance_shell.c` owns the acceptance harness (`flpr ring
+*`, `flpr stress`, `flpr hang`), compiled only under the new
+`CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS` (enabled in
+`boards/nrf54l15dk_nrf54l15_cpuapp.conf`) so normal audio diagnostics
+never compile it.  Canonical gate on the coverage-migration commit
+`b82ab81`: **47 PASS / 0 FAIL / 47 TOTAL**, coverage population **29**
+(mechanical split aggregate exactly equal to the old audio_shell record:
+302/519 L, 124/274 B, 23/23 F; totals unchanged 3505/3946, 1467/2067,
+209/209), builds 3/3, build contract 76/76, BSim pins unchanged, zero
+new/actionable warnings; nRF54L15 focused hardware smoke passed (flpr
+status/offload/runtime/ring-status command paths, `flpr hang` gate
+PASSED with all 16 checks, `flpr ring stall_flpr_ms` stall gate PASSED,
+`bt unpair` validated on hardware).  Full evidence:
+`docs/development/refactor-r4-results.md`; handoff:
+`docs/development/refactor-r4-handoff.md`; coverage provenance:
+`docs/testing/coverage-matrix.md` "R4 baseline migration".
 
 ## Pre-refactor testing track — COMPLETE (T0–T8 ACCEPTED, 2026-08-04)
 

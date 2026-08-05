@@ -524,6 +524,19 @@ reconnect = fresh mono oracle), zero new/actionable warnings.
 
 ## R4 — Shell and acceptance-harness separation
 
+> **R4 COMPLETE/ACCEPTED (2026-08-05)** — implementation `39c318a`,
+> coverage migration `b82ab81`, docs commit (this document's commit).
+> Canonical gate on clean `b82ab81`: **47 PASS / 0 FAIL / 47 TOTAL**,
+> coverage population **29** (four-replacement aggregate exactly equal to
+> the old audio_shell record: 302/519 L, 124/274 B, 23/23 F; totals
+> unchanged), builds 3/3, build contract 76/76, BSim pins unchanged, zero
+> new/actionable warnings; nRF54L15 focused hardware smoke passed
+> (`flpr status/offload/runtime/ring-status` command paths, `flpr hang`
+> gate 16/16 checks, `flpr ring stall_flpr_ms` stall gate, `bt unpair`
+> validated on hardware).  Full evidence:
+> `docs/development/refactor-r4-results.md`; handoff:
+> `docs/development/refactor-r4-handoff.md`.
+
 ### Goal
 
 Split user diagnostics from FLPR acceptance machinery without changing command
