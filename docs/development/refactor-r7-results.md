@@ -118,11 +118,14 @@ integration-only/excluded.  **No coverage baseline migration** — the
 coverage child enforced the unchanged population-30 baseline with zero
 drift (added tests only improve lifecycle/session ratios).
 
-## G1 (canonical, clean `3473127`)
+## G1 (canonical)
 
-`./scripts/test-all.sh` → **49 PASS / 0 FAIL / 49 TOTAL**, exit 0, log
-`/tmp/opencode/r7-gate2.log` (2026-08-05 20:34).  Coverage child:
-population 30, baseline enforcement 0 error(s).  Matrix child: 0
+`./scripts/test-all.sh` → **49 PASS / 0 FAIL / 49 TOTAL**, exit 0.
+Run 1 on clean `3473127` (log `/tmp/opencode/r7-gate2.log`,
+2026-08-05 20:34) and the definitive final run on the clean docs
+acceptance commit `8bc69a2` (log `/tmp/opencode/r7-gate3.log`, exit 0,
+elapsed 18 m 11 s).  Coverage child: population 30, baseline
+enforcement 0 error(s) — no migration needed.  Matrix child: 0
 error(s), 0 note(s).  BSim Stage 1: all 17 scenarios strict-checked;
 existing pins byte-identical; new `duplicate_release_10ms` total=56
 pin enforced.  `fw-build-5340`, `fw-build-54l15`, `fw-build-dongle` all
