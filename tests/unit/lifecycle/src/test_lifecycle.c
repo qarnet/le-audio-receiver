@@ -194,7 +194,6 @@ ZTEST(lifecycle, test_started_without_configure_noop)
 
 /* ── Edge: zero chan_count treated as absent ─────────────────────── */
 
-
 ZTEST(lifecycle, test_out_of_bounds_idx_noop)
 {
 	stream_lifecycle_reset();
@@ -340,7 +339,6 @@ ZTEST(lifecycle, test_repeated_close_and_open_cycles)
 }
 
 /* ── Edge: negative chan_count treated as absent ─────────────────── */
-
 
 /* ── R1: forced close (shell stop) ───────────────────────────────── */
 
@@ -489,6 +487,134 @@ ZTEST(lifecycle, test_idle_force_close_does_not_latch_future_configure)
  * current configured-set truth (false), so a later configure/start can
  * open. */
 
+/* ── R7: per-slot release / occupancy matrix ─────────────────────────
+ * The R7 teardown coordinator composes these primitives: first close
+ * wins, each slot releases once independently, duplicate release is an
+ * observable no-op, and a released slot never reopens without a fresh
+ * configure.  Pure lifecycle behavior — the coordinator closes the gate
+ * BEFORE releasing slots; release itself never touches the gate.
+ */
+
+ZTEST(lifecycle, test_mode_a_release_both_slots_cleans_occupancy_no_reopen)
+{
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0);
+	stream_lifecycle_sink_configured(1);
+	zassert_false(stream_lifecycle_sink_started(0), "partial Mode A");
+	zassert_true(stream_lifecycle_sink_started(1), "pair completes");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate open");
+
+	zassert_true(stream_lifecycle_audio_path_close(), "close returns was-open");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "gate closed");
+
+	/* Release both slots: occupancy fully cleared.  With nothing
+	 * configured a start can never open the gate again — slot reuse
+	 * requires a fresh configure (the R7 coordinator closes the gate
+	 * BEFORE releasing; release itself never touches the gate). */
+	stream_lifecycle_sink_release(0);
+	stream_lifecycle_sink_release(1);
+	zassert_false(stream_lifecycle_sink_started(0), "no reopen after both releases");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "gate stays closed");
+
+	/* Fresh configure/start lifecycle opens (slot reuse). */
+	stream_lifecycle_sink_configured(0);
+	zassert_true(stream_lifecycle_sink_started(0), "fresh configure/start opens");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate open after reuse");
+}
+
+ZTEST(lifecycle, test_release_open_gate_both_slots)
+{
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0);
+	stream_lifecycle_sink_configured(1);
+	zassert_false(stream_lifecycle_sink_started(0), "partial");
+	zassert_true(stream_lifecycle_sink_started(1), "pair completes");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate open");
+
+	/* Release never touches the gate in the pure lifecycle: the
+	 * coordinator closes it first.  Releasing one slot leaves the
+	 * other occupied. */
+	stream_lifecycle_sink_release(0);
+	zassert_false(stream_lifecycle_sink_started(0), "released slot inert");
+	zassert_false(stream_lifecycle_sink_started(1), "duplicate start of open gate inert");
+	zassert_true(stream_lifecycle_audio_path_is_open(),
+		     "release does not close the gate (coordinator does)");
+
+	stream_lifecycle_sink_release(1);
+	zassert_false(stream_lifecycle_sink_started(0), "still inert");
+	zassert_true(stream_lifecycle_audio_path_is_open(),
+		     "gate state untouched by occupancy cleanup");
+}
+
+ZTEST(lifecycle, test_duplicate_release_same_slot_idempotent)
+{
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0);
+	zassert_true(stream_lifecycle_sink_started(0), "open");
+	zassert_true(stream_lifecycle_audio_path_close(), "close");
+
+	stream_lifecycle_sink_release(0);
+	stream_lifecycle_sink_release(0); /* duplicate: observable no-op */
+
+	zassert_false(stream_lifecycle_sink_started(0), "released slot stays inert");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "gate stays closed");
+
+	stream_lifecycle_sink_configured(0);
+	zassert_true(stream_lifecycle_sink_started(0), "fresh configure/start works");
+}
+
+ZTEST(lifecycle, test_force_close_then_release_either_order)
+{
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0);
+	stream_lifecycle_sink_configured(1);
+	zassert_false(stream_lifecycle_sink_started(0), "partial");
+	zassert_true(stream_lifecycle_sink_started(1), "pair completes");
+	zassert_true(stream_lifecycle_force_close(), "forced close latches");
+
+	/* Reverse release order (slot 1 first): the latch clears only on
+	 * the FINAL release, so no reopen happens in between. */
+	stream_lifecycle_sink_release(1);
+	zassert_false(stream_lifecycle_sink_started(0), "slot 0 still configured — latch holds");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "gate stays closed");
+	stream_lifecycle_sink_release(0);
+
+	stream_lifecycle_sink_configured(0);
+	zassert_true(stream_lifecycle_sink_started(0),
+		     "fresh lifecycle opens after the final release");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate open");
+}
+
+ZTEST(lifecycle, test_mixed_close_release_reset_then_reconfigure)
+{
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0);
+	zassert_true(stream_lifecycle_sink_started(0), "open");
+	zassert_true(stream_lifecycle_audio_path_close(), "ordinary close");
+
+	stream_lifecycle_sink_release(0);
+	stream_lifecycle_reset();
+
+	stream_lifecycle_sink_configured(0);
+	zassert_true(stream_lifecycle_sink_started(0), "fresh after mixed teardown");
+	zassert_true(stream_lifecycle_audio_path_close(), "close again");
+
+	/* Forced close on an already-closed configured set latches it. */
+	zassert_false(stream_lifecycle_force_close(), "already closed — no new edge");
+	zassert_false(stream_lifecycle_sink_started(0), "latched");
+	zassert_false(stream_lifecycle_audio_path_is_open(), "stays closed");
+
+	/* Final release clears the latch; fresh lifecycle opens. */
+	stream_lifecycle_sink_release(0);
+	stream_lifecycle_sink_configured(0);
+	zassert_true(stream_lifecycle_sink_started(0), "reuse after final release");
+	zassert_true(stream_lifecycle_audio_path_is_open(), "gate open");
+}
 
 /* ── Suite entry ─────────────────────────────────────────────────── */
 

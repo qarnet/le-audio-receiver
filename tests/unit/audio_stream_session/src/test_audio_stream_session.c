@@ -808,4 +808,137 @@ ZTEST(audio_stream_session, test_no_lock_held_during_push)
 	zassert_equal(1U, fake_sink_push_count(), "push recorded");
 }
 
+/* ── R7: release/reset/admission matrix ─────────────────────────────
+ * The R7 teardown coordinator composes these session primitives: a
+ * slot releases once independently, a duplicate release is an
+ * observable no-op, admission stays closed after teardown until rx_open,
+ * duplicate rx_close cannot deadlock, and release-then-reset-then-
+ * reconfigure starts fresh.
+ */
+
+ZTEST(audio_stream_session, test_release_twice_no_configured_change)
+{
+	setup_mono();
+
+	audio_stream_session_release(0);
+	audio_stream_session_release(0); /* duplicate: observable no-op */
+
+	zassert_equal(0U, audio_stream_session_configured_count(),
+		      "configured count never goes negative");
+	zassert_false(audio_stream_session_configured(0), "slot released");
+	zassert_is_null(audio_stream_session_shape(0), "shape cleared");
+	zassert_equal(0U, audio_stream_session_recv_count(0), "recv count cleared");
+	zassert_equal(0U, audio_stream_session_pd(0), "pd cleared");
+	zassert_equal(-EINVAL,
+		      audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN),
+		      "released slot rejects");
+	zassert_equal(0U, fake_sink_push_count(), "no push");
+}
+
+ZTEST(audio_stream_session, test_independent_per_slot_cleanup)
+{
+	setup_modea();
+
+	audio_stream_session_release(0);
+	zassert_false(audio_stream_session_configured(0), "slot 0 released");
+	zassert_true(audio_stream_session_configured(1), "slot 1 still configured");
+	zassert_equal(1U, audio_stream_session_configured_count(), "one slot left");
+	zassert_equal(AUDIO_STREAM_MODE_MONO, audio_stream_session_mode(1),
+		      "single remaining slot is mono again");
+
+	audio_stream_session_release(1);
+	zassert_false(audio_stream_session_configured(1), "slot 1 released");
+	zassert_equal(0U, audio_stream_session_configured_count(), "no slots left");
+}
+
+ZTEST(audio_stream_session, test_admission_stays_closed_after_release_reset_until_rx_open)
+{
+	setup_mono();
+
+	/* Teardown sequence: close admission + drain, release, reset. */
+	audio_stream_session_rx_close();
+	audio_stream_session_release(0);
+	audio_stream_session_reset_all();
+	zassert_false(audio_stream_session_test_admission_open(), "admission closed");
+
+	/* Fresh config/enable still cannot receive while admission is
+	 * closed — only the gate-open rx_open() edge re-enables it. */
+	zassert_ok(audio_stream_session_config(0, &mono_shape));
+	zassert_ok(audio_stream_session_enable(0));
+	zassert_equal(-EINVAL,
+		      audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN),
+		      "admission closed rejects");
+	zassert_equal(0U, fake_sink_push_count(), "no push");
+
+	audio_stream_session_rx_open();
+	zassert_true(audio_stream_session_test_admission_open(), "admission reopened");
+	zassert_ok(audio_stream_session_recv(0, true, true, 2000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "push after rx_open");
+}
+
+ZTEST(audio_stream_session, test_release_then_reset_then_reconfigure_fresh)
+{
+	setup_mono();
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "first session push");
+	zassert_equal(1U, audio_stream_session_recv_valid_count(0), "counted");
+
+	/* Full teardown: close/drain, release, reset all. */
+	audio_stream_session_rx_close();
+	audio_stream_session_release(0);
+	audio_stream_session_reset_all();
+
+	/* Reconnect: fresh config/enable + gate-open edge. */
+	zassert_ok(audio_stream_session_config(0, &mono_shape));
+	zassert_ok(audio_stream_session_enable(0));
+	audio_stream_session_rx_open();
+	zassert_ok(audio_stream_session_recv(0, true, true, 2000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(2U, fake_sink_push_count(), "fresh session push (1 + 1)");
+	zassert_equal(1U, audio_stream_session_recv_valid_count(0), "fresh counting");
+	zassert_equal(1U, audio_stream_session_recv_count(0), "fresh count only");
+	zassert_equal(2U, audio_stats_get().total_frames, "no state leakage");
+}
+
+ZTEST(audio_stream_session, test_duplicate_rx_close_no_deadlock)
+{
+	setup_mono();
+
+	/* Duplicate rx_close returns immediately (idempotent, no hang). */
+	audio_stream_session_rx_close();
+	audio_stream_session_rx_close();
+
+	zassert_false(audio_stream_session_test_admission_open(), "admission closed");
+	zassert_equal(-EINVAL,
+		      audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN),
+		      "late RX rejected after close");
+	zassert_equal(0U, fake_sink_push_count(), "no push");
+
+	audio_stream_session_rx_open();
+	zassert_ok(audio_stream_session_recv(0, true, true, 2000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "push after reopen");
+}
+
+ZTEST(audio_stream_session, test_modea_first_slot_release_then_second_slot_cleanup)
+{
+	setup_modea();
+	zassert_ok(audio_stream_session_recv(0, true, true, 10000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_ok(audio_stream_session_recv(1, true, true, 10000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "Mode A pair emitted");
+
+	/* First slot release (the coordinator already closed the gate):
+	 * the second slot stays configured and cleans independently. */
+	audio_stream_session_release(0);
+	zassert_false(audio_stream_session_configured(0), "slot 0 released");
+	zassert_true(audio_stream_session_configured(1), "slot 1 still configured");
+	zassert_equal(1U, audio_stream_session_configured_count(), "one slot left");
+
+	audio_stream_session_release(1);
+	zassert_false(audio_stream_session_configured(1), "slot 1 released");
+	zassert_equal(0U, audio_stream_session_configured_count(), "all slots cleared");
+	zassert_equal(-EINVAL,
+		      audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN),
+		      "released slot rejects");
+	zassert_equal(1U, fake_sink_push_count(), "no further push");
+}
+
 ZTEST_SUITE(audio_stream_session, NULL, NULL, NULL, NULL, NULL);
