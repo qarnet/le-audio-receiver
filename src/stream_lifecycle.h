@@ -20,11 +20,11 @@
 void stream_lifecycle_reset(void);
 
 /**
- * Record that sink @p idx is configured with @p chan_count channels.
- * Must be called even when chan_count==1 for a two-ASE stream;
- * the gate decision uses the number of configured sinks, not chan_count.
+ * Record that sink @p idx is configured (slot occupancy).  Must be called
+ * for every accepted ASE Config; the gate decision uses the number of
+ * configured sinks, not any codec field.
  */
-void stream_lifecycle_sink_configured(size_t idx, int chan_count);
+void stream_lifecycle_sink_configured(size_t idx);
 
 /**
  * Mark sink @p idx as started.

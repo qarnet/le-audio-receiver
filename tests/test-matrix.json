@@ -913,6 +913,197 @@
       "stateful": true
     },
     {
+      "source": "src/audio_stream_session.c",
+      "classification": "direct",
+      "suites": [
+        {
+          "name": "audio_stream_session",
+          "evidence": "direct"
+        },
+        {
+          "name": "bsim:stage1",
+          "evidence": "integration"
+        }
+      ],
+      "public_outcomes": [
+        {
+          "api": "audio_stream_session_init",
+          "outcome": "0",
+          "witness": "test_init_and_invalid_slots"
+        },
+        {
+          "api": "audio_stream_session_config",
+          "outcome": "0",
+          "witness": "test_config_accessors_and_qos"
+        },
+        {
+          "api": "audio_stream_session_config",
+          "outcome": "-EINVAL",
+          "witness": "test_init_and_invalid_slots"
+        },
+        {
+          "api": "audio_stream_session_qos",
+          "outcome": "0",
+          "witness": "test_config_accessors_and_qos"
+        },
+        {
+          "api": "audio_stream_session_qos",
+          "outcome": "-EINVAL",
+          "witness": "test_config_accessors_and_qos"
+        },
+        {
+          "api": "audio_stream_session_enable",
+          "outcome": "0",
+          "witness": "test_mono_valid_decode_push_golden"
+        },
+        {
+          "api": "audio_stream_session_enable",
+          "outcome": "-EINVAL",
+          "witness": "test_config_accessors_and_qos"
+        },
+        {
+          "api": "audio_stream_session_disable",
+          "outcome": "void",
+          "witness": "test_disable_keeps_shape_decoder_inert"
+        },
+        {
+          "api": "audio_stream_session_start_clear",
+          "outcome": "void",
+          "witness": "test_start_clear_resets_seq_and_assembler"
+        },
+        {
+          "api": "audio_stream_session_release",
+          "outcome": "void",
+          "witness": "test_release_slot_reuse"
+        },
+        {
+          "api": "audio_stream_session_reset_all",
+          "outcome": "void",
+          "witness": "test_reset_all_clears_session"
+        },
+        {
+          "api": "audio_stream_session_rx_open",
+          "outcome": "void",
+          "witness": "test_admission_closed_then_open"
+        },
+        {
+          "api": "audio_stream_session_rx_close",
+          "outcome": "void",
+          "witness": "test_rx_close_waits_for_admitted_lease"
+        },
+        {
+          "api": "audio_stream_session_recv",
+          "outcome": "0",
+          "witness": "test_mono_valid_decode_push_golden"
+        },
+        {
+          "api": "audio_stream_session_recv",
+          "outcome": "-EINVAL",
+          "witness": "test_admission_closed_then_open"
+        },
+        {
+          "api": "audio_stream_session_recv_valid_count",
+          "outcome": "3",
+          "witness": "test_recv_valid_count_gate_independent"
+        },
+        {
+          "api": "audio_stream_session_recv_reset",
+          "outcome": "void",
+          "witness": "test_recv_valid_count_gate_independent"
+        },
+        {
+          "api": "audio_stream_session_configured",
+          "outcome": "true",
+          "witness": "test_config_accessors_and_qos"
+        },
+        {
+          "api": "audio_stream_session_configured",
+          "outcome": "false",
+          "witness": "test_init_and_invalid_slots"
+        },
+        {
+          "api": "audio_stream_session_configured_count",
+          "outcome": "1",
+          "witness": "test_config_accessors_and_qos"
+        },
+        {
+          "api": "audio_stream_session_shape",
+          "outcome": "\"non-NULL\"",
+          "witness": "test_config_accessors_and_qos"
+        },
+        {
+          "api": "audio_stream_session_shape",
+          "outcome": "\"NULL\"",
+          "witness": "test_init_and_invalid_slots"
+        },
+        {
+          "api": "audio_stream_session_mode",
+          "outcome": "AUDIO_STREAM_MODE_MONO",
+          "witness": "test_config_accessors_and_qos"
+        },
+        {
+          "api": "audio_stream_session_mode",
+          "outcome": "AUDIO_STREAM_MODE_MODEB",
+          "witness": "test_mode_classification_transitions"
+        },
+        {
+          "api": "audio_stream_session_mode",
+          "outcome": "AUDIO_STREAM_MODE_MODEA",
+          "witness": "test_mode_classification_transitions"
+        },
+        {
+          "api": "audio_stream_session_pd",
+          "outcome": "42000",
+          "witness": "test_config_accessors_and_qos"
+        },
+        {
+          "api": "audio_stream_session_recv_count",
+          "outcome": "3",
+          "witness": "test_recv_valid_count_gate_independent"
+        }
+      ],
+      "state_transitions": [
+        {
+          "transition": "idle->configured",
+          "witness": "test_config_accessors_and_qos"
+        },
+        {
+          "transition": "configured->enabled",
+          "witness": "test_decoder_not_ready_skip"
+        },
+        {
+          "transition": "configured->open-admission",
+          "witness": "test_admission_closed_then_open"
+        },
+        {
+          "transition": "open-admission->closed-admission",
+          "witness": "test_admission_closed_then_open"
+        },
+        {
+          "transition": "configured->released",
+          "witness": "test_release_slot_reuse"
+        },
+        {
+          "transition": "open-admission->reset",
+          "witness": "test_reset_all_clears_session"
+        },
+        {
+          "transition": "closed-admission->configured-fresh",
+          "witness": "test_reconnect_fresh_session"
+        },
+        {
+          "transition": "configured->disabled",
+          "witness": "test_disable_keeps_shape_decoder_inert"
+        }
+      ],
+      "function_exclusions": [],
+      "hardware_acceptance": [
+        "scripts/bsim-stage1-run.sh",
+        "scripts/bap_central.py"
+      ],
+      "stateful": true
+    },
+    {
       "source": "src/audio_timing_math.c",
       "classification": "direct",
       "suites": [

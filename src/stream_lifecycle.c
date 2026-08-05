@@ -10,7 +10,7 @@
 #define MAX_SINK_ASE 2
 
 static bool sink_started[MAX_SINK_ASE];
-static int sink_chan_count[MAX_SINK_ASE];
+static bool sink_occupied[MAX_SINK_ASE]; /* R6: slot occupancy only (chan_count removed) */
 static bool audio_path_open;
 static bool force_closed; /* R1: forced-close latch (shell stop) */
 
@@ -18,16 +18,16 @@ void stream_lifecycle_reset(void)
 {
 	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
 		sink_started[i] = false;
-		sink_chan_count[i] = 0;
+		sink_occupied[i] = false;
 	}
 	audio_path_open = false;
 	force_closed = false;
 }
 
-void stream_lifecycle_sink_configured(size_t idx, int chan_count)
+void stream_lifecycle_sink_configured(size_t idx)
 {
 	if (idx < MAX_SINK_ASE) {
-		sink_chan_count[idx] = chan_count;
+		sink_occupied[idx] = true;
 		sink_started[idx] = false;
 	}
 }
@@ -51,7 +51,7 @@ bool stream_lifecycle_sink_started(size_t idx)
 	int started = 0;
 
 	for (int i = 0; i < MAX_SINK_ASE; i++) {
-		if (sink_chan_count[i] > 0) {
+		if (sink_occupied[i]) {
 			total_ase++;
 			if (sink_started[i]) {
 				started++;
@@ -86,7 +86,7 @@ bool stream_lifecycle_sink_started(size_t idx)
 void stream_lifecycle_sink_release(size_t idx)
 {
 	if (idx < MAX_SINK_ASE) {
-		sink_chan_count[idx] = 0;
+		sink_occupied[idx] = false;
 		sink_started[idx] = false;
 	}
 
@@ -96,7 +96,7 @@ void stream_lifecycle_sink_release(size_t idx)
 	bool any_configured = false;
 
 	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
-		if (sink_chan_count[i] > 0) {
+		if (sink_occupied[i]) {
 			any_configured = true;
 			break;
 		}
@@ -136,7 +136,7 @@ bool stream_lifecycle_force_close(void)
 	bool any_configured = false;
 
 	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
-		if (sink_chan_count[i] > 0) {
+		if (sink_occupied[i]) {
 			any_configured = true;
 			break;
 		}
