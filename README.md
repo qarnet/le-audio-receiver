@@ -260,11 +260,12 @@ before reflashing — `west flash` does not erase the settings partition.
 | `src/flpr_shell.c` | FLPR production diagnostics (`flpr status/offload/runtime/restart`, nRF54L15) |
 | `src/flpr_acceptance_shell.c` | FLPR acceptance harness (`flpr ring *`, `flpr stress`, `flpr hang`) — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated |
 | `src/audio_volume.{c,h}` | VCP volume control |
+| `src/audio_stream_session.{c,h}` | App-owned BAP sink receive/session state (R6): validated codec shape, decoder contexts, per-CIS ISO sequence trackers, Mode A assembler, receive counters, and decode/conceal/volume/push orchestration with admission/lease discipline |
 | `boards/ebyte/e83_nrf5340/` | Custom nRF5340 board: I2S0 pins, ACLK 12.288 MHz, QSPI disabled |
 | `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2, FLPR IPC SRAM, TIMER20 reserved |
 | `prj.conf` | App Kconfig |
 | `sysbuild.cmake` | Applies SW Split DT + Kconfig overlays to `hci_ipc` |
-| `tests/unit/` | 28 twister C suites + 5 exec-only C suites + 12 Python suites (48 gate children total) |
+| `tests/unit/` | 29 twister C suites + 5 exec-only C suites + 12 Python suites (49 gate children total) |
 | `tests/bsim/` | BabbleSim Stage 1: 16-scenario T4 BAP matrix (accepted regular local gate); scenario matrix, run counts, and pinned hashes live in `tests/bsim/stage1-scenarios.json` |
 | `scripts/test-all.sh` | Canonical full local gate (all C + Python + BSim Stage 1); suite discovery via `scripts/test_inventory.py` (single source shared with `test-coverage.sh` and `check-test-matrix.py`) |
 | `docs/design.md` | Historical architecture and evidence document (Phases 0–6); active plan of record is `docs/development/refactor-plan.md` |
@@ -280,7 +281,7 @@ before reflashing — `west flash` does not erase the settings partition.
   agents read; `CLAUDE.md` is a symlink to it.
 - **`docs/development/refactor-plan.md`** — the accepted plan of record for
   the current refactoring track (R0–R10), including gate levels and the
-  canonical 48-child inventory.
+  canonical 49-child inventory.
 - **`docs/design.md`** — historical architecture and evidence (what works,
   findings, Phases 0–6). Start here for the "why".
 - **`docs/flashing.md`** — OpenOCD, dual-core ordering, APPROTECT, recovery.
