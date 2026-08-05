@@ -667,6 +667,7 @@ def test_production_pins_load_unchanged():
         "release_without_disable_10ms": {"total": 56},
         "disconnect_streaming_10ms": {"total": 63},
         "reconnect_second_stream_10ms": {"full": 0x22AB5C0D, "total": 63},
+        "duplicate_release_10ms": {"total": 56},
     }
     pins_ok = True
     for name, want in expected.items():

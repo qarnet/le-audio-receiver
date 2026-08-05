@@ -123,7 +123,8 @@
       "name": "duplicate_release_10ms",
       "runs": 1,
       "dec_calls": 1,
-      "channel_mode": "mono"
+      "channel_mode": "mono",
+      "known": {"total": 56}
     }
   ]
 }
