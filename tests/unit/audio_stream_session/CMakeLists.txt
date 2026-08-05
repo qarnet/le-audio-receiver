@@ -6,13 +6,14 @@ set(FIXTURES ${CMAKE_CURRENT_SOURCE_DIR}/../../fixtures/lc3)
 
 # Direct production-source suite for src/audio_stream_session.c: compiles
 # the real session, decoder, Mode A assembler, ISO sequence tracker,
-# statistics, perf, and volume modules against a faithful fake sink and
-# fake observer.  lc3_decode() is linker-wrapped (src/lc3_wrap.c) only to
-# inject hard failures for the production error-accounting path — all
-# other calls pass through to the real liblc3 (same seam as tests/unit/decode).
+# statistics, and perf against faithful fake sink/volume/observer seams.
+# lc3_decode() is linker-wrapped (src/lc3_wrap.c) only to inject hard
+# failures for the production error-accounting path — all other calls pass
+# through to the real liblc3 (same seam as tests/unit/decode).
 target_sources(app PRIVATE
   src/test_audio_stream_session.c
   src/fake_sink.c
+  src/fake_volume.c
   src/fake_observer.c
   src/lc3_wrap.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/audio_stream_session.c
@@ -21,7 +22,6 @@ target_sources(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/audio_iso_seq.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/audio_stats.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/audio_perf.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/audio_volume.c
 )
 
 target_include_directories(app PRIVATE

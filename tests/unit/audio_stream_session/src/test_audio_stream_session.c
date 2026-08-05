@@ -27,6 +27,7 @@
 #include "audio_stats.h"
 #include "audio_perf.h"
 #include "audio_sink.h"
+#include "fake_volume.h"
 #include "lc3_wrap.h"
 #include "fake_sink.h"
 #include "fake_observer.h"
@@ -48,9 +49,6 @@ static const uint8_t modeb10_pcm[] = {
 
 #define MONO_LC3_LEN  sizeof(mono10_lc3)  /* 60 bytes, one 10 ms mono frame */
 #define MODEB_LC3_LEN sizeof(modeb10_lc3) /* 120 bytes, [L][R] per frame */
-
-/* Production volume default (audio_volume.c, no VCP in this build). */
-#define TEST_VOL 195
 
 static const struct audio_stream_codec_shape mono_shape = {
 	.freq_hz = 48000,
@@ -74,6 +72,7 @@ static void full_reset(void)
 {
 	fake_sink_reset();
 	fake_observer_reset();
+	fake_volume_reset();
 	lc3_wrap_reset();
 	audio_stats_reset();
 	audio_perf_reset();
@@ -119,22 +118,17 @@ static uint32_t fnv_u16(uint32_t hash, int16_t v)
 	return hash;
 }
 
-static int16_t vol_scale(int32_t s)
-{
-	return (int16_t)((s * TEST_VOL) / 255);
-}
-
 /* Expected pushed hash: the checked-in .pcm fixtures ARE the stereo
  * interleaved decode output (audio_decode_sdu mono duplicates to both
- * channels, Mode B splits per channel), so the pushed PCM is exactly
- * [scale(pcm[0]), scale(pcm[1]), ...] — the session decode→volume→push
- * pipeline. */
-static uint32_t golden_hash_scaled_flat(const int16_t *pcm, size_t n)
+ * channels, Mode B splits per channel) and the suite's volume seam is
+ * identity, so the pushed PCM is exactly [pcm[0], pcm[1], ...] — the
+ * session decode→volume→push pipeline with real liblc3 decoding. */
+static uint32_t golden_hash_flat(const int16_t *pcm, size_t n)
 {
 	uint32_t hash = 0x811c9dc5UL;
 
 	for (size_t i = 0; i < n; i++) {
-		hash = fnv_u16(hash, vol_scale(pcm[i]));
+		hash = fnv_u16(hash, pcm[i]);
 	}
 	return hash;
 }
@@ -223,7 +217,7 @@ ZTEST(audio_stream_session, test_mono_valid_decode_push_golden)
 
 	const int16_t *pcm = (const int16_t *)mono10_pcm;
 
-	zassert_equal(golden_hash_scaled_flat(pcm, 960), fake_sink_first_push_hash(960),
+	zassert_equal(golden_hash_flat(pcm, 960), fake_sink_first_push_hash(960),
 		      "pushed PCM = volume-scaled golden mono");
 
 	struct audio_stats stats = audio_stats_get();
@@ -234,6 +228,7 @@ ZTEST(audio_stream_session, test_mono_valid_decode_push_golden)
 	zassert_true(fake_observer_last_push_l_valid(), "pre_push l valid");
 	zassert_true(fake_observer_last_push_r_valid(), "pre_push r valid");
 	zassert_equal(1U, fake_observer_pre_push_count(), "one pre-push event");
+	zassert_equal(1U, fake_volume_apply_count(), "volume applied before push");
 }
 
 ZTEST(audio_stream_session, test_modeb_valid_decode_push_golden)
@@ -246,7 +241,7 @@ ZTEST(audio_stream_session, test_modeb_valid_decode_push_golden)
 
 	const int16_t *pcm = (const int16_t *)modeb10_pcm;
 
-	zassert_equal(golden_hash_scaled_flat(pcm, 960), fake_sink_first_push_hash(960),
+	zassert_equal(golden_hash_flat(pcm, 960), fake_sink_first_push_hash(960),
 		      "pushed PCM = volume-scaled golden mode B (L/R interleaved)");
 
 	struct audio_stats stats = audio_stats_get();
@@ -267,7 +262,7 @@ ZTEST(audio_stream_session, test_modea_equal_ts_pair_golden)
 
 	const int16_t *pcm = (const int16_t *)mono10_pcm;
 
-	zassert_equal(golden_hash_scaled_flat(pcm, 960), fake_sink_first_push_hash(960),
+	zassert_equal(golden_hash_flat(pcm, 960), fake_sink_first_push_hash(960),
 		      "Mode A pair = interleaved volume-scaled mono halves");
 
 	struct audio_stats stats = audio_stats_get();
