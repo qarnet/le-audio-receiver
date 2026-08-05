@@ -1060,16 +1060,6 @@
           "api": "audio_stream_session_recv_count",
           "outcome": "3",
           "witness": "test_recv_valid_count_gate_independent"
-        },
-        {
-          "api": "audio_stream_session_release",
-          "outcome": "void",
-          "witness": "test_release_twice_no_configured_change"
-        },
-        {
-          "api": "audio_stream_session_rx_close",
-          "outcome": "void",
-          "witness": "test_duplicate_rx_close_no_deadlock"
         }
       ],
       "state_transitions": [
@@ -1120,6 +1110,10 @@
         {
           "transition": "closed-admission->released->reset->open-admission",
           "witness": "test_admission_stays_closed_after_release_reset_until_rx_open"
+        },
+        {
+          "transition": "open-admission->closed-admission (duplicate rx_close, no deadlock)",
+          "witness": "test_duplicate_rx_close_no_deadlock"
         }
       ],
       "function_exclusions": [],
@@ -1982,11 +1976,6 @@
           "api": "stream_lifecycle_force_close",
           "outcome": "false",
           "witness": "test_force_close_mode_a_second_ase_stays_closed"
-        },
-        {
-          "api": "stream_lifecycle_sink_release",
-          "outcome": "void",
-          "witness": "test_duplicate_release_same_slot_idempotent"
         }
       ],
       "state_transitions": [
@@ -2025,6 +2014,10 @@
         {
           "transition": "force-closed-latched->release-mixed-reset-reconfigure",
           "witness": "test_mixed_close_release_reset_then_reconfigure"
+        },
+        {
+          "transition": "open->released (duplicate release idempotent)",
+          "witness": "test_duplicate_release_same_slot_idempotent"
         }
       ],
       "function_exclusions": [],
