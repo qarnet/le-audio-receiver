@@ -1060,6 +1060,16 @@
           "api": "audio_stream_session_recv_count",
           "outcome": "3",
           "witness": "test_recv_valid_count_gate_independent"
+        },
+        {
+          "api": "audio_stream_session_release",
+          "outcome": "void",
+          "witness": "test_release_twice_no_configured_change"
+        },
+        {
+          "api": "audio_stream_session_rx_close",
+          "outcome": "void",
+          "witness": "test_duplicate_rx_close_no_deadlock"
         }
       ],
       "state_transitions": [
@@ -1094,6 +1104,22 @@
         {
           "transition": "configured->disabled",
           "witness": "test_disable_keeps_shape_decoder_inert"
+        },
+        {
+          "transition": "configured->released-twice",
+          "witness": "test_release_twice_no_configured_change"
+        },
+        {
+          "transition": "configured->released->reset->configured-fresh",
+          "witness": "test_release_then_reset_then_reconfigure_fresh"
+        },
+        {
+          "transition": "configured(0)->released->configured(1)-only",
+          "witness": "test_modea_first_slot_release_then_second_slot_cleanup"
+        },
+        {
+          "transition": "closed-admission->released->reset->open-admission",
+          "witness": "test_admission_stays_closed_after_release_reset_until_rx_open"
         }
       ],
       "function_exclusions": [],
@@ -1286,7 +1312,7 @@
         "scripts/bap_central.py"
       ],
       "stateful": false,
-      "reason": "BAP unicast server, ASCS/PACS, pairing: integration-only through the accepted T4 BabbleSim 16-scenario matrix (mono 7.5/10 ms, Mode A incl. reverse start, Mode B, malformed-SDU rejection + resume, one-CIS-loss, first-ASE stop, release-without-disable, disconnect-while-streaming, reconnect, source-direction rejection, NO_MEM third sink, nine invalid-codec-field rejections, two successes) with strict PCM oracle; no native unit suite exists",
+      "reason": "BAP unicast server, ASCS/PACS, pairing, and the R7 private teardown transition owner: integration-only through the accepted T4+R7 BabbleSim 17-scenario matrix (mono 7.5/10 ms, Mode A incl. reverse start, Mode B, malformed-SDU rejection + resume, one-CIS-loss, first-ASE stop, release-without-disable, disconnect-while-streaming, reconnect, source-direction rejection, NO_MEM third sink, nine invalid-codec-field rejections, two successes, duplicate same-slot release rejected + slot reuse) with strict PCM oracle and exact R7 teardown observer assertions (first close wins once, per-slot cleanup exactly once, release sink-stop only on a release-driven first edge, disconnect cleanup once); no native unit suite exists",
       "excluded_from_numeric": true
     },
     {
@@ -1956,6 +1982,11 @@
           "api": "stream_lifecycle_force_close",
           "outcome": "false",
           "witness": "test_force_close_mode_a_second_ase_stays_closed"
+        },
+        {
+          "api": "stream_lifecycle_sink_release",
+          "outcome": "void",
+          "witness": "test_duplicate_release_same_slot_idempotent"
         }
       ],
       "state_transitions": [
@@ -1982,6 +2013,18 @@
         {
           "transition": "force-closed-latched->reset",
           "witness": "test_reset_clears_force_close_latch"
+        },
+        {
+          "transition": "open->released-both-slots",
+          "witness": "test_mode_a_release_both_slots_cleans_occupancy_no_reopen"
+        },
+        {
+          "transition": "force-closed-latched->open-after-reverse-release",
+          "witness": "test_force_close_then_release_either_order"
+        },
+        {
+          "transition": "force-closed-latched->release-mixed-reset-reconfigure",
+          "witness": "test_mixed_close_release_reset_then_reconfigure"
         }
       ],
       "function_exclusions": [],

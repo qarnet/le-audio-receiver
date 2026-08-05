@@ -244,21 +244,32 @@ FAULT_MARKERS = [
     "stream_lifecycle",
 ]
 
+# Narrow per-scenario allowlist for deliberately exercised negative paths
+# that log at WRN/ERR level in the SDK.  Each entry is an exact substring
+# of the expected line; nothing else is forgiven.
+SCENARIO_ALLOW = {
+    # The server's documented rejection of the duplicate Release PDU on
+    # the already-RELEASING ASE (ascs.c ase_release) — the deliberate
+    # duplicate same-slot release of scenario 17.  No app callback fires;
+    # the cleanup observer count stays exactly one.
+    "duplicate_release_10ms": ["Invalid operation in state: releasing"],
+}
+
 
 def scan_faults(receiver_path, scenario):
     hits = []
+    allow = SCENARIO_ALLOW.get(scenario, [])
     try:
         with open(receiver_path, "r", errors="replace") as fh:
             for line in fh:
-                for marker in FAULT_MARKERS:
-                    if marker in line:
+                if any(marker in line for marker in FAULT_MARKERS):
+                    hits.append(line.strip())
+                    continue
+                if "<wrn> bt_bap:" in line or "<wrn> bt_ascs:" in line:
+                    if not any(a in line for a in allow):
                         hits.append(line.strip())
-                        break
-                else:
-                    if "<wrn> bt_bap:" in line or "<wrn> bt_ascs:" in line:
-                        hits.append(line.strip())
-                    elif "<err> bt_bap:" in line:
-                        hits.append(line.strip())
+                elif "<err> bt_bap:" in line:
+                    hits.append(line.strip())
     except OSError as exc:
         raise ParseError("cannot read %s: %s" % (receiver_path, exc))
     if hits:
@@ -332,6 +343,23 @@ def check_scenario(scenario, recv, cli, known):
                 errs.append("derr1 %s != 0" % r.get("derr1"))
             if r.get("obs_mal") != 0:
                 errs.append("obs_mal %s != 0" % r.get("obs_mal"))
+
+        # R7: a normal audio scenario ends while still streaming — the
+        # gate never closed and no slot was ever released.
+        if r.get("obs_gate_c", 0) != 0:
+            errs.append(
+                "obs_gate_c %s != 0 (normal scenario must not close)"
+                % r.get("obs_gate_c")
+            )
+        if r.get("obs_rel", 0) != 0:
+            errs.append(
+                "obs_rel %s != 0 (normal scenario has no releases)" % r.get("obs_rel")
+            )
+        if r.get("obs_rel_ss", 0) != 0:
+            errs.append(
+                "obs_rel_ss %s != 0 (normal scenario has no release sink-stop)"
+                % r.get("obs_rel_ss")
+            )
 
         if scenario == "modea_one_cis_loss_10ms":
             # Exactly the scheduled losses produced post-start PLC and
@@ -421,12 +449,24 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("after %d != 0" % after)
         if r.get("derr1") != 0:
             errs.append("derr1 %s != 0" % r.get("derr1"))
-        if r.get("obs_gate_c", 0) < 1:
-            errs.append("obs_gate_c < 1 (gate must close on first stop)")
+        # R7: the first Disable closed the gate exactly once (later
+        # disable/release events are first-close no-ops); BOTH slot
+        # cleanups complete — the second runs while the gate is already
+        # closed; no Release caused the first edge (the Disable did), so
+        # no release sink-stop fired.
+        if r.get("obs_gate_c", -1) != 1:
+            errs.append("obs_gate_c %s != 1" % r.get("obs_gate_c", -1))
+        if r.get("obs_rel", -1) != 2:
+            errs.append(
+                "obs_rel %s != 2 (both Mode A slots cleaned)" % r.get("obs_rel", -1)
+            )
+        if r.get("obs_rel_ss", -1) != 0:
+            errs.append(
+                "obs_rel_ss %s != 0 (release must not re-close the gate)"
+                % r.get("obs_rel_ss", -1)
+            )
         if r.get("obs_blk", 0) < 1:
             errs.append("obs_blk < 1 (closed-gate receives expected)")
-        if r.get("obs_rel", 0) < 1:
-            errs.append("obs_rel < 1 (release cleanup expected)")
         if c["sends0"] < 20 or c["sends1"] < 45:
             errs.append("client sends %d/%d unexpected" % (c["sends0"], c["sends1"]))
         if c["relrsps"] < 2:
@@ -441,10 +481,12 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("after %d != 0" % after)
         if r.get("derr1") != 0:
             errs.append("derr1 %s != 0" % r.get("derr1"))
-        if r.get("obs_rel", 0) < 1:
-            errs.append("obs_rel < 1 (release cleanup expected)")
-        if r.get("obs_gate_c", 0) < 1:
-            errs.append("obs_gate_c < 1 (gate must close on release)")
+        # R7: the Release was the single first edge (one gate close, one
+        # cleanup, one release sink-stop).
+        if r.get("obs_gate_c", -1) != 1:
+            errs.append("obs_gate_c %s != 1" % r.get("obs_gate_c", -1))
+        if r.get("obs_rel", -1) != 1:
+            errs.append("obs_rel %s != 1" % r.get("obs_rel", -1))
         # Sink-stop ordering proof: the release path stopped the sink
         # (segment finalize) before the ACL disconnect, by event sequence.
         if r.get("obs_rel_ss", -1) != 1:
@@ -457,6 +499,8 @@ def check_scenario(scenario, recv, cli, known):
                 "release sink-stop seq %s not before disconnect seq %s"
                 % (r.get("rel_ss_seq", -1), r.get("disc_seq", -1))
             )
+        if r.get("obs_disc", -1) != 1:
+            errs.append("obs_disc %s != 1 (disconnect cleanup)" % r.get("obs_disc", -1))
         if c["sends0"] < 20:
             errs.append("client sends0 %d < 20" % c["sends0"])
         if c["relrsps"] != 1:
@@ -471,10 +515,16 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("after %d != 0 (late pushes after disconnect)" % after)
         if r.get("derr1") != 0:
             errs.append("derr1 %s != 0" % r.get("derr1"))
+        # R7: the disconnect was the single first edge; exactly one
+        # disconnect cleanup; no release in this scenario.
+        if r.get("obs_gate_c", -1) != 1:
+            errs.append("obs_gate_c %s != 1" % r.get("obs_gate_c", -1))
+        if r.get("obs_disc", -1) != 1:
+            errs.append("obs_disc %s != 1 (disconnect cleanup)" % r.get("obs_disc", -1))
+        if r.get("obs_rel", 0) != 0:
+            errs.append("obs_rel %s != 0 (no release expected)" % r.get("obs_rel"))
         if r.get("adv_restart") != 1:
             errs.append("adv_restart != 1 (advertising restart path)")
-        if r.get("obs_disc", 0) < 1:
-            errs.append("obs_disc < 1 (disconnect cleanup expected)")
         if c["sends0"] < 20:
             errs.append("client sends0 %d < 20" % c["sends0"])
 
@@ -487,6 +537,17 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("pushes2 %s != 100" % r.get("pushes2"))
         if after != 0:
             errs.append("after %d != 0" % after)
+        # R7: session-1's disconnect closed the gate exactly once and ran
+        # one disconnect cleanup; no release in this scenario.
+        if r.get("obs_gate_c", -1) != 1:
+            errs.append(
+                "obs_gate_c %s != 1 (session-1 disconnect close)"
+                % r.get("obs_gate_c", -1)
+            )
+        if r.get("obs_disc", -1) != 1:
+            errs.append("obs_disc %s != 1 (disconnect cleanup)" % r.get("obs_disc", -1))
+        if r.get("obs_rel", 0) != 0:
+            errs.append("obs_rel %s != 0 (no release expected)" % r.get("obs_rel"))
         if r.get("adv_restart") != 1:
             errs.append("adv_restart != 1")
         if r.get("derr2") != 0:
@@ -506,6 +567,53 @@ def check_scenario(scenario, recv, cli, known):
         if c["sends1"] != 100:
             errs.append("client session-2 sends %d != 100" % c["sends1"])
 
+    elif scenario == "duplicate_release_10ms":
+        if seg != 1:
+            errs.append("seg %d != 1" % seg)
+        if r.get("pushes1", 0) < 20:
+            errs.append("pushes1 %s < 20" % r.get("pushes1"))
+        if after != 0:
+            errs.append("after %d != 0" % after)
+        if r.get("derr1") != 0:
+            errs.append("derr1 %s != 0" % r.get("derr1"))
+        # R7 exact duplicate-release oracle: the streaming release was the
+        # single first edge (one gate close, one release sink-stop); the
+        # duplicate same-slot release was rejected by the transport so the
+        # app cleanup observer fired exactly once per first-time cleanup —
+        # two total (streaming release + reused-slot release).
+        if r.get("obs_gate_c", -1) != 1:
+            errs.append("obs_gate_c %s != 1" % r.get("obs_gate_c", -1))
+        if r.get("obs_rel_ss", -1) != 1:
+            errs.append("obs_rel_ss %s != 1" % r.get("obs_rel_ss", -1))
+        if r.get("obs_rel", -1) != 2:
+            errs.append(
+                "obs_rel %s != 2 (duplicate release must not re-clean)"
+                % r.get("obs_rel", -1)
+            )
+        if r.get("obs_disc", 0) < 1:
+            errs.append("obs_disc < 1 (disconnect cleanup expected)")
+        if r.get("obs_gate_o", 0) != 1:
+            errs.append("obs_gate_o %s != 1" % r.get("obs_gate_o"))
+        # Decoder-invocation accounting (same rule as the normal scenarios).
+        expected_total = r.get("pushes1", 0) + r.get("trans1", 0)
+        if r.get("total1", 0) < expected_total:
+            errs.append("total1 %s < %d" % (r.get("total1"), expected_total))
+        if "known_total" in known and known["known_total"] is not None:
+            if r.get("total1") != known["known_total"]:
+                errs.append(
+                    "total1 %s != pinned %d" % (r.get("total1"), known["known_total"])
+                )
+        if c["sends0"] < 20:
+            errs.append("client sends0 %d < 20" % c["sends0"])
+        if c["cfgrsps"] != 2:
+            errs.append(
+                "client config responses %d != 2 (initial + slot reuse)" % c["cfgrsps"]
+            )
+        if c["relrsps"] != 3:
+            errs.append(
+                "client release responses %d != 3 (first + rejected duplicate + reuse)"
+                % c["relrsps"]
+            )
     elif scenario == "unsupported_source_direction":
         # The final disconnect finalizes an empty segment; seg may be 0
         # (PASS before the disconnect) or 1 (empty segment).  Any push is
@@ -524,6 +632,11 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("obs_code 0x%02X != CONF_UNSUPPORTED" % r.get("obs_code"))
         if r.get("obs_reason") != 0:
             errs.append("obs_reason %d != NONE" % r.get("obs_reason"))
+        # R7: never streamed, never released.
+        if r.get("obs_gate_c", 0) != 0:
+            errs.append("obs_gate_c %s != 0 (no gate close)" % r.get("obs_gate_c"))
+        if r.get("obs_rel", 0) != 0:
+            errs.append("obs_rel %s != 0 (no release)" % r.get("obs_rel"))
         if c["cfgrsps"] != 1:
             errs.append("client config responses %d != 1" % c["cfgrsps"])
         if c["sends0"] != 0:
@@ -547,8 +660,14 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("obs_mts %d != 0" % r.get("obs_mts"))
         if r.get("obs_rej_reason", -1) != 0:
             errs.append("obs_rej_reason %d != NONE" % r.get("obs_rej_reason", -1))
-        if r.get("obs_rel", 0) < 3:
-            errs.append("obs_rel %d < 3 (clean releases)" % r.get("obs_rel"))
+        # R7: exactly three first-time slot cleanups (2 initial + 1 reuse);
+        # never streamed, so no gate close and no release sink-stop.
+        if r.get("obs_rel", -1) != 3:
+            errs.append("obs_rel %s != 3 (clean releases)" % r.get("obs_rel", -1))
+        if r.get("obs_gate_c", 0) != 0:
+            errs.append("obs_gate_c %s != 0 (never streamed)" % r.get("obs_gate_c"))
+        if r.get("obs_rel_ss", 0) != 0:
+            errs.append("obs_rel_ss %s != 0 (no edge release)" % r.get("obs_rel_ss"))
         if c["cfgrsps"] != 4:
             errs.append("client config responses %d != 4" % c["cfgrsps"])
         if c["relrsps"] != 3:
@@ -575,6 +694,16 @@ def check_scenario(scenario, recv, cli, known):
             )
         if r.get("obs_rej_reason", -1) != 0x02:
             errs.append("obs_rej_reason %d != CODEC_DATA" % r.get("obs_rej_reason", -1))
+        # R7: both accepted configs were released exactly once each
+        # (cleanup 2); never streamed, so no gate close / release stop.
+        if r.get("obs_rel", -1) != 2:
+            errs.append(
+                "obs_rel %s != 2 (two accepted configs released)" % r.get("obs_rel", -1)
+            )
+        if r.get("obs_gate_c", 0) != 0:
+            errs.append("obs_gate_c %s != 0 (never streamed)" % r.get("obs_gate_c"))
+        if r.get("obs_rel_ss", 0) != 0:
+            errs.append("obs_rel_ss %s != 0 (no edge release)" % r.get("obs_rel_ss"))
         if c["cfgrsps"] != 11:
             errs.append(
                 "client config responses %d != 11 (9 rejects + 2 accepts)"

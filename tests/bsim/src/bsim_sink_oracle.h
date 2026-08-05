@@ -35,6 +35,7 @@ enum bsim_sink_scenario {
 	BSIM_SCN_NO_FREE_SINK_SLOT,
 	BSIM_SCN_INVALID_CODEC_FIELDS,
 	BSIM_SCN_MODEA_ONE_CIS_LOSS_10MS,
+	BSIM_SCN_DUPLICATE_RELEASE_10MS,
 };
 
 /* Scheduled single-CIS losses in the Mode A one-CIS-loss scenario

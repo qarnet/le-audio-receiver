@@ -494,25 +494,51 @@ static int lc3_metadata(struct bt_bap_stream *stream, const uint8_t meta[], size
 	return 0;
 }
 
-static int lc3_disable(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
-{
-	LOG_INF("Disable: stream %p", stream);
-	audio_stream_session_disable(sink_idx(stream));
-	return 0;
-}
+/*
+ * R7: one explicit private teardown transition owner.
+ *
+ * Every stop/disable/disabled/release/disconnect/shell-stop composition
+ * runs through teardown_transition(), which owns all low-level
+ * session/lifecycle/sink/offload/stats/observer calls.  Thin callbacks
+ * only translate into events.  Universal order (no lock spans
+ * Bluetooth/decode/offload/I2S):
+ *
+ *   close lifecycle gate + sink push admission under lifecycle_lock
+ *     -> release lock
+ *     -> session RX lease drain (audio_stream_session_rx_close)
+ *     -> sink push drain/stop (audio_sink_stop)
+ *     -> offload stop (audio_offload_stream_stop)
+ *     -> state reset
+ *
+ * Idempotence derives from the stream_lifecycle first-edge return, the
+ * session configured flag, the sink stop cohort, and the offload
+ * generation — there are no new global teardown flags and no second
+ * state machine mirroring stream_lifecycle.
+ */
+enum teardown_event {
+	TEARDOWN_CLOSE,      /* lc3_stop / stream_stopped: normal close, no stats */
+	TEARDOWN_DISABLE,    /* lc3_disable: session decoder-disable, serialized */
+	TEARDOWN_DISABLED,   /* stream_disabled_cb: normal close + summary + stats reset */
+	TEARDOWN_RELEASE,    /* lc3_release(slot) */
+	TEARDOWN_DISCONNECT, /* disconnected (default conn): returns advertising-wake bool */
+	TEARDOWN_FORCED,     /* shell bt_bap_audio_path_stop */
+};
 
 /*
- * Centralized audio-path close: used by stop/disabled/release/disconnect
- * (normal, BT-RX-thread callbacks) and by the shell stop (forced).  Closes
- * the gate FIRST under the lifecycle lock (no later receive callback can
- * decode/push), increments the transition generation, and closes sink push
- * admission nonblocking; offload stop and Mode A half clearing stay on the
- * normal-callback path only — the shell thread must not clear BT-RX-owned
- * Mode A/decoder/sequence state, and its offload stop runs after the sink
- * drain.  Emits the gate-close observer event on the open→closed
- * transition.  Safe to call repeatedly.
+ * Global close primitive.  Closes the gate FIRST under the lifecycle lock
+ * (no later receive callback can decode/push), increments the transition
+ * generation on the open->closed edge, and closes sink push admission
+ * nonblocking; then drains session receive leases outside the lock and —
+ * on the first edge only — drains the sink pushes and stops offload, in
+ * that order (R7 approved delta: sink-drain-before-offload, for both
+ * normal and forced paths).  Normal BT close also clears the Mode A
+ * assembler / sequence trackers after the drain; the shell forced path
+ * never clears BT-RX-owned state.  Emits the gate-close observer exactly
+ * once on the open->closed transition.  Safe to call repeatedly.
+ *
+ * @return true when this call performed the first open->closed edge.
  */
-static bool sink_close_audio_path(bool forced)
+static bool teardown_close_path(bool forced)
 {
 	bool was_open;
 
@@ -537,13 +563,12 @@ static bool sink_close_audio_path(bool forced)
 	audio_stream_session_rx_close();
 
 	if (was_open) {
+		/* R7 order: sink drain/finalize first, THEN the offload stop,
+		 * for both normal and forced paths (the old normal path
+		 * stopped offload before the sink drain). */
+		audio_sink_stop();
+		audio_offload_stream_stop();
 		LOG_INF("Audio path gate CLOSED");
-		if (!forced) {
-			/* Normal callback runs on the same BT RX thread as
-			 * pushes; offload stop is safe here.  The shell path
-			 * stops offload only after audio_sink_stop() drains. */
-			audio_offload_stream_stop();
-		}
 #if defined(CONFIG_BSIM_OBSERVER)
 		bsim_observer_gate_close();
 #endif
@@ -558,57 +583,149 @@ static bool sink_close_audio_path(bool forced)
 }
 
 /*
- * Release one sink slot: close path, stop offload and audio sink exactly
- * once through the idempotent APIs, clear lifecycle configuration for the
- * released slot, reset the decoder and app-owned slot state so the slot is
- * reusable, and preserve truthful PACS contexts (no context mutation).
- *
- * The bt_bap_stream struct itself is left intact: the ASCS server owns
- * conn/ep/codec_cfg/iso and clears them when the ASE reaches idle
- * (bt_bap_stream_detach).  Wiping the stream here crashes the server's
- * streaming-exit transition, which dereferences stream->iso after the
- * application release callback returns.
+ * R7 dispatcher: owns every teardown composition.  @p slot is the sink
+ * slot index for the slot-specific events (RELEASE/DISABLE/DISABLED).
+ * Returns whether the advertising-restart semaphore must fire (DISCONNECT
+ * only; all other events return false).
  */
-static void sink_release_slot(size_t idx)
+static bool teardown_transition(enum teardown_event ev, size_t slot)
 {
-	bool was_open = sink_close_audio_path(false);
+	switch (ev) {
+	case TEARDOWN_CLOSE:
+		/* lc3_stop / stream_stopped: normal close; a duplicate
+		 * (already-closed gate) has no global side effect.  Stats
+		 * retained (CLOSE is not a stats-reset event). */
+		teardown_close_path(false);
+		return false;
 
-	if (was_open) {
-		/* Stop the audio sink immediately on Release, before
-		 * returning to ASCS, so the sink oracle can finalize the
-		 * segment (snapshotting the statistics) before any later
-		 * disabled/disconnect path.  audio_sink_stop() is
-		 * idempotent; later paths must not create a second segment
-		 * or hide pushes. */
-		LOG_INF("Release: audio sink stopped");
-		audio_sink_stop();
-#if defined(CONFIG_BSIM_OBSERVER)
-		bsim_observer_release_sink_stop();
-#endif
+	case TEARDOWN_DISABLE:
+		/* lc3_disable remains a session decoder-disable event, but it
+		 * is transition state and is serialized under the lifecycle
+		 * lock so config/start/disable/release/disconnect share the
+		 * same lifecycle serialization (fixed nesting: lifecycle_lock
+		 * then session mutex; session APIs never take lifecycle_lock). */
+		k_mutex_lock(&lifecycle_lock, K_FOREVER);
+		audio_stream_session_disable(slot);
+		k_mutex_unlock(&lifecycle_lock);
+		return false;
+
+	case TEARDOWN_DISABLED: {
+		bool was_open = teardown_close_path(false);
+
+		if (was_open) {
+			LOG_INF("Audio path gate CLOSED (first disable)");
+		}
+
+		/* Stream summary: log the counters before the stats reset so
+		 * the gate can extract explicit SDUs/decoded/I2S evidence.
+		 * audio_sink_stop() never mutates audio_stats, so the
+		 * sink-before-offload delta does not change the summary
+		 * values (output shape unchanged). */
+		struct audio_stats stats = audio_stats_get();
+
+		LOG_INF("Stream[%zu] summary: SDUs=%zu decoded=%u plc=%u "
+			"decode_err=%u i2s_underrun=%u stream_reset=%u",
+			slot, audio_stream_session_recv_count(slot), stats.total_frames,
+			stats.plc_frames, stats.decode_errors, stats.i2s_underruns,
+			stats.stream_resets);
+
+		/* Stats reset once per disabled completion.  No second
+		 * unconditional audio_sink_stop on a duplicate disabled
+		 * event (the first close already stopped the sink). */
+		audio_stats_reset();
+		return false;
 	}
 
-	/* Reset only this app slot after the admission close/drain above;
-	 * the bt_bap_stream object is never touched. */
-	audio_stream_session_release(idx);
-	k_mutex_lock(&lifecycle_lock, K_FOREVER);
-	stream_lifecycle_sink_release(idx);
-	k_mutex_unlock(&lifecycle_lock);
+	case TEARDOWN_RELEASE: {
+		/* Duplicate release of an already-cleaned slot is an
+		 * observable no-op: no observer, no close, no stats, no
+		 * stream touch.  The session configured flag is the
+		 * slot-ownership truth (ASCS normally rejects a duplicate
+		 * Release PDU before this callback; this guard is the
+		 * app-side idempotence boundary).  The check runs under
+		 * the fixed lifecycle -> session lock nesting. */
+		k_mutex_lock(&lifecycle_lock, K_FOREVER);
+		bool configured = audio_stream_session_configured(slot);
+		k_mutex_unlock(&lifecycle_lock);
+
+		if (!configured) {
+			return false;
+		}
+
+		bool was_open = teardown_close_path(false);
+
+		if (was_open) {
+			/* Stop the audio sink immediately on the release that
+			 * closed an open gate, before returning to ASCS, so
+			 * the sink oracle can finalize the segment.  Same
+			 * relative order as before R7: gate close + sink stop
+			 * precede the release observer; the disconnect
+			 * cleanup still fires later (rel_ss_seq < disc_seq). */
+			LOG_INF("Release: audio sink stopped");
 #if defined(CONFIG_BSIM_OBSERVER)
-	bsim_observer_cleanup_release(idx);
+			bsim_observer_release_sink_stop();
 #endif
+		}
+
+		/* Reset only this app slot after the admission close/drain
+		 * above; the bt_bap_stream object is never touched.  The
+		 * second Mode A slot still cleans up here even though the
+		 * global gate is already closed. */
+		audio_stream_session_release(slot);
+		k_mutex_lock(&lifecycle_lock, K_FOREVER);
+		stream_lifecycle_sink_release(slot);
+		k_mutex_unlock(&lifecycle_lock);
+#if defined(CONFIG_BSIM_OBSERVER)
+		bsim_observer_cleanup_release(slot);
+#endif
+		return false;
+	}
+
+	case TEARDOWN_DISCONNECT:
+		/* Normal global close once; lifecycle reset under the lock;
+		 * session reset after the drain; stats reset once;
+		 * disconnect-cleanup observer once.  The caller handles
+		 * conn unref / default_conn; the advertising-restart sem
+		 * decision comes from this return value. */
+		teardown_close_path(false);
+		k_mutex_lock(&lifecycle_lock, K_FOREVER);
+		stream_lifecycle_reset();
+		k_mutex_unlock(&lifecycle_lock);
+		audio_stream_session_reset_all();
+		audio_stats_reset();
+#if defined(CONFIG_BSIM_OBSERVER)
+		bsim_observer_cleanup_disconnect();
+#endif
+		return true;
+
+	case TEARDOWN_FORCED:
+		/* Shell stop: global forced close; sink then offload once on
+		 * the first edge; no assembler/stats clear; the force latch
+		 * stays latched for the current configured slot set. */
+		teardown_close_path(true);
+		return false;
+	}
+	return false;
+}
+
+static int lc3_disable(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
+{
+	LOG_INF("Disable: stream %p", stream);
+	teardown_transition(TEARDOWN_DISABLE, sink_idx(stream));
+	return 0;
 }
 
 static int lc3_stop(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
 {
 	LOG_INF("Stop: stream %p", stream);
-	sink_close_audio_path(false);
+	teardown_transition(TEARDOWN_CLOSE, sink_idx(stream));
 	return 0;
 }
 
 static int lc3_release(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
 {
 	LOG_INF("Release: stream %p", stream);
-	sink_release_slot(sink_idx(stream));
+	teardown_transition(TEARDOWN_RELEASE, sink_idx(stream));
 	return 0;
 }
 
@@ -723,10 +840,10 @@ static void stream_stopped(struct bt_bap_stream *s, uint8_t reason)
 
 	LOG_INF("Stream[%zu] stopped: reason 0x%02X", idx, reason);
 
-	/* Close audio path gate on stop (idempotent).  The disabled
-	 * callback may fire later and close it again harmlessly.
-	 */
-	sink_close_audio_path(false);
+	/* R7: normal close through the teardown coordinator.  The disabled
+	 * callback may fire later and close again harmlessly (duplicate
+	 * close has no global side effect). */
+	teardown_transition(TEARDOWN_CLOSE, idx);
 }
 
 static void stream_started(struct bt_bap_stream *s)
@@ -831,38 +948,12 @@ static void stream_disabled_cb(struct bt_bap_stream *s)
 
 	LOG_INF("Stream[%zu] disabled", idx);
 
-	/*
-	 * Close the audio-path gate BEFORE stopping the sink.
-	 * Must be first so late callbacks on the other ASE cannot
-	 * decode, interleave, push, or restart I2S after the gate
-	 * closes.  The centralized close clears pending Mode A halves
-	 * on the same transition so stale halves cannot pair.
-	 */
-	bool was_open = sink_close_audio_path(false);
-	if (was_open) {
-		LOG_INF("Audio path gate CLOSED (first disable)");
-	}
-
-	/*
-	 * Stream summary: log key counters before reset so the gate
-	 * can extract explicit SDUs/decoded/I2S evidence.
-	 */
-	{
-		struct audio_stats stats = audio_stats_get();
-		LOG_INF("Stream[%zu] summary: SDUs=%zu decoded=%u plc=%u "
-			"decode_err=%u i2s_underrun=%u stream_reset=%u",
-			idx, audio_stream_session_recv_count(idx), stats.total_frames,
-			stats.plc_frames, stats.decode_errors, stats.i2s_underruns,
-			stats.stream_resets);
-	}
-
-	/*
-	 * audio_sink_stop() is idempotent and already calls
-	 * audio_timing_reset() internally.  Do NOT duplicate the
-	 * audio_timing_reset() call — it is redundant here.
-	 */
-	audio_sink_stop();
-	audio_stats_reset();
+	/* R7: the DISABLED coordinator event owns the whole completion —
+	 * first close (gate + sink drain + offload), the exact summary
+	 * snapshot/log, and the stats reset once.  The first close must
+	 * run first so late callbacks on the other ASE cannot decode,
+	 * push, or restart I2S after the gate closes. */
+	teardown_transition(TEARDOWN_DISABLED, idx);
 }
 
 static struct bt_bap_stream_ops stream_ops = {
@@ -904,37 +995,22 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	bt_addr_le_to_str(bt_conn_get_dst(conn), a, sizeof(a));
 	LOG_INF("Disconnected: %s reason 0x%02x", a, reason);
 
-	/*
-	 * Centralized teardown: close gate (idempotent), clear pending
-	 * Mode A halves, then stop offload and the audio sink exactly
-	 * once through idempotent APIs.  lifecycle reset clears the
-	 * per-sink started flags so reconnect works without re-running
-	 * audio_sink_init().
-	 */
-	sink_close_audio_path(false);
-	k_mutex_lock(&lifecycle_lock, K_FOREVER);
-	stream_lifecycle_reset();
-	k_mutex_unlock(&lifecycle_lock);
-	audio_offload_stream_stop();
-
-	/* Reset all app session state after the admission close/drain in
-	 * sink_close_audio_path(); receive admission stays closed until a
-	 * fresh gate-open edge (LIFE-006). */
-	audio_stream_session_reset_all();
-
-	audio_sink_stop();
-	audio_stats_reset();
-
-#if defined(CONFIG_BSIM_OBSERVER)
-	bsim_observer_cleanup_disconnect();
-#endif
+	/* R7: the DISCONNECT coordinator event owns the whole teardown
+	 * (normal global close once, lifecycle reset, session reset after
+	 * the drain, stats reset once, cleanup observer once) and returns
+	 * whether the advertising-restart semaphore must fire.  The
+	 * callback keeps only the connection-object ownership (unref /
+	 * default_conn); no direct low-level teardown calls. */
+	bool wake = teardown_transition(TEARDOWN_DISCONNECT, 0);
 
 	bt_conn_unref(default_conn);
 	default_conn = NULL;
 
 	/* Available contexts persist from initial registration.
 	 * No restore needed — ACL disconnect does not alter the default. */
-	k_sem_give(&sem_disconnected);
+	if (wake) {
+		k_sem_give(&sem_disconnected);
+	}
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -1290,7 +1366,7 @@ int bt_bap_pairing_reset(void)
 
 void bt_bap_audio_path_stop(void)
 {
-	/* R1 shell stop order (outside lifecycle lock):
+	/* R1 shell stop order, now owned by the R7 coordinator:
 	 *   1. force-close the lifecycle gate and sink push admission
 	 *      (forced close latches the gate: stream-started callbacks
 	 *      cannot reopen this configured slot set);
@@ -1298,8 +1374,7 @@ void bt_bap_audio_path_stop(void)
 	 *   3. audio_offload_stream_stop() only after the drain, so an
 	 *      admitted push can never race the offload reset.
 	 * The shell thread never clears/resets Mode A, decoder, sequence,
-	 * stats, or any other BT-RX-owned state. */
-	sink_close_audio_path(true);
-	audio_sink_stop();
-	audio_offload_stream_stop();
+	 * or stats state.  On an already-closed gate the close primitive
+	 * is a no-op for the sink/offload stop as well. */
+	teardown_transition(TEARDOWN_FORCED, 0);
 }

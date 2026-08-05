@@ -44,6 +44,7 @@ static const char *scenario_names[] = {
 	"no_free_sink_slot",            /* 14 */
 	"invalid_codec_fields",         /* 15 */
 	"modea_one_cis_loss_10ms",      /* 16 */
+	"duplicate_release_10ms",       /* 17 */
 };
 
 static void test_init_f(void)
@@ -63,15 +64,21 @@ static bool scenario_observer_ok(enum bsim_sink_scenario scn)
 {
 	switch (scn) {
 	case BSIM_SCN_MODEA_FIRST_STOP_10MS:
-		return bsim_observer_get_gate_close() >= 1U &&
-		       bsim_observer_get_release_cleanup() >= 1U;
+		/* R7: the first Disable closed the gate exactly once; BOTH
+		 * slot cleanups complete (the second runs while the gate is
+		 * already closed) and no Release caused the first edge.  The
+		 * receiver PASSes only after the second cleanup so the
+		 * record proves the full Mode A release sequence. */
+		return bsim_observer_get_gate_close() == 1U &&
+		       bsim_observer_get_release_cleanup() == 2U &&
+		       bsim_observer_get_release_sink_stop() == 0U;
 	case BSIM_SCN_RELEASE_WITHOUT_DISABLE_10MS:
 		/* The ordering proof needs the disconnect event sequence too:
 		 * PASS only after the client's ACL disconnect, so
 		 * rel_ss_seq < disc_seq is observable in the record. */
-		return bsim_observer_get_release_cleanup() >= 1U &&
-		       bsim_observer_get_release_sink_stop() >= 1U &&
-		       bsim_observer_get_disconnect_cleanup() >= 1U;
+		return bsim_observer_get_release_cleanup() == 1U &&
+		       bsim_observer_get_release_sink_stop() == 1U &&
+		       bsim_observer_get_disconnect_cleanup() == 1U;
 	case BSIM_SCN_UNSUPPORTED_SOURCE_DIRECTION:
 		return bsim_observer_get_config_rejected() >= 1U &&
 		       bsim_observer_get_last_config_dir() == (int)BT_AUDIO_DIR_SOURCE &&
@@ -80,19 +87,35 @@ static bool scenario_observer_ok(enum bsim_sink_scenario scn)
 		       bsim_observer_get_last_config_reason() == (int)BT_BAP_ASCS_REASON_NONE &&
 		       bsim_observer_get_config_accepted() == 0U;
 	case BSIM_SCN_NO_FREE_SINK_SLOT:
+		/* R7: exactly three first-time slot cleanups (2 initial +
+		 * 1 reuse); the NO_MEM failure consumed no slot. */
 		return bsim_observer_get_config_accepted() >= 3U &&
 		       bsim_observer_get_config_rejected() == 1U &&
 		       bsim_observer_get_last_rej_code() == (int)BT_BAP_ASCS_RSP_CODE_NO_MEM &&
 		       bsim_observer_get_last_rej_reason() == (int)BT_BAP_ASCS_REASON_NONE &&
-		       bsim_observer_get_release_cleanup() >= 3U;
+		       bsim_observer_get_release_cleanup() == 3U;
 	case BSIM_SCN_INVALID_CODEC_FIELDS:
 		/* Two accepted configs overall (valid mono + missing-frame-
-		 * blocks fallback); the last rejection is CONF_REJECTED. */
+		 * blocks fallback); the last rejection is CONF_REJECTED.
+		 * R7: both post-config releases complete before PASS so the
+		 * record proves every accepted config's slot was cleaned. */
 		return bsim_observer_get_config_rejected() >= 9U &&
 		       bsim_observer_get_config_accepted() >= 2U &&
 		       bsim_observer_get_last_rej_code() ==
 			       (int)BT_BAP_ASCS_RSP_CODE_CONF_REJECTED &&
-		       bsim_observer_get_last_rej_reason() == (int)BT_BAP_ASCS_REASON_CODEC_DATA;
+		       bsim_observer_get_last_rej_reason() == (int)BT_BAP_ASCS_REASON_CODEC_DATA &&
+		       bsim_observer_get_release_cleanup() == 2U;
+	case BSIM_SCN_DUPLICATE_RELEASE_10MS:
+		/* R7 exact duplicate-release oracle: exactly two first-time
+		 * slot cleanups (streaming release + reused-slot release),
+		 * exactly one release sink-stop (only the streaming release
+		 * closed the gate), one gate close, then the disconnect
+		 * cleanup.  The duplicate same-slot release was rejected by
+		 * the transport, so the cleanup count stays at two. */
+		return bsim_observer_get_release_cleanup() == 2U &&
+		       bsim_observer_get_release_sink_stop() == 1U &&
+		       bsim_observer_get_gate_close() == 1U &&
+		       bsim_observer_get_disconnect_cleanup() >= 1U;
 	default:
 		return true;
 	}
@@ -270,6 +293,7 @@ SCENARIO_MAIN(BSIM_SCN_UNSUPPORTED_SOURCE_DIRECTION, 1)
 SCENARIO_MAIN(BSIM_SCN_NO_FREE_SINK_SLOT, 1)
 SCENARIO_MAIN(BSIM_SCN_INVALID_CODEC_FIELDS, 1)
 SCENARIO_MAIN(BSIM_SCN_MODEA_ONE_CIS_LOSS_10MS, 2)
+SCENARIO_MAIN(BSIM_SCN_DUPLICATE_RELEASE_10MS, 1)
 
 static const struct bst_test_instance test_def[] = {
 	{
@@ -382,6 +406,20 @@ static const struct bst_test_instance test_def[] = {
 		.test_descr = "T4 invalid codec field variants",
 		.test_pre_init_f = test_init_f,
 		.test_main_f = test_main_BSIM_SCN_INVALID_CODEC_FIELDS,
+		.test_tick_f = test_tick_f,
+	},
+	{
+		.test_id = "modea_one_cis_loss_10ms",
+		.test_descr = "T4 Mode A 10 ms with 3 scheduled right-CIS losses",
+		.test_pre_init_f = test_init_f,
+		.test_main_f = test_main_BSIM_SCN_MODEA_ONE_CIS_LOSS_10MS,
+		.test_tick_f = test_tick_f,
+	},
+	{
+		.test_id = "duplicate_release_10ms",
+		.test_descr = "R7 duplicate same-slot release rejected + slot reuse",
+		.test_pre_init_f = test_init_f,
+		.test_main_f = test_main_BSIM_SCN_DUPLICATE_RELEASE_10MS,
 		.test_tick_f = test_tick_f,
 	},
 	BSTEST_END_MARKER,

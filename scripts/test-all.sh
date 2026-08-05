@@ -15,7 +15,7 @@
 #      and enforces the committed tests/coverage-baseline.json
 #   5. Test-matrix checker (T7): consumes the coverage run's coverage.json
 #      — zero-hit function enforcement, public API inventory, outcome ledger
-#   6. BabbleSim Stage 1 (canonical 16-scenario T4 BAP matrix, scenarios
+#   6. BabbleSim Stage 1 (canonical 17-scenario T4+R7 BAP matrix, scenarios
 #      1–9 run twice, remaining seven once; deterministic across runs)
 #
 # All suite discovery comes from scripts/test_inventory.py (the single

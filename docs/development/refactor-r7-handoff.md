@@ -366,28 +366,31 @@ coordinator composes; they must pass on the R6 code unchanged.
 
 Strengthen the strict parser to EXACT observer/count assertions that prove
 each R7 item without weakening any existing check (values verified against
-a baseline run before pinning; the R6 code already produces these exact
-counts):
+a baseline run before pinning; where the R6 receiver PASSed before the
+full teardown sequence completed — `modea_first_stop`, `invalid_codec_fields`
+— the receiver `scenario_observer_ok` conditions are tightened so the PASS
+record carries the complete cleanup counts, which the R6 code already
+produces):
 
 - normal audio scenarios (mono/modea/modeb/invalid_sdu/one_cis_loss):
   `obs_gate_c == 0`, `obs_rel == 0` (never closed; ends while streaming).
-- `modea_first_stop_10ms`: `obs_gate_c == 1` (the first Disable closed the
-  gate exactly once; later disable/release events are no-ops),
-  `obs_rel == 2` (slot 0 and slot 1 cleanups — the second cleans while the
-  gate is already closed), `obs_rel_ss == 0` (no Release caused the first
-  edge — the Disable did).
-- `release_without_disable_10ms`: `obs_gate_c == 1`, `obs_rel == 1`
-  (already partially asserted; make exact), `obs_rel_ss == 1` +
-  `rel_ss_seq < disc_seq` (already asserted).
+- `modea_first_stop_10ms`: receiver waits for `obs_gate_c == 1` (the first
+  Disable closed the gate exactly once; later disable/release events are
+  no-ops), `obs_rel == 2` (slot 0 and slot 1 cleanups — the second cleans
+  while the gate is already closed), `obs_rel_ss == 0` (no Release caused
+  the first edge — the Disable did).
+- `release_without_disable_10ms`: `obs_gate_c == 1`, `obs_rel == 1`,
+  `obs_rel_ss == 1` + `rel_ss_seq < disc_seq` + `obs_disc == 1`
+  (already partially asserted; make exact).
 - `disconnect_streaming_10ms`: `obs_gate_c == 1`, `obs_disc == 1`,
   `obs_rel == 0`.
 - `reconnect_second_stream_10ms`: `obs_gate_c == 1` (session-1 disconnect
   closed the gate), `obs_disc == 1`, `obs_rel == 0`; second segment still
   equals the fresh mono 10 ms oracle.
-- `no_free_sink_slot`: `obs_rel == 3` (2 initial + 1 reuse),
-  `obs_gate_c == 0`, `obs_rel_ss == 0`.
-- `invalid_codec_fields`: `obs_rel == 2`, `obs_gate_c == 0`,
-  `obs_rel_ss == 0`.
+- `no_free_sink_slot`: receiver waits for `obs_rel == 3` (2 initial +
+  1 reuse), `obs_gate_c == 0`, `obs_rel_ss == 0`.
+- `invalid_codec_fields`: receiver waits for `obs_rel == 2` (both accepted
+  configs released), `obs_gate_c == 0`, `obs_rel_ss == 0`.
 - `unsupported_source_direction`: `obs_rel == 0`, `obs_gate_c == 0`.
 
 The `tests/unit/bsim_runner/test_bsim_stage1_parse.py` fixtures for the
@@ -396,29 +399,34 @@ parser-contract fixtures; no existing hash/count pin changes).
 
 ### New scenario 17 — `duplicate_release_10ms` (transport-honest)
 
-ASCS evidence (verified in NCS v3.3.0 `bap_stream.c`): a duplicate
-`bt_bap_stream_release()` after a completed release returns `-EINVAL`
-locally — the client library already detached the stream
-(`bt_bap_stream_detach` clears ep/conn after the idle transition), so no
-Release PDU is sent and the server's app release callback never fires
-again.  This scenario proves the observable no-op at the public boundary
-without test-only callback injection; the coordinator's configured check
-remains the app-side guard.
+ASCS evidence (verified in NCS v3.3.0 `ascs.c`/`bap_unicast_client.c`):
+immediately after the first Release response the client library is still
+mid-teardown (the ASE status idle notification has not arrived), so a
+second `bt_bap_stream_release()` is accepted locally and sends a second
+Release PDU.  The ASCS server has already entered RELEASING and rejects
+the duplicate with `INVALID_ASE_STATE` — no application release callback
+fires again, so the receiver's cleanup observer count stays at exactly
+one.  This is the honest transport-level duplicate-release rejection (the
+first implementation attempt assumed a local `-EINVAL` rejection, but the
+verified wire behavior is a server-side rejection of the second PDU);
+the coordinator's configured check is the app-side idempotence guard.
 
 Client flow: mono 10 ms stream up (no send cap) → ≥25 sends → first
 Release from streaming (SUCCESS rsp; receiver: gate close 1, sink stop 1,
-cleanup 1) → duplicate Release of the same stream (client asserts
-`-EINVAL`, no rsp) → reconfigure the same endpoint (slot reuse, SUCCESS
-rsp) → Release again (SUCCESS rsp; receiver cleanup 2) → disconnect.
+cleanup 1) → duplicate Release of the same stream (client lib accepts
+locally, second PDU sent, server rejects with `INVALID_ASE_STATE`; no app
+callback, cleanup stays 1) → wait for the idle transition → reconfigure
+the same endpoint (slot reuse, SUCCESS rsp) → Release again (SUCCESS rsp;
+receiver cleanup 2) → disconnect.
 
 Receiver PASS oracle: `seg == 1`, `pushes1 >= 20`, `after == 0`,
 `derr1 == 0`, `obs_gate_c == 1`, `obs_rel_ss == 1`, `obs_rel == 2`,
 `obs_disc >= 1`.  Client PASS: `sends0 >= 20`, `cfgrsps == 2`,
-`relrsps == 2`.  Parser branch asserts all of the above and pins
-`known-total` (segment frame total) after a deterministic two-run baseline
-(`BSIM_BASELINE=1` twice, identical, then pin).  NEVER alter existing
-hashes/counts.  Document the new pin provenance in `stage1-scenarios.json`
-notes and the results doc.
+`relrsps == 3` (first + rejected duplicate + reuse).  Parser branch
+asserts all of the above and pins `known-total` (segment frame total)
+after a deterministic two-run baseline (`BSIM_BASELINE=1` twice,
+identical, then pin).  NEVER alter existing hashes/counts.  Document the
+new pin provenance in `stage1-scenarios.json` notes and the results doc.
 
 Files touched for the new scenario: `tests/bsim/stage1-scenarios.json`
 (entry; pin in the separate pin commit), `scripts/bsim_stage1_parse.py`

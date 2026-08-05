@@ -229,7 +229,8 @@ def test_modea_first_stop():
         total1=66,
         obs_gate_c=1,
         obs_blk=5,
-        obs_rel=1,
+        obs_rel=2,
+        obs_rel_ss=0,
         szero1=8,
         seg=1,
     )
@@ -247,7 +248,7 @@ def test_modea_first_stop():
         total1=66,
         obs_gate_c=0,
         obs_blk=5,
-        obs_rel=1,
+        obs_rel=2,
     )
     ok = run_check(
         root,
@@ -270,6 +271,7 @@ def test_release_without_disable():
         rel_ss_seq=5,
         disc_seq=9,
         obs_mts=0,
+        obs_disc=1,
     )
     ok = run_check(
         root,
@@ -283,7 +285,13 @@ def test_release_without_disable():
 def test_disconnect_streaming():
     root = tempfile.mkdtemp()
     recv = recv_pass(
-        "disconnect_streaming_10ms", pushes1=25, total1=33, adv_restart=1, obs_disc=1
+        "disconnect_streaming_10ms",
+        pushes1=25,
+        total1=33,
+        adv_restart=1,
+        obs_disc=1,
+        obs_gate_c=1,
+        obs_rel=0,
     )
     ok = run_check(
         root,
@@ -311,7 +319,7 @@ def test_reconnect_second_stream():
     recv = (
         "d_00: INFO: le_audio_receiver: scenario=reconnect_second_stream_10ms seg=2 "
         "after=0 adv_restart=1 pacs=1 obs_ok=2 obs_rej=0 obs_dir=0 obs_code=0 "
-        "obs_reason=0 obs_gate_o=2 obs_gate_c=0 obs_mal=0 obs_blk=0 obs_stale=0 "
+        "obs_reason=0 obs_gate_o=2 obs_gate_c=1 obs_mal=0 obs_blk=0 obs_stale=0 "
         "obs_rel=0 obs_disc=1 "
         "pushes1=25 szero1=8 splc1=7 total1=33 plc1=7 derr1=0 mal1=0 "
         "h1=0x11111111 lh1=0x11111111 rh1=0x11111111 "
@@ -426,6 +434,9 @@ def test_invalid_codec_fields():
         obs_ok=2,
         obs_rej_code=8,
         obs_rej_reason=2,
+        obs_rel=2,
+        obs_gate_c=0,
+        obs_rel_ss=0,
     )
     ok = run_check(
         root,
@@ -450,6 +461,48 @@ def test_invalid_codec_fields():
         cli_pass("invalid_codec_fields", sends0=0, cfgrsps=11),
     )
     report("invalid_codec_fields wrong reason rejected", not ok)
+
+
+def test_duplicate_release():
+    root = tempfile.mkdtemp()
+    recv = recv_pass(
+        "duplicate_release_10ms",
+        pushes1=25,
+        total1=33,
+        seg=1,
+        obs_gate_o=1,
+        obs_gate_c=1,
+        obs_rel=2,
+        obs_rel_ss=1,
+        obs_disc=1,
+    )
+    ok = run_check(
+        root,
+        "duplicate_release_10ms",
+        recv,
+        cli_pass("duplicate_release_10ms", sends0=25, cfgrsps=2, relrsps=3),
+    )
+    report("duplicate_release ok", ok)
+
+    # Duplicate same-slot release must NOT re-clean: cleanup count 3 is a
+    # fault (the scenario has exactly two first-time cleanups).
+    recv_bad = recv_pass(
+        "duplicate_release_10ms",
+        pushes1=25,
+        total1=33,
+        seg=1,
+        obs_gate_c=1,
+        obs_rel=3,
+        obs_rel_ss=1,
+        obs_disc=1,
+    )
+    ok = run_check(
+        root,
+        "duplicate_release_10ms",
+        recv_bad,
+        cli_pass("duplicate_release_10ms", sends0=25, cfgrsps=2, relrsps=3),
+    )
+    report("duplicate_release over-cleanup rejected", not ok)
 
 
 def test_fault_scan():
@@ -480,6 +533,33 @@ def test_fault_scan():
         report("ascs rsp warning rejected everywhere", False)
     except ParseError:
         report("ascs rsp warning rejected everywhere", True)
+
+    # The duplicate-release scenario's deliberate server rejection of the
+    # second Release PDU (ascs.c: "Invalid operation in state: releasing")
+    # is allowed ONLY for that scenario and only for that exact line.
+    dup_ok = "d_00: ... <wrn> bt_ascs: Invalid operation in state: releasing\n"
+    pd = write_log(root, "dup.log", dup_ok)
+    try:
+        scan_faults(pd, "duplicate_release_10ms")
+        report("duplicate-release server rejection allowlisted", True)
+    except ParseError:
+        report("duplicate-release server rejection allowlisted", False)
+
+    pdx = write_log(root, "dupx.log", dup_ok)
+    try:
+        scan_faults(pdx, "mono_10ms")
+        report("duplicate-release line still a fault elsewhere", False)
+    except ParseError:
+        report("duplicate-release line still a fault elsewhere", True)
+
+    # A DIFFERENT bt_ascs warning is still a fault inside the
+    # duplicate-release scenario (the allowlist is exact-line only).
+    pd2 = write_log(root, "dup2.log", "d_00: ... <wrn> bt_ascs: something else\n")
+    try:
+        scan_faults(pd2, "duplicate_release_10ms")
+        report("other bt_ascs warning still a fault in scenario 17", False)
+    except ParseError:
+        report("other bt_ascs warning still a fault in scenario 17", True)
 
     # Any bt_bap error is a fault.
     log14 = "d_00: ... <err> bt_bap: No free sink slot (max 2)\n"
@@ -518,10 +598,10 @@ PRODUCTION_DATA = os.path.join(REPO_ROOT, "tests", "bsim", "stage1-scenarios.jso
 
 
 def test_production_pins_load_unchanged():
-    """All 16 production pins load from the versioned file, unchanged."""
+    """All 17 production pins load from the versioned file, unchanged."""
     data = load_scenarios()
     scenarios = data["scenarios"]
-    report("production pin count", len(scenarios) == 16)
+    report("production pin count", len(scenarios) == 17)
 
     # Every scenario has the full metadata contract.
     ok = True

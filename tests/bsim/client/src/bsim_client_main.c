@@ -69,6 +69,7 @@ enum bsim_scenario {
 	SCN_NO_FREE_SINK_SLOT,
 	SCN_INVALID_CODEC_FIELDS,
 	SCN_MODEA_ONE_CIS_LOSS_10MS,
+	SCN_DUPLICATE_RELEASE_10MS,
 };
 
 /* ── globals ─────────────────────────────────────────────────────── */
@@ -1432,6 +1433,136 @@ static int scenario_invalid_codec_fields(void)
 	return 0;
 }
 
+/* Scenario 17: duplicate same-slot Release must be rejected and the app
+ * cleanup observer must fire exactly once per first-time slot cleanup.
+ *
+ * Transport truth (NCS v3.3.0): immediately after the first Release
+ * response the client library is still mid-teardown (the ASE status
+ * idle notification has not arrived), so a second bt_bap_stream_release()
+ * is accepted locally and sends a second Release PDU.  The ASCS server
+ * has already entered RELEASING for the ASE and rejects the duplicate
+ * with INVALID_ASE_STATE — no application release callback fires again,
+ * so the receiver's cleanup observer count stays at exactly one.  This
+ * is the honest transport-level duplicate-release rejection; the
+ * coordinator's configured check is the app-side idempotence guard.
+ */
+static int scenario_duplicate_release(void)
+{
+	struct tx_param tx = {.octets_per_frame = 120,
+			      .freq_hz = 48000,
+			      .frame_duration_us = 10000,
+			      .chan_count = 1,
+			      .channel_idx = 0};
+	struct bt_bap_lc3_preset *presets[] = {&preset_48_4_1_mono};
+	int err = scan_and_connect();
+
+	if (err != 0) {
+		return err;
+	}
+	err = discover_sinks();
+	if (err != 0) {
+		return err;
+	}
+
+	bsim_tx_set_required_streams(1);
+	err = tx_register(0, &tx);
+	if (err != 0) {
+		return err;
+	}
+	/* No send cap: keep streaming until the first Release closes the
+	 * gate, or the receiver would see source-invalid replacement SDUs
+	 * after a cap pause (strict oracle fault). */
+
+	err = stream_up(presets, 1, false);
+	if (err != 0) {
+		return err;
+	}
+
+	err = wait_for_sends(0, 25);
+	if (err != 0) {
+		return err;
+	}
+	k_sleep(K_MSEC(300));
+
+	/* First Release from streaming: the receiver closes the gate
+	 * (gate_close 1), stops the sink (release_sink_stop 1), and cleans
+	 * up slot 0 (cleanup_release 1). */
+	err = bt_bap_stream_release(&streams[0]);
+	if (err != 0) {
+		return err;
+	}
+	err = k_sem_take(&sem_rel_rsp, K_SECONDS(10));
+	if (err != 0) {
+		return err;
+	}
+	if (rel_rsps[rel_rsp_cnt - 1U].code != BT_BAP_ASCS_RSP_CODE_SUCCESS) {
+		FAIL("client: release rsp 0x%02x\n", rel_rsps[rel_rsp_cnt - 1U].code);
+		return -EBADMSG;
+	}
+	printk("CLI stream 0 released (first)\n");
+
+	/* Duplicate Release of the same stream: accepted locally (the
+	 * client ep is still STREAMING mid-teardown), second Release PDU
+	 * sent, rejected by the ASCS server with INVALID_ASE_STATE.  No
+	 * app release callback on the receiver, so the cleanup observer
+	 * count stays at exactly one. */
+	err = bt_bap_stream_release(&streams[0]);
+	if (err != 0) {
+		FAIL("client: duplicate release rejected locally (%d) — "
+		     "expected a wire-roundtrip server rejection\n",
+		     err);
+		return -EBADMSG;
+	}
+	err = k_sem_take(&sem_rel_rsp, K_SECONDS(10));
+	if (err != 0) {
+		FAIL("client: duplicate release response timeout\n");
+		return err;
+	}
+	if (rel_rsps[rel_rsp_cnt - 1U].code != BT_BAP_ASCS_RSP_CODE_INVALID_ASE_STATE) {
+		FAIL("client: duplicate release rsp 0x%02x != INVALID_ASE_STATE\n",
+		     rel_rsps[rel_rsp_cnt - 1U].code);
+		return -EBADMSG;
+	}
+	printk("CLI duplicate release rejected by server (INVALID_ASE_STATE)\n");
+
+	/* Let the first release's idle transition (ISO teardown + server
+	 * detach + client detach) complete before the slot reuse. */
+	k_sleep(K_MSEC(500));
+
+	/* Slot reuse: reconfigure the released endpoint (the same sink ep
+	 * is idle again) and release it — the receiver cleans up slot 0 a
+	 * second time (cleanup_release 2), proving the first release
+	 * actually freed the slot. */
+	streams[0].ops = &stream_ops;
+	err = config_expect(&streams[0], sink_eps[0], &presets[0]->codec_cfg,
+			    BT_BAP_ASCS_RSP_CODE_SUCCESS, BT_BAP_ASCS_REASON_NONE);
+	if (err != 0) {
+		return err;
+	}
+	err = bt_bap_stream_release(&streams[0]);
+	if (err != 0) {
+		return err;
+	}
+	err = k_sem_take(&sem_rel_rsp, K_SECONDS(10));
+	if (err != 0) {
+		return err;
+	}
+	if (rel_rsps[rel_rsp_cnt - 1U].code != BT_BAP_ASCS_RSP_CODE_SUCCESS) {
+		FAIL("client: reuse release rsp 0x%02x\n", rel_rsps[rel_rsp_cnt - 1U].code);
+		return -EBADMSG;
+	}
+	printk("CLI slot reused and released\n");
+
+	bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+	err = k_sem_take(&sem_disconnected, K_SECONDS(10));
+	if (err != 0) {
+		return err;
+	}
+
+	client_pass("duplicate_release_10ms");
+	return 0;
+}
+
 /* ── test framework ──────────────────────────────────────────────── */
 
 static void test_init_f(void)
@@ -1494,6 +1625,7 @@ SCENARIO_MAIN(reconnect_second_stream)
 SCENARIO_MAIN(unsupported_source)
 SCENARIO_MAIN(no_free_sink_slot)
 SCENARIO_MAIN(invalid_codec_fields)
+SCENARIO_MAIN(duplicate_release)
 
 /* Normal scenario wrappers: mono 10/7.5, Mode A 10/7.5 (+reverse), Mode B 10/7.5. */
 static void test_main_normal_mono_10ms(void)
@@ -1834,6 +1966,13 @@ static const struct bst_test_instance test_def[] = {
 		.test_descr = "T4 invalid codec field variants",
 		.test_pre_init_f = test_init_f,
 		.test_main_f = test_main_invalid_codec_fields,
+		.test_tick_f = test_tick_f,
+	},
+	{
+		.test_id = "duplicate_release_10ms",
+		.test_descr = "R7 duplicate same-slot release rejected + slot reuse",
+		.test_pre_init_f = test_init_f,
+		.test_main_f = test_main_duplicate_release,
 		.test_tick_f = test_tick_f,
 	},
 	BSTEST_END_MARKER,

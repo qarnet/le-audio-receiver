@@ -427,6 +427,7 @@ bool audio_sink_test_goal_reached(void)
 	case BSIM_SCN_MODEA_FIRST_STOP_10MS:
 	case BSIM_SCN_RELEASE_WITHOUT_DISABLE_10MS:
 	case BSIM_SCN_DISCONNECT_STREAMING_10MS:
+	case BSIM_SCN_DUPLICATE_RELEASE_10MS:
 		/* Segment finalized by stop; client guarantees >= 20 pushes. */
 		return segment_count >= 1 && segments[0].finalized && segments[0].pushes >= 20U &&
 		       after_stop_total == 0U;
