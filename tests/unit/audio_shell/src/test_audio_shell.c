@@ -345,3 +345,33 @@ ZTEST(audio_shell, test_wrapper_seam_matches_dispatch)
 	assert_output_has_line(out, "  Frames decoded : 7");
 	assert_output_has_line(out, "  PLC frames     : 1 (14%)");
 }
+
+/* R4: this suite compiles only the audio/bt shell TUs (no FLPR shell, no
+ * acceptance TU) — the same configuration-off shape as the nRF5340 target
+ * and a normal audio diagnostics build.  The FLPR acceptance commands must
+ * not exist in the registry: unknown command, never acceptance output. */
+ZTEST(audio_shell, test_flpr_acceptance_absent_config_off)
+{
+	test_shell_reset_counters();
+
+	int rc = 0;
+	const char *out = run_cmd("flpr ring status", &rc);
+
+	zassert_not_equal(rc, 0,
+			  "flpr ring status must not resolve without "
+			  "CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS");
+	zassert_is_null(strstr(out, "FLPR PCM rings"), "acceptance output must not appear:\n%s",
+			out);
+
+	rc = 0;
+	out = run_cmd("flpr hang", &rc);
+	zassert_not_equal(rc, 0,
+			  "flpr hang must not resolve without "
+			  "CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS");
+
+	rc = 0;
+	out = run_cmd("flpr status", &rc);
+	zassert_not_equal(rc, 0,
+			  "flpr status must not resolve without "
+			  "CONFIG_SOC_NRF54L15 FLPR TUs");
+}

@@ -3,10 +3,11 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(test_audio_shell)
 
 # T6: compile and execute the REAL production shell command bodies
-# (src/audio_shell.c) registered normally and driven through the Zephyr
-# dummy shell backend.  Subsystem APIs (stats/drift/volume/sink/unpair)
-# are mocked; audio_perf.c is compiled for real so queue fields and the
-# deadline percentage come from production instrumentation.
+# (src/audio_shell.c + src/bt_shell.c) registered normally and driven
+# through the Zephyr dummy shell backend.  Subsystem APIs
+# (stats/drift/volume/sink/unpair) are mocked; audio_perf.c is compiled
+# for real so queue fields and the deadline percentage come from
+# production instrumentation.
 #
 # The `unit.audio_shell_noperf` testcase disables CONFIG_AUDIO_PERF_MEASUREMENT
 # so the same production file is proven without measurement enabled.
@@ -14,6 +15,7 @@ target_sources(app PRIVATE
   src/test_audio_shell.c
   src/fake_audio_shell_deps.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/audio_shell.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/bt_shell.c
 )
 
 zephyr_sources_ifdef(CONFIG_AUDIO_PERF_MEASUREMENT

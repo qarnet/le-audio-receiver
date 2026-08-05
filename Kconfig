@@ -106,6 +106,19 @@ config AUDIO_PERF_DEADLINE_US
 	  at runtime via k_us_to_cyc_ceil32().  Default 10000 us = 10 ms.
 	  Works correctly across all platforms and native_sim.
 
+config AUDIO_ACCEPTANCE_DIAGNOSTICS
+	bool "FLPR acceptance diagnostics shell commands"
+	default n
+	depends on SOC_NRF54L15 && SHELL
+	help
+	  Gate the FLPR acceptance-harness shell commands (flpr ring *,
+	  flpr stress, flpr hang) behind an explicit diagnostics option so
+	  normal audio diagnostics never compile the acceptance harness.
+	  Enabled only in boards/nrf54l15dk_nrf54l15_cpuapp.conf; the
+	  nRF5340 target has no FLPR acceptance commands.  The FLPR-image
+	  fault-handler gating is separate CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS
+	  work (R8).
+
 # ── Stage 3B: FLPR ASRC offload ─────────────────────────────────────
 
 config AUDIO_OFFLOAD_ASRC

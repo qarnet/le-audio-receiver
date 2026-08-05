@@ -782,6 +782,65 @@
       "stateful": false
     },
     {
+      "source": "src/bt_shell.c",
+      "classification": "direct",
+      "suites": [
+        {
+          "name": "audio_shell",
+          "evidence": "direct"
+        },
+        {
+          "name": "audio_shell_noperf",
+          "evidence": "direct"
+        },
+        {
+          "name": "audio_shell_nrf54",
+          "evidence": "direct"
+        }
+      ],
+      "public_outcomes": [],
+      "state_transitions": [],
+      "function_exclusions": [],
+      "hardware_acceptance": [],
+      "stateful": false
+    },
+    {
+      "source": "src/flpr_shell.c",
+      "classification": "direct",
+      "suites": [
+        {
+          "name": "audio_shell_nrf54",
+          "evidence": "direct"
+        }
+      ],
+      "public_outcomes": [],
+      "state_transitions": [],
+      "function_exclusions": [],
+      "hardware_acceptance": [
+        "scripts/flpr_hang_gate.py",
+        "scripts/flpr_stall_gate.py"
+      ],
+      "stateful": false
+    },
+    {
+      "source": "src/flpr_acceptance_shell.c",
+      "classification": "direct",
+      "suites": [
+        {
+          "name": "audio_shell_nrf54",
+          "evidence": "direct"
+        }
+      ],
+      "public_outcomes": [],
+      "state_transitions": [],
+      "function_exclusions": [],
+      "hardware_acceptance": [
+        "scripts/flpr_hang_gate.py",
+        "scripts/flpr_stall_gate.py"
+      ],
+      "stateful": false
+    },
+    {
       "source": "src/audio_stats.c",
       "classification": "direct",
       "suites": [

@@ -44,6 +44,14 @@ zephyr_sources_ifdef(CONFIG_AUDIO_CLOCK_ACTUATOR_NONE src/audio_clock_actuator_n
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/audio_timing_nrf54.c)
 zephyr_sources_ifndef(CONFIG_SOC_NRF54L15 src/audio_timing_none.c)
 zephyr_sources_ifdef(CONFIG_SHELL src/audio_shell.c)
+zephyr_sources_ifdef(CONFIG_SHELL src/bt_shell.c)
+# flpr_shell.c needs both SHELL and the nRF54L15 FLPR stack;
+# zephyr_sources_ifdef accepts a single condition, so use an explicit
+# if() with target_sources for the two-condition gate.
+if(CONFIG_SHELL AND CONFIG_SOC_NRF54L15)
+  target_sources(app PRIVATE src/flpr_shell.c)
+endif()
+zephyr_sources_ifdef(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS src/flpr_acceptance_shell.c)
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_handshake.c)
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_ring.c)
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_cache.c)

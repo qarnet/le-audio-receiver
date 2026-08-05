@@ -13,6 +13,7 @@ target_sources(app PRIVATE
   ${SHELL_SUITE_DIR}/src/test_audio_shell.c
   ${SHELL_SUITE_DIR}/src/fake_audio_shell_deps.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/audio_shell.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/bt_shell.c
 )
 
 target_include_directories(app PRIVATE
