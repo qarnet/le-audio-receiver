@@ -182,16 +182,16 @@
     },
     "src/audio_shell.c": {
       "branches": [
-        124,
-        274
+        12,
+        12
       ],
       "functions": [
-        23,
-        23
+        5,
+        5
       ],
       "lines": [
-        302,
-        519
+        51,
+        51
       ]
     },
     "src/audio_stats.c": {
@@ -278,6 +278,34 @@
         66
       ]
     },
+    "src/bt_shell.c": {
+      "branches": [
+        2,
+        2
+      ],
+      "functions": [
+        1,
+        1
+      ],
+      "lines": [
+        6,
+        6
+      ]
+    },
+    "src/flpr_acceptance_shell.c": {
+      "branches": [
+        76,
+        204
+      ],
+      "functions": [
+        10,
+        10
+      ],
+      "lines": [
+        150,
+        328
+      ]
+    },
     "src/flpr_audio_process.c": {
       "branches": [
         46,
@@ -362,6 +390,20 @@
         126
       ]
     },
+    "src/flpr_shell.c": {
+      "branches": [
+        34,
+        56
+      ],
+      "functions": [
+        7,
+        7
+      ],
+      "lines": [
+        95,
+        134
+      ]
+    },
     "src/stream_lifecycle.c": {
       "branches": [
         34,
@@ -379,7 +421,7 @@
   },
   "gcov_version": "gcov (GCC) 14.3.0",
   "gcovr_version": "gcovr 8.4",
-  "generated_commit": "1343c35fb8ac1ce210389ee39886dc885dd2d04e",
+  "generated_commit": "39c318a6565dee0c20804dc22c40eb6408c66252",
   "population": [
     "src/app_lifecycle.c",
     "src/audio_asrc.c",
@@ -400,12 +442,15 @@
     "src/audio_timing_nrf54.c",
     "src/audio_volume.c",
     "src/bt_pairing_policy.c",
+    "src/bt_shell.c",
+    "src/flpr_acceptance_shell.c",
     "src/flpr_audio_process.c",
     "src/flpr_cache.c",
     "src/flpr_handshake.c",
     "src/flpr_ring.c",
     "src/flpr_ring_mgr.c",
     "src/flpr_runtime.c",
+    "src/flpr_shell.c",
     "src/stream_lifecycle.c"
   ],
   "schema_version": 1,

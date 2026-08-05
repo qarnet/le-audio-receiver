@@ -35,7 +35,10 @@ production behavior.
 | `audio_perf.c` | Performance timers | `tests/unit/perf/` — compiles production `src/audio_perf.c` | — | — | — | Basic tests exist; branch coverage unmeasured. | T7 |
 | `audio_rate_convert.c` | Fixed-rate frame-count conversion (init/next_frames) | `tests/unit/rate_convert/` — 5 Twister tests compile production source: identity 48k→48k, nRF54L15 baseline 48k→47,619, remainder determinism, re-init reset, remainder proportion (476/477 distribution) | BSim: compiled only — rate-converter calls live in `audio_i2s.c`, excluded from the BSim build; no BSim execution | — | nRF54L15 streaming verification | Functional tests exist; branch coverage unmeasured. | T7 |
 | `app_lifecycle.c` | Narrow boot coordinator (ordered fatal init + advertising restart) | `tests/unit/app_lifecycle/` — 13 tests compile production source: exact all-success order incl. optional platform step, platform absent, each of the seven fatal steps failing independently (no later callback, exactly one cold reboot, original errno), restart success (only advertising) and restart failure (one reboot, error), NULL/missing-required-callback `-EINVAL` with zero calls/reboots | — | — | Boot logs on both targets | Init order, reboot-once semantics, restart behavior now direct production-source proof; `main.c` wiring stays proven by production builds. | T6 (closed) |
-| `audio_shell.c` | Status shell commands | `tests/unit/audio_shell/` — 13 tests compile production `src/audio_shell.c` with `AUDIO_SHELL_TEST` seams, executed through the real Zephyr dummy backend + `shell_execute_cmd` against mocked stats/drift/volume/sink/unpair and real `audio_perf.c` (deterministic cycle injection): exact `audio status` field order/labels, zero-frames `(0%)` without div0, large-value percentage without uint32 overflow, `audio perf` path labels/queue fields/integer one-decimal deadline %, zero-count averages, reset-stats/perf-reset/stop exactly-once + stable text (R1: `audio stop` routes through `bt_bap_audio_path_stop()` exactly once; the old direct sink-stop fake is proven not called), `bt unpair` success text and exact negative errno propagation, wrapper-seam equivalence; `tests/unit/audio_shell_noperf/` — 10 tests, same production file with `CONFIG_AUDIO_PERF_MEASUREMENT=n`: truthful unavailable (zero) deadline percentage, zeroed queue fields, no div0; `tests/unit/audio_shell_nrf54/` — 42 tests compile the same file with `CONFIG_SOC_NRF54L15` for the TU against mocked FLPR APIs: `flpr status` ready/ACKed/healthy/epoch/errors/TX/RX/loss/order, `flpr ring status` counters/diagnostics/test/latency/stall incl. conditional lines, `flpr offload` state/epoch/generation/counters/faults/recovery/probation/runtime-restart/heartbeat-dedup/RTT/last-error + ASRC counters/faults/RTT/cycles (gate-parsed fields), `flpr runtime` full field set with out-of-range enums printing UNKNOWN/unknown, `flpr restart` EBUSY/success-line/failure-errno | — | — | Log inspection during hardware gates | Parseable status fields, zero-safe percentages, FLPR gate fields, unpair propagation now direct production-source proof. | T6 (closed) |
+| `audio_shell.c` | Audio status shell commands | `tests/unit/audio_shell/` — 14 tests compile production `src/audio_shell.c` + `src/bt_shell.c` with `AUDIO_SHELL_TEST` seams, executed through the real Zephyr dummy backend + `shell_execute_cmd` against mocked stats/drift/volume/sink/unpair and real `audio_perf.c` (deterministic cycle injection): exact `audio status` field order/labels, zero-frames `(0%)` without div0, large-value percentage without uint32 overflow, `audio perf` path labels/queue fields/integer one-decimal deadline %, zero-count averages, reset-stats/perf-reset/stop exactly-once + stable text (R1: `audio stop` routes through `bt_bap_audio_path_stop()` exactly once; the old direct sink-stop fake is proven not called), wrapper-seam equivalence, and (R4) config-off absence: the FLPR acceptance commands do not resolve when the acceptance TU is not compiled; `tests/unit/audio_shell_noperf/` — 10 tests, same production files with `CONFIG_AUDIO_PERF_MEASUREMENT=n`: truthful unavailable (zero) deadline percentage, zeroed queue fields, no div0; `tests/unit/audio_shell_nrf54/` — 42 tests compile all four production shell TUs (see the split rows below) | — | — | Log inspection during hardware gates | Zero-safe percentages and unpair propagation now direct production-source proof. | T6 (closed), R4 |
+| `bt_shell.c` | `bt unpair` pairing-mode reset command | `tests/unit/audio_shell/`, `tests/unit/audio_shell_noperf/`, `tests/unit/audio_shell_nrf54/` — all compile production `src/bt_shell.c`; `bt unpair` success text and exact negative errno propagation executed through the dummy backend; seam `audio_shell_test_cmd_bt_unpair` proven dispatch-identical | — | — | — | Single command; fully covered. | R4 |
+| `flpr_shell.c` | FLPR production diagnostics (`flpr status/offload/runtime/restart`) | `tests/unit/audio_shell_nrf54/` — 42 tests compile production `src/flpr_shell.c` (cross-TU section registration with the acceptance TU) against mocked FLPR APIs: `flpr status` ready/ACKed/healthy/epoch/errors/TX/RX/loss/order, `flpr offload` state/epoch/generation/counters/faults/recovery/probation/runtime-restart/heartbeat-dedup/RTT/last-error + ASRC counters/faults/RTT/cycles (gate-parsed fields), `flpr runtime` full field set with out-of-range enums printing UNKNOWN/unknown, `flpr restart` EBUSY/success-line/failure-errno | — | — | `scripts/flpr_hang_gate.py` + `scripts/flpr_stall_gate.py` parse `flpr offload/status/runtime` output on hardware | Parseable status fields, zero-safe percentages, FLPR gate fields now direct production-source proof. | R4 |
+| `flpr_acceptance_shell.c` | FLPR acceptance-harness commands (`flpr ring *`, `flpr stress`, `flpr hang`), `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated | `tests/unit/audio_shell_nrf54/` — 42 tests compile production `src/flpr_acceptance_shell.c` with the acceptance config forced; `flpr ring status` counters/diagnostics/test/latency/stall incl. conditional lines, `flpr ring init/reset/test/stall/stall_flpr/stall_flpr_ms`, `flpr ring acceptance` validation rejects, `flpr stress` ready/active/summary, `flpr hang` not-ready/ACK/failure-errno — all through the real registry (cross-TU section registration proven); long-running successful acceptance stays hardware evidence | — | — | `scripts/flpr_hang_gate.py` + `scripts/flpr_stall_gate.py` inject `flpr hang` / `flpr ring stall_flpr_ms` and parse the ring/offload output on hardware | Acceptance machinery no longer compiled into normal audio diagnostics builds (config-off absence proven in `audio_shell`). | R4 |
 | `audio_stats.c` | Stream statistics counters | `tests/unit/stats/` — 10 tests execute production source: exact counter coupling (total = decoded + PLC), reset, by-value snapshots, deterministic repeats, 4-thread concurrent exact counts | BSim: compiled and genuinely exercised — production `audio_stats.c` runs through `audio_decode.c`/`bt_bap.c`, and the sink stub reads `audio_stats_get()` snapshots; local counters only supplement startup accounting | — | Hardware log verification | No known functional gap; branch coverage unmeasured. | T7 |
 | `audio_timing_math.c` | Timing math shared across platforms | `tests/unit/timing/` — Twister suite; also compiled by `tests/unit/timing_nrf54/` (production ppm path) | BSim: compiled only — consumed by `audio_timing_nrf54.c`, which is not compiled into BSim; no BSim execution | — | — | Functional tests exist; branch coverage unmeasured. | T7 |
 | `audio_timing_none.c` | nRF5340 no-op timing | — | BSim: compiled; `audio_timing_sdu_ref_update()` no-op is called from the `bt_bap.c` stream path (init/reset live in `audio_i2s.c`, not called in BSim) | — | nRF5340 hardware streaming | No direct unit test; no-op implementation is low-risk. BSim integration evidence exists. Gap not in T5 scope. | — (low-risk no-op) |
@@ -303,3 +306,62 @@ behavior was deleted to improve a percentage.
 
 Canonical enforcement reran on the clean baseline commit (see
 `docs/development/refactor-r2-results.md`): **47 PASS / 0 FAIL / 47 TOTAL**.
+
+## R4 baseline migration (2026-08-04) — shell split, population 26 → 29
+
+R4 split the monolithic `src/audio_shell.c` into four per-owner files
+without changing any command name, help, arg count, output, or return
+behavior (see `docs/development/refactor-r4-handoff.md`).  The pre-R4
+per-file rows above (R2 migration at `1343c35`) are the historical record.
+Per the coverage migration rule (refactor-plan.md), the baseline was
+regenerated on the exact clean implementation commit **`39c318a`**
+(`refactor: split shell command ownership by subsystem`) via
+`scripts/test-coverage.sh --write-baseline /tmp/r4-baseline-candidate.json`;
+the committed `tests/coverage-baseline.json` is the byte-exact copy of
+that candidate.  Tool versions unchanged: **gcovr 8.4 / gcov (GCC)
+14.3.0**, recorded in the baseline.
+
+**Population 26 → 29 files** — the single `src/audio_shell.c` record is
+replaced by `src/audio_shell.c`, `src/bt_shell.c`, `src/flpr_shell.c`,
+`src/flpr_acceptance_shell.c`.  The numeric exclusion list is unchanged
+(`src/bt_bap.c`, `src/flpr/main.c`, `src/main.c`).
+
+### Mechanical split aggregate (old file → four replacement files)
+
+| File | lines | branches | functions |
+|------|-------|----------|-----------|
+| `audio_shell.c` (old monolithic) | 302/519 | 124/274 | 23/23 |
+| `audio_shell.c` (audio commands only) | 51/51 | 12/12 | 5/5 |
+| `bt_shell.c` | 6/6 | 2/2 | 1/1 |
+| `flpr_shell.c` | 95/134 | 34/56 | 7/7 |
+| `flpr_acceptance_shell.c` | 150/328 | 76/204 | 10/10 |
+| **Sum of the four replacements** | **302/519** | **124/274** | **23/23** |
+
+The aggregate is **exactly equal** to the old record — a purely mechanical
+split.  Per-file ratio movement is a compiler/config attribution effect,
+not a behavior change: the audio-only TU became 100% covered because the
+previously-uncovered FLPR/acceptance lines moved into `flpr_shell.c` /
+`flpr_acceptance_shell.c`, where the long-running acceptance gates (which
+need physical FLPR transport) remain hardware-evidence-covered lines.
+Zero-hit functions remain forbidden: all 23 functions across the four
+files execute (10 acceptance + 7 diagnostics + 5 audio + 1 bt unpair).
+
+### Aggregate (pre-R4 committed → post-R4 candidate)
+
+| Metric | Old (population 26) | New (population 29) |
+|--------|---------------------|---------------------|
+| lines | 3505/3946 (88.8%) | 3505/3946 (88.8%) |
+| branches | 1467/2067 (71.0%) | 1467/2067 (71.0%) |
+| functions | 209/209 (100.0%) | 209/209 (100.0%) |
+
+All unchanged files remain at or above their pre-R4 records (verified by
+per-file cross-multiplication against the committed baseline before the
+copy).  No covered live behavior was deleted to improve a percentage.
+`tests/test-matrix.json` records the four owners; hardware scripts
+`scripts/flpr_hang_gate.py` and `scripts/flpr_stall_gate.py` attach to
+`flpr_shell.c` and `flpr_acceptance_shell.c` where their parsed output is
+produced.
+
+Canonical enforcement reran on the clean R4 baseline commit (see
+`docs/development/refactor-r4-results.md`): **47 PASS / 0 FAIL / 47
+TOTAL**.
