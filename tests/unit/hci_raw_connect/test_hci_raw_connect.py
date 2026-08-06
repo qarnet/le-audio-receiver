@@ -12,7 +12,7 @@ Proves, on stdlib python3 with NO live HCI:
     ignore, command failure, completion failure, per-attempt
     timeout -> cancel -> retry -> success, cancel-ack timeout, and
     post-success link-down;
-  - bap_central.wait_for_helper_ready gating on the machine-readable
+  - bap_central_security.wait_for_helper_ready gating on the machine-readable
     ready line (real pipes, no threads).
 """
 
@@ -46,7 +46,7 @@ from hci_raw_connect import (  # noqa: E402
     parse_peer,
 )
 
-from bap_central import wait_for_helper_ready  # noqa: E402
+from bap_central_security import wait_for_helper_ready  # noqa: E402
 
 PEER = parse_peer("DB:A6:0C:05:A2:AA")  # little-endian wire bytes
 PEER_TYPE = 0x01
