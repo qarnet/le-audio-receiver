@@ -149,9 +149,15 @@ static int led_write(bool active)
 	return gpio_pin_set_dt(&g_led_spec, active ? 1 : 0);
 }
 
-/* Schedule one hold-threshold work on the system work queue.  Split out so
- * the (otherwise unreachable-on-native_sim) scheduling-failure cleanup can
- * be exercised through the test-only fault-injection seam. */
+/* Re-arm one hold-threshold work on the system work queue.  Uses
+ * k_work_reschedule() (per the P2 handoff contract) rather than
+ * k_work_schedule(): reschedule re-deadlines an item that is still
+ * submitted and schedules an item in any state (idle, submitted, or
+ * running), so a rapid release/new hold or a race with a pending item can
+ * never leave the new hold without a fresh threshold deadline.  Normally
+ * returns 1 (nonnegative means success).  Split out so the
+ * (otherwise unreachable-on-native_sim) scheduling-failure cleanup can be
+ * exercised through the test-only fault-injection seam. */
 static int schedule_threshold(struct k_work_delayable *dwork, k_timeout_t delay)
 {
 #ifdef USER_PAIRING_IO_TEST
@@ -161,7 +167,7 @@ static int schedule_threshold(struct k_work_delayable *dwork, k_timeout_t delay)
 	}
 	/* GCOVR_EXCL_STOP */
 #endif
-	return k_work_schedule(dwork, delay);
+	return k_work_reschedule(dwork, delay);
 }
 
 /* ── Button event handling ───────────────────────────────────────── */
@@ -200,7 +206,7 @@ static void handle_press(void)
 		k_spin_unlock(&g_lock, key);
 	}
 
-	/* k_work_schedule() returns 0/1 on success, negative on failure. */
+	/* k_work_reschedule() normally returns 1 (nonnegative means success). */
 	ret = schedule_threshold(&g_bond_work.dwork, K_MSEC(CONFIG_USER_PAIRING_BOND_HOLD_MS));
 	if (ret < 0) {
 		LOG_ERR("user pairing: bonding threshold schedule failed: %d", ret);

@@ -106,7 +106,7 @@ native_sim `leds` node (pin 0) is untouched.
   controller work, and status readers via a short spinlock; the lock is
   never held across GPIO, P1 request, logging, or work-cancel calls.
 
-## Tests (20 direct, new twister suite)
+## Tests (21 direct, new twister suite)
 
 `tests/unit/user_pairing_io` compiles the production
 `src/user_pairing_io.c` against the REAL input subsystem, REAL gpio-keys
@@ -120,9 +120,17 @@ native_sim delayed-work deadlines stay within 1 ms of nominal.  The
 and schedule-failure fault-injection hooks) is GCOVR-excluded and never
 enters production firmware; the fault injections exist because the
 native_sim emulated controller never fails a `gpio_pin_set_dt()` and the
-system work queue never rejects a `k_work_schedule()`.
+system work queue never rejects a `k_work_reschedule()`.
 
-Every handoff case is covered (20 tests): init status reports
+The threshold works are re-armed with `k_work_reschedule()` exactly as
+the P2 handoff mandates ("delayed `k_work_reschedule()` normally returns
+1 (nonnegative means success)"): unlike `k_work_schedule()`, reschedule
+re-deadlines an item that is still submitted and schedules an item in any
+state (idle, submitted, or running), so a rapid release/new hold or a
+race with a still-pending item can never leave the new hold without a
+fresh threshold deadline.
+
+Every handoff case is covered (21 tests): init status reports
 inactive/unpressed with the active-low LED raw-high; second init
 `-EALREADY`; LED logical active/inactive produces the correct active-low
 raw pin state with the ctx value ignored (NULL and non-NULL); LED GPIO
@@ -135,8 +143,11 @@ reset cancels the pending RESET; duplicate press/release events are
 no-ops; a bounce shorter than the gpio-keys debounce produces no
 threshold arm/request; stale bonding/reset work from a prior generation
 cannot fire on a new hold; two complete holds produce independent
-generations and one request each; held-at-init arms thresholds from init
-time; events from another input device, another key code, the wrong
+generations and one request each; a rapid release/new hold re-arms both
+thresholds without a stale deadline or a missed request (hold 2 starts
+immediately after hold 1's release and still reaches BONDING then RESET
+exactly once with a fresh generation); held-at-init arms thresholds from
+init time; events from another input device, another key code, the wrong
 type, or `sync=false` produce no request; a hold-threshold scheduling
 failure cancels both thresholds and clears pressed/armed state (seam);
 fake P1 negative returns (including `-ECANCELED`) are surfaced in status
@@ -145,7 +156,7 @@ operation occurs before a successful init.
 
 Focused verification (handoff commands): `west build --no-sysbuild -b
 native_sim/native/64 -d /tmp/user-pairing-p2 tests/unit/user_pairing_io
--p -t run` → **20 PASS / 0 FAIL**, zero warnings; `west build
+-p -t run` → **21 PASS / 0 FAIL**, zero warnings; `west build
 --no-sysbuild -b native_sim/native/64 -d /tmp/user-pairing-p1
 tests/unit/pairing_mode -p -t run` → **32 PASS / 0 FAIL** (P1
 regression); `scripts/test-coverage.sh --report-only --output
@@ -208,10 +219,21 @@ every existing pin byte-identical (mono 10 ms `0x22AB5C0D`, Mode A/B
   cases are proven through the `USER_PAIRING_IO_TEST` fault-injection
   seams (GCOVR-excluded, never in production): the native_sim emulated
   GPIO never fails `gpio_pin_set_dt()` and the system work queue never
-  rejects `k_work_schedule()`, so the exact-errno propagation and the
+  rejects `k_work_reschedule()`, so the exact-errno propagation and the
   cancel-and-clear cleanup are injected rather than observed on a
   failing driver.  This mirrors the P1 fake-op rets and the repo's
   established fault-injection pattern.
+- The review-fix regression (`test_rapid_release_new_hold_rearms_thresholds`)
+  pins the public re-arm contract (rapid release/new hold reaches both
+  thresholds exactly once with a fresh generation — no stale deadline, no
+  missed request).  In the serialized test harness (SYNCHRONOUS input
+  callbacks and threshold handlers share the system work queue, release
+  always cancels, and duplicate presses are rejected) the works are
+  always idle at a new arm, so the k_work_reschedule-vs-k_work_schedule
+  divergence (schedule no-ops on delayed/queued/canceling items) is not
+  deterministically reachable; the API choice itself follows the handoff
+  contract and protects the production INPUT_MODE_THREAD race where the
+  input callback and the threshold handlers run on different threads.
 - `user_pairing_io_get_status(NULL)` is a safe no-op (documented
   contract, matching `pairing_mode_get_status`).
 - The test suite runs at 1 kHz ticks and uses real bounded sleeps in

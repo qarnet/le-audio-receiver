@@ -615,6 +615,48 @@ ZTEST(user_pairing_io, test_schedule_failure_cancels_and_clears)
 	k_sleep(K_MSEC(60));
 }
 
+/* A rapid release/new hold re-arms both thresholds without a stale
+ * deadline or a missed request: hold 2 starts immediately after hold 1's
+ * release, while the hold-1 works were just cancelled, and still reaches
+ * BONDING then RESET exactly once with a fresh generation (the production
+ * adapter re-deadlines the threshold works with k_work_reschedule, so an
+ * item that remains submitted or races with the new hold can never leave
+ * the new hold unarmed). */
+ZTEST(user_pairing_io, test_rapid_release_new_hold_rearms_thresholds)
+{
+	init_ok();
+
+	/* Hold 1: a full BONDING hold, then release (gen 1 -> gen 2). */
+	press();
+	wait_bond(WAIT_MS);
+	zassert_equal(fake_bonding_calls, 1);
+	release();
+	k_sleep(K_MSEC(40)); /* release event delivered, hold-1 works cancelled */
+
+	/* Hold 2 starts immediately after the release is processed. */
+	press();
+	k_sleep(K_MSEC(40)); /* press event delivered, thresholds re-armed */
+
+	struct user_pairing_io_status st;
+
+	user_pairing_io_get_status(&st);
+	zassert_true(st.pressed);
+	zassert_equal(st.hold_generation, 3, "new hold must get a fresh generation");
+	zassert_true(st.bonding_threshold_armed, "bonding threshold not re-armed");
+	zassert_true(st.reset_threshold_armed, "reset threshold not re-armed");
+
+	/* Hold 2 must reach both thresholds exactly once: no stale hold-1
+	 * deadline and no missed hold-2 request. */
+	wait_bond(WAIT_MS);
+	wait_reset(WAIT_MS);
+
+	zassert_equal(fake_bonding_calls, 2, "hold-2 bonding request missed");
+	zassert_equal(fake_reset_calls, 1, "hold-2 reset request missed");
+
+	release();
+	k_sleep(K_MSEC(60));
+}
+
 /* get_status(NULL) is a documented safe no-op. */
 ZTEST(user_pairing_io, test_get_status_null_safe)
 {

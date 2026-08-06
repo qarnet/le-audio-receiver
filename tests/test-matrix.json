@@ -2149,6 +2149,10 @@
     {
      "transition": "boot-held->bonding-requested",
      "witness": "test_held_at_init_arms_thresholds"
+    },
+    {
+     "transition": "released->pressed",
+     "witness": "test_rapid_release_new_hold_rearms_thresholds"
     }
    ],
    "function_exclusions": [],

@@ -64,8 +64,11 @@ LED failures return the exact GPIO errno so P1 can reboot; a short
 spinlock guards all shared state (never held across GPIO/P1/log/cancel
 calls; safe in synchronous/ISR input contexts).  Production feature
 disabled on both boards (`CONFIG_USER_PAIRING_INPUT=n`;
-`zephyr_sources_ifdef` wiring only).  New direct twister suite
-`tests/unit/user_pairing_io` (20 tests) compiles the production source
+`zephyr_sources_ifdef` wiring only).  Threshold re-arming uses
+`k_work_reschedule()` per the P2 handoff contract (re-deadlines an item
+in any state, so a rapid release/new hold or a race with a pending item
+can never leave a new hold unarmed).  New direct twister suite
+`tests/unit/user_pairing_io` (21 tests) compiles the production source
 against the REAL input subsystem + REAL gpio-keys driver + REAL gpio-emul
 controller on native_sim (active-low/pull-up button, 30 ms debounce,
 active-low LED, aliases) with fake link implementations of the two P1
