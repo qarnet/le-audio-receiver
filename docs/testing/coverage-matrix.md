@@ -543,3 +543,40 @@ population; the pairing suite exercises every production function —
 the only zero-execution record is the GCOVR-excluded seam variant).
 No covered live behavior was deleted; the denominator increase is
 exactly the new file's measured lines/branches.
+
+## P2 baseline migration (2026-08-07) — generic input and LED adapter, population 34 → 35
+
+P2 added the reusable user-button / user-LED pairing-control adapter
+`src/user_pairing_io.c` (direct suite `tests/unit/user_pairing_io`,
+20 tests against the real input subsystem + gpio-keys driver +
+gpio-emul controller).  The migration candidate was generated on the
+clean implementation commit `495b3a7` via
+`scripts/test-coverage.sh --write-baseline /tmp/p2-baseline-candidate.json`
+(`--output /tmp/p2-cov-candidate --clean-output`), inspected, and
+committed as `tests/coverage-baseline.json` (byte-exact copy).
+Tool versions unchanged: **gcovr 8.4 / gcov (GCC) 14.3.0**, recorded
+in the baseline.
+
+**Population 34 → 35** is a deliberate provenance change: the new
+production source is directly covered by its own suite.  No per-file
+regression (verified programmatically across lines/branches/functions —
+zero decreases on every unchanged file; the committed baseline record
+for every other file stays at or above its pre-P2 value).  New-file
+record: `user_pairing_io.c` **130/147 lines, 56/106 branches, 11/11
+functions** (the `USER_PAIRING_IO_TEST` state-reset and fault-injection
+seams are GCOVR-excluded and never enter the numeric population).
+Aggregate:
+
+| metric | committed (34 files) | P2 candidate (35 files) |
+|--------|----------------------|-------------------------|
+| lines | 4368/4807 (90.9%) | **4498/4954 (90.8%)** |
+| branches | 1855/2582 (71.8%) | **1911/2688 (71.1%)** |
+| functions | 328/328 | **339/339** |
+
+Zero-hit enforcement stays clean (339/339 functions in the numeric
+population; the io suite exercises every production function — the
+scheduling-failure cleanup `cancel_and_clear` executes through the
+test-only schedule-failure injection because the native_sim system work
+queue never rejects).  No covered live behavior was deleted; the
+denominator increase is exactly the new file's measured
+lines/branches.
