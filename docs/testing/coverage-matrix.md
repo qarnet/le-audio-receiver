@@ -92,8 +92,11 @@ Stage 1 matrix, run counts, and pinned hashes live in
 > Kconfig assigned-value warnings** and zero compiler warnings.  Observed
 > evidence, warning classification, and log provenance: `STATUS.md` (T7
 > section) and `docs/development/workstation-transfer-status.md`.
-> The current accepted 47-child composition (28 twister + 4 exec-only +
-> 12 Python + coverage + matrix + BSim) is the T8 gate described below.
+> The **historical T8 accepted 47-child composition** (28 twister + 4
+> exec-only + 12 Python + coverage + matrix + BSim) is the T8 gate
+> described below; the **current accepted gate is 55 children** (31
+> twister + 5 exec-only + 16 Python + coverage + matrix + BSim) since
+> R8/R9 — see the "Current suite inventory" table above.
 
 ## Explicit weak-test facts
 
@@ -210,8 +213,9 @@ commit and re-verified by the canonical gate):
   via the `bt_pairing_policy` suite); population 25 → 26 files.
 - `1a5842d` (2026-08-04, T8 sequence-gap fix follow-up) — added
   `src/audio_iso_seq.c` (4/4 functions, 36/38 lines, 20/24 branches via
-  the 18-test `iso_seq` suite).  The current numeric population is
-  **26 files**:
+  the 18-test `iso_seq` suite).  At that point the numeric population was
+  **26 files** (historical T8 record; the current population is 33 since
+  the R4/R6/R8 migrations below):
 
 | Metric | Covered/Total | Percent |
 |--------|---------------|---------|
@@ -238,7 +242,9 @@ flpr_handshake 357/369 L, 134/181 B, 17/17 F; flpr_ring 86/87 L, 28/32 B,
 
 The T8-follow-up canonical gate on `1a5842d` is **47 PASS / 0 FAIL /
 47 TOTAL** (28 twister suites including the new `iso_seq`, 4 exec suites,
-12 python suites, coverage, matrix, BSim Stage 1), zero compiler and
+12 python suites, coverage, matrix, BSim Stage 1) — historical T8
+record; the current gate is 55 children (see the suite inventory above),
+zero compiler and
 Kconfig assigned-value warnings in the production builds.
 
 Exact observed re-run of that gate retained (evidence-fix commit,

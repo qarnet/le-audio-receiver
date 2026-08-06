@@ -1,5 +1,13 @@
 # Pre-refactor hardware baseline — T8 evidence (ACCEPTED)
 
+> **Annotation (R10, 2026-08-06):** this document remains the historical
+> T8 hardware baseline (evidence on the accepted production code commit
+> `971e6a4`).  It is deliberately NOT rewritten.  The current
+> authoritative hardware evidence is the R10 full matrix recorded in
+> `docs/development/refactor-r10-results.md` (and the per-phase R6–R9
+> results docs); the refactor track preserved the exact T8 behavior
+> locked here.
+
 Status: **T8 ACCEPTED (2026-08-04).**  Final record — supersedes the earlier
 in-progress draft (2026-08-02).  Both hardware matrices (nRF54L15 and
 nRF5340/E83) pass on the exact final production code; every required stream

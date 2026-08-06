@@ -3,6 +3,20 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
+## Refactoring track — R10 IN PROGRESS (2026-08-06)
+
+R0–R9 ACCEPTED.  **R10 — final integration and documentation closeout —
+IN PROGRESS**: docs/evidence only (no production/test behavior change, no
+coverage baseline regeneration, no BSim re-pin).  Handoff:
+`docs/development/refactor-r10-handoff.md`.  Plan: doc/architecture truth
+cleanup + archive of zero-link superseded handoffs, final G1 (canonical
+**55 PASS / 0 FAIL / 55 TOTAL** expected on the clean cleanup commit),
+full R10 hardware matrix on both targets (nRF54L15 L1–L9 incl. FLPR hang
+Mode A/B 180 s, BZ3 full, pairing reset + BONDED_ONLY; E83 E1–E5 incl.
+APLL evidence), then final acceptance commit with results doc
+(`docs/development/refactor-r10-results.md`) and the whole track marked
+**COMPLETE**.
+
 ## Refactoring track — R9 ACCEPTED (2026-08-06)
 
 R0–R8 ACCEPTED.  **R9 — host central orchestration split — ACCEPTED**:
@@ -1664,7 +1678,14 @@ Standalone I2S20 works. The old DAC breakout caused LRCK anomaly.
 | External I2S analyzer | **PASS** — 24 MHz fx2lafw capture at DAC pins: BCK 1,525,637.347 Hz, LRCK 47,676.613 Hz, ratio 31.999701, SDOUT active. See `docs/development/phase4-acceptance-results.md`. |
 | Phase 4a.2 rate conversion | **PASS** — 35 s stream, 0 slab-full, 0 underrun. Fixed-rate converter matches PCLK32M drain. See `docs/development/phase4-acceptance-results.md`. |
 
-### Next actions (ordered)
+> **Historical (Phase 4–6 "next actions", 2026-07-26…2026-07-29):** the
+> items below record the completed audio-architecture phases 4b/4c, 5
+> (ASRC), and 6 (FLPR offload) as they were tracked at the time.  All are
+> COMPLETE and superseded by the T0–T8 behavior lock and the R0–R10
+> refactor track (see the top of this file and
+> `docs/development/refactor-plan.md`).  Kept as dated evidence only.
+
+### Next actions (ordered) — historical (see note above)
 
  1. ~~**Phase 4b.1** — GRTC-referenced timing foundation~~ → PASS
  2. ~~**Phase 4b.2** — PCLK feedforward + phase PI~~ → PASS

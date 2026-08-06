@@ -80,24 +80,29 @@ current refactoring track R0–R10. Read it before structural changes.
 not the active structural plan.
 
 Current status: **T0–T8 COMPLETE/ACCEPTED** — behavior locked on the exact
-production code `971e6a4`; canonical gate **47 PASS / 0 FAIL / 47 TOTAL**
-(28 twister + 4 exec-only + 12 Python + coverage + matrix + BSim), coverage
-baseline `1a5842d` (26 files: 3281/3722 lines, 1433/2041 branches, 205/205
-functions, gcovr 8.4 / gcov (GCC) 14.3.0), builds 3/3, build contract 76/76,
-both hardware matrices pass (`docs/testing/pre-refactor-hardware-baseline.md`).
-**Refactor track: R0–R7 ACCEPTED** — R7 (stream teardown transition
-owner) landed at **49**; **R8 (FLPR production/diagnostic boundary)
-ACCEPTED** with a **51-child canonical gate** (31 twister + 5 exec-only +
-12 Python + coverage + matrix + BSim), coverage population **33**, build
-contract **79/79**, and nRF54L15 Mode A/B + flpr hang/stall gate
-hardware PASS (see `docs/development/refactor-r8-results.md` and
-`STATUS.md`).
-**BabbleSim Stage 1 is an accepted regular local gate** — the 16-scenario T4
-BAP matrix via `scripts/bsim-stage1-run.sh` (first nine scenarios run twice,
-remaining seven once), strict PCM oracle, deterministic across runs (mono
-10 ms `0x22AB5C0D`, Mode A/B 10 ms `0xBAE24F7E`, reconnect = fresh mono
-oracle). Official upstream smoke remains PARTIAL (documented upstream
-teardown disable-race) and is **not** production acceptance.
+production code `971e6a4`; T8 canonical gate **47 PASS / 0 FAIL / 47
+TOTAL**, coverage baseline `1a5842d` (26 files), builds 3/3, build
+contract 76/76, both hardware matrices pass
+(`docs/testing/pre-refactor-hardware-baseline.md` — historical T8
+evidence; see R10 closeout below for the current authoritative state).
+**Refactor track R0–R10 COMPLETE/ACCEPTED (2026-08-06)** — R10 (final
+integration and documentation closeout) closed the track: canonical gate
+**55 PASS / 0 FAIL / 55 TOTAL** (31 twister + 5 exec-only + 16 Python +
+coverage + matrix + BSim), coverage population **33**
+(4024/4402 lines, 1695/2356 branches, 289/289 functions, gcovr 8.4 /
+gcov (GCC) 14.3.0, committed baseline `54a6b8e` — no migration in R10),
+builds 3/3, build contract **79/79**, BSim Stage 1 pins byte-identical,
+zero new/actionable warnings, and the full R10 hardware matrix passed on
+both targets.  R8/R9 acceptance details and the final evidence:
+`docs/development/refactor-r10-results.md`, `refactor-r9-results.md`,
+`refactor-r8-results.md`, and `STATUS.md`.
+**BabbleSim Stage 1 is an accepted regular local gate** — the
+**17-scenario** T4+R7 BAP matrix via `scripts/bsim-stage1-run.sh`
+(scenarios 1–9 run twice, 10–17 once = 26 runs), strict PCM oracle,
+deterministic across runs (mono 10 ms `0x22AB5C0D`, Mode A/B 10 ms
+`0xBAE24F7E`, reconnect = fresh mono oracle, `duplicate_release_10ms`).
+Official upstream smoke remains PARTIAL (documented upstream teardown
+disable-race) and is **not** production acceptance.
 
 Known behavior question (see `STATUS.md`): nRF54L15 360-frame (7.5 ms) calls
 fall back to cpuapp ASRC because the FLPR payload contract is 480 frames
@@ -596,8 +601,12 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 | `src/audio_modea.c` | Bounded two-CIS event assembler and per-channel PLC |
 | `src/audio_iso_seq.c` | Pure per-CIS omitted-callback sequence tracker |
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
-| `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop) |
+| `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop; R1 stream_open/stream_close admission + drain) |
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA, 48 kHz stereo) — implements audio_sink.h |
+| `src/audio_shell.c` | Audio diagnostics shell commands (`audio status`, `audio perf`, reset-stats/perf-reset/stop) |
+| `src/bt_shell.c` | `bt unpair` pairing-mode reset command (R4) |
+| `src/flpr_shell.c` | FLPR production diagnostics (`flpr status/offload/runtime/restart`, R4) |
+| `src/flpr_acceptance_shell.c` | FLPR acceptance-harness commands (`flpr ring *`, `flpr stress`, `flpr hang`) — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated (R4) |
 | `src/audio_drift.c` | PI clock recovery controller (dual-term, ppm output) |
 | `src/audio_drift.h` | Controller API + APLL register constants |
 | `src/audio_rate_convert.c` | Fixed-rate frame-count/remainder converter (I2S drain-rate matching; init/next_frames only, no resampling/copy API) |

@@ -1,6 +1,8 @@
 # Behavior contract — pre-refactor baseline
 
-Version: T8, 2026-08-04 (R7 ownership clarification 2026-08-05).  Each
+Version: T8, 2026-08-04 (R7 ownership clarification 2026-08-05; R10
+baseline provenance update 2026-08-06 — ownership clarifications only,
+no outcome weakened).  Each
 contract carries a stable ID.  Breaking a contract without a handoff that
 updates this document is a regression.
 
@@ -891,16 +893,22 @@ children of `scripts/test-all.sh`.
 
 ### CV-001 — Numeric coverage never decreases
 
-The committed `tests/coverage-baseline.json` (schema v1, generated on the
-clean commit `971e6a4`, committed in `1a5842d`; lines 3281/3722, branches
-1433/2041, functions 205/205 in the 26-file numeric population) is enforced
+The committed `tests/coverage-baseline.json` (schema v1, currently the R8
+migration committed in **`54a6b8e`**, generated on the clean
+implementation commit `9e5d82a`; lines **4024/4402**, branches
+**1695/2356**, functions **289/289** in the **33-file** numeric
+population) is enforced
 with integer cross multiplication:
 `current_covered/current_total >= baseline_covered/baseline_total` for the
 overall lines and branches totals and for every per-file lines, branches,
-and functions record.  The recorded gcovr/gcov versions are also enforced:
+and functions record.  Baseline provenance migrated mechanically through
+the refactor track: R4 (`b82ab81`, shell split, population 26 → 29), R6
+(`67d2a18`, receive-pipeline split, 29 → 30), R8 (`54a6b8e`, FLPR
+diagnostic split, 30 → 33); R10 made no migration.  The recorded gcovr/gcov versions are also enforced:
 in baseline mode the current tool version first lines must equal the
 baseline's `gcovr_version`/`gcov_version` when those fields are present
-(old baselines that omit either field remain accepted); a mismatch is a
+(recorded: gcovr 8.4 / gcov (GCC) 14.3.0;
+old baselines that omit either field remain accepted); a mismatch is a
 hard error directing an intentional `--write-baseline` refresh.
 `--report-only` never enforces versions.  Lowering the baseline is a
 regression.

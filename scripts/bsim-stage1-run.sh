@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# BabbleSim Stage 1 — T4 BAP scenario matrix (canonical gate entry).
+# BabbleSim Stage 1 — T4+R7 BAP scenario matrix (canonical gate entry).
 #
 # Compiles the repo receiver and the repo parameterized client once per
-# gate, then runs the 16-scenario BAP matrix:
+# gate, then runs the 17-scenario BAP matrix:
 #   scenarios 1–9 (mono / Mode A / Mode B at 10 ms + 7.5 ms, reverse
-#   start, malformed-SDU resume, one-CIS-loss) run twice, scenarios 10–16
+#   start, malformed-SDU resume, one-CIS-loss) run twice, scenarios 10–17
 #   (first-ASE stop, release-without-disable, disconnect-while-streaming,
-#   reconnect, source rejection, NO_MEM, invalid codec fields) run once.
+#   reconnect, source rejection, NO_MEM, invalid codec fields,
+#   duplicate_release_10ms) run once — 26 runs total.
 #
 # The scenario matrix, run counts, and pinned hashes/counts all come from
 # tests/bsim/stage1-scenarios.json (single versioned data source shared

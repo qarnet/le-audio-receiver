@@ -142,9 +142,9 @@ CJMCU-1334 outputs **line level** (no headphone amp on the breakout). Connect:
 ./scripts/test-all.sh
 
 # Requires: NCS v3.3.0 dev shell (direnv allow / nix develop).
-# BabbleSim Stage 1 is an accepted regular local gate: the 16-scenario T4
-# BAP matrix (scripts/bsim-stage1-run.sh, first nine scenarios run twice,
-# remaining seven once) with a strict PCM oracle and pinned deterministic
+# BabbleSim Stage 1 is an accepted regular local gate: the 17-scenario
+# T4+R7 BAP matrix (scripts/bsim-stage1-run.sh, scenarios 1–9 run twice,
+# 10–17 once = 26 runs) with a strict PCM oracle and pinned deterministic
 # hashes. scripts/bsim-env.sh derives BSIM_OUT_PATH;
 # missing BabbleSim prerequisites fail the gate.
 # Production firmware and dongle builds are run separately:
@@ -232,12 +232,12 @@ before reflashing — `west flash` does not erase the settings partition.
 |------|---------|
 | `src/main.c` | Hardware wiring, watchdog, and advertising-loop adapter (fatal boot order lives in `app_lifecycle.c`) |
 | `src/app_lifecycle.c` | Pure fatal boot coordinator: ordered init, cold reboot, advertising restart |
-| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising |
+| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising (R6: app audio receive state lives in `audio_stream_session.c`; R7: one private teardown transition owner — first close wins, per-slot release once, close→drain→sink-stop→offload-stop→reset) |
 | `src/bt_pairing_policy.c` | Pure OPEN/BONDED_ONLY policy snapshot; Bluetooth controller work stays in `bt_bap.c` |
 | `src/audio_modea.c` | Bounded two-CIS event assembler and per-channel PLC |
 | `src/audio_iso_seq.c` | Pure per-CIS omitted-callback sequence tracker |
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
-| `src/audio_sink.h` | Platform-neutral audio-sink interface |
+| `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop; stream_open/stream_close admission + drain) |
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA) — implements `audio_sink.h` |
 | `src/audio_drift.c` | PI clock-recovery controller (ppm output, dual-platform) |
 | `src/audio_drift.h` | Controller API + APLL register constants |
@@ -279,8 +279,8 @@ before reflashing — `west flash` does not erase the settings partition.
 | `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2, FLPR IPC SRAM, TIMER20 reserved |
 | `prj.conf` | App Kconfig |
 | `sysbuild.cmake` | Applies SW Split DT + Kconfig overlays to `hci_ipc` |
-| `tests/unit/` | 29 twister C suites + 5 exec-only C suites + 12 Python suites (49 gate children total) |
-| `tests/bsim/` | BabbleSim Stage 1: 16-scenario T4 BAP matrix (accepted regular local gate); scenario matrix, run counts, and pinned hashes live in `tests/bsim/stage1-scenarios.json` |
+| `tests/unit/` | 31 twister C suites + 5 exec-only C suites + 16 Python suites (52 unit children; 55 gate children with coverage + matrix + BSim) |
+| `tests/bsim/` | BabbleSim Stage 1: 17-scenario T4+R7 BAP matrix (accepted regular local gate); scenario matrix, run counts, and pinned hashes live in `tests/bsim/stage1-scenarios.json` |
 | `scripts/test-all.sh` | Canonical full local gate (all C + Python + BSim Stage 1); suite discovery via `scripts/test_inventory.py` (single source shared with `test-coverage.sh` and `check-test-matrix.py`) |
 | `docs/design.md` | Historical architecture and evidence document (Phases 0–6); active plan of record is `docs/development/refactor-plan.md` |
 | `docs/flashing.md` | Dual-core flash workflow in depth |
@@ -294,8 +294,8 @@ before reflashing — `west flash` does not erase the settings partition.
   summary, key files, build/flash/console conventions). Also the source the
   agents read; `CLAUDE.md` is a symlink to it.
 - **`docs/development/refactor-plan.md`** — the accepted plan of record for
-  the current refactoring track (R0–R10), including gate levels and the
-  canonical 49-child inventory.
+  the current refactoring track (R0–R10, COMPLETE/ACCEPTED 2026-08-06),
+  including gate levels and the canonical 55-child inventory.
 - **`docs/design.md`** — historical architecture and evidence (what works,
   findings, Phases 0–6). Start here for the "why".
 - **`docs/flashing.md`** — OpenOCD, dual-core ordering, APPROTECT, recovery.
