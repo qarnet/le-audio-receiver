@@ -1,7 +1,44 @@
-# STATUS — le-audio-receiver — 2026-08-06
+# STATUS — le-audio-receiver — 2026-08-07
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
+
+## User pairing control — P1 ACCEPTED (2026-08-07)
+
+**P1 — portable pairing-mode transition owner — ACCEPTED**:
+`src/pairing_mode.c/.h` is the sole owner of NORMAL/BONDING/RESETTING,
+their asynchronous transition phases, LED patterns, supersession,
+completion, and fatal recovery; all platform side effects are injected
+via `struct pairing_mode_ops` (no Bluetooth/GPIO/devicetree types in the
+public header).  Event serialization: one private work queue, an atomic
+pending mask + one drain work item (RESET processed first; transition
+generation rejects stale delayed work; submission failure/impossible
+state is fatal).  Synchronous shell-style reset
+(`pairing_mode_request_reset_sync`) waits on a completion event from the
+caller's thread without holding controller locks (single waiter,
+`-EBUSY` while busy, `-ETIMEDOUT` leaves the transition running).
+Rapid-LED interpretation: (FEEDBACK/HALF − 1) toggles complete five full
+flashes; the feedback expiry is the authoritative end.  Production
+feature disabled on both boards (`CONFIG_USER_PAIRING_CONTROL=n`;
+`zephyr_sources_ifdef` wiring only).  New direct twister suite
+`tests/unit/pairing_mode` (32 tests) compiles the production source
+against fake injected operations (ledger, per-op event semaphores,
+blocking gates, tick-aligned short timings preserving the production
+ratios).  Handoff: `docs/development/user-pairing-control-p1-handoff.md`
+(committed `4dc0b72`); implementation `14be974`; coverage migration
+`2ccbb44` (population 33 → 34, new file 344/405 L, 160/226 B, 39/39 F,
+every unchanged file at or above its record, gcovr 8.4 / gcov (GCC)
+14.3.0, provenance in `docs/testing/coverage-matrix.md`); results:
+`docs/development/user-pairing-control-p1-results.md`.  Canonical gate on
+clean `2ccbb44`: **56 PASS / 0 FAIL / 56 TOTAL** (32 twister + 5
+exec-only + 16 Python + coverage + matrix + BSim Stage 1, elapsed
+18m27s, coverage baseline enforcement 0 errors, matrix 0 errors, all
+existing BSim pins byte-identical: mono 10 ms `0x22AB5C0D`, Mode A/B
+10 ms `0xBAE24F7E`, 7.5 ms set, reconnect fresh mono oracle), builds 3/3
+(`fw-build-5340/54l15/dongle`, only the documented NCS v3.3.0
+diagnostics), build contract **79/79**, zero new/actionable warnings,
+`git diff --check` clean.  No hardware tests (P8); no input/LED/Bluetooth/
+lifecycle/shell integration (P2–P5); no production board enabling.
 
 ## Refactoring track — R10 COMPLETE/ACCEPTED — TRACK R0–R10 COMPLETE (2026-08-06)
 
