@@ -218,7 +218,97 @@ ZTEST(flpr_acceptance, test_ring_test_run_rate_success_bounded)
 	zassert_equal(out.test_blocks_recv, 1, "one block received");
 }
 
+/* ── Ring throughput test: remaining loop branches ───────────────── */
+
+ZTEST(flpr_acceptance, test_ring_test_run_rate_limited_sleeps)
+{
+	acc_init_and_reset(42);
+
+	/* One block at 10 blk/s: the pacing target (100 ms) exceeds the
+	 * elapsed time, exercising the rate-limiting sleep branch.  An
+	 * arranged output slot makes the final drain exit immediately. */
+	uint8_t pcm[100 * 4U];
+	flpr_ring_gen_payload(pcm, sizeof(pcm), 1);
+	uint32_t crc = flpr_ring_crc32(pcm, sizeof(pcm));
+	arrange_output_slot(42, 1, 100, FLPR_SLOT_FLAG_VALID, 0, crc, 0, 0, 0, pcm, NULL);
+
+	struct flpr_acceptance_status out;
+	zassert_equal(flpr_acceptance_test_run_rate(1, 5000, 10, &out), 0,
+		      "rate-limited run with arranged output succeeds");
+	zassert_equal(out.test_blocks_sent, 1, "one block sent");
+}
+
+ZTEST(flpr_acceptance, test_ring_test_run_global_timeout)
+{
+	acc_init_and_reset(42);
+
+	/* Six blocks (two batches) with a zero budget: the first batch
+	 * fills the ring, the 10 ms consume wait advances uptime past the
+	 * budget, and the second iteration hits the global timeout branch
+	 * (the run then fails fast). */
+	struct flpr_acceptance_status out;
+	zassert_equal(flpr_acceptance_test_run(6, 0, &out), -1, "timeout → failure");
+	zassert_true(out.test_blocks_sent < 6, "loop stopped before sending all blocks");
+}
+
+ZTEST(flpr_acceptance, test_ring_test_run_input_full_break)
+{
+	acc_init_and_reset(42);
+
+	/* Pre-fill the input ring so the test's first produce hits FULL;
+	 * with sent==0 the final drain exits immediately (recv >= sent). */
+	for (uint32_t i = 0; i < 4; i++) {
+		zassert_equal(flpr_ring_mgr_produce_block(NULL, 480, i, 0, false), FLPR_PRODUCE_OK,
+			      "pre-fill %u", i);
+	}
+
+	struct flpr_acceptance_status out;
+	zassert_equal(flpr_acceptance_test_run(1, 5000, &out), -1,
+		      "input-full produce break → failure (sent=0)");
+	zassert_equal(out.test_blocks_sent, 0, "no block produced");
+}
+
+ZTEST(flpr_acceptance, test_ring_test_run_notify_failure_continue)
+{
+	acc_init_and_reset(42);
+	/* Arranged output slot so the drain observes one block. */
+	uint8_t pcm[100 * 4U];
+	flpr_ring_gen_payload(pcm, sizeof(pcm), 1);
+	uint32_t crc = flpr_ring_crc32(pcm, sizeof(pcm));
+	arrange_output_slot(42, 1, 100, FLPR_SLOT_FLAG_VALID, 0, crc, 0, 0, 0, pcm, NULL);
+
+	/* Send sequence: [0]=TEST_START, [1]=RING_PRODUCER (fails) ... */
+	mock_hs_set_send_fail_from(1);
+
+	struct flpr_acceptance_status out;
+	zassert_equal(flpr_acceptance_test_run(1, 5000, &out), 0,
+		      "notify failure path still completes");
+}
+
+ZTEST(flpr_acceptance, test_null_status_and_snapshot_guards)
+{
+	acc_init_and_reset(42);
+	flpr_acceptance_get_status(NULL);       /* NULL guard */
+	flpr_acceptance_stress_snapshot(NULL);  /* NULL guard */
+	flpr_acceptance_stress(0, NULL);        /* zero-count early return */
+	zassert_false(flpr_acceptance_stress_active(), "still inactive");
+}
+
+ZTEST(flpr_acceptance, test_diag_unknown_type_ignored)
+{
+	acc_init_and_reset(42);
+	mock_hs_invoke_diag(&(struct flpr_msg){.type = FLPR_MSG_RING_CONSUMER,
+					      .version = FLPR_PROTOCOL_VERSION,
+					      .seq = 0,
+					      .data = 0});
+	/* No crash, no state change. */
+	struct flpr_acceptance_status st;
+	flpr_acceptance_get_status(&st);
+	zassert_equal(st.test_blocks_recv, 0, "unknown diag type ignored");
+}
+
 /* ── FLPR stall / timed stall ────────────────────────────────────── */
+
 
 ZTEST(flpr_acceptance, test_stall_persistent_packing)
 {
