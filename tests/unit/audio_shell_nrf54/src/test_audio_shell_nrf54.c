@@ -851,6 +851,22 @@ ZTEST(audio_shell_nrf54, test_flpr_ring_acceptance_uninitialized)
 	assert_output_contains(out, "Rings not initialized");
 }
 
+ZTEST(audio_shell_nrf54, test_flpr_ring_acceptance_delegated_gate_output)
+{
+	test_flpr_reset();
+	struct flpr_ring_status s = {.initialized = true, .epoch = 1};
+
+	test_flpr_set_ring_status(&s);
+	test_flpr_set_gates_result(0);
+	int rc = 0;
+	const char *out = run_cmd("flpr ring acceptance 100", &rc);
+
+	/* The real shell gate sink (shell_gate_print) forwards the
+	 * acceptance module's severity-aware lines byte-identically. */
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "fake gate line");
+}
+
 ZTEST(audio_shell_nrf54, test_flpr_hang_not_ready)
 {
 	test_flpr_reset();

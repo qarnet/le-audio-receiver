@@ -157,8 +157,9 @@ int flpr_acceptance_send_fault_hang(uint32_t timeout_ms)
 int flpr_acceptance_run_gates(uint32_t count, void *ctx, flpr_acceptance_print_t print)
 {
 	(void)count;
-	(void)ctx;
-	(void)print;
+	if (print != NULL) {
+		print(ctx, FLPR_ACC_PRINT_NORMAL, "fake gate line");
+	}
 	return test_gates_result;
 }
 

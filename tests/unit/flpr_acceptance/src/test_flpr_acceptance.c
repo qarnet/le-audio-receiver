@@ -26,6 +26,7 @@
 #include "flpr_acceptance.h"
 #include "flpr_acceptance_hooks.h"
 #include "flpr_ring_mgr.h"
+#include "flpr_ring_mgr_internal.h"
 #include "flpr_ring_mgr_hooks.h"
 #include "flpr_control_ack.h"
 #include "mock_flpr_handshake.h"
@@ -118,7 +119,23 @@ static bool wait_for_stall_token(uint16_t want, uint32_t timeout_ms)
 	return false;
 }
 
+/* ── Internal context accessors ──────────────────────────────────── */
+
+ZTEST(flpr_acceptance, test_internal_context_accessors)
+{
+	acc_init_and_reset(42);
+
+	/* The acceptance module reaches the SAME bulk-op mutex and ring
+	 * bases through the internal accessors (no duplicate locks). */
+	zassert_not_null(flpr_ring_mgr_data_lock(), "data lock accessor");
+	zassert_not_null(flpr_ring_mgr_input_ring(), "input ring accessor");
+	zassert_not_null(flpr_ring_mgr_output_ring(), "output ring accessor");
+	zassert_true(flpr_ring_validate(flpr_ring_mgr_input_ring()), "input ring valid");
+	zassert_true(flpr_ring_validate(flpr_ring_mgr_output_ring()), "output ring valid");
+}
+
 /* ── Ring throughput test ────────────────────────────────────────── */
+
 
 ZTEST(flpr_acceptance, test_ring_test_run_pre_init_eagain)
 {
@@ -748,6 +765,12 @@ ZTEST(flpr_acceptance, test_stress_rejects_unavailable)
 	zassert_equal(acc_worker_out.stress_sent, 0, "no pings sent");
 	zassert_equal(mock_hs_sent_type_count(FLPR_MSG_STRESS_PING), 0, "no pings on wire");
 	zassert_false(acc_worker_out.stress_active, "stress not active");
+}
+
+ZTEST(flpr_acceptance, test_stress_active_false_when_idle)
+{
+	acc_init_and_reset(42);
+	zassert_false(flpr_acceptance_stress_active(), "stress inactive before any run");
 }
 
 ZTEST(flpr_acceptance, test_stress_rejects_active)
