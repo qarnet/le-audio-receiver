@@ -5,10 +5,19 @@
  * CPUAPP side of shared PCM ring management for FLPR transport.
  * Ring addresses are resolved from devicetree at init, not hardcoded.
  *
- * IPC notifications: this module registers callback with the handshake
- * module for FLPR_MSG_RING_CONSUMER (FLPR notifies CPUAPP that output
- * data is available).  The ring manager sends FLPR_MSG_RING_PRODUCER
- * through the handshake module's send function to notify FLPR.
+ * IPC notifications: this module registers the PRODUCTION handlers with
+ * the handshake module for FLPR_MSG_RING_RESET_ACK and
+ * FLPR_MSG_RING_CONSUMER (FLPR notifies CPUAPP that output data is
+ * available).  The ring manager sends FLPR_MSG_RING_PRODUCER through
+ * the handshake module's send function to notify FLPR.  Diagnostic
+ * messages (RING_TEST_REPORT, RING_STALL_ACK, STRESS_PONG,
+ * FAULT_HANG_ACK) are owned by the acceptance module
+ * (src/flpr_acceptance.c) through the handshake diagnostic handler slot;
+ * this header is production-only and contains no acceptance-named API.
+ *
+ * R8: the request/ACK correlation engine (src/flpr_control_ack.c) is the
+ * single owner of reset/stall ACK correlation; this module uses it for
+ * the coordinated-reset ACK.
  */
 
 #ifndef FLPR_RING_MGR_H_
@@ -61,7 +70,10 @@ enum flpr_consume_result {
 	FLPR_CONSUME_INVALID = -22, /* -EINVAL: bad slot metadata */
 };
 
-/** Snapshot of ring and test status for shell display. */
+/** Snapshot of production ring status for shell display.  Acceptance
+ *  fields (test/stall/FLPR-report/latency) live in
+ *  struct flpr_acceptance_status (src/flpr_acceptance.h); the
+ *  acceptance shell merges both. */
 struct flpr_ring_status {
 	bool initialized;
 	uint32_t epoch;
@@ -80,50 +92,21 @@ struct flpr_ring_status {
 	uint32_t out_space;
 	uint32_t out_epoch;
 
-	/* Diagnostic counters (CPUAPP-local). */
+	/* Production notification diagnostics (CPUAPP-local). */
 	uint32_t notify_sent;
 	uint32_t notify_err;
 	uint32_t sem_gives; /* from FLPR → CPUAPP ring consumer notifications */
 	uint32_t sem_takes;
 	uint32_t stale_notify; /* Stage 2: notifications with wrong epoch rejected */
 	uint32_t sem_drained;  /* Stage 2: consume_sem tokens drained at reset */
-
-	/* Test */
-	bool test_active;
-	uint32_t test_blocks_sent;
-	uint32_t test_blocks_recv;
-	uint32_t test_crc_errors;
-	uint32_t test_payload_errors; /* independent memcmp mismatches */
-	uint32_t test_seq_gaps;
-	uint32_t test_full_events;
-	uint32_t test_backpressure; /* stall-producer = full counted */
-	uint32_t test_empty_events;
-	uint32_t test_stale_events;
-	uint32_t test_producer_blocks; /* FLPR-side block count */
-	uint32_t test_output_full;     /* FLPR-side output-full count */
-
-	/* FLPR-reported diagnostic counters. */
-	uint32_t flpr_notify_rcv;  /* notification received */
-	uint32_t flpr_worker_wake; /* ring_process_input() calls */
-	uint32_t flpr_consume_ok;  /* slots consumed */
-	uint32_t flpr_consume_empty;
-	uint32_t flpr_consume_stale;
-	uint32_t flpr_produce_ok; /* slots produced to output */
-	uint32_t flpr_produce_full;
-
-	/* Latency (cycles, k_cycle_get_32 domain). */
-	uint32_t latency_min;   /* minimum roundtrip in cycles */
-	uint32_t latency_max;   /* maximum roundtrip */
-	uint64_t latency_sum;   /* sum for average */
-	uint32_t latency_count; /* number of measurements */
 };
 
 /**
  * @brief Initialize PCM rings in shared memory.
  *
  * Resolves ring addresses from devicetree, does BUILD_ASSERT for size
- * and alignment.  Registers IPC receive callback for RING_RESET_ACK,
- * RING_CONSUMER, RING_TEST_REPORT messages with the handshake module.
+ * and alignment.  Registers the PRODUCTION IPC receive handlers
+ * (RING_RESET_ACK, RING_CONSUMER) with the handshake module.
  *
  * May be called multiple times safely.  Requires FLPR to be ready/acked
  * before IPC messages will be delivered.
@@ -154,7 +137,7 @@ int flpr_ring_mgr_coordinated_reset(uint32_t new_epoch, uint32_t timeout_ms);
 int flpr_ring_mgr_reset(uint32_t new_epoch);
 
 /**
- * @brief Get ring and test status snapshot.
+ * @brief Get ring and production status snapshot.
  */
 void flpr_ring_mgr_get_status(struct flpr_ring_status *status);
 
@@ -202,106 +185,11 @@ enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t 
 int flpr_ring_mgr_notify_producer(void);
 
 /**
- * @brief Stall injection: force producer to pretend full.
- * When enabled, every produce_block call returns FULL without
- * actually filling a slot.
- */
-void flpr_ring_mgr_stall_producer(bool stall);
-
-/**
- * @brief Send FLPR stall config via IPC.
- *
- * Packed data: bits[7:0]=mask, bits[31:8]=duration_ms.
- * Duration zero means persistent (stops any prior timed stall).
- *
- * Stall bits:
- *   FLPR_STALL_CONSUMER_INPUT (0x01): FLPR stops consuming input ring.
- *   FLPR_STALL_PRODUCER_OUTPUT (0x02): FLPR stops producing output ring.
- *   Bit 0 → clear stall (resume normal operation).
- *
- * @param stall_bits  Bitmask of stalls to apply (persistent, duration=0).
- * @param timeout_ms  Max wait for STALL_ACK.
- * @return 0 on success, -ETIMEDOUT if no ACK, -EIO on ACK data mismatch,
- *         -EOVERFLOW when the 16-bit request-token space of the current
- *         FLPR session is exhausted (cleared only by
- *         flpr_ring_mgr_remote_restarted()).
- */
-int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms);
-
-/**
- * @brief Send timed FLPR stall config via IPC (Stage 2).
- *
- * Same as flpr_ring_mgr_flpr_stall but with an auto-clear duration.
- * After the FLPR receives this command, the stall is applied immediately
- * and automatically cleared after @p duration_ms by the FLPR timer.
- * The ACK echoes the exact packed value; caller can verify.
- *
- * @param stall_bits  Bitmask of stalls to apply (must be nonzero).
- * @param duration_ms Auto-clear duration in milliseconds (1 .. 0x00FFFFFF).
- * @param timeout_ms  Max wait for STALL_ACK from FLPR.
- * @return 0 on success, -ETIMEDOUT if no ACK, -EIO on ACK data mismatch,
- *         -EOVERFLOW when the 16-bit request-token space of the current
- *         FLPR session is exhausted (cleared only by
- *         flpr_ring_mgr_remote_restarted()).
- */
-int flpr_ring_mgr_flpr_stall_timed(uint8_t stall_bits, uint32_t duration_ms, uint32_t timeout_ms);
-
-/**
- * @brief Get last acked FLPR stall packed value for diagnostics.
- */
-uint32_t flpr_ring_mgr_flpr_stall_acked(void);
-
-/**
- * @brief Run ring throughput test with independent payload verification.
- *
- * Generates deterministic payload from sequence number, produces
- * into input ring via produce_block, notifies FLPR, drains output ring
- * by consuming blocks and independently regenerating expected payload
- * for memcmp verification.  Tracks CRC errors AND payload errors.
- *
- * Staleness protocol: notify sent AFTER slot publish; no duplicate
- * same sequence.  Final drain waits until recv == sent or global timeout.
- *
- * Latency: cpu_timestamp captured at produce, compared at consume.
- * Reports min/max/avg in k_cycle_get_32 cycles.
- *
- * Returns nonzero if sent != target OR recv != target OR any errors.
- *
- * @param block_count  Number of blocks to transfer.
- * @param timeout_ms   Maximum duration in milliseconds.
- * @param out          Filled with final test status on return.
- * @return 0 on success (all gates), -1 on failure.
- */
-int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flpr_ring_status *out);
-
-/**
- * @brief Run ring throughput test with rate limiting.
- *
- * Identical to flpr_ring_mgr_test_run() but limits production to at most
- * @p rate_per_sec blocks per second (throttled via k_msleep between batches).
- * Pass 0 for unlimited (same as test_run).  Useful for concurrent testing
- * where the ring test must not saturate the link.
- *
- * @param rate_per_sec  Maximum blocks per second (0 = unlimited).
- */
-int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint32_t rate_per_sec,
-				struct flpr_ring_status *out);
-
-/**
- * @brief Probe: produce a slot with stale epoch directly into the OUTPUT ring.
- * Bypasses normal epoch validation so consumer will see ESTALE.
- * Test-use only — not for production data paths.
- *
- * @param stale_epoch  An epoch value that does NOT match the current epoch.
- * @return 0 on success, negative on error.
- */
-int flpr_ring_mgr_produce_stale_test(uint32_t stale_epoch);
-
-/**
  * @brief Wait on the consume semaphore (with timeout) for FLPR output.
  *
- * Used by acceptance suite to wait for output data without busy-polling.
- * Semaphore is given by IPC callback when FLPR publishes output ring data.
+ * Used by the offload submit path (and the acceptance ring test) to
+ * wait for output data without busy-polling.  Semaphore is given by the
+ * IPC callback when FLPR publishes output ring data.
  *
  * @param timeout_ms  Maximum wait time in milliseconds.
  * @return 0 on semaphore acquired, nonzero on timeout.
@@ -312,9 +200,10 @@ int flpr_ring_mgr_wait_consume(uint32_t timeout_ms);
  * @brief Reinitialize rings after FLPR remote restart.
  *
  * Callable only while offload is RECOVERING/stopped — no active submit
- * may race this call.  Invalidates local epoch, drains consumer/reset/stall
- * semaphores, reinitializes shared headers and handlers after new READY.
- * Must be followed by flpr_ring_mgr_coordinated_reset() with nonzero epoch.
+ * may race this call.  Invalidates local epoch, drains consumer and all
+ * registered control-ACK semaphores (reset + stall), reinitializes
+ * shared headers and handlers after new READY.  Must be followed by
+ * flpr_ring_mgr_coordinated_reset() with nonzero epoch.
  *
  * @return 0 on success, negative errno on failure.
  */

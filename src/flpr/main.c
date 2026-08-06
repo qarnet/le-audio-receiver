@@ -27,6 +27,10 @@
 #include "flpr_ring.h"
 #include "flpr_audio_process.h"
 
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+#include "acceptance.h"
+#endif
+
 /* ── Devicetree resolved addresses ───────────────────────────────── */
 
 #define DT_PCM_RING DT_NODELABEL(pcm_ring)
@@ -59,51 +63,19 @@ static struct flpr_peer cpuapp;
 /* Epoch from hardware GRTC at boot start. */
 static uint32_t boot_epoch;
 
-/* ── Ring test state ────────────────────────────────────────────── */
-
-static bool ring_test_active;
-static uint32_t ring_test_block_count; /* blocks processed this test */
-static uint32_t ring_test_crc_errors;  /* CRC mismatches */
-static uint32_t ring_test_seq_gaps;    /* sequence gaps */
-static uint32_t ring_test_epoch_stale; /* stale epoch rejections */
-static uint32_t ring_test_empty_polls; /* times ring was empty */
-static uint32_t ring_test_output_full; /* output ring full count */
-
-/* Diagnostic counters (no lock — single-threaded FLPR). */
-static uint32_t diag_notify_rcv;    /* RING_PRODUCER messages received */
-static uint32_t diag_worker_wake;   /* ring_process_input() call count */
-static uint32_t diag_consume_ok;    /* slots successfully consumed */
-static uint32_t diag_consume_empty; /* consumer found ring empty */
-static uint32_t diag_consume_stale; /* consumer found stale epoch */
-static uint32_t diag_produce_ok;    /* output slots produced */
-static uint32_t diag_produce_full;  /* output ring was full */
+/* R8: the acceptance state (ring-test counters, stall flags/timer,
+ * fault-hang pending, stress, diagnostic counters reported at test
+ * stop) moved to src/flpr/acceptance.c; main.c invokes the acceptance
+ * hooks below only under CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS.  The
+ * diag_* counters that ring_process_input() used to own are likewise
+ * acceptance-owned now (they are reported in the RING_TEST_STOP
+ * cascade); production ring processing delegates via the hooks. */
 
 static bool rings_initialized;
 
 static uint32_t ring_stream_epoch; /* current ring epoch after reset */
 
-/* Stall control: atomic bitmask (replaces two plain bools for Stage 2).
- * Written by IPC RING_STALL handler, read by poll + callback.
- * Bits: FLPR_STALL_CONSUMER_INPUT (0x01), FLPR_STALL_PRODUCER_OUTPUT (0x02).
- *
- * Timed stall (duration > 0): timer expiry atomically clears all bits
- * and kicks ring_wake_sem so queued input drains even without a later
- * producer notification. */
-static atomic_t stall_flags = ATOMIC_INIT(0);
-
-/* Fault hang: set by IPC callback on FAULT_HANG, checked by main loop.
- * When true, main disables all interrupts and spins forever — halting
- * ring processing, heartbeat, and all IPC activity after ACK was sent. */
-static atomic_t hang_pending = ATOMIC_INIT(0);
-
-static void stall_timer_expiry(struct k_timer *timer);
-
-/* One-shot timer for timed-stall auto-clear. */
-static K_TIMER_DEFINE(stall_timer, stall_timer_expiry, NULL);
-
-/* Diagnostics (no lock — single-threaded FLPR). */
-static uint32_t diag_timed_stall_start_count;
-static uint32_t diag_timed_stall_expiry_count;
+static void ring_notify_cpuapp(uint32_t consumed);
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 
@@ -111,6 +83,15 @@ static int send_msg(const struct flpr_msg *msg)
 {
 	return ipc_service_send(&ipc_ep, msg, sizeof(*msg));
 }
+
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+/* R8: acceptance wake hook — kick the main loop's ring wake semaphore
+ * (used for timed-stall expiry and the FAULT_HANG wake). */
+static void flpr_acceptance_wake(void)
+{
+	k_sem_give(&ring_wake_sem);
+}
+#endif
 
 /** Drain all pending input ring slots: run flpr_audio_process()
  *  (identity/passthrough or ASRC) on each slot, publish output.
@@ -125,10 +106,14 @@ static uint32_t ring_process_input(void)
 {
 	uint32_t consumed = 0;
 
-	diag_worker_wake++;
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+	flpr_acceptance_note_worker_wake();
 
 	/* One atomic snapshot per decision — consistent view. */
-	atomic_val_t sf = atomic_get(&stall_flags);
+	uint8_t sf = flpr_acceptance_stall_flags();
+#else
+	uint8_t sf = 0;
+#endif
 
 	while (1) {
 		/* Respect consumer-input stall: stop draining input. */
@@ -148,7 +133,9 @@ static uint32_t ring_process_input(void)
 			if (flpr_ring_space(hdr_out->producer_idx, hdr_out->consumer_idx) == 0) {
 				/* Output ring full — backpressure. Producer must
 				 * drain before we can forward more input. */
-				diag_produce_full++;
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+				flpr_acceptance_note_produce_full();
+#endif
 				break;
 			}
 		}
@@ -161,18 +148,24 @@ static uint32_t ring_process_input(void)
 					      &meta);
 		if (ret == -ENOENT) {
 			/* Empty — stop draining. */
-			ring_test_empty_polls++;
-			diag_consume_empty++;
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+			flpr_acceptance_note_empty_poll();
+			flpr_acceptance_note_consume_empty();
+#endif
 			break;
 		}
 		if (ret == -ESTALE) {
 			/* Stale epoch — skip, already advanced by consume_begin. */
-			ring_test_epoch_stale++;
-			diag_consume_stale++;
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+			flpr_acceptance_note_epoch_stale();
+			flpr_acceptance_note_consume_stale();
+#endif
 			continue;
 		}
 
-		diag_consume_ok++;
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+		flpr_acceptance_note_consume_ok();
+#endif
 		consumed++;
 
 		/* ── Stage 3A: audio processing ────────────────────────
@@ -191,8 +184,9 @@ static uint32_t ring_process_input(void)
 			/* Allocate output slot BEFORE calling processor. */
 			ret = flpr_ring_produce_begin(RING_OUTPUT_BASE, &out_idx);
 			if (ret != 0) {
-				ring_test_output_full++;
-				diag_produce_full++;
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+				flpr_acceptance_note_produce_full();
+#endif
 				break; /* leave input index unchanged */
 			}
 
@@ -202,7 +196,8 @@ static uint32_t ring_process_input(void)
 
 			/* Verify CRC over input if test mode and CRC was set.
 			 * Read payload direct from ring — zero copy. */
-			if (ring_test_active && meta->crc32 != 0) {
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+			if (flpr_acceptance_test_active() && meta->crc32 != 0) {
 				uint16_t vf = meta->valid_frames;
 				if (vf > FLPR_RING_PAYLOAD_CAPACITY_FRAMES) {
 					vf = FLPR_RING_PAYLOAD_CAPACITY_FRAMES;
@@ -210,9 +205,10 @@ static uint32_t ring_process_input(void)
 				uint32_t computed = flpr_ring_crc32(
 					flpr_ring_slot_payload(slot_base), (size_t)vf * 4U);
 				if (computed != meta->crc32) {
-					ring_test_crc_errors++;
+					flpr_acceptance_note_crc_error();
 				}
 			}
+#endif
 
 			t0 = k_cycle_get_32();
 			proc_ret = flpr_audio_process(meta, flpr_ring_slot_payload(slot_base),
@@ -228,7 +224,9 @@ static uint32_t ring_process_input(void)
 			 * set_processing is the final metadata mutation
 			 * before publish — no field rebuild here. */
 
-			diag_produce_ok++;
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+			flpr_acceptance_note_produce_ok();
+#endif
 
 			/* Publish output slot. */
 			flpr_ring_produce_commit(RING_OUTPUT_BASE, out_idx);
@@ -237,7 +235,9 @@ static uint32_t ring_process_input(void)
 		/* Release input slot (only after successful output publish). */
 		flpr_ring_consume_done(RING_INPUT_BASE);
 
-		ring_test_block_count++;
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+		flpr_acceptance_note_block_processed();
+#endif
 	}
 
 	return consumed;
@@ -259,29 +259,11 @@ static int ring_reset_with_epoch(uint32_t epoch)
 	}
 	ring_stream_epoch = epoch;
 
-	/* Clear any active stall on ring reset. */
-	k_timer_stop(&stall_timer);
-	atomic_clear(&stall_flags);
-	diag_timed_stall_start_count = 0;
-	diag_timed_stall_expiry_count = 0;
-
-	/* Reset test counters on ring reset. */
-	ring_test_active = false;
-	ring_test_block_count = 0;
-	ring_test_crc_errors = 0;
-	ring_test_seq_gaps = 0;
-	ring_test_epoch_stale = 0;
-	ring_test_empty_polls = 0;
-	ring_test_output_full = 0;
-
-	/* Reset diagnostic counters. */
-	diag_notify_rcv = 0;
-	diag_worker_wake = 0;
-	diag_consume_ok = 0;
-	diag_consume_empty = 0;
-	diag_consume_stale = 0;
-	diag_produce_ok = 0;
-	diag_produce_full = 0;
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+	/* R8: acceptance state (stall timer/flags, test + diagnostic
+	 * counters) is reset by the acceptance module. */
+	flpr_acceptance_on_ring_reset();
+#endif
 
 	return 0;
 }
@@ -306,19 +288,6 @@ static void ring_notify_cpuapp(uint32_t consumed)
 		.data = ring_stream_epoch,
 	};
 	(void)send_msg(&notify);
-}
-
-/* ── Stall timer expiry callback ────────────────────────────────────
- * Only fires for timed stalls (duration > 0).  Atomically clears
- * all stall bits and kicks ring_wake_sem so queued input drains
- * even without a later producer notification.
- * ISR context: no logging, no blocking calls. */
-static void stall_timer_expiry(struct k_timer *timer)
-{
-	(void)timer;
-	atomic_clear(&stall_flags);
-	diag_timed_stall_expiry_count++;
-	k_sem_give(&ring_wake_sem);
 }
 
 /* ── IPC callbacks ──────────────────────────────────────────────── */
@@ -366,17 +335,6 @@ static void ep_received(const void *data, size_t len, void *priv)
 		flpr_peer_handle_heartbeat_ack(&cpuapp, msg->seq);
 		break;
 
-	case FLPR_MSG_STRESS_PING: {
-		struct flpr_msg pong = {
-			.type = FLPR_MSG_STRESS_PONG,
-			.version = FLPR_PROTOCOL_VERSION,
-			.seq = msg->seq,
-			.data = msg->data,
-		};
-		(void)send_msg(&pong);
-		break;
-	}
-
 		/* ── Stage 1: ring control ─────────────────────────────── */
 
 	case FLPR_MSG_RING_RESET: {
@@ -391,137 +349,34 @@ static void ep_received(const void *data, size_t len, void *priv)
 		break;
 	}
 
-	case FLPR_MSG_RING_TEST_START: {
-		ring_test_active = true;
-		ring_test_block_count = 0;
-		ring_test_crc_errors = 0;
-		ring_test_seq_gaps = 0;
-		break;
-	}
-
-	case FLPR_MSG_RING_TEST_STOP: {
-		ring_test_active = false;
-		/* Send multi-report test results.
-		 * Subtype encoded in seq high byte:
-		 *   0x00: block_count (lo 16-bit) + crc_errors (data)
-		 *   0xD1: consume_ok (full 32-bit in data)
-		 *   0xD2: produce_ok (full 32-bit in data)
-		 *   0xD3: notify_rcv(lo 8) + worker_wake(hi 8 of data)
-		 *          produce_full(lo 16) in seq */
-
-		/* Report 1: block_count (32-bit) + crc_errors.
-		 *   seq lo 16 = crc_errors, data = block_count. */
-		{
-			struct flpr_msg r0 = {
-				.type = FLPR_MSG_RING_TEST_REPORT,
-				.version = FLPR_PROTOCOL_VERSION,
-				.seq = (uint16_t)(ring_test_crc_errors & 0xFFFFU),
-				.data = ring_test_block_count,
-			};
-			(void)send_msg(&r0);
-		}
-		/* Report 2: consume_ok (full 32-bit). */
-		{
-			struct flpr_msg r1 = {
-				.type = FLPR_MSG_RING_TEST_REPORT,
-				.version = FLPR_PROTOCOL_VERSION,
-				.seq = 0xD100U,
-				.data = diag_consume_ok,
-			};
-			(void)send_msg(&r1);
-		}
-		/* Report 3: produce_ok (full 32-bit). */
-		{
-			struct flpr_msg r2 = {
-				.type = FLPR_MSG_RING_TEST_REPORT,
-				.version = FLPR_PROTOCOL_VERSION,
-				.seq = 0xD200U,
-				.data = diag_produce_ok,
-			};
-			(void)send_msg(&r2);
-		}
-		/* Report 4: misc diagnostic counters. */
-		{
-			struct flpr_msg r3 = {
-				.type = FLPR_MSG_RING_TEST_REPORT,
-				.version = FLPR_PROTOCOL_VERSION,
-				.seq = (uint16_t)(0xD300U |
-						  (diag_notify_rcv > 255 ? 255 : diag_notify_rcv)),
-				.data = (diag_worker_wake & 0xFFFFU) |
-					((diag_produce_full & 0xFFFFU) << 16),
-			};
-			(void)send_msg(&r3);
-		}
-		/* Report 5: cons_empty + cons_stale (full 32-bit each). */
-		{
-			struct flpr_msg r4 = {
-				.type = FLPR_MSG_RING_TEST_REPORT,
-				.version = FLPR_PROTOCOL_VERSION,
-				.seq = (uint16_t)(0xD400U),
-				.data = (diag_consume_empty & 0xFFFFU) |
-					((diag_consume_stale & 0xFFFFU) << 16),
-			};
-			(void)send_msg(&r4);
-		}
-		break;
-	}
-
 	case FLPR_MSG_RING_PRODUCER:
 		/* CPUAPP published input data — signal main loop to consume.
 		 * Do NOT call ring_process_input() here (the IPC callback may
 		 * race with the main loop).  The semaphore wake is immediate. */
-		diag_notify_rcv++;
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+		flpr_acceptance_note_notify_rcv();
+#endif
 		k_sem_give(&ring_wake_sem);
 		break;
 
-	case FLPR_MSG_RING_STALL: {
-		/* Stage 2 packed stall: data[7:0]=mask, data[31:8]=duration_ms.
-		 * Duration zero = persistent (stops any prior timer). */
-		uint8_t bits = FLPR_STALL_MASK(msg->data);
-		uint32_t duration_ms = FLPR_STALL_DURATION(msg->data);
-
-		/* Stop any prior timed stall. */
-		k_timer_stop(&stall_timer);
-
-		/* Atomically apply the new mask. */
-		atomic_set(&stall_flags, (atomic_val_t)bits);
-
-		if (duration_ms > 0) {
-			/* Timed stall: start one-shot timer. */
-			k_timer_start(&stall_timer, K_MSEC(duration_ms), K_NO_WAIT);
-			diag_timed_stall_start_count++;
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+	/* ── R8: acceptance messages ─────────────────────────────
+	 * RING_TEST_START/STOP (report cascade), RING_STALL (timer +
+	 * ACK echo), STRESS_PING (PONG echo), and FAULT_HANG
+	 * (ACK-before-spin) are owned by src/flpr/acceptance.c and
+	 * dispatched through its handler.  Config-off builds have no
+	 * acceptance symbol and these messages fall to the default
+	 * err_unknown branch below (current unknown/error behavior). */
+	default:
+		if (!flpr_acceptance_handle_msg(msg)) {
+			cpuapp.err_unknown++;
 		}
-
-		/* ACK with packed value (exact echo, R1: request sequence
-		 * token echoed for correlation). */
-		struct flpr_msg ack =
-			flpr_control_ack_make(msg, FLPR_MSG_RING_STALL_ACK, msg->data);
-		(void)send_msg(&ack);
 		break;
-	}
-
-	case FLPR_MSG_FAULT_HANG: {
-		/* Stage 4B: CPUAPP requests FLPR to hang.
-		 * 1. Send ACK immediately (from IPC callback, ISR context OK).
-		 * 2. Set atomic flag.
-		 * 3. Wake main loop — main loop sees flag, disables IRQs, spins.
-		 * After IRQ disable, no more heartbeats, no ring processing. */
-		struct flpr_msg ack = {
-			.type = FLPR_MSG_FAULT_HANG_ACK,
-			.version = FLPR_PROTOCOL_VERSION,
-			.seq = 0,
-			.data = 0,
-		};
-		(void)send_msg(&ack);
-
-		atomic_set(&hang_pending, 1);
-		k_sem_give(&ring_wake_sem);
-		break;
-	}
-
+#else
 	default:
 		cpuapp.err_unknown++;
 		break;
+#endif
 	}
 }
 
@@ -549,6 +404,20 @@ int main(void)
 	flpr_ring_init(RING_INPUT_BASE, FLPR_RING_CPUAPP_TO_FLPR);
 	flpr_ring_init(RING_OUTPUT_BASE, FLPR_RING_FLPR_TO_CPUAPP);
 	rings_initialized = true;
+
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+	/* R8: initialize the acceptance handlers with the injected
+	 * transport (send via this module's IPC endpoint, wake via the
+	 * ring wake semaphore). */
+	{
+		static const struct flpr_acceptance_deps acc_deps = {
+			.send = send_msg,
+			.wake = flpr_acceptance_wake,
+		};
+
+		flpr_acceptance_init(&acc_deps);
+	}
+#endif
 
 	ipc_dev = DEVICE_DT_GET(DT_NODELABEL(ipc0));
 	if (!device_is_ready(ipc_dev)) {
@@ -637,8 +506,10 @@ int main(void)
 		/* Stage 4B: check fault hang flag.
 		 * ACK was already sent from IPC callback before setting this flag.
 		 * Disable all interrupts and spin forever — halts ring processing,
-		 * heartbeat transmission, and all further IPC activity. */
-		if (atomic_get(&hang_pending)) {
+		 * heartbeat transmission, and all further IPC activity.
+		 * Config-off builds have no acceptance state and never spin. */
+#if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
+		if (flpr_acceptance_hang_pending()) {
 			/* Brief busy-wait for ACK delivery to complete. */
 			k_busy_wait(1000);
 			irq_lock();
@@ -646,6 +517,7 @@ int main(void)
 				/* Nothing — spin forever. */
 			}
 		}
+#endif
 
 		/* Process ALL pending input ring slots.
 		 * This is the ONLY place ring_process_input() runs —

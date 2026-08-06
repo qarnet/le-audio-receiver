@@ -8,12 +8,15 @@ project(test_flpr_ring_mgr)
 # DT-derived shared SRAM pointers to two aligned host arrays and routes
 # the cycle counter through a test-controlled source.  The production
 # static IPC handlers run through the captured handlers of the handshake
-# mock; flpr_ring.c and flpr_cache.c are real production sources.
+# mock; flpr_ring.c, flpr_cache.c, and the shared control-ACK engine
+# (flpr_control_ack.c, used by the core coordinated reset) are real
+# production sources.
 target_sources(app PRIVATE
   src/test_flpr_ring_mgr.c
   src/flpr_ring_mgr_hooks.c
   src/mock_flpr_handshake.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/flpr_ring_mgr.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/flpr_control_ack.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/flpr_ring.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/flpr_cache.c
 )
@@ -23,4 +26,7 @@ target_include_directories(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src
 )
 
-target_compile_definitions(app PRIVATE FLPR_RING_MGR_NATIVE_TEST)
+target_compile_definitions(app PRIVATE
+  FLPR_RING_MGR_NATIVE_TEST
+  FLPR_CONTROL_ACK_NATIVE_TEST
+)

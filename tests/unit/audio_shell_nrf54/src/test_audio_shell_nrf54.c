@@ -177,13 +177,16 @@ ZTEST(audio_shell_nrf54, test_flpr_ring_status_exact_fields)
 	zassert_is_null(strstr(out, "Diag (FLPR)"), "unexpected FLPR diag line:\n%s", out);
 }
 
-/* flpr ring status: FLPR diagnostics present when reported. */
+/* flpr ring status: FLPR diagnostics present when reported (R8: the
+ * FLPR-reported counters live in the acceptance status). */
 ZTEST(audio_shell_nrf54, test_flpr_ring_status_flpr_diag)
 {
 	test_flpr_reset();
 	struct flpr_ring_status s = {
 		.initialized = true,
 		.epoch = 1,
+	};
+	struct flpr_acceptance_status as = {
 		.flpr_notify_rcv = 3,
 		.flpr_worker_wake = 2,
 		.flpr_consume_ok = 4,
@@ -194,19 +197,23 @@ ZTEST(audio_shell_nrf54, test_flpr_ring_status_flpr_diag)
 	};
 
 	test_flpr_set_ring_status(&s);
+	test_flpr_set_acceptance_status(&as);
 	const char *out = run_cmd("flpr ring status", NULL);
 
 	assert_output_contains(out, "Diag (FLPR):   notif_rcv=3 worker=2 cons_ok=4 cons_empty=0 "
 				    "cons_stale=0 prod_ok=5 prod_full=1");
 }
 
-/* flpr ring status: test-done and latency sections. */
+/* flpr ring status: test-done and latency sections (R8: the test and
+ * latency fields live in the acceptance status). */
 ZTEST(audio_shell_nrf54, test_flpr_ring_status_test_and_latency)
 {
 	test_flpr_reset();
 	struct flpr_ring_status s = {
 		.initialized = true,
 		.epoch = 1,
+	};
+	struct flpr_acceptance_status as = {
 		.test_blocks_sent = 10,
 		.test_blocks_recv = 9,
 		.test_crc_errors = 1,
@@ -222,6 +229,7 @@ ZTEST(audio_shell_nrf54, test_flpr_ring_status_test_and_latency)
 	};
 
 	test_flpr_set_ring_status(&s);
+	test_flpr_set_acceptance_status(&as);
 	const char *out = run_cmd("flpr ring status", NULL);
 
 	assert_output_has_line(out, "  Test (done):  sent=10 recv=9 crc_err=1 payload_err=0 full=0 "
@@ -546,9 +554,10 @@ ZTEST(audio_shell_nrf54, test_flpr_stress_not_ready)
 ZTEST(audio_shell_nrf54, test_flpr_stress_already_active)
 {
 	test_flpr_reset();
-	struct flpr_status s = {.ready = true, .acked = true, .stress_active = true};
+	struct flpr_status s = {.ready = true, .acked = true};
 
 	test_flpr_set_status(&s);
+	test_flpr_set_stress_active(true);
 	int rc = 0;
 	const char *out = run_cmd("flpr stress", &rc);
 
@@ -559,9 +568,8 @@ ZTEST(audio_shell_nrf54, test_flpr_stress_already_active)
 ZTEST(audio_shell_nrf54, test_flpr_stress_success_summary)
 {
 	test_flpr_reset();
-	struct flpr_status s = {
-		.ready = true,
-		.acked = true,
+	struct flpr_status s = {.ready = true, .acked = true};
+	struct flpr_status stress = {
 		.stress_active = false,
 		.stress_sent = 5,
 		.stress_recv = 4,
@@ -572,6 +580,7 @@ ZTEST(audio_shell_nrf54, test_flpr_stress_success_summary)
 	};
 
 	test_flpr_set_status(&s);
+	test_flpr_set_stress_snapshot(&stress);
 	int rc = 0;
 	const char *out = run_cmd("flpr stress 5", &rc);
 
@@ -609,6 +618,8 @@ ZTEST(audio_shell_nrf54, test_flpr_ring_test_delegated_success)
 	struct flpr_ring_status s = {
 		.initialized = true,
 		.epoch = 7,
+	};
+	struct flpr_acceptance_status as = {
 		.test_blocks_sent = 1,
 		.test_blocks_recv = 1,
 		.test_crc_errors = 0,
@@ -619,6 +630,7 @@ ZTEST(audio_shell_nrf54, test_flpr_ring_test_delegated_success)
 	};
 
 	test_flpr_set_ring_status(&s);
+	test_flpr_set_acceptance_status(&as);
 	test_flpr_set_ring_test_result(0);
 	int rc = 0;
 	const char *out = run_cmd("flpr ring test 1", &rc);
@@ -634,11 +646,14 @@ ZTEST(audio_shell_nrf54, test_flpr_ring_test_delegated_failure)
 	struct flpr_ring_status s = {
 		.initialized = true,
 		.epoch = 7,
+	};
+	struct flpr_acceptance_status as = {
 		.test_blocks_sent = 0,
 		.test_blocks_recv = 0,
 	};
 
 	test_flpr_set_ring_status(&s);
+	test_flpr_set_acceptance_status(&as);
 	test_flpr_set_ring_test_result(-EIO);
 	int rc = 0;
 	const char *out = run_cmd("flpr ring test 1", &rc);
@@ -653,11 +668,14 @@ ZTEST(audio_shell_nrf54, test_flpr_ring_test_rate_delegated)
 	struct flpr_ring_status s = {
 		.initialized = true,
 		.epoch = 7,
+	};
+	struct flpr_acceptance_status as = {
 		.test_blocks_sent = 1,
 		.test_blocks_recv = 1,
 	};
 
 	test_flpr_set_ring_status(&s);
+	test_flpr_set_acceptance_status(&as);
 	test_flpr_set_ring_test_result(0);
 	int rc = 0;
 	const char *out = run_cmd("flpr ring test 1 10", &rc);

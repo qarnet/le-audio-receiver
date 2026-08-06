@@ -4,10 +4,18 @@
  *
  * CPUAPP ↔ FLPR handshake protocol.
  * VPR launcher boots FLPR; this module handles handshake, bidirectional
- * 1 Hz heartbeat (via k_work_delayable, independent of main loop), and
- * stress-test ping/pong. Graceful if FLPR absent.
+ * 1 Hz heartbeat (via k_work_delayable, independent of main loop).
+ * Graceful if FLPR absent.
  *
  * Uses flpr_protocol.h (shared wire protocol) + flpr_peer (state machine).
+ *
+ * R8: production runtime only.  The stress-test ping/pong and the
+ * fault-hang request state moved to src/flpr_acceptance.c (their
+ * blocking state and counters); this module routes STRESS_PONG,
+ * RING_TEST_REPORT, RING_STALL_ACK, and FAULT_HANG_ACK to the
+ * registered diagnostic handler slot.  The shared flpr_status stress_*
+ * fields are zeroed here (the acceptance module owns them and fills
+ * them through flpr_acceptance_stress()/flpr_acceptance_stress_snapshot()).
  */
 
 #ifndef FLPR_HANDSHAKE_H_
@@ -22,7 +30,10 @@
 extern "C" {
 #endif
 
-/* Snapshot of all handshake/health counters (shell-readable). */
+/* Snapshot of all handshake/health counters (shell-readable).
+ * The stress_* fields are the shared shell-status contract; the
+ * handshake module zeroes them (it does not own stress state — the
+ * acceptance module does). */
 struct flpr_status {
 	bool ready;
 	bool acked;
@@ -43,7 +54,7 @@ struct flpr_status {
 	uint32_t rx_last_ms;
 	uint32_t rx_missed_total;
 
-	/* Stress test */
+	/* Stress test (owned by flpr_acceptance; zero here). */
 	bool stress_active;
 	uint32_t stress_count;
 	uint32_t stress_sent;
@@ -64,7 +75,8 @@ struct flpr_status {
  */
 int flpr_handshake_init(void);
 
-/** Race-safe snapshot of current status. */
+/** Race-safe snapshot of current status.  Stress fields are zeroed
+ *  (acceptance-owned); use flpr_acceptance_stress_snapshot() to merge. */
 void flpr_handshake_get_status(struct flpr_status *status);
 
 /**
@@ -117,18 +129,6 @@ int flpr_handshake_wait_bound(k_timeout_t timeout);
 int flpr_handshake_wait_new_ready(uint32_t previous_epoch, k_timeout_t timeout);
 
 /**
- * @brief Start stress test: send STRESS_PING messages, count PONG replies.
- *
- * Uses stop-and-wait with 200 ms timeout per ping. Runs synchronously in
- * calling thread context (NOT audio callback). Blocks for ~count*200ms.
- * Safe to call from shell or test thread only.
- *
- * @param count  Number of ping/pong to attempt (clamped to 1..1,000,000).
- * @param out    Filled with results on return (even on early timeout).
- */
-void flpr_handshake_stress(uint32_t count, struct flpr_status *out);
-
-/**
  * @brief Send an arbitrary IPC message to FLPR on the existing endpoint.
  *
  * Thread-safe — may be called from any context (lock-free for sending).
@@ -137,32 +137,47 @@ void flpr_handshake_stress(uint32_t count, struct flpr_status *out);
 int flpr_handshake_send_msg(const struct flpr_msg *msg);
 
 /**
- * @brief Callback type for ring-control message handlers.
+ * @brief Callback type for ring-control / diagnostic message handlers.
  * Called from IPC receive context.  msg is NOT owned by the handler.
  */
 typedef void (*flpr_handshake_ring_handler_t)(const struct flpr_msg *msg, void *user_data);
 
 /**
- * @brief Register handlers for ring-control IPC messages.
+ * @brief Register the PRODUCTION ring handlers (reset ACK + consumer).
  *
- * When FLPR sends RING_RESET_ACK, RING_CONSUMER, RING_TEST_REPORT,
- * or RING_STALL_ACK, the registered callbacks are invoked from the
- * IPC receive callback WITHOUT holding the module spinlock
- * (flpr_lock is released before dispatch).
+ * When FLPR sends RING_RESET_ACK or RING_CONSUMER, the registered
+ * callbacks are invoked from the IPC receive callback WITHOUT holding
+ * the module spinlock (flpr_lock is released before dispatch).
  *
  * Call with NULL to unregister.
  *
- * @param reset_ack_fn   Handler for FLPR_MSG_RING_RESET_ACK.
- * @param consumer_fn    Handler for FLPR_MSG_RING_CONSUMER.
- * @param report_fn      Handler for FLPR_MSG_RING_TEST_REPORT.
- * @param stall_ack_fn   Handler for FLPR_MSG_RING_STALL_ACK.
- * @param user_data      Opaque pointer passed to each handler.
+ * @param reset_ack_fn  Handler for FLPR_MSG_RING_RESET_ACK.
+ * @param consumer_fn   Handler for FLPR_MSG_RING_CONSUMER.
+ * @param user_data     Opaque pointer passed to each handler.
  */
 void flpr_handshake_register_ring_handlers(flpr_handshake_ring_handler_t reset_ack_fn,
 					   flpr_handshake_ring_handler_t consumer_fn,
-					   flpr_handshake_ring_handler_t report_fn,
-					   flpr_handshake_ring_handler_t stall_ack_fn,
 					   void *user_data);
+
+/**
+ * @brief Register the DIAGNOSTIC message handler (R8).
+ *
+ * Receives FLPR_MSG_RING_TEST_REPORT, FLPR_MSG_RING_STALL_ACK,
+ * FLPR_MSG_STRESS_PONG, and FLPR_MSG_FAULT_HANG_ACK from the IPC
+ * receive callback, WITHOUT holding the module spinlock (snapshot under
+ * flpr_lock / invoke outside — same semantics as the production slot).
+ * Registered by flpr_acceptance_init() under
+ * CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS.
+ *
+ * With no handler registered (NULL), these four message types are
+ * silently dropped — identical to the pre-R8 inert behavior (the
+ * acceptance state was core but inactive).  Production FLPR never sends
+ * them without an acceptance request.
+ *
+ * @param diag_fn   Handler for the diagnostic message types.
+ * @param user_data Opaque pointer passed to the handler.
+ */
+void flpr_handshake_register_diag_handlers(flpr_handshake_ring_handler_t diag_fn, void *user_data);
 
 /**
  * @brief Callback type for health transition (healthy → unhealthy).
@@ -177,18 +192,6 @@ typedef void (*flpr_health_transition_cb_t)(void *user_data);
  * Pass NULL to unregister.
  */
 void flpr_handshake_register_health_cb(flpr_health_transition_cb_t cb, void *user_data);
-
-/**
- * @brief Send a fault-hang request to FLPR and wait for ACK.
- *
- * Blocks up to @p timeout_ms for FAULT_HANG_ACK from FLPR.
- * After ACK, FLPR disables interrupts and spins forever —
- * ring and heartbeat stop, health transitions to unhealthy.
- *
- * @param timeout_ms  Maximum wait for ACK (typically 500 ms).
- * @return 0 on ACK received, -ETIMEDOUT on timeout, -EIO on send failure.
- */
-int flpr_handshake_send_fault_hang(uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }

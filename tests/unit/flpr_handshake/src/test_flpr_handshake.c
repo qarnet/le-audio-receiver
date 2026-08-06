@@ -25,78 +25,6 @@
 #include "fake_ipc_backend.h"
 #include "flpr_protocol.h"
 
-/* ── Worker infrastructure (stress / fault-hang run in a thread) ──── */
-
-static K_THREAD_STACK_DEFINE(hs_worker_stack, 2048);
-static struct k_thread hs_worker_thread;
-static K_SEM_DEFINE(hs_worker_done_sem, 0, 1);
-static int hs_worker_result;
-static struct flpr_status hs_worker_out;
-
-static void stress_worker_fn(void *count_p, void *unused1, void *unused2)
-{
-	(void)unused1;
-	(void)unused2;
-	flpr_handshake_stress((uint32_t)(uintptr_t)count_p, &hs_worker_out);
-	k_sem_give(&hs_worker_done_sem);
-}
-
-static void fault_hang_worker_fn(void *timeout_p, void *unused1, void *unused2)
-{
-	(void)unused1;
-	(void)unused2;
-	hs_worker_result = flpr_handshake_send_fault_hang((uint32_t)(uintptr_t)timeout_p);
-	k_sem_give(&hs_worker_done_sem);
-}
-
-static void hs_spawn_worker(void (*fn)(void *, void *, void *), void *arg)
-{
-	k_sem_reset(&hs_worker_done_sem);
-	k_thread_create(&hs_worker_thread, hs_worker_stack, K_THREAD_STACK_SIZEOF(hs_worker_stack),
-			fn, arg, NULL, NULL, K_PRIO_COOP(1), 0, K_NO_WAIT);
-}
-
-static bool hs_wait_done(uint32_t timeout_ms)
-{
-	return k_sem_take(&hs_worker_done_sem, K_MSEC(timeout_ms)) == 0;
-}
-
-static bool hs_wait_until(bool (*cond)(void *), void *arg, uint32_t timeout_ms)
-{
-	uint32_t deadline = k_uptime_get_32() + timeout_ms;
-
-	while (!cond(arg)) {
-		if (k_uptime_get_32() >= deadline) {
-			return false;
-		}
-		k_sleep(K_MSEC(1));
-	}
-	return true;
-}
-
-static bool ping_sent_cond(void *arg)
-{
-	(void)arg;
-	return fake_ipc_sent_type_count(FLPR_MSG_STRESS_PING) >= 1;
-}
-
-static bool ping2_sent_cond(void *arg)
-{
-	(void)arg;
-	return fake_ipc_sent_type_count(FLPR_MSG_STRESS_PING) >= 2;
-}
-
-static bool fault_hang_sent_cond(void *arg)
-{
-	(void)arg;
-	return fake_ipc_sent_type_count(FLPR_MSG_FAULT_HANG) >= 1;
-}
-
-static bool send_calls_exceed_cond(void *arg)
-{
-	return fake_ipc_send_calls() > (uintptr_t)arg;
-}
-
 /* ── Setup / teardown ────────────────────────────────────────────── */
 
 static void hs_setup(void *fixture)
@@ -439,109 +367,19 @@ ZTEST(flpr_handshake, test_heartbeat_ack_tracking)
 	zassert_equal(st.tx_acked_seq, 5, "ack advanced again");
 }
 
-ZTEST(flpr_handshake, test_stress_pong_match_signals_waiter)
-{
-	hs_ready_flow(42);
-
-	hs_spawn_worker(stress_worker_fn, (void *)(uintptr_t)1);
-	zassert_true(hs_wait_until(ping_sent_cond, NULL, 1000), "ping sent");
-
-	struct flpr_msg pong = {.type = FLPR_MSG_STRESS_PONG,
-				.version = FLPR_PROTOCOL_VERSION,
-				.seq = 0,
-				.data = 1}; /* first cookie */
-	fake_ipc_receive(&pong, sizeof(pong));
-
-	zassert_true(hs_wait_done(1000), "stress completed");
-	zassert_equal(hs_worker_out.stress_sent, 1, "sent");
-	zassert_equal(hs_worker_out.stress_recv, 1, "recv");
-	zassert_equal(hs_worker_out.stress_timeouts, 0, "timeouts");
-}
-
-ZTEST(flpr_handshake, test_stress_pong_stale_classified)
-{
-	hs_ready_flow(42);
-
-	hs_spawn_worker(stress_worker_fn, (void *)(uintptr_t)2);
-	zassert_true(hs_wait_until(ping_sent_cond, NULL, 1000), "ping 1 sent");
-	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_STRESS_PONG,
-					    .version = FLPR_PROTOCOL_VERSION,
-					    .seq = 0,
-					    .data = 1},
-			 sizeof(struct flpr_msg));
-	zassert_true(hs_wait_until(ping2_sent_cond, NULL, 1000), "ping 2 sent");
-
-	/* PONG with iteration-1 cookie during iteration 2 → stale. */
-	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_STRESS_PONG,
-					    .version = FLPR_PROTOCOL_VERSION,
-					    .seq = 0,
-					    .data = 1},
-			 sizeof(struct flpr_msg));
-	/* Matching cookie completes iteration 2. */
-	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_STRESS_PONG,
-					    .version = FLPR_PROTOCOL_VERSION,
-					    .seq = 0,
-					    .data = 2},
-			 sizeof(struct flpr_msg));
-
-	zassert_true(hs_wait_done(1000), "stress completed");
-	zassert_equal(hs_worker_out.stress_sent, 2, "sent");
-	zassert_equal(hs_worker_out.stress_recv, 2, "recv");
-	zassert_equal(hs_worker_out.stress_stale, 1, "stale counted");
-	zassert_equal(hs_worker_out.stress_timeouts, 0, "timeouts");
-}
-
-ZTEST(flpr_handshake, test_stress_pong_future_classified)
-{
-	hs_ready_flow(42);
-
-	hs_spawn_worker(stress_worker_fn, (void *)(uintptr_t)1);
-	zassert_true(hs_wait_until(ping_sent_cond, NULL, 1000), "ping sent");
-
-	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_STRESS_PONG,
-					    .version = FLPR_PROTOCOL_VERSION,
-					    .seq = 0,
-					    .data = 3},
-			 sizeof(struct flpr_msg)); /* future cookie */
-	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_STRESS_PONG,
-					    .version = FLPR_PROTOCOL_VERSION,
-					    .seq = 0,
-					    .data = 1},
-			 sizeof(struct flpr_msg)); /* match */
-
-	zassert_true(hs_wait_done(1000), "stress completed");
-	zassert_equal(hs_worker_out.stress_mismatch, 1, "future counted as mismatch");
-	zassert_equal(hs_worker_out.stress_recv, 1, "match still received");
-}
-
-ZTEST(flpr_handshake, test_stress_pong_inactive_ignored)
-{
-	zassert_ok(flpr_handshake_init(), "init");
-
-	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_STRESS_PONG,
-					    .version = FLPR_PROTOCOL_VERSION,
-					    .seq = 0,
-					    .data = 1},
-			 sizeof(struct flpr_msg));
-
-	struct flpr_status st;
-	flpr_handshake_get_status(&st);
-	zassert_equal(st.stress_recv, 0, "no receive counted");
-	zassert_equal(st.stress_stale, 0, "no stale counted");
-	zassert_equal(st.stress_mismatch, 0, "no mismatch counted");
-	zassert_equal(flpr_handshake_test_stress_sem_count(), 0, "no semaphore signal");
-}
-
 /* Recording ring handlers at file scope; each also probes the module
  * spinlock by calling get_status() (a nested spinlock would assert under
- * CONFIG_SPIN_VALIDATE, proving dispatch runs without flpr_lock). */
+ * CONFIG_SPIN_VALIDATE, proving dispatch runs without flpr_lock).
+ * R8: slots [0]=reset ACK, [1]=consumer (production slot);
+ * [2]=report, [3]=stall ACK, [4]=stress PONG, [5]=fault-hang ACK
+ * (diagnostic slot). */
 struct ring_rec {
 	const struct flpr_msg *msg;
 	void *ud;
 	int calls;
 };
 
-static struct ring_rec ring_records[4];
+static struct ring_rec ring_records[6];
 static int ring_dispatch_marker;
 
 static void reset_rec(const struct flpr_msg *m, void *ud)
@@ -580,14 +418,55 @@ static void stall_rec(const struct flpr_msg *m, void *ud)
 	flpr_handshake_get_status(&st);
 }
 
+static void pong_rec(const struct flpr_msg *m, void *ud)
+{
+	ring_records[4].msg = m;
+	ring_records[4].ud = ud;
+	ring_records[4].calls++;
+	struct flpr_status st;
+	flpr_handshake_get_status(&st);
+}
+
+static void hang_ack_rec(const struct flpr_msg *m, void *ud)
+{
+	ring_records[5].msg = m;
+	ring_records[5].ud = ud;
+	ring_records[5].calls++;
+	struct flpr_status st;
+	flpr_handshake_get_status(&st);
+}
+
+/* The diagnostic slot is ONE handler receiving all four diagnostic
+ * types; it routes by message type exactly like the acceptance module's
+ * handler (flpr_acceptance_diag_handler). */
+static void diag_router(const struct flpr_msg *m, void *ud)
+{
+	switch (m->type) {
+	case FLPR_MSG_RING_TEST_REPORT:
+		report_rec(m, ud);
+		break;
+	case FLPR_MSG_RING_STALL_ACK:
+		stall_rec(m, ud);
+		break;
+	case FLPR_MSG_STRESS_PONG:
+		pong_rec(m, ud);
+		break;
+	case FLPR_MSG_FAULT_HANG_ACK:
+		hang_ack_rec(m, ud);
+		break;
+	default:
+		break;
+	}
+}
+
 ZTEST(flpr_handshake, test_ring_control_dispatch_exact)
 {
 	zassert_ok(flpr_handshake_init(), "init");
 
 	memset(ring_records, 0, sizeof(ring_records));
 
-	flpr_handshake_register_ring_handlers(reset_rec, consumer_rec, report_rec, stall_rec,
-					      &ring_dispatch_marker);
+	flpr_handshake_register_ring_handlers(reset_rec, consumer_rec, &ring_dispatch_marker);
+	flpr_handshake_register_diag_handlers(diag_router, &ring_dispatch_marker);
 
 	struct flpr_msg m1 = {.type = FLPR_MSG_RING_RESET_ACK,
 			      .version = FLPR_PROTOCOL_VERSION,
@@ -605,16 +484,28 @@ ZTEST(flpr_handshake, test_ring_control_dispatch_exact)
 			      .version = FLPR_PROTOCOL_VERSION,
 			      .seq = 4,
 			      .data = 45};
+	struct flpr_msg m5 = {.type = FLPR_MSG_STRESS_PONG,
+			      .version = FLPR_PROTOCOL_VERSION,
+			      .seq = 5,
+			      .data = 46};
+	struct flpr_msg m6 = {.type = FLPR_MSG_FAULT_HANG_ACK,
+			      .version = FLPR_PROTOCOL_VERSION,
+			      .seq = 0,
+			      .data = 47};
 
 	fake_ipc_receive(&m1, sizeof(m1));
 	fake_ipc_receive(&m2, sizeof(m2));
 	fake_ipc_receive(&m3, sizeof(m3));
 	fake_ipc_receive(&m4, sizeof(m4));
+	fake_ipc_receive(&m5, sizeof(m5));
+	fake_ipc_receive(&m6, sizeof(m6));
 
 	zassert_equal(ring_records[0].calls, 1, "reset_ack dispatched");
 	zassert_equal(ring_records[1].calls, 1, "consumer dispatched");
 	zassert_equal(ring_records[2].calls, 1, "report dispatched");
 	zassert_equal(ring_records[3].calls, 1, "stall_ack dispatched");
+	zassert_equal(ring_records[4].calls, 1, "stress pong dispatched");
+	zassert_equal(ring_records[5].calls, 1, "fault-hang ack dispatched");
 
 	zassert_equal(ring_records[0].msg->type, FLPR_MSG_RING_RESET_ACK, "reset_ack msg type");
 	zassert_equal(ring_records[0].msg->data, 42, "reset_ack msg data");
@@ -624,27 +515,47 @@ ZTEST(flpr_handshake, test_ring_control_dispatch_exact)
 	zassert_equal(ring_records[2].msg->seq, 3, "report msg seq");
 	zassert_equal(ring_records[3].msg->type, FLPR_MSG_RING_STALL_ACK, "stall_ack msg type");
 	zassert_equal(ring_records[3].msg->data, 45, "stall_ack msg data");
+	zassert_equal(ring_records[4].msg->type, FLPR_MSG_STRESS_PONG, "pong msg type");
+	zassert_equal(ring_records[4].msg->data, 46, "pong msg data");
+	zassert_equal(ring_records[5].msg->type, FLPR_MSG_FAULT_HANG_ACK, "hang ack msg type");
 	for (int i = 0; i < 4; i++) {
 		zassert_equal(ring_records[i].ud, &ring_dispatch_marker,
 			      "user_data passed through [%d]", i);
 	}
 }
 
-ZTEST(flpr_handshake, test_fault_hang_ack_signals_waiter)
+/* Diagnostic messages with NO registered diag handler are silently
+ * dropped (identical to the pre-R8 inert acceptance state — not
+ * counted as unknown). */
+ZTEST(flpr_handshake, test_diag_messages_dropped_when_unregistered)
 {
-	hs_ready_flow(42);
+	zassert_ok(flpr_handshake_init(), "init");
 
-	hs_spawn_worker(fault_hang_worker_fn, (void *)(uintptr_t)500);
-	zassert_true(hs_wait_until(fault_hang_sent_cond, NULL, 1000), "FAULT_HANG sent");
-
+	/* No diag handler registered (register_diag_handlers never called). */
+	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_STRESS_PONG,
+					    .version = FLPR_PROTOCOL_VERSION,
+					    .seq = 0,
+					    .data = 1},
+			 sizeof(struct flpr_msg));
+	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_RING_TEST_REPORT,
+					    .version = FLPR_PROTOCOL_VERSION,
+					    .seq = 0xD100,
+					    .data = 1},
+			 sizeof(struct flpr_msg));
+	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_RING_STALL_ACK,
+					    .version = FLPR_PROTOCOL_VERSION,
+					    .seq = 0,
+					    .data = 1},
+			 sizeof(struct flpr_msg));
 	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_FAULT_HANG_ACK,
 					    .version = FLPR_PROTOCOL_VERSION,
 					    .seq = 0,
-					    .data = 0},
+					    .data = 1},
 			 sizeof(struct flpr_msg));
 
-	zassert_true(hs_wait_done(1000), "fault hang completed");
-	zassert_ok(hs_worker_result, "fault hang ACK success");
+	struct flpr_status st;
+	flpr_handshake_get_status(&st);
+	zassert_equal(st.err_unknown, 0, "diag messages with no handler are not unknown");
 }
 
 ZTEST(flpr_handshake, test_unexpected_allowed_types_no_unknown)
@@ -938,7 +849,7 @@ ZTEST(flpr_handshake, test_ring_handler_unregistration)
 	zassert_ok(flpr_handshake_init(), "init");
 
 	unreg_calls = 0;
-	flpr_handshake_register_ring_handlers(unreg_rec, NULL, NULL, NULL, NULL);
+	flpr_handshake_register_ring_handlers(unreg_rec, NULL, NULL);
 
 	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_RING_RESET_ACK,
 					    .version = FLPR_PROTOCOL_VERSION,
@@ -947,13 +858,30 @@ ZTEST(flpr_handshake, test_ring_handler_unregistration)
 			 sizeof(struct flpr_msg));
 	zassert_equal(unreg_calls, 1, "handler invoked");
 
-	flpr_handshake_register_ring_handlers(NULL, NULL, NULL, NULL, NULL);
+	flpr_handshake_register_ring_handlers(NULL, NULL, NULL);
 	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_RING_RESET_ACK,
 					    .version = FLPR_PROTOCOL_VERSION,
 					    .seq = 0,
 					    .data = 2},
 			 sizeof(struct flpr_msg));
 	zassert_equal(unreg_calls, 1, "handler not invoked after unregister");
+
+	/* Diagnostic slot unregisters independently. */
+	flpr_handshake_register_diag_handlers(unreg_rec, NULL);
+	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_RING_TEST_REPORT,
+					    .version = FLPR_PROTOCOL_VERSION,
+					    .seq = 0,
+					    .data = 3},
+			 sizeof(struct flpr_msg));
+	zassert_equal(unreg_calls, 2, "diag handler invoked");
+
+	flpr_handshake_register_diag_handlers(NULL, NULL);
+	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_RING_TEST_REPORT,
+					    .version = FLPR_PROTOCOL_VERSION,
+					    .seq = 0,
+					    .data = 4},
+			 sizeof(struct flpr_msg));
+	zassert_equal(unreg_calls, 2, "diag handler not invoked after unregister");
 }
 
 ZTEST(flpr_handshake, test_endpoint_error_callback_safe)
@@ -965,139 +893,6 @@ ZTEST(flpr_handshake, test_endpoint_error_callback_safe)
 }
 
 /* ── Stress / fault hang ─────────────────────────────────────────── */
-
-ZTEST(flpr_handshake, test_stress_rejects_unavailable)
-{
-	zassert_ok(flpr_handshake_init(), "init"); /* acked=false */
-
-	hs_worker_out.stress_sent = 0;
-	flpr_handshake_stress(3, &hs_worker_out);
-
-	zassert_equal(hs_worker_out.stress_sent, 0, "no pings sent");
-	zassert_equal(fake_ipc_sent_type_count(FLPR_MSG_STRESS_PING), 0, "no pings on wire");
-	struct flpr_status st;
-	flpr_handshake_get_status(&st);
-	zassert_false(st.stress_active, "stress not active");
-}
-
-ZTEST(flpr_handshake, test_stress_rejects_active)
-{
-	hs_ready_flow(42);
-
-	hs_spawn_worker(stress_worker_fn, (void *)(uintptr_t)1);
-	zassert_true(hs_wait_until(ping_sent_cond, NULL, 1000), "first stress started");
-
-	/* Second concurrent stress call is rejected without side effects. */
-	flpr_handshake_stress(1, NULL);
-	struct flpr_status st;
-	flpr_handshake_get_status(&st);
-	zassert_true(st.stress_active, "original stress still active");
-	zassert_equal(st.stress_count, 1, "count not clobbered");
-
-	zassert_true(hs_wait_done(1500), "first stress completes (200 ms timeout)");
-}
-
-ZTEST(flpr_handshake, test_stress_clamps_count)
-{
-	hs_ready_flow(42);
-	uint32_t baseline_calls = fake_ipc_send_calls(); /* READY_ACK */
-	fake_ipc_set_send_block(true);
-
-	hs_spawn_worker(stress_worker_fn, (void *)(uintptr_t)(FLPR_STRESS_MAX_COUNT + 7));
-	/* Wait until the worker's own send call parks it (beyond baseline). */
-	zassert_true(hs_wait_until(send_calls_exceed_cond, (void *)(uintptr_t)baseline_calls, 1000),
-		     "worker parked in send");
-
-	struct flpr_status st;
-	flpr_handshake_get_status(&st);
-	zassert_equal(st.stress_count, FLPR_STRESS_MAX_COUNT, "count clamped");
-	zassert_true(st.stress_active, "stress active");
-	zassert_equal(st.stress_sent, 0, "no iteration completed");
-
-	/* Worker stays parked in the fake send; never mutates state again.
-	 * fake_ipc_reset() in the next test setup clears the block flag,
-	 * but the parked thread remains blocked on the internal semaphore. */
-}
-
-ZTEST(flpr_handshake, test_stress_send_failure)
-{
-	hs_ready_flow(42);
-	fake_ipc_set_send_result(-EIO);
-
-	hs_spawn_worker(stress_worker_fn, (void *)(uintptr_t)2);
-	zassert_true(hs_wait_done(1500), "stress completed");
-
-	zassert_equal(hs_worker_out.stress_err_send, 2, "two send errors");
-	zassert_equal(hs_worker_out.stress_sent, 0, "no successful sends");
-	zassert_equal(hs_worker_out.stress_timeouts, 0, "no sem wait on send failure");
-}
-
-ZTEST(flpr_handshake, test_stress_timeout)
-{
-	hs_ready_flow(42);
-
-	hs_spawn_worker(stress_worker_fn, (void *)(uintptr_t)1);
-	zassert_true(hs_wait_done(1500), "stress completed (200 ms timeout)");
-
-	zassert_equal(hs_worker_out.stress_sent, 1, "sent");
-	zassert_equal(hs_worker_out.stress_recv, 0, "no PONG");
-	zassert_equal(hs_worker_out.stress_timeouts, 1, "timeout counted");
-}
-
-ZTEST(flpr_handshake, test_stress_late_pong)
-{
-	hs_ready_flow(42);
-
-	hs_spawn_worker(stress_worker_fn, (void *)(uintptr_t)2);
-	zassert_true(hs_wait_until(ping_sent_cond, NULL, 1000), "ping 1 sent");
-	printk("DBG t=%u ping1 seen\n", k_uptime_get_32());
-	/* Iteration 1 times out (no PONG); cookie advances. */
-	zassert_true(hs_wait_until(ping2_sent_cond, NULL, 1500), "ping 2 sent");
-	printk("DBG t=%u ping2 seen\n", k_uptime_get_32());
-
-	/* Late PONG for iteration 1 arrives during iteration 2 → stale.
-	 * Note: the timeout invalidation advances stress_cookie, so
-	 * iteration 2's expected cookie is 3 (1 → timeout → 3). */
-	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_STRESS_PONG,
-					    .version = FLPR_PROTOCOL_VERSION,
-					    .seq = 0,
-					    .data = 1},
-			 sizeof(struct flpr_msg));
-	/* Matching PONG completes iteration 2. */
-	fake_ipc_receive(&(struct flpr_msg){.type = FLPR_MSG_STRESS_PONG,
-					    .version = FLPR_PROTOCOL_VERSION,
-					    .seq = 0,
-					    .data = 3},
-			 sizeof(struct flpr_msg));
-
-	zassert_true(hs_wait_done(1500), "stress completed");
-	zassert_equal(hs_worker_out.stress_timeouts, 1, "iteration 1 timed out");
-	zassert_equal(hs_worker_out.stress_stale, 1, "late PONG classified stale");
-	zassert_equal(hs_worker_out.stress_recv, 1, "iteration 2 matched");
-	zassert_equal(hs_worker_out.stress_sent, 2, "sent");
-}
-
-ZTEST(flpr_handshake, test_fault_hang_send_failure)
-{
-	hs_ready_flow(42);
-	fake_ipc_set_send_result(-EIO);
-
-	zassert_equal(flpr_handshake_send_fault_hang(50), -EIO, "send failure → -EIO");
-
-	struct flpr_status st;
-	flpr_handshake_get_status(&st);
-	zassert_equal(st.err_send, 1, "err_send counted");
-}
-
-ZTEST(flpr_handshake, test_fault_hang_ack_timeout)
-{
-	hs_ready_flow(42);
-
-	hs_spawn_worker(fault_hang_worker_fn, (void *)(uintptr_t)50);
-	zassert_true(hs_wait_until(fault_hang_sent_cond, NULL, 1000), "FAULT_HANG sent");
-	zassert_true(hs_wait_done(1000), "fault hang completed");
-	zassert_equal(hs_worker_result, -ETIMEDOUT, "ACK timeout");
-}
 
 ZTEST_SUITE(flpr_handshake, NULL, NULL, hs_setup, hs_teardown, NULL);
 

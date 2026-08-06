@@ -43,6 +43,7 @@ CONFIG_BT_BUF_ACL_TX_COUNT=7
 CONFIG_BT_ISO_TX_BUF_COUNT=6
 CONFIG_BT_ISO_RX_BUF_COUNT=6
 CONFIG_BT_FILTER_ACCEPT_LIST=y
+# CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS is not set
 """
 
 NET_CONFIG = """\
@@ -67,11 +68,13 @@ CONFIG_BT_ISO_TX_BUF_COUNT=1
 CONFIG_BT_CTLR_SDC_ISO_TX_HCI_BUFFER_COUNT=1
 CONFIG_BT_ISO_RX_BUF_COUNT=3
 CONFIG_BT_FILTER_ACCEPT_LIST=y
+CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS=y
 """
 
 FLPR_CONFIG = """\
 CONFIG_FLASH_BASE_ADDRESS=0x165000
 CONFIG_FLASH_LOAD_SIZE=0x18000
+CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS=y
 """
 
 DOMAINS_5340 = """\
@@ -824,6 +827,48 @@ class TestAssertionFailures(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("SRC-001", fails)
         self.assertIn("SRC-002", fails)
+
+    def test_5340_acceptance_parity_inversion(self):
+        def mutate(fx):
+            write(
+                fx.config("5340", "le-audio-receiver"),
+                APP5340_CONFIG.replace(
+                    "# CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS is not set",
+                    "CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS=y",
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-029", fails)
+
+    def test_flpr_acceptance_off_parity(self):
+        def mutate(fx):
+            write(
+                fx.config("54l15", "flpr"),
+                FLPR_CONFIG.replace(
+                    "CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS=y",
+                    "# CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS is not set",
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-036", fails)
+
+    def test_cpuapp_acceptance_off_parity(self):
+        def mutate(fx):
+            write(
+                fx.config("54l15", "le-audio-receiver"),
+                APP54_CONFIG.replace(
+                    "CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS=y",
+                    "# CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS is not set",
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-035", fails)
 
 
 if __name__ == "__main__":

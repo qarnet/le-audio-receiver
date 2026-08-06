@@ -53,6 +53,13 @@ if(CONFIG_SHELL AND CONFIG_SOC_NRF54L15)
   target_sources(app PRIVATE src/flpr_shell.c)
 endif()
 zephyr_sources_ifdef(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS src/flpr_acceptance_shell.c)
+# R8: FLPR acceptance orchestration (ring test, stalls, stale produce,
+# stress, fault hang, gates 1-6) — compiled only with the acceptance
+# diagnostics config.  The shared control-ACK engine is production-neutral
+# (used by the core coordinated reset) and compiles on every nRF54L15
+# build, exactly like flpr_ring_mgr.c.
+zephyr_sources_ifdef(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS src/flpr_acceptance.c)
+zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_control_ack.c)
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_handshake.c)
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_ring.c)
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_cache.c)

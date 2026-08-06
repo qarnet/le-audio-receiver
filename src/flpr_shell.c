@@ -7,6 +7,10 @@
 #include "flpr_handshake.h"
 #include "flpr_runtime.h"
 
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+#include "flpr_acceptance.h"
+#endif
+
 #include <zephyr/kernel.h>
 #include <zephyr/shell/shell.h>
 
@@ -14,6 +18,12 @@ static int cmd_flpr_status(const struct shell *sh, size_t argc, char **argv)
 {
 	struct flpr_status s;
 	flpr_handshake_get_status(&s);
+
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+	/* R8: stress state is acceptance-owned; merge it into the shared
+	 * flpr_status so the stress section below prints identically. */
+	flpr_acceptance_stress_snapshot(&s);
+#endif
 
 	shell_print(sh, "--- FLPR handshake ---");
 	shell_print(sh, "  Ready        : %s", s.ready ? "yes" : "no");

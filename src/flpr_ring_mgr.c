@@ -6,11 +6,22 @@
  * Ring addresses resolved from devicetree, not hardcoded.
  * IPC control through flpr_handshake module's endpoint + handler API.
  *
+ * R8: production runtime only.  Acceptance orchestration/state lives in
+ * src/flpr_acceptance.c (CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS); core
+ * produce/consume paths invoke narrow config-gated acceptance hooks for
+ * the diagnostic counters, and the shared control-ACK engine
+ * (src/flpr_control_ack.c) owns reset/stall ACK correlation.
+ *
  * Lock discipline:
- *   ring_lock spinlock protects local test counters and stall flags.
- *   IPC callbacks run with interrupts disabled; they only set a semaphore
- *   (k_sem_give) outside the spinlock to wake the test loop.
- *   flpr_handshake_send_msg() is lock-free (never called under ring_lock).
+ *   ring_data_lock (mutex) serializes cpuapp-side bulk ring
+ *   memory/header operations (produce fill/commit, consume copy/done,
+ *   reset, coordinated reset, remote-restarted header reinit,
+ *   status header snapshots) against reset/reinit.  IPC callback
+ *   contexts never take it.  Fixed order is ring_data_lock then
+ *   ring_lock (and the acceptance lock, a leaf); never reverse.
+ *   ring_lock protects the production control/diagnostic fields.
+ *   flpr_handshake_send_msg() is lock-free (never called under
+ *   ring_lock).
  */
 
 #include "flpr_ring_mgr.h"
@@ -26,6 +37,9 @@
 
 #include "flpr_ring.h"
 #include "flpr_handshake.h"
+#include "flpr_control_ack.h"
+#include "flpr_ring_mgr_internal.h"
+#include "flpr_acceptance.h"
 
 LOG_MODULE_REGISTER(flpr_ring, LOG_LEVEL_INF);
 
@@ -94,7 +108,7 @@ static struct k_spinlock ring_lock;
 static uint32_t ring_stream_epoch;
 static bool rings_initialized;
 
-/* Diagnostic counters (protected by ring_lock). */
+/* Production diagnostic counters (protected by ring_lock). */
 static uint32_t diag_notify_sent;
 static uint32_t diag_notify_err;
 static uint32_t diag_sem_gives;
@@ -102,180 +116,23 @@ static uint32_t diag_sem_takes;
 static uint32_t diag_stale_notify; /* Stage 2: consumer notifications with wrong epoch */
 static uint32_t diag_sem_drained;  /* Stage 2: consume_sem tokens drained at reset */
 
-/* Test counters (protected by ring_lock). */
-static bool test_active;
-static uint32_t test_blocks_sent;
-static uint32_t test_blocks_recv;
-static uint32_t test_crc_errors;
-static uint32_t test_payload_errors;
-static uint32_t test_seq_gaps;
-static uint32_t test_full_events;
-static uint32_t test_backpressure;
-static uint32_t test_empty_events;
-static uint32_t test_stale_events;
-static uint32_t test_flpr_blocks;  /* blocks FLPR reports processing */
-static uint32_t test_flpr_crc_err; /* FLPR-reported CRC errors */
-static uint32_t test_output_full;  /* FLPR-reported output-full */
-
-/* FLPR-reported diagnostic counters. */
-static uint32_t test_flpr_notify_rcv;
-static uint32_t test_flpr_worker_wake;
-static uint32_t test_flpr_consume_ok;
-static uint32_t test_flpr_consume_empty;
-static uint32_t test_flpr_consume_stale;
-static uint32_t test_flpr_produce_ok;
-static uint32_t test_flpr_produce_full;
-
-/* Latency accumulators (protected by ring_lock). */
-static uint32_t latency_min;
-static uint32_t latency_max;
-static uint64_t latency_sum;
-static uint32_t latency_count;
-
-/* Test control. */
-static bool stall_producer_enabled;
-
 /* ── Semaphore for consumer notifications ────────────────────────── */
 
 static struct k_sem consume_sem;
 
-/* ── Coordinated reset / stall ACK correlation (R1) ────────────────
- *
- * One explicit request state machine per control type (reset, stall),
- * protected by ring_lock: an armed request carries the expected data and
- * a monotonically incremented nonzero 16-bit request sequence token in
- * the existing flpr_msg.seq field.  The cpuapp handler accepts only the
- * FIRST ACK while armed AND with a matching sequence; ACKs while disarmed
- * or with a stale sequence are ignored and counted stale.  Tokens are
- * never reused inside one FLPR session: after 0xFFFF the next request
- * returns -EOVERFLOW until flpr_ring_mgr_remote_restarted() (the known
- * quiescence boundary) clears the ACK state and resets the counters.
- * At most one request per control type is armed at a time. */
-struct control_ack {
-	struct k_sem *sem;      /* waiter wakeup (outside ring_lock) */
-	uint32_t payload;       /* stored ACK data */
-	uint32_t expected_data; /* data the ACK must echo */
-	uint16_t expected_seq;  /* armed expected request token */
-	bool armed;             /* request in flight */
-	uint32_t next_token;    /* next 16-bit token (1..0xFFFF, no wrap) */
-	uint32_t stale_count;   /* stale/duplicate ACKs ignored */
-};
+/* ── Coordinated reset ACK correlation (R1, engine-owned) ───────────
+ * The stall ACK instance lives in flpr_acceptance.c; both are cleared
+ * by flpr_control_ack_reset_session() from remote_restarted(). */
 
 static struct k_sem reset_ack_sem;
-static struct k_sem stall_ack_sem;
-
-static struct control_ack reset_ack_ctl = {.next_token = 1};
-static struct control_ack stall_ack_ctl = {.next_token = 1};
-
-/* Disarm + clear the request state under ring_lock, then drain stale
- * semaphore tokens while disarmed (callbacks ignore ACKs and do not
- * give). */
-static void ack_request_begin(struct control_ack *ctl)
-{
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-
-	ctl->armed = false;
-	ctl->expected_seq = 0;
-	ctl->expected_data = 0;
-	ctl->payload = 0;
-
-	k_spin_unlock(&ring_lock, key);
-
-	while (k_sem_take(ctl->sem, K_NO_WAIT) == 0) {
-	}
-}
-
-/* Allocate the next nonzero 16-bit token without wrap, install the
- * expected data/token, and arm under ring_lock.  Returns the token, or
- * -EOVERFLOW when the token space of the current session is exhausted
- * (cleared only by flpr_ring_mgr_remote_restarted()). */
-static int ack_arm(struct control_ack *ctl, uint32_t expected_data)
-{
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-
-	if (ctl->next_token > 0xFFFFU) {
-		k_spin_unlock(&ring_lock, key);
-		return -EOVERFLOW;
-	}
-	int token = ctl->next_token;
-
-	ctl->next_token++;
-	ctl->expected_data = expected_data;
-	ctl->expected_seq = (uint16_t)token;
-	ctl->payload = 0;
-	ctl->armed = true;
-
-	k_spin_unlock(&ring_lock, key);
-	return token;
-}
-
-/* Disarm under ring_lock (send failure / timeout).  The payload is
- * cleared so a late ACK is ignored even when its data equals a later
- * retry — the sequence differs. */
-static void ack_disarm(struct control_ack *ctl)
-{
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-
-	ctl->armed = false;
-	ctl->expected_seq = 0;
-	ctl->expected_data = 0;
-	ctl->payload = 0;
-
-	k_spin_unlock(&ring_lock, key);
-}
-
-/* First-ACK-while-armed-and-matching handler: stores the payload, disarms,
- * then gives the semaphore outside the lock.  Stale/duplicate ACKs are
- * counted and ignored. */
-static void ack_handle(struct control_ack *ctl, const struct flpr_msg *msg)
-{
-	bool give = false;
-
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-
-	if (ctl->armed && msg->seq == ctl->expected_seq) {
-		ctl->payload = msg->data;
-		ctl->armed = false;
-		give = true;
-	} else {
-		ctl->stale_count++;
-	}
-
-	k_spin_unlock(&ring_lock, key);
-
-	if (give) {
-		k_sem_give(ctl->sem);
-	}
-}
-
-/* Wait for the ACK, then snapshot the stored payload under lock and
- * verify the exact expected data.  Timeout disarms; same-sequence wrong
- * data preserves the fail-fast -EIO. */
-static int ack_wait(struct control_ack *ctl, uint32_t timeout_ms, uint32_t expected_data)
-{
-	int ret = k_sem_take(ctl->sem, K_MSEC(timeout_ms));
-
-	if (ret != 0) {
-		ack_disarm(ctl);
-		return -ETIMEDOUT;
-	}
-
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-	uint32_t payload = ctl->payload;
-	k_spin_unlock(&ring_lock, key);
-
-	if (payload != expected_data) {
-		return -EIO;
-	}
-	return 0;
-}
+static struct flpr_control_ack reset_ack_ctl;
 
 /* ── IPC handlers (called from flpr_handshake receive context) ───── */
 
 static void on_ring_reset_ack(const struct flpr_msg *msg, void *user_data)
 {
 	(void)user_data;
-	ack_handle(&reset_ack_ctl, msg);
+	flpr_control_ack_handle(&reset_ack_ctl, msg);
 }
 
 static void on_ring_consumer(const struct flpr_msg *msg, void *user_data)
@@ -301,58 +158,15 @@ static void on_ring_consumer(const struct flpr_msg *msg, void *user_data)
 		return; /* stale: do NOT give semaphore */
 	}
 
-	/* Matching epoch: update FLPR-reported block count, give sem. */
-	test_flpr_blocks = (uint32_t)msg->seq;
+	/* Matching epoch: record FLPR-reported block count (acceptance
+	 * hook, config-gated), give sem. */
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+	flpr_acceptance_note_flpr_blocks((uint32_t)msg->seq);
+#endif
 	diag_sem_gives++;
 	k_spin_unlock(&ring_lock, key);
 
 	k_sem_give(&consume_sem);
-}
-
-static void on_ring_test_report(const struct flpr_msg *msg, void *user_data)
-{
-	(void)user_data;
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-
-	/* Subtype encoded in seq high byte:
-	 *   0x00 → block_count + crc_errors
-	 *   0xD1 → consume_ok (full 32-bit in data)
-	 *   0xD2 → produce_ok (full 32-bit in data)
-	 *   0xD3 → notify_rcv + worker_wake + produce_full
-	 *   0xD4 → cons_empty + cons_stale (data lo/hi 16-bit) */
-	uint8_t subtype = (uint8_t)(msg->seq >> 8);
-
-	switch (subtype) {
-	case 0x00:
-		/* FLPR: seq lo 16 = crc_errors, data = block_count */
-		test_flpr_crc_err = (uint32_t)(msg->seq & 0xFFFFU);
-		test_flpr_blocks = msg->data;
-		break;
-	case 0xD1:
-		test_flpr_consume_ok = msg->data;
-		break;
-	case 0xD2:
-		test_flpr_produce_ok = msg->data;
-		break;
-	case 0xD3:
-		test_flpr_notify_rcv = (uint32_t)(msg->seq & 0xFFU);
-		test_flpr_worker_wake = (uint32_t)(msg->data & 0xFFFFU);
-		test_flpr_produce_full = (uint32_t)((msg->data >> 16) & 0xFFFFU);
-		break;
-	case 0xD4:
-		test_flpr_consume_empty = (uint32_t)(msg->data & 0xFFFFU);
-		test_flpr_consume_stale = (uint32_t)((msg->data >> 16) & 0xFFFFU);
-		break;
-	default:
-		break;
-	}
-	k_spin_unlock(&ring_lock, key);
-}
-
-static void on_ring_stall_ack(const struct flpr_msg *msg, void *user_data)
-{
-	(void)user_data;
-	ack_handle(&stall_ack_ctl, msg);
 }
 
 /* ── Notification ────────────────────────────────────────────────── */
@@ -418,13 +232,13 @@ int flpr_ring_mgr_init(void)
 	/* Initialize semaphores. */
 	k_sem_init(&consume_sem, 0, 1000001);
 	k_sem_init(&reset_ack_sem, 0, 1);
-	k_sem_init(&stall_ack_sem, 0, 1);
-	reset_ack_ctl.sem = &reset_ack_sem;
-	stall_ack_ctl.sem = &stall_ack_sem;
+	flpr_control_ack_init(&reset_ack_ctl, &reset_ack_sem);
+	flpr_control_ack_register(&reset_ack_ctl);
 
-	/* Register IPC handlers for ring messages. */
-	flpr_handshake_register_ring_handlers(on_ring_reset_ack, on_ring_consumer,
-					      on_ring_test_report, on_ring_stall_ack, NULL);
+	/* Register the PRODUCTION IPC handlers for ring messages (reset
+	 * ACK + consumer).  Diagnostic handlers (report/stall/pong/hang)
+	 * are registered by flpr_acceptance_init(). */
+	flpr_handshake_register_ring_handlers(on_ring_reset_ack, on_ring_consumer, NULL);
 
 	/* Initialize both rings in shared memory. */
 	flpr_ring_init(RING_INPUT_BASE, FLPR_RING_CPUAPP_TO_FLPR);
@@ -476,8 +290,8 @@ int flpr_ring_mgr_coordinated_reset(uint32_t new_epoch, uint32_t timeout_ms)
 
 	/* Disarm/clear + drain, then allocate the next nonzero 16-bit
 	 * request token and arm before send. */
-	ack_request_begin(&reset_ack_ctl);
-	int token = ack_arm(&reset_ack_ctl, new_epoch);
+	flpr_control_ack_begin(&reset_ack_ctl);
+	int token = flpr_control_ack_arm(&reset_ack_ctl, new_epoch);
 
 	if (token < 0) {
 		k_mutex_unlock(&ring_data_lock);
@@ -496,14 +310,14 @@ int flpr_ring_mgr_coordinated_reset(uint32_t new_epoch, uint32_t timeout_ms)
 	ret = flpr_handshake_send_msg(&reset_req);
 
 	if (ret < 0) {
-		ack_disarm(&reset_ack_ctl);
+		flpr_control_ack_disarm(&reset_ack_ctl);
 		LOG_ERR("RING_RESET send failed: %d", ret);
 		k_mutex_unlock(&ring_data_lock);
 		return -EIO;
 	}
 
 	/* Wait for RING_RESET_ACK and verify the exact epoch. */
-	ret = ack_wait(&reset_ack_ctl, timeout_ms, new_epoch);
+	ret = flpr_control_ack_wait(&reset_ack_ctl, timeout_ms, new_epoch);
 	if (ret != 0) {
 		if (ret == -ETIMEDOUT) {
 			LOG_WRN("RING_RESET_ACK timeout (%u ms)", timeout_ms);
@@ -561,9 +375,11 @@ static int flpr_ring_mgr_reset_locked(uint32_t new_epoch)
 		drained++;
 	}
 
-	/* Step 4: publish new epoch + reset diagnostics under lock.
-	 * diag_sem_drained set to drained (NOT zeroed) so callers can
-	 * observe how many tokens were flushed. */
+	/* Step 4: publish new epoch + reset production diagnostics under
+	 * lock.  diag_sem_drained set to drained (NOT zeroed) so callers
+	 * can observe how many tokens were flushed.  Acceptance counters
+	 * (test/latency/stall state) are reset by the acceptance module
+	 * through flpr_acceptance_remote_restarted(). */
 	{
 		k_spinlock_key_t key = k_spin_lock(&ring_lock);
 		ring_stream_epoch = new_epoch;
@@ -573,31 +389,6 @@ static int flpr_ring_mgr_reset_locked(uint32_t new_epoch)
 		diag_sem_takes = 0;
 		diag_stale_notify = 0;
 		diag_sem_drained = drained;
-		test_active = false;
-		test_blocks_sent = 0;
-		test_blocks_recv = 0;
-		test_crc_errors = 0;
-		test_payload_errors = 0;
-		test_seq_gaps = 0;
-		test_full_events = 0;
-		test_backpressure = 0;
-		test_empty_events = 0;
-		test_stale_events = 0;
-		test_flpr_blocks = 0;
-		test_flpr_crc_err = 0;
-		test_output_full = 0;
-		test_flpr_notify_rcv = 0;
-		test_flpr_worker_wake = 0;
-		test_flpr_consume_ok = 0;
-		test_flpr_consume_empty = 0;
-		test_flpr_consume_stale = 0;
-		test_flpr_produce_ok = 0;
-		test_flpr_produce_full = 0;
-		latency_min = UINT32_MAX;
-		latency_max = 0;
-		latency_sum = 0;
-		latency_count = 0;
-		stall_producer_enabled = false;
 		k_spin_unlock(&ring_lock, key);
 
 		LOG_INF("PCM rings reset: epoch=%u", new_epoch);
@@ -650,32 +441,6 @@ void flpr_ring_mgr_get_status(struct flpr_ring_status *status)
 		status->out_epoch = flpr_ring_epoch(RING_OUTPUT_BASE);
 	}
 
-	status->test_active = test_active;
-	status->test_blocks_sent = test_blocks_sent;
-	status->test_blocks_recv = test_blocks_recv;
-	status->test_crc_errors = test_crc_errors;
-	status->test_payload_errors = test_payload_errors;
-	status->test_seq_gaps = test_seq_gaps;
-	status->test_full_events = test_full_events;
-	status->test_backpressure = test_backpressure;
-	status->test_empty_events = test_empty_events;
-	status->test_stale_events = test_stale_events;
-	status->test_producer_blocks = test_flpr_blocks;
-	status->test_output_full = test_output_full;
-
-	status->flpr_notify_rcv = test_flpr_notify_rcv;
-	status->flpr_worker_wake = test_flpr_worker_wake;
-	status->flpr_consume_ok = test_flpr_consume_ok;
-	status->flpr_consume_empty = test_flpr_consume_empty;
-	status->flpr_consume_stale = test_flpr_consume_stale;
-	status->flpr_produce_ok = test_flpr_produce_ok;
-	status->flpr_produce_full = test_flpr_produce_full;
-
-	status->latency_min = latency_min;
-	status->latency_max = latency_max;
-	status->latency_sum = latency_sum;
-	status->latency_count = latency_count;
-
 	k_spin_unlock(&ring_lock, key);
 
 	k_mutex_unlock(&ring_data_lock);
@@ -697,17 +462,16 @@ enum flpr_produce_result flpr_ring_mgr_produce_block(const uint8_t *pcm_data, ui
 	 * concurrent reset cannot zero headers/memory mid-produce. */
 	k_mutex_lock(&ring_data_lock, K_FOREVER);
 
-	/* Stall injection. */
+	/* Stall injection (acceptance-owned, config-gated). */
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
 	{
-		k_spinlock_key_t key = k_spin_lock(&ring_lock);
-		if (stall_producer_enabled) {
-			test_backpressure++;
-			k_spin_unlock(&ring_lock, key);
+		if (flpr_acceptance_stall_producer_active()) {
+			flpr_acceptance_note_backpressure();
 			k_mutex_unlock(&ring_data_lock);
 			return FLPR_PRODUCE_FULL;
 		}
-		k_spin_unlock(&ring_lock, key);
 	}
+#endif
 
 	/* Snapshot the stream epoch under ring_lock while the data lock
 	 * prevents reset.  Epoch 0 (not yet agreed / invalidated) makes
@@ -726,9 +490,9 @@ enum flpr_produce_result flpr_ring_mgr_produce_block(const uint8_t *pcm_data, ui
 
 	ret = flpr_ring_produce_begin(RING_INPUT_BASE, &idx);
 	if (ret == -ENOSPC) {
-		k_spinlock_key_t key = k_spin_lock(&ring_lock);
-		test_full_events++;
-		k_spin_unlock(&ring_lock, key);
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+		flpr_acceptance_note_full();
+#endif
 		k_mutex_unlock(&ring_data_lock);
 		return FLPR_PRODUCE_FULL;
 	}
@@ -802,9 +566,9 @@ enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t 
 		return FLPR_CONSUME_EMPTY;
 	}
 	if (ret == -ESTALE) {
-		k_spinlock_key_t key = k_spin_lock(&ring_lock);
-		test_stale_events++;
-		k_spin_unlock(&ring_lock, key);
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+		flpr_acceptance_note_stale();
+#endif
 		k_mutex_unlock(&ring_data_lock);
 		return FLPR_CONSUME_STALE;
 	}
@@ -837,19 +601,12 @@ enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t 
 			*latency_cycles_out = 0;
 		}
 
-		/* Track min/max/avg. */
-		if (latency > 0 && test_active) {
-			k_spinlock_key_t key = k_spin_lock(&ring_lock);
-			if (latency < latency_min) {
-				latency_min = latency;
-			}
-			if (latency > latency_max) {
-				latency_max = latency;
-			}
-			latency_sum += latency;
-			latency_count++;
-			k_spin_unlock(&ring_lock, key);
+		/* Track min/max/avg (acceptance-owned, config-gated). */
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+		if (latency > 0 && flpr_acceptance_test_active()) {
+			flpr_acceptance_note_latency(latency);
 		}
+#endif
 	}
 
 	/* Read payload. */
@@ -857,409 +614,35 @@ enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t 
 		memcpy(pcm_out, flpr_ring_slot_payload(slot_base), vf > 0 ? (size_t)vf * 4U : 0);
 	}
 
-	/* Verify CRC over valid bytes if present. */
-	if (test_active && meta->crc32 != 0) {
+	/* Verify CRC over valid bytes if present (acceptance test mode). */
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+	if (flpr_acceptance_test_active() && meta->crc32 != 0) {
 		uint32_t computed = flpr_ring_crc32(flpr_ring_slot_payload(slot_base),
 						    vf > 0 ? (size_t)vf * 4U : 0);
 		if (computed != meta->crc32) {
-			k_spinlock_key_t key = k_spin_lock(&ring_lock);
-			test_crc_errors++;
-			k_spin_unlock(&ring_lock, key);
+			flpr_acceptance_note_crc_err();
 		}
 	}
 
 	/* Independent payload verification: regenerate from sequence
-	 * and memcmp. */
-	if (test_active && vf > 0) {
+	 * and memcmp (acceptance test mode). */
+	if (flpr_acceptance_test_active() && vf > 0) {
 		uint32_t frame_errs = flpr_ring_verify_payload(flpr_ring_slot_payload(slot_base),
 							       (size_t)vf * 4U, meta->sequence);
 		if (frame_errs > 0) {
-			k_spinlock_key_t key = k_spin_lock(&ring_lock);
-			test_payload_errors += frame_errs;
-			k_spin_unlock(&ring_lock, key);
+			flpr_acceptance_note_payload_err(frame_errs);
 		}
 	}
+#endif
 
 	flpr_ring_consume_done(RING_OUTPUT_BASE);
 
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-	test_blocks_recv++;
-	k_spin_unlock(&ring_lock, key);
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+	flpr_acceptance_note_recv();
+#endif
 
 	k_mutex_unlock(&ring_data_lock);
 	return FLPR_CONSUME_OK;
-}
-
-void flpr_ring_mgr_stall_producer(bool stall)
-{
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-	stall_producer_enabled = stall;
-	k_spin_unlock(&ring_lock, key);
-}
-
-/* Shared stall helper: sends packed mask+duration, waits for exact ACK
- * echo.  R1: the complete transaction holds ring_data_lock through the
- * ACK wait so a remote restart cannot clear token/armed state beneath the
- * waiter; the ACK callback takes ring_lock only and can still wake it. */
-static int flpr_ring_mgr_stall_internal(uint8_t stall_bits, uint32_t duration_ms,
-					uint32_t timeout_ms)
-{
-	uint32_t packed = FLPR_STALL_PACK(stall_bits, duration_ms);
-
-	k_mutex_lock(&ring_data_lock, K_FOREVER);
-
-	ack_request_begin(&stall_ack_ctl);
-	int token = ack_arm(&stall_ack_ctl, packed);
-
-	if (token < 0) {
-		k_mutex_unlock(&ring_data_lock);
-		return token; /* -EOVERFLOW: token space exhausted this session */
-	}
-
-	struct flpr_msg stall_msg = {
-		.type = FLPR_MSG_RING_STALL,
-		.version = FLPR_PROTOCOL_VERSION,
-		.seq = (uint16_t)token,
-		.data = packed,
-	};
-	int ret = flpr_handshake_send_msg(&stall_msg);
-	if (ret < 0) {
-		ack_disarm(&stall_ack_ctl);
-		k_mutex_unlock(&ring_data_lock);
-		return ret;
-	}
-
-	/* Verify exact packed value echoed. */
-	ret = ack_wait(&stall_ack_ctl, timeout_ms, packed);
-	if (ret == -EIO) {
-		LOG_ERR("Stall ACK mismatch: expected 0x%08x", packed);
-	}
-
-	k_mutex_unlock(&ring_data_lock);
-	return ret;
-}
-
-int flpr_ring_mgr_flpr_stall(uint8_t stall_bits, uint32_t timeout_ms)
-{
-	/* Persistent: duration = 0. */
-	return flpr_ring_mgr_stall_internal(stall_bits, 0, timeout_ms);
-}
-
-int flpr_ring_mgr_flpr_stall_timed(uint8_t stall_bits, uint32_t duration_ms, uint32_t timeout_ms)
-{
-	if (stall_bits == 0) {
-		/* Zero-bits mask with nonzero duration is ambiguous:
-		 * is it "clear stall but also timed"?  Reject it.
-		 * A timed-duration clear makes no sense — persistent only. */
-		if (duration_ms > 0) {
-			LOG_ERR("Timed stall with zero mask rejected");
-			return -EINVAL;
-		}
-	}
-	if (duration_ms > FLPR_STALL_DURATION_MAX) {
-		LOG_ERR("Duration %u exceeds max %u", duration_ms, FLPR_STALL_DURATION_MAX);
-		return -EINVAL;
-	}
-	return flpr_ring_mgr_stall_internal(stall_bits, duration_ms, timeout_ms);
-}
-
-uint32_t flpr_ring_mgr_flpr_stall_acked(void)
-{
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-	uint32_t v = stall_ack_ctl.payload;
-	k_spin_unlock(&ring_lock, key);
-	return v;
-}
-
-/* ── Ring test ──────────────────────────────────────────────────── */
-/* Static buffers for ring test — too large for shell thread stack.
- * Single-writer: only used by the blocking test loop one at a time. */
-static uint8_t test_pattern[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
-static uint8_t test_recv_buf[FLPR_RING_PAYLOAD_CAPACITY_BYTES];
-
-int flpr_ring_mgr_test_run(uint32_t block_count, uint32_t timeout_ms, struct flpr_ring_status *out)
-{
-	return flpr_ring_mgr_test_run_rate(block_count, timeout_ms, 0, out);
-}
-
-int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint32_t rate_per_sec,
-				struct flpr_ring_status *out)
-{
-	uint32_t sent = 0;
-	uint32_t start = k_uptime_get_32();
-	uint32_t last_seq = 0;
-	bool any_error = false;
-
-	{
-		k_spinlock_key_t key = k_spin_lock(&ring_lock);
-		if (!rings_initialized || ring_stream_epoch == 0) {
-			k_spin_unlock(&ring_lock, key);
-			if (out) {
-				flpr_ring_mgr_get_status(out);
-			}
-			return -EAGAIN;
-		}
-		if (test_active) {
-			k_spin_unlock(&ring_lock, key);
-			if (out) {
-				flpr_ring_mgr_get_status(out);
-			}
-			return -EBUSY;
-		}
-
-		test_active = true;
-		test_blocks_sent = 0;
-		test_blocks_recv = 0;
-		test_crc_errors = 0;
-		test_payload_errors = 0;
-		test_seq_gaps = 0;
-		test_full_events = 0;
-		test_backpressure = 0;
-		test_empty_events = 0;
-		test_stale_events = 0;
-		test_flpr_blocks = 0;
-		test_flpr_crc_err = 0;
-		test_output_full = 0;
-		test_flpr_notify_rcv = 0;
-		test_flpr_worker_wake = 0;
-		test_flpr_consume_ok = 0;
-		test_flpr_consume_empty = 0;
-		test_flpr_consume_stale = 0;
-		test_flpr_produce_ok = 0;
-		test_flpr_produce_full = 0;
-		latency_min = UINT32_MAX;
-		latency_max = 0;
-		latency_sum = 0;
-		latency_count = 0;
-		k_spin_unlock(&ring_lock, key);
-	}
-
-	/* Drain semaphore before starting. */
-	while (k_sem_take(&consume_sem, K_NO_WAIT) == 0) {
-	}
-
-	/* Send RING_TEST_START to FLPR. */
-	{
-		struct flpr_msg start_msg = {
-			.type = FLPR_MSG_RING_TEST_START,
-			.version = FLPR_PROTOCOL_VERSION,
-			.seq = 0,
-			.data = block_count,
-		};
-		flpr_handshake_send_msg(&start_msg);
-	}
-
-	LOG_INF("Ring test: sending %u blocks...", block_count);
-
-	/* Event-driven batch send loop:
-	 *
-	 * Batch up to ring capacity, notify FLPR once per batch,
-	 * then wait for consume_sem (or 10 ms timeout) before draining
-	 * and producing the next batch.
-	 *
-	 * This avoids busy-polling drains and lets IPC notifications
-	 * drive the pipeline.  The FLPR polling fallback (10 ms) provides
-	 * a worst-case deadline — notifications are immediate via the IPC
-	 * callback. */
-#define BATCH_MAX 4
-
-	while (sent < block_count) {
-		uint32_t elapsed = k_uptime_get_32() - start;
-		if (elapsed > timeout_ms) {
-			LOG_WRN("Ring test timeout at %u/%u blocks (%u ms)", sent, block_count,
-				elapsed);
-			any_error = true;
-			break;
-		}
-
-		/* Rate limiting before production: sleep if ahead of schedule.
-		 * Pure average pacing from test start time — no per-second
-		 * windows, no initial burst, no reset.  64-bit multiply
-		 * avoids overflow at high block counts.
-		 *
-		 * Sleep cap at 5000 ms prevents the test thread from sleeping
-		 * through the entire remaining budget; long sleeps are split
-		 * across multiple iterations. */
-		if (rate_per_sec > 0) {
-			uint64_t target = flpr_rate_limit_target_ms(sent, rate_per_sec);
-			uint64_t actual = (uint64_t)k_uptime_get_32() - (uint64_t)start;
-			if (target > actual) {
-				uint64_t deficit = target - actual;
-				if (deficit > 5000) {
-					deficit = 5000;
-				}
-				k_msleep((uint32_t)deficit);
-			}
-		}
-
-		/* Drain any available output first. */
-		{
-			uint16_t vf;
-			uint32_t seq_out;
-			uint32_t latency;
-			while (flpr_ring_mgr_consume_block(test_recv_buf, &vf, &seq_out, NULL,
-							   &latency) == FLPR_CONSUME_OK) {
-			}
-		}
-
-		/* Produce up to BATCH_MAX blocks in one go. */
-		uint32_t batch_sent = 0;
-		for (uint32_t b = 0; b < BATCH_MAX && sent < block_count; b++) {
-			flpr_ring_gen_payload(test_pattern, sizeof(test_pattern), sent);
-
-			enum flpr_produce_result pr = flpr_ring_mgr_produce_block(
-				test_pattern, FLPR_RING_PAYLOAD_MAX_INPUT, sent, 0, true);
-			if (pr == FLPR_PRODUCE_FULL) {
-				break; /* ring full — drain + retry next iteration */
-			}
-			if (pr != FLPR_PRODUCE_OK) {
-				any_error = true;
-				break;
-			}
-
-			if (sent > 0 && sent != last_seq + 1) {
-				k_spinlock_key_t key = k_spin_lock(&ring_lock);
-				test_seq_gaps++;
-				k_spin_unlock(&ring_lock, key);
-			}
-			last_seq = sent;
-			sent++;
-			batch_sent++;
-
-			k_spinlock_key_t key = k_spin_lock(&ring_lock);
-			test_blocks_sent = sent;
-			k_spin_unlock(&ring_lock, key);
-		}
-
-		if (batch_sent > 0) {
-			/* Notify FLPR once per batch. */
-			if (flpr_ring_mgr_notify_producer() < 0) {
-				k_msleep(1);
-				continue;
-			}
-		}
-
-		/* Wait for FLPR to process (notification or poll fallback).
-		 * Short timeout avoids busy-wait — the IPC callback gives
-		 * consume_sem when output data is available. */
-		if (sent < block_count) {
-			k_sem_take(&consume_sem, K_MSEC(10));
-		}
-	}
-#undef BATCH_MAX
-
-	/* Final drain: wait until recv == sent or global timeout. */
-	{
-		uint32_t drain_start = k_uptime_get_32();
-		uint32_t remaining = timeout_ms - (drain_start - start);
-		if (remaining > timeout_ms) {
-			remaining = 100;
-		}
-
-		while ((k_uptime_get_32() - drain_start) < remaining) {
-			uint16_t vf;
-			uint32_t seq_out;
-			uint32_t latency;
-			bool drained = false;
-
-			while (flpr_ring_mgr_consume_block(test_recv_buf, &vf, &seq_out, NULL,
-							   &latency) == FLPR_CONSUME_OK) {
-				drained = true;
-			}
-
-			k_spinlock_key_t key = k_spin_lock(&ring_lock);
-			uint32_t recv_now = test_blocks_recv;
-			k_spin_unlock(&ring_lock, key);
-
-			if (recv_now >= sent) {
-				break;
-			}
-
-			if (!drained) {
-				k_sem_take(&consume_sem, K_MSEC(50));
-			}
-		}
-	}
-
-	/* Send RING_TEST_STOP to FLPR (get final report). */
-	{
-		struct flpr_msg stop_msg = {
-			.type = FLPR_MSG_RING_TEST_STOP,
-			.version = FLPR_PROTOCOL_VERSION,
-			.seq = 0,
-			.data = 0,
-		};
-		flpr_handshake_send_msg(&stop_msg);
-	}
-
-	{
-		k_spinlock_key_t key = k_spin_lock(&ring_lock);
-		test_active = false;
-		k_spin_unlock(&ring_lock, key);
-	}
-
-	if (out) {
-		flpr_ring_mgr_get_status(out);
-	}
-
-	/* Return nonzero if ANY failure. */
-	{
-		k_spinlock_key_t key = k_spin_lock(&ring_lock);
-		bool has_error = (sent != block_count) || (test_blocks_recv != block_count) ||
-				 (test_crc_errors > 0) || (test_payload_errors > 0) ||
-				 (test_stale_events > 0) || any_error;
-		k_spin_unlock(&ring_lock, key);
-
-		if (has_error) {
-			return -1;
-		}
-	}
-
-	return 0;
-}
-
-/* ── Test helpers (stale injection) ─────────────────────────────── */
-
-int flpr_ring_mgr_produce_stale_test(uint32_t stale_epoch)
-{
-	uint32_t idx;
-	int ret;
-
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-	bool initialized = rings_initialized;
-	k_spin_unlock(&ring_lock, key);
-
-	if (!initialized) {
-		return -EAGAIN;
-	}
-	if (stale_epoch == 0) {
-		return -EINVAL;
-	}
-
-	/* R1: hold ring_data_lock across the stale-test output-ring
-	 * production (shell-only, after coordinated reset with FLPR
-	 * quiesced). */
-	k_mutex_lock(&ring_data_lock, K_FOREVER);
-
-	/* Allocate slot in OUTPUT ring directly (FLPR→CPUAPP). */
-	ret = flpr_ring_produce_begin(RING_OUTPUT_BASE, &idx);
-	if (ret != 0) {
-		k_mutex_unlock(&ring_data_lock);
-		return ret;
-	}
-
-	uint8_t *slot = flpr_ring_slot_base(RING_OUTPUT_BASE, idx);
-	struct flpr_ring_slot_meta *meta = flpr_ring_slot_meta_ptr(slot);
-
-	/* Fill with stale epoch — consumer will reject. */
-	memset(slot, 0, FLPR_RING_SLOT_STRIDE);
-	meta->epoch = stale_epoch;
-	meta->flags = FLPR_SLOT_FLAG_VALID;
-	meta->valid_frames = 0;
-
-	flpr_ring_produce_commit(RING_OUTPUT_BASE, idx);
-	k_mutex_unlock(&ring_data_lock);
-	return 0;
 }
 
 int flpr_ring_mgr_wait_consume(uint32_t timeout_ms)
@@ -1274,7 +657,8 @@ int flpr_ring_mgr_wait_consume(uint32_t timeout_ms)
  * may race this call.
  *
  * 1. Invalidate local epoch (ring_stream_epoch = 0).
- * 2. Drain consumer/reset/stall semaphores.
+ * 2. Drain consumer/reset/stall semaphores (engine clears every
+ *    registered control-ACK instance and resets its token counter).
  * 3. Reinitialize shared headers and handlers (ring_init on both rings).
  *
  * Must be followed by flpr_ring_mgr_coordinated_reset() with nonzero epoch
@@ -1285,8 +669,7 @@ int flpr_ring_mgr_remote_restarted(void)
 {
 	/* R1: hold ring_data_lock across the remote-restarted header
 	 * reinit (a known quiescence boundary: no active submit may race
-	 * this call).  Also clears the reset/stall ACK state and resets
-	 * the 16-bit token counters so the next request allocates token 1. */
+	 * this call). */
 	k_mutex_lock(&ring_data_lock, K_FOREVER);
 
 	/* Step 1: Invalidate local epoch.
@@ -1307,26 +690,10 @@ int flpr_ring_mgr_remote_restarted(void)
 		LOG_INF("ring remote restart: drained %u consume_sem tokens", drained);
 	}
 
-	/* Step 3: Clear reset/stall ACK request state and reset token
-	 * counters (quiescence boundary), then drain both semaphores. */
-	{
-		k_spinlock_key_t key = k_spin_lock(&ring_lock);
-		reset_ack_ctl.armed = false;
-		reset_ack_ctl.expected_seq = 0;
-		reset_ack_ctl.expected_data = 0;
-		reset_ack_ctl.payload = 0;
-		reset_ack_ctl.next_token = 1;
-		stall_ack_ctl.armed = false;
-		stall_ack_ctl.expected_seq = 0;
-		stall_ack_ctl.expected_data = 0;
-		stall_ack_ctl.payload = 0;
-		stall_ack_ctl.next_token = 1;
-		k_spin_unlock(&ring_lock, key);
-	}
-	while (k_sem_take(&reset_ack_sem, K_NO_WAIT) == 0) {
-	}
-	while (k_sem_take(&stall_ack_sem, K_NO_WAIT) == 0) {
-	}
+	/* Step 3: Clear ALL registered control-ACK request state, reset
+	 * the 16-bit token counters, and drain the ACK semaphores
+	 * (quiescence boundary). */
+	flpr_control_ack_reset_session();
 
 	/* Step 4: Reinitialize shared rings in shared memory.
 	 * The restarted FLPR already called ring_init on its side.
@@ -1334,7 +701,8 @@ int flpr_ring_mgr_remote_restarted(void)
 	flpr_ring_init(RING_INPUT_BASE, FLPR_RING_CPUAPP_TO_FLPR);
 	flpr_ring_init(RING_OUTPUT_BASE, FLPR_RING_FLPR_TO_CPUAPP);
 
-	/* Step 6: Reset test/diag counters and stall flag. */
+	/* Step 5: Reset production diagnostics.  Acceptance counters and
+	 * stall state are reset by the acceptance module. */
 	{
 		k_spinlock_key_t key = k_spin_lock(&ring_lock);
 		diag_notify_sent = 0;
@@ -1343,33 +711,12 @@ int flpr_ring_mgr_remote_restarted(void)
 		diag_sem_takes = 0;
 		diag_stale_notify = 0;
 		diag_sem_drained = 0;
-		test_active = false;
-		test_blocks_sent = 0;
-		test_blocks_recv = 0;
-		test_crc_errors = 0;
-		test_payload_errors = 0;
-		test_seq_gaps = 0;
-		test_full_events = 0;
-		test_backpressure = 0;
-		test_empty_events = 0;
-		test_stale_events = 0;
-		test_flpr_blocks = 0;
-		test_flpr_crc_err = 0;
-		test_output_full = 0;
-		test_flpr_notify_rcv = 0;
-		test_flpr_worker_wake = 0;
-		test_flpr_consume_ok = 0;
-		test_flpr_consume_empty = 0;
-		test_flpr_consume_stale = 0;
-		test_flpr_produce_ok = 0;
-		test_flpr_produce_full = 0;
-		latency_min = UINT32_MAX;
-		latency_max = 0;
-		latency_sum = 0;
-		latency_count = 0;
-		stall_producer_enabled = false;
 		k_spin_unlock(&ring_lock, key);
 	}
+
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+	flpr_acceptance_remote_restarted();
+#endif
 
 	LOG_INF("ring remote restart: reinitialized shared headers, epoch invalidated");
 	k_mutex_unlock(&ring_data_lock);
@@ -1393,17 +740,16 @@ enum flpr_produce_result flpr_ring_mgr_produce_asrc(const int16_t *pcm_data, uin
 	 * produce_block). */
 	k_mutex_lock(&ring_data_lock, K_FOREVER);
 
-	/* Stall injection. */
+	/* Stall injection (acceptance-owned, config-gated). */
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
 	{
-		k_spinlock_key_t key = k_spin_lock(&ring_lock);
-		if (stall_producer_enabled) {
-			test_backpressure++;
-			k_spin_unlock(&ring_lock, key);
+		if (flpr_acceptance_stall_producer_active()) {
+			flpr_acceptance_note_backpressure();
 			k_mutex_unlock(&ring_data_lock);
 			return FLPR_PRODUCE_FULL;
 		}
-		k_spin_unlock(&ring_lock, key);
 	}
+#endif
 
 	/* Epoch snapshot under ring_lock; epoch 0 → INVALID before slot
 	 * mutation. */
@@ -1421,9 +767,9 @@ enum flpr_produce_result flpr_ring_mgr_produce_asrc(const int16_t *pcm_data, uin
 
 	ret = flpr_ring_produce_begin(RING_INPUT_BASE, &idx);
 	if (ret == -ENOSPC) {
-		k_spinlock_key_t key = k_spin_lock(&ring_lock);
-		test_full_events++;
-		k_spin_unlock(&ring_lock, key);
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+		flpr_acceptance_note_full();
+#endif
 		k_mutex_unlock(&ring_data_lock);
 		return FLPR_PRODUCE_FULL;
 	}
@@ -1502,9 +848,9 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 		return FLPR_CONSUME_EMPTY;
 	}
 	if (ret == -ESTALE) {
-		k_spinlock_key_t key = k_spin_lock(&ring_lock);
-		test_stale_events++;
-		k_spin_unlock(&ring_lock, key);
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+		flpr_acceptance_note_stale();
+#endif
 		k_mutex_unlock(&ring_data_lock);
 		return FLPR_CONSUME_STALE;
 	}
@@ -1595,12 +941,32 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 
 	flpr_ring_consume_done(RING_OUTPUT_BASE);
 
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-	test_blocks_recv++;
-	k_spin_unlock(&ring_lock, key);
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+	flpr_acceptance_note_recv();
+#endif
 
 	k_mutex_unlock(&ring_data_lock);
 	return FLPR_CONSUME_OK;
+}
+
+/* ── Internal context accessors (R8) ────────────────────────────────
+ * Shared with the acceptance module so it can hold the SAME bulk-op
+ * mutex over ring memory (no duplicate locks) and reach the raw output
+ * ring for the stale-epoch diagnostic probe. */
+
+struct k_mutex *flpr_ring_mgr_data_lock(void)
+{
+	return &ring_data_lock;
+}
+
+uint8_t *flpr_ring_mgr_input_ring(void)
+{
+	return RING_INPUT_BASE;
+}
+
+uint8_t *flpr_ring_mgr_output_ring(void)
+{
+	return RING_OUTPUT_BASE;
 }
 
 #if defined(FLPR_RING_MGR_NATIVE_TEST)
@@ -1622,21 +988,7 @@ void flpr_ring_mgr_test_reset_state(void)
 	/* Re-initialize semaphores and module state for a clean test. */
 	k_sem_init(&consume_sem, 0, 1000001);
 	k_sem_init(&reset_ack_sem, 0, 1);
-	k_sem_init(&stall_ack_sem, 0, 1);
-	reset_ack_ctl.sem = &reset_ack_sem;
-	stall_ack_ctl.sem = &stall_ack_sem;
-	reset_ack_ctl.armed = false;
-	reset_ack_ctl.expected_seq = 0;
-	reset_ack_ctl.expected_data = 0;
-	reset_ack_ctl.payload = 0;
-	reset_ack_ctl.next_token = 1;
-	reset_ack_ctl.stale_count = 0;
-	stall_ack_ctl.armed = false;
-	stall_ack_ctl.expected_seq = 0;
-	stall_ack_ctl.expected_data = 0;
-	stall_ack_ctl.payload = 0;
-	stall_ack_ctl.next_token = 1;
-	stall_ack_ctl.stale_count = 0;
+	flpr_control_ack_init(&reset_ack_ctl, &reset_ack_sem);
 	pause_armed = false;
 	pause_entered = NULL;
 	pause_release = NULL;
@@ -1650,34 +1002,6 @@ void flpr_ring_mgr_test_reset_state(void)
 	diag_sem_takes = 0;
 	diag_stale_notify = 0;
 	diag_sem_drained = 0;
-
-	test_active = false;
-	test_blocks_sent = 0;
-	test_blocks_recv = 0;
-	test_crc_errors = 0;
-	test_payload_errors = 0;
-	test_seq_gaps = 0;
-	test_full_events = 0;
-	test_backpressure = 0;
-	test_empty_events = 0;
-	test_stale_events = 0;
-	test_flpr_blocks = 0;
-	test_flpr_crc_err = 0;
-	test_output_full = 0;
-	test_flpr_notify_rcv = 0;
-	test_flpr_worker_wake = 0;
-	test_flpr_consume_ok = 0;
-	test_flpr_consume_empty = 0;
-	test_flpr_consume_stale = 0;
-	test_flpr_produce_ok = 0;
-	test_flpr_produce_full = 0;
-
-	latency_min = UINT32_MAX;
-	latency_max = 0;
-	latency_sum = 0;
-	latency_count = 0;
-
-	stall_producer_enabled = false;
 
 	flpr_ring_init(RING_INPUT_BASE, FLPR_RING_CPUAPP_TO_FLPR);
 	flpr_ring_init(RING_OUTPUT_BASE, FLPR_RING_FLPR_TO_CPUAPP);
@@ -1705,33 +1029,16 @@ void flpr_ring_mgr_test_pause_after_produce_begin(void)
 	}
 }
 
+/* Reset-side ACK correlation observability (stall side lives in the
+ * acceptance module). */
 uint32_t flpr_ring_mgr_test_stale_ack_count(void)
 {
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-	uint32_t v = reset_ack_ctl.stale_count + stall_ack_ctl.stale_count;
-	k_spin_unlock(&ring_lock, key);
-	return v;
+	return flpr_control_ack_test_stale_count(&reset_ack_ctl);
 }
 
 void flpr_ring_mgr_test_set_next_reset_token(uint16_t token)
 {
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-	reset_ack_ctl.next_token = token;
-	k_spin_unlock(&ring_lock, key);
-}
-
-void flpr_ring_mgr_test_set_next_stall_token(uint16_t token)
-{
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-	stall_ack_ctl.next_token = token;
-	k_spin_unlock(&ring_lock, key);
-}
-
-void flpr_ring_mgr_test_set_test_active(bool on)
-{
-	k_spinlock_key_t key = k_spin_lock(&ring_lock);
-	test_active = on;
-	k_spin_unlock(&ring_lock, key);
+	flpr_control_ack_test_set_next_token(&reset_ack_ctl, token);
 }
 
 uint32_t flpr_ring_mgr_test_consume_sem_count(void)
@@ -1742,11 +1049,6 @@ uint32_t flpr_ring_mgr_test_consume_sem_count(void)
 uint32_t flpr_ring_mgr_test_reset_ack_sem_count(void)
 {
 	return k_sem_count_get(&reset_ack_sem);
-}
-
-uint32_t flpr_ring_mgr_test_stall_ack_sem_count(void)
-{
-	return k_sem_count_get(&stall_ack_sem);
 }
 /* GCOVR_EXCL_STOP */
 

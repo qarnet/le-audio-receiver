@@ -31,6 +31,9 @@
 #if defined(CONFIG_SOC_NRF54L15)
 #include "flpr_handshake.h"
 #include "flpr_runtime.h"
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+#include "flpr_acceptance.h"
+#endif
 #endif
 
 #if defined(CONFIG_WATCHDOG)
@@ -147,6 +150,14 @@ static void platform_init(void)
 	 * VPR launcher has already released FLPR from reset at this point
 	 * (NORDIC_VPR_LAUNCHER init at POST_KERNEL level). */
 	flpr_handshake_init();
+
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+	/* R8: register the FLPR acceptance diagnostic message handler
+	 * (report/stall-ack/stress-pong/fault-hang-ack) with the
+	 * handshake module.  Boot wiring only — the acceptance
+	 * orchestration lives in src/flpr_acceptance.c. */
+	flpr_acceptance_init();
+#endif
 
 	/* Phase 6 Stage 2: init audio offload (FLPR ring transport).
 	 * Non-blocking — may defer ring init if FLPR not ready yet. */

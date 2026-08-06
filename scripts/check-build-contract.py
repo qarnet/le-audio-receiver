@@ -713,6 +713,15 @@ def run_nrf5340_checks(
         "got %r" % app_cfg.get("CONFIG_BT_FILTER_ACCEPT_LIST"),
     )
 
+    # R8: nRF5340 has no FLPR acceptance diagnostics (no FLPR acceptance
+    # shell commands); the parity pair lives on the nRF54L15 checks.
+    result.add(
+        config_not_enabled(app_cfg, "CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS"),
+        "5340-029",
+        "app CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS not enabled",
+        "got %r" % app_cfg.get("CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS"),
+    )
+
 
 def run_nrf54_checks(
     app_cfg, app_dts, labels_app, flpr_cfg, flpr_dts, labels_flpr, result
@@ -918,6 +927,22 @@ def run_nrf54_checks(
         "54l15-034",
         "app CONFIG_BT_FILTER_ACCEPT_LIST=y",
         "got %r" % app_cfg.get("CONFIG_BT_FILTER_ACCEPT_LIST"),
+    )
+
+    # R8: cpuapp + FLPR-image acceptance diagnostics must both be enabled
+    # for the current lab build (lockstep proof — the acceptance harness
+    # spans both images; release default-off policy is separate work).
+    result.add(
+        config_enabled(app_cfg, "CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS"),
+        "54l15-035",
+        "app CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS=y",
+        "got %r" % app_cfg.get("CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS"),
+    )
+    result.add(
+        config_enabled(flpr_cfg, "CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS"),
+        "54l15-036",
+        "FLPR image CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS=y",
+        "got %r" % flpr_cfg.get("CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS"),
     )
 
 

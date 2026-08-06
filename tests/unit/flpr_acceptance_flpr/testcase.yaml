@@ -1,0 +1,6 @@
+tests:
+  unit.flpr_acceptance_flpr:
+    tags: flpr acceptance flpr_image
+    platform_allow: native_sim
+    integration_platforms:
+      - native_sim
