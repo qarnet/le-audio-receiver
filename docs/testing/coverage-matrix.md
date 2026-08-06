@@ -581,3 +581,37 @@ test-only schedule-failure injection because the native_sim system work
 queue never rejects).  No covered live behavior was deleted; the
 denominator increase is exactly the new file's measured
 lines/branches.
+
+## P3 baseline migration (2026-08-07) — pairing-policy mode/inventory separation, same 35 files
+
+P3 refactored `src/bt_pairing_policy.c` so desired access mode and
+persisted bond inventory are independent state: the coupled
+`set_bonds()`/`request_open()` mutators were removed and replaced with
+the explicit `set_mode()`, `replace_bonds()`, and `clear_bonds()`
+operations (plus the same-direct suite grown to 24 tests against the
+production source).  The migration candidate was generated on the clean
+implementation commit `89304f7` via
+`scripts/test-coverage.sh --write-baseline /tmp/p3-baseline-candidate.json`
+(`--output /tmp/p3-cov-candidate --clean-output`), inspected, and
+committed as `tests/coverage-baseline.json` (byte-exact copy).
+Tool versions unchanged: **gcovr 8.4 / gcov (GCC) 14.3.0**, recorded
+in the baseline.
+
+**Population stays 35 files** — no new production source was added.
+Only `src/bt_pairing_policy.c` moves: **66/66 → 79/79 lines, 20/20 →
+34/34 branches, 8/8 → 9/9 functions** (every function 100% executed;
+all four combinations of mode × inventory, the new error paths, tail
+zeroing, and snapshot clearing are direct-suite proven).  Every other
+file's committed record is unchanged, so there is zero per-file
+regression.  Aggregate:
+
+| metric | committed (P2, 35 files) | P3 candidate (35 files) |
+|--------|--------------------------|-------------------------|
+| lines | 4498/4954 (90.8%) | **4511/4967 (90.8%)** |
+| branches | 1911/2688 (71.1%) | **1925/2702 (71.2%)** |
+| functions | 339/339 | **340/340** |
+
+Zero-hit enforcement stays clean (340/340 functions in the numeric
+population).  No covered live behavior was deleted; the denominator
+increase is exactly the refactored policy file's measured
+lines/branches.

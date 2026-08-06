@@ -280,16 +280,16 @@
     },
     "src/bt_pairing_policy.c": {
       "branches": [
-        20,
-        20
+        34,
+        34
       ],
       "functions": [
-        8,
-        8
+        9,
+        9
       ],
       "lines": [
-        66,
-        66
+        79,
+        79
       ]
     },
     "src/bt_shell.c": {
@@ -505,7 +505,7 @@
   },
   "gcov_version": "gcov (GCC) 14.3.0",
   "gcovr_version": "gcovr 8.4",
-  "generated_commit": "495b3a707c769ce0ef55b016d7110aebbe49e1d3",
+  "generated_commit": "89304f7975bf95b95bc2bc214de21fd50b09de57",
   "population": [
     "src/app_lifecycle.c",
     "src/audio_asrc.c",
@@ -546,16 +546,16 @@
   "schema_version": 1,
   "totals": {
     "branches": [
-      1911,
-      2688
+      1925,
+      2702
     ],
     "functions": [
-      339,
-      339
+      340,
+      340
     ],
     "lines": [
-      4498,
-      4954
+      4511,
+      4967
     ]
   }
 }
