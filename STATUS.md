@@ -3,19 +3,38 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-## Refactoring track — R10 IN PROGRESS (2026-08-06)
+## Refactoring track — R10 COMPLETE/ACCEPTED — TRACK R0–R10 COMPLETE (2026-08-06)
 
-R0–R9 ACCEPTED.  **R10 — final integration and documentation closeout —
-IN PROGRESS**: docs/evidence only (no production/test behavior change, no
-coverage baseline regeneration, no BSim re-pin).  Handoff:
-`docs/development/refactor-r10-handoff.md`.  Plan: doc/architecture truth
-cleanup + archive of zero-link superseded handoffs, final G1 (canonical
-**55 PASS / 0 FAIL / 55 TOTAL** expected on the clean cleanup commit),
-full R10 hardware matrix on both targets (nRF54L15 L1–L9 incl. FLPR hang
-Mode A/B 180 s, BZ3 full, pairing reset + BONDED_ONLY; E83 E1–E5 incl.
-APLL evidence), then final acceptance commit with results doc
-(`docs/development/refactor-r10-results.md`) and the whole track marked
-**COMPLETE**.
+**R10 — final integration and documentation closeout — COMPLETE/
+ACCEPTED.**  Docs/evidence only: no production/test behavior change, no
+coverage baseline regeneration (population 33; committed baseline
+`54a6b8e` byte-identical), no BSim re-pin (17 scenarios / 26 runs, pins
+byte-identical).  Handoff: `docs/development/refactor-r10-handoff.md`;
+doc/archive cleanup `6934d9e`; final evidence:
+`docs/development/refactor-r10-results.md` (+ `/tmp/r10-hw/` manifest +
+SHA256SUMS).  **G1 on clean `6934d9e`: 55 PASS / 0 FAIL / 55 TOTAL**
+(31 twister + 5 exec-only + 16 Python + coverage + matrix + BSim, elapsed
+17m49.6s), coverage population **33** exact (4024/4402 L, 1695/2356 B,
+289/289 F, gcovr 8.4 / gcov (GCC) 14.3.0, baseline enforcement 0
+errors), builds 3/3, build contract **79/79**, BSim pins byte-identical,
+zero new/actionable warnings; final-commit canonical gate re-run also
+55 PASS / 0 FAIL / 55 TOTAL.  **Full R10 hardware matrix PASS on both
+targets**: nRF54L15 L1–L9 (fresh Mode A/B 120 s + bonded reconnect Mode
+A 120 s with FLPR offload submit==success fallback=0 and zero
+decode/I2S/reset faults; FLPR hang Mode A and Mode B 180 s 16/16; BZ3
+full 3/3 playbacks exit 0; pairing reset + BONDED_ONLY with unbonded-
+identity LL rejection; stall gate + flpr status/ring-status/stress/ring-
+test all pass; clean boot zero warnings) and E83 E1–E5 (fresh discovery
+Mode A + fresh/bonded Mode B 120 s zero ISO-gap/i2s/decode/underrun/
+reset lines, APLL evidence Drift ACTIVE ppm −500 identity, all-log zero
+scan).  Doc/architecture truth updated (AGENTS/README/design/
+behavior-contract/coverage-matrix/bsim header/pre-refactor-baseline
+annotation); 25 zero-link superseded handoffs/stage-results archived to
+`docs/development/archive/` (exact list in the results doc).  Non-
+destructive environment remediation only (documented in the results
+doc): dongle 0x0d zombie-slot ritual, `fw-reset-dongle` probe-selection
+defect worked around at runtime (open follow-up), two-receiver
+advertising coordination for BZ3/E-rows.  No audibility claim.
 
 ## Refactoring track — R9 ACCEPTED (2026-08-06)
 

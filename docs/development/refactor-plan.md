@@ -1019,6 +1019,27 @@ teardown simultaneously; CLI/output remains compatible with hardware gates.
 
 ## R10 — Final integration and documentation closeout
 
+> **R10 COMPLETE/ACCEPTED (2026-08-06) — TRACK R0–R10 COMPLETE.**
+> Handoff `987e066`, doc/archive cleanup `6934d9e`, docs acceptance
+> (this document's commit).  Canonical gate on clean `6934d9e`:
+> **55 PASS / 0 FAIL / 55 TOTAL** (31 twister + 5 exec-only + 16 Python +
+> coverage + matrix + BSim Stage 1, elapsed 17m49.6s), coverage
+> population **33** exact (4024/4402 L, 1695/2356 B, 289/289 F; committed
+> baseline `54a6b8e`; no R10 migration), builds 3/3, build contract
+> **79/79**, BSim 17 scenarios / 26 runs pins byte-identical, zero
+> new/actionable warnings, `git diff --check` clean.  Full R10 hardware
+> matrix PASS on both targets (nRF54L15 L1–L9 incl. FLPR hang Mode A/B
+> 180 s 16/16, BZ3 full 3/3, pairing reset + BONDED_ONLY with unbonded-
+> identity rejection, stall gate + flpr status/ring/stress/ring-test, clean
+> boot; E83 E1–E5 incl. Drift ACTIVE ppm −500 identity evidence, all-log
+> zero scan) — zero decode/I2S/reset faults everywhere.  Docs truth
+> updated (AGENTS/README/STATUS/design/behavior-contract/coverage-matrix/
+> bsim header/pre-refactor-baseline annotation); 25 zero-link superseded
+> handoffs/stage-results archived (`docs/development/archive/`, `git mv`);
+> final evidence: `docs/development/refactor-r10-results.md` (plus
+> `/tmp/r10-hw/` manifest + SHA256SUMS).  Final-commit canonical gate
+> re-run: 55 PASS / 0 FAIL / 55 TOTAL.
+
 ### Goal
 
 Prove refactoring preserved all accepted behavior and make resulting

@@ -1,6 +1,26 @@
 # Workstation transfer status — pre-refactor testing track
 
-Date: 2026-08-06 (T8 ACCEPTED final update; R3–R8 ACCEPTED addenda).
+Date: 2026-08-06 (R10 COMPLETE — refactor track R0–R10 ACCEPTED; T0–T8
+historical).
+
+## R10 closeout (2026-08-06) — TRACK COMPLETE
+
+**R10 — final integration and documentation closeout — COMPLETE/
+ACCEPTED (2026-08-06).**  The refactor track R0–R10 is COMPLETE; see
+`docs/development/refactor-r10-results.md` (final authoritative evidence)
+and `docs/development/refactor-r10-handoff.md`.  Canonical gate on the
+clean doc-cleanup commit `6934d9e`: **55 PASS / 0 FAIL / 55 TOTAL**
+(31 twister + 5 exec-only + 16 Python + coverage + matrix + BSim,
+17m49.6s), coverage population 33 exact (committed baseline `54a6b8e`,
+no R10 migration), builds 3/3, build contract 79/79, BSim 17 scenarios /
+26 runs pins byte-identical; final-commit canonical gate re-run also
+55/0/55.  Full R10 hardware matrix PASS on both targets (nRF54L15 L1–L9
+incl. FLPR hang Mode A/B 180 s 16/16, BZ3 full 3/3, pairing reset +
+BONDED_ONLY, stall gate + flpr diagnostics, clean boot; E83 E1–E5 incl.
+Drift ACTIVE ppm −500 identity).  Doc/architecture truth updated;
+25 zero-link superseded handoffs/stage-results archived under
+`docs/development/archive/`.  Worktree clean; no destructive actions;
+no audibility claim.
 
 ## R8 addendum (2026-08-06)
 
