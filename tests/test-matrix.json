@@ -1864,6 +1864,232 @@
    "excluded_from_numeric": true
   },
   {
+   "source": "src/pairing_mode.c",
+   "classification": "direct",
+   "suites": [
+    {
+     "name": "pairing_mode",
+     "evidence": "direct"
+    }
+   ],
+   "public_outcomes": [
+    {
+     "api": "pairing_mode_init",
+     "outcome": "0",
+     "witness": "test_init_invalid_ops_atomic"
+    },
+    {
+     "api": "pairing_mode_init",
+     "outcome": "-EINVAL",
+     "witness": "test_init_invalid_ops_atomic"
+    },
+    {
+     "api": "pairing_mode_init",
+     "outcome": "-EALREADY",
+     "witness": "test_init_status"
+    },
+    {
+     "api": "pairing_mode_start",
+     "outcome": "0",
+     "witness": "test_start_success_idempotent"
+    },
+    {
+     "api": "pairing_mode_start",
+     "outcome": "-EINVAL",
+     "witness": "test_uninitialized_apis_rejected"
+    },
+    {
+     "api": "pairing_mode_start",
+     "outcome": "-ECANCELED",
+     "witness": "test_after_fatal_no_operations"
+    },
+    {
+     "api": "pairing_mode_request_bonding",
+     "outcome": "0",
+     "witness": "test_bonding_no_peer_exact_order"
+    },
+    {
+     "api": "pairing_mode_request_bonding",
+     "outcome": "-EINVAL",
+     "witness": "test_uninitialized_apis_rejected"
+    },
+    {
+     "api": "pairing_mode_request_bonding",
+     "outcome": "-ECANCELED",
+     "witness": "test_after_fatal_no_operations"
+    },
+    {
+     "api": "pairing_mode_request_reset",
+     "outcome": "0",
+     "witness": "test_reset_no_peer_exact_order"
+    },
+    {
+     "api": "pairing_mode_request_reset",
+     "outcome": "-EINVAL",
+     "witness": "test_uninitialized_apis_rejected"
+    },
+    {
+     "api": "pairing_mode_request_reset",
+     "outcome": "-ECANCELED",
+     "witness": "test_after_fatal_no_operations"
+    },
+    {
+     "api": "pairing_mode_request_reset_sync",
+     "outcome": "0",
+     "witness": "test_reset_sync_waits_for_bonding_advertising"
+    },
+    {
+     "api": "pairing_mode_request_reset_sync",
+     "outcome": "-ETIMEDOUT",
+     "witness": "test_reset_sync_timeout_continues_transition"
+    },
+    {
+     "api": "pairing_mode_request_reset_sync",
+     "outcome": "-EBUSY",
+     "witness": "test_reset_sync_busy_second_waiter"
+    },
+    {
+     "api": "pairing_mode_request_reset_sync",
+     "outcome": "-EINVAL",
+     "witness": "test_uninitialized_apis_rejected"
+    },
+    {
+     "api": "pairing_mode_request_reset_sync",
+     "outcome": "-ECANCELED",
+     "witness": "test_after_fatal_no_operations"
+    },
+    {
+     "api": "pairing_mode_notify_connected",
+     "outcome": "0",
+     "witness": "test_connected_bonding_requests_security"
+    },
+    {
+     "api": "pairing_mode_notify_connected",
+     "outcome": "-EINVAL",
+     "witness": "test_uninitialized_apis_rejected"
+    },
+    {
+     "api": "pairing_mode_notify_connected",
+     "outcome": "-ECANCELED",
+     "witness": "test_after_fatal_no_operations"
+    },
+    {
+     "api": "pairing_mode_notify_disconnected",
+     "outcome": "0",
+     "witness": "test_duplicate_disconnect_harmless"
+    },
+    {
+     "api": "pairing_mode_notify_disconnected",
+     "outcome": "-EINVAL",
+     "witness": "test_uninitialized_apis_rejected"
+    },
+    {
+     "api": "pairing_mode_notify_disconnected",
+     "outcome": "-ECANCELED",
+     "witness": "test_after_fatal_no_operations"
+    },
+    {
+     "api": "pairing_mode_notify_pairing_complete",
+     "outcome": "0",
+     "witness": "test_new_bonded_pairing_completes_normal"
+    },
+    {
+     "api": "pairing_mode_notify_pairing_complete",
+     "outcome": "-EINVAL",
+     "witness": "test_uninitialized_apis_rejected"
+    },
+    {
+     "api": "pairing_mode_notify_pairing_complete",
+     "outcome": "-ECANCELED",
+     "witness": "test_after_fatal_no_operations"
+    },
+    {
+     "api": "pairing_mode_notify_pairing_failed",
+     "outcome": "0",
+     "witness": "test_pairing_failed_remains_bonding"
+    },
+    {
+     "api": "pairing_mode_notify_pairing_failed",
+     "outcome": "-EINVAL",
+     "witness": "test_uninitialized_apis_rejected"
+    },
+    {
+     "api": "pairing_mode_notify_pairing_failed",
+     "outcome": "-ECANCELED",
+     "witness": "test_after_fatal_no_operations"
+    },
+    {
+     "api": "pairing_mode_notify_security_changed",
+     "outcome": "0",
+     "witness": "test_bonded_secure_reconnect_completes_normal"
+    },
+    {
+     "api": "pairing_mode_notify_security_changed",
+     "outcome": "-EINVAL",
+     "witness": "test_uninitialized_apis_rejected"
+    },
+    {
+     "api": "pairing_mode_notify_security_changed",
+     "outcome": "-ECANCELED",
+     "witness": "test_after_fatal_no_operations"
+    },
+    {
+     "api": "pairing_mode_get_status",
+     "outcome": "void",
+     "witness": "test_init_status"
+    }
+   ],
+   "state_transitions": [
+    {
+     "transition": "uninitialized->idle",
+     "witness": "test_start_success_idempotent"
+    },
+    {
+     "transition": "idle->wait-disconnect-bonding",
+     "witness": "test_bonding_connected_waits_for_disconnect"
+    },
+    {
+     "transition": "wait-disconnect-bonding->idle",
+     "witness": "test_bonding_connected_waits_for_disconnect"
+    },
+    {
+     "transition": "idle->wait-disconnect-reset",
+     "witness": "test_reset_connected_deletes_after_disconnect"
+    },
+    {
+     "transition": "wait-disconnect-reset->reset-feedback",
+     "witness": "test_reset_connected_deletes_after_disconnect"
+    },
+    {
+     "transition": "idle->reset-feedback",
+     "witness": "test_reset_no_peer_exact_order"
+    },
+    {
+     "transition": "reset-feedback->idle",
+     "witness": "test_reset_no_peer_exact_order"
+    },
+    {
+     "transition": "wait-disconnect-bonding->wait-disconnect-reset",
+     "witness": "test_reset_supersedes_pending_bonding_disconnect"
+    },
+    {
+     "transition": "bonding-idle->reset-feedback",
+     "witness": "test_reset_supersedes_active_bonding"
+    },
+    {
+     "transition": "bonding-idle->normal-idle",
+     "witness": "test_new_bonded_pairing_completes_normal"
+    },
+    {
+     "transition": "any->fatal",
+     "witness": "test_each_op_failure_reboots_once"
+    }
+   ],
+   "function_exclusions": [],
+   "hardware_acceptance": [],
+   "stateful": true
+  },
+  {
    "source": "src/stream_lifecycle.c",
    "classification": "direct",
    "suites": [

@@ -199,4 +199,86 @@ config AUDIO_ISO_SEQ_MAX_CONCEAL
 	  instead of synthesizing unbounded work (duplicates and
 	  backward sequences are likewise explicit resync outcomes).
 
+# ── User pairing control (P1): portable pairing-mode transition owner ──
+
+config USER_PAIRING_CONTROL
+	bool "User pairing control (pairing-mode transition owner)"
+	default n
+	select EVENTS
+	help
+	  Portable NORMAL/BONDING/RESETTING transition owner
+	  (src/pairing_mode.c).  Production boards enable this only when
+	  the full feature stack (input/LED adapter, Bluetooth adapter,
+	  lifecycle/shell integration) is wired — see
+	  docs/development/user-pairing-control-plan.md.  P1 keeps every
+	  production board config disabled.
+
+config USER_PAIRING_BOND_HOLD_MS
+	int "BONDING button-hold threshold (ms)"
+	default 3000
+	range 1 60000
+	depends on USER_PAIRING_CONTROL
+	help
+	  Debounced button hold duration that requests BONDING.  Consumed
+	  by the P2 input adapter; defined here so the relational timing
+	  BUILD_ASSERTs (reset threshold > bonding threshold) can live in
+	  the P1 controller.
+
+config USER_PAIRING_RESET_HOLD_MS
+	int "RESET button-hold threshold (ms)"
+	default 8000
+	range 1 120000
+	depends on USER_PAIRING_CONTROL
+	help
+	  Debounced button hold duration that requests RESET.  Consumed
+	  by the P2 input adapter; must exceed USER_PAIRING_BOND_HOLD_MS
+	  (BUILD_ASSERT in src/pairing_mode.c).
+
+config USER_PAIRING_BOND_LED_HALF_PERIOD_MS
+	int "BONDING LED half-period (ms)"
+	default 500
+	range 1 60000
+	depends on USER_PAIRING_CONTROL
+	help
+	  BONDING LED toggle interval: immediately active on entry, then
+	  one toggle per half-period.
+
+config USER_PAIRING_RESET_LED_HALF_PERIOD_MS
+	int "RESET LED half-period (ms)"
+	default 100
+	range 1 60000
+	depends on USER_PAIRING_CONTROL
+	help
+	  RESET feedback LED toggle interval.  USER_PAIRING_RESET_FEEDBACK_MS
+	  must be divisible by this value with a quotient of at least two
+	  (BUILD_ASSERT in src/pairing_mode.c).
+
+config USER_PAIRING_RESET_FEEDBACK_MS
+	int "RESET feedback indication duration (ms)"
+	default 1000
+	range 1 60000
+	depends on USER_PAIRING_CONTROL
+	help
+	  Duration of the rapid LED indication after bonds are deleted and
+	  before BONDING advertising starts.  At the production defaults
+	  (1000 ms / 100 ms half-period) this produces five complete rapid
+	  flashes.
+
+config USER_PAIRING_WORKQ_STACK_SIZE
+	int "Pairing-mode work-queue stack size (bytes)"
+	default 2048
+	range 1024 32768
+	depends on USER_PAIRING_CONTROL
+	help
+	  Stack for the controller's private work queue thread.
+
+config USER_PAIRING_WORKQ_PRIORITY
+	int "Pairing-mode work-queue thread priority"
+	default 5
+	range 0 15
+	depends on USER_PAIRING_CONTROL
+	help
+	  Priority of the controller's private work queue thread (lower
+	  number = higher priority).
+
 source "Kconfig.zephyr"
