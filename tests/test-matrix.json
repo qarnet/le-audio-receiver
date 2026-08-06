@@ -2090,6 +2090,72 @@
    "stateful": true
   },
   {
+   "source": "src/user_pairing_io.c",
+   "classification": "direct",
+   "suites": [
+    {
+     "name": "user_pairing_io",
+     "evidence": "direct"
+    }
+   ],
+   "public_outcomes": [
+    {
+     "api": "user_pairing_io_init",
+     "outcome": "0",
+     "witness": "test_init_status_inactive_unpressed"
+    },
+    {
+     "api": "user_pairing_io_init",
+     "outcome": "-EALREADY",
+     "witness": "test_second_init_ealready"
+    },
+    {
+     "api": "user_pairing_io_led_set",
+     "outcome": "0",
+     "witness": "test_led_active_low_raw_state"
+    },
+    {
+     "api": "user_pairing_io_led_set",
+     "outcome": "-EIO",
+     "witness": "test_led_gpio_failure_errno_cached_state"
+    },
+    {
+     "api": "user_pairing_io_get_status",
+     "outcome": "void",
+     "witness": "test_get_status_null_safe"
+    }
+   ],
+   "state_transitions": [
+    {
+     "transition": "uninitialized->ready",
+     "witness": "test_init_status_inactive_unpressed"
+    },
+    {
+     "transition": "unpressed->pressed",
+     "witness": "test_bond_threshold_exactly_once_while_held"
+    },
+    {
+     "transition": "pressed->bonding-requested",
+     "witness": "test_bond_threshold_exactly_once_while_held"
+    },
+    {
+     "transition": "held->reset-requested",
+     "witness": "test_continuous_hold_bonding_then_reset"
+    },
+    {
+     "transition": "pressed->released",
+     "witness": "test_release_after_bonding_before_reset"
+    },
+    {
+     "transition": "boot-held->bonding-requested",
+     "witness": "test_held_at_init_arms_thresholds"
+    }
+   ],
+   "function_exclusions": [],
+   "hardware_acceptance": [],
+   "stateful": true
+  },
+  {
    "source": "src/stream_lifecycle.c",
    "classification": "direct",
    "suites": [

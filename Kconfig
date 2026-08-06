@@ -281,4 +281,34 @@ config USER_PAIRING_WORKQ_PRIORITY
 	  Priority of the controller's private work queue thread (lower
 	  number = higher priority).
 
+# ── User pairing control (P2): generic input and LED adapter ─────────
+
+config USER_PAIRING_INPUT
+	bool "User button and LED pairing control"
+	default n
+	depends on USER_PAIRING_CONTROL && INPUT
+	depends on DT_HAS_GPIO_KEYS_ENABLED
+	select GPIO
+	help
+	  Reusable user-button / user-LED pairing-control adapter
+	  (src/user_pairing_io.c).  Hardware is selected only through the
+	  'user-button' (child of a gpio-keys node) and 'user-led' (gpio-leds
+	  child) devicetree aliases; no board-number conditionals.  The
+	  gpio-keys driver owns debounce; this module schedules/cancels the
+	  BONDING/RESET hold thresholds and forwards them to pairing_mode.
+	  Production boards enable this only when the full feature stack is
+	  wired — see docs/development/user-pairing-control-plan.md.  P2
+	  keeps every production board config disabled.
+
+config USER_PAIRING_DEBOUNCE_MS
+	int "User pairing button debounce interval"
+	default 30
+	range 1 1000
+	depends on USER_PAIRING_INPUT
+	help
+	  Board/devicetree contract value: the selected gpio-keys node's
+	  resolved debounce-interval-ms must equal this value (BUILD_ASSERT
+	  in src/user_pairing_io.c).  The gpio-keys driver implements the
+	  debounce; this module adds no second debounce timer.
+
 source "Kconfig.zephyr"
