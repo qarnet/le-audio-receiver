@@ -1,9 +1,9 @@
-# STATUS — le-audio-receiver — 2026-08-05
+# STATUS — le-audio-receiver — 2026-08-06
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-## Refactoring track — R7 ACCEPTED (2026-08-05)
+## Refactoring track — R7 ACCEPTED (2026-08-05, G3 completed 2026-08-06)
 
 R0–R6 ACCEPTED.  **R7 — stream teardown transition owner — ACCEPTED**:
 one explicit private teardown transition owner in `src/bt_bap.c`
@@ -36,16 +36,18 @@ release-edge-only, `obs_disc` once).  Canonical gate on `3473127`:
 drift (no baseline migration), builds 3/3, build contract 76/76, zero
 new/actionable warnings.  G3: nRF54L15 3/3 clean (Mode A/B fresh +
 bonded reconnect Mode A 120 s; offload submit==success fallback=0,
-faults 0, zero decode/i2s/reset faults); nRF5340/E83 Mode A fresh clean
-(zero warnings); **E83 Mode B / bonded reconnect / APLL rows BLOCKED by
-deterministic environmental RF degradation** — five byte-identical bad
-runs (SDUs=9033, stream_reset=113, 226 warnings) across power-cycles,
-75–93 % CIS delivery, i2s_nrfx underruns; evidence it is environmental
-(teardown-only change, Xiao clean on the same R7 image at 65 % delivery,
-E83 Mode A clean when the link was good, E83 loss→underrun coupling is
-the documented pre-R6 behavior).  Full evidence:
-`docs/development/refactor-r7-results.md`; handoff:
-`docs/development/refactor-r7-handoff.md`.
+faults 0, zero decode/i2s/reset faults); nRF5340/E83 **4/4 clean**
+(Mode A fresh, Mode B fresh, Mode B bonded reconnect 120 s, APLL
+evidence Drift ACTIVE ppm −500; zero ISO gap/i2s warnings; Mode B fresh
+11660/23320 and bonded 11665/23330 match the R6 baseline).  A transient
+dongle/RF degradation delayed the E83 Mode B rows (~22:30–02:05,
+75–90 % CIS delivery despite reflashes and every safe recovery);
+differential diagnosis proved it environmental (teardown-only change,
+Xiao clean at 65–89 % delivery, Mode A 88–92 %, btmon host TX complete,
+~55 recovery attempts) and the environment recovered — all rows then
+passed with the standard ritual, no firmware change, no criterion
+weakened.  Full evidence: `docs/development/refactor-r7-results.md`;
+handoff: `docs/development/refactor-r7-handoff.md`.
 
 ## Refactoring track — R6 ACCEPTED (2026-08-05)
 

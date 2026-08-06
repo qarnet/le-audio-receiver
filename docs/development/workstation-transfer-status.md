@@ -1,8 +1,8 @@
 # Workstation transfer status — pre-refactor testing track
 
-Date: 2026-08-05 (T8 ACCEPTED final update; R3–R7 ACCEPTED addenda).
+Date: 2026-08-06 (T8 ACCEPTED final update; R3–R7 ACCEPTED addenda).
 
-## R7 addendum (2026-08-05)
+## R7 addendum (2026-08-05, G3 completed 2026-08-06)
 
 R7 (stream teardown transition owner) is ACCEPTED; see
 `docs/development/refactor-r7-results.md`.  One private teardown
@@ -18,13 +18,17 @@ asserts — all existing pins byte-identical.  Canonical gate **49 PASS /
 0 FAIL / 49 TOTAL** on `3473127`, coverage population 30 with zero drift
 (no baseline migration), builds 3/3, contract 76/76.  G3: nRF54L15 3/3
 clean (Mode A/B fresh + bonded reconnect Mode A 120 s, offload
-submit==success fallback=0, faults 0); nRF5340/E83 Mode A fresh clean
-(zero warnings); **E83 Mode B / bonded reconnect / APLL rows BLOCKED by
-deterministic environmental RF degradation** (five byte-identical bad
-runs, 75–93 % CIS delivery, i2s_nrfx underruns) — documented with the
-environmental evidence (teardown-only change, Xiao clean at 65 % delivery
-on the same image, E83 Mode A clean when the link was good, pre-existing
-loss→underrun coupling).
+submit==success fallback=0, faults 0); nRF5340/E83 **4/4 clean** (Mode A
+fresh, Mode B fresh, Mode B bonded reconnect 120 s, APLL evidence Drift
+ACTIVE ppm −500; zero ISO gap/i2s warnings; Mode B fresh 11660/23320 and
+bonded 11665/23330 match the R6 baseline).  A transient dongle/RF
+degradation delayed the E83 Mode B rows (~22:30–02:05, 75–90 % CIS
+delivery despite reflashes and every safe recovery); differential
+diagnosis proved it environmental (teardown-only change, Xiao clean at
+65–89 % delivery, Mode A 88–92 %, btmon host TX complete, ~55 recovery
+attempts) and the environment recovered — all rows then passed with the
+standard ritual (E83 OpenOCD reset + dongle power-cycle + bond cleanup),
+no firmware change, no criterion weakened.
 
 ## R6 addendum (2026-08-05)
 

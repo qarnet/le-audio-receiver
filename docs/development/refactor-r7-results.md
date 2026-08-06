@@ -1,13 +1,16 @@
 # R7 results — stream teardown transition owner
 
-Accepted: 2026-08-05.  Start commit `dd4c0a8` (R6 docs acceptance;
-worktree clean); handoff commit `6534454`; tests commit `ce15992`;
-implementation commit `400c51d`; BSim pin commit `276b621`; matrix
-witness fix `c4b2839`; gate-comment fix `3473127`; docs acceptance
-commit (this document's commit).  No production BAP behavior, BSim
-hash/count, callback order, stream behavior, counter, log/observer
-event, timing update, or ASCS stack ownership changed; no existing BSim
-pins changed (one deliberate new scenario pin added).
+Accepted: 2026-08-05 (G3 hardware completed 2026-08-06 with the E83 rows
+that a transient dongle/RF degradation had delayed — see the G3 section;
+acceptance-correction commit = this document's commit).  Start commit
+`dd4c0a8` (R6 docs acceptance; worktree clean); handoff commit
+`6534454`; tests commit `ce15992`; implementation commit `400c51d`;
+BSim pin commit `276b621`; matrix witness fix `c4b2839`; gate-comment
+fix `3473127`; docs acceptance commit `8bc69a2`; final-gate record
+`bcecff2`.  No production BAP behavior, BSim hash/count, callback order,
+stream behavior, counter, log/observer event, timing update, or ASCS
+stack ownership changed; no existing BSim pins changed (one deliberate
+new scenario pin added).
 
 ## Goal met
 
@@ -163,31 +166,41 @@ hardware (mid-stream ACL disconnect → advertising restart → bonded
 reconnect); the fresh rows exercised the R7 DISABLED/RELEASE teardowns
 at stream end.
 
-### nRF5340 / E83 — Mode A PASS, Mode B / bonded / APLL BLOCKED (RF)
+### nRF5340 / E83 — 4/4 PASS (zero decode/i2s/reset faults)
 
-| Row | Receiver result | Warnings |
-|-----|-----------------|----------|
-| Mode A fresh 120 s | Stream[0] SDUs=11090 decoded=22182 plc=2; Stream[1] SDUs=11100; **decode_err=0 i2s_underrun=0 stream_reset=0** | **zero** `ISO seq gap` / `seq discontinuity` / `i2s_nrfx` / `Cannot write` lines |
-| Mode B fresh 120 s | 11 attempts, 75–93 % delivery, stream_reset 4–284, decode_err=0 | 8–226 i2s_nrfx underrun lines; no sustained zero-warning window |
-| Mode B bonded reconnect 120 s | BLOCKED (needs clean fresh Mode B) | — |
-| APLL evidence | BLOCKED (needs a clean stream) | — |
+| Row | Central frames | Receiver result | Warnings |
+|-----|---------------|-----------------|----------|
+| Mode A fresh 120 s | 12000 @ 100.0 fps | Stream[0] SDUs=11090 decoded=22182 plc=2; Stream[1] SDUs=11100; **decode_err=0 i2s_underrun=0 stream_reset=0** | **zero** `ISO seq gap` / `seq discontinuity` / `i2s_nrfx` / `Cannot write` lines |
+| Mode B fresh 120 s | 12000 @ 100.0 fps | Stream[0] SDUs=11660 decoded=23320 plc=0; **all zeros** | **zero** warning lines |
+| Mode B bonded reconnect 120 s | 12000 @ 100.0 fps (--preserve-bond, Pair() skipped) | Stream[0] SDUs=11665 decoded=23330 plc=0; **all zeros** | **zero** warning lines |
+| APLL evidence (60 s bonded Mode B, mid-stream `audio status`) | 6000 @ 100.0 fps | Stream[0] SDUs=5836 decoded=11672 plc=0; **all zeros** | **zero** warning lines; mid-stream: Frames decoded 6262, I2S underruns 0, Stream resets 0, **Drift state ACTIVE, Drift ppm -500**, Resampler identity |
 
-**E83 Mode B blocker — environmental RF degradation, not an R7
-defect.**  Eleven attempts with every safe cleanup ritual (receiver
-`bt unpair` + central remove + dongle power-cycle + BlueZ restart +
-Xiao radio halt/resume) produced the same deterministic degradation;
-five consecutive runs were byte-identical (SDUs=9033, stream_reset=113,
-226 warnings) — a fixed interference pattern.  Evidence it is
-environmental: (1) the R7 change is teardown-only, the streaming path is
-untouched; (2) the same R7 image on the Xiao runs clean under worse
-loss (40 s probe, 65 % delivery, plc=2885, still zero resets — the
-Xiao's ASRC absorbs jitter, the E83's identity+APLL path does not);
-(3) the E83 Mode A fresh row PASSED clean on the same R7 image
-(92.4 % delivery, zero warnings) — the R7 E83 path is sound when the
-link is good; (4) the E83 loss→underrun coupling is pre-existing and
-documented in the R6 session (24 % loss → stream_reset=93 on pre-R6
-firmware; accepted R6 E83 rows only at 94–97 % delivery).  The E83 Mode
-B / bonded reconnect / APLL rows are reported BLOCKED, not passed.
+The E83 Mode B counts match the accepted R6 baseline almost exactly
+(Mode B fresh 11660/23320 vs R6 11660/23320; bonded 11665/23330 vs R6
+11656/23312).  APLL evidence matches the R6 APLL row exactly
+(Drift ACTIVE, ppm -500).
+
+### E83 Mode B link degradation — transient, resolved (no firmware change)
+
+Between ~22:30 and ~02:05 the dongle→E83 Mode B link delivered 75–90 %
+of the CIS events (a 24 % silent drop at the receiver's controller: zero
+ISO seq gaps, zero PLC, i2s_nrfx underruns from the thinned stream).
+Differential diagnosis proved it environmental, not an R7 defect:
+(1) the R7 change is teardown-only, the streaming path is untouched;
+(2) the same R7 image on the Xiao ran clean at 65–89 % delivery (the
+Xiao's ASRC absorbs the jitter); (3) Mode A on the E83 stayed 88–92 %
+(two-CIS redundancy masks single-sided loss); (4) btmon proved the host
+transmitted every ISO frame (3026/3026 ISO Data TX) — the loss was
+between the dongle's controller and the E83's radio; (5) ~55 attempts
+with every safe recovery (dongle reflash, E83 reflash, E83 OpenOCD
+reset, dongle power-cycle, fresh btattach, BlueZ restart, bond cleanup,
+20-min idle) showed rare good windows.  The environment recovered after
+02:05 and the three remaining rows (Mode B fresh, bonded reconnect Mode
+B, APLL) ran clean on consecutive attempts with the standard ritual
+(E83 OpenOCD reset + dongle power-cycle + `bt unpair` + `bluetoothctl
+remove`).  This matches the R6 session's documented transient dongle/RF
+degradation; no firmware change was made and no test criterion was
+weakened.
 
 ## Deviations / notes
 
@@ -196,8 +209,11 @@ B / bonded reconnect / APLL rows are reported BLOCKED, not passed.
   (server-side `INVALID_ASE_STATE` rejection of the second PDU); the
   handoff document was updated in the implementation commit and the
   scenario pins the wire behavior.
-- The E83 Mode B / bonded / APLL G3 rows are blocked by the degraded RF
-  environment (full evidence above) — reported, not passed.
+- A transient dongle/RF degradation delayed the E83 Mode B / bonded /
+  APLL G3 rows (~22:30–02:05, 75–90 % CIS delivery despite reflashes and
+  every safe recovery); the environment recovered and all rows passed on
+  consecutive attempts (see the G3 section).  No firmware change, no
+  test criterion weakened.
 - No coverage baseline migration was needed (coverage child passed with
   zero drift on population 30).
 

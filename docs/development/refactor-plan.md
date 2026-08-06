@@ -769,7 +769,7 @@ audio state; no duplicated decode/push paths.
 
 ## R7 — Stream teardown state machine
 
-> **R7 COMPLETE/ACCEPTED (2026-08-05)** — handoff `6534454`, tests
+> **R7 COMPLETE/ACCEPTED (2026-08-05, G3 completed 2026-08-06)** — handoff `6534454`, tests
 > `ce15992`, implementation `400c51d`, BSim pin `276b621` (new
 > `duplicate_release_10ms` oracle), matrix-witness fix `c4b2839`,
 > gate-comment fix `3473127`, docs commit (this document's commit).
@@ -785,14 +785,12 @@ audio state; no duplicated decode/push paths.
 > wins; per-slot release once with duplicate-release no-op; ASCS stream
 > objects untouched.  G3: nRF54L15 3/3 clean (Mode A/B fresh + bonded
 > reconnect Mode A 120 s, offload submit==success fallback=0, faults 0);
-> nRF5340/E83 Mode A fresh clean (zero warnings); **E83 Mode B /
-> bonded reconnect / APLL rows BLOCKED by deterministic environmental RF
-> degradation** (75–93 % CIS delivery, five byte-identical bad runs,
-> i2s_nrfx underruns) — evidence that it is environmental, not an R7
-> defect: teardown-only change, same R7 image clean on the Xiao at 65 %
-> delivery (ASRC absorbs jitter), E83 Mode A clean on the same image
-> when the link was good, and the E83 loss→underrun coupling is the
-> documented pre-R6 behavior.  Full evidence:
+> nRF5340/E83 **4/4 clean** (Mode A fresh, Mode B fresh, Mode B bonded
+> reconnect 120 s, and APLL evidence: Drift ACTIVE ppm −500) — the
+> transient dongle/RF degradation that delayed the E83 Mode B rows
+> (~22:30–02:05) resolved and every row passed with zero warnings
+> (Mode B fresh 11660/23320, bonded 11665/23330, matching the R6
+> baseline; no firmware change, no criterion weakened).  Full evidence:
 > `docs/development/refactor-r7-results.md`; handoff:
 > `docs/development/refactor-r7-handoff.md`.
 
