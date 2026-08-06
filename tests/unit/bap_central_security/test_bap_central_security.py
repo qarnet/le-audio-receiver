@@ -61,6 +61,9 @@ class FakeRawProc:
         if ready_payload:
             os.write(self._w, ready_payload)
             os.close(self._w)
+        elif rc is not None:
+            # Simulated exit: stdout reaches EOF like a dead subprocess.
+            os.close(self._w)
         self.stdout = os.fdopen(self._r, "rb")
         self.stderr = io.BytesIO(stderr_data)
         self._rc = rc
@@ -455,6 +458,7 @@ class TestPreserveBondConnect(unittest.TestCase):
             rh = kwargs.get("reply_handler")
             eh = kwargs.get("error_handler")
             if connect_fire == "ok":
+                state["Connected"] = True
                 rh()
             elif connect_fire == "error":
                 eh("org.bluez.Error.Failed: connect refused")
@@ -556,6 +560,12 @@ class TestPreserveBondConnect(unittest.TestCase):
         bus, device, props = self._setup(
             {"Paired": True, "Connected": False}, connect_fire="ok"
         )
+        # Override: the reply fires but Connected stays False (the _setup
+        # default flips it to True on a successful reply).
+        def on_connect(*args, **kwargs):
+            kwargs.get("reply_handler")()
+
+        device.script("Connect", on_connect)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             with self.assertRaises(sec.CentralError):
@@ -620,7 +630,11 @@ class TestPreserveBondConnect(unittest.TestCase):
         def on_disconnect(*a, **k):
             raise fakes.FakeDbusModule.exceptions.DBusException("already down")
 
+        def on_connect(*args, **kwargs):
+            kwargs.get("reply_handler")()
+
         device.script("Disconnect", on_disconnect)
+        device.script("Connect", on_connect)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             sec.preserve_bond_connect(
@@ -629,11 +643,12 @@ class TestPreserveBondConnect(unittest.TestCase):
                 fakes.FakeDbusModule(),
                 fakes.FakeGLib,
                 already_connected=True,
-                wait_s=0.05,
-                connected_deadline_s=0.1,
+                wait_s=0.5,
+                connected_deadline_s=0.2,
                 disc_deadline_s=0.1,
             )
         self.assertIn("[main]   Disconnect ignored: already down", out.getvalue())
+        self.assertEqual(len(device.calls_for("Connect")), 1)
 
 
 # ── State reads / Pairable / Trusted / Pair / Services ──────────────────

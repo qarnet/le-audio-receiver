@@ -115,6 +115,10 @@ def make_endpoint(stereo=False):
     return bus, dbus, endpoint
 
 
+def transport_iface(bus, tp):
+    return bus.iface(tp, "org.bluez.MediaTransport1")
+
+
 def ltv_config(channel_alloc):
     """Configuration LTV blob: mono config + channel-allocation LTV."""
     return ep.LC3_CONFIG_MONO + bytes(
@@ -160,7 +164,7 @@ class TestSelectProperties(unittest.TestCase):
         self.assertEqual(int(qos["Latency"]), 10)
         self.assertEqual(int(qos["PresentationDelay"]), 40000)
         self.assertEqual(int(qos["TargetLatency"]), 0x02)
-        self.assertIn("ChannelAllocation=0x000003", out)
+        self.assertIn("ChannelAllocation=0x0003", out)
 
     def test_mono_fl_exact_bytes(self):
         ret, out, _ = self._select(0x01)
@@ -194,7 +198,7 @@ class TestSetConfiguration(unittest.TestCase):
         self.assertEqual(endpoint._pending_transports[0]["path"], TP1)
         self.assertEqual(endpoint._pending_transports[0]["channel_alloc"], 0x03)
         self.assertIn("[endpoint] SetConfiguration enter", out.getvalue())
-        self.assertIn("[endpoint]  parsed channel_alloc=0x0003", out.getvalue())
+        self.assertIn("[endpoint]  parsed channel_alloc=0x03", out.getvalue())
 
     def test_parses_mono_channel_alloc(self):
         bus, dbus, endpoint = make_endpoint()
@@ -221,13 +225,10 @@ class TestAcquireTransports(unittest.TestCase):
         for tp, ch in paths_chans:
             endpoint.SetConfiguration(tp, {"Configuration": list(ltv_config(ch))})
 
-    def _transport(self, bus, tp):
-        return bus.iface(tp, "org.bluez.MediaTransport1")
-
     def test_all_success_stereo_b(self):
         bus, dbus, endpoint = make_endpoint()
         self._queue(endpoint, [(TP1, 0x03)])
-        tr = self._transport(bus, TP1)
+        tr = transport_iface(bus, TP1)
 
         def on_acquire(*args, **kwargs):
             kwargs["reply_handler"](3, 0, 240)
@@ -257,7 +258,7 @@ class TestAcquireTransports(unittest.TestCase):
     def test_all_success_mono(self):
         bus, dbus, endpoint = make_endpoint()
         self._queue(endpoint, [(TP1, 0x01)])
-        tr = self._transport(bus, TP1)
+        tr = transport_iface(bus, TP1)
 
         def on_acquire(*args, **kwargs):
             kwargs["reply_handler"](7, 0, 120)
@@ -285,8 +286,8 @@ class TestAcquireTransports(unittest.TestCase):
         r2, w2 = os.pipe()
         os.close(r1)
         os.close(r2)
-        tr1 = self._transport(bus, TP1)
-        tr2 = self._transport(bus, TP2)
+        tr1 = transport_iface(bus, TP1)
+        tr2 = transport_iface(bus, TP2)
         tr1.script("Acquire", lambda *a, **k: k["reply_handler"](w1, 0, 120))
         tr2.script("Acquire", lambda *a, **k: k["reply_handler"](w2, 0, 120))
         try:
@@ -312,7 +313,7 @@ class TestAcquireTransports(unittest.TestCase):
     def test_unix_fd_take(self):
         bus, dbus, endpoint = make_endpoint()
         self._queue(endpoint, [(TP1, 0x01)])
-        tr = self._transport(bus, TP1)
+        tr = transport_iface(bus, TP1)
 
         class FakeUnixFd:
             def __init__(self, fd):
@@ -345,8 +346,8 @@ class TestAcquireTransports(unittest.TestCase):
         r2, w2 = os.pipe()
         os.close(r1)
         os.close(r2)
-        tr1 = self._transport(bus, TP1)
-        tr2 = self._transport(bus, TP2)
+        tr1 = transport_iface(bus, TP1)
+        tr2 = transport_iface(bus, TP2)
         tr1.script("Acquire", lambda *a, **k: k["reply_handler"](w1, 0, 120))
         tr2.script(
             "Acquire",
@@ -380,11 +381,11 @@ class TestAcquireTransports(unittest.TestCase):
         self._queue(endpoint, [(TP1, 0x01)])
         r, w = os.pipe()
         os.close(r)
-        tr = self._transport(bus, TP1)
+        tr = transport_iface(bus, TP1)
         tr.script("Acquire", lambda *a, **k: k["reply_handler"](w, 0, 120))
         # Second pending transport never replies -> bounded acquire timeout.
         self._queue(endpoint, [(TP2, 0x02)])
-        tr2 = self._transport(bus, TP2)
+        tr2 = transport_iface(bus, TP2)
 
         def never(*a, **k):
             pass
@@ -409,7 +410,7 @@ class TestAcquireTransports(unittest.TestCase):
     def test_no_transports_acquired(self):
         bus, dbus, endpoint = make_endpoint()
         self._queue(endpoint, [(TP1, 0x01)])
-        tr = self._transport(bus, TP1)
+        tr = transport_iface(bus, TP1)
 
         def error(*a, **k):
             k["error_handler"]("org.bluez.Error.NotAuthorized: nope")
@@ -457,8 +458,8 @@ class TestAcquireTransports(unittest.TestCase):
     def test_config_done_but_no_pending(self):
         bus, dbus, endpoint = make_endpoint()
         endpoint.config_done = True
-        errbuf = io.StringIO()
-        with contextlib.redirect_stderr(errbuf):
+        outbuf = io.StringIO()
+        with contextlib.redirect_stdout(outbuf):
             with self.assertRaises(ep.CentralError):
                 ep.acquire_transports(
                     bus,
@@ -471,14 +472,14 @@ class TestAcquireTransports(unittest.TestCase):
                 )
         self.assertIn(
             "[error] SetConfiguration received but no pending transports",
-            errbuf.getvalue(),
+            outbuf.getvalue(),
         )
 
 
 class TestReleaseTransports(unittest.TestCase):
     def _closed(self, fd):
         try:
-            os.write(fd, b"x")
+            os.fstat(fd)
             return False
         except OSError:
             return True
@@ -493,8 +494,8 @@ class TestReleaseTransports(unittest.TestCase):
             {"path": TP1, "fd": w1, "write_mtu": 120, "channel_alloc": 0x01},
             {"path": TP2, "fd": w2, "write_mtu": 120, "channel_alloc": 0x02},
         ]
-        tr1 = self._transport(bus, TP1)
-        tr2 = self._transport(bus, TP2)
+        tr1 = transport_iface(bus, TP1)
+        tr2 = transport_iface(bus, TP2)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             ep.release_transports(bus, dbus, list(endpoint.transports), endpoint)
@@ -515,7 +516,7 @@ class TestReleaseTransports(unittest.TestCase):
         endpoint.transports = [
             {"path": TP1, "fd": w, "write_mtu": 120, "channel_alloc": 0x01},
         ]
-        tr = self._transport(bus, TP1)
+        tr = transport_iface(bus, TP1)
 
         def boom(*a, **k):
             raise RuntimeError("gone")
@@ -542,7 +543,7 @@ class TestReleaseTransports(unittest.TestCase):
 class TestEndpointReleaseClear(unittest.TestCase):
     def _closed(self, fd):
         try:
-            os.write(fd, b"x")
+            os.fstat(fd)
             return False
         except OSError:
             return True

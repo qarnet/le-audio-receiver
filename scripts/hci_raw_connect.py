@@ -77,7 +77,7 @@ OP_LE_EXT_CREATE_CONN = 0x2043  # BT_HCI_OP_LE_EXT_CREATE_CONN
 # LE_Extended_Create_Connection (BT Core Spec Vol 4 Part E 7.8.25).
 OP_LE_CREATE_CONN_CANCEL = 0x200E
 
-# Machine-readable stdout tokens (bap_central.py gates on READY).
+# Machine-readable stdout tokens (bap_central_security gates on READY).
 READY_PREFIX = b"HCI_CONNECT_READY"
 READY_PREFIX_TEXT = "HCI_CONNECT_READY"
 FAIL_PREFIX = "HCI_CONNECT_FAIL"

@@ -60,6 +60,8 @@ def capture(fn):
 class FakeEncoder:
     """Deterministic 120-byte encoder; counts instances and calls."""
 
+    instances = 0
+
     def __init__(self, *a, **k):
         FakeEncoder.instances += 1
         self.calls = 0
@@ -74,9 +76,21 @@ class FakeEncoder:
 
 
 class FakeWriter:
-    """Records start/stop/join; scripted join result."""
+    """Records start/stop/join; scripted join result.  First two
+    positional args mirror the real PacedWriter (encode_fn, duration_s)
+    so StreamSession can construct it identically."""
 
-    def __init__(self, join_results=(True, True), error=None, tail_frames=0, frames=5):
+    def __init__(
+        self,
+        encode_fn,
+        duration_s,
+        join_results=(True, True),
+        error=None,
+        tail_frames=0,
+        frames=5,
+    ):
+        self.encode_fn = encode_fn
+        self.duration_s = duration_s
         self.started = False
         self.stopped = False
         self.join_calls = 0
@@ -111,6 +125,12 @@ def make_transports(chans):
     ]
 
 
+def writer_with(**kwargs):
+    """FakeWriter factory: forwards StreamSession's (encode_fn, duration_s)
+    positional args and layers scripted kwargs on top."""
+    return lambda *a, **k: FakeWriter(*a, **k, **kwargs)
+
+
 def make_session(
     stream_mode,
     transports=None,
@@ -141,7 +161,17 @@ def make_session(
 class TestModuleLazyImport(unittest.TestCase):
     def test_no_liblc3_at_import(self):
         # Importing the session module must NOT load liblc3 (stdlib tests).
-        self.assertIsNone(sess._liblc3_cdll)
+        # Subprocess so the golden liblc3 tests in this process cannot
+        # populate the module cache first.
+        code = (
+            "import sys; sys.path.insert(0, {scripts!r});"
+            "import bap_central_session;"
+            "print(bap_central_session._liblc3_cdll is None)"
+        ).format(scripts=SCRIPTS_DIR)
+        proc = subprocess.run([sys.executable, "-c", code],
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "True")
 
 
 class TestStreamSessionStart(unittest.TestCase):
@@ -234,7 +264,7 @@ class TestRun(unittest.TestCase):
         session = make_session(
             "mono",
             duration_s=0.01,
-            writer_cls=lambda *a, **k: FakeWriter(error=RuntimeError("encode boom")),
+            writer_cls=writer_with(error=RuntimeError("encode boom")),
         )
         session.start()
         _, out = capture(lambda: session.run())
@@ -247,7 +277,7 @@ class TestStopWriter(unittest.TestCase):
         session = make_session(
             "mono",
             duration_s=0.01,
-            writer_cls=lambda *a, **k: FakeWriter(tail_frames=3),
+            writer_cls=writer_with(tail_frames=3),
         )
         session.start()
         session.run()
@@ -262,7 +292,7 @@ class TestStopWriter(unittest.TestCase):
         session = make_session(
             "mono",
             duration_s=0.01,
-            writer_cls=lambda *a, **k: FakeWriter(error=RuntimeError("late boom")),
+            writer_cls=writer_with(error=RuntimeError("late boom")),
         )
         session.start()
         session.run()
@@ -273,7 +303,7 @@ class TestStopWriter(unittest.TestCase):
         session = make_session(
             "mono",
             duration_s=0.01,
-            writer_cls=lambda *a, **k: FakeWriter(join_results=(False, True)),
+            writer_cls=writer_with(join_results=(False, True)),
         )
         session.start()
         session.run()
@@ -293,8 +323,7 @@ class TestStopWriter(unittest.TestCase):
 
     def test_no_writer_noop(self):
         session = make_session("mono", duration_s=0.01)
-        session.run()  # never started -> no writer
-        session.stop_writer()  # no-op, no crash
+        session.stop_writer()  # never started -> no writer, no crash
 
 
 # ── Golden LC3 payload sizes with REAL liblc3 (skips without it) ─────────

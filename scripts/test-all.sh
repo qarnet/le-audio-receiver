@@ -8,11 +8,13 @@
 #      flpr_ring, offload_asrc, offload_asrc_verify)
 #      (R8: flpr_acceptance + flpr_acceptance_flpr are the two new
 #      Twister children — R8 gate total 51)
-#   3. Python unit suites (12: tests/unit/*/test_*.py in CMake-less dirs
+#   3. Python unit suites (16: tests/unit/*/test_*.py in CMake-less dirs
 #      plus scripts/test_*.py — fw_flash_dongle, flpr_stall_gate,
 #      flpr_hang_gate, bluez_wireplumber_gate, bluez_wireplumber_phase3_gate,
 #      bsim_runner, build_contract, hci_raw_connect, bap_central_policy,
-#      bap_central_writer, test_matrix, test_coverage_runner)
+#      bap_central_writer, test_matrix, test_coverage_runner, and the four
+#      R9 bap_central split suites: bap_central_device, bap_central_security,
+#      bap_central_endpoint, bap_central_session — R9 gate total 55)
 #   4. Coverage (T7): rebuilds all native C suites with CONFIG_COVERAGE=y
 #      and enforces the committed tests/coverage-baseline.json
 #   5. Test-matrix checker (T7): consumes the coverage run's coverage.json
