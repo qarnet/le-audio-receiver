@@ -6,8 +6,8 @@
       "src/main.c"
     ],
     "reasons": {
-      "src/bt_bap.c": "BAP unicast server, ASCS/PACS, pairing: integration-only through the accepted T4 BabbleSim 16-scenario matrix (mono 7.5/10 ms, Mode A incl. reverse start, Mode B, malformed-SDU rejection + resume, one-CIS-loss, first-ASE stop, release-without-disable, disconnect-while-streaming, reconnect, source-direction rejection, NO_MEM third sink, nine invalid-codec-field rejections, two successes) with strict PCM oracle; no native unit suite exists",
-      "src/flpr/main.c": "FLPR firmware entry point (RISC-V VPR): no RISC-V simulator infrastructure exists in this repo; hardware-only by design",
+      "src/bt_bap.c": "BAP unicast server, ASCS/PACS, pairing, and the R7 private teardown transition owner: integration-only through the accepted T4+R7 BabbleSim 17-scenario matrix (mono 7.5/10 ms, Mode A incl. reverse start, Mode B, malformed-SDU rejection + resume, one-CIS-loss, first-ASE stop, release-without-disable, disconnect-while-streaming, reconnect, source-direction rejection, NO_MEM third sink, nine invalid-codec-field rejections, two successes, duplicate same-slot release rejected + slot reuse) with strict PCM oracle and exact R7 teardown observer assertions (first close wins once, per-slot cleanup exactly once, release sink-stop only on a release-driven first edge, disconnect cleanup once); no native unit suite exists",
+      "src/flpr/main.c": "FLPR firmware entry point (RISC-V VPR): no RISC-V simulator infrastructure exists in this repo; hardware-only by design. R8: acceptance message handlers (RING_TEST/STALL/STRESS/FAULT_HANG + diagnostic counters) moved to src/flpr/acceptance.c, which IS direct-tested natively (tests/unit/flpr_acceptance_flpr); main.c retains READY/heartbeat/reset/producer/consumer + production ring processing.",
       "src/main.c": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by production builds and boot logs"
     }
   },
@@ -210,7 +210,7 @@
     },
     "src/audio_stream_session.c": {
       "branches": [
-        131,
+        132,
         192
       ],
       "functions": [
@@ -218,7 +218,7 @@
         25
       ],
       "lines": [
-        274,
+        276,
         292
       ]
     },
@@ -306,18 +306,46 @@
         6
       ]
     },
-    "src/flpr_acceptance_shell.c": {
+    "src/flpr/acceptance.c": {
       "branches": [
-        76,
-        204
+        14,
+        18
       ],
       "functions": [
-        10,
-        10
+        18,
+        18
       ],
       "lines": [
-        150,
-        328
+        143,
+        143
+      ]
+    },
+    "src/flpr_acceptance.c": {
+      "branches": [
+        143,
+        293
+      ],
+      "functions": [
+        28,
+        28
+      ],
+      "lines": [
+        462,
+        647
+      ]
+    },
+    "src/flpr_acceptance_shell.c": {
+      "branches": [
+        78,
+        109
+      ],
+      "functions": [
+        11,
+        11
+      ],
+      "lines": [
+        160,
+        174
       ]
     },
     "src/flpr_audio_process.c": {
@@ -348,18 +376,32 @@
         9
       ]
     },
-    "src/flpr_handshake.c": {
+    "src/flpr_control_ack.c": {
       "branches": [
-        134,
-        181
+        25,
+        32
       ],
       "functions": [
-        17,
-        17
+        9,
+        9
       ],
       "lines": [
-        389,
-        401
+        94,
+        95
+      ]
+    },
+    "src/flpr_handshake.c": {
+      "branches": [
+        92,
+        120
+      ],
+      "functions": [
+        16,
+        16
+      ],
+      "lines": [
+        274,
+        281
       ]
     },
     "src/flpr_ring.c": {
@@ -378,16 +420,16 @@
     },
     "src/flpr_ring_mgr.c": {
       "branches": [
-        230,
-        326
+        171,
+        258
       ],
       "functions": [
-        29,
-        29
+        17,
+        17
       ],
       "lines": [
-        694,
-        741
+        344,
+        367
       ]
     },
     "src/flpr_runtime.c": {
@@ -414,8 +456,8 @@
         7
       ],
       "lines": [
-        95,
-        134
+        96,
+        135
       ]
     },
     "src/stream_lifecycle.c": {
@@ -435,7 +477,7 @@
   },
   "gcov_version": "gcov (GCC) 14.3.0",
   "gcovr_version": "gcovr 8.4",
-  "generated_commit": "3c7396ad530de2857d7f30c00f7995bdff1f8409",
+  "generated_commit": "9e5d82ad424aac1c864648870e4a357c3b539c06",
   "population": [
     "src/app_lifecycle.c",
     "src/audio_asrc.c",
@@ -458,9 +500,12 @@
     "src/audio_volume.c",
     "src/bt_pairing_policy.c",
     "src/bt_shell.c",
+    "src/flpr/acceptance.c",
+    "src/flpr_acceptance.c",
     "src/flpr_acceptance_shell.c",
     "src/flpr_audio_process.c",
     "src/flpr_cache.c",
+    "src/flpr_control_ack.c",
     "src/flpr_handshake.c",
     "src/flpr_ring.c",
     "src/flpr_ring_mgr.c",
@@ -471,16 +516,16 @@
   "schema_version": 1,
   "totals": {
     "branches": [
-      1611,
-      2237
+      1695,
+      2356
     ],
     "functions": [
-      246,
-      246
+      289,
+      289
     ],
     "lines": [
-      3777,
-      4164
+      4024,
+      4402
     ]
   }
 }
