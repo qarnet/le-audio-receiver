@@ -151,6 +151,17 @@ CJMCU-1334 outputs **line level** (no headphone amp on the breakout). Connect:
 #   fw-build-5340 && fw-build-54l15 && fw-build-dongle
 ```
 
+The central test driver (`scripts/bap_central.py`) is split into
+single-domain modules (R9): device resolution
+(`bap_central_device.py`), agent/pairing/connect strategies
+(`bap_central_security.py`), the BAP source endpoint + acquire
+(`bap_central_endpoint.py`), and the LC3 source/writer lifecycle
+(`bap_central_session.py`).  CLI flags, D-Bus object paths, LC3
+payloads, pacing, sudo boundary, exit codes, and the teardown tail are
+unchanged; the CLI's `CentralCleanup` owner releases every acquired
+resource on success and on fatal paths (each module raises a
+`CentralError` with the message already printed).
+
 ### If using the PCM5102A instead
 
 Same D0/D1/D2 (nRF54L15) or P1.15/P1.13/P1.12 (nRF5340) → BCLK / DIN / LRCK

@@ -944,6 +944,36 @@ configurable; direct tests still execute real production logic.
 
 ## R9 — Host central orchestration split
 
+> **R9 COMPLETE/ACCEPTED (2026-08-06)** — handoff `0c09100`, tests
+> `41b2e14`, implementation + tests + inventory truth `21d57a5`, docs
+> commit (this document's commit).  Canonical gate on clean `21d57a5`:
+> **55 PASS / 0 FAIL / 55 TOTAL** (31 twister + 5 exec-only + 16 Python
+> + coverage + matrix + BSim Stage 1 — Python children 12 → 16 with the
+> four new stdlib bap_central split suites: device 15, security 50,
+> endpoint 31, session 31), coverage population **33** (no C change, no
+> migration), builds 3/3, build contract 79/79, BSim pins
+> byte-identical, zero new/actionable warnings.  `bap_central.py` is now
+> a thin CLI coordinator; `bap_central_device.py` (adapter power, peer
+> bypass, enumeration, bounded discovery with signal-match ownership),
+> `bap_central_security.py` (agent, pairing, raw-HCI fresh +
+> preserve-bond BlueZ Connect strategies, moved `wait_for_helper_ready`),
+> `bap_central_endpoint.py` (MediaEndpoint class factory, registration,
+> deferred async Acquire, fd ownership, mode inference), and
+> `bap_central_session.py` (lazy liblc3, sine, PacedWriter lifecycle)
+> each own one domain.  The CLI's `CentralCleanup` is the single
+> idempotent resource owner (fixed teardown order, safe from `finally`);
+> every fatal path raises a module `CentralError` (message already
+> printed, exit 1 preserved) and the owner releases exactly what was
+> acquired — the pre-split `sys.exit` leak paths are closed.  Hardware:
+> nRF54L15 fresh Mode A/B + bonded reconnect Mode A 30 s (3000 frames
+> @100 fps each; FLPR offload submit==success fallback=0; decode_err/
+> i2s_underrun/stream_reset=0) and nRF5340/E83 fresh discovery Mode A +
+> bonded reconnect Mode A/B 30 s (zero errors/gaps/underruns; APLL
+> evidence: Drift ACTIVE ppm −500 mid-stream); teardown tail
+> byte-identical (35–37 tail frames through the release window).  Full
+> evidence: `docs/development/refactor-r9-results.md`; handoff:
+> `docs/development/refactor-r9-handoff.md`.
+
 ### Goal
 
 Split `bap_central.py` without changing CLI, D-Bus object paths, security flow,

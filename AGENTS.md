@@ -628,5 +628,9 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 | `prj.conf` | App Kconfig (ACL/ISO buffers, SMP, 2 ASEs, liblc3, FPU, ZMS) |
 | `sysbuild.cmake` | Applies SW Split DT overlay + Kconfig overlay to hci_ipc |
 | `Kconfig.sysbuild` | `NRF_DEFAULT_BLUETOOTH=y` conditional on nRF5340, gates netcore |
-| `scripts/bap_central.py` | BAP central test driver (Linux → receiver, LC3 sine stream) |
+| `scripts/bap_central.py` | BAP central test driver — thin CLI coordinator (argparse + wiring + flow) plus the `CentralCleanup` idempotent resource owner (fixed teardown order, safe from `finally`; every fatal path raises a module `CentralError` with the message already printed and exit 1 preserved) |
+| `scripts/bap_central_device.py` | Central device resolution (R9): adapter power, `--peer-addr` exact-peer path, existing Device1 enumeration, bounded `InterfacesAdded` discovery — `DiscoverySession` owns its signal match and StopDiscovery exactly once |
+| `scripts/bap_central_security.py` | Central agent/pairing/connect (R9): JustWorks agent factory, raw-HCI fresh-connect strategy (exact `sudo -n` argv, ready + Connected gates), BlueZ preserve-bond Connect strategy, `wait_for_helper_ready` (READY_PREFIX from `hci_raw_connect.py`), RemoveDevice fresh-only, Pairable/Trusted/async Pair, services-resolved, cleanup Disconnect |
+| `scripts/bap_central_endpoint.py` | Central BAP source endpoint (R9): constants/LC3 blobs, `MediaEndpoint1` class factory, registration, deferred async Acquire, pending/acquired fd ownership, second-ASE grace, all-or-nothing, mode inference |
+| `scripts/bap_central_session.py` | Central LC3 source/writer (R9): lazy liblc3 loader + encoder (stdlib-safe import), sine, per-mode payloads, `StreamSession` writer lifecycle + exact teardown tail |
 | `README.md` | Human-facing project overview, BOM, I2S wiring for both boards |

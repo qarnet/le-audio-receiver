@@ -3,6 +3,41 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
+## Refactoring track — R9 ACCEPTED (2026-08-06)
+
+R0–R8 ACCEPTED.  **R9 — host central orchestration split — ACCEPTED**:
+`scripts/bap_central.py` is now a thin argparse + dependency-wiring +
+main-coordinator; discovery, security/connect strategies, the BAP
+endpoint, and the LC3 source/writer lifecycle each have one owning
+module — `bap_central_device.py` (adapter power, `--peer-addr` bypass,
+existing Device1 enumeration, bounded discovery with signal-match
+ownership and StopDiscovery exactly once), `bap_central_security.py`
+(JustWorks agent, pairing, raw-HCI fresh-connect strategy with the
+exact `sudo -n` argv, BlueZ preserve-bond Connect strategy,
+`wait_for_helper_ready` moved verbatim), `bap_central_endpoint.py`
+(MediaEndpoint1 class factory, registration, deferred async Acquire,
+pending/acquired fd ownership, second-ASE grace, all-or-nothing, mode
+inference), `bap_central_session.py` (lazy liblc3, sine, PacedWriter
+lifecycle, exact teardown tail).  The CLI's `CentralCleanup` is the
+single idempotent resource owner in the fixed successful-teardown
+order, safe from `finally`; every fatal path raises a module
+`CentralError` (message already printed, exit 1 preserved) and the
+owner releases exactly what was acquired — the pre-split `sys.exit`
+leak paths (raw helper/ACL/fds/discovery) are closed.  Gate **55 PASS /
+0 FAIL / 55 TOTAL** (31 twister + 5 exec-only + **16 Python** +
+coverage + matrix + BSim Stage 1; four new stdlib suites:
+bap_central_device 15, bap_central_security 50, bap_central_endpoint
+31, bap_central_session 31 incl. CLI golden tests); coverage population
+33 (no C change); builds 3/3; build contract 79/79; BSim pins
+byte-identical; zero new/actionable warnings.  Hardware: nRF54L15 fresh
+Mode A/B + bonded reconnect Mode A 30 s and nRF5340/E83 fresh discovery
+Mode A + bonded reconnect Mode A/B 30 s — all ~3000 frames @100 fps,
+FLPR offload submit==success fallback=0 (54L15), decode_err/
+i2s_underrun/stream_reset=0, APLL evidence Drift ACTIVE ppm −500 (E83),
+teardown tail byte-identical.  Full evidence:
+`docs/development/refactor-r9-results.md`; handoff:
+`docs/development/refactor-r9-handoff.md`.
+
 ## Refactoring track — R8 ACCEPTED (2026-08-06)
 
 R0–R7 ACCEPTED.  **R8 — FLPR production/diagnostic boundary —
