@@ -839,23 +839,7 @@
      "evidence": "direct"
     }
    ],
-   "public_outcomes": [
-    {
-     "api": "cmd_flpr_ring_status",
-     "outcome": "0",
-     "witness": "test_flpr_ring_status_exact_fields"
-    },
-    {
-     "api": "cmd_flpr_ring_acceptance",
-     "outcome": "-EINVAL",
-     "witness": "test_flpr_ring_acceptance_invalid_count"
-    },
-    {
-     "api": "cmd_flpr_stress",
-     "outcome": "0",
-     "witness": "test_flpr_stress_success_summary"
-    }
-   ],
+   "public_outcomes": [],
    "state_transitions": [],
    "function_exclusions": [],
    "hardware_acceptance": [
@@ -1771,21 +1755,21 @@
     {
      "api": "flpr_ring_mgr_coordinated_reset",
      "outcome": "-EOVERFLOW",
-     "witness": "test_ack_token_boundary_overflow_and_remote_restart"
+     "witness": "test_reset_ack_token_boundary_overflow_and_remote_restart"
     },
     {
      "api": "flpr_ring_mgr_data_lock",
-     "outcome": "mutex*",
+     "outcome": "success",
      "witness": "test_stale_slot_advances"
     },
     {
      "api": "flpr_ring_mgr_input_ring",
-     "outcome": "uint8_t*",
+     "outcome": "success",
      "witness": "test_ring_test_run_success_bounded"
     },
     {
      "api": "flpr_ring_mgr_output_ring",
-     "outcome": "uint8_t*",
+     "outcome": "success",
      "witness": "test_stale_slot_advances"
     }
    ],
@@ -1797,10 +1781,6 @@
     {
      "transition": "reset-token-exhausted->restart",
      "witness": "test_reset_ack_token_boundary_overflow_and_remote_restart"
-    },
-    {
-     "transition": "late-ack-ignored-by-sequence",
-     "witness": "test_reset_ack_retry_late_ack_ignored_by_sequence"
     }
    ],
    "function_exclusions": [],
@@ -2084,7 +2064,7 @@
     },
     {
      "api": "flpr_acceptance_stall_producer_active",
-     "outcome": "bool",
+     "outcome": "true",
      "witness": "test_producer_stall_full_backpressure"
     },
     {
@@ -2119,7 +2099,7 @@
     },
     {
      "api": "flpr_acceptance_flpr_stall_acked",
-     "outcome": "uint32_t",
+     "outcome": "success",
      "witness": "test_stall_exact_ack"
     },
     {
@@ -2164,7 +2144,7 @@
     },
     {
      "api": "flpr_acceptance_stress_active",
-     "outcome": "bool",
+     "outcome": "true",
      "witness": "test_stress_rejects_active"
     },
     {
@@ -2194,7 +2174,7 @@
     },
     {
      "api": "flpr_acceptance_test_active",
-     "outcome": "bool",
+     "outcome": "true",
      "witness": "test_latency_metrics_only_in_test_mode"
     },
     {
@@ -2251,10 +2231,6 @@
     {
      "transition": "stall-token-exhausted->restart",
      "witness": "test_stall_ack_token_boundary_overflow_and_remote_restart"
-    },
-    {
-     "transition": "late-stall-ack-ignored-by-sequence",
-     "witness": "test_stall_ack_retry_late_ack_ignored_by_sequence"
     },
     {
      "transition": "stress-active->complete",
@@ -2338,7 +2314,7 @@
     },
     {
      "api": "flpr_control_ack_payload",
-     "outcome": "uint32_t",
+     "outcome": "success",
      "witness": "test_stall_exact_ack"
     },
     {
@@ -2389,17 +2365,17 @@
     },
     {
      "api": "flpr_acceptance_hang_pending",
-     "outcome": "bool",
+     "outcome": "true",
      "witness": "test_fault_hang_ack_before_pending"
     },
     {
      "api": "flpr_acceptance_test_active",
-     "outcome": "bool",
+     "outcome": "true",
      "witness": "test_test_start_stop_report_cascade"
     },
     {
      "api": "flpr_acceptance_stall_flags",
-     "outcome": "uint8_t",
+     "outcome": "success",
      "witness": "test_stall_persistent_ack_echo"
     },
     {
