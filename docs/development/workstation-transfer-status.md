@@ -1,6 +1,27 @@
 # Workstation transfer status — pre-refactor testing track
 
-Date: 2026-08-06 (T8 ACCEPTED final update; R3–R7 ACCEPTED addenda).
+Date: 2026-08-06 (T8 ACCEPTED final update; R3–R8 ACCEPTED addenda).
+
+## R8 addendum (2026-08-06)
+
+R8 (FLPR production/diagnostic boundary) is ACCEPTED; see
+`docs/development/refactor-r8-results.md` and the handoff
+`docs/development/refactor-r8-handoff.md`.  Core FLPR cpuapp files and
+the FLPR image contain production runtime only; acceptance machinery is
+explicit and configurable (`CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS` cpuapp,
+new `CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS` FLPR image with
+`src/flpr/Kconfig`).  Shared ACK correlation engine
+`src/flpr_control_ack.c` (one owner); handshake split production/
+diagnostic handler slots; stress + fault-hang moved out of the handshake;
+gates 1–6 moved to the acceptance module with byte-identical shell
+output.  Build contract 76 → **79** with acceptance parity checks.
+Canonical gate **51 PASS / 0 FAIL / 51 TOTAL** on `35bc635` (two new
+direct suites: flpr_acceptance 48, flpr_acceptance_flpr 8); coverage
+population 30 → **33** (migration `54a6b8e`); BSim pins byte-identical.
+Hardware: nRF54L15 Mode A/B 120 s (offload submit==success fallback=0,
+faults 0), flpr hang gate Mode A + Mode B 16/16, flpr stall gate PASSED,
+`flpr status`/`flpr ring status`/`flpr stress`/`flpr ring test` exercise
+the moved handlers.  Evidence: `/tmp/r8-hw/` (MANIFEST + SHA256SUMS).
 
 ## R7 addendum (2026-08-05, G3 completed 2026-08-06)
 

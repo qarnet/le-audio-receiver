@@ -868,6 +868,28 @@ remain untouched.
 
 ## R8 — FLPR production/diagnostic boundary
 
+> **R8 COMPLETE/ACCEPTED (2026-08-06)** — handoff `42e59c9`,
+> implementation + tests `68f4003` (+ test-gap fixes `b443156`,
+> `9e5d82a`), baseline migration `54a6b8e` (population 30 → 33),
+> matrix-schema fix `35bc635`, docs commit (this document's commit).
+> Canonical gate on clean `35bc635`: **51 PASS / 0 FAIL / 51 TOTAL**
+> (31 twister + 5 exec-only + 12 Python + coverage + matrix + BSim
+> Stage 1), coverage population **33** (split aggregate old
+> ring_mgr+handshake+shell 83.88 % L / 61.88 % B / 100 % F vs the six
+> replacement files 86.53 % / 63.01 % / 100 %; every unchanged file at
+> or above its record; zero-hit functions 289/289), builds 3/3, build
+> contract **79/79** (new `5340-029`, `54l15-035`, `54l15-036`
+> cpuapp/FLPR acceptance parity checks), BSim pins byte-identical,
+> zero new/actionable warnings.  Hardware: nRF54L15 Mode A 120 s
+> (offload submit=12022 success=12022 fallback=0, faults 0) and Mode B
+> 120 s (submit=12025 success=12025 fallback=0, faults 0;
+> decode_err/i2s_underrun/stream_reset=0), flpr hang gate Mode A and
+> Mode B 16/16, flpr stall gate PASSED, `flpr status`/`flpr ring
+> status`/`flpr stress`/`flpr ring test` all exercise the moved
+> diagnostic handlers.  Full evidence:
+> `docs/development/refactor-r8-results.md`; handoff:
+> `docs/development/refactor-r8-handoff.md`.
+
 ### Goal
 
 Remove acceptance-only machinery from core ring/handshake/FLPR runtime files

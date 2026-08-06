@@ -2,10 +2,12 @@
 # Canonical full local gate script for le-audio-receiver.
 #
 # Runs every test suite:
-#   1. Twister C unit suites (testcase.yaml under tests/unit/ — currently 28)
+#   1. Twister C unit suites (testcase.yaml under tests/unit/ — currently 31)
 #   2. Exec-only C unit suites (CMakeLists.txt without testcase.yaml under
 #      tests/unit/ — currently 5: audio_offload, flpr_audio_process,
 #      flpr_ring, offload_asrc, offload_asrc_verify)
+#      (R8: flpr_acceptance + flpr_acceptance_flpr are the two new
+#      Twister children — R8 gate total 51)
 #   3. Python unit suites (12: tests/unit/*/test_*.py in CMake-less dirs
 #      plus scripts/test_*.py — fw_flash_dongle, flpr_stall_gate,
 #      flpr_hang_gate, bluez_wireplumber_gate, bluez_wireplumber_phase3_gate,

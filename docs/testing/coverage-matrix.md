@@ -49,13 +49,16 @@ production behavior.
 | `bt_pairing_policy.c` | Pure OPEN/BONDED_ONLY policy snapshot | `tests/unit/bt_pairing_policy/` — compiles production source: open default, set-bonds bonded-only/zero/overflow-atomic, pairing-accept open/bonded-only, mark-bonded add + bonded-only, full-snapshot overflow, request-open reset, snapshot atomic/empty | — | — | Bonded-only FAL filtering on both targets (hardware baseline pairing-filter phase) | Direct suite covers the pure policy; HCI/controller filter work remains in `bt_bap.c` | T8 (closed) |
 | `flpr_audio_process.c` | FLPR audio block wrapper | `tests/unit/flpr_audio_process/` — compiles production source | — | — | nRF54L15 FLPR streaming | No known functional gap; branch coverage unmeasured. | T7 |
 | `flpr_cache.c` | FLPR cache operations | Compiled by `flpr_ring`, `flpr_audio_process`, and `flpr_ring_mgr` (T1) suites (production source) | — | — | nRF54L15 FLPR activation | native_sim coverage is API/barrier-call proof only — the native branch uses `atomic_thread_fence`; physical cache/barrier semantics remain hardware-only. Branch coverage unmeasured. | T7 |
-| `flpr_handshake.c` | FLPR boot handshake + VEVIF IPC | `tests/unit/flpr_handshake/` — 46 tests compile and execute `src/flpr_handshake.c` against a fake IPC service backend (real `ipc_service_*` APIs, production callbacks); R1 adds validation counters under concurrent status reads (reader thread polls while invalid messages are injected; the counter pair stays monotonic and ends exact) and changed-epoch failed-ACK stale-state prevention (a changed READY epoch clears `acked`; a failed READY_ACK send cannot leave the stale fast path usable, restored only by a successful duplicate READY ACK) | — | — | nRF54L15 FLPR handshake | Bind/unbind, READY/duplicate/changed epoch, ACK send failures, heartbeat health transitions, ring dispatch, disconnect/reconnect, stress, fault-hang now direct production-source proof. Branch coverage unmeasured. | T7 |
+| `flpr_handshake.c` | FLPR boot handshake + VEVIF IPC (R8: production slot reset/consumer + diagnostic slot registration; stress/fault-hang state moved to `flpr_acceptance.c`) | `tests/unit/flpr_handshake/` — 46 tests compile and execute `src/flpr_handshake.c` against a fake IPC service backend (real `ipc_service_*` APIs, production callbacks); R1 adds validation counters under concurrent status reads (reader thread polls while invalid messages are injected; the counter pair stays monotonic and ends exact) and changed-epoch failed-ACK stale-state prevention (a changed READY epoch clears `acked`; a failed READY_ACK send cannot leave the stale fast path usable, restored only by a successful duplicate READY ACK) | — | — | nRF54L15 FLPR handshake | Bind/unbind, READY/duplicate/changed epoch, ACK send failures, heartbeat health transitions, ring dispatch, disconnect/reconnect, stress, fault-hang now direct production-source proof. Branch coverage unmeasured. | T7 |
 | `flpr_ring.c` | SPSC ring buffer (shared SRAM) | `tests/unit/flpr_ring/` — compiles production source | — | — | nRF54L15 FLPR ring through I/O | No known functional gap; branch coverage unmeasured. | T7 |
-| `flpr_ring_mgr.c` | Ring manager: paired input/output rings | `tests/unit/flpr_ring_mgr/` — 66 tests compile and execute `src/flpr_ring_mgr.c` (+ real `flpr_ring.c`, `flpr_cache.c`) with host ring arrays and a handshake mock; R1 adds the ring-data-lock barrier (producer paused after produce begin holds the data lock; reset cannot run/mutate until release), repeated-init preservation/serialization (repeated init during a live session is a non-destructive no-op proven by unchanged epoch/headers/contents/semaphore tokens; concurrent init blocks on the same data lock as a paused producer), epoch-0 produce rejection before slot mutation, reset/stall ACK sequence correlation (late-ACK-by-sequence retry regression), and the 16-bit token boundary (0xFFFF succeeds, next overflows -EOVERFLOW, remote restart permits token 1); R2 removed the dead `flpr_ring_mgr_set_consume_cb()` no-op test (67 → 66) | — | — | nRF54L15 FLPR ring manager through I/O | Coordinated reset, invalidation races, semaphore draining, producer/consumer validation, backpressure, sequence wrap, remote restart, data-lock barrier, ACK correlation now direct production-source proof. Branch coverage unmeasured. | T7 |
+| `flpr_ring_mgr.c` | Ring manager production core: paired rings, reset, typed ASRC produce/consume, notify, wait, remote restart (R8: acceptance APIs moved to `flpr_acceptance.c`) | `tests/unit/flpr_ring_mgr/` — 28 tests compile and execute `src/flpr_ring_mgr.c` (+ real `flpr_ring.c`, `flpr_cache.c`, `flpr_control_ack.c`) with host ring arrays and a handshake mock; R1 barrier/repeated-init/token/late-ACK tests retained; `tests/unit/flpr_acceptance/` compiles the same core with the acceptance hooks active | — | — | nRF54L15 FLPR ring manager through I/O | Production reset/consume/ASRC/notify/wait/remote-restart now direct production-source proof; acceptance counters proven in the flpr_acceptance suite. | R8 |
+| `src/flpr_acceptance.c` | Cpuapp FLPR acceptance module (R8): ring test, stalls + ACK correlation, stale produce, report aggregation, acceptance status, stress, fault hang, gates 1–6 — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS` | `tests/unit/flpr_acceptance/` — 48 tests compile and execute `src/flpr_acceptance.c` (+ real core ring mgr, control-ACK engine, ring, cache) against a faithful two-slot handshake mock: test_run loop incl. rate-limit/timeout/full/notify-failure, stall packing/validation/ACK correlation/token boundary/remote-restart, stale produce, report subtypes, backpressure/CRC/payload/latency accounting, stress (match/stale/future/clamp/timeout/late PONG), fault hang, gate prep | — | — | `scripts/flpr_hang_gate.py` + `scripts/flpr_stall_gate.py` + nRF54L15 Mode A/B/hang/stall hardware | all-gates-PASS tail of `flpr_acceptance_run_gates` requires a live FLPR worker (hardware evidence). | R8 |
+| `src/flpr_control_ack.c` | Shared control-ACK correlation engine (R8): ONE owner of reset + stall ACK correlation, token/arm/handle/wait/reset-session | `tests/unit/flpr_ring_mgr/` + `tests/unit/flpr_acceptance/` — direct production-source execution (reset side via the ring-mgr suite, stall side via the acceptance suite: timeout/disarm, first-ACK-wins, stale rejection by sequence, 0xFFFF token boundary + remote-restart reset) | — | — | — | Fully direct-covered. | R8 | `tests/unit/flpr_ring_mgr/` — 66 tests compile and execute `src/flpr_ring_mgr.c` (+ real `flpr_ring.c`, `flpr_cache.c`) with host ring arrays and a handshake mock; R1 adds the ring-data-lock barrier (producer paused after produce begin holds the data lock; reset cannot run/mutate until release), repeated-init preservation/serialization (repeated init during a live session is a non-destructive no-op proven by unchanged epoch/headers/contents/semaphore tokens; concurrent init blocks on the same data lock as a paused producer), epoch-0 produce rejection before slot mutation, reset/stall ACK sequence correlation (late-ACK-by-sequence retry regression), and the 16-bit token boundary (0xFFFF succeeds, next overflows -EOVERFLOW, remote restart permits token 1); R2 removed the dead `flpr_ring_mgr_set_consume_cb()` no-op test (67 → 66) | — | — | nRF54L15 FLPR ring manager through I/O | Coordinated reset, invalidation races, semaphore draining, producer/consumer validation, backpressure, sequence wrap, remote restart, data-lock barrier, ACK correlation now direct production-source proof. Branch coverage unmeasured. | T7 |
 | `flpr_runtime.c` | Synchronous FLPR VPR runtime restart manager | `tests/unit/flpr_runtime/` — 21 tests compile and execute the real nRF54 restart body (shadow VPR HAL, host source/exec arrays, ordered event log) | — | — | nRF54L15 FLPR runtime restart + fault handling | DMCONTROL transitions, fault stages, CRC rejection, mutex busy, duration accounting now direct production-source proof. Physical cache/FLPR entry behavior remains hardware-only. Branch coverage unmeasured. | T7 |
 | `main.c` | Boot wiring, watchdog device/thread, advertising loop | Boot ordering/reboot semantics delegated to `app_lifecycle.c` (direct suite above); `main.c` itself is not compiled into any unit suite — hardware wiring remains proven by the production builds | — | — | Boot logs on both targets | Fatal init order and reboot behavior now direct production-source proof via the coordinator; `main.c` remains adapter-only glue. | T6 (closed) |
 | `stream_lifecycle.c` | Stream start/stop lifecycle | `tests/unit/lifecycle/` — 28 tests compile production source: Mode A/B/mono gates, close idempotence, closed-to-open edge semantics (duplicate starts return false), configure/start/close/reconfigure/start permutations, release-then-slot-reuse, reset from closed/partial/open states, repeated open/close cycles, inert unconfigured starts; R1 forced-close latch (was-open return for exact first-close observer emission, later starts blocked for the configured slot set, one-slot release does not unblock while another remains, final release + reconfigure permits open, reset permits fresh open, idle force-close does not latch a future first configure/start); R6 narrowed `stream_lifecycle_sink_configured()` to slot occupancy only (chan_count parameter/storage removed — three chan_count-specific tests deleted: zero/negative chan_count absence and the `configured(idx, 0)` stale-latch scenario, which no longer exists; released-slot inert start remains covered by release-then-slot-reuse) | BSim T4 matrix: gate open/close across mono, Mode A (two-ASE set), first-ASE stop, release-without-disable, disconnect-while-streaming, and reconnect; closed-gate receive evidence | — | Hardware connect/disconnect cycles | Duplicate-start edge semantics now direct production-source proof. | T5 (closed), R6 |
-| `src/flpr/main.c` | FLPR firmware entry point (RISC-V VPR) | — | — | — | nRF54L15 FLPR firmware loaded + active | **No direct unit test.** No RISC-V simulator test infrastructure exists. Hardware-only by design; no practical simulation path. | — (hardware-only) |
+| `src/flpr/main.c` | FLPR firmware entry point (RISC-V VPR): READY/heartbeat/reset/producer/consumer + production ring processing (R8: acceptance handlers moved to `src/flpr/acceptance.c`) | — | — | — | nRF54L15 FLPR firmware loaded + active | **No direct unit test.** No RISC-V simulator test infrastructure exists. Hardware-only by design; the moved acceptance message/state logic IS direct-tested (`tests/unit/flpr_acceptance_flpr`). | — (hardware-only) |
+| `src/flpr/acceptance.c` | FLPR-image acceptance handlers (R8): RING_TEST_START/STOP report cascade, RING_STALL timer + ACK echo, STRESS_PING/PONG, FAULT_HANG ACK-before-spin, diagnostic note hooks — `CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS` | `tests/unit/flpr_acceptance_flpr/` — 8 tests compile and execute `src/flpr/acceptance.c` directly via its injected send/wake dependency table (no ipc_service/DT/RV32 glue): report cascade exact subtype packing, stall ACK echo + timed auto-clear, ring-reset state reset, stress echo, hang ACK-before-pending, unknown-message false | — | — | nRF54L15 FLPR firmware + hang/stall gates | The hardware spin (irq_lock/busy-wait) stays in main.c (hardware-only); all message/state logic direct-covered. | R8 |
 
 ## Current suite inventory
 
@@ -71,13 +74,13 @@ Stage 1 matrix, run counts, and pinned hashes live in
 
 | Category | Count | Suites |
 |----------|-------|--------|
-| Twister C (testcase.yaml) | 29 | actuator_apll, actuator_apll_nohfclk, actuator_none, actuator_sample_adjust_historical, app_lifecycle, asrc, audio_i2s, audio_i2s_identity, audio_shell, audio_shell_noperf, audio_shell_nrf54, audio_stream_session, bt_pairing_policy, decode, drift, flpr_handshake, flpr_protocol, flpr_ring_mgr, flpr_runtime, iso_seq, lifecycle, modea, perf, rate_convert, stats, timing, timing_none, timing_nrf54, volume |
+| Twister C (testcase.yaml) | 31 | actuator_apll, actuator_apll_nohfclk, actuator_none, actuator_sample_adjust_historical, app_lifecycle, asrc, audio_i2s, audio_i2s_identity, audio_shell, audio_shell_noperf, audio_shell_nrf54, audio_stream_session, bt_pairing_policy, decode, drift, flpr_acceptance, flpr_acceptance_flpr, flpr_handshake, flpr_protocol, flpr_ring_mgr, flpr_runtime, iso_seq, lifecycle, modea, perf, rate_convert, stats, timing, timing_none, timing_nrf54, volume |
 | Exec-only C (CMakeLists.txt, no testcase.yaml) | 5 | audio_offload, flpr_audio_process, flpr_ring, offload_asrc, offload_asrc_verify |
 | Python | 12 | fw_flash_dongle (test_fw_flash_dongle.py), flpr_stall_gate (test_flpr_stall_gate.py), flpr_hang_gate (test_flpr_hang_gate.py), bluez_wireplumber_gate (test_bluez_wireplumber_gate.py), bluez_wireplumber_phase3_gate (test_bluez_wireplumber_phase3_gate.py), bsim_runner (test_bsim_stage1_parse.py), build_contract (test_build_contract.py), hci_raw_connect (test_hci_raw_connect.py), bap_central_policy (test_bap_central_policy.py), bap_central_writer (test_bap_central_writer.py), test_matrix (test_check_test_matrix.py), test_coverage_runner (test_test_coverage_runner.py) |
-| Coverage | 1 | coverage (test-coverage.sh default mode: rebuilds the 28 twister + 5 exec suites with CONFIG_COVERAGE=y, enforces the committed baseline) |
+| Coverage | 1 | coverage (test-coverage.sh default mode: rebuilds the 31 twister + 5 exec suites with CONFIG_COVERAGE=y, enforces the committed baseline) |
 | Test-matrix checker | 1 | matrix (check-test-matrix.py --coverage-json on the coverage run's coverage.json) |
-| BabbleSim | 1 | bsim_stage1 (T4 16-scenario BAP matrix, scenarios 1–9 twice, remaining seven once) |
-| **Total gate children** | **49** | |
+| BabbleSim | 1 | bsim_stage1 (T4+R7 17-scenario BAP matrix, scenarios 1–9 twice, remaining eight once) |
+| **Total gate children** | **51** | |
 
 > **T7 canonical gate ACCEPTED (2026-08-02) — historical 41-child evidence.**
 >  The 41-child composition
@@ -411,6 +414,56 @@ baseline with zero drift on the R7 gate.  New direct tests only improve
 the `stream_lifecycle.c` and `audio_stream_session.c` ratios (lifecycle
 28→33 tests, session 29→35 tests); every file remains at or above its
 committed record.
+
+## R8 baseline migration (2026-08-06) — FLPR production/diagnostic split, population 30 → 33
+
+R8 moved the acceptance machinery out of the core FLPR cpuapp files
+(`flpr_ring_mgr.c`, `flpr_handshake.c`) and the FLPR image
+(`src/flpr/main.c`) into explicit configurable modules
+(`src/flpr_acceptance.c` under `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`;
+`src/flpr/acceptance.c` under `CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS`),
+generalized the shared reset/stall ACK correlation into
+`src/flpr_control_ack.c` (one owner), and moved the gate orchestration
+out of `flpr_acceptance_shell.c`.  The migration candidate was
+generated on the clean implementation commit `9e5d82a` via
+`scripts/test-coverage.sh --output /tmp/r8-cov-candidate3
+--write-baseline /tmp/r8-baseline-candidate3.json` and committed as
+`tests/coverage-baseline.json` (`54a6b8e`).  Tool versions unchanged:
+**gcovr 8.4 / gcov (GCC) 14.3.0**.
+
+Split aggregate (old `flpr_ring_mgr` + `flpr_handshake` +
+`flpr_acceptance_shell` vs the six replacement files including the new
+`src/flpr_acceptance.c`, `src/flpr_control_ack.c`, and
+`src/flpr/acceptance.c`):
+
+| metric | old 3-file | R8 candidate (6 files) |
+|--------|-----------|------------------------|
+| lines | 1233/1470 (83.9%) | **1477/1707 (86.5%)** |
+| branches | 440/711 (61.9%) | **523/830 (63.0%)** |
+| functions | 56/56 | **99/99** |
+
+Every unchanged file remains at or above its committed record (verified
+programmatically — zero decreases); zero-hit enforcement clean
+(289/289).  New-file records: `src/flpr_acceptance.c` 443/647 L,
+121/293 B, 28/28 F; `src/flpr_control_ack.c` 94/95 L, 25/32 B, 9/9 F;
+`src/flpr/acceptance.c` 143/143 L, 14/18 B, 18/18 F (FLPR-image
+acceptance now direct-tested natively via the injected send/wake
+dependency table — no longer hardware-only).  The gate bodies'
+FLPR-dependent branches (gates 1–6 drain paths, the 60 s gate-1 test_run
+floor) stay hardware evidence, exactly as the R4 shell gate branches
+were fake-driven at 37 %: the real-module gates are proven by the
+hardware hang/stall gates and this phase's nRF54L15 runs — no covered
+live behavior was deleted.  Aggregate totals:
+
+| metric | committed (30 files) | R8 candidate (33 files) |
+|--------|----------------------|-------------------------|
+| lines | 3777/4164 (90.7%) | **4024/4402 (91.4%)** |
+| branches | 1611/2237 (72.0%) | 1695/2356 (71.9%) |
+| functions | 246/246 | **289/289** |
+
+Canonical enforcement on the clean R8 baseline commit `54a6b8e`:
+**51 PASS / 0 FAIL / 51 TOTAL** (31 twister + 5 exec-only + 12 Python +
+coverage + matrix + BSim Stage 1, pins unchanged).
 
 ## R6 baseline migration (2026-08-05) — receive-pipeline split, population 29 → 30
 

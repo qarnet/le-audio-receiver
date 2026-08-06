@@ -843,7 +843,12 @@ resolves it from each root's `domains.yaml` (`default:` image; missing file
 or missing default is a hard error); `hci_ipc`/`flpr` domain names are
 fixed.  Missing, duplicate, unreadable, or
 malformed required inputs are hard failures; comments can never satisfy a
-DTS assertion.  `tests/unit/build_contract/` (30 tests) covers a complete
+DTS assertion.  **R8:** the checker additionally asserts the acceptance
+diagnostics parity — nRF5340 app `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`
+not enabled (`5340-029`), nRF54L15 app `CONFIG_AUDIO_ACCEPTANCE_
+DIAGNOSTICS=y` (`54l15-035`) and FLPR image `CONFIG_FLPR_ACCEPTANCE_
+DIAGNOSTICS=y` (`54l15-036`) — 76 → **79 assertions**.  `tests/unit/
+build_contract/` (33 tests) covers a complete
 valid dual-target fixture, every hard-input class, explicit unset vs set
 symbols, comment-only satisfaction attempts, wrong node status/compatible/
 chosen/pins/counts/polarity/capacitance, missing/overlapping/out-of-range

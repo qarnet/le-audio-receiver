@@ -3,6 +3,33 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
+## Refactoring track — R8 ACCEPTED (2026-08-06)
+
+R0–R7 ACCEPTED.  **R8 — FLPR production/diagnostic boundary —
+ACCEPTED**: core FLPR cpuapp files (`flpr_ring_mgr.c/.h`,
+`flpr_handshake.c/.h`) and the FLPR image (`src/flpr/main.c`) contain
+production runtime only; acceptance machinery is explicit and
+configurable.  Cpuapp acceptance moved to `src/flpr_acceptance.c/.h`
+(ring test, stalls, stale produce, report aggregation, acceptance
+status, stress, fault hang, gates 1–6) under the R4
+`CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`; FLPR-image acceptance moved to
+`src/flpr/acceptance.c/.h` (RING_TEST/STALL/STRESS/FAULT_HANG handlers +
+diagnostic hooks) under the new `CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS`
+(new `src/flpr/Kconfig` app root, no SHELL dependency).  The shared
+reset/stall ACK correlation engine is `src/flpr_control_ack.c/.h` (ONE
+owner); handshake splits production (reset/consumer) from diagnostic
+(report/stall-ack/pong/hang) handler registration; stress + fault-hang
+blocking state moved out of the handshake; shells are parsing/printing
+only with byte-identical output.  Build contract 76 → 79 with
+cpuapp/FLPR acceptance parity checks (`5340-029`, `54l15-035`,
+`54l15-036`).  Gate 51 PASS / 0 FAIL / 51 TOTAL (two new direct suites:
+flpr_acceptance 48, flpr_acceptance_flpr 8); coverage population 30 →
+33; BSim pins byte-identical.  Hardware: nRF54L15 Mode A/B 120 s with
+offload submit==success fallback=0 and zero faults, flpr hang gate
+Mode A and Mode B 16/16, flpr stall gate PASSED.  Full evidence:
+`docs/development/refactor-r8-results.md`; handoff:
+`docs/development/refactor-r8-handoff.md`.
+
 ## Refactoring track — R7 ACCEPTED (2026-08-05, G3 completed 2026-08-06)
 
 R0–R6 ACCEPTED.  **R7 — stream teardown transition owner — ACCEPTED**:

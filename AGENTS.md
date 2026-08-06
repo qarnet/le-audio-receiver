@@ -85,11 +85,13 @@ production code `971e6a4`; canonical gate **47 PASS / 0 FAIL / 47 TOTAL**
 baseline `1a5842d` (26 files: 3281/3722 lines, 1433/2041 branches, 205/205
 functions, gcovr 8.4 / gcov (GCC) 14.3.0), builds 3/3, build contract 76/76,
 both hardware matrices pass (`docs/testing/pre-refactor-hardware-baseline.md`).
-**Refactor track: R0–R6 ACCEPTED** — R6 (BAP receive-pipeline
-decomposition into `src/audio_stream_session.{c,h}`) landed with a
-**49-child canonical gate** (29 twister + 5 exec-only + 12 Python +
-coverage + matrix + BSim) and coverage population **30**; see
-`docs/development/refactor-r6-results.md` and `STATUS.md`.
+**Refactor track: R0–R7 ACCEPTED** — R7 (stream teardown transition
+owner) landed at **49**; **R8 (FLPR production/diagnostic boundary)
+ACCEPTED** with a **51-child canonical gate** (31 twister + 5 exec-only +
+12 Python + coverage + matrix + BSim), coverage population **33**, build
+contract **79/79**, and nRF54L15 Mode A/B + flpr hang/stall gate
+hardware PASS (see `docs/development/refactor-r8-results.md` and
+`STATUS.md`).
 **BabbleSim Stage 1 is an accepted regular local gate** — the 16-scenario T4
 BAP matrix via `scripts/bsim-stage1-run.sh` (first nine scenarios run twice,
 remaining seven once), strict PCM oracle, deterministic across runs (mono
@@ -612,10 +614,13 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 | `src/audio_asrc.c` | Fixed-point linear stereo ASRC (cpuapp + FLPR fallback) |
 | `src/audio_offload.c` | FLPR offload manager (handshake, IPC, fallback path) |
 | `src/flpr/` | FLPR firmware (RISC-V VPR): ASRC, ICMsg/VEVIF IPC |
-| `src/flpr_handshake.c` | cpuapp↔FLPR boot handshake + VEVIF |
+| `src/flpr_handshake.c` | cpuapp↔FLPR boot handshake + VEVIF (R8: production slot reset/consumer + diagnostic slot registration; stress/fault-hang state moved to flpr_acceptance) |
 | `src/flpr_protocol.h` | Shared protocol constants (ring layout, commands) |
 | `src/flpr_ring.c` | SPSC ring buffer (shared SRAM, cache-safe) |
-| `src/flpr_ring_mgr.c` | Ring manager: paired input/output rings |
+| `src/flpr_ring_mgr.c` | Ring manager production core: paired rings, reset, typed ASRC produce/consume, notify, wait, remote restart (R8) |
+| `src/flpr_acceptance.c` | Cpuapp FLPR acceptance module (R8): ring test, stalls + ACK correlation, stale produce, report aggregation, stress, fault hang, gates 1–6 — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS` |
+| `src/flpr_control_ack.c` | Shared control-ACK correlation engine (R8): ONE owner for reset + stall ACK correlation |
+| `src/flpr/acceptance.c` | FLPR-image acceptance handlers (R8): RING_TEST/STALL/STRESS/FAULT_HANG + diagnostic hooks — `CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS` |
 | `src/flpr_runtime.c` | FLPR runtime: IPC submit, watchdog, fault detection |
 | `src/flpr_audio_process.c` | FLPR audio block wrapper (metadata + PCM) |
 | `boards/ebyte/e83_nrf5340/` | Custom board definition for Ebyte E83-2G4M03S: I2S0 pins, ACLK 12.288 MHz, QSPI disabled, i2s-audio alias, OpenOCD flash runner |

@@ -249,7 +249,9 @@ before reflashing — `west flash` does not erase the settings partition.
 | `src/flpr_handshake.{c,h}` | cpuapp↔FLPR boot handshake + VEVIF signalling |
 | `src/flpr_protocol.h` | Shared protocol constants (ring layout, commands) |
 | `src/flpr_ring.{c,h}` | SPSC ring buffer (shared SRAM) |
-| `src/flpr_ring_mgr.{c,h}` | Ring manager: paired input/output rings |
+| `src/flpr_ring_mgr.{c,h}` | Ring manager production core: paired rings, reset, typed ASRC produce/consume, notify, wait, remote restart (R8) |
+| `src/flpr_acceptance.{c,h}` | Cpuapp FLPR acceptance module (R8): ring test, stalls, stale produce, report aggregation, stress, fault hang, gates 1–6 — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated |
+| `src/flpr_control_ack.{c,h}` | Shared control-ACK correlation engine (R8): one owner for reset + stall ACK correlation |
 | `src/flpr_runtime.{c,h}` | FLPR runtime: IPC submit, watchdog, fault detection |
 | `src/flpr_audio_process.{c,h}` | FLPR audio block wrapper (metadata + PCM) |
 | `src/flpr_cache.c` | Cache maintenance for shared SRAM (ARMv8-M / RISC-V) |
@@ -258,7 +260,8 @@ before reflashing — `west flash` does not erase the settings partition.
 | `src/audio_shell.c` | Shell diagnostics (`audio status`, `audio perf`, stop/reset commands) |
 | `src/bt_shell.c` | Shell command `bt unpair` (pairing-mode reset, both targets) |
 | `src/flpr_shell.c` | FLPR production diagnostics (`flpr status/offload/runtime/restart`, nRF54L15) |
-| `src/flpr_acceptance_shell.c` | FLPR acceptance harness (`flpr ring *`, `flpr stress`, `flpr hang`) — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated |
+| `src/flpr_acceptance_shell.c` | FLPR acceptance shell parsing/printing (`flpr ring *`, `flpr stress`, `flpr hang`) — delegates to `src/flpr_acceptance.c`, `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated (R8) |
+| `src/flpr/acceptance.{c,h}` | FLPR-image acceptance handlers (R8): RING_TEST/STALL/STRESS/FAULT_HANG + diagnostic hooks — `CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS` |
 | `src/audio_volume.{c,h}` | VCP volume control |
 | `src/audio_stream_session.{c,h}` | App-owned BAP sink receive/session state (R6): validated codec shape, decoder contexts, per-CIS ISO sequence trackers, Mode A assembler, receive counters, and decode/conceal/volume/push orchestration with admission/lease discipline |
 | `boards/ebyte/e83_nrf5340/` | Custom nRF5340 board: I2S0 pins, ACLK 12.288 MHz, QSPI disabled |
