@@ -40,6 +40,54 @@ diagnostics), build contract **79/79**, zero new/actionable warnings,
 `git diff --check` clean.  No hardware tests (P8); no input/LED/Bluetooth/
 lifecycle/shell integration (P2–P5); no production board enabling.
 
+## User pairing control — P2 ACCEPTED (2026-08-07)
+
+**P2 — generic input and LED adapter — ACCEPTED**:
+`src/user_pairing_io.c/.h` translates one debounced user button into the
+accepted P1 `pairing_mode` requests (BONDING at
+`USER_PAIRING_BOND_HOLD_MS`, RESET at `USER_PAIRING_RESET_HOLD_MS`) and
+drives the user LED with logical levels (polarity in DT).  Hardware is
+selected ONLY through the `user-button` (child of a `gpio-keys` node)
+and `user-led` (`gpio-leds` child) devicetree aliases — no board-number
+conditionals; compile-time alias/node/property assertions with useful
+errors.  The gpio-keys driver owns debounce (no second debounce timer;
+BUILD_ASSERT ties the selected node's resolved `debounce-interval-ms` to
+`CONFIG_USER_PAIRING_DEBOUNCE_MS`).  Press arms both hold thresholds with
+a captured hold generation; release invalidates the generation and
+cancels best-effort (busy-state bitmask deliberately ignored, never
+blocking); stale work can never call P1.  Threshold handlers recheck
+initialized/pressed/armed/generation and call
+`pairing_mode_request_bonding()/request_reset()` exactly once; negative
+returns (incl. `-ECANCELED` after a P1 fatal) are logged and surfaced in
+status, never retried, and never drive transition operations directly.
+LED failures return the exact GPIO errno so P1 can reboot; a short
+spinlock guards all shared state (never held across GPIO/P1/log/cancel
+calls; safe in synchronous/ISR input contexts).  Production feature
+disabled on both boards (`CONFIG_USER_PAIRING_INPUT=n`;
+`zephyr_sources_ifdef` wiring only).  New direct twister suite
+`tests/unit/user_pairing_io` (20 tests) compiles the production source
+against the REAL input subsystem + REAL gpio-keys driver + REAL gpio-emul
+controller on native_sim (active-low/pull-up button, 30 ms debounce,
+active-low LED, aliases) with fake link implementations of the two P1
+request APIs recording public calls/results and shortened hold thresholds
+preserving reset > bonding (bond 100 ms, reset 200 ms).  Handoff:
+`docs/development/user-pairing-control-p2-handoff.md` (committed
+`1fa7f17`); implementation `495b3a7`; coverage migration `184969a`
+(population 34 → 35, new file 130/147 L, 56/106 B, 11/11 F, every
+unchanged file at or above its record, gcovr 8.4 / gcov (GCC) 14.3.0,
+provenance in `docs/testing/coverage-matrix.md`); results:
+`docs/development/user-pairing-control-p2-results.md`.  Canonical gate on
+clean `184969a`: **57 PASS / 0 FAIL / 57 TOTAL** (33 twister + 5
+exec-only + 16 Python + coverage + matrix + BSim Stage 1, coverage
+baseline enforcement 0 errors, matrix 0 errors, all existing BSim pins
+byte-identical: mono 10 ms `0x22AB5C0D`, Mode A/B 10 ms `0xBAE24F7E`,
+7.5 ms set, reconnect fresh mono oracle), builds 3/3
+(`fw-build-5340/54l15/dongle`, only the documented NCS v3.3.0
+diagnostics), build contract **79/79**, zero new/actionable warnings,
+`git diff --check` clean.  No hardware tests (P8); no XIAO overlay/pin
+mapping (P6); no Bluetooth/lifecycle/shell integration (P3–P5); no
+production board enabling.
+
 ## Refactoring track — R10 COMPLETE/ACCEPTED — TRACK R0–R10 COMPLETE (2026-08-06)
 
 **R10 — final integration and documentation closeout — COMPLETE/
