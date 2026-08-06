@@ -509,3 +509,36 @@ population; the session suite exercises every production session
 function).  Canonical enforcement on the clean R6 baseline commit:
 **49 PASS / 0 FAIL / 49 TOTAL** (29 twister + 5 exec-only + 12 Python +
 coverage + matrix + BSim Stage 1, pins unchanged).
+
+## P1 baseline migration (2026-08-06) — pairing-mode transition owner, population 33 → 34
+
+P1 added the portable pairing-mode transition owner
+`src/pairing_mode.c` (direct suite `tests/unit/pairing_mode`, 32
+tests).  The migration candidate was generated on the clean
+implementation commit `14be974` via
+`scripts/test-coverage.sh --write-baseline /tmp/p1-baseline-candidate.json`
+(`--output /tmp/p1-cov-candidate --clean-output`), inspected, and
+committed as `tests/coverage-baseline.json` (byte-exact copy).
+Tool versions unchanged: **gcovr 8.4 / gcov (GCC) 14.3.0**, recorded
+in the baseline.
+
+**Population 33 → 34** is a deliberate provenance change: the new
+production source is directly covered by its own suite.  No per-file
+regression (verified programmatically across lines/branches/functions —
+zero decreases on every unchanged file; the committed baseline record
+for every other file stays at or above its pre-P1 value).  New-file
+record: `pairing_mode.c` **344/405 lines, 160/226 branches, 39/39
+functions** (the `PAIRING_MODE_TEST` state-reset seam is
+GCOVR-excluded and never enters the numeric population).  Aggregate:
+
+| metric | committed (33 files) | P1 candidate (34 files) |
+|--------|----------------------|-------------------------|
+| lines | 4024/4402 (91.4%) | **4368/4807 (90.9%)** |
+| branches | 1695/2356 (71.9%) | **1855/2582 (71.8%)** |
+| functions | 289/289 | **328/328** |
+
+Zero-hit enforcement stays clean (328/328 functions in the numeric
+population; the pairing suite exercises every production function —
+the only zero-execution record is the GCOVR-excluded seam variant).
+No covered live behavior was deleted; the denominator increase is
+exactly the new file's measured lines/branches.
