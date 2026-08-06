@@ -1326,14 +1326,49 @@
      "witness": "test_init_open_default"
     },
     {
-     "api": "bt_pairing_policy_set_bonds",
+     "api": "bt_pairing_policy_set_mode",
      "outcome": "0",
-     "witness": "test_set_bonds_bonded_only"
+     "witness": "test_set_mode_idempotent_legal_empty_bonded_only"
     },
     {
-     "api": "bt_pairing_policy_set_bonds",
+     "api": "bt_pairing_policy_set_mode",
+     "outcome": "-EINVAL",
+     "witness": "test_set_mode_invalid_atomic"
+    },
+    {
+     "api": "bt_pairing_policy_replace_bonds",
+     "outcome": "0",
+     "witness": "test_replace_nonempty_keeps_bonded_only"
+    },
+    {
+     "api": "bt_pairing_policy_replace_bonds",
      "outcome": "-ENOMEM",
-     "witness": "test_set_bonds_overflow_atomic"
+     "witness": "test_replace_overflow_atomic"
+    },
+    {
+     "api": "bt_pairing_policy_replace_bonds",
+     "outcome": "-EINVAL",
+     "witness": "test_replace_nonzero_null_atomic"
+    },
+    {
+     "api": "bt_pairing_policy_mark_bonded",
+     "outcome": "0",
+     "witness": "test_mark_preserves_open"
+    },
+    {
+     "api": "bt_pairing_policy_mark_bonded",
+     "outcome": "-ENOMEM",
+     "witness": "test_mark_overflow_preserves_mode_and_inventory"
+    },
+    {
+     "api": "bt_pairing_policy_mark_bonded",
+     "outcome": "-EINVAL",
+     "witness": "test_mark_null_atomic"
+    },
+    {
+     "api": "bt_pairing_policy_clear_bonds",
+     "outcome": "void",
+     "witness": "test_clear_preserves_open_idempotent"
     },
     {
      "api": "bt_pairing_policy_get_mode",
@@ -1343,7 +1378,7 @@
     {
      "api": "bt_pairing_policy_get_mode",
      "outcome": "BT_PAIRING_POLICY_MODE_BONDED_ONLY",
-     "witness": "test_set_bonds_bonded_only"
+     "witness": "test_replace_nonempty_keeps_bonded_only"
     },
     {
      "api": "bt_pairing_policy_get_entry_count",
@@ -1353,32 +1388,17 @@
     {
      "api": "bt_pairing_policy_get_entry_count",
      "outcome": "2",
-     "witness": "test_set_bonds_bonded_only"
+     "witness": "test_replace_nonempty_keeps_bonded_only"
     },
     {
      "api": "bt_pairing_policy_pairing_accept",
      "outcome": "BT_PAIRING_POLICY_ACCEPT",
-     "witness": "test_pairing_accept_open_accepts_any"
+     "witness": "test_accept_open_accepts_any"
     },
     {
      "api": "bt_pairing_policy_pairing_accept",
      "outcome": "BT_PAIRING_POLICY_REJECT",
-     "witness": "test_pairing_accept_bonded_only_rejects_unbonded"
-    },
-    {
-     "api": "bt_pairing_policy_mark_bonded",
-     "outcome": "0",
-     "witness": "test_mark_bonded_adds_and_sets_bonded_only"
-    },
-    {
-     "api": "bt_pairing_policy_mark_bonded",
-     "outcome": "-ENOMEM",
-     "witness": "test_mark_bonded_full_snapshot"
-    },
-    {
-     "api": "bt_pairing_policy_request_open",
-     "outcome": "void",
-     "witness": "test_request_open_resets_to_open"
+     "witness": "test_accept_bonded_only_empty_rejects_all"
     },
     {
      "api": "bt_pairing_policy_snapshot",
@@ -1389,11 +1409,11 @@
    "state_transitions": [
     {
      "transition": "open->bonded-only",
-     "witness": "test_set_bonds_bonded_only"
+     "witness": "test_set_mode_preserves_inventory"
     },
     {
      "transition": "bonded-only->open",
-     "witness": "test_request_open_resets_to_open"
+     "witness": "test_set_mode_idempotent_legal_empty_bonded_only"
     }
    ],
    "function_exclusions": [],

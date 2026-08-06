@@ -1088,6 +1088,13 @@ static void pairing_complete(struct bt_conn *conn, bool bonded)
 				"controller filter until the next rebuild",
 				err);
 		}
+		/* Legacy behavior: a completed bonded pairing selects
+		 * BONDED_ONLY as the desired mode even when the inventory
+		 * was already full.  The mode and inventory are separate
+		 * state; P4 moves desired-mode selection to the transition
+		 * owner.  set_mode cannot fail for a valid enum value. */
+		(void)bt_pairing_policy_set_mode(&pairing_policy,
+						 BT_PAIRING_POLICY_MODE_BONDED_ONLY);
 	}
 }
 
@@ -1173,9 +1180,19 @@ static int bt_bap_restart_advertising_locked(void)
 	struct bond_collector collector = {0};
 
 	bt_foreach_bond(BT_ID_DEFAULT, collect_bond, &collector);
-	err = bt_pairing_policy_set_bonds(&pairing_policy, collector.addrs, collector.count);
+	err = bt_pairing_policy_replace_bonds(&pairing_policy, collector.addrs, collector.count);
 	if (err) {
 		LOG_ERR("Pairing policy rebuild failed: %d (%zu bonds)", err, collector.count);
+		return err;
+	}
+	/* Legacy feature-off behavior: the desired mode derives from the bond
+	 * count (BONDED_ONLY when any bond persisted, OPEN when none).  P4
+	 * moves mode selection to the pairing-mode transition owner. */
+	err = bt_pairing_policy_set_mode(&pairing_policy,
+					 (collector.count > 0) ? BT_PAIRING_POLICY_MODE_BONDED_ONLY
+							       : BT_PAIRING_POLICY_MODE_OPEN);
+	if (err) {
+		LOG_ERR("Pairing policy mode select failed: %d (%zu bonds)", err, collector.count);
 		return err;
 	}
 
@@ -1312,10 +1329,14 @@ int bt_bap_pairing_reset(void)
 
 	/* Desired state -> OPEN; the controller filter is cleared at the
 	 * next advertising restart (or by the immediate restart below).
-	 * request_open runs under pairing_adv_lock so it cannot interleave
-	 * with an in-flight advertising-restart rebuild of the filter. */
+	 * Both policy calls run under pairing_adv_lock so they cannot
+	 * interleave with an in-flight advertising-restart rebuild of the
+	 * filter.  Mode and inventory are set as two explicit independent
+	 * calls: set_mode cannot fail for a valid enum value.  P4 replaces
+	 * this old transition path with the pairing-mode owner. */
 	k_mutex_lock(&pairing_adv_lock, K_FOREVER);
-	bt_pairing_policy_request_open(&pairing_policy);
+	(void)bt_pairing_policy_set_mode(&pairing_policy, BT_PAIRING_POLICY_MODE_OPEN);
+	bt_pairing_policy_clear_bonds(&pairing_policy);
 	k_mutex_unlock(&pairing_adv_lock);
 
 	/* Clear all persisted bonds.  bt_unpair() also disconnects any
