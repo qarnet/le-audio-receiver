@@ -1039,6 +1039,14 @@ teardown simultaneously; CLI/output remains compatible with hardware gates.
 > final evidence: `docs/development/refactor-r10-results.md` (plus
 > `/tmp/r10-hw/` manifest + SHA256SUMS).  Final-commit canonical gate
 > re-run: 55 PASS / 0 FAIL / 55 TOTAL.
+>
+> **R10 review correction (2026-08-06)** — `docs: correct R10
+> production-tree identity wording` (results doc's correction commit):
+> R0–R9 made structural production-source changes while preserving
+> behavior; T8 `971e6a4` is the behavioral baseline, not an identical
+> source tree; production/test tree unchanged `4da2df1`→R10 because R10
+> is docs/evidence only.  Canonical gate re-run on the exact corrected
+> final commit: **55 PASS / 0 FAIL / 55 TOTAL**, exit 0.
 
 ### Goal
 

@@ -18,7 +18,13 @@ SHA256SUMS).  **G1 on clean `6934d9e`: 55 PASS / 0 FAIL / 55 TOTAL**
 289/289 F, gcovr 8.4 / gcov (GCC) 14.3.0, baseline enforcement 0
 errors), builds 3/3, build contract **79/79**, BSim pins byte-identical,
 zero new/actionable warnings; final-commit canonical gate re-run also
-55 PASS / 0 FAIL / 55 TOTAL.  **Full R10 hardware matrix PASS on both
+55 PASS / 0 FAIL / 55 TOTAL.  R10 review correction (this results doc's
+correction commit, `docs: correct R10 production-tree identity wording`):
+production/test tree unchanged `4da2df1`→R10 (R10 docs/evidence only);
+T8 `971e6a4` = behavioral baseline, not identical source tree (R0–R9
+made structural production-source changes); canonical gate re-run on the
+exact corrected final commit: **55 PASS / 0 FAIL / 55 TOTAL**, exit 0.
+**Full R10 hardware matrix PASS on both
 targets**: nRF54L15 L1–L9 (fresh Mode A/B 120 s + bonded reconnect Mode
 A 120 s with FLPR offload submit==success fallback=0 and zero
 decode/I2S/reset faults; FLPR hang Mode A and Mode B 180 s 16/16; BZ3

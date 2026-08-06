@@ -36,9 +36,10 @@ documents are written per phase when work on it starts.
 
 # Current architecture (post-R10, authoritative)
 
-The R0–R10 refactor track preserved the T8 accepted behavior (production
-code commit `971e6a4` — zero production source changes through R10) while
-reorganizing ownership.  The current module map:
+The R0–R10 refactor track preserved the T8 accepted behavior (behavioral
+baseline T8 commit `971e6a4` — not an identical source tree; R0–R9 made
+structural production-source changes while preserving behavior, R10 is
+docs/evidence only) while reorganizing ownership.  The current module map:
 
 ```
 src/main.c                     hardware wiring, watchdog, advertising-loop adapter

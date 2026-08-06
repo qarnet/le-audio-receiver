@@ -6,9 +6,11 @@ worktree clean); handoff commit `987e066`; doc/archive cleanup commit
 docs/evidence only**: no production or test behavior change, no coverage
 baseline regeneration (population stays 33; committed baseline
 `54a6b8e` byte-identical), no BSim re-pin (17 scenarios / 26 runs, all
-pins byte-identical).  Firmware identity: production code tree unchanged
-since the accepted R9 state (T8 production code `971e6a4` — the refactor
-track made zero production source changes through R10); builds/flashes
+pins byte-identical).  Firmware identity: the production/test tree is
+unchanged between the accepted R9 code state (`4da2df1`) and R10 because
+R10 is docs/evidence only; T8 commit `971e6a4` is the behavioral
+baseline, not an identical source tree — R0–R9 made structural
+production-source changes while preserving behavior.  Builds/flashes
 used the G1 build trees (build/nrf5340, build/nrf54l15, build/dongle)
 produced on `6934d9e`, and the final docs commit changes no firmware.
 
@@ -24,7 +26,8 @@ inventory, and evidence are the new authoritative baseline.
 |--------|----------|
 | `987e066` | `docs: record R10 handoff — final integration and documentation closeout` |
 | `6934d9e` | `docs: R10 architecture truth cleanup and zero-link archive` |
-| (final) | `docs: accept R10 — final integration closeout, track COMPLETE` (this document) |
+| `0cb215f` | `docs: accept R10 — final integration closeout, track COMPLETE` |
+| (final) | `docs: correct R10 production-tree identity wording` (this document's correction commit; phrase fix — no evidence altered) |
 
 ## Doc/architecture truth (all updated in `6934d9e`)
 
@@ -147,13 +150,15 @@ Results:
 
 ## Final-commit G1
 
-The final acceptance commit is docs-only (results doc + acceptance marks
-in plan/STATUS/AGENTS/README/`workstation-transfer-status`).  Per the R10
+The final acceptance commit — this document's correction commit — is
+docs-only (results doc + acceptance marks in
+plan/STATUS/AGENTS/README/`workstation-transfer-status`).  Per the R10
 handoff, the canonical `./scripts/test-all.sh` was re-run on the exact
-final commit (below) — **55 PASS / 0 FAIL / 55 TOTAL**, exit 0.  Builds
-were not re-run for the docs-only commit (recorded code/tree identity:
-G1 builds on `6934d9e`; the final commit changes no source/test/build
-input — verified `git diff` is docs/markdown only).
+corrected final commit (this document's correction commit) — **55 PASS /
+0 FAIL / 55 TOTAL**, exit 0, gate log recorded against this exact HEAD.
+Builds were not re-run for the docs-only commit (recorded code/tree
+identity: G1 builds on `6934d9e`; the final commit changes no
+source/test/build input — verified `git diff` is docs/markdown only).
 
 ## Hardware — nRF54L15 (all PASS)
 

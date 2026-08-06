@@ -19,11 +19,12 @@ evidence the new authoritative baseline.  R10 is **docs/evidence only**:
 - **No BSim re-pin** (17 scenarios / 26 runs; scenarios 1–9 twice,
   10–17 once; all pins byte-identical).
 
-Firmware identity: the exact accepted production code commit is
-`971e6a4` (T8 behavior-lock) with zero production source changes through
-R9 — the refactor track is source-refactor + test/documentation only, so
-the flashed code tree equals `971e6a4`'s production tree.  R10 adds
-docs-only commits; builds/flashes use the code tree of the doc-cleanup
+Firmware identity: the behavioral baseline is the T8 production code
+commit `971e6a4` — not an identical source tree; R0–R9 made structural
+production-source changes while preserving behavior (source refactor +
+test/documentation), so the flashed code tree's behavior equals
+`971e6a4`'s but its source differs.  R10 adds docs-only commits;
+builds/flashes use the code tree of the doc-cleanup
 commit and the final docs commit.  R8/R9 hardware evidence is
 corroboration; R10 requires **fresh full rows** below plus the final G1.
 
