@@ -308,16 +308,16 @@
     },
     "src/bt_shell.c": {
       "branches": [
-        2,
-        2
+        4,
+        4
       ],
       "functions": [
         1,
         1
       ],
       "lines": [
-        6,
-        6
+        11,
+        11
       ]
     },
     "src/flpr/acceptance.c": {
@@ -476,16 +476,16 @@
     },
     "src/pairing_mode.c": {
       "branches": [
-        160,
-        226
+        171,
+        236
       ],
       "functions": [
         39,
         39
       ],
       "lines": [
-        344,
-        405
+        354,
+        414
       ]
     },
     "src/stream_lifecycle.c": {
@@ -519,7 +519,7 @@
   },
   "gcov_version": "gcov (GCC) 14.3.0",
   "gcovr_version": "gcovr 8.4",
-  "generated_commit": "c347710a64e5893680d53d63e8abde7615e64bf0",
+  "generated_commit": "b1885d2cc1ab08713b93426dbe083ec1e6fde040",
   "population": [
     "src/app_lifecycle.c",
     "src/audio_asrc.c",
@@ -561,16 +561,16 @@
   "schema_version": 1,
   "totals": {
     "branches": [
-      2010,
-      2808
+      2023,
+      2820
     ],
     "functions": [
       357,
       357
     ],
     "lines": [
-      4650,
-      5107
+      4665,
+      5121
     ]
   }
 }
