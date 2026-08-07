@@ -12,9 +12,15 @@ Gates checked (all must pass):
   - runtime_restart==1
   - New remote+ring epoch (epoch changes)
   - Probation cleared >=1
-  - Resumed success until end (success+fallback >= expected ~duration*100)
+  - Resumed success until end: final success+fallback >= 85% of duration*100
+    (explicit tolerance grounded in the 100 fps cadence — the 15% slack
+    covers the pre-injection threshold, recovery downtime, and startup
+    variance)
+  - ASRC fallback triggered (fallback > 0 — the hang actually faulted)
   - Faults: verify=0, crc=0, seq=0, frame=0, state=0
-  - I2S/decode/push faults zero (from audio status)
+  - Audio faults zero from final `audio status`/`audio perf`: decode
+    errors, I2S underruns, stream resets, push failures — each field must
+    be present in the captured output and exactly zero
   - No exhaustion (exhaustion==0)
 
 Usage:
@@ -44,8 +50,14 @@ from flpr_status import (  # noqa: E402
     RE_RECOVERY_OK,
     RE_RUNTIME,
     RE_STATE_LINE,
+    parse_audio_faults,
     parse_offload_status,
 )
+
+# Resumed-success gate: final success+fallback must reach this fraction of
+# duration*100 (100 fps cadence).  The 15% slack covers the pre-injection
+# threshold (~10 s), recovery downtime, and startup/teardown variance.
+RESUMED_SUCCESS_TOLERANCE_FRACTION = 0.85
 
 
 # ── Command-specific regexes (hang gate owns these) ─────────────────────
@@ -579,17 +591,23 @@ class HangGateRunner:
 
             # ── Step 8: Collect final status ──
             time.sleep(0.5)
-            for cmd in ("flpr offload", "flpr status", "flpr runtime", "audio status"):
+            # Send every final command, then drain until the console is
+            # quiet so ALL responses (including the audio status / perf
+            # blocks) are captured before parsing.  The final status
+            # commands are parsed below, not merely sent.
+            for cmd in (
+                "flpr offload",
+                "flpr status",
+                "flpr runtime",
+                "audio status",
+                "audio perf",
+            ):
                 self._send_cmd(cmd)
-                time.sleep(0.08)
-            self._read_all()
-            time.sleep(0.5)
-            self._read_all()
 
-            result.full_log = self._all_text()
+            result.full_log = self._read_status()
 
-            # Parse final status (read until quiet so the Counters line is
-            # not lost to the 50 ms single-read race)
+            # Parse final status (the drain already captured the full
+            # response; the last complete offload block is the newest)
             self._send_cmd("flpr offload")
             st_final = self.parse_offload(parse_last_offload_block(self._read_status()))
             result.final_status = st_final
@@ -597,6 +615,11 @@ class HangGateRunner:
             # Parse ASRC section
             asrc = self.parse_asrc(parse_last_offload_block(result.full_log))
             result.asrc_status = asrc
+
+            # Parse audio fault fields from the captured final
+            # `audio status` / `audio perf` output.
+            audio = parse_audio_faults(result.full_log)
+            result.audio_status = audio
 
             # ── Step 9: Verify all gates ──
             checks = {}
@@ -669,11 +692,40 @@ class HangGateRunner:
             )
 
             # Gate: resumed success after recovery (success must keep growing)
-            # We already checked probation_cleared >= 1 which requires 100 consecutive successes
+            # Explicit tolerance grounded in duration/cadence: final
+            # success+fallback must reach 85% of duration*100 frames.
+            resumed = st_final["success"] + st_final["fallback"]
+            resumed_expected = int(expected_frames * RESUMED_SUCCESS_TOLERANCE_FRACTION)
+            checks["resumed_success_until_end"] = resumed >= resumed_expected
+            if not checks["resumed_success_until_end"]:
+                print(
+                    f"  WARNING: resumed success+fallback={resumed} < "
+                    f"{resumed_expected} ({int(RESUMED_SUCCESS_TOLERANCE_FRACTION * 100)}% of "
+                    f"{expected_frames})"
+                )
 
             # Gate: ASRC fallback > 0 (we did trigger fallback)
             asrc_fallback_triggered = asrc["fallback"] > 0
             checks["asrc_fallback_triggered"] = asrc_fallback_triggered
+
+            # Gate: audio fault fields zero — each field must be present in
+            # the captured final `audio status`/`audio perf` output and
+            # exactly zero.  An absent/unparseable field is missing
+            # evidence, never zero.
+            checks["audio_status_seen"] = bool(audio["status_seen"])
+            for field in (
+                "decode_errors",
+                "i2s_underruns",
+                "stream_resets",
+                "push_failures",
+            ):
+                checks["audio_%s_zero" % field] = audio[field] == 0
+                if audio[field] != 0:
+                    print(f"  WARNING: audio {field}={audio[field]} (must be zero)")
+            if not audio["status_seen"]:
+                print(
+                    "  WARNING: final 'audio status' block missing from console output"
+                )
 
             # Determine overall pass
             required_checks = [
@@ -692,6 +744,13 @@ class HangGateRunner:
                 "relapses_zero",
                 "runtime_fails_zero",
                 "frame_count_plausible",
+                "resumed_success_until_end",
+                "asrc_fallback_triggered",
+                "audio_status_seen",
+                "audio_decode_errors_zero",
+                "audio_i2s_underruns_zero",
+                "audio_stream_resets_zero",
+                "audio_push_failures_zero",
             ]
 
             result.checks = checks

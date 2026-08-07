@@ -261,8 +261,9 @@ class Phase3Gate:
         os.makedirs(log_dir, exist_ok=True)
 
         # Serial interface — open eagerly to keep SAMD11 CDC bridge alive.
-        # Never close/reopen; the USB CDC endpoint on Xiao boards fails
-        # if the serial port is closed and reopened.
+        # Avoid spurious close/reopen; the USB CDC endpoint on Xiao boards
+        # fails if the port is closed and reopened.  The ONE deliberate
+        # reopen is after the receiver reset (Step 11, self.serial.reset()).
         self.serial = ReceiverSerial(port=serial_port)
         try:
             self.serial._get_serial()  # force eager open, caches handle
@@ -576,12 +577,14 @@ class Phase3Gate:
     def wait_for_advertising_restart(self, timeout: float = 20.0) -> bool:
         """Wait for receiver to restart advertising after disconnect.
 
-        Reuses the existing open serial connection — never closes/reopens
-        because that can break the SAMD11 USB CDC bridge on Xiao boards.
-        The serial was opened during gate init and remains open.
+        Reuses the existing open serial connection — the port is only
+        closed and reopened after the receiver reset (Step 11); closing
+        and reopening can break the SAMD11 USB CDC bridge on Xiao boards,
+        so the port stays open across the disconnect/reconnect steps.
 
-        Firmware prints 'Restarting advertising...' + 'Advertising again'
-        after disconnect (main.c:164-172), not the initial 'Advertising as'.
+        Firmware prints 'Restarting advertising...' (src/main.c:283) and
+        'Advertising again' (src/main.c:294) after disconnect, not the
+        initial 'Advertising as' (src/main.c:267).
         """
         start = time.monotonic()
         all_data = ""
@@ -1509,9 +1512,13 @@ class Phase3Gate:
     def _atexit_cleanup(self) -> None:
         """Last-resort cleanup registered with atexit.
 
-        Handles catastrophic exit paths where the normal finally block
-        is skipped (e.g., SIGKILL to parent, interpreter crash).
-        Does NOT close serial — CDC bridge dies on close.
+        Handles exit paths where the normal finally block is skipped
+        (e.g. sys.exit inside a subprocess-thread error handler).
+        atexit handlers do NOT run on SIGKILL to the parent, power loss,
+        or interpreter crash — those paths are outside Python's control,
+        and this gate makes no such claim.  The serial port is NOT closed
+        here: the SAMD11 CDC bridge dies on close, and the port is left
+        for the OS to release.
         """
         try:
             self._stop_btagent()
@@ -1533,9 +1540,12 @@ class Phase3Gate:
     def cleanup(self) -> None:
         """Comprehensive cleanup: agent, scan, WP lifecycle, adapter state.
 
-        Guarantees restoration for every exit path. Must be called in finally.
-        No global process kills — only own process groups are stopped.
-        Does NOT close serial — SAMD11 CDC bridge dies on close/reopen.
+        Runs the same steps as _atexit_cleanup for the normal finally
+        path; the atexit handler covers abnormal-but-catchable exits.
+        Neither path runs on SIGKILL/power loss.  No global process kills
+        — only own process groups are stopped.  The serial port is NOT
+        closed here — the SAMD11 CDC bridge dies on close/reopen; the
+        only deliberate reopen is after the receiver reset (Step 11).
         """
         # 1. Stop own bt-agent subprocess
         self._stop_btagent()

@@ -11,6 +11,15 @@
 # disables its source ASE — documented in docs/development/bsim-stage0-results.md.
 # This is a test-script ordering issue, not a BAP stack failure.
 #
+# Acceptance is EVIDENCE-BASED, not assumed: every device log is captured
+# and parsed by scripts/bsim_official_smoke_parse.py, which must prove
+# >=100 valid RX SDUs (the test's MIN_SEND_COUNT, exact "Incoming audio on
+# stream [valid|rx]" marker from bap_stream_rx.c) before any outcome is
+# accepted.  With progress proven, a nonzero process exit is accepted ONLY
+# when the logs carry the known teardown race ("ISO receive lost",
+# bap_stream_rx.c:104); missing, malformed, or short progress and any
+# unrelated failure exit nonzero with the reason.
+#
 # The ACL-disconnect sub-test (unicast_client_acl_disconnect /
 # unicast_server_acl_disconnect) suffers from a separate host-side
 # -ENOMEM bug in this NCS version when creating >1 extended advertising
@@ -85,30 +94,32 @@ source "${ZEPHYR_BASE}/tests/bsim/sh_common.source"
 
 cd "${BSIM_OUT_PATH}/bin"
 
+# Per-device log capture dir so acceptance can be verified from evidence.
+SMOKE_LOG_DIR="${BSIM_OUT_PATH}/bsim_official_smoke_$$"
+mkdir -p "$SMOKE_LOG_DIR"
+
 # Full lifecycle test (unicast_client / unicast_server).
 # sim_length=110e6 must exceed WAIT_TIME in tests/bsim/bluetooth/audio/src/common.h
-Execute "./${exe_name//\//_}" \
+run_in_background timeout --kill-after=5 -v "${EXECUTE_TIMEOUT:-30}" \
+    "./${exe_name//\//_}" \
     -v="${VERBOSITY_LEVEL}" -s="${SIMULATION_ID}" -d=0 \
     -testid=unicast_client \
-    -RealEncryption=1 -rs=23 -D=2
+    -RealEncryption=1 -rs=23 -D=2 >"$SMOKE_LOG_DIR/client.log" 2>&1
 
-Execute "./${exe_name//\//_}" \
+run_in_background timeout --kill-after=5 -v "${EXECUTE_TIMEOUT:-30}" \
+    "./${exe_name//\//_}" \
     -v="${VERBOSITY_LEVEL}" -s="${SIMULATION_ID}" -d=1 \
     -testid=unicast_server \
-    -RealEncryption=1 -rs=28 -D=2
+    -RealEncryption=1 -rs=28 -D=2 >"$SMOKE_LOG_DIR/server.log" 2>&1
 
-Execute ./bs_2G4_phy_v1 \
+run_in_background timeout --kill-after=5 -v "${EXECUTE_TIMEOUT:-30}" \
+    ./bs_2G4_phy_v1 \
     -v="${VERBOSITY_LEVEL}" -s="${SIMULATION_ID}" \
-    -D=2 -sim_length=110e6
+    -D=2 -sim_length=110e6 >"$SMOKE_LOG_DIR/phy.log" 2>&1
 
-# Full test always exits non-zero due to known disable-race (see docs).
-# Client receives BT_ISO_FLAGS_LOST after server disables source ASE;
-# the test script treats this as a hard failure but it is an ordering
-# issue in teardown, not a BAP stack defect. PHY always exits 0.
-# We check that streaming completed (100 SDUs sent/received) and
-# accept non-zero exit from the teardown race.
-# Note: wait_for_background_jobs() calls exit() on failure, so we wait
-# directly to capture exit codes without terminating the script.
+# Full test can exit non-zero due to the known disable-race (see docs).
+# wait_for_background_jobs() calls exit() on failure, so we wait directly
+# to capture exit codes without terminating the script.
 _smoke_rc=0
 for _pid in $_process_ids; do
     wait $_pid || _smoke_rc=$?
@@ -116,15 +127,34 @@ done
 
 echo ""
 echo "Simulation ID: $SIMULATION_ID"
-echo "Full lifecycle test exit code: $_smoke_rc (expected non-zero: known disable-race)"
+echo "Full lifecycle test exit code: $_smoke_rc"
+echo "Logs: $SMOKE_LOG_DIR"
 echo ""
 
-if [ "$_smoke_rc" -ne 0 ]; then
-    echo "=== Baseline PARTIAL — teardown disable-race (documented, NCS v3.3.0) ==="
-    echo "Environment/streaming proven; official teardown + ACL-disconnect fail in pinned NCS."
-    echo "See docs/development/bsim-stage0-results.md for details."
-    exit $_smoke_rc
+# Evidence-based acceptance: prove >=100 valid RX SDUs from the captured
+# logs before accepting anything.  The parser rejects missing/malformed/
+# short progress and unrelated failures.
+if ! _acceptance="$(python3 "$SCRIPT_DIR/bsim_official_smoke_parse.py" check \
+    --client "$SMOKE_LOG_DIR/client.log" \
+    --server "$SMOKE_LOG_DIR/server.log" \
+    --min-sdus 100 \
+    --smoke-rc "$_smoke_rc" 2>&1)"; then
+    echo "=== OFFICIAL BSIM SMOKE FAIL — no accepted outcome ==="
+    echo "$_acceptance"
+    exit 1
 fi
 
-echo "=== Baseline PASS — all processes exit 0 ==="
+echo "$_acceptance"
+
+if [ "$_smoke_rc" -ne 0 ]; then
+    echo ""
+    echo "=== Baseline PARTIAL — accepted with evidence ==="
+    echo ">=100 SDUs proven from logs; nonzero exit is the documented"
+    echo "teardown disable-race (NCS v3.3.0), not a BAP stack defect."
+    echo "See docs/development/bsim-stage0-results.md for details."
+    exit 0
+fi
+
+echo ""
+echo "=== Baseline PASS — all processes exit 0 with >=100 SDUs proven ==="
 exit 0

@@ -13,8 +13,12 @@ Algorithm (v3 — timed 60ms auto-clear, no external on/wait/off):
   4. Require exact ACK: bits=0x01 duration=60.
   5. Read until at least one fault/fallback detected.
   6. Monitor status until ACTIVE, recovery>=1, exhaustion=0, probation_cleared>=1,
-     success increased by >=100 after injection, 0 I2S/decode/push/ASRC faults.
-  7. Send final status commands, close port.
+     success increased by >=100 after injection, 0 ASRC integrity faults.
+  7. Send final status commands, drain until the console is quiet, then
+     PARSE the captured responses (not merely send): the final offload
+     status becomes final_status and the final `audio status`/`audio perf`
+     fault fields (decode errors, I2S underruns, stream resets, push
+     failures) must each be present and exactly zero.  Close port.
      Exit 0 on success, nonzero on timeout or missing predicate.
 
 Testability: GateRunner class accepts a Transport interface.
@@ -36,6 +40,7 @@ from flpr_status import (  # noqa: E402
     RE_RECOVERY,
     RE_RECOVERY_OK,
     RE_STATE_LINE,
+    parse_audio_faults,
     parse_offload_status,
 )
 
@@ -62,6 +67,7 @@ class GateResult:
         self.first_fallback_time: float = 0.0
         self.baseline_success: int = -1
         self.final_status: dict = {}
+        self.audio_status: dict = {}
         self.full_log: str = ""
 
 
@@ -208,6 +214,21 @@ class GateRunner:
         self._tr.write((cmd + "\n").encode("utf-8"))
         time.sleep(0.05)
 
+    def _drain_until_quiet(self, grace_s=0.15, max_iter=50):
+        """Read until no new bytes arrive for grace_s (bounded by max_iter
+        so an always-noisy transport cannot hang the gate)."""
+        quiet = 0.0
+        iters = 0
+        while quiet < grace_s and iters < max_iter:
+            iters += 1
+            before = len(self._recv_buf)
+            self._read_all()
+            if len(self._recv_buf) == before:
+                quiet += 0.05
+            else:
+                quiet = 0.0
+            time.sleep(0.05)
+
     def run(self) -> GateResult:
         result = GateResult()
         total_deadline = time.monotonic() + self._timeout
@@ -340,19 +361,51 @@ class GateRunner:
                     f"Last status: {result.final_status}"
                 )
 
-            # ── Step 7: Final status dump ──────────────────────────────
+            # ── Step 7: Final status dump (parsed, not merely sent) ─────
+            # Start from a clean buffer so the parsed final offload status
+            # and audio fault fields reflect ONLY the final responses —
+            # a stale mid-stream status can never be mistaken for the
+            # post-run snapshot.
+            self._recv_buf.clear()
             for cmd in (
                 "flpr offload",
                 "flpr ring status",
                 "flpr status",
                 "audio status",
+                "audio perf",
             ):
                 self._send_cmd(cmd)
-                time.sleep(0.05)
-            self._read_all()
+            self._drain_until_quiet()
+            result.full_log = self._all_text()
+
+            # Parse the final offload status from the captured responses.
+            st_final = self.parse_offload(result.full_log)
+            if st_final["state"] is not None:
+                result.final_status = st_final
+
+            # Parse audio fault fields: each must be present and zero.
+            audio = parse_audio_faults(result.full_log)
+            result.audio_status = audio
+            if not audio["status_seen"]:
+                raise StallGateError(
+                    "final 'audio status' block missing from console output"
+                )
+            for field in (
+                "decode_errors",
+                "i2s_underruns",
+                "stream_resets",
+                "push_failures",
+            ):
+                if audio[field] is None:
+                    raise StallGateError(
+                        "audio fault field %s missing from final status" % field
+                    )
+                if audio[field] != 0:
+                    raise StallGateError(
+                        "audio fault field %s=%s (must be zero)" % (field, audio[field])
+                    )
 
             result.passed = True
-            result.full_log = self._all_text()
 
         except StallGateError as e:
             result.error = str(e)

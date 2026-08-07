@@ -39,6 +39,48 @@ RE_RUNTIME = re.compile(
 RE_HB_DEDUP = re.compile(r"HB dedup\s*:\s*(\d+)")
 RE_RECOVERY_OK = re.compile(r"offload recovery OK:")
 
+# ── Audio-status / audio-perf fault grammar (both gates consume this) ────
+# src/audio_shell.c `audio status` prints "Decode errors", "I2S underruns",
+# "Stream resets"; `audio perf` prints "Push failures" under its Queue
+# section.  A field value is captured only when it parses as a number —
+# malformed output (e.g. "I2S underruns : N/A") leaves the field absent
+# (None), which gates must treat as missing evidence, never as zero.
+RE_AUDIO_STATUS_MARKER = re.compile(r"^--- Audio status ---", re.MULTILINE)
+RE_AUDIO_FAULT_FIELD = re.compile(
+    r"^\s*(Decode errors|I2S underruns|Stream resets|Push failures)\s*:\s*(\d+)",
+    re.MULTILINE,
+)
+AUDIO_FAULT_FIELDS = (
+    "decode_errors",
+    "i2s_underruns",
+    "stream_resets",
+    "push_failures",
+)
+_AUDIO_FIELD_LABELS = {
+    "Decode errors": "decode_errors",
+    "I2S underruns": "i2s_underruns",
+    "Stream resets": "stream_resets",
+    "Push failures": "push_failures",
+}
+
+
+def parse_audio_faults(text):
+    """Parse audio fault fields from ``audio status`` / ``audio perf`` output.
+
+    Returns ``{"status_seen": bool, "decode_errors": int|None, ...}`` with
+    each fault field set to its LAST occurrence in ``text`` (matching the
+    gates' last-block convention — an earlier stale block never overrides a
+    fresh one).  A field whose line is absent or unparseable stays None,
+    which a gate must reject as missing evidence rather than read as zero.
+    """
+    result: dict = {"status_seen": bool(RE_AUDIO_STATUS_MARKER.search(text))}
+    for field in AUDIO_FAULT_FIELDS:
+        result[field] = None
+    for m in RE_AUDIO_FAULT_FIELD.finditer(text):
+        result[_AUDIO_FIELD_LABELS[m.group(1)]] = int(m.group(2))
+    return result
+
+
 # Superset field order (hang schema; stall consumes a subset).
 STATUS_FIELDS = (
     "state",

@@ -221,10 +221,60 @@ OFFLOAD_FINAL_STOPPED = (
 
 FAULT_HANG_ACK_LINE = "FAULT_HANG_ACK received\n"
 
+# Real `flpr status` ASRC section shape (src/flpr_shell.c) — NOT an
+# "--- Audio status ---" header, which only `audio status` prints.
 ASRC_STATUS_TEXT = (
+    "  ── ASRC offload ──\n"
+    "    Counters : submit=1200 success=1100 fallback=30\n"
+    "    Faults   : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 state=0 verify=0\n"
+)
+
+# Real `audio status` output shape (src/audio_shell.c cmd_status).
+AUDIO_STATUS_GOOD = (
     "--- Audio status ---\n"
-    "  Counters    : submit=1200 success=1100 fallback=30\n"
-    "  Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 state=0 verify=0\n"
+    "  Frames decoded : 11400\n"
+    "  PLC frames     : 42 (0%)\n"
+    "  Decode errors  : 0\n"
+    "  I2S underruns  : 0\n"
+    "  Stream resets  : 0\n"
+    "  Drift state    : locked\n"
+    "  Drift ppm      : 0\n"
+    "  Resampler      : ASRC linear\n"
+    "  Volume         : 255 / 255\n"
+)
+
+# Real `audio perf` output shape (src/audio_shell.c cmd_perf) — push
+# failures live under the Queue section.
+AUDIO_PERF_GOOD = (
+    "--- Performance ---\n"
+    "  Path          Count   Avg(cyc)  Avg(us)  Max(cyc)  Max(us)  %deadline\n"
+    "  iso_recv        11400       120      120       240      240   0.0%\n"
+    "  Queue:\n"
+    "    Slab free     : 4 / 16 (min/max)\n"
+    "    Output frames : 0 / 4 (min/max)\n"
+    "    Output blocks : 11400\n"
+    "    Push failures : 0\n"
+    "    Repeat fb     : 0\n"
+    "    ASRC cap fail : 0\n"
+)
+
+
+def _audio_status_fault(field, value):
+    """AUDIO_STATUS_GOOD with one fault field set to a nonzero value.
+
+    src/audio_shell.c pads the audio-status labels to a fixed width:
+    "  Decode errors  : %u", "  I2S underruns  : %u", "  Stream resets  : %u".
+    """
+    return AUDIO_STATUS_GOOD.replace("%s  : 0" % field, "%s  : %d" % (field, value))
+
+
+AUDIO_STATUS_DECODE_ERR = _audio_status_fault("Decode errors", 3)
+AUDIO_STATUS_I2S_UNDERRUN = _audio_status_fault("I2S underruns", 1)
+AUDIO_STATUS_STREAM_RESET = _audio_status_fault("Stream resets", 1)
+AUDIO_PERF_PUSH_FAIL = AUDIO_PERF_GOOD.replace("Push failures : 0", "Push failures : 2")
+# Malformed: field present but not a number — missing evidence, not zero.
+AUDIO_STATUS_MALFORMED = AUDIO_STATUS_GOOD.replace(
+    "I2S underruns  : 0", "I2S underruns  : N/A"
 )
 
 SUCCESS_OFFLOAD_RESPONSES = [
@@ -235,6 +285,27 @@ SUCCESS_OFFLOAD_RESPONSES = [
     OFFLOAD_FINAL_STOPPED,  # Step 8 final status
     OFFLOAD_FINAL_STOPPED,  # Step 9 final parse
 ]
+
+
+def _hang_responses(
+    audio_status=AUDIO_STATUS_GOOD,
+    audio_perf=AUDIO_PERF_GOOD,
+    final_offload=OFFLOAD_FINAL_STOPPED,
+    status_text=ASRC_STATUS_TEXT,
+):
+    """Full success-path response set with overridable audio/perf/final
+    blocks, so negative audio-gate tests reuse the exact happy choreography."""
+    responses = {
+        "flpr offload": list(SUCCESS_OFFLOAD_RESPONSES[:-2])
+        + [final_offload, final_offload],
+        "flpr hang": FAULT_HANG_ACK_LINE,
+        "flpr status": status_text,
+        "flpr runtime": status_text,
+        "audio perf": audio_perf,
+    }
+    if audio_status is not None:
+        responses["audio status"] = audio_status
+    return responses
 
 
 class FakeHangTransport:
@@ -356,13 +427,7 @@ class TestHangGateRunnerLifecycle(unittest.TestCase):
 
         fake_proc = FakeBapProcess()
         runner, transport = self._make_runner(
-            {
-                "flpr offload": list(SUCCESS_OFFLOAD_RESPONSES),
-                "flpr hang": FAULT_HANG_ACK_LINE,
-                "flpr status": ASRC_STATUS_TEXT,
-                "flpr runtime": ASRC_STATUS_TEXT,
-                "audio status": ASRC_STATUS_TEXT,
-            },
+            _hang_responses(),
             launcher=lambda d, s, p: fake_proc,
         )
         runner.open()
@@ -378,6 +443,13 @@ class TestHangGateRunnerLifecycle(unittest.TestCase):
         self.assertTrue(result.checks["runtime_restarts_eq_1"])
         self.assertTrue(result.checks["epoch_changed"])
         self.assertTrue(result.checks["frame_count_plausible"])
+        self.assertTrue(result.checks["resumed_success_until_end"])
+        self.assertTrue(result.checks["asrc_fallback_triggered"])
+        self.assertTrue(result.checks["audio_status_seen"])
+        self.assertTrue(result.checks["audio_decode_errors_zero"])
+        self.assertTrue(result.checks["audio_i2s_underruns_zero"])
+        self.assertTrue(result.checks["audio_stream_resets_zero"])
+        self.assertTrue(result.checks["audio_push_failures_zero"])
         self.assertFalse(fake_proc.killed, "successful run must not kill bap_central")
         self.assertIn("flpr hang", transport.written)
 
@@ -487,13 +559,7 @@ class TestHangGateRunnerLifecycle(unittest.TestCase):
 
         fake_proc = FakeBapProcess(timeout=True)
         runner, _transport = self._make_runner(
-            {
-                "flpr offload": list(SUCCESS_OFFLOAD_RESPONSES),
-                "flpr hang": FAULT_HANG_ACK_LINE,
-                "flpr status": ASRC_STATUS_TEXT,
-                "flpr runtime": ASRC_STATUS_TEXT,
-                "audio status": ASRC_STATUS_TEXT,
-            },
+            _hang_responses(),
             launcher=lambda d, s, p: fake_proc,
         )
         runner.open()
@@ -506,6 +572,173 @@ class TestHangGateRunnerLifecycle(unittest.TestCase):
         # the console state, which is non-deterministic on hardware — the
         # deterministic contract under test is the cleanup kill itself.
         self.assertTrue(fake_proc.killed, "communicate timeout must kill bap_central")
+
+
+class TestHangAudioFaultGate(unittest.TestCase):
+    """Audio fault fields from the final `audio status`/`audio perf` must
+    each be present and exactly zero; any nonzero/missing field fails."""
+
+    def _run_full(self, responses):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        log_path = os.path.join(self.tmp.name, "hang.log")
+        transport = FakeHangTransport(responses)
+        runner = HangGateRunner(
+            "/dev/fake",
+            115200,
+            log_path,
+            transport=transport,
+            launcher=lambda d, s, p: FakeBapProcess(),
+        )
+        runner.open()
+        try:
+            with (
+                patch("flpr_hang_gate.time.sleep") as mock_sleep,
+                patch("flpr_hang_gate.time.monotonic") as mock_mono,
+            ):
+                mock_sleep.return_value = None
+                gen = _mono_steady(1000.0)
+                mock_mono.side_effect = lambda: next(gen)
+                return runner.run(12, stereo=False)
+        finally:
+            runner.close()
+
+    def test_decode_errors_nonzero_fails(self):
+        result = self._run_full(_hang_responses(audio_status=AUDIO_STATUS_DECODE_ERR))
+        self.assertFalse(result.passed)
+        self.assertIn("audio_decode_errors_zero", result.error)
+        self.assertEqual(result.audio_status["decode_errors"], 3)
+
+    def test_i2s_underruns_nonzero_fails(self):
+        result = self._run_full(_hang_responses(audio_status=AUDIO_STATUS_I2S_UNDERRUN))
+        self.assertFalse(result.passed)
+        self.assertIn("audio_i2s_underruns_zero", result.error)
+        self.assertEqual(result.audio_status["i2s_underruns"], 1)
+
+    def test_stream_resets_nonzero_fails(self):
+        result = self._run_full(_hang_responses(audio_status=AUDIO_STATUS_STREAM_RESET))
+        self.assertFalse(result.passed)
+        self.assertIn("audio_stream_resets_zero", result.error)
+        self.assertEqual(result.audio_status["stream_resets"], 1)
+
+    def test_push_failures_nonzero_fails(self):
+        result = self._run_full(_hang_responses(audio_perf=AUDIO_PERF_PUSH_FAIL))
+        self.assertFalse(result.passed)
+        self.assertIn("audio_push_failures_zero", result.error)
+        self.assertEqual(result.audio_status["push_failures"], 2)
+
+    def test_missing_audio_status_block_fails(self):
+        result = self._run_full(_hang_responses(audio_status=None))
+        self.assertFalse(result.passed)
+        self.assertIn("audio_status_seen", result.error)
+
+    def test_malformed_audio_field_is_missing_evidence(self):
+        result = self._run_full(_hang_responses(audio_status=AUDIO_STATUS_MALFORMED))
+        self.assertFalse(result.passed)
+        self.assertIn("audio_i2s_underruns_zero", result.error)
+        self.assertIsNone(result.audio_status["i2s_underruns"])
+
+
+class TestHangResumedSuccessAndFallback(unittest.TestCase):
+    """resumed_success_until_end and asrc_fallback_triggered are required
+    checks grounded in duration/cadence."""
+
+    OFFLOAD_FINAL_LOW = (
+        "  State       : STOPPED / epoch=2 gen=3\n"
+        "  Counters    : submit=1200 success=300 fallback=30 busy=0\n"
+        "  Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
+        "  Probation   : active=0 success=100 cleared=1\n"
+        "  Runtime     : restarts=1 fails=0 last_ms=231 remote_epoch=2\n"
+        "  Faults      : timeout=0 full=0 stale=0 seq=0 frame=0 crc=0 payload=0\n"
+    )
+    OFFLOAD_FINAL_NO_FALLBACK = OFFLOAD_FINAL_STOPPED.replace(
+        "success=1100 fallback=30", "success=1130 fallback=0"
+    )
+
+    def _run_full(self, responses):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        log_path = os.path.join(self.tmp.name, "hang.log")
+        runner = HangGateRunner(
+            "/dev/fake",
+            115200,
+            log_path,
+            transport=FakeHangTransport(responses),
+            launcher=lambda d, s, p: FakeBapProcess(),
+        )
+        runner.open()
+        try:
+            with (
+                patch("flpr_hang_gate.time.sleep") as mock_sleep,
+                patch("flpr_hang_gate.time.monotonic") as mock_mono,
+            ):
+                mock_sleep.return_value = None
+                gen = _mono_steady(1000.0)
+                mock_mono.side_effect = lambda: next(gen)
+                return runner.run(12, stereo=False)
+        finally:
+            runner.close()
+
+    def test_resumed_success_too_low_fails(self):
+        # success+fallback = 330 < 0.85 * 12*100 = 1020.
+        result = self._run_full(_hang_responses(final_offload=self.OFFLOAD_FINAL_LOW))
+        self.assertFalse(result.passed)
+        self.assertIn("resumed_success_until_end", result.error)
+
+    def test_resumed_success_meets_tolerance_passes(self):
+        result = self._run_full(_hang_responses())
+        self.assertTrue(result.passed, result.error)
+        self.assertTrue(result.checks["resumed_success_until_end"])
+
+    def test_asrc_fallback_zero_fails(self):
+        # fallback=0 everywhere → the hang never faulted a block.
+        result = self._run_full(
+            _hang_responses(final_offload=self.OFFLOAD_FINAL_NO_FALLBACK)
+        )
+        self.assertFalse(result.passed)
+        self.assertIn("asrc_fallback_triggered", result.error)
+
+
+class TestParseAudioFaults(unittest.TestCase):
+    """Shared audio-fault grammar: last occurrence wins, absent/malformed
+    fields are None (missing evidence), stale blocks never override fresh."""
+
+    def _parse(self, text):
+        from flpr_status import parse_audio_faults
+
+        return parse_audio_faults(text)
+
+    def test_clean_output_all_zero(self):
+        audio = self._parse(AUDIO_STATUS_GOOD + AUDIO_PERF_GOOD)
+        self.assertTrue(audio["status_seen"])
+        self.assertEqual(audio["decode_errors"], 0)
+        self.assertEqual(audio["i2s_underruns"], 0)
+        self.assertEqual(audio["stream_resets"], 0)
+        self.assertEqual(audio["push_failures"], 0)
+
+    def test_empty_text_no_status(self):
+        audio = self._parse("")
+        self.assertFalse(audio["status_seen"])
+        self.assertIsNone(audio["decode_errors"])
+
+    def test_stale_faulty_block_then_fresh_clean_last_wins(self):
+        text = AUDIO_STATUS_DECODE_ERR + AUDIO_STATUS_GOOD
+        audio = self._parse(text)
+        self.assertEqual(audio["decode_errors"], 0, "fresh block must win")
+
+    def test_fresh_faulty_after_clean_stale_fails_semantics(self):
+        text = AUDIO_STATUS_GOOD + AUDIO_STATUS_DECODE_ERR
+        audio = self._parse(text)
+        self.assertEqual(audio["decode_errors"], 3, "last occurrence wins")
+
+    def test_malformed_field_is_none(self):
+        audio = self._parse(AUDIO_STATUS_MALFORMED)
+        self.assertTrue(audio["status_seen"])
+        self.assertIsNone(audio["i2s_underruns"])
+
+    def test_absent_audio_perf_push_failures_none(self):
+        audio = self._parse(AUDIO_STATUS_GOOD)
+        self.assertIsNone(audio["push_failures"], "perf block absent → None")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@ import os
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 # Ensure the scripts directory is in the path
 SCRIPT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)))
@@ -17,6 +19,37 @@ _bg = importlib.import_module("bluez-wireplumber-gate")
 BluezWirePlumberGate = _bg.BluezWirePlumberGate
 GateResult = _bg.GateResult
 _parse_version = _bg._parse_version
+
+RECEIVER_ADDR = "DB_A6_0C_05_A2_AA"
+OTHER_ADDR = "11_22_33_44_55_66"
+
+
+def _card(addr_underscore, description="LE Audio Receiver"):
+    return {
+        "id": 1,
+        "info": {
+            "props": {
+                "device.api": "bluez5",
+                "device.name": "bluez_card.%s" % addr_underscore,
+                "device.description": description,
+                "media.class": "Audio/Device",
+                "bluez5.address": addr_underscore.replace("_", ":"),
+            }
+        },
+    }
+
+
+def _sink(addr_underscore, media="Audio/Sink", kind="output"):
+    return {
+        "id": 2,
+        "info": {
+            "props": {
+                "node.name": "bluez_%s.%s.1" % (kind, addr_underscore),
+                "media.class": media,
+                "device.name": "bluez_card.%s" % addr_underscore,
+            }
+        },
+    }
 
 
 class TestFindBtDevices(unittest.TestCase):
@@ -82,6 +115,200 @@ class TestFindBtDevices(unittest.TestCase):
         ]
         devices = self.gate._find_bt_devices(dump)
         self.assertEqual(len(devices), 1)
+
+
+class TestReceiverIdentity(unittest.TestCase):
+    """Receiver identity/address filtering: an unrelated BlueZ device or
+    MIDI node must never satisfy receiver readiness or sink lookup."""
+
+    def _gate(self, receiver_address=None):
+        return BluezWirePlumberGate(
+            receiver_name="LE Audio Receiver",
+            duration=30,
+            log_path="/tmp/test_identity.log",
+            receiver_address=receiver_address,
+        )
+
+    # ── _find_bt_devices with address binding ────────────────────────
+
+    def test_devices_unfiltered_returns_all(self):
+        dump = [_card(RECEIVER_ADDR), _card(OTHER_ADDR, "Mouse")]
+        devices = self._gate()._find_bt_devices(dump)
+        self.assertEqual(len(devices), 2)
+
+    def test_devices_filtered_to_receiver_address(self):
+        dump = [_card(RECEIVER_ADDR), _card(OTHER_ADDR, "Mouse")]
+        devices = self._gate()._find_bt_devices(dump, RECEIVER_ADDR)
+        self.assertEqual(len(devices), 1)
+        self.assertIn(RECEIVER_ADDR, devices[0]["name"])
+
+    def test_devices_wrong_address_empty(self):
+        dump = [_card(OTHER_ADDR, "Mouse")]
+        devices = self._gate()._find_bt_devices(dump, RECEIVER_ADDR)
+        self.assertEqual(devices, [])
+
+    # ── _find_bt_sink_nodes: Audio/Sink + address only ──────────────
+
+    def test_sink_nodes_receiver_audio_sink_only(self):
+        dump = [
+            _sink(RECEIVER_ADDR),
+            _sink(OTHER_ADDR),
+            _sink(OTHER_ADDR, media="Midi/Bidirectional", kind="midi"),
+            _sink(OTHER_ADDR, media="Audio/Source", kind="input"),
+        ]
+        sinks = self._gate()._find_bt_sink_nodes(dump, RECEIVER_ADDR)
+        self.assertEqual(len(sinks), 1, sinks)
+        self.assertEqual(sinks[0]["media_class"], "Audio/Sink")
+
+    def test_sink_nodes_midi_never_matches(self):
+        dump = [
+            _sink(OTHER_ADDR, media="Midi/Bidirectional", kind="midi"),
+            _sink(OTHER_ADDR, media="Audio/Source", kind="input"),
+        ]
+        sinks = self._gate()._find_bt_sink_nodes(dump, RECEIVER_ADDR)
+        self.assertEqual(sinks, [])
+
+    def test_sink_nodes_wrong_address_empty(self):
+        dump = [_sink(OTHER_ADDR)]
+        sinks = self._gate()._find_bt_sink_nodes(dump, RECEIVER_ADDR)
+        self.assertEqual(sinks, [])
+
+    # ── find_receiver: exact name / address identity ────────────────
+
+    def test_find_receiver_exact_name_match(self):
+        gate = self._gate()
+        with mock.patch.object(
+            _bg,
+            "_run",
+            return_value=SimpleNamespace(
+                stdout="Device DB:A6:0C:05:A2:AA LE Audio Receiver\n"
+            ),
+        ):
+            path = gate.find_receiver()
+        self.assertEqual(path, "/org/bluez/hci0/dev_DB_A6_0C_05_A2_AA")
+
+    def test_find_receiver_name_fragment_does_not_match(self):
+        gate = self._gate()
+        with mock.patch.object(
+            _bg,
+            "_run",
+            return_value=SimpleNamespace(
+                stdout="Device DB:A6:0C:05:A2:AA My LE Audio Receiver Clone\n"
+            ),
+        ):
+            path = gate.find_receiver()
+        self.assertIsNone(path, "substring name match must not qualify")
+
+    def test_find_receiver_address_matches_regardless_of_name(self):
+        gate = self._gate(receiver_address="db:a6:0c:05:a2:aa")
+        with mock.patch.object(
+            _bg,
+            "_run",
+            return_value=SimpleNamespace(
+                stdout="Device DB:A6:0C:05:A2:AA Some Other Name\n"
+            ),
+        ):
+            path = gate.find_receiver()
+        self.assertEqual(path, "/org/bluez/hci0/dev_DB_A6_0C_05_A2_AA")
+
+    def test_find_receiver_wrong_address_none(self):
+        gate = self._gate(receiver_address="AA:00:11:22:33:44")
+        with mock.patch.object(
+            _bg,
+            "_run",
+            return_value=SimpleNamespace(
+                stdout="Device DB:A6:0C:05:A2:AA LE Audio Receiver\n"
+            ),
+        ):
+            path = gate.find_receiver()
+        self.assertIsNone(path, "wrong address must not match")
+
+    def test_receiver_address_validation(self):
+        with self.assertRaises(ValueError):
+            self._gate(receiver_address="not-an-address")
+
+    # ── poll_pipewire_objects: unrelated objects never satisfy ──────
+
+    def _poll(self, dump, wpctl_stdout, receiver_addr=RECEIVER_ADDR):
+        gate = self._gate()
+        gate._receiver_addr = receiver_addr
+        gate._get_pw_dump = lambda: dump
+        with (
+            mock.patch.object(
+                _bg, "_run", return_value=SimpleNamespace(stdout=wpctl_stdout)
+            ),
+            mock.patch.object(_bg.time, "sleep", lambda *a, **k: None),
+        ):
+            result = GateResult()
+            ok = gate.poll_pipewire_objects(result, timeout=0.05)
+        return ok, result
+
+    def test_poll_exact_target_success(self):
+        dump = [_card(RECEIVER_ADDR), _sink(RECEIVER_ADDR)]
+        ok, result = self._poll(
+            dump, "Sinks:\n  * 51. bluez_output.%s.1 [Active]\n" % RECEIVER_ADDR
+        )
+        self.assertTrue(ok, "\n".join(result.evidence))
+
+    def test_poll_unrelated_midi_node_fails(self):
+        dump = [
+            _card(OTHER_ADDR, "MIDI Keyboard"),
+            _sink(OTHER_ADDR, media="Midi/Bidirectional", kind="midi"),
+        ]
+        ok, result = self._poll(dump, "Sinks:\n  * 40. bluez_midi.%s.0\n" % OTHER_ADDR)
+        self.assertFalse(ok, "MIDI node must not satisfy receiver readiness")
+        evidence = "\n".join(result.evidence)
+        self.assertIn("found_sink=False", evidence)
+
+    def test_poll_unrelated_device_only_fails(self):
+        dump = [_card(OTHER_ADDR, "Mouse")]
+        ok, result = self._poll(dump, "Sinks:\n")
+        self.assertFalse(ok, "unrelated device must not satisfy readiness")
+
+    def test_poll_wrong_receiver_address_fails(self):
+        dump = [_card(RECEIVER_ADDR), _sink(RECEIVER_ADDR)]
+        ok, result = self._poll(
+            dump,
+            "Sinks:\n  * 51. bluez_output.%s.1\n" % RECEIVER_ADDR,
+            receiver_addr="AA_00_11_22_33_44",
+        )
+        self.assertFalse(ok, "objects not bound to configured address must fail")
+
+    def test_poll_profile_requires_receiver_address_in_wpctl(self):
+        # Card + sink present, but wpctl shows only a different device:
+        # profile requirement not satisfied.
+        dump = [_card(RECEIVER_ADDR), _sink(RECEIVER_ADDR)]
+        ok, result = self._poll(
+            dump, "Sinks:\n  * 51. bluez_output.%s.1\n" % OTHER_ADDR
+        )
+        self.assertFalse(ok, "wpctl without receiver profile must fail")
+        evidence = "\n".join(result.evidence)
+        self.assertIn("found_profile=False", evidence)
+
+    # ── _find_sink_name: receiver Audio/Sink only ───────────────────
+
+    def test_sink_name_receiver_audio_sink(self):
+        gate = self._gate()
+        gate._receiver_addr = RECEIVER_ADDR
+        gate._get_pw_dump = lambda: [_card(RECEIVER_ADDR), _sink(RECEIVER_ADDR)]
+        self.assertEqual(
+            gate._find_sink_name(),
+            "bluez_output.%s.1" % RECEIVER_ADDR,
+        )
+
+    def test_sink_name_midi_never_returned(self):
+        gate = self._gate()
+        gate._receiver_addr = RECEIVER_ADDR
+        gate._get_pw_dump = lambda: [
+            _sink(OTHER_ADDR, media="Midi/Bidirectional", kind="midi")
+        ]
+        self.assertIsNone(gate._find_sink_name())
+
+    def test_sink_name_unrelated_device_none(self):
+        gate = self._gate()
+        gate._receiver_addr = RECEIVER_ADDR
+        gate._get_pw_dump = lambda: [_card(OTHER_ADDR, "Headphones")]
+        self.assertIsNone(gate._find_sink_name())
 
 
 class TestFindBtNodes(unittest.TestCase):
@@ -570,20 +797,25 @@ class TestParseReceiverLog(unittest.TestCase):
         ok = self.gate.parse_receiver_log(result)
         self.assertTrue(ok, f"3000 SDUs at 10ms/30s must pass: {result.evidence}")
 
-    def test_multiple_summaries_uses_last(self):
-        """If log has multiple summaries, last one should be the acceptance target."""
+    def test_multiple_summaries_max_counts_last_fault_counters(self):
+        """Multiple summaries: SDU/decoded counts use the MAXIMUM across
+        summaries (parser semantics); fault counters use the LAST summary.
+        Neither is a strict "last summary is the acceptance target"."""
         content = """[00:00:10] ASCS: ASE configured
 [00:00:12] ASCS: stream started
 [00:00:13] I2S DMA started
-[00:00:15] Stream[0] summary: SDUs=50 decoded=55 plc=5 decode_err=0 i2s_underrun=0 stream_reset=0
-[00:00:20] Stream[0] summary: SDUs=4000 decoded=4100 plc=100 decode_err=0 i2s_underrun=0 stream_reset=0
+[00:00:15] Stream[0] summary: SDUs=4000 decoded=4100 plc=100 decode_err=0 i2s_underrun=0 stream_reset=0
+[00:00:20] Stream[0] summary: SDUs=3000 decoded=3100 plc=100 decode_err=0 i2s_underrun=0 stream_reset=0
 """
         # This gate is duration=30, but no Frame Duration line so expected_fps=0.0
         # → SDU check skipped. Both summaries non-zero → passes.
         result = self._write_log(content)
         ok = self.gate.parse_receiver_log(result)
         self.assertTrue(ok, f"Multiple summaries with valid counts: {result.evidence}")
-        self.assertEqual(result.receiver_counters.get("sdu_summary"), 4000)
+        # Counts: maximum across summaries (4000, not the last 3000).
+        self.assertEqual(result.receiver_counters.get("sdu_summary"), 3000)
+        evidence_str = "\n".join(result.evidence)
+        self.assertIn("SDUs=4000", evidence_str)
 
     # ── Phase 2 strict: log freshness / independent capture ──────
 

@@ -98,6 +98,47 @@ OFFLOAD_BASELINE_NO_FALLBACK = """\
   RTT         : min=736 cyc (736 us) max=883 cyc (883 us) avg=740 cyc (740 us) n=560
 """
 
+# Real `audio status` output shape (src/audio_shell.c cmd_status).
+AUDIO_STATUS_GOOD = """\
+--- Audio status ---
+  Frames decoded : 730
+  PLC frames     : 42 (5%)
+  Decode errors  : 0
+  I2S underruns  : 0
+  Stream resets  : 0
+  Drift state    : locked
+  Drift ppm      : 0
+  Resampler      : ASRC linear
+  Volume         : 255 / 255
+"""
+
+# Real `audio perf` output shape (src/audio_shell.c cmd_perf).
+AUDIO_PERF_GOOD = """\
+--- Performance ---
+  Path          Count   Avg(cyc)  Avg(us)  Max(cyc)  Max(us)  %deadline
+  iso_recv          730       120      120       240      240   0.0%
+  Queue:
+    Slab free     : 4 / 16 (min/max)
+    Output frames : 0 / 4 (min/max)
+    Output blocks : 730
+    Push failures : 0
+    Repeat fb     : 0
+    ASRC cap fail : 0
+"""
+
+
+def _audio_status_fault(field, value):
+    return AUDIO_STATUS_GOOD.replace("%s  : 0" % field, "%s  : %d" % (field, value))
+
+
+AUDIO_STATUS_DECODE_ERR = _audio_status_fault("Decode errors", 3)
+AUDIO_STATUS_I2S_UNDERRUN = _audio_status_fault("I2S underruns", 1)
+AUDIO_STATUS_STREAM_RESET = _audio_status_fault("Stream resets", 1)
+AUDIO_PERF_PUSH_FAIL = AUDIO_PERF_GOOD.replace("Push failures : 0", "Push failures : 2")
+AUDIO_STATUS_MALFORMED = AUDIO_STATUS_GOOD.replace(
+    "I2S underruns  : 0", "I2S underruns  : N/A"
+)
+
 
 def _mono_steady(base, step=0.02):
     """Generator for time.monotonic returning steady increments from base."""
@@ -342,6 +383,9 @@ class TestGateSuccess(unittest.TestCase):
           #4: Step 5 second read → OFFLOAD_BASELINE (fallback=30>0 → break)
           #5: Step 6 first read → (empty / discard)
           #6: Step 6 second read → OFFLOAD_EVIDENCE → GATE PASS
+          #7: Step 7 drain → OFFLOAD_EVIDENCE (final offload status)
+          #8: Step 7 drain → AUDIO_STATUS_GOOD
+          #9: Step 7 drain → AUDIO_PERF_GOOD
         """
         return {
             0: OFFLOAD_ACTIVE_START,
@@ -349,6 +393,9 @@ class TestGateSuccess(unittest.TestCase):
             2: OFFLOAD_BASELINE,
             4: OFFLOAD_BASELINE,
             6: OFFLOAD_EVIDENCE,
+            7: OFFLOAD_EVIDENCE,
+            8: AUDIO_STATUS_GOOD,
+            9: AUDIO_PERF_GOOD,
         }
 
     @patch("flpr_stall_gate.time.sleep")
@@ -482,6 +529,9 @@ class TestGateNotActiveAtStart(unittest.TestCase):
                 4: OFFLOAD_BASELINE,  # Step 4 baseline
                 6: OFFLOAD_BASELINE,  # Step 5 fallback evidence
                 8: OFFLOAD_EVIDENCE,  # Step 6 evidence → pass
+                9: OFFLOAD_EVIDENCE,  # Step 7 final offload
+                10: AUDIO_STATUS_GOOD,  # Step 7 audio status
+                11: AUDIO_PERF_GOOD,  # Step 7 audio perf
             }
         )
         runner = GateRunner(fake, total_timeout=10.0, status_interval=0.01)
@@ -512,6 +562,9 @@ class TestGateBaselineCapturedImmediately(unittest.TestCase):
                 2: OFFLOAD_BASELINE,  # baseline=530, fallback=30
                 4: OFFLOAD_BASELINE,  # Step 5 fallback evidence
                 6: OFFLOAD_EVIDENCE,  # success=700 >= 530+100
+                7: OFFLOAD_EVIDENCE,  # Step 7 final offload
+                8: AUDIO_STATUS_GOOD,  # Step 7 audio status
+                9: AUDIO_PERF_GOOD,  # Step 7 audio perf
             }
         )
         runner = GateRunner(fake, total_timeout=10.0, status_interval=0.01)
@@ -583,6 +636,12 @@ class TestGateMigratedRunnerBehavior(unittest.TestCase):
                         "Recovery    : attempts=1 fail=0 relapses=0 exhaustion=0\n"
                         "Probation   : active=0 success=0 cleared=0\n"
                     ).encode("utf-8")
+                elif self._idx == 9:
+                    # Step 7 final drain: audio status block.
+                    return AUDIO_STATUS_GOOD.encode("utf-8")
+                elif self._idx == 10:
+                    # Step 7 final drain: audio perf block.
+                    return AUDIO_PERF_GOOD.encode("utf-8")
                 else:
                     return (
                         "State       : ACTIVE / epoch=1 gen=1\n"
@@ -646,6 +705,111 @@ class TestGateMigratedRunnerBehavior(unittest.TestCase):
         )
         result = runner.run()
         self.assertFalse(result.passed, "Gate must FAIL with seq=1 integrity fault")
+
+
+class TestGateFinalAudioFaults(unittest.TestCase):
+    """Step 7 final `audio status`/`audio perf` fault fields must each be
+    present and exactly zero; the final status commands are parsed, not
+    merely sent."""
+
+    def _run_with_audio(
+        self, audio_status=AUDIO_STATUS_GOOD, audio_perf=AUDIO_PERF_GOOD
+    ):
+        schedule = {
+            0: OFFLOAD_ACTIVE_START,
+            1: TIMED_STALL_ACK,
+            2: OFFLOAD_BASELINE,
+            4: OFFLOAD_BASELINE,
+            6: OFFLOAD_EVIDENCE,
+            7: OFFLOAD_EVIDENCE,  # Step 7 final offload
+        }
+        if audio_status is not None:
+            schedule[8] = audio_status
+        if audio_perf is not None:
+            schedule[9] = audio_perf
+        fake = FakeSerial(schedule)
+        runner = GateRunner(fake, total_timeout=10.0, status_interval=0.01)
+        with (
+            patch("flpr_stall_gate.time.sleep") as mock_sleep,
+            patch("flpr_stall_gate.time.monotonic") as mock_mono,
+        ):
+            mock_sleep.return_value = None
+            gen = _mono_steady(1000.0, 0.02)
+            mock_mono.side_effect = lambda: next(gen)
+            return runner.run()
+
+    def test_clean_audio_faults_pass(self):
+        result = self._run_with_audio()
+        self.assertTrue(result.passed, result.error)
+        self.assertEqual(result.audio_status["decode_errors"], 0)
+        self.assertEqual(result.audio_status["push_failures"], 0)
+        # Final offload status parsed from the final responses, not stale.
+        self.assertEqual(result.final_status.get("state"), "ACTIVE")
+        self.assertEqual(result.final_status.get("success"), 700)
+
+    def test_decode_errors_nonzero_fails(self):
+        result = self._run_with_audio(audio_status=AUDIO_STATUS_DECODE_ERR)
+        self.assertFalse(result.passed)
+        self.assertIn("decode_errors=3", result.error)
+
+    def test_i2s_underruns_nonzero_fails(self):
+        result = self._run_with_audio(audio_status=AUDIO_STATUS_I2S_UNDERRUN)
+        self.assertFalse(result.passed)
+        self.assertIn("i2s_underruns=1", result.error)
+
+    def test_stream_resets_nonzero_fails(self):
+        result = self._run_with_audio(audio_status=AUDIO_STATUS_STREAM_RESET)
+        self.assertFalse(result.passed)
+        self.assertIn("stream_resets=1", result.error)
+
+    def test_push_failures_nonzero_fails(self):
+        result = self._run_with_audio(audio_perf=AUDIO_PERF_PUSH_FAIL)
+        self.assertFalse(result.passed)
+        self.assertIn("push_failures=2", result.error)
+
+    def test_malformed_field_is_missing_evidence(self):
+        result = self._run_with_audio(audio_status=AUDIO_STATUS_MALFORMED)
+        self.assertFalse(result.passed)
+        self.assertIn("i2s_underruns missing", result.error)
+
+    def test_missing_audio_status_block_fails(self):
+        result = self._run_with_audio(audio_status=None)
+        self.assertFalse(result.passed)
+        self.assertIn("'audio status' block missing", result.error)
+
+    def test_partial_output_missing_perf_fails(self):
+        # audio status present but audio perf absent → push failures field
+        # is missing evidence, never zero.
+        result = self._run_with_audio(audio_perf=None)
+        self.assertFalse(result.passed)
+        self.assertIn("push_failures missing", result.error)
+
+    def test_stale_faulty_audio_from_mid_stream_ignored(self):
+        # A faulty audio block that lands in the Step 5 region is discarded
+        # by the buffer clear before the final command batch; the fresh
+        # Step 7 blocks decide, so the gate passes.
+        schedule = {
+            0: OFFLOAD_ACTIVE_START,
+            1: TIMED_STALL_ACK,
+            2: OFFLOAD_BASELINE,
+            4: OFFLOAD_BASELINE,
+            5: AUDIO_STATUS_DECODE_ERR,  # stale mid-stream block
+            6: OFFLOAD_EVIDENCE,
+            7: OFFLOAD_EVIDENCE,
+            8: AUDIO_STATUS_GOOD,
+            9: AUDIO_PERF_GOOD,
+        }
+        fake = FakeSerial(schedule)
+        runner = GateRunner(fake, total_timeout=10.0, status_interval=0.01)
+        with (
+            patch("flpr_stall_gate.time.sleep") as mock_sleep,
+            patch("flpr_stall_gate.time.monotonic") as mock_mono,
+        ):
+            mock_sleep.return_value = None
+            gen = _mono_steady(1000.0, 0.02)
+            mock_mono.side_effect = lambda: next(gen)
+            result = runner.run()
+        self.assertTrue(result.passed, result.error)
 
 
 if __name__ == "__main__":
