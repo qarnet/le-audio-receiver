@@ -370,10 +370,10 @@ assigned-but-got in `audio_stream_session` native suite) are the
 pre-existing unchanged-file test-build diagnostics documented since
 P3/P4/P5.  `git diff --check` clean.  No hardware (P8), no nRF5340
 enablement, no advertising payload differentiation, no
-audio/FLPR/shared-memory/pin changes.  Corrections recorded in the
-results doc (not amending accepted docs): P6 STATUS section added
-here; RAM percentage corrected 96.52 % → **98.29 %** (161036/163840;
-P6 byte counts and 2804 B margin identical).
+audio/FLPR/shared-memory/pin changes.  Corrections: P6 STATUS section
+added here; the two `96.52%` instances in the P6 results doc corrected
+to **98.29 %** (161036/163840; P6 byte counts and 2804 B margin
+identical) in the follow-up documentation-fix commit.
 
 ## Refactoring track — R10 COMPLETE/ACCEPTED — TRACK R0–R10 COMPLETE (2026-08-06)
 

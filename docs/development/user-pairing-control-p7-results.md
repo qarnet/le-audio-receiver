@@ -236,7 +236,10 @@ warnings; zero warnings from any pairing-feature file.**
 ## Commits
 
 1. `7e44d61` — P7 handoff.
-2. This acceptance commit (P7 results + STATUS P6/P7 sections).
+2. `5772206` — P7 acceptance (P7 results + STATUS P6/P7 sections).
+3. Follow-up documentation-fix commit — corrects the two `96.52%`
+   RAM-percentage instances in the P6 results doc to `98.29%` (see the
+   deviation note above).
 
 No production/test/baseline/BSim-pin changes; no coverage migration
 (no production C file changed; population 36).
@@ -245,14 +248,16 @@ No production/test/baseline/BSim-pin changes; no coverage migration
 
 - **STATUS lacked the P6 section** — P6 acceptance (commit `48f6028`)
   added only the results doc.  P7's scope explicitly allows STATUS
-  edits, so this closeout adds both the P6 and P7 STATUS sections;
-  no historical doc is amended.
-- **RAM percentage correction**: P6 results doc records
-  `RAM: 161036 B / 160 KB, 96.52%`, but 161036/163840 =
+  edits, so this closeout adds both the P6 and P7 STATUS sections.
+- **RAM percentage correction (follow-up commit)**: the P6 results doc
+  recorded `RAM: 161036 B / 160 KB, 96.52%`, but 161036/163840 =
   **98.29%** (the linker/CMake-reported value; byte counts and the
-  2804 B free margin are identical to P6).  The P6 acceptance doc is
-  not amended (accepted historical evidence); the corrected percentage
-  is recorded here and in STATUS.
+  2804 B free margin are identical to P6).  The two `96.52%` instances
+  in the P6 results doc are corrected to **98.29%** in the follow-up
+  documentation-fix commit (correcting a file in a new commit is not a
+  git amend; the accepted evidence must not retain arithmetic errors).
+  The P7 STATUS section notes the correction so the record reads
+  consistently.
 - The canonical gate's four `FAIL:` grep matches are the
   bluez_wireplumber_gate failure-injection negative-path test names
   (e.g. "Cannot start wireplumber: exec failed") — expected output of

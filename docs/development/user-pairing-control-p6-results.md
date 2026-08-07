@@ -89,7 +89,7 @@ Full-stack after P6 (pairing on, diagnostics on, heap 0):
 `_image_ram_end = 0x2002750c`, used 161036 B, free **2804 B**
 (0xAF4) — **the full-stack margin is larger than the accepted
 feature-off margin** (2804 > 1956).  Linker report: `RAM: 161036 B /
-160 KB, 96.52%` (FLASH 531668 B / 1428 KB, 36.36%).
+160 KB, 98.29%` (FLASH 531668 B / 1428 KB, 36.36%).
 
 How the budget was solved (map/config evidence, no guessing):
 1. Full production config (workq 1024, diagnostics on, heap 4096)
@@ -156,7 +156,7 @@ fixing a stale pre-P6 count).
 ## Verification
 
 - Builds (from the implementation commit): `fw-build-54l15` exit 0
-  (RAM 161036/163840, 96.52%; FLASH 531668/1462272, 36.36%);
+  (RAM 161036/163840, 98.29%; FLASH 531668/1462272, 36.36%);
   `fw-build-5340` exit 0; `fw-build-dongle` exit 0.  Only documented
   pre-existing NCS v3.3.0 diagnostics: PARTITION_MANAGER deprecation,
   SW Split experimental symbols, FLPR-image `UART_CONSOLE`
