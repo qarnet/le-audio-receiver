@@ -1311,6 +1311,222 @@
    "excluded_from_numeric": true
   },
   {
+   "source": "src/bt_bap_pairing_adapter.c",
+   "classification": "direct",
+   "suites": [
+    {
+     "name": "bt_bap_pairing_adapter",
+     "evidence": "direct"
+    }
+   ],
+   "public_outcomes": [
+    {
+     "api": "bt_bap_pairing_adapter_init",
+     "outcome": "0",
+     "witness": "test_init_missing_slot_einval_atomic"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_init",
+     "outcome": "-EINVAL",
+     "witness": "test_init_null_backend_einval"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_init",
+     "outcome": "-EALREADY",
+     "witness": "test_init_ealready"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_set_access_mode",
+     "outcome": "0",
+     "witness": "test_set_access_normal_selects_bonded_only"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_set_access_mode",
+     "outcome": "-EINVAL",
+     "witness": "test_set_access_invalid_atomic"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_set_access_mode",
+     "outcome": "-EIO",
+     "witness": "test_set_access_policy_failure_not_published"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_advertising_suspend",
+     "outcome": "0",
+     "witness": "test_suspend_stops_and_publishes_suspended"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_advertising_suspend",
+     "outcome": "-EBUSY",
+     "witness": "test_suspend_failure_not_published"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_advertising_suspend",
+     "outcome": "-EINVAL",
+     "witness": "test_ops_before_init_einval"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_advertising_start",
+     "outcome": "0",
+     "witness": "test_start_normal_empty_inventory_still_filters"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_advertising_start",
+     "outcome": "-EACCES",
+     "witness": "test_start_rejects_suspended_eacces"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_advertising_start",
+     "outcome": "-EIO",
+     "witness": "test_start_step_failures_exact_errno"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_advertising_start",
+     "outcome": "-ENOMEM",
+     "witness": "test_start_step_failures_exact_errno"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_advertising_start",
+     "outcome": "-EAGAIN",
+     "witness": "test_start_step_failures_exact_errno"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_advertising_start",
+     "outcome": "-EINVAL",
+     "witness": "test_start_step_failures_exact_errno"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_advertising_start",
+     "outcome": "-EBUSY",
+     "witness": "test_start_step_failures_exact_errno"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_disconnect_peer",
+     "outcome": "0",
+     "witness": "test_disconnect_no_peer_success_no_pending"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_disconnect_peer",
+     "outcome": "-EINVAL",
+     "witness": "test_disconnect_null_pending_einval"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_disconnect_peer",
+     "outcome": "-EBUSY",
+     "witness": "test_disconnect_connected_error_no_pending_exact_errno"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_disconnect_peer",
+     "outcome": "-EIO",
+     "witness": "test_disconnect_other_no_pending"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_delete_all_bonds",
+     "outcome": "0",
+     "witness": "test_delete_storage_success_clears_inventory"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_delete_all_bonds",
+     "outcome": "-EIO",
+     "witness": "test_delete_storage_failure_preserves_inventory"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_delete_all_bonds",
+     "outcome": "-EINVAL",
+     "witness": "test_ops_before_init_einval"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_request_security",
+     "outcome": "0",
+     "witness": "test_security_success"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_request_security",
+     "outcome": "-ENOTCONN",
+     "witness": "test_security_no_peer_enotconn"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_request_security",
+     "outcome": "-EBUSY",
+     "witness": "test_security_error_exact_errno"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_request_security",
+     "outcome": "-EINVAL",
+     "witness": "test_ops_before_init_einval"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_notifications_enable",
+     "outcome": "void",
+     "witness": "test_notify_enable_idempotent_and_gate_opens"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_notifications_enabled",
+     "outcome": "true",
+     "witness": "test_notify_enable_idempotent_and_gate_opens"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_notifications_enabled",
+     "outcome": "false",
+     "witness": "test_init_starts_suspended"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_notify_connected",
+     "outcome": "void",
+     "witness": "test_notify_enable_idempotent_and_gate_opens"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_notify_disconnected",
+     "outcome": "void",
+     "witness": "test_notify_enable_idempotent_and_gate_opens"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_notify_pairing_complete",
+     "outcome": "void",
+     "witness": "test_notify_pairing_complete_exact_payloads_and_duplicates"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_notify_pairing_failed",
+     "outcome": "void",
+     "witness": "test_notify_pairing_failed_and_security_payloads"
+    },
+    {
+     "api": "bt_bap_pairing_adapter_notify_security_changed",
+     "outcome": "void",
+     "witness": "test_notify_pairing_failed_and_security_payloads"
+    }
+   ],
+   "state_transitions": [
+    {
+     "transition": "uninitialized->suspended",
+     "witness": "test_init_starts_suspended"
+    },
+    {
+     "transition": "suspended->normal",
+     "witness": "test_set_access_normal_selects_bonded_only"
+    },
+    {
+     "transition": "suspended->bonding",
+     "witness": "test_set_access_bonding_selects_open_preserves_inventory"
+    },
+    {
+     "transition": "normal->suspended",
+     "witness": "test_suspend_stops_and_publishes_suspended"
+    },
+    {
+     "transition": "bonding->suspended",
+     "witness": "test_set_access_suspended_no_policy_change"
+    },
+    {
+     "transition": "notify-disabled->notify-enabled",
+     "witness": "test_notify_enable_idempotent_and_gate_opens"
+    }
+   ],
+   "function_exclusions": [],
+   "hardware_acceptance": [],
+   "stateful": true
+  },
+  {
    "source": "src/bt_pairing_policy.c",
    "classification": "direct",
    "suites": [

@@ -47,6 +47,7 @@ zephyr_sources_ifndef(CONFIG_SOC_NRF54L15 src/audio_timing_none.c)
 zephyr_sources_ifdef(CONFIG_SHELL src/audio_shell.c)
 zephyr_sources_ifdef(CONFIG_SHELL src/bt_shell.c)
 zephyr_sources_ifdef(CONFIG_USER_PAIRING_CONTROL src/pairing_mode.c)
+zephyr_sources_ifdef(CONFIG_USER_PAIRING_CONTROL src/bt_bap_pairing_adapter.c)
 zephyr_sources_ifdef(CONFIG_USER_PAIRING_INPUT src/user_pairing_io.c)
 # flpr_shell.c needs both SHELL and the nRF54L15 FLPR stack;
 # zephyr_sources_ifdef accepts a single condition, so use an explicit
