@@ -275,6 +275,106 @@ gate logs — pre-existing test-build diagnostics in unchanged files),
 advertising payload differentiation; no audio/BAP stream lifecycle
 changes; no hardware tests (P8); production boards remain feature-off.
 
+## User pairing control — P6 ACCEPTED (2026-08-07)
+
+**P6 — XIAO controls, production enablement, and build contract —
+ACCEPTED**: the real Seeed XIAO nRF54L15 user controls are mapped
+through the project aliases, the inherited DK GPIO claims are removed,
+the full pairing control stack is enabled **only** on nRF54L15
+(`boards/nrf54l15dk_nrf54l15_cpuapp.conf`:
+`CONFIG_USER_PAIRING_CONTROL=y`, `CONFIG_USER_PAIRING_INPUT=y`,
+`CONFIG_INPUT=y` — the mandatory `INPUT` subsystem dependency, debounce
+30 ms, shell reset timeout 15000 ms, work-queue stack 1024 — the
+build-minimum value, runtime pending P8 — and
+`CONFIG_HEAP_MEM_POOL_SIZE=0` after map/source proof that
+`kheap__system_heap` has zero consumers: net_buf's heap path is
+compiled only under `K_HEAP_MEM_POOL_SIZE > 0` and referenced by no
+pool, and shell history uses its own dedicated heap), and the resolved
+artifacts prove: `user-button`/`user-led` aliases, `button0`
+`<&gpio0 0 (GPIO_ACTIVE_LOW|GPIO_PULL_UP)>` code `INPUT_KEY_0`, 30 ms
+gpio-keys debounce, `led0` `<&gpio2 0 GPIO_ACTIVE_LOW>`, inherited
+`button1`/`button2`/`button3` disabled (UART20 P1.08/P1.09 protected),
+inherited `led1`/`led2`/`led3` `/delete-node/`d with dangling aliases
+`/delete-property/`d (gpio-leds uses all children regardless of
+status).  Full-stack SRAM solved: feature-on margin **2804 B free**
+(`_image_ram_end 0x2002750c`, RAM 161036 B / 160 KB) exceeds the
+accepted feature-off margin (1956 B); RAM 98.29%, FLASH 36.36%.
+Build contract 79 → **95 assertions** (resolved config/DT, no
+source-text matching), `tests/unit/build_contract` 33 → **51 tests**
+with mutations failing on every wrong resolved artifact.  Handoff:
+`docs/development/user-pairing-control-p6-handoff.md` (committed
+`b246447`); implementation `62b8727`; acceptance (results only, no
+STATUS section at the time):
+`docs/development/user-pairing-control-p6-results.md`.  Canonical gate
+on clean `62b8727`: **59 PASS / 0 FAIL / 59 TOTAL** (35 twister + 5
+exec-only + 16 Python + coverage + matrix + BSim Stage 1; coverage
+population 36, baseline enforcement 0 errors — no migration, no
+production C file changed; matrix 0 errors 0 notes; all 17 BSim
+scenarios strict-checked byte-identical: mono 10 ms `0x22AB5C0D`,
+mono 7.5 ms `0x01A3EB05`, Mode A/B 10 ms `0xBAE24F7E`, Mode A/B 7.5 ms
+`0x2D95D15C`/`0xFF82CADB`, invalid_sdu_resume `0x0C61918D`,
+modea_one_cis_loss `0x30D6BAF0`, modea_first_stop `0x5A025240`,
+release/duplicate_release `0xAEBD23A1`,
+disconnect/reconnect `0x8500C966`, zero-push `0x00000000`), builds 3/3
+(`fw-build-5340/54l15/dongle`, only documented NCS v3.3.0
+diagnostics), build contract **95/95**, zero new/actionable warnings,
+`git diff --check` clean.  No hardware tests (P8); no nRF5340
+enablement; no advertising payload differentiation.
+
+## User pairing control — P7 ACCEPTED (2026-08-07)
+
+**P7 — software and build acceptance — ACCEPTED**: independent full
+re-run of the software/build acceptance on the exact integrated
+production code (P1–P6 + nRF54L15 feature-enabled), evidence-only, no
+production/test/baseline change.  Handoff:
+`docs/development/user-pairing-control-p7-handoff.md` (committed
+`7e44d61`); results: `docs/development/user-pairing-control-p7-results.md`.
+Focused direct suites on real production sources: pairing_mode **37/37**,
+user_pairing_io **21/21**, bt_pairing_policy **23/23**,
+bt_bap_pairing_adapter **37/37**, bt_shell_pairing **5/5**,
+app_lifecycle **13/13**, build-contract Python **51 tests** (95
+assertions, 0 failed).  Coverage report-only + enforcement: population
+**36**, functions **357/357 (100%)**, zero zero-hit files, baseline
+comparison **0 errors** (no decrease, no weakening, identical
+population sets; gcovr 8.4 / gcov 14.3.0).  Matrix: **0 errors, 0
+notes** (both the explicit run and the gate child).  Canonical gate on
+clean `7e44d61`: **59 PASS / 0 FAIL / 59 TOTAL**, exit 0 (35 twister +
+5 exec-only + 16 Python + coverage + matrix + BSim Stage 1; coverage
+child population 36 / baseline 0 errors; matrix child 0/0; all **17
+BSim scenarios** / 26 runs strict-checked **byte-identical** to the
+pinned table — mono 10 ms `0x22AB5C0D`, mono 7.5 ms `0x01A3EB05`, Mode
+A/B 10 ms `0xBAE24F7E`, Mode A/B 7.5 ms `0x2D95D15C`/`0xFF82CADB`,
+invalid_sdu_resume `0x0C61918D`, modea_one_cis_loss `0x30D6BAF0`,
+modea_first_stop `0x5A025240`, release/duplicate_release `0xAEBD23A1`,
+disconnect/reconnect `0x8500C966`, zero-push scenarios `0x00000000`).
+Fresh builds 3/3: `fw-build-5340` exit 0 (app FLASH 375364 B / RAM
+145256 B), `fw-build-54l15` exit 0 (app FLASH 531668 B / RAM 161036 B
+/ 2804 B free; FLPR RAM 43632 B), `fw-build-dongle` exit 0 (merged
+hexes written).  Build contract against fresh artifacts: **95/95**,
+BUILD CONTRACT PASSED.  nRF54L15 resolved audits: full pairing stack +
+`CONFIG_INPUT=y` enabled, exact P0.00/P2.00 aliases/flags/debounce
+(button0 `<&gpio0 0 0x11>` code `0xb`, led0 `<&gpio2 0 0x1>`, gpio-keys
+debounce 30 ms), inherited button1/2/3 disabled and led1/2/3 absent
+(mx25r64's P2.00 reset-gpios claim void — node disabled), RAM
+used/free 161036/2804 B, heap 0, workq stack 1024 (resolved
+`g_pairing_stack`), `net_buf_heap_cb` not linked, full-stack symbols
+linked (`pairing_control_start`, `user_pairing_io_init`,
+`user_pairing_io_led_set`, `bt_bap_pairing_notifications_enable`,
+gpio_keys driver, `_input_callback__user_button_cb`).  nRF5340
+feature-off proof: CONTROL/INPUT/`CONFIG_INPUT` not set, full-stack
+symbols absent from the ELF, legacy `bt_bap_pairing_reset` linked.
+Warnings: zero new/actionable — only the documented NCS v3.3.0
+diagnostics; the three gate-log instances (fake_flpr_deps
+`[-Wenum-int-mismatch]`, BT_CONN_TX_MAX and BT_ISO_TX_BUF_COUNT
+assigned-but-got in `audio_stream_session` native suite) are the
+pre-existing unchanged-file test-build diagnostics documented since
+P3/P4/P5.  `git diff --check` clean.  No hardware (P8), no nRF5340
+enablement, no advertising payload differentiation, no
+audio/FLPR/shared-memory/pin changes.  Corrections recorded in the
+results doc (not amending accepted docs): P6 STATUS section added
+here; RAM percentage corrected 96.52 % → **98.29 %** (161036/163840;
+P6 byte counts and 2804 B margin identical).
+
 ## Refactoring track — R10 COMPLETE/ACCEPTED — TRACK R0–R10 COMPLETE (2026-08-06)
 
 **R10 — final integration and documentation closeout — COMPLETE/
