@@ -5,9 +5,9 @@ project(test_pairing_mode)
 # P1: execute the REAL production pairing-mode transition owner
 # (src/pairing_mode.c) against fake injected operations with an operation
 # ledger, per-op event semaphores, per-op blocking gates, and short Kconfig
-# timing values that preserve the production ratios (bond half 40 ms,
-# reset half 8 ms, feedback 80 ms = 10 half-periods; bond hold 100 ms,
-# reset hold 200 ms).
+# timing values that preserve the production ratios (bond half 100 ms,
+# reset half 20 ms, feedback 200 ms = ten half-periods / five complete
+# flashes; bond hold 250 ms, reset hold 500 ms).
 target_sources(app PRIVATE
   src/test_pairing_mode.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/pairing_mode.c

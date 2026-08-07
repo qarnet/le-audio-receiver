@@ -6,9 +6,12 @@
  * boot-coordinator wiring, advertising restart loop. The ordered fatal
  * boot sequence itself lives in the narrow, unit-tested coordinator
  * app_lifecycle.c; this file retains all hardware wiring and adapts the
- * real subsystem calls to the coordinator's operations structure. BT and
- * decode logic live in bt_bap.c / audio_decode.c. I2S output lives in
- * audio_i2s.c behind audio_sink.h.
+ * real subsystem calls to the coordinator's operations structure. Under
+ * CONFIG_USER_PAIRING_INPUT the final advertising adapter and the main
+ * loop delegate to the pairing-mode controller (P5); the legacy
+ * disconnect-wait/restart loop remains byte-for-byte for feature-off
+ * builds. BT and decode logic live in bt_bap.c / audio_decode.c. I2S
+ * output lives in audio_i2s.c behind audio_sink.h.
  */
 
 #include <errno.h>
@@ -27,6 +30,11 @@
 #include "audio_volume.h"
 #include "audio_offload.h"
 #include "bt_bap.h"
+
+#if defined(CONFIG_USER_PAIRING_INPUT)
+#include "pairing_mode.h"
+#include "user_pairing_io.h"
+#endif
 
 #if defined(CONFIG_SOC_NRF54L15)
 #include "flpr_handshake.h"
@@ -133,10 +141,56 @@ static int sink_init(void)
 	return audio_sink_init();
 }
 
+#if defined(CONFIG_USER_PAIRING_INPUT)
+/*
+ * P5 full-stack boot adapter (replaces the legacy advertising_start
+ * under CONFIG_USER_PAIRING_INPUT): initialize the pairing-mode
+ * transition owner and the user I/O adapter, open the Bluetooth
+ * callback notification gate only after BOTH initializations
+ * succeeded, then enqueue the boot start.  Returns the first exact
+ * errno; pairing_mode_start() is enqueue-only — accepted P1 owns
+ * asynchronous platform failure and cold reboot.
+ */
+static void pairing_cold_reboot(void *ctx)
+{
+	ARG_UNUSED(ctx);
+	sys_reboot(SYS_REBOOT_COLD);
+}
+
+static int pairing_control_start(void)
+{
+	static const struct pairing_mode_ops pairing_ops = {
+		.set_access_mode = bt_bap_pairing_set_access_mode,
+		.advertising_suspend = bt_bap_pairing_advertising_suspend,
+		.advertising_start = bt_bap_pairing_advertising_start,
+		.disconnect_peer = bt_bap_pairing_disconnect_peer,
+		.delete_all_bonds = bt_bap_pairing_delete_all_bonds,
+		.request_security = bt_bap_pairing_request_security,
+		.led_set = user_pairing_io_led_set,
+		.cold_reboot = pairing_cold_reboot,
+	};
+	int err;
+
+	err = pairing_mode_init(&pairing_ops, NULL);
+	if (err != 0) {
+		return err;
+	}
+
+	err = user_pairing_io_init();
+	if (err != 0) {
+		return err;
+	}
+
+	bt_bap_pairing_notifications_enable();
+
+	return pairing_mode_start();
+}
+#else
 static int advertising_start(void)
 {
 	return bt_bap_restart_advertising();
 }
+#endif /* CONFIG_USER_PAIRING_INPUT */
 
 static void cold_reboot(void)
 {
@@ -183,7 +237,14 @@ int main(void)
 #if defined(CONFIG_SOC_NRF54L15)
 		.platform_init = platform_init,
 #endif
+#if defined(CONFIG_USER_PAIRING_INPUT)
+		/* P5: under the full-stack gate the pairing-mode controller owns
+		 * initial advertising (NORMAL) through the injected operations;
+		 * the legacy adapter remains only for the feature-off build. */
+		.advertising_start = pairing_control_start,
+#else
 		.advertising_start = advertising_start,
+#endif
 		.cold_reboot = cold_reboot,
 	};
 	int err;
@@ -205,6 +266,16 @@ int main(void)
 
 	LOG_INF("Advertising as \"%s\"", CONFIG_BT_DEVICE_NAME);
 
+#if defined(CONFIG_USER_PAIRING_INPUT)
+	/* P5 full-stack: Bluetooth callbacks → pairing-mode notifications own
+	 * the advertising restart (idle disconnect restarts run inside the
+	 * controller; RESETTING keeps advertising suspended).  Passive
+	 * forever sleep — never consume sem_disconnected or call
+	 * app_lifecycle_restart_advertising() here. */
+	while (true) {
+		k_sleep(K_FOREVER);
+	}
+#else
 	while (true) {
 		/* Heartbeat runs via k_work_delayable (flpr_handshake_init).
 		 * No poll call needed in main loop. */
@@ -222,6 +293,7 @@ int main(void)
 		}
 		LOG_INF("Advertising again");
 	}
+#endif /* CONFIG_USER_PAIRING_INPUT */
 
 	/* Unreachable — loop exits only on reboot */
 	return 0;

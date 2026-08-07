@@ -35,6 +35,12 @@
  *  - The drain never blocks: a transition that needs a disconnect simply
  *    enters WAIT_DISCONNECT_* and returns; the matching disconnected
  *    notification advances it.
+ *  - A disconnected notification in an idle phase (NORMAL/IDLE or
+ *    BONDING/IDLE) with a real prior connection restarts advertising once
+ *    through the injected advertising_start operation (P5: the main loop
+ *    no longer restarts on its own under the full-stack gate).  Stale or
+ *    duplicate disconnects with no prior connection are a no-op; the
+ *    idle restart never mutates mode/access/LED/generation.
  *  - Synchronous reset waits on a completion event from the CALLER's
  *    thread; the controller never blocks and holds no lock while the
  *    caller waits.
@@ -193,6 +199,7 @@ enum pairing_op {
 	OP_RESET_ENTRY_ADVERTISING,
 	OP_STALE_SUSPEND,
 	OP_STALE_DISCONNECT,
+	OP_IDLE_RESTART_ADVERTISING,
 	OP_CONNECTED_SECURITY,
 	OP_COMPLETE_ACCESS,
 	OP_COMPLETE_LED,
@@ -698,6 +705,8 @@ static bool step(atomic_t ev)
 
 	/* 4. DISCONNECTED. */
 	if ((ev & EV_DISCONNECTED) != 0) {
+		bool was_connected = g_status.connected;
+
 		status_write_connected(false);
 
 		if (g_status.phase == PAIRING_MODE_PHASE_WAIT_DISCONNECT_FOR_BONDING) {
@@ -711,10 +720,29 @@ static bool step(atomic_t ev)
 			if (atomic_get(&g_fatal)) {
 				return true;
 			}
-		} else {
-			/* NORMAL/IDLE or BONDING/IDLE: P1 must not invent an
-			 * automatic advertising restart; stale/duplicate
-			 * disconnects are a no-op. */
+		} else if (!was_connected) {
+			/* Duplicate/stale disconnect with no prior connection:
+			 * no-op.  P4 forwards exactly one matching disconnect
+			 * after teardown; a second must never restart
+			 * advertising (P5 ownership: main loop no longer
+			 * restarts on its own). */
+		} else if (g_status.phase == PAIRING_MODE_PHASE_IDLE &&
+			   (g_status.mode == PAIRING_MODE_NORMAL ||
+			    g_status.mode == PAIRING_MODE_BONDING)) {
+			/* P5 idle disconnect restart: NORMAL/IDLE and
+			 * BONDING/IDLE with a real prior connection call the
+			 * injected advertising start exactly once, restoring
+			 * BONDED_ONLY (NORMAL) or OPEN (BONDING) advertising
+			 * after the peer dropped.  No mode, access, LED, or
+			 * generation mutation during the idle restart; a
+			 * restart failure is fatal through the dedicated
+			 * operation context. */
+			int ret = op_advertising_start();
+
+			if (ret < 0) {
+				fatal_finalize(OP_IDLE_RESTART_ADVERTISING, -ret);
+				return true;
+			}
 		}
 	}
 

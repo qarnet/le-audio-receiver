@@ -804,6 +804,10 @@
     {
      "name": "audio_shell_nrf54",
      "evidence": "direct"
+    },
+    {
+     "name": "bt_shell_pairing",
+     "evidence": "direct"
     }
    ],
    "public_outcomes": [],
@@ -2319,6 +2323,10 @@
     {
      "transition": "any->fatal",
      "witness": "test_each_op_failure_reboots_once"
+    },
+    {
+     "transition": "idle->idle",
+     "witness": "test_normal_idle_disconnect_restarts_once"
     }
    ],
    "function_exclusions": [],

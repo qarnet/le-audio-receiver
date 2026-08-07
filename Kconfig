@@ -311,4 +311,16 @@ config USER_PAIRING_DEBOUNCE_MS
 	  in src/user_pairing_io.c).  The gpio-keys driver implements the
 	  debounce; this module adds no second debounce timer.
 
+config USER_PAIRING_SHELL_RESET_TIMEOUT_MS
+	int "Pairing reset shell timeout (ms)"
+	default 15000
+	range 1000 120000
+	depends on USER_PAIRING_INPUT && SHELL
+	help
+	  Bounded synchronous wait for the 'bt unpair' RESET transition
+	  (disconnect + 1-second feedback + BONDING advertising completion)
+	  with ample controller margin.  On timeout the shell prints an
+	  error and the transition continues asynchronously; success is
+	  printed only after BONDING advertising is active.
+
 source "Kconfig.zephyr"

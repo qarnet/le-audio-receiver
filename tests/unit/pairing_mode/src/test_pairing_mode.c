@@ -832,8 +832,7 @@ ZTEST(pairing_mode, test_stale_work_cannot_modify_newer_generation)
 	bonding_no_peer(); /* gen 1: slow blink scheduled at +40 ms */
 
 	zassert_equal(pairing_mode_request_reset(), 0); /* gen 2 */
-	zassert_true(wait_phase(PAIRING_MODE_PHASE_RESET_FEEDBACK, WAIT_MS),
-		     "reset feedback");
+	zassert_true(wait_phase(PAIRING_MODE_PHASE_RESET_FEEDBACK, WAIT_MS), "reset feedback");
 	zassert_true(wait_phase(PAIRING_MODE_PHASE_IDLE, WAIT_MS), "reset -> IDLE");
 	/* The gen-1 slow toggle fires mid-feedback: it must be a no-op, so
 	 * the LED ledger is exactly: start(off), BONDING entry(on),
@@ -1184,8 +1183,8 @@ ZTEST(pairing_mode, test_reset_sync_busy_second_waiter)
 	fctx.gate[FOP_ADV_START] = &gate;
 
 	k_thread_create(&sync_helper_thread, sync_helper_stack,
-			K_THREAD_STACK_SIZEOF(sync_helper_stack), sync_helper_fn,
-			NULL, NULL, NULL, 7, 0, K_NO_WAIT);
+			K_THREAD_STACK_SIZEOF(sync_helper_stack), sync_helper_fn, NULL, NULL, NULL,
+			7, 0, K_NO_WAIT);
 	k_thread_name_set(&sync_helper_thread, "sync_reset_helper");
 
 	/* Wait until the first waiter's reset reaches the gated advertising
@@ -1207,7 +1206,8 @@ ZTEST(pairing_mode, test_reset_sync_busy_second_waiter)
 	fctx.gate[FOP_ADV_START] = NULL;
 }
 
-/* Duplicate disconnect is harmless. */
+/* The first real disconnect in an idle phase restarts advertising once;
+ * a duplicate/stale disconnect (no prior connection) is a no-op. */
 ZTEST(pairing_mode, test_duplicate_disconnect_harmless)
 {
 	start_and_idle();
@@ -1215,9 +1215,17 @@ ZTEST(pairing_mode, test_duplicate_disconnect_harmless)
 	zassert_equal(pairing_mode_notify_connected(), 0);
 	wait_op(FOP_REQUEST_SECURITY);
 
+	struct pairing_mode_status st_before;
+
+	pairing_mode_get_status(&st_before);
 	int before = rec_count();
 
+	/* Real disconnect: BONDING/IDLE with a prior connection restarts
+	 * advertising exactly once; no mode/access/LED/generation mutation. */
 	zassert_equal(pairing_mode_notify_disconnected(), 0);
+	wait_op(FOP_ADV_START);
+
+	/* Stale duplicate (was_connected already false): no-op. */
 	zassert_equal(pairing_mode_notify_disconnected(), 0);
 	k_sleep(K_MSEC(20));
 
@@ -1227,7 +1235,182 @@ ZTEST(pairing_mode, test_duplicate_disconnect_harmless)
 	zassert_false(st.connected);
 	zassert_false(st.fatal);
 	zassert_equal(fctx.reboot_count, 0);
-	zassert_equal(rec_count(), before, "duplicate disconnect executed ops");
+	zassert_equal(st.mode, PAIRING_MODE_BONDING);
+	zassert_equal(st.phase, PAIRING_MODE_PHASE_IDLE);
+	zassert_equal(st.access_mode, PAIRING_ACCESS_BONDING);
+	zassert_equal(st.transition_generation, st_before.transition_generation,
+		      "idle restart must not bump the generation");
+	zassert_equal(st.led_active, st_before.led_active, "idle restart must not touch the LED");
+	/* Exactly one extra operation: the advertising restart. */
+	zassert_equal(rec_count(), before + 1, "only the idle restart op");
+	zassert_equal(rec_op(before), FOP_ADV_START, "idle restart op type");
+}
+
+/* P5: a matching NORMAL/IDLE disconnect (real prior connection) restarts
+ * NORMAL advertising exactly once without mutating mode/access/LED. */
+ZTEST(pairing_mode, test_normal_idle_disconnect_restarts_once)
+{
+	start_and_idle();
+
+	/* NORMAL with a real peer connection; the connect is a no-op. */
+	zassert_equal(pairing_mode_notify_connected(), 0);
+	k_sleep(K_MSEC(20));
+
+	struct pairing_mode_status st_before;
+
+	pairing_mode_get_status(&st_before);
+	zassert_equal(st_before.mode, PAIRING_MODE_NORMAL);
+	zassert_equal(st_before.phase, PAIRING_MODE_PHASE_IDLE);
+	zassert_true(st_before.connected);
+
+	int before = rec_count();
+
+	zassert_equal(pairing_mode_notify_disconnected(), 0);
+	/* Wait for the disconnect processing + restart record (the FOP_ADV_START
+	 * event semaphore carries a stale token from the boot/bonding entry, so
+	 * the ledger count is the deterministic synchronization). */
+	zassert_true(wait_rec_count(before + 1, WAIT_MS), "idle restart never recorded");
+
+	struct pairing_mode_status st;
+
+	pairing_mode_get_status(&st);
+	zassert_false(st.connected);
+	zassert_false(st.fatal);
+	zassert_equal(fctx.reboot_count, 0);
+	zassert_equal(st.mode, PAIRING_MODE_NORMAL);
+	zassert_equal(st.phase, PAIRING_MODE_PHASE_IDLE);
+	zassert_equal(st.access_mode, PAIRING_ACCESS_NORMAL);
+	zassert_equal(st.transition_generation, st_before.transition_generation,
+		      "no generation bump");
+	zassert_equal(st.led_active, st_before.led_active, "no LED mutation");
+	zassert_equal(rec_count(), before + 1, "only the idle restart op");
+	zassert_equal(rec_op(before), FOP_ADV_START, "restart op type");
+}
+
+/* P5: a matching BONDING/IDLE disconnect (real prior connection) restarts
+ * OPEN (BONDING) advertising exactly once. */
+ZTEST(pairing_mode, test_bonding_idle_disconnect_restarts_once)
+{
+	start_and_idle();
+	bonding_no_peer();
+	zassert_equal(pairing_mode_notify_connected(), 0);
+	wait_op(FOP_REQUEST_SECURITY);
+
+	struct pairing_mode_status st_before;
+
+	pairing_mode_get_status(&st_before);
+	zassert_equal(st_before.mode, PAIRING_MODE_BONDING);
+	zassert_equal(st_before.phase, PAIRING_MODE_PHASE_IDLE);
+
+	int before = rec_count();
+
+	zassert_equal(pairing_mode_notify_disconnected(), 0);
+	zassert_true(wait_rec_count(before + 1, WAIT_MS), "idle restart never recorded");
+
+	struct pairing_mode_status st;
+
+	pairing_mode_get_status(&st);
+	zassert_false(st.connected);
+	zassert_false(st.fatal);
+	zassert_equal(fctx.reboot_count, 0);
+	zassert_equal(st.mode, PAIRING_MODE_BONDING);
+	zassert_equal(st.phase, PAIRING_MODE_PHASE_IDLE);
+	zassert_equal(st.access_mode, PAIRING_ACCESS_BONDING);
+	zassert_equal(st.transition_generation, st_before.transition_generation,
+		      "no generation bump");
+	zassert_equal(rec_count(), before + 1, "only the idle restart op");
+	zassert_equal(rec_op(before), FOP_ADV_START, "restart op type");
+}
+
+/* P5: a stale/duplicate disconnect with no prior connection never
+ * restarts advertising in any idle mode. */
+ZTEST(pairing_mode, test_stale_disconnect_noop)
+{
+	start_and_idle();
+
+	int before = rec_count();
+
+	zassert_equal(pairing_mode_notify_disconnected(), 0);
+	k_sleep(K_MSEC(20));
+
+	struct pairing_mode_status st;
+
+	pairing_mode_get_status(&st);
+	zassert_false(st.connected);
+	zassert_false(st.fatal);
+	zassert_equal(fctx.reboot_count, 0);
+	zassert_equal(rec_count(), before, "stale disconnect executed ops");
+	zassert_equal(st.mode, PAIRING_MODE_NORMAL);
+	zassert_equal(st.phase, PAIRING_MODE_PHASE_IDLE);
+}
+
+/* P5: a failed idle advertising restart is fatal through the dedicated
+ * operation context — exactly one cold reboot, no mode/access/generation
+ * mutation, and only the best-effort fatal LED force. */
+ZTEST(pairing_mode, test_idle_disconnect_restart_failure_reboots_once)
+{
+	start_and_idle();
+	zassert_equal(pairing_mode_notify_connected(), 0);
+	k_sleep(K_MSEC(20));
+
+	struct pairing_mode_status st_before;
+
+	pairing_mode_get_status(&st_before);
+	int access_before = op_event_count(FOP_SET_ACCESS);
+	int led_before = op_event_count(FOP_LED);
+
+	fctx.ret[FOP_ADV_START] = -EIO;
+
+	zassert_equal(pairing_mode_notify_disconnected(), 0);
+	wait_op(FOP_REBOOT);
+
+	struct pairing_mode_status st;
+
+	pairing_mode_get_status(&st);
+	zassert_true(st.fatal, "restart failure is fatal");
+	zassert_equal(fctx.reboot_count, 1, "exactly one cold reboot");
+	/* The idle restart mutates nothing before failing: no access
+	 * change, no generation bump, and only the fatal path's best-effort
+	 * LED-inactive force. */
+	zassert_equal(op_event_count(FOP_SET_ACCESS), access_before, "no access mutation");
+	zassert_equal(st.transition_generation, st_before.transition_generation,
+		      "no generation bump");
+	zassert_equal(op_event_count(FOP_LED), led_before + 1, "only the fatal LED force");
+	/* Order: failed restart op, fatal LED force, cold reboot. */
+	zassert_equal(rec_op(rec_count() - 3), FOP_ADV_START, "restart op");
+	zassert_equal(rec_op(rec_count() - 2), FOP_LED, "fatal LED force");
+	zassert_equal(rec_op(rec_count() - 1), FOP_REBOOT, "reboot last");
+}
+
+/* P5: a disconnect completing a WAIT_DISCONNECT_* phase never also fires
+ * the idle-restart branch (was_connected is true, but the phase is a
+ * wait phase): the BONDING and RESET completions each perform exactly
+ * one advertising start. */
+ZTEST(pairing_mode, test_wait_phase_disconnect_no_double_start)
+{
+	/* BONDING wait path: exactly one advertising start (the BONDING
+	 * entry), no extra idle restart. */
+	start_and_idle();
+	fctx.peer_connected = true;
+	zassert_equal(pairing_mode_request_bonding(), 0);
+	zassert_true(wait_phase(PAIRING_MODE_PHASE_WAIT_DISCONNECT_FOR_BONDING, WAIT_MS),
+		     "bonding wait");
+	fctx.peer_connected = false;
+	zassert_equal(pairing_mode_notify_disconnected(), 0);
+	zassert_true(wait_phase(PAIRING_MODE_PHASE_IDLE, WAIT_MS), "bonding entry");
+	zassert_equal(op_event_count(FOP_ADV_START), 2, "bonding entry start only");
+
+	/* RESET wait path: exactly one advertising start after the feedback
+	 * (the reset BONDING entry), no extra idle restart. */
+	fctx.peer_connected = true;
+	zassert_equal(pairing_mode_request_reset(), 0);
+	zassert_true(wait_phase(PAIRING_MODE_PHASE_WAIT_DISCONNECT_FOR_RESET, WAIT_MS),
+		     "reset wait");
+	fctx.peer_connected = false;
+	zassert_equal(pairing_mode_notify_disconnected(), 0);
+	zassert_true(wait_phase(PAIRING_MODE_PHASE_IDLE, WAIT_MS), "reset -> IDLE");
+	zassert_equal(op_event_count(FOP_ADV_START), 3, "reset entry start only");
+	zassert_equal(fctx.reboot_count, 0);
 }
 
 /* RESET has priority over a concurrently pending BONDING. */

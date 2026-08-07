@@ -30,8 +30,16 @@ int bt_bap_restart_advertising(void);
 void bt_bap_wait_disconnect(void);
 
 /**
- * Production pairing-mode reset: clear all persisted bonds, disconnect the
- * current peer, and return the receiver to open pairing mode.
+ * LEGACY feature-off pairing-mode reset: clear all persisted bonds,
+ * disconnect the current peer, and return the receiver to open pairing
+ * mode.
+ *
+ * Retained only for feature-off compatibility (CONFIG_USER_PAIRING_INPUT=n)
+ * and the historical shell output consumed by the BlueZ/WirePlumber gate
+ * fixtures.  When the full pairing stack is enabled, `bt unpair` routes
+ * through pairing_mode_request_reset_sync() (src/pairing_mode.h) and the
+ * pairing-mode controller owns the whole RESET transition — this function
+ * has zero references from the full-stack main/shell/controller path.
  *
  * Safe to call from shell/work/thread context.  On success the receiver
  * advertises in OPEN mode (no connection filtering) — immediately when no

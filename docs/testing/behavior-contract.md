@@ -732,8 +732,23 @@ APIs:
   `audio reset-stats`, `audio perf-reset`, `audio stop` (the previous
   `reset - stats` / `perf - reset` spaced syntax strings could not be
   matched by any input word — a T6-found defect, fixed).
-- `bt unpair` propagates the exact negative errno and prints
-  `bt_unpair failed: <errno>` on failure, `All bonds cleared.` on success.
+- `bt unpair` has two compile-time paths proven through the real production
+  command body (dummy backend + `shell_execute_cmd`):
+  - feature-off (`CONFIG_USER_PAIRING_INPUT` unset, all production boards
+    today): the legacy direct reset `bt_bap_pairing_reset()` prints
+    `Pairing mode reset: bonds cleared; open pairing enabled.` on success
+    and `bt_bap_pairing_reset failed: <errno>` on failure, returning the
+    exact errno — byte-identical historical output consumed by the
+    BlueZ/WirePlumber gate fixtures (`"Pairing mode reset" in output`).
+  - feature-on (`CONFIG_USER_PAIRING_INPUT`): the pairing-mode controller
+    owns the whole RESET transition through
+    `pairing_mode_request_reset_sync(K_MSEC(CONFIG_USER_PAIRING_SHELL_RESET_TIMEOUT_MS))`
+    (no direct bond/advertising call in the shell path); success prints
+    `Pairing reset complete: bonds cleared; BONDING advertising active.`
+    only after BONDING advertising is active, any failure prints
+    `pairing_mode reset failed: <errno>` and returns the exact errno,
+    `-ETIMEDOUT` means the transition continues asynchronously — the shell
+    prints the error, never claims success, and never issues a second reset.
 - nRF54 FLPR status commands print the exact parseable labels consumed by
   `scripts/flpr_hang_gate.py` (handshake health/epoch/error/TX/RX/loss
   fields, ring counters/diagnostics/test/latency/stall, offload
