@@ -871,7 +871,9 @@ nRF54L15 full-stack enablement proven from the resolved app config
 `CONFIG_USER_PAIRING_INPUT=y` `54l15-038`, its mandatory subsystem
 dependency `CONFIG_INPUT=y` `54l15-050`, debounce 30 `54l15-039`,
 shell reset timeout 15000 `54l15-040`, chosen work-queue stack 1024
-`54l15-041` (build-minimum; runtime pending P8),
+`54l15-041` (build-minimum; runtime validated by P8 hardware —
+pairing work-queue stack usage 640/1024 (62 %) at idle, sustained
+BONDING/RESET/stream transitions clean, no stack/heap/assert warning),
 `CONFIG_HEAP_MEM_POOL_SIZE=0` system-heap-removal proof
 `54l15-042`) and from the resolved app DTS (the `user-button` alias
 resolves to `button0` `54l15-043`, whose gpio-keys parent carries

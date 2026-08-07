@@ -70,7 +70,10 @@ CONFIG_HEAP_MEM_POOL_SIZE=0        # was 4096
 - `WORKQ_STACK_SIZE=1024`: the smallest **build-defensible** value
   (Kconfig range minimum; the P5 full-stack scratch required 1024 to
   **link** — the scratch was never run on hardware; runtime sufficiency
-  is pending P8 validation).
+  was pending P8 validation and is resolved by P8: pairing work-queue
+  stack usage 640/1024 (62 %) at idle, sustained transitions clean,
+  no stack warning — see
+  `docs/development/user-pairing-control-p8-results.md`).
 - `HEAP_MEM_POOL_SIZE` 4096 → **0** — the handoff-sanctioned SRAM
   candidate, applied only after map/source proof (see below).
 - No production timing defaults changed (bond/reset/LED thresholds stay
@@ -133,7 +136,7 @@ nRF54L15 (`54l15-037` … `54l15-050`):
   `USER_PAIRING_INPUT` subsystem dependency — a config without it would
   Kconfig-downgrade INPUT to `n` and never compile the adapter),
   debounce 30, shell timeout 15000, chosen workqueue stack 1024
-  (build-minimum; runtime pending P8), chosen heap 0;
+  (build-minimum; runtime pending P8 — resolved, see P8 results), chosen heap 0;
 - dts: `user-button` alias → `button0`; button0 parent compatible
   gpio-keys with debounce 30; button0 = `<&gpio0 0
   (GPIO_ACTIVE_LOW|GPIO_PULL_UP)>` with `zephyr,code = <INPUT_KEY_0>`;

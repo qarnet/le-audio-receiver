@@ -224,6 +224,27 @@ bonded and now fails to pair after a firmware change, delete the bond on the
 central and re-scan, or mass-erase the chip (`nrf53_recover` via `openocd-master`)
 before reflashing — `west flash` does not erase the settings partition.
 
+### User pairing control (nRF54L15)
+
+The XIAO onboard user button and LED implement a three-mode access state
+machine (`CONFIG_USER_PAIRING_CONTROL`/`USER_PAIRING_INPUT`, feature-on only
+on nRF54L15; nRF5340 stays feature-off):
+
+- **NORMAL** (boot default): LED inactive, advertising with a
+  BONDED_ONLY filter accept list. Unbonded peers are rejected at the link
+  layer; saved bonds reconnect without re-pairing.
+- **BONDING**: press and hold the button through 3 s, release before 8 s.
+  Advertising suspends, any active peer disconnects, bonds are preserved,
+  and advertising restarts open with a slow LED blink (~500 ms on/off).
+  A fresh Just Works pair completes to NORMAL without disconnecting.
+- **RESET**: hold through 8 s (supersedes BONDING at 3 s). The peer
+  disconnects, all bonds are deleted, and the LED flashes rapidly
+  (~100 ms, five flashes over one second) before re-entering BONDING.
+  `bt unpair` drives the same RESET transition from the shell.
+
+See `docs/development/user-pairing-control-plan.md` and the P1–P8 results
+docs for the full contract and hardware acceptance evidence.
+
 ---
 
 ## Repository layout
@@ -234,6 +255,9 @@ before reflashing — `west flash` does not erase the settings partition.
 | `src/app_lifecycle.c` | Pure fatal boot coordinator: ordered init, cold reboot, advertising restart |
 | `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising (R6: app audio receive state lives in `audio_stream_session.c`; R7: one private teardown transition owner — first close wins, per-slot release once, close→drain→sink-stop→offload-stop→reset) |
 | `src/bt_pairing_policy.c` | Pure OPEN/BONDED_ONLY policy snapshot; Bluetooth controller work stays in `bt_bap.c` |
+| `src/pairing_mode.c` | Portable NORMAL/BONDING/RESETTING transition owner (P1) — sole owner of modes, LED patterns, supersession, fatal recovery |
+| `src/user_pairing_io.c` | User button/LED adapter (P2) — debounced hold thresholds (3 s / 8 s) via gpio-keys, LED drive |
+| `src/bt_bap_pairing_adapter.c` | Bluetooth backend for the pairing-mode controller (P4/P5): access policy, advertising suspend/start, disconnect, bond deletion |
 | `src/audio_modea.c` | Bounded two-CIS event assembler and per-channel PLC |
 | `src/audio_iso_seq.c` | Pure per-CIS omitted-callback sequence tracker |
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |

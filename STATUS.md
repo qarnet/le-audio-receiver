@@ -375,6 +375,51 @@ added here; the two `96.52%` instances in the P6 results doc corrected
 to **98.29 %** (161036/163840; P6 byte counts and 2804 B margin
 identical) in the follow-up documentation-fix commit.
 
+## User pairing control — P8 ACCEPTED (2026-08-08)
+
+**P8 — hardware acceptance and closeout — ACCEPTED**: full hardware
+matrix on the XIAO nRF54L15 receiver plus nRF5340 feature-off parity,
+evidence-only (no production/test/baseline change).  Handoff:
+`docs/development/user-pairing-control-p8-handoff.md` (committed
+`83fdea2`); results: `docs/development/user-pairing-control-p8-results.md`.
+Fresh builds on the exact base (P7 code; only docs changed since):
+`fw-build-54l15` exit 0 (app 531668 B / RAM 161036 B, 98.29 %; FLPR
+43632 B), `fw-build-5340` exit 0 (375364 B / 145256 B), build contract
+**95/95**; zero compiler warnings.  Runtime probe identity:
+`nrf-probes` → XIAO `8EE9B3FF` (nRF54L15, DPIDR `0x6ba02477`, PART
+`0x00054b15`) and E83 `E6635C08CB1F502B` (nRF5340, PART `0x00005340`).
+XIAO boot clean (BLE ready, settings OK, FLPR READY, advertising), pairing
+work-queue stack **1024 B usage 640/1024 (62 %)** at idle, heap 0 with no
+allocation failure across all streams.  All 8 XIAO rows PASS: (1) NORMAL
+zero-bond advertises, unbonded connect rejected at link layer (no
+Connection Complete; BlueZ Pair `AuthenticationTimeout`); (2) short press
+LED off (user); (3) 3 s hold → BONDING slow-blink LED (user);
+(4) fresh Just Works pair → bonded 1 → NORMAL without disconnect, Mode A
+40 s `decode_err=0 i2s_underrun=0 stream_reset=0`; (5) preserved-bond
+reconnect → level 2 bonded 1 without re-pair, Mode B 40 s clean;
+(6) 8 s hold RESET supersedes BONDING (user-observed rapid flash), peer
+disconnected before deletion, old bond fails (`Security changed: level 1
+err 2 bonded 0` ×4), fresh pair succeeds, Mode A 35 s clean; (7) `bt
+unpair` repeats exact synchronous RESET output; (8) reboot → NORMAL
+accepts saved bond (`level 2 err 0 bonded 1`, no re-pair) and rejects a
+distinct unbonded identity (random `C0:AA:BB:CC:DD:EF` → no Connection
+Complete).  nRF5340 parity: feature-off boot/advertising clean, legacy
+`bt unpair` output exact (`Pairing mode reset: bonds cleared; open
+pairing enabled.`), Mode A 40 s `SDUs=3778 decoded=7558 plc=2
+decode_err=0 i2s_underrun=0 stream_reset=0` with reconnect.  User
+observations: short-press LED off, BONDING ~500 ms slow blink, RESET
+~100 ms rapid for one second then slow — all confirmed; audio audibility
+not observable (no speakers/headphones connected; technical counters
+clean).  Warnings: zero new/actionable; the only log `LOG_WRN` is the
+documented 5340 stale central-side bond `Pairing failed: 4` (cleared via
+receiver `bt unpair`, not a receiver fault).  Deviations: rows 5/6/7
+button transitions also driven via CLI at user request (shell and button
+share the same transition owner); three clean XIAO reboots during the
+user's button session (no FATAL; physical RST behavior is plan
+NON-SCOPE).  No mass erase / recovery / probe-rs; bonds cleared only via
+production `bt unpair`.  BSim/software evidence unchanged (P7 gate
+59/59, pins stand); no rerun needed.  `git diff --check` clean.
+
 ## Refactoring track — R10 COMPLETE/ACCEPTED — TRACK R0–R10 COMPLETE (2026-08-06)
 
 **R10 — final integration and documentation closeout — COMPLETE/

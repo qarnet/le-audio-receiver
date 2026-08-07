@@ -1,7 +1,6 @@
 # User pairing control plan — button, LED, and access-mode state machine
 
-Status: accepted design; implementation pending.
-
+Status: accepted design; implementation complete (P1–P8 accepted 2026-08-08, hardware acceptance on XIAO nRF54L15).
 Scope: first production integration targets the Seeed XIAO nRF54L15 hardware,
 but behavior and control logic must be portable to another Zephyr board by
 supplying devicetree aliases and enabling Kconfig. The nRF5340 production target
