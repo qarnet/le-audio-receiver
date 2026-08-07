@@ -146,10 +146,10 @@ Stage 1 matrix, run counts, and pinned hashes live in
    actuator path selection, host/controller ISO buffer agreement, pin
    assignments, RF-switch polarity, crystal capacitance, exact
    non-overlapping FLPR/ring memory ranges, and both SW Split overlays.
-   The checker's own suite (`tests/unit/build_contract/`, 30 tests) uses
-   minimal temporary fixtures and never depends on pre-existing firmware
-   build directories; the real contract run happens after pristine
-   production builds.
+    The checker's own suite (`tests/unit/build_contract/`, 50 tests) uses
+    minimal temporary fixtures and never depends on pre-existing firmware
+    build directories; the real contract run happens after pristine
+    production builds.
 8. **Hardware evidence** comes from logs and autonomous central automated
    streams.  These verify end-to-end data flow but do not replace direct
    branch/error-path unit tests.

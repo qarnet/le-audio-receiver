@@ -44,6 +44,8 @@ CONFIG_BT_ISO_TX_BUF_COUNT=6
 CONFIG_BT_ISO_RX_BUF_COUNT=6
 CONFIG_BT_FILTER_ACCEPT_LIST=y
 # CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS is not set
+# CONFIG_USER_PAIRING_CONTROL is not set
+# CONFIG_USER_PAIRING_INPUT is not set
 """
 
 NET_CONFIG = """\
@@ -69,6 +71,12 @@ CONFIG_BT_CTLR_SDC_ISO_TX_HCI_BUFFER_COUNT=1
 CONFIG_BT_ISO_RX_BUF_COUNT=3
 CONFIG_BT_FILTER_ACCEPT_LIST=y
 CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS=y
+CONFIG_USER_PAIRING_CONTROL=y
+CONFIG_USER_PAIRING_INPUT=y
+CONFIG_USER_PAIRING_DEBOUNCE_MS=30
+CONFIG_USER_PAIRING_SHELL_RESET_TIMEOUT_MS=15000
+CONFIG_USER_PAIRING_WORKQ_STACK_SIZE=1024
+CONFIG_HEAP_MEM_POOL_SIZE=0
 """
 
 FLPR_CONFIG = """\
@@ -213,6 +221,14 @@ APP54_DTS = """\
 			reg = < 0x20000000 0x28000 >;
 		};
 
+		gpio0: gpio@50000000 {
+			compatible = "nordic,nrf-gpio";
+		};
+
+		gpio1: gpio@50000800 {
+			compatible = "nordic,nrf-gpio";
+		};
+
 		spi00: spi@4a000 {
 			compatible = "nordic,nrf-spim";
 			status = "disabled";
@@ -274,6 +290,47 @@ APP54_DTS = """\
 		compatible = "regulator-fixed";
 		enable-gpios = < &gpio2 0x3 0x0 >;
 		regulator-boot-on;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led0: led_0 {
+			gpios = < &gpio2 0x0 0x1 >;
+		};
+	};
+
+	buttons {
+		compatible = "gpio-keys";
+		debounce-interval-ms = < 0x1e >;
+
+		button0: button_0 {
+			gpios = < &gpio0 0x0 0x11 >;
+			zephyr,code = < 0xb >;
+		};
+
+		button1: button_1 {
+			gpios = < &gpio1 0x9 0x11 >;
+			zephyr,code = < 0x2 >;
+			status = "disabled";
+		};
+
+		button2: button_2 {
+			gpios = < &gpio1 0x8 0x11 >;
+			zephyr,code = < 0x3 >;
+			status = "disabled";
+		};
+
+		button3: button_3 {
+			gpios = < &gpio0 0x4 0x11 >;
+			zephyr,code = < 0x4 >;
+			status = "disabled";
+		};
+	};
+
+	aliases {
+		user-button = &button0;
+		user-led = &led0;
 	};
 
 	gpio2: gpio@50001000 {
@@ -869,6 +926,252 @@ class TestAssertionFailures(unittest.TestCase):
         rc, fails = self._rc_and_fails(mutate)
         self.assertEqual(rc, 1)
         self.assertIn("54l15-035", fails)
+
+
+class TestPairingControlAssertions(unittest.TestCase):
+    """P6 resolved-artifact assertions: aliases, GPIO flags, deleted nodes,
+    disabled inherited buttons, feature-off checks (wrong resolved values
+    must fail, not copied constants)."""
+
+    def _rc_and_fails(self, mutate):
+        fx = Fixture()
+        try:
+            mutate(fx)
+            parsed = cbc.resolve_inputs(fx.nrf5340, fx.nrf54l15, fx.bt_bap)
+            result = cbc.run_all(parsed)
+            return cbc.main(
+                [
+                    "--nrf5340",
+                    fx.nrf5340,
+                    "--nrf54l15",
+                    fx.nrf54l15,
+                    "--bt-bap-source",
+                    fx.bt_bap,
+                ]
+            ), [e[1] for e in result.failures()]
+        finally:
+            fx.destroy()
+
+    def test_5340_feature_on_control_fails(self):
+        rc, fails = self._rc_and_fails(
+            lambda fx: write(
+                fx.config("5340", "le-audio-receiver"),
+                APP5340_CONFIG.replace(
+                    "# CONFIG_USER_PAIRING_CONTROL is not set",
+                    "CONFIG_USER_PAIRING_CONTROL=y",
+                ),
+            )
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-030", fails)
+
+    def test_5340_feature_on_input_fails(self):
+        rc, fails = self._rc_and_fails(
+            lambda fx: write(
+                fx.config("5340", "le-audio-receiver"),
+                APP5340_CONFIG.replace(
+                    "# CONFIG_USER_PAIRING_INPUT is not set",
+                    "CONFIG_USER_PAIRING_INPUT=y",
+                ),
+            )
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-031", fails)
+
+    def test_54l15_control_off_fails(self):
+        rc, fails = self._rc_and_fails(
+            lambda fx: write(
+                fx.config("54l15", "le-audio-receiver"),
+                APP54_CONFIG.replace(
+                    "CONFIG_USER_PAIRING_CONTROL=y",
+                    "# CONFIG_USER_PAIRING_CONTROL is not set",
+                ),
+            )
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-037", fails)
+
+    def test_54l15_wrong_workq_stack(self):
+        rc, fails = self._rc_and_fails(
+            lambda fx: write(
+                fx.config("54l15", "le-audio-receiver"),
+                APP54_CONFIG.replace(
+                    "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE=1024",
+                    "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE=2048",
+                ),
+            )
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-041", fails)
+
+    def test_54l15_heap_not_zero(self):
+        rc, fails = self._rc_and_fails(
+            lambda fx: write(
+                fx.config("54l15", "le-audio-receiver"),
+                APP54_CONFIG.replace(
+                    "CONFIG_HEAP_MEM_POOL_SIZE=0", "CONFIG_HEAP_MEM_POOL_SIZE=4096"
+                ),
+            )
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-042", fails)
+
+    def test_wrong_user_button_alias(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace("user-button = &button0;", "user-button = &button1;"),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-043", fails)
+
+    def test_wrong_debounce(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace(
+                    "debounce-interval-ms = < 0x1e >;",
+                    "debounce-interval-ms = < 0x14 >;",
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-044", fails)
+
+    def test_wrong_button_pin(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace(
+                    "gpios = < &gpio0 0x0 0x11 >;", "gpios = < &gpio0 0x1 0x11 >;"
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-045", fails)
+
+    def test_wrong_button_polarity(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace(
+                    "gpios = < &gpio0 0x0 0x11 >;", "gpios = < &gpio0 0x0 0x1 >;"
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-045", fails)
+
+    def test_wrong_button_code(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace("zephyr,code = < 0xb >;", "zephyr,code = < 0x1e >;"),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-045", fails)
+
+    def test_button_re_enabled(self):
+        # Re-enable button1 specifically (its zephyr,code 0x2 is unique),
+        # leaving the other disabled nodes untouched.
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace(
+                    'zephyr,code = < 0x2 >;\n\t\t\tstatus = "disabled";',
+                    "zephyr,code = < 0x2 >;",
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-046", fails)
+
+    def test_wrong_user_led_alias(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace("user-led = &led0;", "user-led = &button0;"),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-047", fails)
+
+    def test_wrong_led_pin(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace(
+                    "gpios = < &gpio2 0x0 0x1 >;", "gpios = < &gpio2 0x9 0x1 >;"
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-048", fails)
+
+    def test_wrong_led_polarity(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace(
+                    "gpios = < &gpio2 0x0 0x1 >;", "gpios = < &gpio2 0x0 0x0 >;"
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-048", fails)
+
+    def test_led1_reintroduced_fails(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace(
+                    '\tleds {\n\t\tcompatible = "gpio-leds";\n\n\t\tled0: led_0 {',
+                    '\tleds {\n\t\tcompatible = "gpio-leds";\n\n'
+                    "\t\tled1: led_1 {\n\t\t\tgpios = < &gpio1 0xa 0x1 >;\n\t\t};\n\n"
+                    "\t\tled0: led_0 {",
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-049", fails)
+
+    def test_wrong_input_debounce_kconfig(self):
+        rc, fails = self._rc_and_fails(
+            lambda fx: write(
+                fx.config("54l15", "le-audio-receiver"),
+                APP54_CONFIG.replace(
+                    "CONFIG_USER_PAIRING_DEBOUNCE_MS=30",
+                    "CONFIG_USER_PAIRING_DEBOUNCE_MS=50",
+                ),
+            )
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-039", fails)
+
+    def test_wrong_shell_timeout(self):
+        rc, fails = self._rc_and_fails(
+            lambda fx: write(
+                fx.config("54l15", "le-audio-receiver"),
+                APP54_CONFIG.replace(
+                    "CONFIG_USER_PAIRING_SHELL_RESET_TIMEOUT_MS=15000",
+                    "CONFIG_USER_PAIRING_SHELL_RESET_TIMEOUT_MS=1000",
+                ),
+            )
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-040", fails)
 
 
 if __name__ == "__main__":

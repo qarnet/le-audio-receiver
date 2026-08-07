@@ -864,14 +864,38 @@ DTS assertion.  **R8:** the checker additionally asserts the acceptance
 diagnostics parity — nRF5340 app `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`
 not enabled (`5340-029`), nRF54L15 app `CONFIG_AUDIO_ACCEPTANCE_
 DIAGNOSTICS=y` (`54l15-035`) and FLPR image `CONFIG_FLPR_ACCEPTANCE_
-DIAGNOSTICS=y` (`54l15-036`) — 76 → **79 assertions**.  `tests/unit/
-build_contract/` (33 tests) covers a complete
+DIAGNOSTICS=y` (`54l15-036`) — 76 → **79 assertions**.  **P6:** the
+user-pairing-control contract grows the checker to **94 assertions** —
+nRF54L15 full-stack enablement proven from the resolved app config
+(`CONFIG_USER_PAIRING_CONTROL=y` `54l15-037`,
+`CONFIG_USER_PAIRING_INPUT=y` `54l15-038`, debounce 30 `54l15-039`,
+shell reset timeout 15000 `54l15-040`, chosen work-queue stack 1024
+`54l15-041`, `CONFIG_HEAP_MEM_POOL_SIZE=0` system-heap-removal proof
+`54l15-042`) and from the resolved app DTS (the `user-button` alias
+resolves to `button0` `54l15-043`, whose gpio-keys parent carries
+`debounce-interval-ms = 30` `54l15-044`; button0 is `<&gpio0 0
+(GPIO_ACTIVE_LOW|GPIO_PULL_UP)>` with `zephyr,code = <INPUT_KEY_0>`
+`54l15-045`; the inherited DK `button1`/`button2`/`button3` are status
+disabled so gpio-keys can never claim UART20 P1.08/P1.09 `54l15-046`;
+the `user-led` alias resolves to `led0` `54l15-047` = `<&gpio2 0
+GPIO_ACTIVE_LOW>` `54l15-048`; and the inherited DK `led1`/`led2`/
+`led3` are absent from the resolved tree (`/delete-node/` — gpio-leds
+uses all children regardless of status) `54l15-049`) — and the
+nRF5340 feature-off proof (app `CONFIG_USER_PAIRING_CONTROL` not
+enabled `5340-030`, `CONFIG_USER_PAIRING_INPUT` not enabled
+`5340-031`).  `tests/unit/
+build_contract/` (50 tests) covers a complete
 valid dual-target fixture, every hard-input class, explicit unset vs set
 symbols, comment-only satisfaction attempts, wrong node status/compatible/
 chosen/pins/counts/polarity/capacitance, missing/overlapping/out-of-range
 memory intervals, SW Split Kconfig-only and DTS-only half failures, an
 alternate sysbuild default-domain name, a missing `domains.yaml`, and the
-deterministic multi-error report with nonzero exit.
+deterministic multi-error report with nonzero exit, plus the P6
+resolved-artifact failure modes: nRF5340 feature-on control/input, wrong
+work-queue stack / heap / debounce / shell timeout values, wrong
+`user-button`/`user-led` alias targets, wrong button pin/polarity/code,
+re-enabled inherited buttons, wrong LED pin/polarity, and a reintroduced
+inherited LED node.
 
 ### BUILD-008 — 48 kHz capability proof split (T6)
 

@@ -390,6 +390,52 @@ def chosen_ref(labels, chosen_node, prop_name):
     return labels.get(ref[1:])
 
 
+def alias_ref(labels, nodes, alias_name):
+    """Resolve a root /aliases property to the referenced node, or None."""
+    aliases = None
+    for n in nodes:
+        if n.name == "aliases":
+            aliases = n
+            break
+    if aliases is None:
+        for n in nodes:
+            if n.name == "/":
+                for c in n.children:
+                    if c.name == "aliases":
+                        aliases = c
+                        break
+            if aliases is not None:
+                break
+    if aliases is None:
+        return None
+    groups = aliases.props.get(alias_name)
+    if not groups or not groups[0]:
+        return None
+    ref = groups[0][0]
+    if not (isinstance(ref, str) and ref.startswith("&")):
+        return None
+    return labels.get(ref[1:])
+
+
+# GPIO flag/code constants (Zephyr dt-bindings/gpio/gpio.h, input_codes.h).
+GPIO_ACTIVE_LOW = 1
+GPIO_PULL_UP = 16
+INPUT_KEY_0 = 11
+
+
+def gpio_spec(node, prop_name="gpios"):
+    """(controller_label, pin, flags) from the first gpios group, or None."""
+    if node is None:
+        return None
+    groups = node.props.get(prop_name)
+    if not groups or not groups[0]:
+        return None
+    cells = groups[0]
+    if len(cells) < 3 or not isinstance(cells[0], str) or not cells[0].startswith("&"):
+        return None
+    return (cells[0][1:], cells[1], cells[2])
+
+
 # ── contract checks ─────────────────────────────────────────────────
 
 PHYS_SRAM_BASE = 0x20000000
@@ -722,6 +768,21 @@ def run_nrf5340_checks(
         "got %r" % app_cfg.get("CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS"),
     )
 
+    # P6: user pairing control is nRF54L15-only; the nRF5340 app must stay
+    # feature-off (both the controller and the input/LED adapter).
+    result.add(
+        config_not_enabled(app_cfg, "CONFIG_USER_PAIRING_CONTROL"),
+        "5340-030",
+        "app CONFIG_USER_PAIRING_CONTROL not enabled",
+        "got %r" % app_cfg.get("CONFIG_USER_PAIRING_CONTROL"),
+    )
+    result.add(
+        config_not_enabled(app_cfg, "CONFIG_USER_PAIRING_INPUT"),
+        "5340-031",
+        "app CONFIG_USER_PAIRING_INPUT not enabled",
+        "got %r" % app_cfg.get("CONFIG_USER_PAIRING_INPUT"),
+    )
+
 
 def run_nrf54_checks(
     app_cfg, app_dts, labels_app, flpr_cfg, flpr_dts, labels_flpr, result
@@ -943,6 +1004,147 @@ def run_nrf54_checks(
         "54l15-036",
         "FLPR image CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS=y",
         "got %r" % flpr_cfg.get("CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS"),
+    )
+
+    # P6: user pairing control full-stack enablement (nRF54L15 production
+    # XIAO target only).  Kconfig half.
+    result.add(
+        config_enabled(app_cfg, "CONFIG_USER_PAIRING_CONTROL"),
+        "54l15-037",
+        "app CONFIG_USER_PAIRING_CONTROL=y",
+        "got %r" % app_cfg.get("CONFIG_USER_PAIRING_CONTROL"),
+    )
+    result.add(
+        config_enabled(app_cfg, "CONFIG_USER_PAIRING_INPUT"),
+        "54l15-038",
+        "app CONFIG_USER_PAIRING_INPUT=y",
+        "got %r" % app_cfg.get("CONFIG_USER_PAIRING_INPUT"),
+    )
+    result.add(
+        config_int(app_cfg, "CONFIG_USER_PAIRING_DEBOUNCE_MS") == 30,
+        "54l15-039",
+        "app USER_PAIRING_DEBOUNCE_MS=30",
+        "got %r" % config_int(app_cfg, "CONFIG_USER_PAIRING_DEBOUNCE_MS"),
+    )
+    result.add(
+        config_int(app_cfg, "CONFIG_USER_PAIRING_SHELL_RESET_TIMEOUT_MS") == 15000,
+        "54l15-040",
+        "app USER_PAIRING_SHELL_RESET_TIMEOUT_MS=15000",
+        "got %r" % config_int(app_cfg, "CONFIG_USER_PAIRING_SHELL_RESET_TIMEOUT_MS"),
+    )
+    result.add(
+        config_int(app_cfg, "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE") == 1024,
+        "54l15-041",
+        "app USER_PAIRING_WORKQ_STACK_SIZE=1024 (smallest defensible)",
+        "got %r" % config_int(app_cfg, "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE"),
+    )
+    result.add(
+        config_int(app_cfg, "CONFIG_HEAP_MEM_POOL_SIZE") == 0,
+        "54l15-042",
+        "app HEAP_MEM_POOL_SIZE=0 (system heap proven unused)",
+        "got %r" % config_int(app_cfg, "CONFIG_HEAP_MEM_POOL_SIZE"),
+    )
+
+    # P6: devicetree half — resolved aliases, GPIO flags, disabled
+    # inherited DK buttons, deleted inherited DK LEDs.
+    user_button = alias_ref(labels_app, app_dts, "user-button")
+    result.add(
+        user_button is not None and user_button is node_by_label(labels_app, "button0"),
+        "54l15-043",
+        "user-button alias resolves to button0",
+        "resolved %r" % (user_button.name if user_button else None),
+    )
+    buttons_ok = False
+    if user_button is not None:
+        parent = user_button.parent
+        compat = parent.props.get("compatible") if parent else None
+        is_keys = bool(compat) and "gpio-keys" in compat[0]
+        deb = parent.props.get("debounce-interval-ms") if parent else None
+        deb_ok = bool(deb) and len(deb[0]) == 1 and deb[0][0] == 30
+        buttons_ok = is_keys and deb_ok
+    result.add(
+        buttons_ok,
+        "54l15-044",
+        "button0 parent compatible gpio-keys with debounce-interval-ms 30",
+    )
+    b0 = node_by_label(labels_app, "button0")
+    spec = gpio_spec(b0)
+    code = b0.props.get("zephyr,code") if b0 else None
+    code_ok = bool(code) and len(code[0]) == 1 and code[0][0] == INPUT_KEY_0
+    spec_ok = spec is not None and spec == ("gpio0", 0, GPIO_ACTIVE_LOW | GPIO_PULL_UP)
+    result.add(
+        spec_ok and code_ok,
+        "54l15-045",
+        "button0 gpios = <&gpio0 0 ACTIVE_LOW|PULL_UP> with zephyr,code INPUT_KEY_0",
+        "spec %r code %r" % (spec, (code[0] if code else None)),
+    )
+    disabled_ok = True
+    for name in ("button1", "button2", "button3"):
+        node = node_by_label(labels_app, name)
+        if node is None or node.status() != "disabled":
+            disabled_ok = False
+    result.add(
+        disabled_ok,
+        "54l15-046",
+        "button1/button2/button3 status disabled (no UART20/I2S pin claims)",
+        "button1 %r button2 %r button3 %r"
+        % (
+            (
+                node_by_label(labels_app, "button1").status()
+                if node_by_label(labels_app, "button1")
+                else None
+            ),
+            (
+                node_by_label(labels_app, "button2").status()
+                if node_by_label(labels_app, "button2")
+                else None
+            ),
+            (
+                node_by_label(labels_app, "button3").status()
+                if node_by_label(labels_app, "button3")
+                else None
+            ),
+        ),
+    )
+    user_led = alias_ref(labels_app, app_dts, "user-led")
+    result.add(
+        user_led is not None and user_led is node_by_label(labels_app, "led0"),
+        "54l15-047",
+        "user-led alias resolves to led0",
+        "resolved %r" % (user_led.name if user_led else None),
+    )
+    led_spec = gpio_spec(node_by_label(labels_app, "led0"))
+    result.add(
+        led_spec is not None and led_spec == ("gpio2", 0, GPIO_ACTIVE_LOW),
+        "54l15-048",
+        "led0 gpios = <&gpio2 0 ACTIVE_LOW>",
+        "got %r" % (led_spec,),
+    )
+    gone = all(
+        node_by_label(labels_app, name) is None for name in ("led1", "led2", "led3")
+    )
+    result.add(
+        gone,
+        "54l15-049",
+        "inherited led1/led2/led3 absent from resolved tree (deleted)",
+        "led1 %r led2 %r led3 %r"
+        % (
+            (
+                node_by_label(labels_app, "led1").name
+                if node_by_label(labels_app, "led1")
+                else None
+            ),
+            (
+                node_by_label(labels_app, "led2").name
+                if node_by_label(labels_app, "led2")
+                else None
+            ),
+            (
+                node_by_label(labels_app, "led3").name
+                if node_by_label(labels_app, "led3")
+                else None
+            ),
+        ),
     )
 
 
