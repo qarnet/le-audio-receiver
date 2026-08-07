@@ -137,18 +137,43 @@ SOURCE_COMMIT="$(git rev-parse HEAD)"
 # ---------- output-dir safety ----------
 # Path-shape validation runs unconditionally: never accept empty/root/
 # repo-root/home, relative paths, paths outside the caller-selected output
-# tree (/tmp or $HOME), paths inside the repo, or the working directory.
+# tree (/tmp or $HOME), paths inside the repo, the repo's ancestors, or the
+# working directory.  Every check runs against the canonical path (symlinks
+# resolved, traversal like /tmp/../ resolved) so aliases of the repo are
+# caught before any rm -rf.  No output path is accepted unless its canonical
+# target can be proven to live outside the repo root.
+[ -n "$OUTPUT_DIR" ] || die "refusing to clean unsafe output path: $OUTPUT_DIR"
 case "$OUTPUT_DIR" in
-    ""|/|"$REPO_ROOT"|"$HOME") die "refusing to clean unsafe output path: $OUTPUT_DIR" ;;
-esac
-case "$OUTPUT_DIR" in
-    /tmp/*|"$HOME"/*) : ;;
+    /*) : ;;
     *) die "refusing to clean path outside the allowed output tree (/tmp or \$HOME): $OUTPUT_DIR" ;;
 esac
-case "$REPO_ROOT" in
-    "$OUTPUT_DIR"/*) die "refusing to clean a path inside the repo root: $OUTPUT_DIR" ;;
+case "$OUTPUT_DIR" in
+    ""|/|"$HOME") die "refusing to clean unsafe output path: $OUTPUT_DIR" ;;
 esac
-[ "$OUTPUT_DIR" = "$(pwd)" ] && die "refusing to clean the current working directory"
+CANON_REPO="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$REPO_ROOT")" \
+    || die "cannot canonicalize repo root: $REPO_ROOT"
+CANON_OUT="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$OUTPUT_DIR")" \
+    || die "cannot canonicalize output path: $OUTPUT_DIR"
+CANON_HOME="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$HOME")" \
+    || die "cannot canonicalize home directory: $HOME"
+CANON_PWD="$(python3 -c 'import os; print(os.path.realpath(os.getcwd()))')"
+[ -n "$CANON_OUT" ] || die "cannot resolve output path: $OUTPUT_DIR"
+[ "$CANON_OUT" = "/" ] && die "refusing to clean unsafe output path: $OUTPUT_DIR"
+[ "$CANON_OUT" = "$CANON_REPO" ] && die "refusing to clean the repo root: $OUTPUT_DIR"
+case "$CANON_OUT" in
+    "$CANON_REPO"/*) die "refusing to clean a path inside the repo root: $OUTPUT_DIR" ;;
+esac
+case "$CANON_REPO" in
+    "$CANON_OUT"/*) die "refusing to clean a path containing the repo root: $OUTPUT_DIR" ;;
+esac
+case "$CANON_OUT" in
+    /tmp|/tmp/*|"$CANON_HOME"|"$CANON_HOME"/*) : ;;
+    *) die "refusing to clean path outside the allowed output tree (/tmp or \$HOME): $OUTPUT_DIR" ;;
+esac
+[ "$CANON_OUT" = "$CANON_PWD" ] && die "refusing to clean the current working directory"
+# Operate on the canonical path from here on so every later mkdir/rm targets
+# the verified location.
+OUTPUT_DIR="$CANON_OUT"
 
 if [ -d "$OUTPUT_DIR" ] && [ -n "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]; then
     [ "$CLEAN_OUTPUT" -eq 1 ] || die "output directory not empty: $OUTPUT_DIR (pass --clean-output to remove it)"

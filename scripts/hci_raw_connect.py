@@ -91,6 +91,24 @@ DEFAULT_OWN_ADDR = "C0:AA:BB:CC:DD:EE"
 OWN_ADDR_PUBLIC = 0x00
 OWN_ADDR_RANDOM = 0x01
 
+# Command-status error codes that can never be fixed by retrying the
+# identical LE Extended Create Connection command (Bluetooth Core Spec
+# Vol 2 Part D 1.3; names from Zephyr include/zephyr/bluetooth/hci_types.h):
+# the command itself is unknown/unsupported/invalid or the controller
+# hardware is broken.  Every other command-status error is retryable —
+# e.g. Command Disallowed (0x0c) while another operation is in flight,
+# Connection Already Exists (0x0b), Insufficient Resources (0x0d) — and a
+# fresh attempt may succeed.
+FATAL_CMD_STATUS_CODES = frozenset(
+    {
+        0x01,  # BT_HCI_ERR_UNKNOWN_CMD
+        0x03,  # BT_HCI_ERR_HW_FAILURE
+        0x11,  # BT_HCI_ERR_UNSUPP_FEATURE_PARAM_VAL
+        0x12,  # BT_HCI_ERR_INVALID_PARAM
+        0x1E,  # BT_HCI_ERR_INVALID_LL_PARAM
+    }
+)
+
 
 class HciPacketError(ValueError):
     """Malformed or unrecognized raw HCI packet."""
@@ -289,6 +307,8 @@ class ConnectSession:
     the caller executes:
       ('send_cmd', opcode)            — caller builds/sends the command
       ('failed_attempt', status)      — attempt ended in error; caller may retry
+      ('fatal_status', status)        — fatal command-status error; caller MUST
+                                        NOT retry (session is done)
       ('cancelled',)                  — cancel acknowledged; caller may retry
       ('cancel_timeout',)             — cancel not acknowledged in time
       ('success', handle)             — confirmed link
@@ -325,7 +345,14 @@ class ConnectSession:
                 else:
                     self.last_status = evt["status"]
                     self.state = "idle"
-                    actions.append(("failed_attempt", evt["status"]))
+                    if evt["status"] in FATAL_CMD_STATUS_CODES:
+                        # The command itself can never succeed on retry:
+                        # stop the session so the caller reports failure
+                        # instead of retrying.
+                        self.result = ("fatal_status", evt["status"])
+                        actions.append(("fatal_status", evt["status"]))
+                    else:
+                        actions.append(("failed_attempt", evt["status"]))
         elif self.state == "in_progress":
             if kind == "le_conn_complete":
                 peer_ok = (
@@ -368,6 +395,24 @@ class ConnectSession:
                 self.state = "idle"
                 return [("cancel_timeout",)]
         return []
+
+
+def force_cancel(session, now):
+    """Cancel any in-flight create-connection attempt immediately.
+
+    Used on the global connect-deadline path: an uncancelled LE Extended
+    Create Connection keeps the controller connecting after the raw socket
+    closes and blocks the next connect.  This is independent of the
+    per-attempt timeout — a young attempt is cancelled too.
+
+    Returns [('send_cmd', OP_LE_CREATE_CONN_CANCEL)] when an attempt was
+    in flight, else [].
+    """
+    if session.state in ("pending_status", "in_progress"):
+        session._cancel_started = now
+        session.state = "cancel_sent"
+        return [("send_cmd", OP_LE_CREATE_CONN_CANCEL)]
+    return []
 
 
 def main():
@@ -585,16 +630,21 @@ def main():
                     "cmd_status" if prev_state == "pending_status" else "conn_complete",
                     action[1],
                 )
+            elif action[0] == "fatal_status":
+                last_fail = ("fatal_cmd_status", action[1])
             _dispatch([action])
 
     if not (session.is_done() and session.result[0] == "success"):
         # Deadline expired without a confirmed link.  Cancel any in-flight
-        # attempt (protocol permits cancelling an in-progress extended
-        # create connection), then report failure.
+        # attempt BEFORE closing the socket (protocol permits cancelling an
+        # in-progress extended create connection): an uncancelled attempt
+        # keeps the controller connecting after this socket closes and
+        # blocks the next connect.  The cancel is unconditional — it does
+        # not wait for the per-attempt deadline.
         if session.state in ("pending_status", "in_progress"):
-            _dispatch(session.handle_timeout(time.monotonic()))
+            _dispatch(force_cancel(session, time.monotonic()))
             cancel_wait = time.monotonic() + 2.0
-            while time.monotonic() < cancel_wait:
+            while time.monotonic() < cancel_wait and session.state == "cancel_sent":
                 try:
                     r, _, _ = select.select([s], [], [], 0.2)
                 except (OSError, ValueError):
@@ -604,15 +654,12 @@ def main():
                 try:
                     data = s.recv(4096)
                     ptype, body = parse_hci_packet(data)
-                    if ptype == HCI_EVENT_PKT:
-                        evt = parse_event(body)
-                        if (
-                            evt.get("evt") in ("cmd_status", "cmd_complete")
-                            and evt.get("opcode") == OP_LE_CREATE_CONN_CANCEL
-                        ):
-                            break
+                    if ptype != HCI_EVENT_PKT:
+                        continue
+                    evt = parse_event(body)
                 except (OSError, HciPacketError, ValueError):
                     continue
+                session.handle_event(evt)  # ('cancelled',) -> idle
         if session.state == "cancel_sent":
             reason = "cancel_timeout"
         elif last_fail is not None:

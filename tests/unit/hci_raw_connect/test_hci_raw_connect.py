@@ -31,6 +31,7 @@ sys.path.insert(
 
 from hci_raw_connect import (  # noqa: E402
     ConnectSession,
+    FATAL_CMD_STATUS_CODES,
     HciPacketError,
     LE_SUBEVT_CONN_COMPLETE,
     LE_SUBEVT_ENH_CONN_COMPLETE,
@@ -40,6 +41,7 @@ from hci_raw_connect import (  # noqa: E402
     build_ext_create_conn,
     build_hci_filter,
     cmd,
+    force_cancel,
     format_peer,
     parse_event,
     parse_hci_packet,
@@ -311,6 +313,96 @@ class TestConnectSession(unittest.TestCase):
         body = evt_body(0x05, bytes([0x00]) + struct.pack("<H", 0x0042) + bytes([0x13]))
         actions = s.handle_event(parse_event(body))
         self.assertEqual(actions, [("link_down", 0x0042, 0x13)])
+
+
+class TestFatalCommandStatus(unittest.TestCase):
+    """Command-status errors that can never be fixed by retry stop the
+    session (fatal_status); transient errors stay retryable."""
+
+    def test_fatal_status_ends_session(self):
+        s = ConnectSession(PEER, PEER_TYPE)
+        s.begin_attempt()
+        actions = s.handle_event(
+            parse_event(cmd_status_evt(OP_LE_EXT_CREATE_CONN, 0x01))
+        )
+        self.assertEqual(actions, [("fatal_status", 0x01)])
+        self.assertTrue(s.is_done(), "fatal status must stop retries")
+        self.assertEqual(s.result, ("fatal_status", 0x01))
+        self.assertEqual(s.state, "idle")
+        self.assertEqual(s.last_status, 0x01)
+
+    def test_every_fatal_code_ends_session(self):
+        for code in sorted(FATAL_CMD_STATUS_CODES):
+            s = ConnectSession(PEER, PEER_TYPE)
+            s.begin_attempt()
+            actions = s.handle_event(
+                parse_event(cmd_status_evt(OP_LE_EXT_CREATE_CONN, code))
+            )
+            self.assertEqual(actions, [("fatal_status", code)], hex(code))
+            self.assertTrue(s.is_done(), hex(code))
+
+    def test_retryable_statuses_keep_session_alive(self):
+        for code in (0x07, 0x0B, 0x0C, 0x0D, 0x0F, 0x10):
+            s = ConnectSession(PEER, PEER_TYPE)
+            s.begin_attempt()
+            actions = s.handle_event(
+                parse_event(cmd_status_evt(OP_LE_EXT_CREATE_CONN, code))
+            )
+            self.assertEqual(actions, [("failed_attempt", code)], hex(code))
+            self.assertFalse(s.is_done(), hex(code))
+            self.assertEqual(s.state, "idle")
+
+    def test_retry_after_transient_status_succeeds(self):
+        s = ConnectSession(PEER, PEER_TYPE)
+        s.begin_attempt()
+        s.handle_event(parse_event(cmd_status_evt(OP_LE_EXT_CREATE_CONN, 0x0C)))
+        s.begin_attempt()
+        s.handle_event(parse_event(cmd_status_evt(OP_LE_EXT_CREATE_CONN, 0)))
+        actions = s.handle_event(
+            parse_event(le_conn_evt(LE_SUBEVT_ENH_CONN_COMPLETE, 0, 0x0042))
+        )
+        self.assertEqual(actions, [("success", 0x0042)])
+
+
+class TestForceCancel(unittest.TestCase):
+    """Global-deadline cancel is independent of the per-attempt timeout:
+    any in-flight attempt is cancelled before the socket closes."""
+
+    def test_force_cancel_in_progress_attempt(self):
+        s = ConnectSession(PEER, PEER_TYPE, attempt_timeout_s=10.0)
+        s.begin_attempt()
+        s.handle_event(parse_event(cmd_status_evt(OP_LE_EXT_CREATE_CONN, 0)))
+        # Global deadline at +2s — far below the 10 s per-attempt timeout.
+        actions = force_cancel(s, 1002.0)
+        self.assertEqual(actions, [("send_cmd", OP_LE_CREATE_CONN_CANCEL)])
+        self.assertEqual(s.state, "cancel_sent")
+        # Cancel ack completes the cancellation; session may retry.
+        actions = s.handle_event(
+            parse_event(cmd_status_evt(OP_LE_CREATE_CONN_CANCEL, 0))
+        )
+        self.assertEqual(actions, [("cancelled",)])
+        self.assertEqual(s.state, "idle")
+        self.assertFalse(s.is_done())
+
+    def test_force_cancel_pending_status(self):
+        s = ConnectSession(PEER, PEER_TYPE)
+        s.begin_attempt()  # pending_status (no cmd_status yet)
+        actions = force_cancel(s, 5.0)
+        self.assertEqual(actions, [("send_cmd", OP_LE_CREATE_CONN_CANCEL)])
+        self.assertEqual(s.state, "cancel_sent")
+
+    def test_force_cancel_idle_noop(self):
+        s = ConnectSession(PEER, PEER_TYPE)
+        self.assertEqual(force_cancel(s, 5.0), [])
+        self.assertEqual(s.state, "idle")
+
+    def test_force_cancel_connected_noop(self):
+        s = ConnectSession(PEER, PEER_TYPE)
+        s.begin_attempt()
+        s.handle_event(parse_event(cmd_status_evt(OP_LE_EXT_CREATE_CONN, 0)))
+        s.handle_event(parse_event(le_conn_evt(LE_SUBEVT_ENH_CONN_COMPLETE, 0, 0x0042)))
+        self.assertEqual(force_cancel(s, 5.0), [])
+        self.assertEqual(s.state, "connected")
 
 
 class TestWaitForHelperReady(unittest.TestCase):

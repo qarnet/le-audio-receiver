@@ -336,6 +336,93 @@ class RunnerCleanOutput(unittest.TestCase):
         self.assertIn("refusing to clean path outside the allowed output tree", out)
 
 
+class RunnerOutputPathSafety(unittest.TestCase):
+    """Safety fix (P9 documentation-hygiene track): the containment check is
+    canonical-path based.  A repo child (even via /tmp, traversal, or a
+    symlink alias) must be rejected BEFORE any rm -rf, an ancestor of the
+    repo must be rejected, and an external temp output must still work."""
+
+    def _repo_child_fixture(self, child_dir, marker="keep.txt"):
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        os.makedirs(child_dir)
+        marker_path = os.path.join(child_dir, marker)
+        with open(marker_path, "w") as fh:
+            fh.write("keep")
+        return fx, marker_path
+
+    def test_repo_child_rejected_before_deletion(self):
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        child = os.path.join(fx.repo, "cov-out")
+        os.makedirs(child)
+        marker = os.path.join(child, "keep.txt")
+        with open(marker, "w") as fh:
+            fh.write("keep")
+        rc, out, _ = fx.run("--report-only", "--clean-output", output=child)
+        self.assertNotEqual(0, rc)
+        self.assertIn("refusing to clean a path inside the repo root", out)
+        self.assertTrue(os.path.exists(marker), "repo child must not be deleted")
+
+    def test_repo_child_with_traversal_rejected(self):
+        # /tmp/<root>/other/../repo/cov-out canonically resolves inside the
+        # repo even though the raw string is a /tmp child.
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        os.makedirs(os.path.join(fx.root, "other"))
+        child = os.path.join(fx.root, "other", "..", "repo", "cov-out")
+        os.makedirs(child)
+        marker = os.path.join(child, "keep.txt")
+        with open(marker, "w") as fh:
+            fh.write("keep")
+        rc, out, _ = fx.run("--report-only", "--clean-output", output=child)
+        self.assertNotEqual(0, rc)
+        self.assertIn("refusing to clean a path inside the repo root", out)
+        self.assertTrue(os.path.exists(marker))
+
+    def test_symlink_alias_of_repo_root_rejected(self):
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        link = os.path.join(fx.root, "repo-link")
+        os.symlink(fx.repo, link)
+        rc, out, _ = fx.run("--report-only", "--clean-output", output=link)
+        self.assertNotEqual(0, rc)
+        self.assertIn("refusing to clean the repo root", out)
+        self.assertTrue(os.path.exists(os.path.join(fx.repo, "scripts")))
+
+    def test_symlink_alias_of_repo_child_rejected_before_deletion(self):
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        child = os.path.join(fx.repo, "cov-out")
+        os.makedirs(child)
+        marker = os.path.join(child, "keep.txt")
+        with open(marker, "w") as fh:
+            fh.write("keep")
+        link = os.path.join(fx.root, "child-link")
+        os.symlink(child, link)
+        rc, out, _ = fx.run("--report-only", "--clean-output", output=link)
+        self.assertNotEqual(0, rc)
+        self.assertIn("refusing to clean a path inside the repo root", out)
+        self.assertTrue(os.path.exists(marker))
+
+    def test_repo_ancestor_rejected(self):
+        # fx.root contains the repo — deleting it would take the repo with it.
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        rc, out, _ = fx.run("--report-only", "--clean-output", output=fx.root)
+        self.assertNotEqual(0, rc)
+        self.assertIn("refusing to clean a path containing the repo root", out)
+        self.assertTrue(os.path.exists(os.path.join(fx.repo, "scripts")))
+
+    def test_external_temp_output_works(self):
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        out_dir = os.path.join(fx.root, "external-out")
+        rc, out, _ = fx.run("--report-only", "--clean-output", output=out_dir)
+        self.assertEqual(0, rc, out)
+        self.assertTrue(os.path.exists(os.path.join(out_dir, "run-manifest.json")))
+
+
 class RunnerBaseline(unittest.TestCase):
     def test_write_and_enforce_baseline(self):
         fx = RunnerFixture()

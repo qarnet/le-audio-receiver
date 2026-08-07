@@ -168,8 +168,9 @@ class TestModuleLazyImport(unittest.TestCase):
             "import bap_central_session;"
             "print(bap_central_session._liblc3_cdll is None)"
         ).format(scripts=SCRIPTS_DIR)
-        proc = subprocess.run([sys.executable, "-c", code],
-                              capture_output=True, text=True)
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True
+        )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), "True")
 
@@ -563,14 +564,20 @@ class TestCleanupSequence(unittest.TestCase):
         owner.register("helper", lambda: conn.terminate(verbose=True))
 
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             owner.run()  # must not raise; every error is printed + tolerated
         text = out.getvalue()
         self.assertIn("[cleanup] Transport " + TP1 + " release error: rel boom", text)
         self.assertIn("[cleanup] Endpoint unregister error: unreg boom", text)
         self.assertIn("[cleanup] Agent unregister error: agent boom", text)
         self.assertIn("[cleanup] Disconnect error: disc boom", text)
-        self.assertIn("[cleanup] Raw-HCI helper terminate error: wait boom", text)
+        # The raw-HCI helper termination failure now surfaces on stderr
+        # (guaranteed-reaped guarantee); it is never claimed as cleaned up.
+        self.assertNotIn("[cleanup] Raw-HCI helper terminated", text)
+        self.assertIn(
+            "[error] Raw-HCI helper termination failed: wait boom", err.getvalue()
+        )
         with self.assertRaises(OSError):
             os.write(w, b"x")  # fd still closed despite Release error
 

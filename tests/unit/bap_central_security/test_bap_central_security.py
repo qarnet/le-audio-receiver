@@ -24,6 +24,7 @@ process (no live BlueZ, no sudo):
 import contextlib
 import io
 import os
+import subprocess
 import sys
 import time
 import unittest
@@ -48,6 +49,13 @@ PEER = "DB:A6:0C:05:A2:AA"
 def capture(fn):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
+        result = fn()
+    return result, buf.getvalue()
+
+
+def capture_err(fn):
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
         result = fn()
     return result, buf.getvalue()
 
@@ -86,6 +94,31 @@ class FakeRawProc:
 
     def wait(self, timeout=3.0):
         self.wait_calls += 1
+        return self._rc
+
+
+class EscalationRawProc(FakeRawProc):
+    """Fake whose first/second wait can raise TimeoutExpired so the
+    SIGTERM->SIGKILL escalation path is exercised."""
+
+    def __init__(self, first_wait_timeout=False, second_wait_timeout=False):
+        super().__init__(ready_payload=b"x")
+        self.kill_calls = 0
+        self._first_wait_timeout = first_wait_timeout
+        self._second_wait_timeout = second_wait_timeout
+        self._wait_n = 0
+
+    def kill(self):
+        self.kill_calls += 1
+        self._rc = -9
+
+    def wait(self, timeout=3.0):
+        self.wait_calls += 1
+        self._wait_n += 1
+        if self._wait_n == 1 and self._first_wait_timeout:
+            raise subprocess.TimeoutExpired("proc", timeout)
+        if self._wait_n == 2 and self._second_wait_timeout:
+            raise subprocess.TimeoutExpired("proc", timeout)
         return self._rc
 
 
@@ -367,6 +400,65 @@ class TestRawHciConnect(unittest.TestCase):
         self.assertEqual(proc.terminate_calls, 1)
         self.assertEqual(out.count("[cleanup] Raw-HCI helper terminated"), 1)
 
+    def test_terminate_sigterm_timeout_escalates_to_kill(self):
+        """SIGTERM wait timeout must escalate to SIGKILL and still reap."""
+        conn = sec.RawHciConnect(PEER, 30, 0)
+        proc = EscalationRawProc(first_wait_timeout=True, second_wait_timeout=False)
+        conn.proc = proc
+        _, out = capture(lambda: conn.terminate(verbose=True))
+        self.assertEqual(proc.terminate_calls, 1)
+        self.assertEqual(proc.kill_calls, 1)
+        self.assertIn("[cleanup] Raw-HCI helper terminated", out)
+
+    def test_terminate_sigkill_timeout_surfaces_failure(self):
+        """Both SIGTERM and SIGKILL waits timing out must surface the
+        failure and NEVER claim a cleanup line."""
+        conn = sec.RawHciConnect(PEER, 30, 0)
+        proc = EscalationRawProc(first_wait_timeout=True, second_wait_timeout=True)
+        conn.proc = proc
+        _, out = capture(lambda: conn.terminate(verbose=True))
+        _, err = capture_err(lambda: None)
+        self.assertEqual(proc.kill_calls, 1)
+        self.assertNotIn("[cleanup] Raw-HCI helper terminated", out)
+        # Fresh connection for the stderr assertion (terminate is idempotent).
+        conn2 = sec.RawHciConnect(PEER, 30, 0)
+        proc2 = EscalationRawProc(first_wait_timeout=True, second_wait_timeout=True)
+        conn2.proc = proc2
+        _, err = capture_err(lambda: conn2.terminate(verbose=True))
+        self.assertIn("did not exit after SIGKILL", err)
+        self.assertNotIn("[cleanup] Raw-HCI helper terminated", err)
+
+    def test_terminate_already_exited_helper(self):
+        """terminate() on an already-exited (ProcessLookupError) helper is
+        clean: no error surfaced, cleanup line still accurate."""
+        conn = sec.RawHciConnect(PEER, 30, 0)
+
+        class AlreadyExitedProc(FakeRawProc):
+            def terminate(self):
+                raise ProcessLookupError("no such process")
+
+        proc = AlreadyExitedProc(ready_payload=b"x")
+        conn.proc = proc
+        _, out = capture(lambda: conn.terminate(verbose=True))
+        self.assertIn("[cleanup] Raw-HCI helper terminated", out)
+        _, err = capture_err(lambda: conn.terminate(verbose=True))
+        self.assertEqual(err, "")
+
+    def test_terminate_silent_failure_still_surfaces(self):
+        """An unreapable helper surfaces on stderr even on the silent
+        (verbose=False) error paths."""
+        conn = sec.RawHciConnect(PEER, 30, 0)
+        proc = FakeRawProc(ready_payload=READY_PREFIX + b"\n")
+
+        def bad_wait(timeout=3.0):
+            raise RuntimeError("wait boom")
+
+        proc.wait = bad_wait
+        conn.proc = proc
+        _, err = capture_err(lambda: conn.terminate())
+        self.assertIn("[error] Raw-HCI helper termination failed: wait boom", err)
+        self.assertNotIn("[cleanup] Raw-HCI helper terminated", err)
+
     def test_terminate_error_tolerated(self):
         conn = sec.RawHciConnect(PEER, 30, 0)
         proc = FakeRawProc(ready_payload=READY_PREFIX + b"\n")
@@ -376,8 +468,8 @@ class TestRawHciConnect(unittest.TestCase):
 
         proc.wait = bad_wait
         conn.proc = proc
-        _, out = capture(lambda: conn.terminate(verbose=True))
-        self.assertIn("[cleanup] Raw-HCI helper terminate error: wait boom", out)
+        _, err = capture_err(lambda: conn.terminate(verbose=True))
+        self.assertIn("[error] Raw-HCI helper termination failed: wait boom", err)
 
     def test_terminate_never_errors_when_not_spawned(self):
         conn = sec.RawHciConnect(PEER, 30, 0)
@@ -560,6 +652,7 @@ class TestPreserveBondConnect(unittest.TestCase):
         bus, device, props = self._setup(
             {"Paired": True, "Connected": False}, connect_fire="ok"
         )
+
         # Override: the reply fires but Connected stays False (the _setup
         # default flips it to True on a successful reply).
         def on_connect(*args, **kwargs):

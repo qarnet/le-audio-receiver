@@ -325,21 +325,53 @@ class RawHciConnect:
         print("[main] Device1 Connected confirmed")
 
     def terminate(self, verbose=False):
-        """Idempotent helper termination.  verbose (cleanup tail) prints
-        the [cleanup] line; error paths call it silently."""
+        """Idempotent helper termination with a guaranteed-reaped guarantee.
+
+        SIGTERM + bounded wait; on timeout escalate to SIGKILL + bounded
+        wait.  No SIGKILL/host-loss cleanup is ever claimed: the [cleanup]
+        line is printed only when the process was actually reaped, and a
+        process that still cannot be reaped surfaces the failure on stderr
+        regardless of verbose.
+        """
         if self._terminated:
             return
         self._terminated = True
         if self.proc is None:
             return
         try:
-            self.proc.terminate()
-            self.proc.wait(timeout=3)
-            if verbose:
-                print("[cleanup] Raw-HCI helper terminated")
+            try:
+                self.proc.terminate()
+            except ProcessLookupError:
+                # Already exited and reaped — nothing left to terminate.
+                pass
+            try:
+                self.proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                # SIGTERM did not take: escalate, then wait again.
+                try:
+                    self.proc.kill()
+                except ProcessLookupError:
+                    pass
+                try:
+                    self.proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    print(
+                        "[error] Raw-HCI helper did not exit after SIGKILL — "
+                        "helper may survive",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return
         except Exception as e:  # noqa: BLE001
-            if verbose:
-                print("[cleanup] Raw-HCI helper terminate error: {}".format(e))
+            # Unreapable or unexpected failure: surface it.
+            print(
+                "[error] Raw-HCI helper termination failed: {}".format(e),
+                file=sys.stderr,
+                flush=True,
+            )
+            return
+        if verbose:
+            print("[cleanup] Raw-HCI helper terminated")
 
 
 # ── RemoveDevice / proxy recreation ─────────────────────────────────────
@@ -365,7 +397,7 @@ def remove_device(adapter_iface, dev_path, dbus_mod, preserve_bond):
 
 def recreate_proxies(bus, dbus_mod, dev_path):
     """Rebuild Device1 + Properties proxies from the live bus after
-    RemoveDevice + raw HCI reconnect (pre-split lines 1179-1188)."""
+    RemoveDevice + raw HCI reconnect."""
     device = dbus_mod.Interface(
         bus.get_object("org.bluez", dev_path), "org.bluez.Device1"
     )
