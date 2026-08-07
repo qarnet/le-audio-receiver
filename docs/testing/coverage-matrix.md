@@ -653,3 +653,52 @@ increase is exactly the new file's measured lines/branches.  Canonical
 enforcement on the clean baseline commit `0f954d0`: **58 PASS / 0 FAIL
 / 58 TOTAL** (34 twister + 5 exec-only + 16 Python + coverage + matrix
 + BSim Stage 1, pins byte-identical).
+
+## P5 baseline migration (2026-08-07) — lifecycle/shell integration, same 36 files
+
+P5 wired the pairing-mode controller into the lifecycle, main loop, and
+shell (idle-disconnect advertising restart in `src/pairing_mode.c`;
+`pairing_control_start` + passive main loop + feature-on `bt unpair`
+path in `src/main.c`/`src/bt_shell.c`) under `CONFIG_USER_PAIRING_INPUT`.
+No new production source file was added.  The migration candidate was
+generated on the clean implementation commit `b1885d2` via
+`scripts/test-coverage.sh --write-baseline /tmp/p5-baseline-candidate.json`
+(`--output /tmp/p5-cov-candidate --clean-output`), inspected, and
+committed as `tests/coverage-baseline.json` (commit `94c2742`,
+byte-exact copy).  Tool versions unchanged: **gcovr 8.4 / gcov (GCC)
+14.3.0**, recorded in the baseline.
+
+**Population stays 36 files** — only the two changed production files
+move, and every unchanged file stays at or above its committed record
+(verified programmatically across lines/branches/functions — zero
+decreases, zero population drift):
+
+| file | metric | committed (P4) | P5 candidate |
+|------|--------|----------------|--------------|
+| `src/bt_shell.c` | lines | 6/6 | **11/11** |
+| | branches | 2/2 | **4/4** |
+| | functions | 1/1 | 1/1 |
+| `src/pairing_mode.c` | lines | 344/405 | **354/414** |
+| | branches | 160/226 | **171/236** |
+| | functions | 39/39 | 39/39 |
+
+The `bt_shell.c` feature-on branch enters the totals via the new
+`tests/unit/bt_shell_pairing` suite (feature-on shell command body, fake
+`pairing_mode_request_reset_sync`); the `pairing_mode.c` delta is the
+idle-restart branch (restart once NORMAL/BONDING, stale no-op, failure
+fatal, wait-phase no double-start) proven by the 5 new direct tests.
+Aggregate:
+
+| metric | committed (36 files) | P5 candidate (36 files) |
+|--------|----------------------|-------------------------|
+| lines | 4650/5107 (91.1%) | **4665/5121 (91.1%)** |
+| branches | 2010/2808 (71.6%) | **2023/2820 (71.7%)** |
+| functions | 357/357 | **357/357** |
+
+Zero-hit enforcement stays clean (357/357 functions in the numeric
+population; every function executes, including the new idle-restart and
+feature-on-shell branches).  No covered live behavior was deleted; the
+denominator increase is exactly the two changed files' measured
+lines/branches.  Canonical enforcement on the clean baseline commit
+`94c2742`: **59 PASS / 0 FAIL / 59 TOTAL** (35 twister + 5 exec-only +
+16 Python + coverage + matrix + BSim Stage 1, pins byte-identical).

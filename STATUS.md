@@ -202,6 +202,79 @@ lifecycle/shell/main/board enablement (P5/P6); no advertising payload
 differentiation; no audio/BAP stream lifecycle changes; no hardware
 tests (P8); production boards remain feature-off.
 
+## User pairing control — P5 ACCEPTED (2026-08-07)
+
+**P5 — lifecycle, disconnect restart, and shell integration —
+ACCEPTED**: under `CONFIG_USER_PAIRING_INPUT` the pairing-mode
+controller owns the whole P5 surface; every feature-off production
+build stays byte-for-byte behavior-equivalent.  `pairing_mode.c`:
+a matching NORMAL/IDLE or BONDING/IDLE disconnect with a real prior
+connection (`was_connected` captured before clearing status) restarts
+advertising exactly once through the injected `advertising_start` op —
+no mode/access/LED/generation mutation; stale/duplicate disconnects
+(`was_connected == false`) are a no-op; restart failure is fatal via
+the dedicated `OP_IDLE_RESTART_ADVERTISING` context; BONDING/RESET
+wait-phase completions are unchanged and never double-start.
+`main.c`: under the gate the final lifecycle adapter is
+`pairing_control_start` (`pairing_mode_init` → `user_pairing_io_init` →
+`bt_bap_pairing_notifications_enable` → `pairing_mode_start`; first
+exact errno returned, notification gate never opens after an init
+failure; `pairing_cold_reboot(void *ctx)` ignores ctx and calls
+`sys_reboot(SYS_REBOOT_COLD)`) and the main loop becomes a passive
+`k_sleep(K_FOREVER)` loop (callbacks → controller notifications own
+restart; `sem_disconnected`/`app_lifecycle_restart_advertising()` never
+consumed/called in that branch); the legacy disconnect-wait/restart
+loop remains byte-for-byte under `#else`.  `bt_shell.c`: under the gate
+`bt unpair` calls
+`pairing_mode_request_reset_sync(K_MSEC(USER_PAIRING_SHELL_RESET_TIMEOUT_MS))`
+— success `Pairing reset complete: bonds cleared; BONDING advertising
+active.` (only after BONDING advertising is active), any failure
+`pairing_mode reset failed: <errno>` with the exact result returned,
+`-ETIMEDOUT` prints the error, never claims success, never re-issues a
+reset, and no direct bond/advertising call exists in the path; the
+feature-off command keeps calling `bt_bap_pairing_reset()` with the
+exact historical output (BlueZ/WirePlumber fixtures unchanged).
+`Kconfig` adds `USER_PAIRING_SHELL_RESET_TIMEOUT_MS` (default 15000,
+range 1000–120000, `depends on USER_PAIRING_INPUT && SHELL`);
+`bt_bap.h` documents `bt_bap_pairing_reset()` as the LEGACY feature-off
+path with zero full-stack references (structurally proven: the new
+shell suite does not link the symbol).  Direct tests: pairing_mode
+32 → 37 (idle restart once NORMAL/BONDING, stale no-op, restart-failure
+fatal with exact order/one-reboot, wait-phase no double-start);
+NEW feature-on shell suite `tests/unit/bt_shell_pairing` (5 tests,
+real production `bt_shell.c` under the gate vs fake
+`pairing_mode_request_reset_sync`, exact timeout argument, success,
+`-ETIMEDOUT`, another errno, one call only, no legacy API); app_lifecycle
+unchanged (13).  Focused runs: pairing_mode **37 PASS**, app_lifecycle
+**13 PASS**, bt_shell_pairing **5 PASS**.  Full-stack scratch build
+(nRF54L15 sysbuild app+FLPR with `CONFIG_USER_PAIRING_INPUT=y` +
+`CONTROL=y` and scratch-only user-button/user-led aliases overlay,
+inherited DK buttons 1–3 disabled) links clean with zero warnings and
+resolved aliases/config in the app image.  Handoff:
+`docs/development/user-pairing-control-p5-handoff.md` (committed
+`37e7398`); implementation `b1885d2`; coverage migration `94c2742`
+(same 36 files; only `src/bt_shell.c` 6/6 → 11/11 L, 2/2 → 4/4 B and
+`src/pairing_mode.c` 344/405 → 354/414 L, 160/226 → 171/236 B move,
+every unchanged file at or above its record, zero-hit 357/357, gcovr
+8.4 / gcov (GCC) 14.3.0, provenance in
+`docs/testing/coverage-matrix.md`); results:
+`docs/development/user-pairing-control-p5-results.md`.  Canonical gate
+on clean `94c2742`: **59 PASS / 0 FAIL / 59 TOTAL** (35 twister + 5
+exec-only + 16 Python + coverage + matrix + BSim Stage 1, baseline
+enforcement 0 errors, matrix 0 errors, all existing BSim pins
+byte-identical: mono 10 ms `0x22AB5C0D`, mono 7.5 ms `0x01A3EB05`, Mode
+A/B 10 ms `0xBAE24F7E`, Mode A/B 7.5 ms `0x2D95D15C`/`0xFF82CADB`,
+modea_one_cis_loss_10ms `0x30D6BAF0`, release/duplicate_release_10ms
+`0xAEBD23A1`, disconnect_streaming/reconnect_second_stream_10ms
+`0x8500C966` with reconnect second segment a fresh mono oracle), builds
+3/3 (`fw-build-5340/54l15/dongle`, only the documented NCS v3.3.0
+diagnostics), build contract **79/79**, zero new/actionable warnings
+(the three gate-log warning instances are each present 1× in the P3/P4
+gate logs — pre-existing test-build diagnostics in unchanged files),
+`git diff --check` clean.  No P6 board enablement/overlay edits; no
+advertising payload differentiation; no audio/BAP stream lifecycle
+changes; no hardware tests (P8); production boards remain feature-off.
+
 ## Refactoring track — R10 COMPLETE/ACCEPTED — TRACK R0–R10 COMPLETE (2026-08-06)
 
 **R10 — final integration and documentation closeout — COMPLETE/
