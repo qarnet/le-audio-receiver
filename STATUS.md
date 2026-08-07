@@ -91,6 +91,51 @@ diagnostics), build contract **79/79**, zero new/actionable warnings,
 mapping (P6); no Bluetooth/lifecycle/shell integration (P3–P5); no
 production board enabling.
 
+## User pairing control — P3 ACCEPTED (2026-08-07)
+
+**P3 — separate access mode from bond inventory — ACCEPTED**:
+`src/bt_pairing_policy.c/.h` now holds desired OPEN/BONDED_ONLY mode and
+persisted bond inventory as fully independent state.  The coupled
+`set_bonds()` (mode derived from count) and `request_open()` (mode plus
+inventory clear) are removed with no wrappers; the explicit API is
+`set_mode()` (OPEN/BONDED_ONLY only, `-EINVAL` for other values, atomic,
+idempotent, inventory untouched), `replace_bonds()` (exact replacement,
+mode preserved, tail slots zeroed; `-EINVAL` for nonzero-count NULL,
+`-ENOMEM` for overflow, both atomic), `mark_bonded()` (inventory only —
+never derives or mutates mode; duplicate idempotent, overflow and NULL
+preserve the full policy), and `clear_bonds()` (count + storage zeroed,
+mode preserved, idempotent); kept getters/`pairing_accept`/atomic
+`snapshot` (output storage zeroed before copying active entries).  All
+four mode×inventory combinations are legal and proven: OPEN/empty and
+OPEN/nonempty accept any peer, BONDED_ONLY/empty rejects every peer,
+BONDED_ONLY/nonempty accepts only exact members.  Current `bt_bap.c`
+callers mechanically adapted (advertising rebuild: `replace_bonds` +
+explicit BONDED_ONLY-when-count>0/OPEN-when-zero with errno through the
+restart path; `pairing_complete`: `mark_bonded` + explicit BONDED_ONLY
+even on `-ENOMEM`, no-HCI rule retained; `bt_bap_pairing_reset`:
+`set_mode(OPEN)` + `clear_bonds` as two explicit calls under
+`pairing_adv_lock`) — legacy feature-off behavior and every BSim pin
+byte-identical; no P1 Bluetooth ops or callback/lifecycle integration
+(P4/P5).  Direct suite `tests/unit/bt_pairing_policy` grew 12 → 23
+tests (real production source).  Handoff:
+`docs/development/user-pairing-control-p3-handoff.md` (committed
+`f8b7fcd`); implementation `89304f7`; coverage migration `bc011d6`
+(same 35 files; only `src/bt_pairing_policy.c` moves: 66/66 → 79/79 L,
+20/20 → 34/34 B, 8/8 → 9/9 F, every unchanged file byte-identical,
+gcovr 8.4 / gcov (GCC) 14.3.0, provenance in
+`docs/testing/coverage-matrix.md`); results:
+`docs/development/user-pairing-control-p3-results.md`.  Canonical gate on
+clean `bc011d6`: **57 PASS / 0 FAIL / 57 TOTAL** (33 twister + 5
+exec-only + 16 Python + coverage + matrix + BSim Stage 1, coverage
+baseline enforcement 0 errors, matrix 0 errors, all existing BSim pins
+byte-identical: mono 10 ms `0x22AB5C0D`, mono 7.5 ms `0x01A3EB05`, Mode
+A 10 ms `0xBAE24F7E`, Mode A 7.5 ms `0x2D95D15C`, reconnect fresh mono
+oracle), builds 3/3 (`fw-build-5340/54l15/dongle`, only the documented
+NCS v3.3.0 diagnostics), build contract **79/79**, zero new/actionable
+warnings, `git diff --check` clean.  No hardware tests (P8); no
+Bluetooth ops/callback/lifecycle/shell integration (P4/P5); no
+production board enabling.
+
 ## Refactoring track — R10 COMPLETE/ACCEPTED — TRACK R0–R10 COMPLETE (2026-08-06)
 
 **R10 — final integration and documentation closeout — COMPLETE/
