@@ -616,3 +616,40 @@ Zero-hit enforcement stays clean (340/340 functions in the numeric
 population).  No covered live behavior was deleted; the denominator
 increase is exactly the refactored policy file's measured
 lines/branches.
+
+## P4 baseline migration (2026-08-07) — Bluetooth pairing adapter, population 35 → 36
+
+P4 added the private Bluetooth pairing adapter
+`src/bt_bap_pairing_adapter.c` (direct suite
+`tests/unit/bt_bap_pairing_adapter`, 37 tests against a fake backend
+with an operation ledger, per-slot result injection, snapshot control,
+and the `BT_BAP_PAIRING_ADAPTER_TEST` state-reset seam).  The migration
+candidate was generated on the clean implementation commit `c347710`
+via `scripts/test-coverage.sh --write-baseline
+/tmp/p4-baseline-candidate.json` (`--output /tmp/p4-cov-candidate
+--clean-output`), inspected, and committed as
+`tests/coverage-baseline.json` (commit `0f954d0`, byte-exact copy).
+Tool versions unchanged: **gcovr 8.4 / gcov (GCC) 14.3.0**, recorded
+in the baseline.
+
+**Population 35 → 36** is a deliberate provenance change: the new
+production source is directly covered by its own suite.  No per-file
+regression (verified programmatically across lines/branches/functions —
+zero decreases on every unchanged file).  New-file record:
+`bt_bap_pairing_adapter.c` **139/140 lines, 85/106 branches, 17/17
+functions** (every function 100% executed; the
+`BT_BAP_PAIRING_ADAPTER_TEST` state-reset seam is GCOVR-excluded and
+never enters the numeric population).  Aggregate:
+
+| metric | committed (35 files) | P4 candidate (36 files) |
+|--------|----------------------|-------------------------|
+| lines | 4511/4967 (90.8%) | **4650/5107 (91.1%)** |
+| branches | 1925/2702 (71.2%) | **2010/2808 (71.6%)** |
+| functions | 340/340 | **357/357** |
+
+Zero-hit enforcement stays clean (357/357 functions in the numeric
+population).  No covered live behavior was deleted; the denominator
+increase is exactly the new file's measured lines/branches.  Canonical
+enforcement on the clean baseline commit `0f954d0`: **58 PASS / 0 FAIL
+/ 58 TOTAL** (34 twister + 5 exec-only + 16 Python + coverage + matrix
++ BSim Stage 1, pins byte-identical).

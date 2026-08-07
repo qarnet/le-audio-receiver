@@ -130,11 +130,77 @@ exec-only + 16 Python + coverage + matrix + BSim Stage 1, coverage
 baseline enforcement 0 errors, matrix 0 errors, all existing BSim pins
 byte-identical: mono 10 ms `0x22AB5C0D`, mono 7.5 ms `0x01A3EB05`, Mode
 A 10 ms `0xBAE24F7E`, Mode A 7.5 ms `0x2D95D15C`, reconnect fresh mono
-oracle), builds 3/3 (`fw-build-5340/54l15/dongle`, only the documented
+  oracle), builds 3/3 (`fw-build-5340/54l15/dongle`, only the documented
 NCS v3.3.0 diagnostics), build contract **79/79**, zero new/actionable
 warnings, `git diff --check` clean.  No hardware tests (P8); no
 Bluetooth ops/callback/lifecycle/shell integration (P4/P5); no
 production board enabling.
+
+## User pairing control — P4 ACCEPTED (2026-08-07)
+
+**P4 — Bluetooth adapter and callback integration — ACCEPTED**:
+one private, Bluetooth-type-free adapter module
+`src/bt_bap_pairing_adapter.c/.h` owns the applied NORMAL/BONDING/
+SUSPENDED access state, the six P1 Bluetooth operation mechanics, and
+the callback-event translation gate; `bt_bap.c` remains the concrete
+Zephyr Bluetooth owner (advertising set, `struct bt_conn` refs,
+callback registration, controller filter) behind one immutable injected
+17-slot backend table (`adv_locked` runner, advertising/FAL/enumerate
+steps, policy mutations, peer ops, storage delete, pairing-mode
+notification enqueues).  `pairing_mode` stays the sole transition
+owner.  Public production surface: the seven conditional `bt_bap.h`
+functions exactly matching the P1 `pairing_mode_ops` slots (ctx
+accepted and ignored): `bt_bap_pairing_set_access_mode` (NORMAL→policy
+BONDED_ONLY, BONDING→policy OPEN, SUSPENDED pure, invalid -EINVAL
+atomic, policy failure not published), `_advertising_suspend`
+(idempotent stop under `pairing_adv_lock`, publishes SUSPENDED only on
+success), `_advertising_start` (rejects applied SUSPENDED with -EACCES;
+stop → FAL clear → enumerate+replace → atomic snapshot → params/FAL
+rebuild per snapshot MODE never count, empty BONDED_ONLY still filters
+→ start; first exact errno), `_disconnect_peer` (NULL -EINVAL,
+no-peer success, CONNECTED pending-on-success, DISCONNECTING pending
+without duplicate command, exact errno; backend owns/refs/unrefs the
+peer), `_delete_all_bonds` (inventory clear only after `bt_unpair`
+storage success, mode preserved, no disconnect), `_request_security`
+(L2 on the CONNECTED peer, -ENOTCONN otherwise, exact set_security
+errno), `bt_bap_pairing_notifications_enable` (one-way idempotent).
+Callback forwarding when enabled: connected notify after ref,
+disconnected notify exactly once after teardown+cleanup,
+pairing_complete marks inventory first then notifies bonded/unbonded
+honestly (legacy BONDED_ONLY selection retained only while
+notifications are disabled), pairing_failed notify, and a new
+`security_changed` conn callback (success = `BT_SECURITY_ERR_SUCCESS`;
+bonded only when success AND `bt_le_bond_exists`).  Unexpected enqueue
+results are logged with event/errno, never retried, never block, never
+do HCI work; -ECANCELED is informational.  Legacy
+`bt_bap_restart_advertising()` kept for feature-off shell/build
+compatibility with the OPEN/BONDED_ONLY count derivation isolated in
+the legacy wrapper (P4 operations never derive mode); adapter init in
+`bt_bap_init` after advertising creation (failure propagates).  Direct
+suite `tests/unit/bt_bap_pairing_adapter` (37 tests, real production
+source vs fake backend ledger) proves every handoff case incl. exact
+restart order, empty-BONDED_ONLY filtering, boundary errno + sequence
+stop, ref balance, delete ordering, notification gate/payloads/
+duplicates/no-inline-HCI.  Handoff:
+`docs/development/user-pairing-control-p4-handoff.md` (committed
+`d3dc9a4`); implementation `c347710`; coverage migration `0f954d0`
+(population 35 → 36, only `src/bt_bap_pairing_adapter.c` added:
+139/140 L, 85/106 B, 17/17 F, every unchanged file at or above its
+record, gcovr 8.4 / gcov (GCC) 14.3.0, provenance in
+`docs/testing/coverage-matrix.md`); results:
+`docs/development/user-pairing-control-p4-results.md`.  Canonical gate
+on clean `0f954d0`: **58 PASS / 0 FAIL / 58 TOTAL** (34 twister + 5
+exec-only + 16 Python + coverage + matrix + BSim Stage 1, coverage
+baseline enforcement 0 errors, matrix 0 errors, all existing BSim pins
+byte-identical: mono 10 ms `0x22AB5C0D`, mono 7.5 ms `0x01A3EB05`, Mode
+A/B 10 ms `0xBAE24F7E`, Mode A/B 7.5 ms `0x2D95D15C`/`0xFF82CADB`,
+reconnect fresh mono oracle), builds 3/3 (`fw-build-5340/54l15/dongle`,
+only the documented NCS v3.3.0 diagnostics), build contract **79/79**,
+feature-on nRF5340 scratch build `-DCONFIG_USER_PAIRING_CONTROL=y` exit
+0, zero new/actionable warnings, `git diff --check` clean.  No
+lifecycle/shell/main/board enablement (P5/P6); no advertising payload
+differentiation; no audio/BAP stream lifecycle changes; no hardware
+tests (P8); production boards remain feature-off.
 
 ## Refactoring track — R10 COMPLETE/ACCEPTED — TRACK R0–R10 COMPLETE (2026-08-06)
 
