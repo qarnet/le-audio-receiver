@@ -73,6 +73,7 @@ CONFIG_BT_FILTER_ACCEPT_LIST=y
 CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS=y
 CONFIG_USER_PAIRING_CONTROL=y
 CONFIG_USER_PAIRING_INPUT=y
+CONFIG_INPUT=y
 CONFIG_USER_PAIRING_DEBOUNCE_MS=30
 CONFIG_USER_PAIRING_SHELL_RESET_TIMEOUT_MS=15000
 CONFIG_USER_PAIRING_WORKQ_STACK_SIZE=1024
@@ -990,6 +991,20 @@ class TestPairingControlAssertions(unittest.TestCase):
         )
         self.assertEqual(rc, 1)
         self.assertIn("54l15-037", fails)
+
+    def test_54l15_input_dependency_off_fails(self):
+        # USER_PAIRING_INPUT without its mandatory CONFIG_INPUT=y must be
+        # caught by the contract (Kconfig silently downgrades INPUT=n to
+        # 'n', so a config without the dependency would not compile the
+        # adapter).
+        rc, fails = self._rc_and_fails(
+            lambda fx: write(
+                fx.config("54l15", "le-audio-receiver"),
+                APP54_CONFIG.replace("CONFIG_INPUT=y", "# CONFIG_INPUT is not set"),
+            )
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-050", fails)
 
     def test_54l15_wrong_workq_stack(self):
         rc, fails = self._rc_and_fails(

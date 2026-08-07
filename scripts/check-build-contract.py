@@ -1035,7 +1035,7 @@ def run_nrf54_checks(
     result.add(
         config_int(app_cfg, "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE") == 1024,
         "54l15-041",
-        "app USER_PAIRING_WORKQ_STACK_SIZE=1024 (smallest defensible)",
+        "app USER_PAIRING_WORKQ_STACK_SIZE=1024 (build-minimum; runtime pending P8)",
         "got %r" % config_int(app_cfg, "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE"),
     )
     result.add(
@@ -1145,6 +1145,16 @@ def run_nrf54_checks(
                 else None
             ),
         ),
+    )
+    # USER_PAIRING_INPUT's mandatory subsystem dependency (menuconfig,
+    # default n, nothing selects it; INPUT_GPIO_KEYS only selects GPIO).
+    # Without it Kconfig reports "assigned the value 'y' but got the
+    # value 'n'" and the adapter is not compiled.
+    result.add(
+        config_enabled(app_cfg, "CONFIG_INPUT"),
+        "54l15-050",
+        "app CONFIG_INPUT=y (USER_PAIRING_INPUT mandatory dependency)",
+        "got %r" % app_cfg.get("CONFIG_INPUT"),
     )
 
 

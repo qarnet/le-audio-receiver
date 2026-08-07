@@ -11,7 +11,7 @@ P6 maps the real Seeed XIAO nRF54L15 user controls through the project
 aliases, removes the inherited DK GPIO claims, enables the full pairing
 control stack **only** on nRF54L15, solves the cpuapp SRAM budget while
 keeping `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS=y`, and extends the
-resolved-artifact build contract to **94 assertions** (79 → 94).
+resolved-artifact build contract to **95 assertions** (79 → 95).
 
 ## Exact XIAO control mapping (resolved, not just overlay source)
 
@@ -67,9 +67,10 @@ CONFIG_HEAP_MEM_POOL_SIZE=0        # was 4096
   assertion can never pass.  The P2 test suite already required
   `CONFIG_INPUT=y` in its prj.conf; this is the production equivalent.
 - `DEBOUNCE_MS=30`, `SHELL_RESET_TIMEOUT_MS=15000`: handoff exact values.
-- `WORKQ_STACK_SIZE=1024`: the smallest build- and runtime-defensible
-  value (Kconfig range minimum; the P5 full-stack scratch required 1024
-  to link and run).
+- `WORKQ_STACK_SIZE=1024`: the smallest **build-defensible** value
+  (Kconfig range minimum; the P5 full-stack scratch required 1024 to
+  **link** — the scratch was never run on hardware; runtime sufficiency
+  is pending P8 validation).
 - `HEAP_MEM_POOL_SIZE` 4096 → **0** — the handoff-sanctioned SRAM
   candidate, applied only after map/source proof (see below).
 - No production timing defaults changed (bond/reset/LED thresholds stay
@@ -122,14 +123,17 @@ How the budget was solved (map/config evidence, no guessing):
    2804 B margin exceeds the accepted feature-off margin, and P8
    validates runtime (stacks, pairing, LED) on hardware.
 
-## Build contract — 79 → 94 assertions
+## Build contract — 79 → 95 assertions
 
 `scripts/check-build-contract.py` (resolved `.config` + `zephyr.dts`,
-no source-text matching) grows 79 → **94** (0 failed, exit 0):
+no source-text matching) grows 79 → **95** (0 failed, exit 0):
 
-nRF54L15 (`54l15-037` … `54l15-049`):
-- config: CONTROL=y, INPUT=y, debounce 30, shell timeout 15000, chosen
-  workqueue stack 1024, chosen heap 0;
+nRF54L15 (`54l15-037` … `54l15-050`):
+- config: CONTROL=y, INPUT=y, **CONFIG_INPUT=y** (the mandatory
+  `USER_PAIRING_INPUT` subsystem dependency — a config without it would
+  Kconfig-downgrade INPUT to `n` and never compile the adapter),
+  debounce 30, shell timeout 15000, chosen workqueue stack 1024
+  (build-minimum; runtime pending P8), chosen heap 0;
 - dts: `user-button` alias → `button0`; button0 parent compatible
   gpio-keys with debounce 30; button0 = `<&gpio0 0
   (GPIO_ACTIVE_LOW|GPIO_PULL_UP)>` with `zephyr,code = <INPUT_KEY_0>`;
@@ -140,13 +144,14 @@ nRF5340 (`5340-030`, `5340-031`): CONTROL not enabled, INPUT not
 enabled.  All existing UART/I2S/RF/shared-memory/diagnostic assertions
 remain and pass.
 
-Unit suite `tests/unit/build_contract/` grows 33 → **50 tests** with
+Unit suite `tests/unit/build_contract/` grows 33 → **51 tests** with
 new fixtures + mutations that fail on wrong resolved artifacts (wrong
 alias targets, wrong pin/polarity/code/debounce, re-enabled inherited
-buttons, reintroduced LED node, wrong heap/workq/timeout values, and
-nRF5340 feature-on).  Docs: `docs/testing/behavior-contract.md`
-BUILD-007 and `docs/testing/coverage-matrix.md` updated (test count 30
-→ 50 — also fixing a stale pre-P6 count).
+buttons, reintroduced LED node, wrong heap/workq/timeout values,
+missing `CONFIG_INPUT`, and nRF5340 feature-on).  Docs:
+`docs/testing/behavior-contract.md` BUILD-007 and
+`docs/testing/coverage-matrix.md` updated (test count 30 → 51 — also
+fixing a stale pre-P6 count).
 
 ## Verification
 
@@ -161,7 +166,7 @@ BUILD-007 and `docs/testing/coverage-matrix.md` updated (test count 30
   `rram@165000` / `memory@20028000` (nodes untouched by P6 — the P6
   overlay edits add only root-level aliases/buttons/leds).  Zero
   new/actionable warnings.
-- Build contract on real builds: **94 assertions, 0 failed, BUILD
+- Build contract on real builds: **95 assertions, 0 failed, BUILD
   CONTRACT PASSED**.
 - Canonical gate `./scripts/test-all.sh` on clean `62b8727`: **59 PASS
   / 0 FAIL / 59 TOTAL**, exit 0 (35 twister + 5 exec-only + 16 Python +
