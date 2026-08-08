@@ -11,6 +11,39 @@ historical evidence, remove phase/commit/handoff chronology from current
 production/API comments while retaining rationale, update repo-local
 skills, and reconcile the P8 evidence wording.
 
+## Audit scope and counts
+
+Full-audit inventory (reconciled session ledger, 568 rows):
+
+- Original candidate inventory: **544 human-written files** (source,
+  headers, Kconfig, devicetree, CMake, scripts, tests, repo-local skills,
+  and docs). Of these, **115 rewritten** and **429 clean** — most audited
+  files needed no change.
+- **21 valid exclusions** — generated, machine-consumed, or non-prose
+  files, all out of audit scope:
+  - tool/config files (8): `.clang-format`, `.clangd`, `.envrc`,
+    `.gitattributes`, `.gitignore`, `flake.nix`, `opencode.json`,
+    `scripts/probe-serial.local.example`;
+  - legal boilerplate (1): `LICENSE`;
+  - generated lockfile (1): `flake.lock`;
+  - machine-consumed structured data (3): `tests/bsim/stage1-scenarios.json`,
+    `tests/coverage-baseline.json`, `tests/test-matrix.json`;
+  - binary/corpus golden fixtures (8): all files under `tests/fixtures/lc3/`.
+- **3 new cleanup-output docs** added during the audit range — the handoff,
+  this results doc, and the managed marker — each audited clean.
+- Totals: **547 non-excluded files audited, 115 rewritten, 432 clean,
+  0 moved, 0 deleted, 21 excluded.**
+
+Archived historical docs (`docs/development/archive/` and dated
+phase/refactor/pre-refactor result and handoff docs) were **audited clean**,
+not excluded: the skill preserves valid history in dated evidence docs, so
+they remain in scope and require no change. Dongle source (`dongle/` —
+`hci_identity.h`, `hci_ipc/`, `hci_uart/`, `README.md`) was likewise
+**audited clean**: it is repo-owned, lab-maintained firmware source, not an
+excludable artifact, and its comments were verified against the current
+dongle build. Not every audited file changed: 429 of the 544 original
+candidates (78.9%) were already clean; only 115 were rewritten.
+
 ## 1. Active-doc corrections
 
 - `README.md`: current inventory/gate counts (35 twister + 5 exec-only +
@@ -188,3 +221,55 @@ and incidental clang-format reflow churn in `audio_offload.c` and the
 - None from the handoff's required fixes.  No behavior, baseline, BSim
   pin, hardware, flashing, push, PR, amend, force-push, or attribution
   footer.
+
+## Documentation hygiene
+
+- Mode: full
+- Default branch: `main`
+- Audit base: `72abbc4`
+- Audited revision: `b3da11a` (cleanup chain `72abbc4..b3da11a`, including
+  staged/unstaged/untracked changes at audit time; this results doc was
+  later corrected in a receipt-only follow-up commit)
+- Files audited: 547
+- Excluded: 21
+- Clean: 432
+- Rewritten: 115
+- Moved: 0
+- Deleted: 0
+- Contributor docs changed: 3 (cleanup handoff, cleanup results, managed
+  baseline marker)
+- ADRs added/superseded: 0/0
+- Behavior changes: none
+- Verification: `git diff --check` clean on every commit; `python3 -m
+  py_compile` on every changed Python module/test and `bash -n` on every
+  changed shell script; `python3 scripts/test_inventory.py --json` (59
+  unit children, gate 62); all 17 Python suites (19 children) pass; focused
+  native_sim C suites pass with zero warnings; build contract 95/95;
+  canonical clean-tree gate 62 PASS / 0 FAIL / 62 TOTAL at `b8e7d85` with
+  all BSim pins byte-identical.
+
+### Important findings
+
+- `docs/development/user-pairing-control-p8-results.md`, `STATUS.md`:
+  removed "user requested CLI" attribution; stated combined evidence
+  accurately — user confirmed threshold/LED observations, CLI produced the
+  instrumented RESET ordering through the same transition owner, and the
+  exact instrumented physical-hold ordering was not captured in the same
+  run.
+- `src/flpr_ring.h`: obsolete sentinel-slot/full-at-N−1 statement removed —
+  monotonic counters use all slots and are full at N.
+- `src/audio_timing_none.c`: nRF54 path corrected to GRTC+TIMER20+GPPI
+  PCLK measurement (not LRCK).
+- `src/audio_perf.h`: deadline comparison described at cycle-end recording
+  (`audio_perf_cycle_end`), not snapshot/print.
+- `tests/unit/lifecycle/src/test_lifecycle.c`: renamed to
+  `test_close_clears_gate_then_restart_reopens`; removed `l_received`/
+  `r_received` claim replaced with the close/reopen behavior actually
+  asserted.
+- `src/audio_asrc.c`, `src/audio_i2s.c`: "Commit:" history wording
+  replaced with current state-update invariants.
+- Gate regression found and fixed during the run (`c454a39`): comment
+  cleanup had corrupted the shell command registry (`reset - stats` /
+  `perf - reset` spaced names); exact `reset-stats` / `perf-reset` names
+  restored, incidental clang-format reflow reverted — final diff
+  comment-only.
