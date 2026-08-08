@@ -1,9 +1,16 @@
 # Supported LE Audio sources on Linux
 
-This page explains what it takes for a Linux computer to act as an LE Audio
-**source** for this receiver, and lists the hardware options researched so
-far, with honest status labels. It complements the general notes in the
-[User guide](user-guide.md#supported-source-devices) and the
+This page is the overview and source matrix for making a Linux computer act as
+an LE Audio **source** for this receiver. The detail lives in two focused
+guides:
+
+- [Linux LE Audio host setup](linux-le-audio-host-setup.md) — host OS setup,
+  configuration, and verification for the BlueZ + PipeWire path.
+- [Bluetooth adapter support and evaluation](bluetooth-adapter-evaluation.md) —
+  which adapter is supported, and how adapters get accepted or rejected.
+
+This page complements the general notes in the [User
+guide](user-guide.md#supported-source-devices) and the
 [README](../README.md#supported-source-devices).
 
 Status labels used in the matrix below:
@@ -39,11 +46,11 @@ What this path needs:
 - A **controller with ISO support** (the LE Audio transport is
   isochronous). The radio must support connected isochronous streams
   (`cis-central` for a source).
-- A **current Linux software stack**: Linux kernel 6.4 or later (Collabora
-  recommends newer versions), a recent BlueZ, and a recent PipeWire/
-  WirePlumber whose BlueZ SPA plugin provides LC3 encoding (via
-  `liblc3`), plus BlueZ experimental configuration for the ISO socket.
-  See [Linux software requirements](#linux-software-requirements).
+- A **current Linux software stack**: Linux kernel 6.4 or later, BlueZ 5.85
+  or later, and a current PipeWire/WirePlumber whose BlueZ SPA plugin
+  provides LC3 encoding (via `liblc3`), plus BlueZ experimental
+  configuration for the ISO socket. Full setup and verification are on the
+  [host setup page](linux-le-audio-host-setup.md).
 - **Bluetooth version numbers do not prove LE Audio support.** "Bluetooth
   5.3" or "5.4" on a spec sheet describes the radio generation, not the
   profiles. LE Audio is a feature set; the controller must actually
@@ -66,15 +73,9 @@ firmware/driver/BlueZ/PipeWire combination. Note that **Published Audio
 Capabilities (PACS) is a GATT service observed on remote devices**, not a
 property of the local adapter: seeing it while scanning a peer says
 something about that peer, so it is not a reliable pre-buy check of the
-adapter itself.
-
-Minimal distro-neutral runtime checks for the native path:
-
-- The controller reports `cis-central` (`btmgmt --index hci0 info`).
-- BlueZ's experimental BAP/ISO path is enabled (e.g. `Experimental=true`
-  and `KernelExperimental=true` in `/etc/bluetooth/main.conf`).
-- PipeWire's BlueZ SPA plugin provides LC3 and the `bap_source` role.
-- WirePlumber is running.
+adapter itself. The [adapter evaluation
+page](bluetooth-adapter-evaluation.md) defines what an adapter must prove
+to be accepted.
 
 ### 2. Self-contained USB audio transmitters (dongles)
 
@@ -96,80 +97,26 @@ path:
   firmware**, not on the Linux stack, so it cannot be verified from
   documentation alone.
 
-## Linux software requirements
+## Software requirements summary
 
-For the native-adapter path, the current Linux LE Audio architecture is:
+The full host requirements, configuration, and verification procedure are on
+the [Linux LE Audio host setup](linux-le-audio-host-setup.md) page. In brief,
+the native path needs Linux kernel 6.4+, BlueZ 5.85+ (the first stable release
+with the PAC configuration callback fix), and a current PipeWire built with
+the BlueZ SPA and LC3 (`liblc3`), with the `bap_source` role enabled in
+WirePlumber.
 
-- **BlueZ** implements the Bluetooth side (BAP, ISO, VCP coordination).
-- **PipeWire** implements the audio side. Since version 0.3.59 PipeWire has
-  supported the Basic Audio Profile (BAP) over connected isochronous
-  streams with LC3 ([BlueZ: LE Audio support in
-  PipeWire](https://www.bluez.org/le-audio-support-in-pipewire/)); the
-  PipeWire roles documentation lists `bap_source` (LE Audio Basic Audio
-  Profile Source) among the enabled
-  [BlueZ roles](https://docs.pipewire.org/page_man_pipewire-props_7.html).
-
-Version guidance (from [Collabora's Linux LE Audio
-overview](https://www.collabora.com/news-and-blog/blog/2025/11/24/implementing-bluetooth-le-audio-and-auracast-on-linux-systems/)):
-
-- **Linux kernel 6.4 or later**, with newer versions strongly recommended
-  due to ongoing ISO fixes.
-- **BlueZ 5.85 or later.** BlueZ 5.85 is the first stable release that
-  includes the PAC configuration callback fix (upstream
-  [commit 6b0a087](https://github.com/bluez/bluez/commit/6b0a08776ae44a9102d7c6875a77e83dc6a11a37)).
-  Earlier releases are not recommended, and this project does not
-  recommend building or patching older BlueZ releases yourself.
-- **Recent PipeWire and WirePlumber** versions. BlueZ experimental
-  features — including the kernel ISO socket — currently have to be
-  enabled in `/etc/bluetooth/main.conf`; expect this to become simpler
-  over time.
-- LC3 support: PipeWire's BlueZ SPA plugin (part of PipeWire, not BlueZ
-  itself) handles the LC3 encoding for the BAP source role and needs
-  `liblc3` available to it.
-
-This project does not pin a specific Linux distribution. The exact
-package/version situation differs by distro, and desktop audio UIs are
-still maturing.
-
-### Project's tested path vs. desktop PipeWire
-
-This project validated the native-adapter path with the **Intel AX210**
-using a generic desktop **PipeWire/WirePlumber UI** streaming to this
-receiver — the same user-facing flow a normal Linux desktop uses. The
-validated host ran:
-
-- Linux kernel **7.1.5**
-- BlueZ **5.86**
-- PipeWire **1.6.6**
-- WirePlumber **0.5.14**
-- BlueZ configured with `Experimental=true` and `KernelExperimental=true`
-  in `/etc/bluetooth/main.conf` (the daemon runs without explicit `-E`/`-K`
-  flags)
-- PipeWire and WirePlumber enabled, PulseAudio disabled, rtkit enabled
-
-The AX210 validation below is therefore direct evidence that a normal
-desktop PipeWire/WirePlumber path works as an LE Audio source with this
-receiver, not only a custom script.
-
-The validated host also carries a small BlueZ **5.86** patch that fixes a
-QoS-property spelling in `profiles/audio/bap.c`: it changes `MimimumDelay`
-to `MinimumDelay` and `PreferredMimimumDelay` to `PreferredMinimumDelay`.
-This is separate from the BlueZ `pac_config_cb()` pointer/value fix that
-landed in 5.85 (see
-[Linux software requirements](#linux-software-requirements)). The
-misspelled keys are still present in upstream BlueZ master as of
-2026-08-09:
-<https://kernel.googlesource.com/pub/scm/bluetooth/bluez/+/master/profiles/audio/bap.c>.
-We report the patch as a disclosure about the host we tested, not as proof
-that every distribution needs it.
-
-The repository's own **`scripts/bap_central.py`** (a BlueZ BAP source that
-streams LC3 test tones) remains a separate, deterministic
-development/test path for verifying receiver builds without hunting for a
-consumer source device — it is not the basis for the AX210
-project-validation claim above. Desktop LE Audio UX is still evolving, so
-keep the software stack current (see
-[Linux software requirements](#linux-software-requirements)).
+This project validated the native path end-to-end with the **Intel AX210** on
+a host running Linux 7.1.5, BlueZ 5.86, PipeWire 1.6.6, WirePlumber 0.5.14
+(the exact baseline is on the host setup page). That BlueZ 5.86 build carried
+a downstream QoS-property spelling patch
+(`MimimumDelay`/`PreferredMimimumDelay` → `MinimumDelay`/`PreferredMinimumDelay`).
+The typo was fixed upstream on 2026-05-07 (commit
+[`d45fd43a1cc3ba791858f11c144112c518a9ad84`](https://github.com/bluez/bluez/commit/d45fd43a1cc3ba791858f11c144112c518a9ad84)),
+so current BlueZ master has the correct keys. The repository's own
+`scripts/bap_central.py` (a BlueZ BAP source that streams LC3 test tones)
+remains a separate, deterministic development/test path for verifying receiver
+builds — it is not the basis for the AX210 project-validation claim above.
 
 ## Hardware matrix
 
@@ -177,13 +124,14 @@ keep the software stack current (see
 
 | Hardware | Host model | Linux status | Receiver status | Notes |
 |---|---|---|---|---|
-| **Intel Wi-Fi 6E AX210** | M.2 (NGFF) PCIe Wi-Fi card — not a plug-in USB stick; the Bluetooth function is exposed to the host over internal USB, so `lsusb` may show `Intel Corp. AX210 Bluetooth` | **Project-validated** | **Project-validated** | Validated as a BAP unicast source with this receiver on Linux via a **generic desktop PipeWire/WirePlumber UI** (the normal desktop flow), and also exercised with the repository's `scripts/bap_central.py` development/test tool. Project validation is the primary evidence for compatibility with this receiver. Intel's [specifications](https://www.intel.com/content/www/us/en/products/sku/239216/intel-wifi-6e-ax210-gig-embedded/specifications.html) list the Bluetooth function over USB. A practical Linux LE Audio report (Raspberry Pi 5 with an AX210 module, BlueZ/PipeWire/WirePlumber) is at [AK-Experiments](https://ak-experiments.blogspot.com/2025/08/bluetooth-le-audio-on-raspberry-pi-with.html). Needs a current kernel/BlueZ/PipeWire stack (BlueZ 5.85 or later) — see [Linux software requirements](#linux-software-requirements). |
-| **Intel BE200** | M.2 (NGFF) | **Unverified** | **Unverified** | Research candidate only, not confirmed. Per [Collabora's overview](https://www.collabora.com/news-and-blog/blog/2025/11/24/implementing-bluetooth-le-audio-and-auracast-on-linux-systems/), recent Intel controllers (BE200) implement LE Audio in recent models. Check the controller's actual capabilities (`cis-central`) before relying on it. |
+| **Intel Wi-Fi 6E AX210** | M.2 (NGFF) combo card — Wi-Fi over PCIe, Bluetooth function over internal USB; on a desktop the carrier needs a USB header connection, and `lsusb` commonly shows `8087:0032 Intel Corp. AX210 Bluetooth` | **Project-validated** | **Project-validated** | Validated as a BAP unicast source with this receiver on Linux via a **generic desktop PipeWire/WirePlumber UI** (the normal desktop flow) and exercised with the repository's `scripts/bap_central.py` development/test tool. Intel's [specifications](https://www.intel.com/content/www/us/en/products/sku/239216/intel-wifi-6e-ax210-gig-embedded/specifications.html) list the Bluetooth function over USB. A practical Linux LE Audio report (Raspberry Pi 5 with an AX210 module, BlueZ/PipeWire/WirePlumber) is at [AK-Experiments](https://ak-experiments.blogspot.com/2025/08/bluetooth-le-audio-on-raspberry-pi-with.html). Needs the current kernel/BlueZ/PipeWire stack — see [host setup](linux-le-audio-host-setup.md) and [adapter evaluation](bluetooth-adapter-evaluation.md). |
 
-This project found **no plug-in USB HCI stick with verified Linux CIS
-support**. Generic "Bluetooth 5.3" or "Bluetooth 5.4" USB dongles do not
-prove LE Audio support — see the version-numbers caveat above — so do not
-buy one on that basis alone.
+The **Intel AX210 is the only project-validated native adapter** — see the
+[adapter evaluation page](bluetooth-adapter-evaluation.md) for rejected
+candidates and the evaluation contract. This project found **no plug-in USB
+HCI stick with verified Linux CIS support**. Generic "Bluetooth 5.3" or
+"Bluetooth 5.4" USB dongles do not prove LE Audio support — see the
+version-numbers caveat above — so do not buy one on that basis alone.
 
 ### Self-contained USB transmitters (secondary candidates)
 
@@ -221,6 +169,10 @@ Notes:
 
 ## Related documents
 
+- [Linux LE Audio host setup](linux-le-audio-host-setup.md) — host OS setup,
+  configuration, and verification for the BlueZ + PipeWire path
+- [Bluetooth adapter support and evaluation](bluetooth-adapter-evaluation.md) —
+  supported adapters and the active device-evaluation contract
 - [User guide](user-guide.md) — pairing, boot, and general source-device
   notes
 - [Known limitations](known-limitations.md) — 48 kHz only, and other

@@ -161,7 +161,9 @@ not a consumer feature.
 | Document | What it covers |
 |---|---|
 | [User guide](docs/user-guide.md) | What you need, what to expect, pairing modes, troubleshooting |
-| [Supported sources on Linux](docs/supported-sources.md) | Researched Linux LE Audio source hardware and software requirements (AX210 project-validated via desktop PipeWire) |
+| [Supported sources on Linux](docs/supported-sources.md) | Overview/source matrix of researched Linux LE Audio source hardware, with links to the host setup and adapter evaluation guides |
+| [Linux LE Audio host setup](docs/linux-le-audio-host-setup.md) | Host OS setup, configuration, and verification for transmitting BAP unicast audio via BlueZ + PipeWire |
+| [Bluetooth adapter evaluation](docs/bluetooth-adapter-evaluation.md) | Which Bluetooth adapters are supported and how new adapters get accepted (Intel AX210 project-validated) |
 | [Hardware wiring](docs/hardware-wiring.md) | DAC choice and verified I2S pin wiring for both boards |
 | [Known limitations](docs/known-limitations.md) | Honest list of current gaps and caveats |
 | [Technology: nRF5340](docs/technology/nrf5340.md) | Dual-core architecture, controller, audio PLL, flashing constraints |
