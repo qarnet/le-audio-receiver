@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""BAP source endpoint for bap_central (R9): constants, MediaEndpoint
+"""BAP source endpoint for bap_central: constants, MediaEndpoint
 class factory, registration, deferred async Acquire, fd ownership, and
 stream-mode inference.
 
 Stdlib import only; D-Bus is injected late via the class factory.  Every
 print and every LC3 config/QoS byte blob is byte-compatible with the
-pre-split bap_central.py flow.  Fatal paths print their exact message
-(primary error to stderr where the pre-split code used stderr) then
+bap_central.py flow.  Fatal paths print their exact message
+(primary error to stderr where the established code used stderr) then
 raise CentralError.
 
 FD ownership: every acquired fd is owned by exactly one stage.  On
@@ -401,7 +401,7 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
 def register_endpoint(
     media_iface, bus, dbus_mod, endpoint_cls, path=ENDPOINT_PATH, stereo=False
 ):
-    """RegisterEndpoint with the exact pre-split props (UUID/Codec/Caps);
+    """RegisterEndpoint with the exact props (UUID/Codec/Caps);
     prints the registration line.  Returns the endpoint instance."""
     endpoint = endpoint_cls(bus, path, stereo=stereo)
     endpoint_caps = LC3_CAPS_STEREO if stereo else LC3_CAPS
@@ -444,10 +444,10 @@ def acquire_transports(
     """Wait for SetConfiguration, apply the second-ASE grace, run the
     deferred async Acquire, enforce all-or-nothing, infer stream mode.
 
-    On success populates endpoint.transports, prints the exact pre-split
+    On success populates endpoint.transports, prints the exact
     totals/mode lines, and returns (transports, stream_mode, sdu_size).
-    Every failure path prints the exact pre-split error lines (stderr
-    where the pre-split code used stderr), closes every already-taken fd,
+    Every failure path prints the exact error lines (stderr
+    where the established code used stderr), closes every already-taken fd,
     and raises CentralError.
     """
     # ── 7. Wait for SetConfiguration callback(s) ─────────────────────

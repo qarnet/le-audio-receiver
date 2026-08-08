@@ -2,12 +2,13 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * FLPR application — Stage 1: shared PCM ring transport.
- * Handshake/heartbeat retained from Stage 0.
+ * FLPR application (RISC-V VPR): READY/heartbeat handshake, shared PCM
+ * ring transport, and fixed-point ASRC processing offloaded from cpuapp.
  *
- * Loopback consumer: polls input ring, passes each slot through
- * flpr_audio_process() (identity/passthrough or ASRC), publishes output.
- * Ring addresses resolved from devicetree, not hardcoded.
+ * Ring consumer: polls the input ring (event-driven via IPC wake with a
+ * 10 ms polling fallback), passes each slot through flpr_audio_process()
+ * (ASRC), and publishes the output slot.  Ring addresses resolved from
+ * devicetree, not hardcoded.
  *
  * Epoch: hardware GRTC counter at boot start.
  * All state transitions use production helpers from flpr_protocol.h.
@@ -63,9 +64,9 @@ static struct flpr_peer cpuapp;
 /* Epoch from hardware GRTC at boot start. */
 static uint32_t boot_epoch;
 
-/* R8: the acceptance state (ring-test counters, stall flags/timer,
+/* The acceptance state (ring-test counters, stall flags/timer,
  * fault-hang pending, stress, diagnostic counters reported at test
- * stop) moved to src/flpr/acceptance.c; main.c invokes the acceptance
+ * stop) lives in src/flpr/acceptance.c; main.c invokes the acceptance
  * hooks below only under CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS.  The
  * diag_* counters that ring_process_input() used to own are likewise
  * acceptance-owned now (they are reported in the RING_TEST_STOP
@@ -85,7 +86,7 @@ static int send_msg(const struct flpr_msg *msg)
 }
 
 #if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
-/* R8: acceptance wake hook — kick the main loop's ring wake semaphore
+/* Acceptance wake hook — kick the main loop's ring wake semaphore
  * (used for timed-stall expiry and the FAULT_HANG wake). */
 static void flpr_acceptance_wake(void)
 {
@@ -168,7 +169,7 @@ static uint32_t ring_process_input(void)
 #endif
 		consumed++;
 
-		/* ── Stage 3A: audio processing ────────────────────────
+		/* ── Audio processing ───────────────────────────────────
 		 * Measure processor cycles with k_cycle_get_32(),
 		 * call flpr_audio_process(), store delta + status
 		 * in output metadata.  Failed processing increments
@@ -260,7 +261,7 @@ static int ring_reset_with_epoch(uint32_t epoch)
 	ring_stream_epoch = epoch;
 
 #if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
-	/* R8: acceptance state (stall timer/flags, test + diagnostic
+	/* Acceptance state (stall timer/flags, test + diagnostic
 	 * counters) is reset by the acceptance module. */
 	flpr_acceptance_on_ring_reset();
 #endif
@@ -271,9 +272,10 @@ static int ring_reset_with_epoch(uint32_t epoch)
 /** Send RING_CONSUMER notification + diagnostic counters to CPUAPP.
  *  Called from IPC callback and polling path when data was consumed.
  *
- *  Stage 2 fix: data carries current ring_stream_epoch (non-zero) for
- *  stale-notification rejection.  Consumed count is not needed for wake
- *  semantics; diagnostic block count retained in seq. */
+ *  The data field carries the current ring_stream_epoch (non-zero) so
+ *  stale notifications from an expired epoch are rejected by cpuapp.
+ *  Consumed count is not needed for wake semantics; diagnostic block
+ *  count retained in seq. */
 static void ring_notify_cpuapp(uint32_t consumed)
 {
 	if (consumed == 0) {
@@ -335,12 +337,12 @@ static void ep_received(const void *data, size_t len, void *priv)
 		flpr_peer_handle_heartbeat_ack(&cpuapp, msg->seq);
 		break;
 
-		/* ── Stage 1: ring control ─────────────────────────────── */
+		/* ── Ring control ─────────────────────────────────────── */
 
 	case FLPR_MSG_RING_RESET: {
 		uint32_t epoch = msg->data;
 		int ret = ring_reset_with_epoch(epoch);
-		/* R1: ACK echoes the request sequence token so the cpuapp
+		/* ACK echoes the request sequence token so the cpuapp
 		 * side can correlate by sequence (late/stale ACKs are
 		 * rejected there). */
 		struct flpr_msg ack = flpr_control_ack_make(msg, FLPR_MSG_RING_RESET_ACK,
@@ -360,7 +362,7 @@ static void ep_received(const void *data, size_t len, void *priv)
 		break;
 
 #if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
-	/* ── R8: acceptance messages ─────────────────────────────
+	/* ── Acceptance messages ──────────────────────────────────
 	 * RING_TEST_START/STOP (report cascade), RING_STALL (timer +
 	 * ACK echo), STRESS_PING (PONG echo), and FAULT_HANG
 	 * (ACK-before-spin) are owned by src/flpr/acceptance.c and
@@ -406,7 +408,7 @@ int main(void)
 	rings_initialized = true;
 
 #if defined(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS)
-	/* R8: initialize the acceptance handlers with the injected
+	/* Initialize the acceptance handlers with the injected
 	 * transport (send via this module's IPC endpoint, wake via the
 	 * ring wake semaphore). */
 	{
@@ -503,7 +505,7 @@ int main(void)
 		 * timeout (10 ms polling fallback). */
 		k_sem_take(&ring_wake_sem, K_MSEC(10));
 
-		/* Stage 4B: check fault hang flag.
+		/* Check the fault-hang flag.
 		 * ACK was already sent from IPC callback before setting this flag.
 		 * Disable all interrupts and spin forever — halts ring processing,
 		 * heartbeat transmission, and all further IPC activity.

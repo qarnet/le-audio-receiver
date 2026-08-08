@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Resolved build-contract checker for the LE Audio Receiver.
 
-Phase T6: parses the RESOLVED ``.config`` and ``zephyr.dts`` files beneath
+Parses the RESOLVED ``.config`` and ``zephyr.dts`` files beneath
 each sysbuild root (never top-level sysbuild configs) and asserts the
 production build contracts documented in
-``docs/development/pre-refactor-testing-plan.md`` (Phase T6) and
 ``docs/testing/behavior-contract.md`` (BUILD-*).
 
 Stdlib only.  Deterministic output: one PASS/FAIL line per assertion, in
@@ -601,7 +600,7 @@ def check_memory_ranges(result, labels, tag, prefix):
 def run_nrf5340_checks(
     app_cfg, app_dts, labels_app, net_cfg, net_dts, labels_net, result
 ):
-    """nRF5340 contract assertions (BUILD-002/003 + T6 plan)."""
+    """nRF5340 contract assertions (BUILD-002/003)."""
 
     # ---- app config ----
     result.add(
@@ -759,7 +758,7 @@ def run_nrf5340_checks(
         "got %r" % app_cfg.get("CONFIG_BT_FILTER_ACCEPT_LIST"),
     )
 
-    # R8: nRF5340 has no FLPR acceptance diagnostics (no FLPR acceptance
+    # nRF5340 has no FLPR acceptance diagnostics (no FLPR acceptance
     # shell commands); the parity pair lives on the nRF54L15 checks.
     result.add(
         config_not_enabled(app_cfg, "CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS"),
@@ -768,7 +767,7 @@ def run_nrf5340_checks(
         "got %r" % app_cfg.get("CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS"),
     )
 
-    # P6: user pairing control is nRF54L15-only; the nRF5340 app must stay
+    # User pairing control is nRF54L15-only; the nRF5340 app must stay
     # feature-off (both the controller and the input/LED adapter).
     result.add(
         config_not_enabled(app_cfg, "CONFIG_USER_PAIRING_CONTROL"),
@@ -787,7 +786,7 @@ def run_nrf5340_checks(
 def run_nrf54_checks(
     app_cfg, app_dts, labels_app, flpr_cfg, flpr_dts, labels_flpr, result
 ):
-    """nRF54L15 contract assertions (BUILD-004/005 + T6 plan)."""
+    """nRF54L15 contract assertions (BUILD-004/005)."""
 
     # ---- app config ----
     result.add(
@@ -990,9 +989,9 @@ def run_nrf54_checks(
         "got %r" % app_cfg.get("CONFIG_BT_FILTER_ACCEPT_LIST"),
     )
 
-    # R8: cpuapp + FLPR-image acceptance diagnostics must both be enabled
+    # cpuapp + FLPR-image acceptance diagnostics must both be enabled
     # for the current lab build (lockstep proof — the acceptance harness
-    # spans both images; release default-off policy is separate work).
+    # spans both images).
     result.add(
         config_enabled(app_cfg, "CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS"),
         "54l15-035",
@@ -1006,7 +1005,7 @@ def run_nrf54_checks(
         "got %r" % flpr_cfg.get("CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS"),
     )
 
-    # P6: user pairing control full-stack enablement (nRF54L15 production
+    # User pairing control full-stack enablement (nRF54L15 production
     # XIAO target only).  Kconfig half.
     result.add(
         config_enabled(app_cfg, "CONFIG_USER_PAIRING_CONTROL"),
@@ -1035,7 +1034,8 @@ def run_nrf54_checks(
     result.add(
         config_int(app_cfg, "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE") == 1024,
         "54l15-041",
-        "app USER_PAIRING_WORKQ_STACK_SIZE=1024 (build-minimum; runtime pending P8)",
+        "app USER_PAIRING_WORKQ_STACK_SIZE=1024 (build-minimum; runtime "
+        "validated by P8 hardware acceptance)",
         "got %r" % config_int(app_cfg, "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE"),
     )
     result.add(
@@ -1045,7 +1045,7 @@ def run_nrf54_checks(
         "got %r" % config_int(app_cfg, "CONFIG_HEAP_MEM_POOL_SIZE"),
     )
 
-    # P6: devicetree half — resolved aliases, GPIO flags, disabled
+    # Devicetree half — resolved aliases, GPIO flags, disabled
     # inherited DK buttons, deleted inherited DK LEDs.
     user_button = alias_ref(labels_app, app_dts, "user-button")
     result.add(
@@ -1306,9 +1306,7 @@ def format_result(result):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(
-        description="Resolved build-contract checker (Phase T6)"
-    )
+    parser = argparse.ArgumentParser(description="Resolved build-contract checker")
     parser.add_argument(
         "--nrf5340",
         required=True,

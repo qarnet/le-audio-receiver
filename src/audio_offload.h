@@ -78,7 +78,7 @@ struct audio_offload_status {
 	uint32_t probation_cleared;    /* times probation completed (100+ consecutive) */
 	uint32_t busy_count;           /* mutex-timeout rejections */
 
-	/* Stage 4B: runtime restart + heartbeat supervisor */
+	/* Runtime restart + heartbeat supervisor */
 	uint32_t runtime_restart_count;        /* times FLPR was runtime-restarted */
 	uint32_t runtime_restart_fail;         /* restart failures */
 	uint32_t runtime_restart_ms;           /* last restart duration */
@@ -153,7 +153,7 @@ bool audio_offload_is_healthy(void);
  */
 void audio_offload_get_status(struct audio_offload_status *status);
 
-/* ── Stage 3B: ASRC offload ──────────────────────────────────────── */
+/* ── ASRC offload ────────────────────────────────────────────────── */
 
 /** Typed result from FLPR ASRC processing. */
 struct audio_offload_asrc_result {

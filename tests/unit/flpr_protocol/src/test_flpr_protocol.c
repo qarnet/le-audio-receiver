@@ -712,7 +712,7 @@ ZTEST(flpr_protocol, test_rate_target_integer_truncation)
 	zassert_equal(flpr_rate_limit_target_ms(3, 3), 1000ULL);
 }
 
-/* ── Stage 2: stall pack/unpack ──────────────────────────────────── */
+/* ── Stall pack/unpack ──────────────────────────────────── */
 
 ZTEST(flpr_protocol, test_stall_pack_persistent)
 {
@@ -793,7 +793,7 @@ ZTEST(flpr_protocol, test_stall_pack_roundtrip)
 	zassert_equal(FLPR_STALL_DURATION(packed), (packed >> 8) & 0x00FFFFFFU);
 }
 
-/* ── R1: control ACK constructor ────────────────────────────────────
+/* ── Control ACK constructor ────────────────────────────────────
  * RESET_ACK and STALL_ACK echo the exact request sequence token, data,
  * type, and current protocol version (request correlation). */
 

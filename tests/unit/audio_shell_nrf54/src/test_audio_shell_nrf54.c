@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * T6: direct tests of the nRF54L15 FLPR status command bodies in
+ * Direct tests of the nRF54L15 FLPR status command bodies in
  * src/audio_shell.c (handshake, ring, offload, runtime, restart)
  * through the real Zephyr dummy backend and shell_execute_cmd().
  * FLPR APIs are mocked; the parseable labels and values are locked
@@ -177,7 +177,7 @@ ZTEST(audio_shell_nrf54, test_flpr_ring_status_exact_fields)
 	zassert_is_null(strstr(out, "Diag (FLPR)"), "unexpected FLPR diag line:\n%s", out);
 }
 
-/* flpr ring status: FLPR diagnostics present when reported (R8: the
+/* flpr ring status: FLPR diagnostics present when reported (the
  * FLPR-reported counters live in the acceptance status). */
 ZTEST(audio_shell_nrf54, test_flpr_ring_status_flpr_diag)
 {
@@ -204,7 +204,7 @@ ZTEST(audio_shell_nrf54, test_flpr_ring_status_flpr_diag)
 				    "cons_stale=0 prod_ok=5 prod_full=1");
 }
 
-/* flpr ring status: test-done and latency sections (R8: the test and
+/* flpr ring status: test-done and latency sections (the test and
  * latency fields live in the acceptance status). */
 ZTEST(audio_shell_nrf54, test_flpr_ring_status_test_and_latency)
 {
@@ -531,7 +531,7 @@ ZTEST(audio_shell_nrf54, test_wrapper_seam_flpr)
 	assert_output_has_line(out, "  Epoch        : 9 (ready=0 reboot=0)");
 }
 
-/* ── FLPR command handlers (T7 Stage 2) ─────────────────────────────
+/* ── FLPR command handlers ─────────────────────────────────────────
  * cmd_flpr_stress / ring test / ring reset / ring init / producer
  * stall / stall_flpr / stall_flpr_ms / ring acceptance / hang —
  * production shell handlers executed through the real shell registry.
@@ -586,7 +586,8 @@ ZTEST(audio_shell_nrf54, test_flpr_stress_success_summary)
 
 	zassert_equal(rc, 0);
 	assert_output_contains(out, "Starting 5 ping/pong stress...");
-	assert_output_contains(out, "Sent=5 Recv=4 Timeout=1 Stale=0 Mismatch=0 ErrSend=0 (of 5 requested)");
+	assert_output_contains(
+		out, "Sent=5 Recv=4 Timeout=1 Stale=0 Mismatch=0 ErrSend=0 (of 5 requested)");
 }
 
 ZTEST(audio_shell_nrf54, test_flpr_ring_test_invalid_count)

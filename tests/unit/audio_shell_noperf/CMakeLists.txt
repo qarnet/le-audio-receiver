@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(test_audio_shell_noperf)
 
-# T6: same production shell command bodies as the audio_shell suite, but
+# Same production shell command bodies as the audio_shell suite, but
 # built with CONFIG_AUDIO_PERF_MEASUREMENT=n so the disabled-perf branch
 # of the production file is proven: truthful unavailable (zero) deadline
 # percentage, zeroed queue fields, no division by zero.  The test source

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(test_audio_shell_nrf54)
 
-# T6: same production shell command bodies as the audio_shell suite, but
+# Same production shell command bodies as the audio_shell suite, but
 # with CONFIG_SOC_NRF54L15 forced for this translation unit so the FLPR
 # command groups (production diagnostics in flpr_shell.c, acceptance
 # harness in flpr_acceptance_shell.c, bt unpair in bt_shell.c) compile

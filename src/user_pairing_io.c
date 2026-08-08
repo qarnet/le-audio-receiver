@@ -48,8 +48,8 @@
  *   work busy-state bitmask, not errno, so its nonzero return is
  *   deliberately ignored (cancellation is best-effort generation
  *   invalidation).
- * - Stale work from a prior hold can never call P1: generation + pressed
- *   + armed must all match at fire time.
+ * - Stale work from a prior hold can never call pairing_mode: generation
+ *   + pressed + armed must all match at fire time.
  */
 
 #include "user_pairing_io.h"
@@ -150,12 +150,12 @@ static int led_write(bool active)
 }
 
 /* Re-arm one hold-threshold work on the system work queue.  Uses
- * k_work_reschedule() (per the P2 handoff contract) rather than
- * k_work_schedule(): reschedule re-deadlines an item that is still
- * submitted and schedules an item in any state (idle, submitted, or
- * running), so a rapid release/new hold or a race with a pending item can
- * never leave the new hold without a fresh threshold deadline.  Normally
- * returns 1 (nonnegative means success).  Split out so the
+ * k_work_reschedule() rather than k_work_schedule(): reschedule
+ * re-deadlines an item that is still submitted and schedules an item in
+ * any state (idle, submitted, or running), so a rapid release/new hold
+ * or a race with a pending item can never leave the new hold without a
+ * fresh threshold deadline.  Normally returns 1 (nonnegative means
+ * success).  Split out so the
  * (otherwise unreachable-on-native_sim) scheduling-failure cleanup can be
  * exercised through the test-only fault-injection seam. */
 static int schedule_threshold(struct k_work_delayable *dwork, k_timeout_t delay)

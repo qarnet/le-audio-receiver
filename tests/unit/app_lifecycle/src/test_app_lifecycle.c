@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * T6: direct tests of the production boot coordinator
+ * Direct tests of the production boot coordinator
  * (src/app_lifecycle.c).  Records ordered callback IDs with configurable
  * return codes; proves init order, cold-reboot-once semantics for every
  * fatal step, the nonfatal platform step, advertising restart, and

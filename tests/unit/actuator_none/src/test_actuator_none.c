@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * T5: production NONE actuator suite.
+ * Production NONE actuator suite.
  *
  * Compiles the real src/audio_clock_actuator_none.c and proves that
  * every API is a deterministic no-op returning zero (no state to

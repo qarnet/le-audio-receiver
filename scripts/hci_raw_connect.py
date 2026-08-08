@@ -10,7 +10,9 @@ This helper issues LE Extended Create Connection (0x2043) to the exact
 peer, watches HCI events for the connection-complete event (legacy LE
 Connection Complete 0x01 or LE Enhanced Connection Complete 0x0A) for
 THAT peer, and retries with backoff until the link is confirmed, the
-connect deadline expires, or a fatal command error occurs.  On success it
+connect deadline expires, or a fatal command error occurs.  A per-attempt
+timeout sends LE Create Connection Cancel and retries; the global
+connect deadline force-cancels the in-progress attempt.  On success it
 emits a stable machine-readable line on stdout
 
     HCI_CONNECT_READY peer=<addr> addr_type=<n> handle=0x<handle>

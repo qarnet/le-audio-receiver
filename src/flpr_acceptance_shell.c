@@ -6,11 +6,11 @@
  * CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS is enabled (nRF54L15 board conf);
  * normal audio diagnostics never compile this file.
  *
- * R8: parsing/printing/registration only.  The acceptance orchestration
+ * Parsing/printing/registration only.  The acceptance orchestration
  * and state (ring test, stalls, stale produce, stress, fault hang, gates
  * 1–6) live in src/flpr_acceptance.c; this file validates arguments,
  * pre-checks readiness, calls the acceptance module, and prints the
- * results byte-identically to the R4 behavior.
+ * results byte-identically to the established behavior.
  */
 
 #include <stdarg.h>
@@ -113,7 +113,7 @@ static int cmd_flpr_ring_status(const struct shell *sh, size_t argc, char **argv
 			    as.latency_count);
 	}
 
-	/* Timed stall diagnostics (Stage 2). */
+	/* Timed stall diagnostics. */
 	{
 		uint32_t acked = flpr_acceptance_flpr_stall_acked();
 		uint8_t mask = FLPR_STALL_MASK(acked);
@@ -332,7 +332,7 @@ static int cmd_flpr_ring_acceptance(const struct shell *sh, size_t argc, char **
 		return -EAGAIN;
 	}
 
-	/* R8: gate orchestration (1–6) moved to the acceptance module;
+	/* Gate orchestration (1–6) lives in the acceptance module;
 	 * the shell only forwards output through the severity-aware sink
 	 * (byte-identical lines including error/warn coloring). */
 	struct shell_gate_ctx ctx = {

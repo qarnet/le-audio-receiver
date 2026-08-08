@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * P5: direct tests of the production feature-on `bt unpair` command body
+ * Direct tests of the production feature-on `bt unpair` command body
  * (src/bt_shell.c compiled under CONFIG_USER_PAIRING_INPUT) through the
  * real Zephyr dummy backend and shell_execute_cmd(), against a fake link
  * implementation of pairing_mode_request_reset_sync() that records the

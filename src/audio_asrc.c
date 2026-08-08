@@ -19,7 +19,7 @@
  *   pos = N, frac=0  → input[N−1]                (right weight = 0)
  *   pos = N, frac>0  → break                     (need next block)
  *
- * Commit: consumed = min(phase>>32, N);
+ * State update: consumed = min(phase>>32, N);
  *         prev   = input[N−1];
  *         phase  = phase − consumed·2³².
  */

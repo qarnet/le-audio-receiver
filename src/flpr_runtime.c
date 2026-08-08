@@ -12,7 +12,7 @@
  *   - source-memory phandle (FLPR code in RRAM at 0x165000)
  *   - execution-memory phandle (FLPR execution SRAM at 0x20030000)
  *
- * Stage 4A reset-order fix: one-variable DMCONTROL mask.
+ * One-variable DMCONTROL mask.
  * DMACTIVE stays Enabled through entire restart — never Disabled.
  * Only NDMRESET toggles: assert for preparation, release as final launch edge.
  *
@@ -113,7 +113,7 @@ BUILD_ASSERT((EXEC_BASE & 0x7F) == 0,
 
 #endif /* FLPR_RUNTIME_NATIVE_TEST */
 
-/* Stage 4A reset-order fix: one-variable DMCONTROL mask.
+/* One-variable DMCONTROL mask.
  * DMACTIVE stays Enabled through entire restart — never Disabled.
  * Only NDMRESET toggles: assert for preparation, release as final launch edge. */
 #define DMCONTROL_RESET_ASSERT                                                                     \

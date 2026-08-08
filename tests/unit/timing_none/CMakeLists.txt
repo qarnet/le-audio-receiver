@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(test_timing_none)
 
-# T7 Stage 1: production nRF5340 no-op timing suite.  Compiles the real
+# Production nRF5340 no-op timing suite.  Compiles the real
 # src/audio_timing_none.c and proves every function executes: init == 0,
 # repeated init, zero/extreme SDU timestamp and presentation-delay inputs,
 # repeated reset, and arbitrary call order.  The no-op is intentionally

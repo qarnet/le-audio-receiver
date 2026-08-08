@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""T7 Stage 2: test-matrix manifest checker (stdlib only).
+"""Test-matrix manifest checker (stdlib only).
 
 Validates tests/test-matrix.json against the production source inventory
-and the current test suites.  See docs/development/pre-refactor-testing-t7-stage2-handoff.md
-section 3 and docs/testing/coverage-matrix.md for the classification,
-evidence, outcome-ledger and state-transition semantics.
+and the current test suites.  See docs/testing/coverage-matrix.md for the
+classification, evidence, outcome-ledger and state-transition semantics.
 
 Rules enforced (all checked, deterministic sorted output, nonzero exit):
   1. exact source inventory completeness (no missing/duplicate/stale path)

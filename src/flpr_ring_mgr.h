@@ -15,7 +15,7 @@
  * (src/flpr_acceptance.c) through the handshake diagnostic handler slot;
  * this header is production-only and contains no acceptance-named API.
  *
- * R8: the request/ACK correlation engine (src/flpr_control_ack.c) is the
+ * The request/ACK correlation engine (src/flpr_control_ack.c) is the
  * single owner of reset/stall ACK correlation; this module uses it for
  * the coordinated-reset ACK.
  */
@@ -97,8 +97,8 @@ struct flpr_ring_status {
 	uint32_t notify_err;
 	uint32_t sem_gives; /* from FLPR → CPUAPP ring consumer notifications */
 	uint32_t sem_takes;
-	uint32_t stale_notify; /* Stage 2: notifications with wrong epoch rejected */
-	uint32_t sem_drained;  /* Stage 2: consume_sem tokens drained at reset */
+	uint32_t stale_notify; /* notifications with wrong epoch rejected */
+	uint32_t sem_drained;  /* consume_sem tokens drained at reset */
 };
 
 /**
@@ -211,7 +211,7 @@ int flpr_ring_mgr_remote_restarted(void);
 
 /* ── Typed ASRC produce / consume ───────────────────────────────────
  *
- * Stage 3B: type-safe wrappers that embed struct audio_asrc_state into
+ * Type-safe wrappers that embed struct audio_asrc_state into
  * slot metadata and read it back post-process.  These preserve the
  * existing produce_block / consume_block transport and tests.
  */

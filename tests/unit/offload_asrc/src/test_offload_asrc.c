@@ -2,7 +2,7 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * Unit tests for audio_offload_process_asrc() — Stage 3B.
+ * Unit tests for audio_offload_process_asrc().
  *
  * Tests the production nRF54L15 ASRC offload path with mocked
  * flpr_ring_mgr transport.  Covers:
@@ -317,7 +317,7 @@ ZTEST(offload_asrc, test_consume_stale)
 	zassert_equal(ret, -EAGAIN, "stale fails");
 }
 
-/* ── R5: ret-level dedicated fault coverage ───────────────────────── */
+/* ── Ret-level dedicated fault coverage ───────────────────────── */
 
 /* Produce returns an unexpected (non-FULL, non-OK) result. */
 ZTEST(offload_asrc, test_produce_other)
@@ -551,7 +551,7 @@ ZTEST(offload_asrc, test_sequential_1000)
 	}
 }
 
-/* ── Stage 3B review: transport corruption tests ──────────────────── */
+/* ── Transport corruption tests ──────────────────── */
 
 /* Test: sequence mismatch between request and FLPR echo. */
 ZTEST(offload_asrc, test_sequence_mismatch)

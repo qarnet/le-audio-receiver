@@ -10,9 +10,9 @@
 #define MAX_SINK_ASE 2
 
 static bool sink_started[MAX_SINK_ASE];
-static bool sink_occupied[MAX_SINK_ASE]; /* R6: slot occupancy only (chan_count removed) */
+static bool sink_occupied[MAX_SINK_ASE]; /* slot occupancy only */
 static bool audio_path_open;
-static bool force_closed; /* R1: forced-close latch (shell stop) */
+static bool force_closed; /* forced-close latch (shell stop) */
 
 void stream_lifecycle_reset(void)
 {
@@ -38,7 +38,7 @@ bool stream_lifecycle_sink_started(size_t idx)
 		return false;
 	}
 	if (force_closed) {
-		/* R1: a forced (shell) close latches until the current
+		/* A forced (shell) close latches until the current
 		 * configured slot set is released or a full reset; later
 		 * duplicate/second-ASE start requests and stream-start
 		 * callbacks can never reopen this lifecycle. */
@@ -90,7 +90,7 @@ void stream_lifecycle_sink_release(size_t idx)
 		sink_started[idx] = false;
 	}
 
-	/* R1: releasing the LAST configured slot clears the forced-close
+	/* Releasing the LAST configured slot clears the forced-close
 	 * latch so a later reconfigure/start lifecycle can open.  Releasing
 	 * only one Mode A slot (another remains configured) does not. */
 	bool any_configured = false;
@@ -116,7 +116,7 @@ bool stream_lifecycle_audio_path_close(void)
 
 bool stream_lifecycle_force_close(void)
 {
-	/* R1: close the gate AND latch it closed for the current configured
+	/* Close the gate AND latch it closed for the current configured
 	 * slot set.  Returns whether the gate was open before force-close
 	 * so the caller can emit the first-close observer event exactly
 	 * once.

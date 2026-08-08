@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/bap_central_device.py (R9 device-resolution split).
+"""Unit tests for scripts/bap_central_device.py (device-resolution module).
 
 Proves, on stdlib python3 with fake D-Bus/GLib (no live BlueZ):
   - --peer-addr bypass path construction and print;
@@ -10,7 +10,7 @@ Proves, on stdlib python3 with fake D-Bus/GLib (no live BlueZ):
     signal match removed exactly once, safe from double-run;
   - adapter power-on success/error;
   - resolve_device composition (bypass / enum / discovery) with the exact
-    pre-split prints.
+    established prints.
 """
 
 import contextlib
@@ -288,7 +288,7 @@ class TestDiscoverySession(unittest.TestCase):
         session = self._make(bus, adapter, fakes.FakeGLib, timeout_s=0.05)
         with self.assertRaises(dev.CentralError):
             capture(lambda: session.run())
-        # The exact pre-split error message text is preserved.
+        # The exact established error message text is preserved.
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             with self.assertRaises(dev.CentralError):

@@ -22,7 +22,7 @@ target_sources(app PRIVATE
   ../audio_asrc.c
 )
 
-# R8: FLPR-image acceptance handlers (RING_TEST/STALL/STRESS/FAULT_HANG +
+# FLPR-image acceptance handlers (RING_TEST/STALL/STRESS/FAULT_HANG +
 # diagnostic counters) gated behind CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS
 # (src/flpr/Kconfig; enabled in src/flpr/prj.conf for the current lab
 # build).  Config-off images contain no acceptance symbols.

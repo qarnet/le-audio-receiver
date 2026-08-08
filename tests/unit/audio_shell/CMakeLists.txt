@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(test_audio_shell)
 
-# T6: compile and execute the REAL production shell command bodies
+# Compile and execute the REAL production shell command bodies
 # (src/audio_shell.c + src/bt_shell.c) registered normally and driven
 # through the Zephyr dummy shell backend.  Subsystem APIs
 # (stats/drift/volume/sink/unpair) are mocked; audio_perf.c is compiled

@@ -65,12 +65,12 @@ void bt_bap_audio_path_stop(void);
 
 #if defined(CONFIG_USER_PAIRING_CONTROL)
 /*
- * P4: pairing-mode Bluetooth operations.  Signatures exactly match the
- * P1 `struct pairing_mode_ops` slots; `ctx` is accepted (P1 has one
- * shared context) and ignored — the adapter uses the context installed at
- * bt_bap_init().  Thin calls into the private singleton adapter
- * (bt_bap_pairing_adapter.c).  pairing_mode remains the sole transition
- * owner.
+ * Pairing-mode Bluetooth operations.  Signatures exactly match the
+ * `struct pairing_mode_ops` slots; `ctx` is accepted (pairing_mode has
+ * one shared context) and ignored — the adapter uses the context
+ * installed at bt_bap_init().  Thin calls into the private singleton
+ * adapter (bt_bap_pairing_adapter.c).  pairing_mode remains the sole
+ * transition owner.
  */
 
 /*

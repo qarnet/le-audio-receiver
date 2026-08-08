@@ -89,7 +89,7 @@ int flpr_handshake_send_msg(const struct flpr_msg *msg)
 	mock_sent_count++;
 
 	/* Optional synchronous ACK echo for reset and stall messages.
-	 * R1: the ACK echoes the request's sequence token so the
+	 * The ACK echoes the request's sequence token so the
 	 * production correlation engines match by sequence. */
 	if (mock_auto_ack && msg->type == FLPR_MSG_RING_RESET && mock_captured_reset_ack) {
 		struct flpr_msg ack = {

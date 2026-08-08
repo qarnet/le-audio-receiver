@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(test_pairing_mode)
 
-# P1: execute the REAL production pairing-mode transition owner
+# Execute the REAL production pairing-mode transition owner
 # (src/pairing_mode.c) against fake injected operations with an operation
 # ledger, per-op event semaphores, per-op blocking gates, and short Kconfig
 # timing values that preserve the production ratios (bond half 100 ms,

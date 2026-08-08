@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Security/connect orchestration for bap_central (R9): JustWorks agent,
+"""Security/connect orchestration for bap_central: JustWorks agent,
 pairing, raw-HCI fresh-connect strategy, and BlueZ preserve-bond connect
 strategy.
 
 Stdlib import (bap_central_policy + hci_raw_connect only); D-Bus is
 injected late via factories.  Every print is byte-compatible with the
-pre-split bap_central.py flow.  Fatal paths print their exact message
+bap_central.py flow.  Fatal paths print their exact message
 then raise CentralError; the CLI catches it (exit 1) after the
 finally-registered cleanup owner runs (the raw helper is terminated by
 the owner on every post-spawn failure).
@@ -111,7 +111,7 @@ def make_agent_class(dbus_mod, dbus_service_mod):
 
 
 def register_agent(bus, dbus_mod, agent_cls, path=AGENT_PATH):
-    """Register the NINO agent and request it as default (pre-split step 1).
+    """Register the NINO agent and request it as default (step 1).
 
     Returns (agent, agent_mgr).
     """
@@ -204,7 +204,7 @@ def wait_for_helper_ready(out, is_alive, deadline, poll_s=0.05):
 class RawHciConnect:
     """Owns the raw-HCI helper process for the fresh --peer-addr path.
 
-    Spawns hci_raw_connect.py with the exact pre-split argv, waits for the
+    Spawns hci_raw_connect.py with the exact argv, waits for the
     machine-readable ready line (gate 1), then the BlueZ Device1 Connected
     property (gate 2).  Every post-spawn failure terminates the helper
     silently and raises CentralError.  ``terminate(verbose=True)`` is the
@@ -230,7 +230,7 @@ class RawHciConnect:
         self._terminated = False
 
     def argv(self):
-        """Exact pre-split helper argv (sudo boundary preserved)."""
+        """Exact helper argv (sudo boundary preserved)."""
         hold_secs = int(self.duration_s) + int(self._hold_add_s)
         return [
             "sudo",
@@ -250,7 +250,7 @@ class RawHciConnect:
         ]
 
     def spawn(self):
-        """Popen the helper (exact pre-split command + print)."""
+        """Popen the helper (exact command + print)."""
         print(
             "[main] Creating persistent ACL via raw HCI (hold={:.0f}s)...".format(
                 self.duration_s + self._hold_add_s
@@ -381,7 +381,7 @@ def remove_device(adapter_iface, dev_path, dbus_mod, preserve_bond):
     """Clear the stale BlueZ device cache — fresh path only.
 
     --preserve-bond keeps the Device1 record (the bond must survive);
-    fresh mode RemoveDevice + settle.  Prints are pre-split exact.
+    fresh mode RemoveDevice + settle.  Prints are exact.
     """
     if preserve_bond:
         print("[main] --preserve-bond: keeping existing BlueZ device record")
@@ -426,7 +426,7 @@ def preserve_bond_connect(
 
     Policy-driven (bap_central_policy): strategy fail / disconnect-first
     on a stale BlueZ connection / async Connect with bounded wait /
-    Connected-property gate.  Prints and acceptance policy are pre-split
+    Connected-property gate.  Prints and acceptance policy are
     exact; every fatal path prints then raises CentralError.  The raw-HCI
     helper is NEVER launched here (BlueZ owns the initiator).
     """
@@ -554,7 +554,7 @@ def set_pairable(adapter_props_iface, dbus_mod):
 
 
 def set_trusted(dev_props_iface, dbus_mod, trust_msg):
-    """Trust the device (non-fatal).  trust_msg is the exact pre-split
+    """Trust the device (non-fatal).  trust_msg is the exact
     post-Trust print for the active pairing path."""
     try:
         dev_props_iface.Set("org.bluez.Device1", "Trusted", dbus_mod.Boolean(True))
@@ -568,7 +568,7 @@ def pair_device(
 ):
     """Async Pair() over the existing link (GLib keeps dispatching the
     Agent1 callbacks).  Pair skip/fail/timeout acceptance policy is the
-    pre-split behavior: NONE of these are fatal.  Returns (paired,
+    behavior: NONE of these are fatal.  Returns (paired,
     connected) read back after pairing."""
     pair_result = [None]
     pair_error = [None]
@@ -621,7 +621,7 @@ def pair_device(
 
 def wait_services_resolved(dev_props_iface, dbus_mod, GLib, deadline_s=30.0):
     """Bounded ServicesResolved wait.  Pre-split acceptance: NOT set is a
-    warning, flow continues (never tightened in R9)."""
+    warning, flow continues (never tightened)."""
     sr_deadline = time.monotonic() + deadline_s
     services_resolved = False
     while time.monotonic() < sr_deadline:

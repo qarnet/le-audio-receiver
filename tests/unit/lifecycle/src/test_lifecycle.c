@@ -103,15 +103,14 @@ ZTEST(lifecycle, test_mono_single_ase_opens)
 
 /* ── Reconfigure/teardown ────────────────────────────────────────── */
 
-ZTEST(lifecycle, test_close_clears_l_received_equivalent)
+ZTEST(lifecycle, test_close_clears_gate_then_restart_reopens)
 {
 	stream_lifecycle_reset();
 
-	/* After gate closes, l_received/r_received must be cleared
-	 * so stale halves can't pair.  This test verifies that
-	 * audio_path_close() transitions the gate from open→closed;
-	 * the caller in bt_bap.c clears l_received/r_received
-	 * on the same transition.
+	/* Close transitions the gate open→closed; the Mode A half state
+	 * lives in the audio stream session and is cleared by the caller on
+	 * the same transition, not in the lifecycle module.  A start after
+	 * close re-opens the gate for the same run.
 	 */
 	stream_lifecycle_sink_configured(0);
 	stream_lifecycle_sink_started(0);
@@ -203,7 +202,7 @@ ZTEST(lifecycle, test_out_of_bounds_idx_noop)
 	zassert_false(stream_lifecycle_audio_path_is_open());
 }
 
-/* ── T5: closed-to-open edge semantics ─────────────────────────────
+/* ── Closed-to-open edge semantics ─────────────────────────────
  * stream_lifecycle_sink_started() returns true only for a
  * closed-to-open transition; duplicate starts must not repeat the
  * one-time open work in the caller (LIFE-003).
@@ -340,7 +339,7 @@ ZTEST(lifecycle, test_repeated_close_and_open_cycles)
 
 /* ── Edge: negative chan_count treated as absent ─────────────────── */
 
-/* ── R1: forced close (shell stop) ───────────────────────────────── */
+/* ── Forced close (shell stop) ───────────────────────────────── */
 
 ZTEST(lifecycle, test_force_close_returns_was_open)
 {
@@ -487,7 +486,7 @@ ZTEST(lifecycle, test_idle_force_close_does_not_latch_future_configure)
  * current configured-set truth (false), so a later configure/start can
  * open. */
 
-/* ── R7: per-slot release / occupancy matrix ─────────────────────────
+/* ── Per-slot release / occupancy matrix ─────────────────────────
  * The R7 teardown coordinator composes these primitives: first close
  * wins, each slot releases once independently, duplicate release is an
  * observable no-op, and a released slot never reopens without a fresh

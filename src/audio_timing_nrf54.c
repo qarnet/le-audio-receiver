@@ -5,7 +5,7 @@
  * nRF54L15 audio timing measurement: hardware-timed PCLK clock progress
  * against Bluetooth controller / GRTC time.
  *
- * Design (Phase 4b.1, revised 2026-07-26):
+ * Design:
  *  1. TIMER20 runs in TIMER mode (free-running PCLK-derived ticks).
  *  2. GRTC compare at 1 s intervals → GPPI → TIMER20 CAPTURE[0]
  *     (hardware snapshots timer count; zero callback latency).
@@ -86,7 +86,7 @@ struct timing_state {
 
 static struct timing_state ts;
 
-/* R1: thread-context control mutex serializing the anchor decision,
+/* Thread-context control mutex serializing the anchor decision,
  * GRTC first-compare programming, and anchor/active commit in
  * audio_timing_sdu_ref_update() against the inactive/generation
  * transition, compare disable, and anchor/last-state reset in
@@ -239,7 +239,7 @@ static void diag_work_handler(struct k_work *work)
 
 		int32_t ppm = audio_timing_compute_ppm(diag.tick_delta, nominal);
 
-		/* Phase 4b.2: every measurement feeds the PCLK frequency
+		/* Every measurement feeds the PCLK frequency
 		 * error into the drift controller's feedforward path.
 		 * Positive ppm → local PCLK/I2S faster than controller.
 		 */
@@ -338,7 +338,7 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 		return;
 	}
 
-	/* R1: capture the generation exactly once at ISR entry and carry
+	/* Capture the generation exactly once at ISR entry and carry
 	 * that captured value in every payload, so a callback accepted
 	 * under one session can never be labeled as a later generation. */
 	atomic_val_t gen = atomic_get(&generation);
@@ -394,7 +394,7 @@ static void grtc_cc_handler(int32_t id, uint64_t cc_value, void *p_context)
 		 */
 		ts.diag_seq++;
 
-		/* Phase 4b.2: publish every measurement for the
+		/* Publish every measurement for the
 		 * frequency-error feedforward path.  Diagnostic
 		 * logging is gated in the work handler.
 		 */
@@ -505,7 +505,7 @@ void audio_timing_sdu_ref_update(uint32_t sdu_ts_us, uint32_t pd_us)
 
 	if (ts.anchor_set) {
 		/* Already anchored — one compare at a time, skip
-		 * subsequent SDUs until Phase 4b.2.
+		 * subsequent SDUs until the anchor changes.
 		 */
 		k_mutex_unlock(&ctl_mutex);
 		return;

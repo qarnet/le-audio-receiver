@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""T7 Stage 2: focused tests for scripts/test-coverage.sh argument parsing,
+"""Focused tests for scripts/test-coverage.sh argument parsing,
 output-dir safety, worktree-dirty rules, and baseline write/enforcement.
 
 Runs the real script (copied into a temporary fixture repo) against fake

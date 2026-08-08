@@ -16,7 +16,7 @@ tone as LC3 (48 kHz / 10 ms / 96 kbps for mono, 192 kbps for stereo).
 --duration N: stream for N seconds (default 30)
 --freq FREQ: sine frequency in Hz (default 1000)
 
-R9: this file is the thin CLI coordinator.  Discovery lives in
+This file is the thin CLI coordinator.  Discovery lives in
 bap_central_device.py, agent/pairing/connect strategies in
 bap_central_security.py, the BAP endpoint + acquire in
 bap_central_endpoint.py, and the LC3 source/writer lifecycle in

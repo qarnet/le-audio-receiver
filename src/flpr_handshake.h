@@ -9,7 +9,7 @@
  *
  * Uses flpr_protocol.h (shared wire protocol) + flpr_peer (state machine).
  *
- * R8: production runtime only.  The stress-test ping/pong and the
+ * Production runtime only.  The stress-test ping/pong and the
  * fault-hang request state moved to src/flpr_acceptance.c (their
  * blocking state and counters); this module routes STRESS_PONG,
  * RING_TEST_REPORT, RING_STALL_ACK, and FAULT_HANG_ACK to the

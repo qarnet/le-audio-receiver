@@ -64,7 +64,7 @@ static bool scenario_observer_ok(enum bsim_sink_scenario scn)
 {
 	switch (scn) {
 	case BSIM_SCN_MODEA_FIRST_STOP_10MS:
-		/* R7: the first Disable closed the gate exactly once; BOTH
+		/* The first Disable closed the gate exactly once; BOTH
 		 * slot cleanups complete (the second runs while the gate is
 		 * already closed) and no Release caused the first edge.  The
 		 * receiver PASSes only after the second cleanup so the
@@ -87,7 +87,7 @@ static bool scenario_observer_ok(enum bsim_sink_scenario scn)
 		       bsim_observer_get_last_config_reason() == (int)BT_BAP_ASCS_REASON_NONE &&
 		       bsim_observer_get_config_accepted() == 0U;
 	case BSIM_SCN_NO_FREE_SINK_SLOT:
-		/* R7: exactly three first-time slot cleanups (2 initial +
+		/* Exactly three first-time slot cleanups (2 initial +
 		 * 1 reuse); the NO_MEM failure consumed no slot. */
 		return bsim_observer_get_config_accepted() >= 3U &&
 		       bsim_observer_get_config_rejected() == 1U &&
@@ -97,7 +97,7 @@ static bool scenario_observer_ok(enum bsim_sink_scenario scn)
 	case BSIM_SCN_INVALID_CODEC_FIELDS:
 		/* Two accepted configs overall (valid mono + missing-frame-
 		 * blocks fallback); the last rejection is CONF_REJECTED.
-		 * R7: both post-config releases complete before PASS so the
+		 * Both post-config releases complete before PASS so the
 		 * record proves every accepted config's slot was cleaned. */
 		return bsim_observer_get_config_rejected() >= 9U &&
 		       bsim_observer_get_config_accepted() >= 2U &&

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(test_timing_nrf54)
 
-# T5: production nRF54 timing suite.  Compiles the real
+# Production nRF54 timing suite.  Compiles the real
 # src/audio_timing_nrf54.c and src/audio_timing_math.c against
 # test-owned include shadows of the installed nrfx_grtc / nrfx_gppi /
 # nrf_grtc / nrf_timer HALs (see include/), plus a mock of

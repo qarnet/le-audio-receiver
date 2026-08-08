@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/bap_central_endpoint.py (R9 BAP endpoint split).
+"""Unit tests for scripts/bap_central_endpoint.py (BAP endpoint module).
 
 Proves, on stdlib python3 with fake D-Bus/GLib (no live BlueZ):
   - SelectProperties returns the exact LC3 config byte blobs and QoS dict
@@ -35,7 +35,7 @@ HCI_PATH = "/org/bluez/hci0"
 TP1 = HCI_PATH + "/dev_LE/iso0"
 TP2 = HCI_PATH + "/dev_LE/iso1"
 
-# Byte-for-byte pre-split blobs under test.
+# Byte-for-byte established blobs under test.
 CAPS_MONO = bytes(
     [
         0x03,

@@ -3,13 +3,14 @@
 """
 flpr_hang_gate.py — Automated FLPR FAULT_HANG gate for nRF54L15.
 
-Stage 4B: injects `flpr hang` via console shell, monitors full recovery
+Injects `flpr hang` via console shell, monitors full recovery
 chain (heartbeat→RECOVERING→runtime restart→ACTIVE→probation cleared).
 
 Gates checked (all must pass):
   - FAULT_HANG_ACK received
-  - Exactly ONE recovery (attempts==1, no duplicate restart)
-  - runtime_restart==1
+  - Exactly ONE recovery since baseline (recovery_attempts − baseline == 1;
+    relapses and duplicate restarts rejected)
+  - Exactly ONE runtime restart since baseline (runtime_restarts − baseline == 1)
   - New remote+ring epoch (epoch changes)
   - Probation cleared >=1
   - Resumed success until end: final success+fallback >= 85% of duration*100
@@ -17,7 +18,8 @@ Gates checked (all must pass):
     covers the pre-injection threshold, recovery downtime, and startup
     variance)
   - ASRC fallback triggered (fallback > 0 — the hang actually faulted)
-  - Faults: verify=0, crc=0, seq=0, frame=0, state=0
+  - Faults: verify=0, crc=0, seq=0, frame=0, state=0 (ring faults from the
+    offload status block; verify/state from the ASRC section)
   - Audio faults zero from final `audio status`/`audio perf`: decode
     errors, I2S underruns, stream resets, push failures — each field must
     be present in the captured output and exactly zero

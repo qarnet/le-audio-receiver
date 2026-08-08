@@ -20,7 +20,7 @@ static int cmd_flpr_status(const struct shell *sh, size_t argc, char **argv)
 	flpr_handshake_get_status(&s);
 
 #if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
-	/* R8: stress state is acceptance-owned; merge it into the shared
+	/* Stress state is acceptance-owned; merge it into the shared
 	 * flpr_status so the stress section below prints identically. */
 	flpr_acceptance_stress_snapshot(&s);
 #endif
@@ -54,7 +54,7 @@ static int cmd_flpr_status(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
-/* ── Offload status command (Phase 6 Stage 2) ──────────────────── */
+/* ── Offload status command ───────────────────────────────────── */
 
 static const char *offload_state_str(enum audio_offload_state st)
 {
@@ -97,7 +97,7 @@ static int cmd_offload_status(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "  Probation   : active=%u success=%u cleared=%u",
 		    (unsigned)s.probation_active, s.probation_success, s.probation_cleared);
 
-	/* Stage 4B: runtime restart + heartbeat supervisor */
+	/* Runtime restart + heartbeat supervisor */
 	if (s.runtime_restart_count > 0 || s.runtime_restart_fail > 0) {
 		shell_print(sh, "  Runtime     : restarts=%u fails=%u last_ms=%u remote_epoch=%u",
 			    s.runtime_restart_count, s.runtime_restart_fail, s.runtime_restart_ms,
@@ -280,8 +280,7 @@ SHELL_SUBCMD_SET_CREATE(flpr_cmds, (flpr));
 SHELL_CMD_REGISTER(flpr, &flpr_cmds, "FLPR co-processor commands.", NULL);
 
 SHELL_SUBCMD_ADD((flpr), status, NULL, "FLPR handshake/health status.", cmd_flpr_status, 1, 0);
-SHELL_SUBCMD_ADD((flpr), offload, NULL, "Audio offload status (Phase 6 Stage 2).",
-		 cmd_offload_status, 1, 0);
+SHELL_SUBCMD_ADD((flpr), offload, NULL, "Audio offload status.", cmd_offload_status, 1, 0);
 SHELL_SUBCMD_ADD((flpr), runtime, NULL, "FLPR runtime restart manager status.",
 		 cmd_flpr_runtime_status, 1, 0);
 SHELL_SUBCMD_ADD((flpr), restart, NULL, "Restart FLPR co-processor. [timeout_ms default 10000].",

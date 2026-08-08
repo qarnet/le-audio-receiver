@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * T5: production nRF54 timing suite.
+ * Production nRF54 timing suite.
  *
  * Compiles and executes the real src/audio_timing_nrf54.c and
  * src/audio_timing_math.c against test-owned include shadows of the
@@ -593,7 +593,7 @@ ZTEST(timing_nrf54, test_fifo_overflow_fault_drains_accepted_stops)
 	zassert_equal(mock_grtc_cc_abs_calls, abs_after, "no reschedule while inactive");
 }
 
-/* ── 17. R1: update/reset serialized by the control mutex ───────────
+/* ── 17. update/reset serialized by the control mutex ───────────
  * The update thread holds the control mutex across the (blocked) first
  * compare programming; the reset thread cannot disable/reset until the
  * compare is released.  After release both join and a fresh anchor
@@ -674,7 +674,7 @@ ZTEST(timing_nrf54, test_reset_waits_for_control_mutex_held_by_update)
 	zassert_true(audio_timing_test_is_active(), "new session active");
 }
 
-/* ── 18. R1: first-compare failure releases the control mutex ─────── */
+/* ── 18. first-compare failure releases the control mutex ─────── */
 
 ZTEST(timing_nrf54, test_first_compare_failure_releases_control_mutex)
 {
@@ -698,7 +698,7 @@ ZTEST(timing_nrf54, test_first_compare_failure_releases_control_mutex)
 	zassert_true(audio_timing_test_is_active(), "new session active");
 }
 
-/* ── 19. R1: reset before init is a clean no-op ───────────────────── */
+/* ── 19. reset before init is a clean no-op ───────────────────── */
 
 ZTEST(timing_nrf54, test_reset_before_init_noop)
 {

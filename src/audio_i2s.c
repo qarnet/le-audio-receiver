@@ -297,7 +297,8 @@ static int fill_block_asrc(uint16_t input_frames_snapshot, const int16_t *stereo
 						      &tmp_prev_l, &tmp_prev_r, &tmp_prev_valid);
 
 		if (imp_ret == 0) {
-			/* Commit: overwrite asrc_ctx + prev from offload result. */
+			/* State update: overwrite asrc_ctx + prev from the
+			 * validated offload result. */
 			memcpy(&asrc_ctx, &temp_ctx, sizeof(asrc_ctx));
 			asrc_prev_l = tmp_prev_l;
 			asrc_prev_r = tmp_prev_r;

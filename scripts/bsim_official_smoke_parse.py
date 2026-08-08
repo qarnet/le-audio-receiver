@@ -12,7 +12,7 @@ progress is logged by bap_stream_rx.c log_stream_rx as
 and the known NCS v3.3.0 teardown disable-race fails the test with the
 message "ISO receive lost" (bap_stream_rx.c:104) after the 100-SDU phase
 completes.  scripts/bsim-official-smoke.sh uses this module to prove the
-claimed >=100 completed SDUs from the captured client/server logs before
+claimed >=100 valid RX SDUs from the captured client/server logs before
 accepting the teardown race — missing, malformed, or short progress, or
 an unrelated failure, is never accepted.
 

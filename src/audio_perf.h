@@ -7,7 +7,8 @@
  * Tracks CPU cycles and queue-level metrics for LC3 decode, volume,
  * sink push, and ISO receive paths.  All per-frame work is add/compare
  * only — no division, no heap, no floating point.  Cycle-to-time
- * conversion and deadline comparison happen at snapshot/print time.
+ * conversion and the deadline comparison happen at cycle-end recording
+ * (audio_perf_cycle_end); snapshot/print only reads accumulated counters.
  *
  * When CONFIG_AUDIO_PERF_MEASUREMENT is disabled, all public functions
  * compile to static inline no-ops that the compiler removes entirely.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# T7 Stage 2: honest native coverage runner for le-audio-receiver.
+# Honest native coverage runner for le-audio-receiver.
 #
 # Builds every C suite discovered by scripts/test_inventory.py (twister
 # suites under tests/unit/ with testcase.yaml, plus exec-only suites with
-# CMakeLists.txt but no testcase.yaml — currently 28 + 4) with
+# CMakeLists.txt but no testcase.yaml) with
 # CONFIG_COVERAGE=y, runs each native executable to normal exit so host
 # libgcov writes .gcda, then produces gcovr 8.x reports.
 #
@@ -405,7 +405,7 @@ exec_only = set(inv.exec_only)
 suites = inv.all_c_suites()
 
 manifest = {
-    "tool": "test-coverage.sh (T7 Stage 2)",
+    "tool": "test-coverage.sh",
     "mode": mode,
     "source_commit": commit,
     "dirty": dirty == "1",

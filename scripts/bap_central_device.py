@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Device resolution for bap_central (R9): adapter power, exact-peer
+"""Device resolution for bap_central: adapter power, exact-peer
 bypass path, existing Device1 enumeration, and bounded InterfacesAdded
 discovery.
 
 Stdlib import only; D-Bus/GLib are injected late (real modules at
 runtime, fakes in unit tests).  Every print is byte-compatible with the
-pre-split bap_central.py flow.
+bap_central.py flow.
 
 Fatal paths print their exact message then raise CentralError; the CLI
 catches it (exit 1) after the finally-registered cleanup owner runs.
@@ -19,10 +19,10 @@ class CentralError(Exception):
 
 
 def power_on_adapter(adapter_props_iface, dbus_mod):
-    """Set Adapter1 Powered=True on the adapter (pre-split step 3).
+    """Set Adapter1 Powered=True on the adapter (step 3).
 
     Prints "[main] Adapter powered on".  A D-Bus failure is fatal
-    (pre-split it was an uncaught traceback; now a clean [error] line +
+    (it was an uncaught traceback; now a clean [error] line +
     CentralError, exit code 1 preserved).
     """
     try:
@@ -35,7 +35,7 @@ def power_on_adapter(adapter_props_iface, dbus_mod):
 
 def peer_device_path(hci_path, peer_addr):
     """--peer-addr bypass: return the exact Device1 path and print the
-    pre-split bypass line.  already_connected is always False here."""
+    bypass line.  already_connected is always False here."""
     dev_path = "{}/dev_{}".format(hci_path, peer_addr.replace(":", "_").upper())
     print("[main] --peer-addr bypass: skipping discovery, target={}".format(dev_path))
     return dev_path
@@ -46,7 +46,7 @@ def find_existing_receiver(om_iface, hci_path):
     Receiver' on this adapter.
 
     Returns (dev_path, already_connected) or (None, False).  Prints the
-    exact pre-split "[enum] ..." lines.
+    exact "[enum] ..." lines.
     """
     managed = om_iface.GetManagedObjects()
     for path, ifaces in managed.items():
@@ -82,11 +82,11 @@ class DiscoverySession:
     """Bounded InterfacesAdded discovery for 'LE Audio Receiver'.
 
     Owns the signal match for its lifetime and StopDiscovery exactly once.
-    ``run()`` prints the pre-split discovery lines and returns the target
+    ``run()`` prints the discovery lines and returns the target
     Device1 path; timeout and KeyboardInterrupt are fatal (CentralError
     after printing).  ``close()`` is idempotent and safe from ``finally``:
     StopDiscovery once, remove the signal match once.  ``run()`` closes
-    internally on every exit path (preserving the pre-split
+    internally on every exit path (preserving the
     post-discovery StopDiscovery).
     """
 
@@ -180,10 +180,10 @@ class DiscoverySession:
 def resolve_device(
     bus, dbus_mod, GLib, adapter_iface, om_iface, hci_path, peer_addr, timeout_s=30.0
 ):
-    """Locate the target Device1 path (pre-split step 4).
+    """Locate the target Device1 path (step 4).
 
     peer_addr bypass -> existing-device enumeration -> discovery.  Prints
-    the exact pre-split "[main] Target device: ..." line.  Returns
+    the exact "[main] Target device: ..." line.  Returns
     (dev_path, already_connected).
     """
     dev_path = None

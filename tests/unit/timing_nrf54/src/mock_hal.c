@@ -183,7 +183,7 @@ int nrfx_grtc_syscounter_cc_absolute_set(nrfx_grtc_channel_t *p_chan_data, uint6
 	mock_grtc_cc_abs_last_channel = p_chan_data->channel;
 	mock_grtc_cc_abs_last_irq = enable_irq;
 
-	/* R1: one-shot deterministic block on the first compare after
+	/* One-shot deterministic block on the first compare after
 	 * arming (the production update thread holds the control mutex
 	 * across this call). */
 	if (cc_abs_gate_armed) {

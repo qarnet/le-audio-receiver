@@ -10,7 +10,7 @@
 # FLPR code partition is a RRAM slice at 0x165000 in the app core's
 # address space) — verified 2026-07-05.
 #
-# Phase 6 Stage 0: flashes BOTH cpuapp and flpr images from the sysbuild
+# Flashes BOTH cpuapp and flpr images from the sysbuild
 # multi-image layout (two separate hex files, each loaded at its encoded
 # address).  There is no merged.hex path — the partition-manager fallback
 # was removed; require both images.
@@ -34,7 +34,7 @@ CPUAPP_HEX="$BUILD_DIR/le-audio-receiver/zephyr/zephyr.hex"
 FLPR_HEX="$BUILD_DIR/flpr/zephyr/zephyr.hex"
 OPENOCD_CFG="$ZEPHYR_BASE/boards/seeed/xiao_nrf54l15/support/openocd.cfg"
 
-# Stage 0 requires both cpuapp and flpr images. Fail if either missing.
+# Flashing requires both cpuapp and flpr images. Fail if either missing.
 # Each hex is loaded at the address encoded in the file.
 MISSING=""
 [ -f "$CPUAPP_HEX" ] || MISSING="$MISSING cpuapp ($CPUAPP_HEX)"

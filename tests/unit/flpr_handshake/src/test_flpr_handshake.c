@@ -370,7 +370,7 @@ ZTEST(flpr_handshake, test_heartbeat_ack_tracking)
 /* Recording ring handlers at file scope; each also probes the module
  * spinlock by calling get_status() (a nested spinlock would assert under
  * CONFIG_SPIN_VALIDATE, proving dispatch runs without flpr_lock).
- * R8: slots [0]=reset ACK, [1]=consumer (production slot);
+ * Slots [0]=reset ACK, [1]=consumer (production slot);
  * [2]=report, [3]=stall ACK, [4]=stress PONG, [5]=fault-hang ACK
  * (diagnostic slot). */
 struct ring_rec {
@@ -896,7 +896,7 @@ ZTEST(flpr_handshake, test_endpoint_error_callback_safe)
 
 ZTEST_SUITE(flpr_handshake, NULL, NULL, hs_setup, hs_teardown, NULL);
 
-/* ── R1: validation counters under concurrent status reads ──────────
+/* ── Validation counters under concurrent status reads ──────────
  * ep_received now validates under flpr_lock (it mutates err_len /
  * err_version that get_status reads).  A reader thread polls status
  * while the main thread injects invalid messages; the counter pair must

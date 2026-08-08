@@ -58,7 +58,7 @@ BAP_UUIDS = {
     "VCS": "00001844-0000-1000-8000-00805f9b34fb",
 }
 
-# Required remote UUIDs per handoff (PACS/ASCS/VCS)
+# Required remote UUIDs (PACS/ASCS/VCS)
 REMOTE_UUIDS = {
     "PACS": "00001850-0000-1000-8000-00805f9b34fb",
     "ASCS": "0000184e-0000-1000-8000-00805f9b34fb",

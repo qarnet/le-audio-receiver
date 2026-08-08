@@ -735,7 +735,7 @@ class Phase3Gate:
     def run_full_sequence(self) -> Phase3Result:
         """Execute the complete Phase 3 hardware sequence.
 
-        Steps 1-12 as specified in the handoff.
+        Steps 1-12.
         """
         result = Phase3Result()
         result.stage = "sequence"
@@ -1141,7 +1141,7 @@ class Phase3Gate:
         result.evidence.append("  ✓ PipeWire sink restored after reset")
 
         # Short playback (30s — shorter durations have SDU count skew
-        # from stream startup overhead; handoff allows 30s).
+        # from stream startup overhead; 30s is the allowed minimum).
         short_dur = 30
         orig_dur = self.duration
         self.duration = short_dur

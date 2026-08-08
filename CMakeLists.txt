@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.20.0)
 # Expose project's boards/ dir to Zephyr for custom board discovery.
 list(APPEND BOARD_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 
-# Probe selection happens at flash time (fw-flash-5340 → fw-probes), not at
+# Probe selection happens at flash time (fw-flash-5340 → nrf-probes), not at
 # configure time — a serial baked into runners.yaml goes stale when probes
 # are replugged.
 
@@ -56,7 +56,7 @@ if(CONFIG_SHELL AND CONFIG_SOC_NRF54L15)
   target_sources(app PRIVATE src/flpr_shell.c)
 endif()
 zephyr_sources_ifdef(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS src/flpr_acceptance_shell.c)
-# R8: FLPR acceptance orchestration (ring test, stalls, stale produce,
+# FLPR acceptance orchestration (ring test, stalls, stale produce,
 # stress, fault hang, gates 1-6) — compiled only with the acceptance
 # diagnostics config.  The shared control-ACK engine is production-neutral
 # (used by the core coordinated reset) and compiles on every nRF54L15

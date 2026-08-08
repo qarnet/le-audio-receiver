@@ -15,7 +15,7 @@
  * producer/consumer APIs are used to arrange ring contents.  No copied
  * reset/produce/consume/callback algorithm is used.
  *
- * R8: acceptance-specific behavior (ring throughput test, stalls, stale
+ * Acceptance-specific behavior (ring throughput test, stalls, stale
  * produce, report aggregation, latency/counter accounting, producer
  * backpressure counting) moved to the direct suite
  * tests/unit/flpr_acceptance, which compiles this same core plus the
@@ -909,7 +909,7 @@ ZTEST(flpr_ring_mgr, test_remote_restarted_invalidates_and_requires_reset)
 
 ZTEST_SUITE(flpr_ring_mgr, NULL, NULL, rm_setup, NULL, NULL);
 
-/* ── R1: data-lock barrier and ACK correlation ───────────────────── */
+/* ── Data-lock barrier and ACK correlation ───────────────────── */
 
 static K_THREAD_STACK_DEFINE(rm_stack, 4096);
 static struct k_thread rm_thread;

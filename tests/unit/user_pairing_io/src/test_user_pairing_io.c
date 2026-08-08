@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * P2: direct tests of the production user-pairing I/O adapter
+ * Direct tests of the production user-pairing I/O adapter
  * (src/user_pairing_io.c) against the REAL input subsystem, the REAL
  * gpio-keys driver, and the REAL gpio-emul controller on native_sim.
  *

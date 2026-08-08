@@ -5,7 +5,7 @@
  * CPUAPP side of FLPR handshake and heartbeat (k_work_delayable).
  * Uses flpr_peer state machine from flpr_protocol.h.
  *
- * R8: production runtime only.  The stress-test ping/pong state and the
+ * Production runtime only.  The stress-test ping/pong state and the
  * fault-hang request state moved to src/flpr_acceptance.c; the four
  * diagnostic message types (STRESS_PONG, RING_TEST_REPORT,
  * RING_STALL_ACK, FAULT_HANG_ACK) route to the registered diagnostic
@@ -142,7 +142,7 @@ static void hb_work_fn(struct k_work *work)
 			/* Periodic health check of remote (FLPR) heartbeats. */
 			(void)flpr_peer_check_health(&flpr, now_ms);
 			now_unhealthy = !flpr.healthy;
-			/* R1: snapshot the health callback + user-data under the
+			/* Snapshot the health callback + user-data under the
 			 * lock together with the transition state, then invoke
 			 * OUTSIDE the lock. */
 			if (was_healthy && now_unhealthy) {
@@ -222,7 +222,7 @@ static void ep_received(const void *data, size_t len, void *priv)
 	ARG_UNUSED(priv);
 	uint32_t now_ms = k_uptime_get_32();
 
-	/* R1: shared validation runs under flpr_lock because it mutates
+	/* Shared validation runs under flpr_lock because it mutates
 	 * err_len/err_version read by flpr_handshake_get_status(). */
 	bool valid;
 
@@ -249,7 +249,7 @@ static void ep_received(const void *data, size_t len, void *priv)
 		{
 			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 			is_new_epoch = flpr_peer_handle_ready(&flpr, epoch);
-			/* R1: capture the READY count under the lock so the log
+			/* Capture the READY count under the lock so the log
 			 * below never reads a concurrently mutated counter. */
 			ready_count = flpr.ready_count;
 			if (session_available && !hb_started) {
@@ -342,8 +342,8 @@ static void ep_received(const void *data, size_t len, void *priv)
 		/* CPUAPP receives these — unexpected but not errors. */
 		break;
 
-	/* ── Stage 1: ring control — route to ring manager ────────
-	 * R1: snapshot the handler function + shared user-data under
+	/* ── Ring control — route to ring manager ────────────────
+	 * Snapshot the handler function + shared user-data under
 	 * flpr_lock, then invoke OUTSIDE the lock (a handler may call
 	 * back into get_status / take ring locks). */
 	case FLPR_MSG_RING_RESET_ACK: {
@@ -377,13 +377,13 @@ static void ep_received(const void *data, size_t len, void *priv)
 		break;
 	}
 
-	/* ── R8: diagnostic message types ────────────────────────
+	/* ── Diagnostic message types ─────────────────────────────
 	 * STRESS_PONG, RING_TEST_REPORT, RING_STALL_ACK, and
 	 * FAULT_HANG_ACK route to the diagnostic handler slot registered
 	 * by flpr_acceptance_init().  Same snapshot-under-lock /
 	 * invoke-outside-lock semantics as the production slot.  With no
-	 * handler registered the messages are silently dropped (the
-	 * pre-R8 acceptance state was core but inert). */
+	 * handler registered the messages are silently dropped (an
+	 * unregistered acceptance state is inert). */
 	case FLPR_MSG_STRESS_PONG:
 	case FLPR_MSG_RING_TEST_REPORT:
 	case FLPR_MSG_RING_STALL_ACK:
@@ -495,7 +495,7 @@ void flpr_handshake_get_status(struct flpr_status *status)
 	status->rx_last_ms = flpr.rx_last_ms;
 	status->rx_missed_total = flpr.rx_missed_total;
 
-	/* R8: stress fields are acceptance-owned (flpr_acceptance.c).
+	/* Stress fields are acceptance-owned (flpr_acceptance.c).
 	 * Zero them so the shared flpr_status is never garbage; the
 	 * shell merges flpr_acceptance_stress_snapshot() when the
 	 * acceptance config is enabled. */

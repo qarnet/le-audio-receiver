@@ -104,7 +104,7 @@ static struct bt_conn *default_conn;
 static struct bt_pairing_policy pairing_policy;
 static K_MUTEX_DEFINE(pairing_adv_lock);
 
-/* R1: short lifecycle lock serializing every stream_lifecycle_* call and
+/* Short lifecycle lock serializing every stream_lifecycle_* call and
  * the audio-path transition generation between the BT RX thread and the
  * shell thread.  Fixed nesting is lifecycle_lock then sink mutex; never
  * reversed.  No lifecycle_lock hold spans offload cancellation/scheduling,
@@ -496,7 +496,7 @@ static int lc3_metadata(struct bt_bap_stream *stream, const uint8_t meta[], size
 }
 
 /*
- * R7: one explicit private teardown transition owner.
+ * One explicit private teardown transition owner.
  *
  * Every stop/disable/disabled/release/disconnect/shell-stop composition
  * runs through teardown_transition(), which owns all low-level
@@ -555,7 +555,7 @@ static bool teardown_close_path(bool forced)
 	audio_sink_stream_close();
 	k_mutex_unlock(&lifecycle_lock);
 
-	/* R6: close session receive admission and wait for admitted
+	/* Close session receive admission and wait for admitted
 	 * receive leases to drain BEFORE any decoder/assembler/sequence
 	 * reset runs.  Outside the lifecycle lock: the drain wait must
 	 * never run under it.  Idempotent; in-flight leases on the shared
@@ -658,10 +658,10 @@ static bool teardown_transition(enum teardown_event ev, size_t slot)
 		if (was_open) {
 			/* Stop the audio sink immediately on the release that
 			 * closed an open gate, before returning to ASCS, so
-			 * the sink oracle can finalize the segment.  Same
-			 * relative order as before R7: gate close + sink stop
-			 * precede the release observer; the disconnect
-			 * cleanup still fires later (rel_ss_seq < disc_seq). */
+			 * the sink oracle can finalize the segment.  Gate
+			 * close + sink stop precede the release observer;
+			 * the disconnect cleanup still fires later
+			 * (rel_ss_seq < disc_seq). */
 			LOG_INF("Release: audio sink stopped");
 #if defined(CONFIG_BSIM_OBSERVER)
 			bsim_observer_release_sink_stop();
@@ -753,8 +753,8 @@ static const struct bt_bap_unicast_server_cb unicast_server_cb = {
  *   - the timing-reference update for stream 0 (valid + TS + gate open,
  *     using the session's stored presentation delay);
  *   - gate-independent valid-receive counting via the session counter
- *     (identical semantics to pre-R6: valid packets count and the
- *     periodic SDU log fires regardless of gate state);
+ *     (valid packets count and the periodic SDU log fires regardless
+ *     of gate state);
  *   - the gate-closed throttle + bsim recv_gate_blocked observer event.
  */
 static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_info *info,
@@ -766,7 +766,7 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	const bool valid = (info->flags & BT_ISO_FLAGS_VALID) != 0;
 	const bool has_ts = (info->flags & BT_ISO_FLAGS_TS) != 0;
 
-	/* R1: one gate snapshot under the lifecycle lock for the whole
+	/* One gate snapshot under the lifecycle lock for the whole
 	 * callback; the shell thread can force-close concurrently. */
 	bool gate_open;
 
@@ -774,23 +774,23 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	gate_open = stream_lifecycle_audio_path_is_open();
 	k_mutex_unlock(&lifecycle_lock);
 
-	/* Phase 4b.1: feed validated timestamp + presentation delay to
+	/* Feed validated timestamp + presentation delay to
 	 * hardware timing measurement (nRF54L15 GRTC path).  Only stream 0
 	 * is used as the timing reference.  Gated behind audio-path-open
 	 * to prevent late callbacks from re-arming hardware timers after
 	 * teardown.  The presentation delay lives in the session.
 	 *
-	 * Phase 4b.2: drift compensation is now per-block in
-	 * audio_sink_push(), driven by PCLK feedforward + buffer-phase PI.
-	 * ISO timestamps go ONLY to audio_timing for GRTC scheduling.
+	 * Drift compensation is per-block in audio_sink_push(), driven by
+	 * PCLK feedforward + buffer-phase PI.  ISO timestamps go ONLY to
+	 * audio_timing for GRTC scheduling.
 	 */
 	if (idx == 0 && valid && has_ts && gate_open) {
 		audio_timing_sdu_ref_update(info->ts, audio_stream_session_pd(0));
 	}
 
 	if (valid) {
-		/* Gate-independent counting/log, exactly as before R6: the
-		 * session owns the counter, the adapter logs it. */
+		/* Gate-independent counting/log: the session owns the
+		 * counter, the adapter logs it. */
 		size_t cnt = audio_stream_session_recv_valid_count(idx);
 #if defined(CONFIG_INFO_REPORTING_INTERVAL) && CONFIG_INFO_REPORTING_INTERVAL > 0
 		if ((cnt % CONFIG_INFO_REPORTING_INTERVAL) == 0U) {
@@ -841,7 +841,7 @@ static void stream_stopped(struct bt_bap_stream *s, uint8_t reason)
 
 	LOG_INF("Stream[%zu] stopped: reason 0x%02X", idx, reason);
 
-	/* R7: normal close through the teardown coordinator.  The disabled
+	/* Normal close through the teardown coordinator.  The disabled
 	 * callback may fire later and close again harmlessly (duplicate
 	 * close has no global side effect). */
 	teardown_transition(TEARDOWN_CLOSE, idx);
@@ -902,13 +902,13 @@ static void stream_started(struct bt_bap_stream *s)
 		audio_stream_session_start_clear();
 		audio_stream_session_rx_open();
 
-		/* Phase 5.0: reset perf counters at start of new audio session.
+		/* Reset perf counters at start of new audio session.
 		 * Metrics from previous session are discarded here; use
 		 * 'audio perf' before gate opens to inspect completed-session data.
 		 */
 		audio_perf_reset();
 
-		/* Phase 6 Stage 2: start offload pipeline for new stream. */
+		/* Start offload pipeline for new stream. */
 		audio_offload_stream_start();
 
 #if defined(CONFIG_BSIM_OBSERVER)
@@ -949,7 +949,7 @@ static void stream_disabled_cb(struct bt_bap_stream *s)
 
 	LOG_INF("Stream[%zu] disabled", idx);
 
-	/* R7: the DISABLED coordinator event owns the whole completion —
+	/* The DISABLED coordinator event owns the whole completion —
 	 * first close (gate + sink drain + offload), the exact summary
 	 * snapshot/log, and the stats reset once.  The first close must
 	 * run first so late callbacks on the other ASE cannot decode,
@@ -980,7 +980,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	LOG_INF("Connected: %s", a);
 	default_conn = bt_conn_ref(conn);
 
-	/* P4: after storing/refing the connection, translate the connect to
+	/* After storing/refing the connection, translate the connect to
 	 * the pairing-mode owner (forwarded only when notifications are
 	 * enabled).  This callback performs no security request directly —
 	 * the pairing-mode owner requests L2 in BONDING. */
@@ -1004,7 +1004,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	bt_addr_le_to_str(bt_conn_get_dst(conn), a, sizeof(a));
 	LOG_INF("Disconnected: %s reason 0x%02x", a, reason);
 
-	/* R7: the DISCONNECT coordinator event owns the whole teardown
+	/* The DISCONNECT coordinator event owns the whole teardown
 	 * (normal global close once, lifecycle reset, session reset after
 	 * the drain, stats reset once, cleanup observer once) and returns
 	 * whether the advertising-restart semaphore must fire.  The
@@ -1015,7 +1015,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	bt_conn_unref(default_conn);
 	default_conn = NULL;
 
-	/* P4: after teardown and connection ownership cleanup, translate the
+	/* After teardown and connection ownership cleanup, translate the
 	 * disconnect to the pairing-mode owner exactly once (non-matching
 	 * disconnects returned above).  The adapter forwards only when
 	 * notifications are enabled; it never restarts advertising itself. */
@@ -1149,7 +1149,7 @@ static void pairing_complete(struct bt_conn *conn, bool bonded)
 #endif
 	}
 #if defined(CONFIG_USER_PAIRING_CONTROL)
-	/* P4: mark happened above; notify bonded/unbonded honestly.  The
+	/* Mark happened above; notify bonded/unbonded honestly.  The
 	 * adapter forwards only when notifications are enabled. */
 	bt_bap_pairing_adapter_notify_pairing_complete(bonded);
 #endif
@@ -1432,7 +1432,7 @@ int bt_bap_init(void)
 	}
 
 #if defined(CONFIG_USER_PAIRING_CONTROL)
-	/* P4: install the immutable pairing adapter backend after the
+	/* Install the immutable pairing adapter backend after the
 	 * advertising set exists; applied access starts SUSPENDED.  Failure
 	 * propagates as a boot/BAP init failure. */
 	err = bt_bap_pairing_adapter_init(&bt_bap_pairing_backend, NULL);

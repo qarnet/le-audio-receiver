@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * T6: direct tests of the production shell command bodies
+ * Direct tests of the production shell command bodies
  * (src/audio_shell.c) through the real Zephyr dummy backend and
  * shell_execute_cmd().  Subsystem state is controlled via the fakes;
  * audio_perf.c is production source with deterministic injection.
@@ -346,7 +346,7 @@ ZTEST(audio_shell, test_wrapper_seam_matches_dispatch)
 	assert_output_has_line(out, "  PLC frames     : 1 (14%)");
 }
 
-/* R4: this suite compiles only the audio/bt shell TUs (no FLPR shell, no
+/* This suite compiles only the audio/bt shell TUs (no FLPR shell, no
  * acceptance TU) — the same configuration-off shape as the nRF5340 target
  * and a normal audio diagnostics build.  The FLPR acceptance commands must
  * not exist in the registry: unknown command, never acceptance output. */

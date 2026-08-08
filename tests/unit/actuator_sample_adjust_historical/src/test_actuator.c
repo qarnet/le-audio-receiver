@@ -130,7 +130,7 @@ ZTEST(actuator_sample_adjust_historical, test_clamp_prevents_burst)
 		      "no more pending after clamped consume");
 }
 
-/* Phase 4b.2: sign chain verification.
+/* Sign chain verification.
  * Measured local +1775 ppm (PCLK fast) → controller output ≈ -1775 ppm
  * (negative correction) → actuator accumulates negative → eventual -1
  * (insert).  This test proves negative ppm input produces insert, not drop.

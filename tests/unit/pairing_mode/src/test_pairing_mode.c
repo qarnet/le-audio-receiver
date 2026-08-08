@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * P1: direct tests of the production pairing-mode transition owner
+ * Direct tests of the production pairing-mode transition owner
  * (src/pairing_mode.c) against fake injected operations.
  *
  * The fake records every operation call (op id + argument) into a bounded
@@ -1246,7 +1246,7 @@ ZTEST(pairing_mode, test_duplicate_disconnect_harmless)
 	zassert_equal(rec_op(before), FOP_ADV_START, "idle restart op type");
 }
 
-/* P5: a matching NORMAL/IDLE disconnect (real prior connection) restarts
+/* A matching NORMAL/IDLE disconnect (real prior connection) restarts
  * NORMAL advertising exactly once without mutating mode/access/LED. */
 ZTEST(pairing_mode, test_normal_idle_disconnect_restarts_once)
 {
@@ -1287,7 +1287,7 @@ ZTEST(pairing_mode, test_normal_idle_disconnect_restarts_once)
 	zassert_equal(rec_op(before), FOP_ADV_START, "restart op type");
 }
 
-/* P5: a matching BONDING/IDLE disconnect (real prior connection) restarts
+/* A matching BONDING/IDLE disconnect (real prior connection) restarts
  * OPEN (BONDING) advertising exactly once. */
 ZTEST(pairing_mode, test_bonding_idle_disconnect_restarts_once)
 {
@@ -1322,7 +1322,7 @@ ZTEST(pairing_mode, test_bonding_idle_disconnect_restarts_once)
 	zassert_equal(rec_op(before), FOP_ADV_START, "restart op type");
 }
 
-/* P5: a stale/duplicate disconnect with no prior connection never
+/* A stale/duplicate disconnect with no prior connection never
  * restarts advertising in any idle mode. */
 ZTEST(pairing_mode, test_stale_disconnect_noop)
 {
@@ -1344,7 +1344,7 @@ ZTEST(pairing_mode, test_stale_disconnect_noop)
 	zassert_equal(st.phase, PAIRING_MODE_PHASE_IDLE);
 }
 
-/* P5: a failed idle advertising restart is fatal through the dedicated
+/* A failed idle advertising restart is fatal through the dedicated
  * operation context — exactly one cold reboot, no mode/access/generation
  * mutation, and only the best-effort fatal LED force. */
 ZTEST(pairing_mode, test_idle_disconnect_restart_failure_reboots_once)
@@ -1382,7 +1382,7 @@ ZTEST(pairing_mode, test_idle_disconnect_restart_failure_reboots_once)
 	zassert_equal(rec_op(rec_count() - 1), FOP_REBOOT, "reboot last");
 }
 
-/* P5: a disconnect completing a WAIT_DISCONNECT_* phase never also fires
+/* A disconnect completing a WAIT_DISCONNECT_* phase never also fires
  * the idle-restart branch (was_connected is true, but the phase is a
  * wait phase): the BONDING and RESET completions each perform exactly
  * one advertising start. */

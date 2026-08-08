@@ -2,22 +2,15 @@
 # Canonical full local gate script for le-audio-receiver.
 #
 # Runs every test suite:
-#   1. Twister C unit suites (testcase.yaml under tests/unit/ — currently 31)
+#   1. Twister C unit suites (testcase.yaml under tests/unit/)
 #   2. Exec-only C unit suites (CMakeLists.txt without testcase.yaml under
-#      tests/unit/ — currently 5: audio_offload, flpr_audio_process,
-#      flpr_ring, offload_asrc, offload_asrc_verify)
-#      (R8: flpr_acceptance + flpr_acceptance_flpr are the two new
-#      Twister children — R8 gate total 51)
-#   3. Python unit suites (16: tests/unit/*/test_*.py in CMake-less dirs
-#      plus scripts/test_*.py — fw_flash_dongle, flpr_stall_gate,
-#      flpr_hang_gate, bluez_wireplumber_gate, bluez_wireplumber_phase3_gate,
-#      bsim_runner, build_contract, hci_raw_connect, bap_central_policy,
-#      bap_central_writer, test_matrix, test_coverage_runner, and the four
-#      R9 bap_central split suites: bap_central_device, bap_central_security,
-#      bap_central_endpoint, bap_central_session — R9 gate total 55)
-#   4. Coverage (T7): rebuilds all native C suites with CONFIG_COVERAGE=y
+#      tests/unit/ — audio_offload, flpr_audio_process, flpr_ring,
+#      offload_asrc, offload_asrc_verify)
+#   3. Python unit suites (tests/unit/*/test_*.py in CMake-less dirs plus
+#      scripts/test_*.py)
+#   4. Coverage: rebuilds all native C suites with CONFIG_COVERAGE=y
 #      and enforces the committed tests/coverage-baseline.json
-#   5. Test-matrix checker (T7): consumes the coverage run's coverage.json
+#   5. Test-matrix checker: consumes the coverage run's coverage.json
 #      — zero-hit function enforcement, public API inventory, outcome ledger
 #   6. BabbleSim Stage 1 (canonical 17-scenario T4+R7 BAP matrix, scenarios
 #      1–9 run twice, remaining eight once; deterministic across runs)
@@ -25,7 +18,9 @@
 # All suite discovery comes from scripts/test_inventory.py (the single
 # filesystem classification source shared with test-coverage.sh and
 # check-test-matrix.py) — adding a suite cannot silently omit it from the
-# gate.
+# gate.  Current inventory (scripts/test_inventory.py): 35 twister + 5
+# exec-only + 19 Python = 59 unit children; the canonical gate is 62
+# children (59 + coverage + matrix + BSim).
 #
 # Required: NCS v3.3.0 dev shell (nix develop / direnv allow).
 #   ZEPHYR_BASE must be set. BabbleSim dependencies must be provisioned;

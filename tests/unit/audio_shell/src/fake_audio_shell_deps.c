@@ -112,7 +112,7 @@ int test_shell_sink_stop_calls(void)
 	return sink_stop_calls;
 }
 
-/* ---- BAP audio-path stop (R1: shell 'audio stop' routes through it) ---- */
+/* ---- BAP audio-path stop (shell 'audio stop' routes through it) ---- */
 
 void bt_bap_audio_path_stop(void)
 {

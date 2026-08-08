@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * T7 Stage 1: direct no-op timing suite for src/audio_timing_none.c.
+ * Direct no-op timing suite for src/audio_timing_none.c.
  *
  * The nRF5340 timing implementation is intentionally side-effect free.
  * These tests prove the API contract (init returns 0, all calls safe at

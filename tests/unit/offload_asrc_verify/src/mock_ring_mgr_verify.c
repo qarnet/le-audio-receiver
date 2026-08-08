@@ -295,7 +295,7 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 	return FLPR_CONSUME_OK;
 }
 
-/* ── Stage 4B recovery stubs ───────────────────────────────────────── */
+/* ── Recovery stubs ───────────────────────────────────────── */
 
 int flpr_runtime_init(void)
 {

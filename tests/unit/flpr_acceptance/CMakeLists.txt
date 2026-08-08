@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(test_flpr_acceptance)
 
-# R8: direct suite for the cpuapp FLPR acceptance module.
+# Direct suite for the cpuapp FLPR acceptance module.
 #
 # Compiles the REAL acceptance module (src/flpr_acceptance.c), the REAL
 # core ring manager (src/flpr_ring_mgr.c with host ring arrays via

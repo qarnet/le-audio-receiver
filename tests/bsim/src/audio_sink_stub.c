@@ -52,7 +52,7 @@ static struct bsim_sink_segment segments[BSIM_SINK_MAX_SEGMENTS];
 static int segment_count; /* finalized segments */
 static int current_seg;   /* open segment index */
 static bool stopped;
-static bool accepting;            /* R1: push admission (restored only by open) */
+static bool accepting;            /* push admission (restored only by open) */
 static bool first_nonzero_seen;   /* per segment */
 static bool boundary_closed;      /* per segment: first nonzero source-valid push */
 static uint32_t after_stop_total; /* cumulative, never hidden */
@@ -178,7 +178,7 @@ void audio_sink_test_begin(enum bsim_sink_scenario scn, int dec_calls)
 
 int audio_sink_init(void)
 {
-	/* R1: configured=true but push admission closed; only
+	/* configured=true but push admission closed; only
 	 * audio_sink_stream_open() (BAP gate closed→open) restores it. */
 	accepting = false;
 	return 0;
@@ -210,7 +210,7 @@ void audio_sink_stop(void)
 
 void audio_sink_set_input_frames(uint16_t frames)
 {
-	/* R1: never enables admission — only audio_sink_stream_open() does.
+	/* Never enables admission — only audio_sink_stream_open() does.
 	 * The segment heuristics below stay unchanged. */
 	uint16_t samples = (uint16_t)(frames * 2); /* stereo: frames → samples */
 
@@ -256,7 +256,7 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 	 * even after the scenario goal was reached (the goal check must
 	 * not paper over a closed admission).  When admission remains
 	 * open, post-goal pushes may retain the existing ignored-success
-	 * behavior.  Stage 1 hashes/counts are unchanged: the goal path
+	 * behavior.  The pinned hashes/counts are unchanged: the goal path
 	 * still sees the same accepted pushes. */
 	if (!accepting) {
 		return -EBUSY;
@@ -267,7 +267,7 @@ int audio_sink_push(const int16_t *data, size_t sample_count)
 		return 0;
 	}
 
-	/* R1: closed admission rejects pushes without touching oracle
+	/* Closed admission rejects pushes without touching oracle
 	 * state (the stream_recv gate normally blocks these earlier). */
 	if (stopped) {
 		after_stop_total++;
@@ -545,7 +545,7 @@ bool audio_sink_test_validate(void)
 		}
 
 		/* PACS available sink contexts must never be NONE after
-		 * connection + stream (Phase 1 regression). */
+		 * connection + stream. */
 		enum bt_audio_context ctx = bt_pacs_get_available_contexts(BT_AUDIO_DIR_SINK);
 
 		if (ctx == BT_AUDIO_CONTEXT_TYPE_NONE) {

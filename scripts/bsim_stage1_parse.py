@@ -344,7 +344,7 @@ def check_scenario(scenario, recv, cli, known):
             if r.get("obs_mal") != 0:
                 errs.append("obs_mal %s != 0" % r.get("obs_mal"))
 
-        # R7: a normal audio scenario ends while still streaming — the
+        # a normal audio scenario ends while still streaming — the
         # gate never closed and no slot was ever released.
         if r.get("obs_gate_c", 0) != 0:
             errs.append(
@@ -449,7 +449,7 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("after %d != 0" % after)
         if r.get("derr1") != 0:
             errs.append("derr1 %s != 0" % r.get("derr1"))
-        # R7: the first Disable closed the gate exactly once (later
+        # the first Disable closed the gate exactly once (later
         # disable/release events are first-close no-ops); BOTH slot
         # cleanups complete — the second runs while the gate is already
         # closed; no Release caused the first edge (the Disable did), so
@@ -481,7 +481,7 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("after %d != 0" % after)
         if r.get("derr1") != 0:
             errs.append("derr1 %s != 0" % r.get("derr1"))
-        # R7: the Release was the single first edge (one gate close, one
+        # the Release was the single first edge (one gate close, one
         # cleanup, one release sink-stop).
         if r.get("obs_gate_c", -1) != 1:
             errs.append("obs_gate_c %s != 1" % r.get("obs_gate_c", -1))
@@ -515,7 +515,7 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("after %d != 0 (late pushes after disconnect)" % after)
         if r.get("derr1") != 0:
             errs.append("derr1 %s != 0" % r.get("derr1"))
-        # R7: the disconnect was the single first edge; exactly one
+        # the disconnect was the single first edge; exactly one
         # disconnect cleanup; no release in this scenario.
         if r.get("obs_gate_c", -1) != 1:
             errs.append("obs_gate_c %s != 1" % r.get("obs_gate_c", -1))
@@ -537,7 +537,7 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("pushes2 %s != 100" % r.get("pushes2"))
         if after != 0:
             errs.append("after %d != 0" % after)
-        # R7: session-1's disconnect closed the gate exactly once and ran
+        # session-1's disconnect closed the gate exactly once and ran
         # one disconnect cleanup; no release in this scenario.
         if r.get("obs_gate_c", -1) != 1:
             errs.append(
@@ -632,7 +632,7 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("obs_code 0x%02X != CONF_UNSUPPORTED" % r.get("obs_code"))
         if r.get("obs_reason") != 0:
             errs.append("obs_reason %d != NONE" % r.get("obs_reason"))
-        # R7: never streamed, never released.
+        # never streamed, never released.
         if r.get("obs_gate_c", 0) != 0:
             errs.append("obs_gate_c %s != 0 (no gate close)" % r.get("obs_gate_c"))
         if r.get("obs_rel", 0) != 0:
@@ -660,7 +660,7 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("obs_mts %d != 0" % r.get("obs_mts"))
         if r.get("obs_rej_reason", -1) != 0:
             errs.append("obs_rej_reason %d != NONE" % r.get("obs_rej_reason", -1))
-        # R7: exactly three first-time slot cleanups (2 initial + 1 reuse);
+        # exactly three first-time slot cleanups (2 initial + 1 reuse);
         # never streamed, so no gate close and no release sink-stop.
         if r.get("obs_rel", -1) != 3:
             errs.append("obs_rel %s != 3 (clean releases)" % r.get("obs_rel", -1))
@@ -694,7 +694,7 @@ def check_scenario(scenario, recv, cli, known):
             )
         if r.get("obs_rej_reason", -1) != 0x02:
             errs.append("obs_rej_reason %d != CODEC_DATA" % r.get("obs_rej_reason", -1))
-        # R7: both accepted configs were released exactly once each
+        # both accepted configs were released exactly once each
         # (cleanup 2); never streamed, so no gate close / release stop.
         if r.get("obs_rel", -1) != 2:
             errs.append(

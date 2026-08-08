@@ -222,7 +222,7 @@ bool flpr_acceptance_handle_msg(const struct flpr_msg *msg)
 			diag_timed_stall_start_count++;
 		}
 
-		/* ACK with packed value (exact echo, R1: request sequence
+		/* ACK with packed value (exact echo: request sequence
 		 * token echoed for correlation). */
 		struct flpr_msg ack =
 			flpr_control_ack_make(msg, FLPR_MSG_RING_STALL_ACK, msg->data);
@@ -242,7 +242,7 @@ bool flpr_acceptance_handle_msg(const struct flpr_msg *msg)
 	}
 
 	case FLPR_MSG_FAULT_HANG: {
-		/* Stage 4B: CPUAPP requests FLPR to hang.
+		/* CPUAPP requests FLPR to hang.
 		 * 1. Send ACK immediately (from IPC callback, ISR context OK).
 		 * 2. Set atomic flag.
 		 * 3. Wake main loop — main loop sees flag, disables IRQs, spins.

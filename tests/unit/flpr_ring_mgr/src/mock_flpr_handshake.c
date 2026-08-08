@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Mock implementation of the flpr_handshake API surface consumed by the
- * ring manager (R8: production slot only — reset ACK + consumer).  See
+ * ring manager (production slot only — reset ACK + consumer).  See
  * mock_flpr_handshake.h for controls.  The diagnostic handler slot is
  * owned by the flpr_acceptance suite's mock.
  */
@@ -64,7 +64,7 @@ int flpr_handshake_send_msg(const struct flpr_msg *msg)
 	mock_sent_count++;
 
 	/* Optional synchronous ACK echo for reset messages.
-	 * R1: the ACK echoes the request's sequence token so the
+	 * The ACK echoes the request's sequence token so the
 	 * production handler correlates by sequence. */
 	if (mock_auto_ack && msg->type == FLPR_MSG_RING_RESET && mock_captured_reset_ack) {
 		struct flpr_msg ack = {

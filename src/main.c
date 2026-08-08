@@ -206,18 +206,18 @@ static void platform_init(void)
 	flpr_handshake_init();
 
 #if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
-	/* R8: register the FLPR acceptance diagnostic message handler
+	/* Register the FLPR acceptance diagnostic message handler
 	 * (report/stall-ack/stress-pong/fault-hang-ack) with the
 	 * handshake module.  Boot wiring only — the acceptance
 	 * orchestration lives in src/flpr_acceptance.c. */
 	flpr_acceptance_init();
 #endif
 
-	/* Phase 6 Stage 2: init audio offload (FLPR ring transport).
+	/* Init audio offload (FLPR ring transport).
 	 * Non-blocking — may defer ring init if FLPR not ready yet. */
 	audio_offload_init();
 
-	/* Phase 6 Stage 4A: init FLPR runtime restart manager.
+	/* Init FLPR runtime restart manager.
 	 * Derives DT addresses, non-blocking. */
 	flpr_runtime_init();
 }
@@ -238,7 +238,7 @@ int main(void)
 		.platform_init = platform_init,
 #endif
 #if defined(CONFIG_USER_PAIRING_INPUT)
-		/* P5: under the full-stack gate the pairing-mode controller owns
+		/* Under the full-stack gate the pairing-mode controller owns
 		 * initial advertising (NORMAL) through the injected operations;
 		 * the legacy adapter remains only for the feature-off build. */
 		.advertising_start = pairing_control_start,

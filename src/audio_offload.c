@@ -30,7 +30,7 @@
  *   - recovery_attempts, recovery_fail_count, recovery_relapses,
  *     max_exhaustion_count, probation_cleared are lifetime
  *
- * Lifecycle safety (Stage 2 fix #4):
+ * Lifecycle safety:
  *   - After ANY blocking/waiting operation, before calling record_fault,
  *     re-check captured state/generation/epoch.  If stop/restart occurred
  *     during the block, count ONE stale+fallback and NEVER change
@@ -59,7 +59,7 @@ LOG_MODULE_REGISTER(audio_offload, LOG_LEVEL_INF);
 #include "flpr_runtime.h"
 
 /* Synchronous wait deadline.
- * Stage 1 measured max RTT ~5.3 ms → 8 ms leaves 2.7 ms margin.
+ * Measured max RTT ~5.3 ms → 8 ms leaves 2.7 ms margin.
  * Mode B (two LC3 decodes) stays well under 10 ms SDU interval. */
 #define OFFLOAD_DEADLINE_MS 8U
 
@@ -128,7 +128,7 @@ static uint32_t g_recovery_tries;
 static bool g_probation_active;
 static uint32_t g_probation_success;
 
-/* Stage 4B: runtime restart + heartbeat supervisor state */
+/* Runtime restart + heartbeat supervisor state */
 static uint32_t g_runtime_restart_count;
 static uint32_t g_runtime_restart_fail;
 static uint32_t g_runtime_restart_ms;
@@ -136,7 +136,7 @@ static uint32_t g_remote_epoch;
 static uint32_t g_heartbeat_dedup_count;
 static bool g_recovery_scheduled; /* prevent duplicate recovery scheduling */
 
-/* ── Stage 3B: ASRC offload state ────────────────────────────── */
+/* ── ASRC offload state ────────────────────────────────────── */
 
 /* Module-static scratch receive buffer — 481 stereo frames (1924 B).
  * Serialised by submit_lock (same mutex as identity submit). */
@@ -277,7 +277,7 @@ static bool lifecycle_check_before_fault(enum audio_offload_state captured_state
  * Central authoritative recovery scheduling helper.
  * Must be called UNDER g_lock with the key held.
  *
- * Contract (per handoff Stage 4B review):
+ * Contract:
  *   - Only schedules if state is RECOVERING AND g_recovery_scheduled is false.
  *   - Sets g_recovery_scheduled true exactly once — the scheduling decision.
  *   - Recovery work keeps it true while running and across delayed retries.
@@ -322,7 +322,7 @@ static void schedule_prep(k_timeout_t delay)
 	k_work_schedule_for_queue(&g_offload_wq, &g_prep_work, delay);
 }
 
-/* ── Heartbeat supervisor (Stage 4B) ───────────────────────────────
+/* ── Heartbeat supervisor ───────────────────────────────────────────
  * Invoked from flpr_handshake heartbeat work context (outside spinlock)
  * on healthy→unhealthy transition.  Dedup: only fires once per transition
  * episode.  The first timeout (8ms output deadline) normally detects a
@@ -537,7 +537,7 @@ prep_retry: {
 }
 }
 
-/* ── Recovery work (Stage 4B: staged approach) ─────────────────────
+/* ── Recovery work (staged approach) ────────────────────────────────
  * Runs on dedicated offload work queue — NEVER in BT callback.
  *
  * Staged algorithm:
@@ -811,7 +811,7 @@ int audio_offload_init(void)
 	g_probation_active = false;
 	g_probation_success = 0;
 
-	/* Stage 4B: recovery state */
+	/* Recovery state */
 	g_runtime_restart_count = 0;
 	g_runtime_restart_fail = 0;
 	g_runtime_restart_ms = 0;
@@ -947,7 +947,7 @@ void audio_offload_get_status(struct audio_offload_status *status)
 	status->probation_active = g_probation_active;
 	status->probation_success = g_probation_success;
 
-	/* Stage 4B: runtime restart + heartbeat supervisor */
+	/* Runtime restart + heartbeat supervisor */
 	status->runtime_restart_count = g_runtime_restart_count;
 	status->runtime_restart_fail = g_runtime_restart_fail;
 	status->runtime_restart_ms = g_runtime_restart_ms;
@@ -957,14 +957,14 @@ void audio_offload_get_status(struct audio_offload_status *status)
 	k_spin_unlock(&g_lock, key);
 }
 
-/* ── Stage 3B: ASRC offload ─────────────────────────────────────────
+/* ── ASRC offload ───────────────────────────────────────────────────
  *
- * audio_offload_process_asrc() is decomposed (R5) into private stage
+ * audio_offload_process_asrc() is decomposed into private stage
  * helpers with one transaction/capture struct, one shared fault
  * finalizer for every recovery-eligible post-lock fault, and one
  * success commit/linearization point.  Public behavior — counters,
  * transitions, errno, recovery scheduling, output mutation, probation,
- * RTT/cycles — is byte-identical to the pre-R5 monolithic body.
+ * RTT/cycles — is byte-identical to the monolithic body.
  */
 
 struct asrc_txn {
@@ -1011,7 +1011,7 @@ static int asrc_validate_args(const struct asrc_txn *t)
 static bool asrc_lifecycle_ok_locked(const struct asrc_txn *t)
 {
 	bool ok = lifecycle_check_before_fault(t->captured_state, t->captured_generation,
-						t->captured_epoch, t->sequence);
+					       t->captured_epoch, t->sequence);
 
 	if (!ok) {
 		g_asrc_stats.fallback_count++;
@@ -1321,27 +1321,27 @@ static int asrc_shadow_verify(struct asrc_txn *t, const struct flpr_consume_asrc
 	/* Import must succeed — pre_state was exported by cpuapp.
 	 * Import failure is a fault: do NOT fall through as pass. */
 	if (imp_ret != 0) {
-		return asrc_fault_finalize(t, -EFAULT, NULL,
-					   &g_asrc_stats.verify_fault_count, true);
+		return asrc_fault_finalize(t, -EFAULT, NULL, &g_asrc_stats.verify_fault_count,
+					   true);
 	}
 
 	size_t consumed, produced;
 	int16_t nl, nr;
-	int asrc_ret = audio_asrc_process(
-		&verify_ctx, t->input, OFFLOAD_EXPECTED_FRAMES, g_asrc_shadow,
-		FLPR_RING_PAYLOAD_CAPACITY_FRAMES, t->correction_ppm, verify_prev_l,
-		verify_prev_r, verify_prev_valid, &consumed, &produced, &nl, &nr);
+	int asrc_ret = audio_asrc_process(&verify_ctx, t->input, OFFLOAD_EXPECTED_FRAMES,
+					  g_asrc_shadow, FLPR_RING_PAYLOAD_CAPACITY_FRAMES,
+					  t->correction_ppm, verify_prev_l, verify_prev_r,
+					  verify_prev_valid, &consumed, &produced, &nl, &nr);
 
 	/* Compare return code. */
 	if (asrc_ret != 0) {
-		return asrc_fault_finalize(t, -EFAULT, NULL,
-					   &g_asrc_stats.verify_fault_count, true);
+		return asrc_fault_finalize(t, -EFAULT, NULL, &g_asrc_stats.verify_fault_count,
+					   true);
 	}
 
 	/* Compare frame count. */
 	if (produced != cr->output_frames) {
-		return asrc_fault_finalize(t, -EFAULT, NULL,
-					   &g_asrc_stats.verify_fault_count, true);
+		return asrc_fault_finalize(t, -EFAULT, NULL, &g_asrc_stats.verify_fault_count,
+					   true);
 	}
 
 	/* Compare every sample. */
@@ -1523,7 +1523,6 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 	txn.owns_submit_lock = false;
 	return 0;
 }
-
 
 void audio_offload_get_asrc_stats(struct audio_offload_asrc_stats *s)
 {

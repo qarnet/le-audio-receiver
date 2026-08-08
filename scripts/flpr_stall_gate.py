@@ -6,7 +6,7 @@ flpr_stall_gate.py — Automated FLPR timed-stall gate for nRF54L15.
 Single pyserial process owns UART for entire injection round-trip.
 No serial-MCP polling latency.
 
-Algorithm (v3 — timed 60ms auto-clear, no external on/wait/off):
+Algorithm — timed 60ms auto-clear, no external on/wait/off:
   1. Open configured console, preserve raw log to file.
   2. Send `flpr offload`; wait until State=ACTIVE AND success >= 500.
   3. Send `flpr ring stall_flpr_ms 1 60`.
@@ -46,7 +46,7 @@ from flpr_status import (  # noqa: E402
 
 # ── Regex patterns against current shell/log output ─────────────────────
 
-# Stage 2 timed stall ACK: "FLPR timed stall applied: bits=0x01 duration=60 ms"
+# Timed stall ACK: "FLPR timed stall applied: bits=0x01 duration=60 ms"
 RE_STALL_TIMED_ACK = re.compile(
     r"FLPR timed stall applied:\s*bits=0x([0-9a-fA-F]+)\s+duration=(\d+)\s+ms"
 )
@@ -421,9 +421,7 @@ class GateRunner:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="FLPR timed-stall gate automation (Stage 2)"
-    )
+    parser = argparse.ArgumentParser(description="FLPR timed-stall gate automation")
     parser.add_argument("--port", default="/dev/ttyACM0")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--timeout", type=float, default=30.0)

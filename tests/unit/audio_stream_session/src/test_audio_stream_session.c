@@ -808,7 +808,7 @@ ZTEST(audio_stream_session, test_no_lock_held_during_push)
 	zassert_equal(1U, fake_sink_push_count(), "push recorded");
 }
 
-/* ── R7: release/reset/admission matrix ─────────────────────────────
+/* ── Release/reset/admission matrix ─────────────────────────────
  * The R7 teardown coordinator composes these session primitives: a
  * slot releases once independently, a duplicate release is an
  * observable no-op, admission stays closed after teardown until rx_open,

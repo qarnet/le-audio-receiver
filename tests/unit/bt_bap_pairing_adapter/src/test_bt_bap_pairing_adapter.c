@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * P4: direct tests of the production Bluetooth pairing adapter
+ * Direct tests of the production Bluetooth pairing adapter
  * (src/bt_bap_pairing_adapter.c) against a fake backend.
  *
  * The adapter compiles against an injected immutable backend table; every

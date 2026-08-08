@@ -2,7 +2,7 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * Phase 4b.2: PCLK feedforward + buffer-phase PI controller.
+ * PCLK feedforward + buffer-phase PI controller.
  *
  * Two explicit inputs:
  *   1. audio_drift_frequency_error_update(local_clock_error_ppm)

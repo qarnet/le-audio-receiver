@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(test_flpr_acceptance_flpr)
 
-# R8: direct native suite for the FLPR-image acceptance module
+# Direct native suite for the FLPR-image acceptance module
 # (src/flpr/acceptance.c).  The module takes an injected send/wake
 # dependency table (no ipc_service/device/DT/irq references), so its
 # message/state logic — RING_TEST_START/STOP report cascade, RING_STALL

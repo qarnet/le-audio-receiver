@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LC3 source + PacedWriter lifecycle for bap_central (R9): liblc3
+"""LC3 source + PacedWriter lifecycle for bap_central: liblc3
 loader/encoder, sine generator, per-mode stream payloads, and the
 deterministic writer teardown tail.
 
@@ -9,7 +9,7 @@ D-Bus suites never require it.  The PacedWriter (bap_central_writer) is
 injected as a class so tests can substitute a fake writer/encoder.
 
 Every print and every per-mode payload is byte-compatible with the
-pre-split bap_central.py flow.
+bap_central.py flow.
 """
 
 import ctypes
@@ -42,8 +42,8 @@ def load_liblc3():
     """Load liblc3.so with fallback paths.
 
     Returns a ctypes.CDLL handle to liblc3.  Called lazily at the first
-    LC3Encoder construction (R9: pre-split imported at module load; now
-    lazy so stdlib-only tests never need liblc3).
+    LC3Encoder construction (lazy loading keeps stdlib-only tests free
+    of the liblc3 dependency).
     """
     # Paths to try, in order.
     NIX_LIBLC3_PATH = (
@@ -171,7 +171,7 @@ class StreamSession:
     endpoint module); ``start()`` snapshots it for the writer thread so
     teardown can never race a mid-frame read.  The writer keeps feeding
     the receiver through the release window; ``stop_writer()`` is
-    idempotent and preserves the exact pre-split bounded-join/force tail.
+    idempotent and preserves the exact bounded-join/force tail.
     """
 
     def __init__(
@@ -244,7 +244,7 @@ class StreamSession:
         """Main thread: sleep for the requested duration (the writer paces
         the frames).  Bounded by the duration; a writer error stops it
         early and is reported below.  KeyboardInterrupt is NOT fatal
-        (pre-split behavior: teardown still runs, exit 0)."""
+        (KeyboardInterrupt is not fatal: teardown still runs, exit 0)."""
         try:
             time.sleep(self.duration_s)
         except KeyboardInterrupt:

@@ -2,7 +2,7 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * Unit tests for audio_offload state machine — Phase 6 Stage 5.
+ * Unit tests for audio_offload state machine.
  *
  * Tests the production nRF54L15 code path with mocked flpr_ring_mgr
  * transport via audio_offload_process_asrc().  Uses direct invocation
@@ -20,7 +20,7 @@
  *   - Concurrent stop-during-submit with helper thread
  *   - Exact accounting: submit_count, fallback_count, busy_count
  *   - ASRC typed validation: sequence, frames, flags, state, CRC
- *   - Stage 4B recovery state machine
+ *   - Recovery state machine
  */
 
 #include "audio_offload.h"
@@ -55,7 +55,7 @@ extern enum flpr_consume_result mock_asrc_consume_result;
 extern struct flpr_consume_asrc_result mock_asrc_consume_data;
 extern int mock_asrc_consume_calls;
 
-/* ── Stage 4B recovery mock control variables (mock_ring_mgr.c) ───── */
+/* ── Recovery mock control variables (mock_ring_mgr.c) ───────── */
 extern int mock_runtime_restart_result;
 extern uint32_t mock_runtime_restart_calls;
 extern bool mock_runtime_restart_called;
@@ -207,7 +207,7 @@ static void setup_normal(void *fixture)
 	mock_wait_result = 0;
 	mock_wait_delay_ms = 0;
 
-	/* Stage 4B recovery mocks. */
+	/* Recovery mocks. */
 	mock_runtime_restart_result = 0;
 	mock_runtime_restart_calls = 0;
 	mock_runtime_restart_called = false;
@@ -643,7 +643,7 @@ ZTEST(audio_offload, test_is_healthy)
 {
 	zassert_true(audio_offload_is_healthy(), "healthy after init+start+prep");
 
-	/* NULL status snapshot is a deterministic no-op (R2: keeps the
+	/* NULL status snapshot is a deterministic no-op (keeps the
 	 * surviving get_status null-guard line covered after the
 	 * is_stopped() deletion). */
 	audio_offload_get_status(NULL);
@@ -921,7 +921,7 @@ ZTEST(audio_offload, test_recovery_bounded_5_attempts)
 	zassert_equal(s.recovery_attempts, base_attempts + 5, "still 5 successful recoveries");
 }
 
-/* ── Stage 4B recovery state machine tests ───────────────────────── */
+/* ── Recovery state machine tests ───────────────────────────────── */
 
 ZTEST(audio_offload, test_stage4b_short_reset_ok)
 {
@@ -1221,7 +1221,7 @@ static void teardown_asrc(void *fixture)
 	memset(test_output, 0, sizeof(test_output));
 }
 
-/* ── R5: second-thread submit-mutex contention + stage hooks ──────── */
+/* ── Second-thread submit-mutex contention + stage hooks ─────────── */
 
 K_SEM_DEFINE(busy_holder_locked, 0, 1);
 K_SEM_DEFINE(busy_holder_release, 0, 1);
@@ -1251,7 +1251,7 @@ static void stop_at_stage_hook(enum asrc_test_stage stage, void *user_data)
 	}
 }
 
-/* ── R5: table-driven recovery-eligible fault snapshots ───────────── */
+/* ── Table-driven recovery-eligible fault snapshots ──────────────── */
 
 struct asrc_fault_row {
 	const char *name;

@@ -2,7 +2,7 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * Phase 4b.2: unit tests for the PCLK-feedforward + buffer-phase PI
+ * Unit tests for the PCLK-feedforward + buffer-phase PI
  * drift controller.  Tests the production audio_drift.c directly.
  *
  * All tests use CONFIG_AUDIO_DRIFT_OUTPUT_CLAMP=500 (default).
@@ -264,7 +264,7 @@ ZTEST(drift, test_phase_integral_clamped)
 	}
 }
 
-/* ── T5: defined arithmetic across the full int32/int range ─────────
+/* ── Defined arithmetic across the full int32/int range ─────────
  * Every public input (frequency ppm and slab count) must be defined:
  * int64_t intermediates, rails clamped before narrowing, no signed
  * overflow (verified with -fsanitize=undefined in the focused run).
@@ -342,7 +342,7 @@ ZTEST(drift, test_exact_rail_boundary_and_clamp_overshoot)
 	zassert_equal(audio_drift_controller_update(SETPOINT), 500, "-501 clamps +500");
 }
 
-/* ── T5: long-run boundedness and setpoint stability ─────────────── */
+/* ── Long-run boundedness and setpoint stability ─────────────── */
 
 #define LONG_RUN 100000
 
@@ -387,7 +387,7 @@ ZTEST(drift, test_long_run_negative_extreme_bounded)
 	zassert_equal(audio_drift_get_ppm(), -500, "final -500");
 }
 
-/* ── T5: symmetric feedforward-rail phase unwind ──────────────────── */
+/* ── Symmetric feedforward-rail phase unwind ──────────────────── */
 
 ZTEST(drift, test_feedforward_rail_phase_unwind_symmetric)
 {
@@ -426,7 +426,7 @@ ZTEST(drift, test_feedforward_rail_phase_unwind_symmetric)
 	zassert_equal(audio_drift_get_ppm(), 500, "unwound integral reaches +rail");
 }
 
-/* ── T5: concurrent update / frequency / reset ─────────────────────
+/* ── Concurrent update / frequency / reset ─────────────────────
  * Real Zephyr threads hammering the controller while a reset thread
  * runs; k_thread_join returning proves no deadlock, and a deterministic
  * final reset leaves INIT / zero state.

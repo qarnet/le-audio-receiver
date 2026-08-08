@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(test_user_pairing_io)
 
-# P2: execute the REAL production user-pairing I/O adapter
+# Execute the REAL production user-pairing I/O adapter
 # (src/user_pairing_io.c) against the real input subsystem, the real
 # gpio-keys driver, and the real gpio-emul controller on native_sim, with
 # fake link implementations of the two P1 request APIs that record public

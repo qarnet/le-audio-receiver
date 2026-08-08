@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""T7 Stage 1+2: focused tests for scripts/check-test-matrix.py.
+"""Focused tests for scripts/check-test-matrix.py.
 
 Runs the real checker against temporary mini repositories/fixtures.
 Stdlib only.  Run directly:

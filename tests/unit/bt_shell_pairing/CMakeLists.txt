@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(test_bt_shell_pairing)
 
-# P5: execute the REAL production feature-on `bt unpair` command body
+# Execute the REAL production feature-on `bt unpair` command body
 # (src/bt_shell.c compiled under CONFIG_USER_PAIRING_INPUT) through the
 # real Zephyr dummy backend, with a fake link implementation of
 # pairing_mode_request_reset_sync that records the exact timeout argument

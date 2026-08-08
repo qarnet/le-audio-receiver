@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * T5: no-HFCLKAUDIO variant of the production APLL actuator suite.
+ * No-HFCLKAUDIO variant of the production APLL actuator suite.
  *
  * Compiles the same src/audio_clock_actuator_apll.c with
  * NRF_CLOCK_HAS_HFCLKAUDIO=0 and proves every API is a no-op with no

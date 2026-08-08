@@ -8,8 +8,9 @@
  * Index discipline: producer_idx and consumer_idx are MONOTONIC uint32_t
  * counters — they grow unbounded and only wrap at 2³².  Slot index is
  * counter % slot_count.  used = producer - consumer is always correct
- * (producer only advances when consumer cannot overtake it).  Full when
- * used >= slot_count - 1 (sentinel slot kept empty).  Empty when used == 0.
+ * (producer only advances when consumer cannot overtake it).  All
+ * SLOT_COUNT slots are usable — full when used >= slot_count.  Empty
+ * when used == 0.
  *
  * Memory layout (one direction, 8 KiB):
  *   [ ring_header 128 B ] [ slot_0 2016 B ] [ slot_1 ] [ slot_2 ] [ slot_3 ]
@@ -179,7 +180,7 @@ enum flpr_ring_dir {
  * Used slots  = producer - consumer  (correct even across uint32 wrap
  *               as long as distance ≤ slot_count).
  * Empty       = (producer == consumer).
- * Full        = (producer - consumer) >= (slot_count - 1).
+ * Full        = (producer - consumer) >= slot_count.
  */
 
 /** Number of slots currently occupied (consumer has not yet processed). */

@@ -499,7 +499,7 @@ class TestServiceResolutionMocked(unittest.TestCase):
 
 
 class TestSharedRemoteUuids(unittest.TestCase):
-    """R3: phase3's remote-UUID check reads the base module's REMOTE_UUIDS
+    """Phase3's remote-UUID check reads the base module's REMOTE_UUIDS
     (one source of truth for PACS/ASCS/VCS shared with the Phase 2 gate)."""
 
     def test_phase3_remote_uuids_come_from_base_module(self):

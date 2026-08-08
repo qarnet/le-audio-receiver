@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for scripts/check-build-contract.py (Phase T6).
+"""Tests for scripts/check-build-contract.py.
 
 Builds minimal temporary sysbuild fixtures (resolved .config + zephyr.dts
 for both targets incl. the netcore and FLPR images) and exercises the

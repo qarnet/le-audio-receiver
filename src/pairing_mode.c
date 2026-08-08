@@ -37,7 +37,7 @@
  *    notification advances it.
  *  - A disconnected notification in an idle phase (NORMAL/IDLE or
  *    BONDING/IDLE) with a real prior connection restarts advertising once
- *    through the injected advertising_start operation (P5: the main loop
+ *    through the injected advertising_start operation (the main loop
  *    no longer restarts on its own under the full-stack gate).  Stale or
  *    duplicate disconnects with no prior connection are a no-op; the
  *    idle restart never mutates mode/access/LED/generation.

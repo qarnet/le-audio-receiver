@@ -280,7 +280,7 @@ bool flpr_acceptance_stall_producer_active(void)
 }
 
 /* Shared stall helper: sends packed mask+duration, waits for exact ACK
- * echo.  R1: the complete transaction holds ring_data_lock through the
+ * echo.  The complete transaction holds ring_data_lock through the
  * ACK wait so a remote restart cannot clear token/armed state beneath
  * the waiter; the ACK handler takes engine lock only and can still wake
  * it. */
@@ -620,7 +620,7 @@ int flpr_acceptance_produce_stale_test(uint32_t stale_epoch)
 		return -EINVAL;
 	}
 
-	/* R1: hold ring_data_lock across the stale-test output-ring
+	/* Hold ring_data_lock across the stale-test output-ring
 	 * production (shell-only, after coordinated reset with FLPR
 	 * quiesced). */
 	struct k_mutex *data_lock = flpr_ring_mgr_data_lock();
@@ -833,7 +833,7 @@ int flpr_acceptance_send_fault_hang(uint32_t timeout_ms)
 		return -ETIMEDOUT;
 	}
 
-	/* R1: read the published flag under the lock after the take
+	/* Read the published flag under the lock after the take
 	 * (take-before-read ordering). */
 	{
 		k_spinlock_key_t key = k_spin_lock(&acc_lock);

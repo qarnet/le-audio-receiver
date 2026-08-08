@@ -6,7 +6,7 @@
  * Ring addresses resolved from devicetree, not hardcoded.
  * IPC control through flpr_handshake module's endpoint + handler API.
  *
- * R8: production runtime only.  Acceptance orchestration/state lives in
+ * Production runtime only.  Acceptance orchestration/state lives in
  * src/flpr_acceptance.c (CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS); core
  * produce/consume paths invoke narrow config-gated acceptance hooks for
  * the diagnostic counters, and the shared control-ACK engine
@@ -94,7 +94,7 @@ BUILD_ASSERT(RING_DT_BASE + RING_DT_SIZE == 0x20030000U,
 
 /* ── State ──────────────────────────────────────────────────────── */
 
-/* R1: ring_data_lock (mutex) serializes cpuapp-side bulk ring
+/* ring_data_lock (mutex) serializes cpuapp-side bulk ring
  * memory/header operations (produce fill/commit, consume copy/done,
  * reset, coordinated reset, stall transaction, remote-restarted header
  * reinit, stale-test production, status header snapshots) against
@@ -113,8 +113,8 @@ static uint32_t diag_notify_sent;
 static uint32_t diag_notify_err;
 static uint32_t diag_sem_gives;
 static uint32_t diag_sem_takes;
-static uint32_t diag_stale_notify; /* Stage 2: consumer notifications with wrong epoch */
-static uint32_t diag_sem_drained;  /* Stage 2: consume_sem tokens drained at reset */
+static uint32_t diag_stale_notify; /* consumer notifications with wrong epoch */
+static uint32_t diag_sem_drained;  /* consume_sem tokens drained at reset */
 
 /* ── Semaphore for consumer notifications ────────────────────────── */
 
@@ -282,7 +282,7 @@ int flpr_ring_mgr_coordinated_reset(uint32_t new_epoch, uint32_t timeout_ms)
 		return -EINVAL;
 	}
 
-	/* R1: hold ring_data_lock across the entire coordinated reset
+	/* Hold ring_data_lock across the entire coordinated reset
 	 * (send/ACK wait/local reset) so a concurrent produce/consume can
 	 * never mutate ring memory/headers mid-transaction.  The ACK
 	 * callback takes ring_lock only, so it can always wake the waiter. */
@@ -411,7 +411,7 @@ void flpr_ring_mgr_get_status(struct flpr_ring_status *status)
 	}
 	memset(status, 0, sizeof(*status));
 
-	/* R1: ring header snapshots need ring_data_lock so reset/reinit
+	/* Ring header snapshots need ring_data_lock so reset/reinit
 	 * cannot tear them mid-read. */
 	k_mutex_lock(&ring_data_lock, K_FOREVER);
 
@@ -458,7 +458,7 @@ enum flpr_produce_result flpr_ring_mgr_produce_block(const uint8_t *pcm_data, ui
 		return FLPR_PRODUCE_INVALID;
 	}
 
-	/* R1: hold ring_data_lock across produce begin/fill/commit so a
+	/* Hold ring_data_lock across produce begin/fill/commit so a
 	 * concurrent reset cannot zero headers/memory mid-produce. */
 	k_mutex_lock(&ring_data_lock, K_FOREVER);
 
@@ -547,7 +547,7 @@ enum flpr_consume_result flpr_ring_mgr_consume_block(uint8_t *pcm_out, uint16_t 
 	struct flpr_ring_slot_meta *meta;
 	int ret;
 
-	/* R1: hold ring_data_lock across consume begin/copy/done so a
+	/* Hold ring_data_lock across consume begin/copy/done so a
 	 * concurrent reset cannot zero headers/memory mid-consume. */
 	k_mutex_lock(&ring_data_lock, K_FOREVER);
 
@@ -650,7 +650,7 @@ int flpr_ring_mgr_wait_consume(uint32_t timeout_ms)
 	return k_sem_take(&consume_sem, K_MSEC(timeout_ms));
 }
 
-/* ── Remote restart (Stage 4B) ──────────────────────────────────────
+/* ── Remote restart ─────────────────────────────────────────────────
  *
  * Reinitialize rings after FLPR was reset by a remote restart.
  * Callable only while offload is RECOVERING/stopped — no active submit
@@ -667,7 +667,7 @@ int flpr_ring_mgr_wait_consume(uint32_t timeout_ms)
 
 int flpr_ring_mgr_remote_restarted(void)
 {
-	/* R1: hold ring_data_lock across the remote-restarted header
+	/* Hold ring_data_lock across the remote-restarted header
 	 * reinit (a known quiescence boundary: no active submit may race
 	 * this call). */
 	k_mutex_lock(&ring_data_lock, K_FOREVER);
@@ -736,7 +736,7 @@ enum flpr_produce_result flpr_ring_mgr_produce_asrc(const int16_t *pcm_data, uin
 		return FLPR_PRODUCE_INVALID;
 	}
 
-	/* R1: ring_data_lock across produce begin/fill/commit (see
+	/* ring_data_lock across produce begin/fill/commit (see
 	 * produce_block). */
 	k_mutex_lock(&ring_data_lock, K_FOREVER);
 
@@ -830,7 +830,7 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 	 * means the caller sees output_frames=0 on error. */
 	result->output_frames = 0;
 
-	/* R1: hold ring_data_lock across consume begin/copy/done. */
+	/* Hold ring_data_lock across consume begin/copy/done. */
 	k_mutex_lock(&ring_data_lock, K_FOREVER);
 
 	/* Epoch snapshot under ring_lock (reset cannot run: data lock). */
