@@ -178,15 +178,12 @@ keep the software stack current (see
 | Hardware | Host model | Linux status | Receiver status | Notes |
 |---|---|---|---|---|
 | **Intel Wi-Fi 6E AX210** | M.2 (NGFF) PCIe Wi-Fi card — not a plug-in USB stick; the Bluetooth function is exposed to the host over internal USB, so `lsusb` may show `Intel Corp. AX210 Bluetooth` | **Project-validated** | **Project-validated** | Validated as a BAP unicast source with this receiver on Linux via a **generic desktop PipeWire/WirePlumber UI** (the normal desktop flow), and also exercised with the repository's `scripts/bap_central.py` development/test tool. Project validation is the primary evidence for compatibility with this receiver. Intel's [specifications](https://www.intel.com/content/www/us/en/products/sku/239216/intel-wifi-6e-ax210-gig-embedded/specifications.html) list the Bluetooth function over USB. A practical Linux LE Audio report (Raspberry Pi 5 with an AX210 module, BlueZ/PipeWire/WirePlumber) is at [AK-Experiments](https://ak-experiments.blogspot.com/2025/08/bluetooth-le-audio-on-raspberry-pi-with.html). Needs a current kernel/BlueZ/PipeWire stack (BlueZ 5.85 or later) — see [Linux software requirements](#linux-software-requirements). |
-| **Recent adapters: Intel BE200 and recent NXP / MediaTek / Qualcomm models** | Varies (M.2, USB) | **Unverified** | **Unverified** | Research candidates only, not confirmed. Controller/firmware LE Audio support varies by vendor and model: per [Collabora's overview](https://www.collabora.com/news-and-blog/blog/2025/11/24/implementing-bluetooth-le-audio-and-auracast-on-linux-systems/), recent Intel controllers (BE200) and several other vendors implement LE Audio in recent models. Check the controller's actual capabilities (`cis-central`) before relying on it. |
+| **Intel BE200** | M.2 (NGFF) | **Unverified** | **Unverified** | Research candidate only, not confirmed. Per [Collabora's overview](https://www.collabora.com/news-and-blog/blog/2025/11/24/implementing-bluetooth-le-audio-and-auracast-on-linux-systems/), recent Intel controllers (BE200) implement LE Audio in recent models. Check the controller's actual capabilities (`cis-central`) before relying on it. |
 
 This project found **no plug-in USB HCI stick with verified Linux CIS
 support**. Generic "Bluetooth 5.3" or "Bluetooth 5.4" USB dongles do not
 prove LE Audio support — see the version-numbers caveat above — so do not
-buy one on that basis alone. Many cheap USB Bluetooth dongles use the
-Realtek **RTL8761BU** controller; community runtime reports show no
-`cis-central` support on it, so it is useful only as a counterexample and
-should not be treated as LE Audio-capable.
+buy one on that basis alone.
 
 ### Self-contained USB transmitters (secondary candidates)
 
