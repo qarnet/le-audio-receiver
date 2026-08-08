@@ -47,7 +47,70 @@ or "Bluetooth 5.4" USB dongles do not prove ISO support — a marketing version
 is not a capability claim (see [Mandatory controller
 contract](#mandatory-controller-contract)). USB sticks are eligible for
 evaluation on any bus (see [Bus independence](#bus-independence)); they just
-have not passed acceptance yet.
+have not passed acceptance yet. The current evaluation results follow: two
+ASUS sticks and the Nordic development kits are candidates under evaluation,
+and two UGREEN products are incompatible with the native path.
+
+### ASUS USB-BT540 — Candidate / under evaluation
+
+ASUS officially lists Linux, Bluetooth 5.4, LC3/LE Audio, and LE 2M
+([product page](https://www.asus.com/networking-iot-servers/adapters/all-series/usb-bt540/),
+[tech specs](https://www.asus.com/networking-iot-servers/wireless-adapters/all-series/usb-bt540/techspec/)).
+Chipset, VID:PID, `cis-central`, ISO MTU/count, and the dynamic receiver
+sequence (fresh boot, pairing, PACS/ASCS, 48 kHz negotiation, mono, two-CIS
+Mode A stereo, reconnect, cold-boot repeat) remain unrecorded. Vendor claims
+do not constitute acceptance — status is **Candidate / under evaluation**, not
+supported.
+
+### ASUS USB-BT600 — Candidate / under evaluation
+
+ASUS officially lists Linux, Bluetooth 6.0, and LC3/LE Audio
+([product page](https://www.asus.com/networking-iot-servers/wireless-adapters/all-series/usb-bt600/)).
+Chipset, VID:PID, `cis-central`, ISO MTU/count, availability/maturity, and the
+dynamic receiver sequence remain unrecorded. Status is **Candidate / under
+evaluation**, not supported.
+
+### UGREEN CM591 / product 90225 — Incompatible
+
+Public Linux USB evidence identifies the ATS2851 chipset and USB ID
+`10d7:b012`
+([linux-usb](https://www.spinics.net/lists/linux-usb/msg233858.html)), but
+available evidence does not establish CIS support. Normal Bluetooth operation
+does not prove LE Audio (see the [Mandatory controller
+contract](#mandatory-controller-contract)), and no project test exists. Status:
+**Incompatible** with the native Linux LE Audio source requirements — not
+project-tested, and no support or candidate claim is made.
+
+### UGREEN Bluetooth 6.0 model 75073 — Incompatible
+
+The vendor product listing documents Windows only, Linux unsupported, SBC/AAC
+codecs, and LE Audio unsupported
+([Amazon listing](https://www.amazon.com/UGREEN-Bluetooth-Receiver-Headphone-Keyboard/dp/B0DYV5MPLF)).
+Status: **Incompatible** for this documented Linux native-HCI path. This is a
+different product from UGREEN's separate USB-C self-contained LE Audio
+transmitter (which runs the stack in dongle firmware and is outside the
+native-HCI contract); do not conflate the two.
+
+### Nordic nRF5340 DK (HCI UART controller) — Candidate / under evaluation
+
+NCS v3.3.0 supports running the Bluetooth controller on cpunet with H4 UART on
+cpuapp, and this repository's `dongle/` directory is a working
+source-controller implementation. USB caveat: NCS v3.3.0's Zephyr USB device
+HCI class (`subsys/usb/device_next/class/bt_hci.c`) cannot carry LE HCI ISO —
+the controller-to-host TX path handles EVT and ACL only and drops HCI ISO
+packet type `0x05`, and the bulk OUT path is hard-coded to ACL buffers and ACL
+header parsing. (This is not a missing-USB-isochronous-endpoints issue; those
+descriptors concern SCO.) HCI UART is the supported route. Status: **Candidate
+/ under evaluation** as a native HCI development adapter; the hardware source
+path is not project-validated — existing public evidence does not establish
+full dynamic acceptance.
+
+### Nordic nRF54L15 DK (HCI UART controller) — Candidate / under evaluation
+
+NCS v3.3.0's `samples/bluetooth/hci_uart` supports
+`nrf54l15dk/nrf54l15/cpuapp`, and the H4 transport handles packet type `0x05`
+(ISO). Status: **Candidate / under evaluation** as a native HCI development
+adapter; dynamic Linux and receiver validation remains required.
 
 ## Adapter requirements and evaluation
 
@@ -156,6 +219,12 @@ the evidence (test logs, `btmon` captures, result documents).
   A single public report does not qualify.
 - **Unverified** — no project test and no vendor confirmation for the specific
   claim.
+- **Incompatible / not eligible** — documented evidence (a vendor listing,
+  chipset/ID evidence, or transport limits) shows the device cannot serve as a
+  native Linux LE Audio HCI source, or available evidence does not establish
+  the mandatory controller contract. No project test is needed for this
+  verdict; it is distinct from **Rejected** (project-evaluated and failed) and
+  from **Unverified** (no evidence either way).
 
 **No candidate gets Supported status from feature bits or vendor claim alone.**
 
