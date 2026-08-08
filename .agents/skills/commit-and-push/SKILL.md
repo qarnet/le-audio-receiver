@@ -38,24 +38,33 @@ Testing is **required** unless all of the following are true:
 
 When testing is required:
 
-3a. **Build natively**
+3a. **Build natively** — from the repo root, in the dev shell (`direnv allow`
+or `nix develop`):
+
 ```bash
-nrfutil sdk-manager toolchain launch --ncs-version v3.3.0 -- bash -c "cd ~/ncs/v3.3.0 && west build -b nrf5340dk/nrf5340/cpuapp --sysbuild --pristine"
+fw-build-5340
 ```
 
-Must succeed with `build/merged.hex` present.
+Must succeed; the merged sysbuild hexes are written to
+`build/nrf5340/merged.hex` and `build/nrf5340/merged_CPUNET.hex`.
 
-> Use `--pristine` after Kconfig or DT changes to avoid stale CMake cache
-> issues.
+> Use `--pristine` (the helper already does) after Kconfig or DT changes to
+> avoid stale CMake cache issues.
 
 3b. **Check for warnings**
 Scan the build output for compiler warnings (especially `-Werror` violations,
 `-Wint-conversion`, or `-Wimplicit-function-declaration`).  If any warnings
-appear, treat them as failures and fix them.
+appear, treat them as failures and fix them.  Kconfig "assigned value but got"
+warnings are hard errors per repo policy; documented NCS v3.3.0 diagnostics
+(PARTITION_MANAGER deprecation, experimental SW Split symbols, watchdog
+"No SOURCES given" on nRF54L15, `__ASSERT()` informational) are not
+actionable at repo level.
 
 If the change touches audio pipeline (LC3, I2S, BAP stream receive) or
-board-level config, ask the user whether they want to flash and verify on
-the real device.
+board-level config, verify on hardware using the autonomous central
+(`scripts/bap_central.py` via the nRF5340DK `hci_uart` central attached as
+`hci0`) — no human-operated central is allowed.  Ask the user only for a true
+physical observation (audibility) that an agent cannot make.
 
 If any test step fails, report the failure and stop.  Do not commit.
 
@@ -66,17 +75,16 @@ contain a coherent, self-contained change.  Examples:
 
 | Logical unit | Typical files |
 |--------------|---------------|
-| LC3 decoder fix | `src/main.c` |
-| I2S driver fix | `src/audio_i2s.c`, `src/audio_i2s.h` |
-| Build-system change | `CMakeLists.txt`, `prj.conf`, `sysbuild.cmake`, `sysbuild.conf` |
-| Board config change | `boards/*.overlay` |
-| West manifest | `west.yml` |
+| LC3 decoder fix | `src/audio_decode.c` |
+| I2S driver fix | `src/audio_i2s.c` |
+| Build-system change | `CMakeLists.txt`, `prj.conf`, `sysbuild.cmake` |
+| Board config change | `boards/*.overlay`, `boards/*.conf` |
 | Documentation update | `.md` files, `AGENTS.md`, `README.md` |
 
 If a file contributes to more than one logical unit, split the changes into
 separate commits using `git add -p`.
 
-**Ordering principle:** infrastructure first (configs, west manifest), then
+**Ordering principle:** infrastructure first (configs, build), then
 library code, then application code, then docs.
 
 **Rules:**
@@ -95,6 +103,8 @@ Follow the existing commit-message style (check `git log --oneline -5`):
 Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `build`.
 
 Messages are lowercase, no trailing period, 50-72 chars for the summary.
+Never append tool/agent attribution footers (`Co-Authored-By`, "Generated
+with ...").
 
 ```bash
 git add <files for commit 1>
@@ -150,7 +160,9 @@ git push --set-upstream origin <branch>
 
 ## Notes
 
-- Build runs natively via nrfutil toolchain launcher.
+- Build from the repo root in the NCS v3.3.0 dev shell (`direnv allow` /
+  `nix develop`); helpers are `fw-build-5340`, `fw-build-54l15`,
+  `fw-build-dongle`.
 - West-managed repos (zephyr, nrf, modules) live in `~/ncs/` on the host
   and are **never** committed to this repo.
 - Never commit generated files: `build/`, `.west/`, `zephyr/`, `nrf/`,

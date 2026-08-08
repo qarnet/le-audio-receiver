@@ -79,20 +79,23 @@ current refactoring track R0–R10. Read it before structural changes.
 `docs/design.md` remains the historical architecture and evidence document,
 not the active structural plan.
 
-Current status: **T0–T8 COMPLETE/ACCEPTED** — behavior locked on the exact
-production code `971e6a4`; T8 canonical gate **47 PASS / 0 FAIL / 47
-TOTAL**, coverage baseline `1a5842d` (26 files), builds 3/3, build
-contract 76/76, both hardware matrices pass
-(`docs/testing/pre-refactor-hardware-baseline.md` — historical T8
-evidence; see R10 closeout below for the current authoritative state).
-**Refactor track R0–R10 COMPLETE/ACCEPTED (2026-08-06)** — R10 (final
-integration and documentation closeout) closed the track: canonical gate
-**55 PASS / 0 FAIL / 55 TOTAL** (31 twister + 5 exec-only + 16 Python +
-coverage + matrix + BSim), coverage population **33**
-(4024/4402 lines, 1695/2356 branches, 289/289 functions, gcovr 8.4 /
-gcov (GCC) 14.3.0, committed baseline `54a6b8e` — no migration in R10),
-builds 3/3, build contract **79/79**, BSim Stage 1 pins byte-identical,
-zero new/actionable warnings, and the full R10 hardware matrix passed on
+Current status: **canonical gate 62 PASS / 0 FAIL / 62 TOTAL** on the
+clean tree (35 twister + 5 exec-only + 19 Python + coverage + matrix +
+BSim; clean-tree run recorded in
+`docs/development/documentation-hygiene-behavior-fix-results.md` at
+`b8bd633`), coverage population **36** (4665/5121 lines, 2023/2820
+branches, 357/357 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
+baseline unchanged), builds 3/3, build contract **95/95**, BSim Stage 1
+pins byte-identical, and P1–P8 user pairing control ACCEPTED (nRF54L15
+enabled, nRF5340 feature-off).  Historical baselines: T0–T8 locked
+behavior on production code `971e6a4` (T8 canonical gate **47 PASS /
+0 FAIL / 47 TOTAL**, coverage baseline `1a5842d` (26 files), build
+contract 76/76 — `docs/testing/pre-refactor-hardware-baseline.md`); the
+R0–R10 refactor track closed 2026-08-06 with gate **55 PASS / 0 FAIL /
+55 TOTAL** (31 twister + 5 exec-only + 16 Python + coverage + matrix +
+BSim), coverage population **33** (4024/4402 lines, 1695/2356 branches,
+289/289 functions, committed baseline `54a6b8e`), build contract
+**79/79**, and the full R10 hardware matrix passed on
 both targets.  R8/R9 acceptance details and the final evidence:
 `docs/development/refactor-r10-results.md`, `refactor-r9-results.md`,
 `refactor-r8-results.md`, and `STATUS.md`.
