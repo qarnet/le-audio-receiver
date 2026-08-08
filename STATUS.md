@@ -1,7 +1,20 @@
-# STATUS — le-audio-receiver — 2026-08-07
+# STATUS — le-audio-receiver — 2026-08-08
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
+
+> **Current state (2026-08-08):** canonical gate **62 PASS / 0 FAIL /
+> 62 TOTAL** on the clean tree (35 twister + 5 exec-only + 19 Python +
+> coverage + matrix + BSim Stage 1; clean-tree run recorded in
+> `docs/development/documentation-hygiene-behavior-fix-results.md` at
+> `b8bd633`), coverage population **36** (4665/5121 lines, 2023/2820
+> branches, 357/357 functions, committed baseline unchanged), build
+> contract **95/95**, BSim 17 scenarios / 26 runs pins byte-identical,
+> P1–P8 user pairing control ACCEPTED (nRF54L15 enabled, nRF5340
+> feature-off).  The R0–R10 refactor figures below (gate 55/0/55,
+> population 33, contract 79/79) are the **historical** R10 baseline
+> (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
+> for their own commits.
 
 ## User pairing control — P1 ACCEPTED (2026-08-07)
 
@@ -413,17 +426,22 @@ not observable (no speakers/headphones connected; technical counters
 clean).  Warnings: zero new/actionable; the only log `LOG_WRN` is the
 documented 5340 stale central-side bond `Pairing failed: 4` (cleared via
 receiver `bt unpair`, not a receiver fault).  Deviations: rows 5/6/7
-button transitions also driven via CLI at user request (shell and button
-share the same transition owner); three clean XIAO reboots during the
+button transitions also driven via CLI (shell and button share the same
+transition owner); the exact instrumented physical-hold ordering was not
+captured in the same run — the user confirmed the threshold/LED
+observations, and the CLI produced the instrumented RESET ordering via
+the same transition owner; three clean XIAO reboots during the
 user's button session (no FATAL; physical RST behavior is plan
 NON-SCOPE).  No mass erase / recovery / probe-rs; bonds cleared only via
 production `bt unpair`.  BSim/software evidence unchanged (P7 gate
 59/59, pins stand); no rerun needed.  `git diff --check` clean.
 
-## Refactoring track — R10 COMPLETE/ACCEPTED — TRACK R0–R10 COMPLETE (2026-08-06)
+## Refactoring track — R10 COMPLETE/ACCEPTED — TRACK R0–R10 COMPLETE (2026-08-06, historical)
 
 **R10 — final integration and documentation closeout — COMPLETE/
-ACCEPTED.**  Docs/evidence only: no production/test behavior change, no
+ACCEPTED.**  Historical refactor-baseline record (2026-08-06): the
+current authoritative state is the P8 closeout and the 62-child gate
+above.  R10 was docs/evidence only: no production/test behavior change, no
 coverage baseline regeneration (population 33; committed baseline
 `54a6b8e` byte-identical), no BSim re-pin (17 scenarios / 26 runs, pins
 byte-identical).  Handoff: `docs/development/refactor-r10-handoff.md`;

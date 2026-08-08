@@ -157,8 +157,9 @@ reconnect in rows 5/8 (bonds survive BONDING/NORMAL cycles).
 
 ### Row 5 — preserved-bond reconnect; Mode B 30 s — PASS
 
-User requested CLI-driven tests (button interrupt/timing already verified
-by the LED observations).  Preserved-bond reconnect (`--preserve-bond`,
+CLI-driven tests produced the instrumented RESET ordering (button
+interrupt/timing were already verified by the user's LED observations).
+Preserved-bond reconnect (`--preserve-bond`,
 no re-pair): `Connected` → `Security changed: level 2 err 0 bonded 1` →
 NORMAL without disconnect.  Mode B (single stereo ASE
 `chan_count=2` SDU 240): central 4000 frames / 40.00 s, exit 0; receiver
@@ -257,13 +258,15 @@ recovery, settings-partition erase (bonds cleared only via production
 
 ## Deviations and notes
 
-- **Rows 5/6/7 button presses driven via CLI after the user's initial
-  LED observations** — the user explicitly requested CLI-driven tests
-  after verifying button interrupt + timekeeping via the LED pattern
-  observations (rows 2/3/6 timing).  Shell `bt unpair` and the button
-  share the same pairing-mode transition owner by design (P1), so the
-  CLI RESET evidence exercises the same transition machinery; the
-  button's 3 s / 8 s thresholds were confirmed by the user's LED
+- **Rows 5/6/7 button transitions driven via CLI after the user's initial
+  LED observations.**  The user confirmed the physical-button threshold/
+  LED observations (rows 2/3/6 timing: short-press LED off, 3 s slow
+  blink, 8 s rapid then slow); the instrumented RESET ordering in rows
+  5/6/7 was produced by the CLI (`bt unpair`), because shell and button
+  share the same pairing-mode transition owner by design.  The exact
+  instrumented physical-hold ordering was not captured in the same run
+  — the CLI RESET evidence exercises the same transition machinery, and
+  the button's 3 s / 8 s thresholds were confirmed by the user's LED
   observations.
 - **Three clean XIAO reboots occurred during the user's button session**
   (boot logs show no FATAL/error).  Each reboot returns NORMAL —

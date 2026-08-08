@@ -1,5 +1,13 @@
 # Workstation transfer status — pre-refactor testing track
 
+> **Historical snapshot.**  This document records the pre-refactor
+> (T0–T8) and refactor-track (R0–R10) transfer state as of 2026-08-06.
+> It is retained as dated evidence for the commits it documents.  The
+> current authoritative state is the P1–P8 user pairing control closeout
+> (2026-08-08): canonical gate **62 PASS / 0 FAIL / 62 TOTAL**, coverage
+> population 36, build contract 95/95, BSim 17 scenarios / 26 runs — see
+> `STATUS.md` and `docs/development/user-pairing-control-p8-results.md`.
+
 Date: 2026-08-06 (R10 COMPLETE — refactor track R0–R10 ACCEPTED; T0–T8
 historical).
 

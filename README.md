@@ -152,7 +152,7 @@ CJMCU-1334 outputs **line level** (no headphone amp on the breakout). Connect:
 ```
 
 The central test driver (`scripts/bap_central.py`) is split into
-single-domain modules (R9): device resolution
+single-domain modules: device resolution
 (`bap_central_device.py`), agent/pairing/connect strategies
 (`bap_central_security.py`), the BAP source endpoint + acquire
 (`bap_central_endpoint.py`), and the LC3 source/writer lifecycle
@@ -253,11 +253,11 @@ docs for the full contract and hardware acceptance evidence.
 |------|---------|
 | `src/main.c` | Hardware wiring, watchdog, and advertising-loop adapter (fatal boot order lives in `app_lifecycle.c`) |
 | `src/app_lifecycle.c` | Pure fatal boot coordinator: ordered init, cold reboot, advertising restart |
-| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising (R6: app audio receive state lives in `audio_stream_session.c`; R7: one private teardown transition owner — first close wins, per-slot release once, close→drain→sink-stop→offload-stop→reset) |
+| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising (app audio receive state lives in `audio_stream_session.c`; one private teardown transition owner — first close wins, per-slot release once, close→drain→sink-stop→offload-stop→reset) |
 | `src/bt_pairing_policy.c` | Pure OPEN/BONDED_ONLY policy snapshot; Bluetooth controller work stays in `bt_bap.c` |
-| `src/pairing_mode.c` | Portable NORMAL/BONDING/RESETTING transition owner (P1) — sole owner of modes, LED patterns, supersession, fatal recovery |
-| `src/user_pairing_io.c` | User button/LED adapter (P2) — debounced hold thresholds (3 s / 8 s) via gpio-keys, LED drive |
-| `src/bt_bap_pairing_adapter.c` | Bluetooth backend for the pairing-mode controller (P4/P5): access policy, advertising suspend/start, disconnect, bond deletion |
+| `src/pairing_mode.c` | Portable NORMAL/BONDING/RESETTING transition owner — sole owner of modes, LED patterns, supersession, fatal recovery |
+| `src/user_pairing_io.c` | User button/LED adapter — debounced hold thresholds (3 s / 8 s) via gpio-keys, LED drive |
+| `src/bt_bap_pairing_adapter.c` | Bluetooth backend for the pairing-mode controller: access policy, advertising suspend/start, disconnect, bond deletion |
 | `src/audio_modea.c` | Bounded two-CIS event assembler and per-channel PLC |
 | `src/audio_iso_seq.c` | Pure per-CIS omitted-callback sequence tracker |
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
@@ -284,9 +284,9 @@ docs for the full contract and hardware acceptance evidence.
 | `src/flpr_handshake.{c,h}` | cpuapp↔FLPR boot handshake + VEVIF signalling |
 | `src/flpr_protocol.h` | Shared protocol constants (ring layout, commands) |
 | `src/flpr_ring.{c,h}` | SPSC ring buffer (shared SRAM) |
-| `src/flpr_ring_mgr.{c,h}` | Ring manager production core: paired rings, reset, typed ASRC produce/consume, notify, wait, remote restart (R8) |
-| `src/flpr_acceptance.{c,h}` | Cpuapp FLPR acceptance module (R8): ring test, stalls, stale produce, report aggregation, stress, fault hang, gates 1–6 — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated |
-| `src/flpr_control_ack.{c,h}` | Shared control-ACK correlation engine (R8): one owner for reset + stall ACK correlation |
+| `src/flpr_ring_mgr.{c,h}` | Ring manager production core: paired rings, reset, typed ASRC produce/consume, notify, wait, remote restart |
+| `src/flpr_acceptance.{c,h}` | Cpuapp FLPR acceptance module: ring test, stalls, stale produce, report aggregation, stress, fault hang, gates 1–6 — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated |
+| `src/flpr_control_ack.{c,h}` | Shared control-ACK correlation engine: one owner for reset + stall ACK correlation |
 | `src/flpr_runtime.{c,h}` | FLPR runtime: IPC submit, watchdog, fault detection |
 | `src/flpr_audio_process.{c,h}` | FLPR audio block wrapper (metadata + PCM) |
 | `src/flpr_cache.c` | Cache maintenance for shared SRAM (ARMv8-M / RISC-V) |
@@ -295,15 +295,15 @@ docs for the full contract and hardware acceptance evidence.
 | `src/audio_shell.c` | Shell diagnostics (`audio status`, `audio perf`, stop/reset commands) |
 | `src/bt_shell.c` | Shell command `bt unpair` (pairing-mode reset, both targets) |
 | `src/flpr_shell.c` | FLPR production diagnostics (`flpr status/offload/runtime/restart`, nRF54L15) |
-| `src/flpr_acceptance_shell.c` | FLPR acceptance shell parsing/printing (`flpr ring *`, `flpr stress`, `flpr hang`) — delegates to `src/flpr_acceptance.c`, `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated (R8) |
-| `src/flpr/acceptance.{c,h}` | FLPR-image acceptance handlers (R8): RING_TEST/STALL/STRESS/FAULT_HANG + diagnostic hooks — `CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS` |
+| `src/flpr_acceptance_shell.c` | FLPR acceptance shell parsing/printing (`flpr ring *`, `flpr stress`, `flpr hang`) — delegates to `src/flpr_acceptance.c`, `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated |
+| `src/flpr/acceptance.{c,h}` | FLPR-image acceptance handlers: RING_TEST/STALL/STRESS/FAULT_HANG + diagnostic hooks — `CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS` |
 | `src/audio_volume.{c,h}` | VCP volume control |
-| `src/audio_stream_session.{c,h}` | App-owned BAP sink receive/session state (R6): validated codec shape, decoder contexts, per-CIS ISO sequence trackers, Mode A assembler, receive counters, and decode/conceal/volume/push orchestration with admission/lease discipline |
+| `src/audio_stream_session.{c,h}` | App-owned BAP sink receive/session state: validated codec shape, decoder contexts, per-CIS ISO sequence trackers, Mode A assembler, receive counters, and decode/conceal/volume/push orchestration with admission/lease discipline |
 | `boards/ebyte/e83_nrf5340/` | Custom nRF5340 board: I2S0 pins, ACLK 12.288 MHz, QSPI disabled |
 | `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2, FLPR IPC SRAM, TIMER20 reserved |
 | `prj.conf` | App Kconfig |
 | `sysbuild.cmake` | Applies SW Split DT + Kconfig overlays to `hci_ipc` |
-| `tests/unit/` | 31 twister C suites + 5 exec-only C suites + 16 Python suites (52 unit children; 55 gate children with coverage + matrix + BSim) |
+| `tests/unit/` | 35 twister C suites + 5 exec-only C suites + 19 Python suites (59 unit children; 62 gate children with coverage + matrix + BSim) |
 | `tests/bsim/` | BabbleSim Stage 1: 17-scenario T4+R7 BAP matrix (accepted regular local gate); scenario matrix, run counts, and pinned hashes live in `tests/bsim/stage1-scenarios.json` |
 | `scripts/test-all.sh` | Canonical full local gate (all C + Python + BSim Stage 1); suite discovery via `scripts/test_inventory.py` (single source shared with `test-coverage.sh` and `check-test-matrix.py`) |
 | `docs/design.md` | Historical architecture and evidence document (Phases 0–6); active plan of record is `docs/development/refactor-plan.md` |
@@ -318,8 +318,7 @@ docs for the full contract and hardware acceptance evidence.
   summary, key files, build/flash/console conventions). Also the source the
   agents read; `CLAUDE.md` is a symlink to it.
 - **`docs/development/refactor-plan.md`** — the accepted plan of record for
-  the current refactoring track (R0–R10, COMPLETE/ACCEPTED 2026-08-06),
-  including gate levels and the canonical 55-child inventory.
+  the refactoring track (R0–R10, COMPLETE/ACCEPTED 2026-08-06).
 - **`docs/design.md`** — historical architecture and evidence (what works,
   findings, Phases 0–6). Start here for the "why".
 - **`docs/flashing.md`** — OpenOCD, dual-core ordering, APPROTECT, recovery.

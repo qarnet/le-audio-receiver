@@ -1,8 +1,8 @@
 # Behavior contract — pre-refactor baseline
 
-Version: T8, 2026-08-04 (R7 ownership clarification 2026-08-05; R10
-baseline provenance update 2026-08-06 — ownership clarifications only,
-no outcome weakened).  Each
+Version: current, 2026-08-08 (P1–P8 user pairing control closed;
+historical refactor/pre-refactor provenance notes retained per
+contract).  Each
 contract carries a stable ID.  Breaking a contract without a handoff that
 updates this document is a regression.
 
@@ -255,8 +255,8 @@ closed-to-open transition of the audio-path gate; a duplicate start while
 the gate is already open returns false, so the caller's one-time open work
 (perf reset, offload start, observer event, session receive admission via
 `audio_stream_session_rx_open()`) runs exactly once.  The expanded
-`tests/unit/lifecycle/` matrix (28 tests after the R6 occupancy narrowing)
-pins duplicate starts (single-ASE and Mode A), close-then-start edges,
+`tests/unit/lifecycle/` matrix (33 tests after the teardown-owner
+expansion) pins duplicate starts (single-ASE and Mode A), close-then-start edges,
 configure/start/close/reconfigure/start permutations, release-then-slot-
 reuse, reset from closed/partial/open states, repeated open/close cycles,
 inert unconfigured starts, and the R1 forced-close latch (first-close
@@ -511,7 +511,7 @@ stream generation cannot feed drift with outdated frequency measurements.
 
 ### CLOCK-008 — nRF54 timing measurement contract (T5)
 
-The production nRF54 timing path (`tests/unit/timing_nrf54`, 18 tests
+The production nRF54 timing path (`tests/unit/timing_nrf54`, 21 tests
 compiling `audio_timing_nrf54.c` + `audio_timing_math.c` against mocked
 GRTC/GPPI/TIMER HALs) pins: GRTC allocation failure returns the exact error
 with no later setup; GPPI allocation failure disables the GRTC compare/
@@ -713,9 +713,9 @@ nonfatal and void.
 ### APP-007 — Shell diagnostic formatting (T6)
 
 The production shell command bodies in `src/audio_shell.c` are executed
-directly by `tests/unit/audio_shell/` (13 tests, perf enabled),
+directly by `tests/unit/audio_shell/` (15 tests, perf enabled),
 `tests/unit/audio_shell_noperf/` (10 tests, perf disabled), and
-`tests/unit/audio_shell_nrf54/` (16 tests, FLPR fields) through the real
+`tests/unit/audio_shell_nrf54/` (43 tests, FLPR fields) through the real
 Zephyr dummy backend and `shell_execute_cmd()` against mocked subsystem
 APIs:
 
@@ -931,24 +931,27 @@ accepted:
 
 ## Coverage and test-matrix gate contract (`CV-*`)
 
-Version: T8, 2026-08-04.  Enforced by `scripts/test-coverage.sh` (default
+Enforced by `scripts/test-coverage.sh` (default
 mode) and `scripts/check-test-matrix.py --coverage-json`, both ordered
 children of `scripts/test-all.sh`.
 
 ### CV-001 — Numeric coverage never decreases
 
-The committed `tests/coverage-baseline.json` (schema v1, currently the R8
-migration committed in **`54a6b8e`**, generated on the clean
-implementation commit `9e5d82a`; lines **4024/4402**, branches
-**1695/2356**, functions **289/289** in the **33-file** numeric
+The committed `tests/coverage-baseline.json` (schema v1, currently the P5
+migration committed in **`94c2742`**, generated on the clean
+implementation commit `b1885d2`; lines **4665/5121**, branches
+**2023/2820**, functions **357/357** in the **36-file** numeric
 population) is enforced
 with integer cross multiplication:
 `current_covered/current_total >= baseline_covered/baseline_total` for the
 overall lines and branches totals and for every per-file lines, branches,
 and functions record.  Baseline provenance migrated mechanically through
-the refactor track: R4 (`b82ab81`, shell split, population 26 → 29), R6
-(`67d2a18`, receive-pipeline split, 29 → 30), R8 (`54a6b8e`, FLPR
-diagnostic split, 30 → 33); R10 made no migration.  The recorded gcovr/gcov versions are also enforced:
+the refactor and pairing-control tracks: R4 (`b82ab81`, shell split,
+population 26 → 29), R6 (`67d2a18`, receive-pipeline split, 29 → 30), R8
+(`54a6b8e`, FLPR diagnostic split, 30 → 33), P1 (`14be974`, pairing-mode
+owner, 33 → 34), P2 (`495b3a7`, input/LED adapter, 34 → 35), P4
+(`c347710`, Bluetooth pairing adapter, 35 → 36); P3/P5 kept the same
+population and P5 committed the current baseline at `94c2742`.  The recorded gcovr/gcov versions are also enforced:
 in baseline mode the current tool version first lines must equal the
 baseline's `gcovr_version`/`gcov_version` when those fields are present
 (recorded: gcovr 8.4 / gcov (GCC) 14.3.0;

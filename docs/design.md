@@ -13,14 +13,21 @@ The accepted plan of record for the refactoring track (R0–R10) is
 COMPLETE/ACCEPTED — **historical evidence** (canonical gate 47 PASS /
 0 FAIL / 47 TOTAL, coverage baseline `1a5842d`, builds 3/3, build
 contract 76/76, both hardware matrices —
-`docs/testing/pre-refactor-hardware-baseline.md`).  The current
-authoritative state is the **R0–R10 refactor track COMPLETE/ACCEPTED
-(2026-08-06)**: canonical gate **55 PASS / 0 FAIL / 55 TOTAL** (31
+`docs/testing/pre-refactor-hardware-baseline.md`).  The R0–R10 refactor
+track COMPLETE/ACCEPTED (2026-08-06) is the **historical refactor
+baseline**: canonical gate **55 PASS / 0 FAIL / 55 TOTAL** (31
 twister + 5 exec-only + 16 Python + coverage + matrix + BSim), coverage
 population **33** (4024/4402 L, 1695/2356 B, 289/289 F; committed
 baseline `54a6b8e`), builds 3/3, build contract 79/79, BSim Stage 1 17
 scenarios/26 runs pins byte-identical — final evidence in
-`docs/development/refactor-r10-results.md` and `STATUS.md`.  All
+`docs/development/refactor-r10-results.md`.  The current authoritative
+state is the P1–P8 user pairing control closeout (2026-08-08): canonical
+gate **62 PASS / 0 FAIL / 62 TOTAL** (35 twister + 5 exec-only + 19
+Python + coverage + matrix + BSim), coverage population **36**
+(4665/5121 lines, 2023/2820 branches, 357/357 functions), build contract
+**95/95**, BSim 17 scenarios / 26 runs pins byte-identical — see
+`STATUS.md` and `docs/development/user-pairing-control-p8-results.md`.
+All
 "Phases 0–6" content below is dated architecture/evidence of the
 pre-refactor design and is superseded by the module ownership described
 in the current-architecture section that follows.
@@ -611,11 +618,11 @@ proven hardware or SDK impossibility that needs an explicit redesign
 
 ## BabbleSim — cross-cutting verification track
 
-BabbleSim Stage 1 is an **accepted regular local gate**: the 16-scenario T4
+BabbleSim Stage 1 is an **accepted regular local gate**: the 17-scenario T4+R7
 BAP matrix over real `src/bt_bap.c`, `src/audio_decode.c`, real Zephyr
 BAP/ASCS/PACS, real ISO transport, and real liblc3
-(`scripts/bsim-stage1-run.sh`, first nine scenarios run twice, remaining
-seven once), with a strict PCM oracle and pinned deterministic hashes.  The official upstream smoke
+(`scripts/bsim-stage1-run.sh`, scenarios 1–9 run twice, remaining eight
+once = 26 runs), with a strict PCM oracle and pinned deterministic hashes.  The official upstream smoke
 (`scripts/bsim-official-smoke.sh`) remains **PARTIAL** because of the
 documented upstream teardown disable-race and is **not** production
 acceptance.  It complements, never substitutes, native unit tests and
@@ -666,7 +673,7 @@ real-hardware central-driven tests.
 > **Historical (pre-T2 oracle):** this stage-1 acceptance predates the T2B
 > mono overlap-safe expansion fix; the `0xFE0D4245` hash below locked in the
 > forward-expansion collapse defect and was superseded by the corrected T2
-> values and then by the T4 16-scenario matrix (see `STATUS.md` T2/T4
+> values and then by the T4/T4+R7 scenario matrix (see `STATUS.md` T2/T4
 > sections and `docs/development/bsim-stage1-results.md`).  Kept as dated
 > evidence only; the current accepted gate is
 > `scripts/bsim-stage1-run.sh`.
@@ -685,9 +692,9 @@ real-hardware central-driven tests.
 
 ### Planned beyond Stage 1
 
-No further BabbleSim scenario expansion is planned beyond the accepted T4
-16-scenario matrix (mono/Mode A/Mode B 7.5+10 ms incl. one-CIS-loss,
-lifecycle, reconnect, rejection, and invalid-codec scenarios, run by
+The accepted BSim scenario set is the 17-scenario T4+R7 matrix
+(mono/Mode A/Mode B 7.5+10 ms incl. one-CIS-loss, lifecycle, reconnect,
+rejection, duplicate-release, and invalid-codec scenarios, run by
 `scripts/bsim-stage1-run.sh`).
 
 BabbleSim cannot validate ASRC quality, I2S behaviour, SDC realism, FLPR
