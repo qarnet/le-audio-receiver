@@ -15,8 +15,8 @@ historical).
 
 **R10 — final integration and documentation closeout — COMPLETE/
 ACCEPTED (2026-08-06).**  The refactor track R0–R10 is COMPLETE; see
-`docs/development/refactor-r10-results.md` (final authoritative evidence)
-and `docs/development/refactor-r10-handoff.md`.  Canonical gate on the
+`docs/development/refactor-r10-results.md` (final authoritative evidence).
+Canonical gate on the
 clean doc-cleanup commit `6934d9e`: **55 PASS / 0 FAIL / 55 TOTAL**
 (31 twister + 5 exec-only + 16 Python + coverage + matrix + BSim,
 17m49.6s), coverage population 33 exact (committed baseline `54a6b8e`,
@@ -33,8 +33,7 @@ no audibility claim.
 ## R8 addendum (2026-08-06)
 
 R8 (FLPR production/diagnostic boundary) is ACCEPTED; see
-`docs/development/refactor-r8-results.md` and the handoff
-`docs/development/refactor-r8-handoff.md`.  Core FLPR cpuapp files and
+`docs/development/refactor-r8-results.md`.  Core FLPR cpuapp files and
 the FLPR image contain production runtime only; acceptance machinery is
 explicit and configurable (`CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS` cpuapp,
 new `CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS` FLPR image with
@@ -172,8 +171,8 @@ bounded steps and final commands are.
 | T3 — I2S state-machine tests | ACCEPTED (2026-08-01) | `STATUS.md`, `docs/testing/t3-audio-i2s-tests.md` |
 | T4 — BAP/BabbleSim matrix | ACCEPTED (2026-08-01) | `STATUS.md`, `docs/testing/t4-bap-bsim-matrix.md` |
 | T5 — lifecycle, timing, drift, actuators | ACCEPTED (2026-08-01) | `STATUS.md` |
-| T6 — boot, shell, resolved-config contracts | ACCEPTED (2026-08-02) | `STATUS.md`, `docs/development/pre-refactor-testing-t6-handoff.md` |
-| T7 — coverage enforcement | **ACCEPTED (2026-08-02)** | `STATUS.md` (T7 section), `docs/testing/coverage-matrix.md`, `docs/development/pre-refactor-testing-t7-stage1-handoff.md`, `-t7-stage2-handoff.md`, `-t7-evidence-fix-handoff.md` |
+| T6 — boot, shell, resolved-config contracts | ACCEPTED (2026-08-02) | `STATUS.md` |
+| T7 — coverage enforcement | **ACCEPTED (2026-08-02)** | `STATUS.md` (T7 section), `docs/testing/coverage-matrix.md` |
 | T8 — hardware baseline freeze | **ACCEPTED (2026-08-04)** | `docs/testing/pre-refactor-hardware-baseline.md` — both matrices pass on the exact final code `971e6a4` (nRF54L15 Mode A/B 120, bonded reconnect, FLPR hang Mode A 16/16 + Mode B 16/16 earlier, Phase 3 3/3; E83 Mode A 120, Mode B 120 fresh + bonded, Mode B 300; zero underruns/faults; APLL ppm −500; sequence-gap activation documented as an evidence limitation) |
 
 ## Key T7 commit chain
@@ -301,9 +300,8 @@ Before the transfer commit, these files were dirty on
 - `docs/testing/coverage-matrix.md` — suite inventory corrected to
   41 children (25/4/9/coverage/matrix/BSim), baseline provenance corrected,
   explicit no-exact-gate-acceptance note.
-- `docs/development/pre-refactor-testing-t7-evidence-fix-handoff.md`
-  (was untracked) — evidence-fix handoff corrected to 41 children / 41/41
-  expected, marked pending.
+- the then-untracked T7 evidence-fix document — corrected to 41 children /
+  41/41 expected, marked pending.
 
 The transfer commit `98e4920` committed those edits, making the tree clean.
 The T7 evidence-fix commit `b342aae` then recorded the first exact accepted
@@ -463,8 +461,8 @@ but measurable automated gates do not depend on it.
 
 ## Workstation detached-worktree / bundle workflow
 
-Per `docs/development/pre-refactor-testing-t0-review-fix-handoff.md`
-(the established transfer procedure):
+Per the established transfer procedure (T0 review-fix round of the
+pre-refactor track):
 
 1. Commit the scoped changes on the desktop branch.
 2. Create a git bundle containing branch `test/pre-refactor-behavior`.
@@ -490,20 +488,21 @@ shell, so `gcovr` is on PATH for the coverage child).
 
 Git bundles contain commits only.  The documentation edits that were dirty
 at `042290c` (`STATUS.md`, `docs/testing/behavior-contract.md`,
-`docs/testing/coverage-matrix.md`, and the then-untracked
-`docs/development/pre-refactor-testing-t7-evidence-fix-handoff.md`) were
+`docs/testing/coverage-matrix.md`, and the then-untracked T7 evidence-fix
+document) were
 **not** included in any git bundle until they were committed.  The transfer
 commit `98e4920` resolved this: it committed those docs on
 `handoff/workstation-transfer`, so the full state (including this document
-and the evidence-fix handoff) is now in the commit graph and transferable by
+and the T7 evidence-fix document) is now in the commit graph and transferable by
 normal clone/bundle.  Nothing in the current state is uncommitted.
 
 ## Historical documents
 
-Phase handoffs and results files written at the time
-(`pre-refactor-testing-t0-handoff.md` … `-t6-handoff.md`, the T7 stage 1/2
-handoffs, `docs/testing/t4-bap-bsim-matrix.md`, and older `STATUS.md` gate
-totals such as 21, 23, 25, 26, 30, 36 children) retain their contemporaneous
-wording and child counts.  They are historical evidence for their own
-commits; only this document, `STATUS.md`, the plan, the coverage matrix, and
-the evidence-fix handoff state the CURRENT status.
+Phase handoffs and results files written at the time (the pre-refactor
+T0–T6 handoffs, the T7 stage 1/2 handoffs, `docs/testing/t4-bap-bsim-matrix.md`,
+and older `STATUS.md` gate totals such as 21, 23, 25, 26, 30, 36 children)
+retained their contemporaneous wording and child counts as historical
+evidence for their own commits; the handoff documents were deleted at the
+2026-08-08 repo wrap-up (superseded by the accepted plan, `STATUS.md`, and
+per-phase results).  Only this document, `STATUS.md`, the plan, and the
+coverage matrix state the CURRENT status.

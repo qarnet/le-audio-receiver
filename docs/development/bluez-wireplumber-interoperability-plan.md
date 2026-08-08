@@ -81,7 +81,7 @@ SPA proof requires actual `libspa-bluez5.so` mapped in WirePlumber process
 (`/proc/<pid>/maps`); failed `bluetoothctl remove` is fatal unless exact
 postcondition shows no device object and no bond state.
 
-Two corrections per `docs/development/bluez-wireplumber-phase3-final-review-handoff.md`:
+Two corrections per the Phase 3 final review (see `docs/development/phase3-results.md`):
 - `_wait_for_bluez_spa()`: maps proof replaces `pw-cli info all` fallback.
 - `remove_device()`: postcondition check makes partial removal fatal.
 

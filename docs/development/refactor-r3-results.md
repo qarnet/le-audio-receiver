@@ -7,8 +7,7 @@ BSim pins changed.
 
 ## Commits
 
-1. `6b4198e` — `docs: record R3 handoff — suite/parser/hash consolidation`
-   (`docs/development/refactor-r3-handoff.md`).
+1. `6b4198e` — `docs: record R3 handoff — suite/parser/hash consolidation`.
 2. `0c19fd5` — `refactor: consolidate suite discovery, gate ownership, and
    BSim data` (22 files: inventory module, gate/coverage/checker refactors,
    gate-suite split, shared FLPR parser, hang-gate boundaries, BlueZ

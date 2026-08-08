@@ -4,8 +4,7 @@ Accepted: 2026-08-07.  Base commit `f430406` (P3 accepted); handoff
 commit `d3dc9a4` (`docs: record P4 handoff — Bluetooth adapter and
 callback integration`); implementation commit `c347710`; coverage
 migration commit `0f954d0`; acceptance commit (this document's commit).
-Handoff: `docs/development/user-pairing-control-p4-handoff.md`; plan:
-`docs/development/user-pairing-control-plan.md`.
+Plan: `docs/development/user-pairing-control-plan.md`.
 
 P4 wires the accepted `pairing_mode_ops` Bluetooth side into `bt_bap.c`:
 one private, Bluetooth-type-free adapter module

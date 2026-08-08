@@ -3,8 +3,7 @@
 Accepted: 2026-08-07.  Base commit `04b5010` (P5 accepted); handoff
 commit `b246447` (`docs: record P6 handoff — XIAO controls and build
 contract`); implementation commit `62b8727`; acceptance commit (this
-document's commit).  Handoff:
-`docs/development/user-pairing-control-p6-handoff.md`; plan:
+document's commit).  Plan:
 `docs/development/user-pairing-control-plan.md`.
 
 P6 maps the real Seeed XIAO nRF54L15 user controls through the project

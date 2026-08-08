@@ -3,8 +3,7 @@
 Accepted: 2026-08-08.  Base commit `e1dbbb0` (P7 accepted plus documentation
 arithmetic correction); handoff commit `83fdea2` (`docs: record P8 handoff —
 hardware acceptance and closeout`); acceptance commit (this document's
-commit).  Handoff:
-`docs/development/user-pairing-control-p8-handoff.md`; plan:
+commit).  Plan:
 `docs/development/user-pairing-control-plan.md`.
 
 P8 executes the hardware acceptance matrix on the XIAO nRF54L15 receiver

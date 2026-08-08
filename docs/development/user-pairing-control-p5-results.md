@@ -4,8 +4,7 @@ Accepted: 2026-08-07.  Base commit `be18b60` (P4 accepted); handoff
 commit `37e7398` (`docs: record P5 handoff — lifecycle and shell
 integration`); implementation commit `b1885d2`; coverage migration
 commit `94c2742`; acceptance commit (this document's commit).
-Handoff: `docs/development/user-pairing-control-p5-handoff.md`; plan:
-`docs/development/user-pairing-control-plan.md`.
+Plan: `docs/development/user-pairing-control-plan.md`.
 
 P5 completes the full-stack integration under `CONFIG_USER_PAIRING_INPUT`
 while keeping every feature-off production build byte-for-byte

@@ -5,8 +5,9 @@ Mode: full-repository baseline audit (user-approved).  Scope: prose,
 comments, and repo-local agent skills only — no behavior change, no
 coverage-baseline change, no BSim pin change, no hardware.
 
-Track: apply the exact corrections from
-`docs/development/documentation-hygiene-cleanup-handoff.md`, preserve
+Track: apply the exact corrections from the approved full-repository
+cleanup handoff (deleted at the 2026-08-08 wrap-up; this results doc
+records its scope and outcome), preserve
 historical evidence, remove phase/commit/handoff chronology from current
 production/API comments while retaining rationale, update repo-local
 skills, and reconcile the P8 evidence wording.
@@ -29,8 +30,9 @@ Full-audit inventory (reconciled session ledger, 568 rows):
   - machine-consumed structured data (3): `tests/bsim/stage1-scenarios.json`,
     `tests/coverage-baseline.json`, `tests/test-matrix.json`;
   - binary/corpus golden fixtures (8): all files under `tests/fixtures/lc3/`.
-- **3 new cleanup-output docs** added during the audit range — the handoff,
-  this results doc, and the managed marker — each audited clean.
+- **3 new cleanup-output docs** added during the audit range — the cleanup
+  handoff (deleted at the 2026-08-08 wrap-up), this results doc, and the
+  managed marker — each audited clean.
 - Totals: **547 non-excluded files audited, 115 rewritten, 432 clean,
   0 moved, 0 deleted, 21 excluded.**
 
@@ -236,8 +238,9 @@ and incidental clang-format reflow churn in `audio_offload.c` and the
 - Rewritten: 115
 - Moved: 0
 - Deleted: 0
-- Contributor docs changed: 3 (cleanup handoff, cleanup results, managed
-  baseline marker)
+- Contributor docs changed: 2 (cleanup results, managed
+  baseline marker; the cleanup handoff was deleted at the 2026-08-08
+  wrap-up)
 - ADRs added/superseded: 0/0
 - Behavior changes: none
 - Verification: `git diff --check` clean on every commit; `python3 -m

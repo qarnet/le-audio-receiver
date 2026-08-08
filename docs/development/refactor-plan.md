@@ -324,7 +324,7 @@ diagnostics"), kept distinct from the G1 zero-actionable-warning claim.
 (STATUS.md "What does NOT work / open").  Full commands, suite counts, raw
 evidence directory and SHA-256 manifest, identity/controller proof, and
 per-run counters: `docs/development/refactor-r1-results.md` (status
-section) and `docs/development/refactor-r1-revalidation-handoff.md`.  The
+section).  The
 earlier `a79ac71` closure evidence is superseded.
 
 ### Files
@@ -534,8 +534,7 @@ reconnect = fresh mono oracle), zero new/actionable warnings.
 > (`flpr status/offload/runtime/ring-status` command paths, `flpr hang`
 > gate 16/16 checks, `flpr ring stall_flpr_ms` stall gate, `bt unpair`
 > validated on hardware).  Full evidence:
-> `docs/development/refactor-r4-results.md`; handoff:
-> `docs/development/refactor-r4-handoff.md`.
+> `docs/development/refactor-r4-results.md`.
 
 ### Goal
 
@@ -604,8 +603,7 @@ normal audio diagnostics no longer compile the acceptance harness by accident.
 > verify/state/seq/frame/crc faults across 12031 shadow-verified blocks
 > per stream, flpr hang gate Mode A 16/16 and Mode B 16/16 with
 > asrc_verify_zero, production verify-off image restored and clean).
-> Full evidence: `docs/development/refactor-r5-results.md`; handoff:
-> `docs/development/refactor-r5-handoff.md`.
+> Full evidence: `docs/development/refactor-r5-results.md`.
 
 ### Goal
 
@@ -685,8 +683,7 @@ and hardware counters.
 > fallback=0, faults 0); nRF5340/E83 fresh Mode A/B + bonded reconnect
 > Mode B 120 s (SDUs 11322–11660, zero ISO gaps/i2s warnings, APLL
 > ACTIVE ppm −500).  Full evidence:
-> `docs/development/refactor-r6-results.md`; handoff:
-> `docs/development/refactor-r6-handoff.md`.
+> `docs/development/refactor-r6-results.md`.
 
 ### Goal
 
@@ -791,8 +788,7 @@ audio state; no duplicated decode/push paths.
 > (~22:30–02:05) resolved and every row passed with zero warnings
 > (Mode B fresh 11660/23320, bonded 11665/23330, matching the R6
 > baseline; no firmware change, no criterion weakened).  Full evidence:
-> `docs/development/refactor-r7-results.md`; handoff:
-> `docs/development/refactor-r7-handoff.md`.
+> `docs/development/refactor-r7-results.md`.
 
 ### Goal
 
@@ -887,8 +883,7 @@ remain untouched.
 > Mode B 16/16, flpr stall gate PASSED, `flpr status`/`flpr ring
 > status`/`flpr stress`/`flpr ring test` all exercise the moved
 > diagnostic handlers.  Full evidence:
-> `docs/development/refactor-r8-results.md`; handoff:
-> `docs/development/refactor-r8-handoff.md`.
+> `docs/development/refactor-r8-results.md`.
 
 ### Goal
 
@@ -971,8 +966,7 @@ configurable; direct tests still execute real production logic.
 > bonded reconnect Mode A/B 30 s (zero errors/gaps/underruns; APLL
 > evidence: Drift ACTIVE ppm −500 mid-stream); teardown tail
 > byte-identical (35–37 tail frames through the release window).  Full
-> evidence: `docs/development/refactor-r9-results.md`; handoff:
-> `docs/development/refactor-r9-handoff.md`.
+> evidence: `docs/development/refactor-r9-results.md`.
 
 ### Goal
 
@@ -1068,7 +1062,7 @@ architecture the new baseline.
 ### Files
 
 - `AGENTS.md`, `README.md`, `STATUS.md`, `docs/design.md`.
-- `docs/development/refactor-plan.md` and accepted phase handoffs/results.
+- `docs/development/refactor-plan.md` and accepted phase results.
 - `docs/testing/behavior-contract.md`, `docs/testing/coverage-matrix.md`, and
   pre/post-refactor hardware baseline evidence.
 - Test/build manifests only for final accepted inventory and baseline anchors.

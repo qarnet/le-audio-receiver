@@ -3,8 +3,7 @@
 Accepted: 2026-08-07.  Base commit `2ca4fb3` (P1 accepted); handoff
 commit `1fa7f17` (`docs: record P2 handoff — generic input and LED
 adapter`); implementation commit `495b3a7`; coverage migration commit
-`184969a`; acceptance commit (this document's commit).  Handoff:
-`docs/development/user-pairing-control-p2-handoff.md`; plan:
+`184969a`; acceptance commit (this document's commit).  Plan:
 `docs/development/user-pairing-control-plan.md`.
 
 P2 delivers one reusable Zephyr `gpio-keys`/GPIO LED adapter

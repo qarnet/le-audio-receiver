@@ -37,8 +37,7 @@ feature disabled on both boards (`CONFIG_USER_PAIRING_CONTROL=n`;
 `tests/unit/pairing_mode` (32 tests) compiles the production source
 against fake injected operations (ledger, per-op event semaphores,
 blocking gates, tick-aligned short timings preserving the production
-ratios).  Handoff: `docs/development/user-pairing-control-p1-handoff.md`
-(committed `4dc0b72`); implementation `14be974`; coverage migration
+ratios).  Handoff commit `4dc0b72`; implementation `14be974`; coverage migration
 `2ccbb44` (population 33 → 34, new file 344/405 L, 160/226 B, 39/39 F,
 every unchanged file at or above its record, gcovr 8.4 / gcov (GCC)
 14.3.0, provenance in `docs/testing/coverage-matrix.md`); results:
@@ -86,9 +85,8 @@ against the REAL input subsystem + REAL gpio-keys driver + REAL gpio-emul
 controller on native_sim (active-low/pull-up button, 30 ms debounce,
 active-low LED, aliases) with fake link implementations of the two P1
 request APIs recording public calls/results and shortened hold thresholds
-preserving reset > bonding (bond 100 ms, reset 200 ms).  Handoff:
-`docs/development/user-pairing-control-p2-handoff.md` (committed
-`1fa7f17`); implementation `495b3a7`; coverage migration `184969a`
+preserving reset > bonding (bond 100 ms, reset 200 ms).  Handoff commit
+`1fa7f17`; implementation `495b3a7`; coverage migration `184969a`
 (population 34 → 35, new file 130/147 L, 56/106 B, 11/11 F, every
 unchanged file at or above its record, gcovr 8.4 / gcov (GCC) 14.3.0,
 provenance in `docs/testing/coverage-matrix.md`); results:
@@ -130,9 +128,8 @@ even on `-ENOMEM`, no-HCI rule retained; `bt_bap_pairing_reset`:
 `pairing_adv_lock`) — legacy feature-off behavior and every BSim pin
 byte-identical; no P1 Bluetooth ops or callback/lifecycle integration
 (P4/P5).  Direct suite `tests/unit/bt_pairing_policy` grew 12 → 23
-tests (real production source).  Handoff:
-`docs/development/user-pairing-control-p3-handoff.md` (committed
-`f8b7fcd`); implementation `89304f7`; coverage migration `bc011d6`
+tests (real production source).  Handoff commit `f8b7fcd`;
+implementation `89304f7`; coverage migration `bc011d6`
 (same 35 files; only `src/bt_pairing_policy.c` moves: 66/66 → 79/79 L,
 20/20 → 34/34 B, 8/8 → 9/9 F, every unchanged file byte-identical,
 gcovr 8.4 / gcov (GCC) 14.3.0, provenance in
@@ -194,9 +191,8 @@ suite `tests/unit/bt_bap_pairing_adapter` (37 tests, real production
 source vs fake backend ledger) proves every handoff case incl. exact
 restart order, empty-BONDED_ONLY filtering, boundary errno + sequence
 stop, ref balance, delete ordering, notification gate/payloads/
-duplicates/no-inline-HCI.  Handoff:
-`docs/development/user-pairing-control-p4-handoff.md` (committed
-`d3dc9a4`); implementation `c347710`; coverage migration `0f954d0`
+duplicates/no-inline-HCI.  Handoff commit `d3dc9a4`; implementation
+`c347710`; coverage migration `0f954d0`
 (population 35 → 36, only `src/bt_bap_pairing_adapter.c` added:
 139/140 L, 85/106 B, 17/17 F, every unchanged file at or above its
 record, gcovr 8.4 / gcov (GCC) 14.3.0, provenance in
@@ -263,9 +259,8 @@ unchanged (13).  Focused runs: pairing_mode **37 PASS**, app_lifecycle
 (nRF54L15 sysbuild app+FLPR with `CONFIG_USER_PAIRING_INPUT=y` +
 `CONTROL=y` and scratch-only user-button/user-led aliases overlay,
 inherited DK buttons 1–3 disabled) links clean with zero warnings and
-resolved aliases/config in the app image.  Handoff:
-`docs/development/user-pairing-control-p5-handoff.md` (committed
-`37e7398`); implementation `b1885d2`; coverage migration `94c2742`
+resolved aliases/config in the app image.  Handoff commit `37e7398`;
+implementation `b1885d2`; coverage migration `94c2742`
 (same 36 files; only `src/bt_shell.c` 6/6 → 11/11 L, 2/2 → 4/4 B and
 `src/pairing_mode.c` 344/405 → 354/414 L, 160/226 → 171/236 B move,
 every unchanged file at or above its record, zero-hit 357/357, gcovr
@@ -314,9 +309,8 @@ status).  Full-stack SRAM solved: feature-on margin **2804 B free**
 accepted feature-off margin (1956 B); RAM 98.29%, FLASH 36.36%.
 Build contract 79 → **95 assertions** (resolved config/DT, no
 source-text matching), `tests/unit/build_contract` 33 → **51 tests**
-with mutations failing on every wrong resolved artifact.  Handoff:
-`docs/development/user-pairing-control-p6-handoff.md` (committed
-`b246447`); implementation `62b8727`; acceptance (results only, no
+with mutations failing on every wrong resolved artifact.  Handoff commit
+`b246447`; implementation `62b8727`; acceptance (results only, no
 STATUS section at the time):
 `docs/development/user-pairing-control-p6-results.md`.  Canonical gate
 on clean `62b8727`: **59 PASS / 0 FAIL / 59 TOTAL** (35 twister + 5
@@ -339,9 +333,8 @@ enablement; no advertising payload differentiation.
 **P7 — software and build acceptance — ACCEPTED**: independent full
 re-run of the software/build acceptance on the exact integrated
 production code (P1–P6 + nRF54L15 feature-enabled), evidence-only, no
-production/test/baseline change.  Handoff:
-`docs/development/user-pairing-control-p7-handoff.md` (committed
-`7e44d61`); results: `docs/development/user-pairing-control-p7-results.md`.
+production/test/baseline change.  Handoff commit `7e44d61`; results:
+`docs/development/user-pairing-control-p7-results.md`.
 Focused direct suites on real production sources: pairing_mode **37/37**,
 user_pairing_io **21/21**, bt_pairing_policy **23/23**,
 bt_bap_pairing_adapter **37/37**, bt_shell_pairing **5/5**,
@@ -392,9 +385,8 @@ identical) in the follow-up documentation-fix commit.
 
 **P8 — hardware acceptance and closeout — ACCEPTED**: full hardware
 matrix on the XIAO nRF54L15 receiver plus nRF5340 feature-off parity,
-evidence-only (no production/test/baseline change).  Handoff:
-`docs/development/user-pairing-control-p8-handoff.md` (committed
-`83fdea2`); results: `docs/development/user-pairing-control-p8-results.md`.
+evidence-only (no production/test/baseline change).  Handoff commit
+`83fdea2`; results: `docs/development/user-pairing-control-p8-results.md`.
 Fresh builds on the exact base (P7 code; only docs changed since):
 `fw-build-54l15` exit 0 (app 531668 B / RAM 161036 B, 98.29 %; FLPR
 43632 B), `fw-build-5340` exit 0 (375364 B / 145256 B), build contract
@@ -444,8 +436,7 @@ current authoritative state is the P8 closeout and the 62-child gate
 above.  R10 was docs/evidence only: no production/test behavior change, no
 coverage baseline regeneration (population 33; committed baseline
 `54a6b8e` byte-identical), no BSim re-pin (17 scenarios / 26 runs, pins
-byte-identical).  Handoff: `docs/development/refactor-r10-handoff.md`;
-doc/archive cleanup `6934d9e`; final evidence:
+byte-identical).  Handoff commit `987e066`; doc/archive cleanup `6934d9e`; final evidence:
 `docs/development/refactor-r10-results.md` (+ `/tmp/r10-hw/` manifest +
 SHA256SUMS).  **G1 on clean `6934d9e`: 55 PASS / 0 FAIL / 55 TOTAL**
 (31 twister + 5 exec-only + 16 Python + coverage + matrix + BSim, elapsed
@@ -509,8 +500,7 @@ Mode A + bonded reconnect Mode A/B 30 s — all ~3000 frames @100 fps,
 FLPR offload submit==success fallback=0 (54L15), decode_err/
 i2s_underrun/stream_reset=0, APLL evidence Drift ACTIVE ppm −500 (E83),
 teardown tail byte-identical.  Full evidence:
-`docs/development/refactor-r9-results.md`; handoff:
-`docs/development/refactor-r9-handoff.md`.
+`docs/development/refactor-r9-results.md`.
 
 ## Refactoring track — R8 ACCEPTED (2026-08-06)
 
@@ -536,8 +526,7 @@ flpr_acceptance 48, flpr_acceptance_flpr 8); coverage population 30 →
 33; BSim pins byte-identical.  Hardware: nRF54L15 Mode A/B 120 s with
 offload submit==success fallback=0 and zero faults, flpr hang gate
 Mode A and Mode B 16/16, flpr stall gate PASSED.  Full evidence:
-`docs/development/refactor-r8-results.md`; handoff:
-`docs/development/refactor-r8-handoff.md`.
+`docs/development/refactor-r8-results.md`.
 
 ## Refactoring track — R7 ACCEPTED (2026-08-05, G3 completed 2026-08-06)
 
@@ -582,8 +571,7 @@ differential diagnosis proved it environmental (teardown-only change,
 Xiao clean at 65–89 % delivery, Mode A 88–92 %, btmon host TX complete,
 ~55 recovery attempts) and the environment recovered — all rows then
 passed with the standard ritual, no firmware change, no criterion
-weakened.  Full evidence: `docs/development/refactor-r7-results.md`;
-handoff: `docs/development/refactor-r7-handoff.md`.
+weakened.  Full evidence: `docs/development/refactor-r7-results.md`.
 
 ## Refactoring track — R6 ACCEPTED (2026-08-05)
 
@@ -635,8 +623,7 @@ offload submit==success fallback=0, all fault counters 0; nRF5340/E83
 fresh Mode A/B + bonded reconnect Mode B 120 s: SDUs 11322–11660 with
 decoded 22644–23320, decode_err/i2s_underrun/stream_reset=0, zero `ISO seq
 gap`/`i2s_nrfx` warning lines, APLL evidence Drift ACTIVE ppm −500
-identity).  Full evidence: `docs/development/refactor-r6-results.md`;
-handoff: `docs/development/refactor-r6-handoff.md`; coverage provenance:
+identity).  Full evidence: `docs/development/refactor-r6-results.md`; coverage provenance:
 `docs/testing/coverage-matrix.md` "R6 baseline migration (29 → 30)".
 
 ## Refactoring track — R5 ACCEPTED (2026-08-05)
@@ -669,8 +656,7 @@ submit=12031 success=12031 fallback=0 and zero verify/state/seq/frame/
 crc faults across 12031 shadow-verified blocks per stream, flpr hang
 gate Mode A 16/16 and Mode B 16/16 with asrc_verify_zero, production
 verify-off image restored with clean boot).  Full evidence:
-`docs/development/refactor-r5-results.md`; handoff:
-`docs/development/refactor-r5-handoff.md`; coverage provenance:
+`docs/development/refactor-r5-results.md`; coverage provenance:
 `docs/testing/coverage-matrix.md` "R5 (no baseline rewrite)".
 
 ## Refactoring track — R4 ACCEPTED (2026-08-05)
@@ -696,8 +682,7 @@ new/actionable warnings; nRF54L15 focused hardware smoke passed (flpr
 status/offload/runtime/ring-status command paths, `flpr hang` gate
 PASSED with all 16 checks, `flpr ring stall_flpr_ms` stall gate PASSED,
 `bt unpair` validated on hardware).  Full evidence:
-`docs/development/refactor-r4-results.md`; handoff:
-`docs/development/refactor-r4-handoff.md`; coverage provenance:
+`docs/development/refactor-r4-results.md`; coverage provenance:
 `docs/testing/coverage-matrix.md` "R4 baseline migration".
 
 ## Pre-refactor testing track — COMPLETE (T0–T8 ACCEPTED, 2026-08-04)
@@ -1042,8 +1027,7 @@ Closes T5 from `docs/development/pre-refactor-testing-plan.md` by testing
 production lifecycle, nRF54 timing, drift-controller, APLL-actuator, and
 NONE-actuator behavior directly, and fixing the defects those tests exposed.
 Evidence: updated `docs/testing/behavior-contract.md` (LIFE-003 closed;
-CLOCK-008..010 added) and `docs/testing/coverage-matrix.md`; handoff:
-`docs/development/pre-refactor-testing-t5-handoff.md`.
+CLOCK-008..010 added) and `docs/testing/coverage-matrix.md`.
 
 - **Lifecycle closed-to-open edge** — `stream_lifecycle_sink_started()`
   returns true only for a closed-to-open transition; duplicate starts
@@ -1129,8 +1113,7 @@ Acceptance evidence (desktop `thomas-main` + workstation `thomas-workstation`):
 Closes T6 from `docs/development/pre-refactor-testing-plan.md` with a narrow
 testable boot coordinator, direct production shell-command tests, and a
 stdlib-only resolved build-contract checker for both production targets.
-Handoff: `docs/development/pre-refactor-testing-t6-handoff.md`.  Evidence
-updates: `docs/testing/behavior-contract.md` (APP-001..003 closed;
+Evidence updates: `docs/testing/behavior-contract.md` (APP-001..003 closed;
 APP-006, APP-007, BUILD-002..005 closed, BUILD-007, BUILD-008 added),
 `docs/testing/coverage-matrix.md`, `STATUS.md`.
 
@@ -1248,8 +1231,7 @@ Development evidence (desktop `thomas-main`, branch `test/pre-refactor-behavior`
 
 ### T6 review-fix round (2026-08-02)
 
-Closes the defects found in review of `411f6f2`:
-`docs/development/pre-refactor-testing-t6-review-fix-handoff.md`.  Exact
+Closes the defects found in review of `411f6f2`.  Exact
 final code commit: **`7a823cb`**.
 
 - **FLPR restart parser drift fixed** — `RE_RUNTIME_RESTART_OK` in
@@ -1306,9 +1288,7 @@ bundle-transferred; workstation `main` never modified):
 
 ### T7 implementation and acceptance (2026-08-02)
 
-Implements the coverage-enforcement phase (**ACCEPTED**):
-`docs/development/pre-refactor-testing-t7-stage1-handoff.md` and
-`docs/development/pre-refactor-testing-t7-stage2-handoff.md`.  Code
+Implements the coverage-enforcement phase (**ACCEPTED**).  Code
 commits `bd51054`, `bf10c20`, `5ece4d1`, `c6adce8` carry the Stage 2
 gap-closing tests and tooling; `c6adce8` is the clean commit the baseline
 was generated on; `4a31324` commits the baseline and wires coverage +
@@ -1441,7 +1421,6 @@ callback before `k_work_submit()`, and Zephyr may coalesce submissions
 while the work item is pending/running, so a delayed system workqueue
 could silently discard one-second feedforward measurements — contradicting
 the every-measurement contract in `audio_drift.h` and CLOCK-008.
-Handoff: `docs/development/pre-refactor-testing-t5-review-fix-handoff.md`.
 Evidence updates: `docs/testing/behavior-contract.md` (CLOCK-008
 review-fix), `docs/testing/coverage-matrix.md` (timing row).
 
@@ -1789,9 +1768,8 @@ Preflight hardened with two corrections landed in final review:
   postcondition shows device object no longer exists and no `Paired`/`Bonded`
   state remains.
 
-See `docs/development/phase3-results.md` for acceptance evidence,
-`docs/development/bluez-wireplumber-phase3-final-review-handoff.md` for
-execution handoff, and `docs/development/bluez-wireplumber-interoperability-plan.md`
+See `docs/development/phase3-results.md` for acceptance evidence and
+`docs/development/bluez-wireplumber-interoperability-plan.md`
 for BZ1–BZ4 plan.
 
 **BZ4 compatibility expansion NOT needed.** Bare BAP passed with stock
@@ -1831,8 +1809,7 @@ at PASS point verifies contexts non-NONE after connection + 100-frame stream).
 Contexts persist from `bt_bap_init()` through connect/disconnect cycles.
 Zephyr PACS restores default on ACL disconnect per spec — no manual restore
 needed. See `docs/development/bluez-wireplumber-interoperability-plan.md` for
-full BZ1–BZ4 plan and `docs/development/bluez-wireplumber-phase1-handoff.md`
-for execution handoff.
+full BZ1–BZ4 plan.
 
 ## Stage 0 — PASS (2026-07-27)
 
@@ -2120,8 +2097,7 @@ diagnostics are the expected page-tail `Warn : Adding extra erase range`
 flashing messages, classified for the dongle in the OpenOCD flashing
 diagnostics table above (net `0x0102c23c .. 0x0102c7ff`, 2 kB net-core
 page; app `0x0000a040 .. 0x0000afff`, 4 kB app-core page; both wholly
-inside their core's flash region).  See
-`docs/development/fw-flash-dongle-probe-fix-handoff.md`.
+inside their core's flash region).
 
 ### I2S20 hardware evidence
 

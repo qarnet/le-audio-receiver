@@ -326,7 +326,7 @@ Canonical enforcement reran on the clean baseline commit (see
 
 R4 split the monolithic `src/audio_shell.c` into four per-owner files
 without changing any command name, help, arg count, output, or return
-behavior (see `docs/development/refactor-r4-handoff.md`).  The pre-R4
+behavior (see `docs/development/refactor-r4-results.md`).  The pre-R4
 per-file rows above (R2 migration at `1343c35`) are the historical record.
 Per the coverage migration rule (refactor-plan.md), the baseline was
 regenerated on the exact clean implementation commit **`39c318a`**

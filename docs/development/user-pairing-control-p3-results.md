@@ -4,8 +4,7 @@ Accepted: 2026-08-07.  Base commit `e8a120b` (P2 accepted plus reviewed
 threshold-rearm fix); handoff commit `f8b7fcd` (`docs: record P3 handoff
 — separate access mode from bond inventory`); implementation commit
 `89304f7`; coverage migration commit `bc011d6`; acceptance commit (this
-document's commit).  Handoff:
-`docs/development/user-pairing-control-p3-handoff.md`; plan:
+document's commit).  Plan:
 `docs/development/user-pairing-control-plan.md`.
 
 P3 refactors the pure `bt_pairing_policy` state so the desired

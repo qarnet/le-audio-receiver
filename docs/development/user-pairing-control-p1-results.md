@@ -3,8 +3,7 @@
 Accepted: 2026-08-07.  Base commit `b830018` (P0 contract lock); handoff
 commit `4dc0b72` (`docs: record P1 handoff — portable pairing-mode
 transition owner`); implementation commit `14be974`; coverage migration
-commit `2ccbb44`; acceptance commit (this document's commit).  Handoff:
-`docs/development/user-pairing-control-p1-handoff.md`; plan:
+commit `2ccbb44`; acceptance commit (this document's commit).  Plan:
 `docs/development/user-pairing-control-plan.md`.
 
 P1 delivers one portable, directly tested transition owner

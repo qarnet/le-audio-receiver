@@ -69,34 +69,38 @@ Reference search re-run immediately before the move (repo-wide grep for
 each filename; only self-references and the handoff's own archive list
 matched).  Moved to `docs/development/archive/` (index: `ARCHIVE.md`):
 
-- Pre-refactor T-track handoffs: `pre-refactor-testing-t1-review-fix-`,
-  `t2-`, `t2-review-fix-`, `t3-`, `t3-review-fix-`, `t4-`,
-  `t4-review-fix-`, `t8-handoff.md`.
-- BZ desktop-track handoffs: `bluez-wireplumber-phase2-handoff.md`,
-  `bluez-wireplumber-phase2-diagnostic-handoff.md`,
-  `bluez-wireplumber-phase2-final-review-handoff.md`,
-  `bluez-wireplumber-phase2-frame-duration-fix-handoff.md`,
-  `bluez-wireplumber-phase2-systemwide-handoff.md`,
-  `bluez-wireplumber-phase3-handoff.md`,
-  `bluez-wireplumber-phase3-spa-proof-fix-handoff.md`,
-  `bluez-wireplumber-phase3-strict-host-fix-handoff.md`,
-  `pairing-mode-filter-handoff.md`.
-- Refactor handoffs R0–R2: `refactor-r0-handoff.md`,
-  `refactor-r1-handoff.md`, `refactor-r2-handoff.md`.
-- Phase 6 intermediate stage results: `phase6-stage2-results.md`,
-  `phase6-stage3a-results.md`, `phase6-stage3b-results.md`,
+- Pre-refactor T-track handoffs: **8 files** — T1 review-fix; T2, T3, T4
+  (each with a review-fix variant); T8.
+- BZ desktop-track handoffs: **9 files** — Phase 2 execution handoffs
+  (plain, diagnostic, final-review, frame-duration-fix, systemwide),
+  Phase 3 execution handoffs (plain, SPA-proof-fix, strict-host-fix),
+  and the pairing-mode-filter implementation handoff.
+- Refactor handoffs R0–R2: **3 files**.
+- Phase 6 intermediate stage results (kept archived):
+  `phase6-stage2-results.md`, `phase6-stage3a-results.md`,
+  `phase6-stage3b-results.md`,
   `phase6-stage3-hardware-acceptance-results.md`,
   `phase6-stage4a-reset-order-results.md`.
 
-Not moved (active links): all refactor results; refactor handoffs R3–R9;
-`pre-refactor-testing-plan.md` and the t0/t1/t5/t6/t7 handoffs linked from
-STATUS/`workstation-transfer-status`/`refactor-r2-results`/
-`check-test-matrix.py`; `phase2-stock-desktop-gate-results.md`;
-`phase3-results.md`; `bluez-wireplumber-interoperability-plan.md`;
-`bluez-wireplumber-phase1-handoff.md`; the linked BZ2/BZ3 handoffs;
-`fw-flash-dongle-probe-fix-handoff.md`; `xiao-rf-switch-fix-handoff.md`;
-`bsim-stage0/1-results.md`; `workstation-transfer-status.md`; all phase
-4/5 results; phase 6 stage 0/1/4a-runtime/4b/5 results.
+The 20 archived handoff documents above (and the 37 handoffs that
+remained in `docs/development/`) were **deleted** at the 2026-08-08 repo
+wrap-up; superseding authority is the accepted plan of record
+(`docs/development/refactor-plan.md`), `STATUS.md`, and the per-phase
+results docs.  Exact per-file names and the move/deletion record remain
+recoverable in git history (archive move at `6934d9e`; deletions in the
+wrap-up commit).  `docs/development/archive/ARCHIVE.md` indexes the
+surviving archived files.
+
+Not moved at R10 (active links then): all refactor results; the
+remaining refactor handoffs R3–R9; `pre-refactor-testing-plan.md` and
+the pre-refactor T0/T1/T5/T6/T7 handoffs linked from STATUS/
+`workstation-transfer-status`/`refactor-r2-results`/`check-test-matrix.py`;
+`phase2-stock-desktop-gate-results.md`; `phase3-results.md`;
+`bluez-wireplumber-interoperability-plan.md`; the Phase 1 execution
+handoff and the linked BZ2/BZ3 handoffs; the dongle probe-selection fix
+handoff; the Xiao RF-switch fix handoff; `bsim-stage0/1-results.md`;
+`workstation-transfer-status.md`; all phase 4/5 results; phase 6 stage
+0/1/4a-runtime/4b/5 results.
 
 ## G1 — canonical, on the clean `6934d9e`
 

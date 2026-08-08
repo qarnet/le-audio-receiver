@@ -8,8 +8,7 @@ behavior changed; no BSim pins changed.
 
 ## Commits
 
-1. `128c4bc` — `docs: record R4 handoff — shell/acceptance-harness split`
-   (`docs/development/refactor-r4-handoff.md`).
+1. `128c4bc` — `docs: record R4 handoff — shell/acceptance-harness split`.
 2. `39c318a` — `refactor: split shell command ownership by subsystem`
    (four shell TUs, `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS` Kconfig + board
    conf, test CMake updates incl. the config-off absence test,

@@ -2,8 +2,8 @@
 
 **Date**: 2026-07-31
 **Status**: ACCEPTED — 30 s and 120 s gates pass with stock WirePlumber main-systemwide
-**Executor**: Phase 2 strict evidence handoff
-  (`bluez-wireplumber-phase2-strict-evidence-handoff.md`)
+**Executor**: Phase 2 strict-evidence sub-track
+  (handoff documents deleted at the 2026-08-08 wrap-up)
 
 ## Independent review run (canonical gate)
 
@@ -13,10 +13,8 @@
 - **Hardware raw log timestamps**: 30 s run ≈ 35.47 s actual elapsed;
   120 s run ≈ 125.41 s actual elapsed (calculated from SDU count vs
   negotiated 7.5 ms / 133.3 fps).
-- **Pending handoffs tracked**:
-  `bluez-wireplumber-phase2-strict-evidence-handoff.md`,
-  `bluez-wireplumber-phase2-duration-fault-fix-handoff.md`, and
-  `bluez-wireplumber-phase2-review-cleanup-handoff.md`.
+- **Sub-tracks completed**: strict-evidence, duration-fault-fix, and
+  review-cleanup (handoff documents deleted at the 2026-08-08 wrap-up).
 
 ## Rejected commit history
 

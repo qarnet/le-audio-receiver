@@ -19,9 +19,9 @@ callers for every deleted symbol:
 | Symbol/source | Production callers | Remaining uses before R2 (all removed unless noted) |
 |---|---|---:|
 | `audio_clock_actuator_consume_sample_adjustment()` | 0 | production header decl + `apll.c`/`none.c` impls, APLL/NONE/nohfclk test asserts, 2 matrix outcomes, active docs.  Survives ONLY as the test-local historical symbol under `tests/unit/actuator_sample_adjust_historical/src/` |
-| `flpr_ring_mgr_set_consume_cb()` / `flpr_ring_consume_cb_t` | 0 | no-op impl, header decl + typedef, direct no-op test, 2 copied mocks, 1 matrix outcome.  Remaining doc mentions are dated evidence (`t1-flpr-production-tests.md`, `pre-refactor-testing-t1-handoff.md`) or the plan record |
+| `flpr_ring_mgr_set_consume_cb()` / `flpr_ring_consume_cb_t` | 0 | no-op impl, header decl + typedef, direct no-op test, 2 copied mocks, 1 matrix outcome.  Remaining doc mentions are dated evidence (`t1-flpr-production-tests.md`) or the plan record |
 | `audio_rate_converter_nearest_stereo()` | 0 | decl/impl, 5 dedicated tests, 1 matrix outcome |
-| `audio_offload_is_stopped()` | 0 | header decl, nRF54 impl, non-nRF stub, 3-test suite, 2 matrix outcomes.  Remaining doc mentions are dated evidence (`phase6-stage4a-runtime-restart-results.md`, `pre-refactor-testing-t7-stage2-handoff.md`) or the plan record |
+| `audio_offload_is_stopped()` | 0 | header decl, nRF54 impl, non-nRF stub, 3-test suite, 2 matrix outcomes.  Remaining doc mentions are dated evidence (`phase6-stage4a-runtime-restart-results.md`) or the plan record |
 | `DEFAULT_VOL` | 0 | macro definition only in `src/audio_volume.c` |
 | `src/audio_clock_actuator_sample_adjust.c` | 0 production builds | moved to `tests/unit/actuator_sample_adjust_historical/src/audio_clock_actuator_sample_adjust_historical.c` (git rename), test-local header added |
 

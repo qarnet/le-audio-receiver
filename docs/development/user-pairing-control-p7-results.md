@@ -3,8 +3,7 @@
 Accepted: 2026-08-07.  Base commit `c6b338b` (P6 accepted plus review
 fix); handoff commit `7e44d61` (`docs: record P7 handoff — software
 and build acceptance`); acceptance commit (this document's commit).
-Handoff: `docs/development/user-pairing-control-p7-handoff.md`; plan:
-`docs/development/user-pairing-control-plan.md`.
+Plan: `docs/development/user-pairing-control-plan.md`.
 
 P7 independently reruns and records the complete software/build
 acceptance on the exact production code now that P1–P6 are integrated
