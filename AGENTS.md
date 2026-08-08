@@ -649,4 +649,5 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 | `docs/user-guide.md` | Public user guide: boot, pairing modes (NORMAL/BONDING/RESET), flashing notes, troubleshooting |
 | `docs/hardware-wiring.md` | Public wiring: DAC choice, verified E83/Xiao I2S pin tables, config pins, line-level warning |
 | `docs/known-limitations.md` | Public known-limitations list (48 kHz only, 360-frame FLPR fallback, linear volume, pop, duplicate adv, etc.) |
+| `docs/supported-sources.md` | Public researched Linux LE Audio source hardware + software requirements (status labels Project-validated / Vendor-supported / Unverified; Intel AX210 project-validated, dongles unverified) |
 | `docs/technology/nrf5340.md`, `docs/technology/nrf54l15.md` | Public per-platform technology notes (architecture, clock recovery/rate matching) |

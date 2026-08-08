@@ -63,7 +63,9 @@ working button. Tracked in [Planned features](../PLANNED_FEATURES.md) item E.
 LE Audio source devices are still uncommon, and classic Bluetooth audio
 capability does not imply BAP unicast-source support. Finding a consumer
 device that can actually stream to this receiver may be the hardest part of
-using it. See [Supported source devices](user-guide.md#supported-source-devices).
+using it. See [Supported source devices](user-guide.md#supported-source-devices)
+and the researched Linux source hardware in [Supported LE Audio sources on
+Linux](supported-sources.md).
 
 ## 8. Release binaries not yet published
 

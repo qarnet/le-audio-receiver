@@ -106,6 +106,13 @@ to look for:
 Classic Bluetooth audio capability (A2DP) **does not** imply LE Audio source
 support.
 
+For Linux specifically, see [Supported LE Audio sources on
+Linux](supported-sources.md): it explains the BlueZ/PipeWire software
+requirements, distinguishes native HCI adapters from self-contained USB
+audio dongles, and lists researched hardware with honest status labels
+(the Intel Wi-Fi 6E AX210 is project-validated with this receiver; most
+other hardware remains unverified).
+
 ### Development / test path
 
 As a development and test path (not a consumer feature), the repository

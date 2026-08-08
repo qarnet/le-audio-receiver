@@ -128,6 +128,17 @@ source** — classic audio capability does not imply BAP unicast-source
 support. Check that the phone, tablet, or computer you want to stream from
 actually supports Bluetooth LE Audio with BAP unicast.
 
+On Linux, this project has validated the **Intel Wi-Fi 6E AX210** as a BAP
+unicast source with this receiver — using the repository's own custom
+BlueZ source tool (`scripts/bap_central.py`), not the desktop PipeWire UI
+(Linux/BlueZ/PipeWire path; the AX210 is an M.2 Wi-Fi card whose Bluetooth
+function is exposed over internal USB — not a plug-in USB stick). Desktop
+LE Audio on Linux needs a recent kernel/BlueZ/PipeWire stack, and most
+consumer adapters — including self-contained USB audio dongles — remain
+unverified with this receiver. See [Supported LE Audio sources on
+Linux](docs/supported-sources.md) for the researched hardware matrix and
+software requirements.
+
 As a development and test path, this repository includes a **central test
 tool** (`scripts/bap_central.py`) that streams LC3 test tones from a Linux PC
 with a compatible LE Audio controller and BlueZ — useful for verifying a
@@ -140,6 +151,7 @@ not a consumer feature.
 | Document | What it covers |
 |---|---|
 | [User guide](docs/user-guide.md) | What you need, what to expect, pairing modes, troubleshooting |
+| [Supported sources on Linux](docs/supported-sources.md) | Researched Linux LE Audio source hardware and software requirements (AX210 project-validated) |
 | [Hardware wiring](docs/hardware-wiring.md) | DAC choice and verified I2S pin wiring for both boards |
 | [Known limitations](docs/known-limitations.md) | Honest list of current gaps and caveats |
 | [Technology: nRF5340](docs/technology/nrf5340.md) | Dual-core architecture, controller, audio PLL, flashing constraints |
