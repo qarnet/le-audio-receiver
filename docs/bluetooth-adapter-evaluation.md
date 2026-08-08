@@ -49,7 +49,8 @@ contract](#mandatory-controller-contract)). USB sticks are eligible for
 evaluation on any bus (see [Bus independence](#bus-independence)); they just
 have not passed acceptance yet. The current evaluation results follow: two
 ASUS sticks and the Nordic development kits are candidates under evaluation,
-and two UGREEN products are incompatible with the native path.
+the UGREEN model 75073 is incompatible with the native path, and the UGREEN
+CM591 remains unverified (not a candidate).
 
 ### ASUS USB-BT540 — Candidate / under evaluation
 
@@ -70,16 +71,16 @@ Chipset, VID:PID, `cis-central`, ISO MTU/count, availability/maturity, and the
 dynamic receiver sequence remain unrecorded. Status is **Candidate / under
 evaluation**, not supported.
 
-### UGREEN CM591 / product 90225 — Incompatible
+### UGREEN CM591 / product 90225 — Unverified / not a candidate
 
 Public Linux USB evidence identifies the ATS2851 chipset and USB ID
 `10d7:b012`
-([linux-usb](https://www.spinics.net/lists/linux-usb/msg233858.html)), but
-available evidence does not establish CIS support. Normal Bluetooth operation
-does not prove LE Audio (see the [Mandatory controller
-contract](#mandatory-controller-contract)), and no project test exists. Status:
-**Incompatible** with the native Linux LE Audio source requirements — not
-project-tested, and no support or candidate claim is made.
+([linux-usb](https://www.spinics.net/lists/linux-usb/msg233858.html)), but no
+authoritative CIS/ISO proof and no project test exist for this device. Normal
+Bluetooth operation does not prove LE Audio (see the [Mandatory controller
+contract](#mandatory-controller-contract)). Status: **Unverified / not a
+candidate** — the identity evidence alone does not establish incompatibility,
+and no support or candidate claim is made.
 
 ### UGREEN Bluetooth 6.0 model 75073 — Incompatible
 
@@ -219,12 +220,13 @@ the evidence (test logs, `btmon` captures, result documents).
   A single public report does not qualify.
 - **Unverified** — no project test and no vendor confirmation for the specific
   claim.
-- **Incompatible / not eligible** — documented evidence (a vendor listing,
-  chipset/ID evidence, or transport limits) shows the device cannot serve as a
-  native Linux LE Audio HCI source, or available evidence does not establish
-  the mandatory controller contract. No project test is needed for this
-  verdict; it is distinct from **Rejected** (project-evaluated and failed) and
-  from **Unverified** (no evidence either way).
+- **Incompatible / not eligible** — documented evidence shows a mandatory
+  requirement is absent or the transport cannot support it, so the device
+  cannot serve as a native Linux LE Audio HCI source. No project test is
+  needed for this verdict. It is distinct from **Rejected** (project-evaluated
+  and failed) and from **Unverified** (no project test and no vendor
+  confirmation — absence of evidence alone does not establish
+  incompatibility).
 
 **No candidate gets Supported status from feature bits or vendor claim alone.**
 
