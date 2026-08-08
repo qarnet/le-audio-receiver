@@ -41,8 +41,8 @@ What this path needs:
   (`cis-central` for a source).
 - A **current Linux software stack**: Linux kernel 6.4 or later (Collabora
   recommends newer versions), a recent BlueZ, and a recent PipeWire/
-  WirePlumber with LC3 support (`liblc3` or LC3 built into the BlueZ
-  plugin), plus BlueZ experimental configuration for the ISO socket.
+  WirePlumber whose BlueZ SPA plugin provides LC3 encoding (via
+  `liblc3`), plus BlueZ experimental configuration for the ISO socket.
   See [Linux software requirements](#linux-software-requirements).
 - **Bluetooth version numbers do not prove LE Audio support.** "Bluetooth
   5.3" or "5.4" on a spec sheet describes the radio generation, not the
@@ -77,7 +77,13 @@ audio to a USB sound card. This is a different model from the native HCI
 path:
 
 - They **may work on Linux with no BlueZ/PipeWire involvement at all** —
-  the OS sees a plain USB audio device.
+  the OS sees a plain USB audio device, and the dongle handles the whole
+  Bluetooth side itself.
+- Pairing is **generic standards-based**: the dongle pairs directly with
+  the receiver while both sides are in their pairing mode, and stores the
+  bond in its own firmware. The transmitter and receiver do **not** need
+  to be shipped or sold as a matched pair — but actual interoperability
+  still has to be tested.
 - Interoperability with a specific receiver depends on the **dongle
   firmware**, not on the Linux stack, so it cannot be verified from
   documentation alone.
@@ -100,11 +106,32 @@ overview](https://www.collabora.com/news-and-blog/blog/2025/11/24/implementing-b
 
 - **Linux kernel 6.4 or later**, with newer versions strongly recommended
   due to ongoing ISO fixes.
-- **Recent BlueZ and PipeWire** versions (plus WirePlumber). BlueZ
-  experimental features — including the kernel ISO socket — currently have
-  to be enabled in `/etc/bluetooth/main.conf`; expect this to become
-  simpler over time.
-- LC3 support: PipeWire's BlueZ plugin needs `liblc3` (or LC3 compiled in).
+- **BlueZ 5.85 or later** (or BlueZ 5.84 with an upstream
+  [`pac_config_cb()` fix](https://github.com/bluez/bluez/commit/6b0a08776ae44a9102d7c6875a77e83dc6a11a37)
+  backported). An **unpatched BlueZ 5.84** mishandles the error result in
+  the PAC configuration callback (`pac_config_cb()`): it compares the
+  error-code **pointer** instead of the pointed-to **value**, so a
+  successful BAP endpoint configuration could be reported as `-EINVAL`
+  and block LE Audio stream setup. This is pointer/value error handling,
+  not a cosmetic issue. Upstream fixed it in
+  [commit 6b0a087](https://github.com/bluez/bluez/commit/6b0a08776ae44a9102d7c6875a77e83dc6a11a37)
+  (landed immediately after the BlueZ 5.84 tag), making **5.85 the first
+  stable release containing the fix**; distributions that carried the fix
+  as a backport, such as [Yocto](https://patchwork.yoctoproject.org/project/oe-core/patch/20251123143946.3445210-1-gudni.m.g@gmail.com/),
+  dropped it when upgrading to 5.85. This finding is specific to
+  unpatched 5.84 — other releases in that era or earlier may differ, and
+  may lack other functionality required for LE Audio. If you backport the
+  fix yourself, use upstream's form `(error_code && *error_code == 0)`:
+  a NULL `error_code` means no returned success code, which upstream
+  treats as failure. A variant that treats NULL as success could report
+  an error path as success.
+- **Recent PipeWire and WirePlumber** versions. BlueZ experimental
+  features — including the kernel ISO socket — currently have to be
+  enabled in `/etc/bluetooth/main.conf`; expect this to become simpler
+  over time.
+- LC3 support: PipeWire's BlueZ SPA plugin (part of PipeWire, not BlueZ
+  itself) handles the LC3 encoding for the BAP source role and needs
+  `liblc3` available to it.
 
 This project does not pin a specific Linux distribution. The exact
 package/version situation differs by distro, and desktop audio UIs are
@@ -112,24 +139,51 @@ still maturing.
 
 ### Project's tested path vs. desktop PipeWire
 
-This project validated the native-adapter path using its own **custom
-source tool**, `scripts/bap_central.py` (a BlueZ BAP source that streams
-LC3 test tones), not the desktop PipeWire UI. The AX210 validation below is
-therefore direct evidence for the **controller + Linux stack combination
-that was tested** — it does not automatically guarantee that every desktop
-distro's PipeWire/WirePlumber UI will work out of the box. Desktop LE
-Audio UX is still evolving.
+This project validated the native-adapter path with the **Intel AX210**
+using a generic desktop **PipeWire/WirePlumber UI** streaming to this
+receiver — the same user-facing flow a normal Linux desktop uses, with a
+BlueZ that carries the required PAC configuration fix (upstream in BlueZ
+5.85, or backported to 5.84). The AX210 validation below is therefore
+direct evidence that a normal desktop PipeWire/WirePlumber path works as
+an LE Audio source with this receiver, not only a custom script.
+
+The repository's own **`scripts/bap_central.py`** (a BlueZ BAP source that
+streams LC3 test tones) remains a separate, deterministic
+development/test path for verifying receiver builds without hunting for a
+consumer source device — it is not the basis for the AX210
+project-validation claim above. Desktop LE Audio UX is still evolving, so
+keep the software stack current (see
+[Linux software requirements](#linux-software-requirements)).
 
 ## Hardware matrix
 
+### Native HCI adapters (primary candidates)
+
 | Hardware | Host model | Linux status | Receiver status | Notes |
 |---|---|---|---|---|
-| **Intel Wi-Fi 6E AX210** | M.2 (NGFF) PCIe Wi-Fi card — not a plug-in USB stick; the Bluetooth function is exposed to the host over internal USB, so `lsusb` may show `Intel Corp. AX210 Bluetooth` | **Project-validated** | **Project-validated** | Validated as a BAP unicast source with this receiver on Linux; project validation is the primary evidence for compatibility with this receiver. Intel's [specifications](https://www.intel.com/content/www/us/en/products/sku/239216/intel-wifi-6e-ax210-gig-embedded/specifications.html) list the Bluetooth function over USB. A practical Linux LE Audio report (Raspberry Pi 5 with an AX210 module, BlueZ/PipeWire/WirePlumber) is at [AK-Experiments](https://ak-experiments.blogspot.com/2025/08/bluetooth-le-audio-on-raspberry-pi-with.html). Needs the current kernel/BlueZ/PipeWire stack — see [Linux software requirements](#linux-software-requirements). |
-| **FlooGoo FMA120** (Flairmesh) | USB-A dongle (composite USB audio; no driver needed on the host) | **Vendor-supported** | **Unverified** | Vendor explicitly claims Linux: no-driver USB audio, LE Audio unicast (LC3) and Auracast, with a Linux configuration app (FlooCast `.deb`/`.rpm`, also on GitHub). Strongest actual USB-dongle candidate found in research, but **not project-tested** with this receiver. See [Flairmesh FMA120](https://www.flairmesh.com/Dongle/FMA120.html). |
-| **Creative BT-W6** | USB-C wireless audio transmitter | **Unverified** | **Unverified** | Vendor claims LC3 LE Audio unicast to a compatible receiver, plug-and-play on PC/Mac/consoles. Linux is **not** in the officially listed platforms, and the Creative configuration app downloads appear Windows/macOS-only. It may enumerate as generic USB audio on Linux, but Linux configuration and interoperability with this receiver are unverified. Not recommended as a confirmed Linux solution. See [Creative BT-W6](https://us.creative.com/p/speakers/creative-bt-w6) and [Creative support](https://support.creative.com/Products/ProductDetails.aspx?prodID=24280&prodName=Creative+BT-W6). |
-| **Avantalk / Avantree C82 LEA** | USB-C adapter (USB-A adapter included) | **Unverified** | **Unverified** | Vendor claims no-driver USB audio and LE Audio/LC3 (plus classic Bluetooth), listing Windows/Mac/Android/consoles — but **not Linux**. Linux support and interoperability with this receiver are unverified. See [Avantree C82 LEA](https://avantree.com/products/c82-usb-le-audio-adapter). |
-| **Nordic nRF5340 Audio DK** | Development kit (USB) | **Unverified** | **Unverified** | Official Nordic LE Audio development platform; Nordic documents that it is configurable as a USB dongle to send/receive PC audio. It is a large development kit, not a consumer adapter, Nordic lists "PC" rather than Linux specifically, and Linux USB Audio Class enumeration and interoperability with this receiver are **unverified** by this project. See [nRF5340 Audio DK](https://www.nordicsemi.com/Products/Development-hardware/nRF5340-Audio-DK/Download). |
+| **Intel Wi-Fi 6E AX210** | M.2 (NGFF) PCIe Wi-Fi card — not a plug-in USB stick; the Bluetooth function is exposed to the host over internal USB, so `lsusb` may show `Intel Corp. AX210 Bluetooth` | **Project-validated** | **Project-validated** | Validated as a BAP unicast source with this receiver on Linux via a **generic desktop PipeWire/WirePlumber UI** (the normal desktop flow), and also exercised with the repository's `scripts/bap_central.py` development/test tool. Project validation is the primary evidence for compatibility with this receiver. Intel's [specifications](https://www.intel.com/content/www/us/en/products/sku/239216/intel-wifi-6e-ax210-gig-embedded/specifications.html) list the Bluetooth function over USB. A practical Linux LE Audio report (Raspberry Pi 5 with an AX210 module, BlueZ/PipeWire/WirePlumber) is at [AK-Experiments](https://ak-experiments.blogspot.com/2025/08/bluetooth-le-audio-on-raspberry-pi-with.html). Needs a current kernel/BlueZ/PipeWire stack (BlueZ 5.85 or later) — see [Linux software requirements](#linux-software-requirements). |
 | **Recent adapters: Intel BE200 and recent NXP / MediaTek / Qualcomm models** | Varies (M.2, USB) | **Unverified** | **Unverified** | Research candidates only, not confirmed. Controller/firmware LE Audio support varies by vendor and model: per [Collabora's overview](https://www.collabora.com/news-and-blog/blog/2025/11/24/implementing-bluetooth-le-audio-and-auracast-on-linux-systems/), recent Intel controllers (BE200) and several other vendors implement LE Audio in recent models. Check the controller's actual capabilities (`cis-central`) before relying on it. |
+
+### Self-contained USB transmitters (secondary candidates)
+
+| Hardware | Host model | Linux status | Receiver status | Notes |
+|---|---|---|---|---|
+| **FlooGoo FMA120** (Flairmesh) | USB-A dongle (composite USB audio; no driver needed on the host) | **Vendor-supported** | **Unverified** | Vendor explicitly claims Linux: no-driver USB audio, LE Audio unicast (LC3) and Auracast, with a Linux configuration app (FlooCast `.deb`/`.rpm`, also on GitHub). Pairing is set up through the FlooCast app: enable "Prefer LE Audio", scan and add the nearest device (the receiver), and the bond/settings are stored in the dongle — the app is not needed after initial pairing. Strongest actual USB-dongle candidate found in research, but **not project-tested** with this receiver. See [Flairmesh FMA120](https://www.flairmesh.com/Dongle/FMA120.html) and the [FMA120 user guide](https://www.flairmesh.com/support/FMA120UG.pdf). |
+| **Creative BT-W6** | USB-C wireless audio transmitter | **Unverified** | **Unverified** | Vendor claims LC3 LE Audio unicast to a compatible receiver, plug-and-play on PC/Mac/consoles. Linux is **not** in the officially listed platforms, and the Creative configuration app downloads appear Windows/macOS-only — but pairing and mode selection are driven from the hardware: a multifunction button starts pairing on first use, and the transmitter's controls switch LE Audio/unicast mode. It may enumerate as generic USB audio on Linux, but interoperability with this receiver is untested. Not recommended as a confirmed Linux solution. See [Creative BT-W6](https://us.creative.com/p/speakers/creative-bt-w6) and [Creative support](https://support.creative.com/Products/ProductDetails.aspx?prodID=24280&prodName=Creative+BT-W6). |
+| **Avantalk / Avantree C82 LEA** | USB-C adapter (USB-A adapter included) | **Unverified** | **Unverified** | Vendor claims no-driver USB audio and LE Audio/LC3 (plus classic Bluetooth), listing Windows/Mac/Android/consoles — but **not Linux**. A physical button switches it into LE Audio mode and enters pairing; no custom Linux Bluetooth stack is required. Linux support and interoperability with this receiver are unverified. See [Avantree C82 LEA](https://avantree.com/products/c82-usb-le-audio-adapter) and the [C82 LEA user guide](https://iug.avantree.com/C82-LEA/EN/C82-LEA-IUG.pdf). |
+| **Nordic nRF5340 Audio DK** | Development kit (USB) | **Unverified** | **Unverified** | Official Nordic LE Audio development platform; Nordic documents that it is configurable as a USB dongle to send/receive PC audio. It is a large development kit, not a consumer adapter, Nordic lists "PC" rather than Linux specifically, and Linux USB Audio Class enumeration and interoperability with this receiver are **unverified** by this project. See [nRF5340 Audio DK](https://www.nordicsemi.com/Products/Development-hardware/nRF5340-Audio-DK/Download). |
+
+### Project priority: native HCI adapters
+
+Native HCI adapters are this project's **primary** candidates. The
+BlueZ/PipeWire path provides an observable, controllable, standard BAP
+source: stream state, QoS, codec configuration and diagnostics are visible
+(and scriptable) on the host. Self-contained USB transmitters hide
+Bluetooth state, QoS and profile behavior inside proprietary firmware,
+offer little or no host-side diagnostics, and remain untested with this
+receiver. They are **secondary interoperability candidates**, not
+recommended or confirmed sources. The **Intel AX210 is the only
+project-validated source** listed here.
 
 Notes:
 
@@ -138,6 +192,11 @@ Notes:
 - For the dongle-based products, "receiver status" can only be settled by
   testing the dongle against this receiver; the Linux software stack is
   not the deciding factor for them.
+- Self-contained transmitters do **not** require a matched
+  receiver/transmitter pair: generic standards-based pairing is intended.
+  Put both the dongle and the receiver into their pairing modes and they
+  bond directly — but actual interoperability with this receiver must
+  still be tested.
 
 ## Related documents
 

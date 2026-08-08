@@ -129,15 +129,25 @@ support. Check that the phone, tablet, or computer you want to stream from
 actually supports Bluetooth LE Audio with BAP unicast.
 
 On Linux, this project has validated the **Intel Wi-Fi 6E AX210** as a BAP
-unicast source with this receiver — using the repository's own custom
-BlueZ source tool (`scripts/bap_central.py`), not the desktop PipeWire UI
-(Linux/BlueZ/PipeWire path; the AX210 is an M.2 Wi-Fi card whose Bluetooth
-function is exposed over internal USB — not a plug-in USB stick). Desktop
-LE Audio on Linux needs a recent kernel/BlueZ/PipeWire stack, and most
-consumer adapters — including self-contained USB audio dongles — remain
-unverified with this receiver. See [Supported LE Audio sources on
+unicast source with this receiver, streaming through a generic desktop
+**PipeWire/WirePlumber UI** — the normal Linux/BlueZ/PipeWire desktop path
+(the AX210 is an M.2 Wi-Fi card whose Bluetooth function is exposed over
+internal USB — not a plug-in USB stick). Desktop LE Audio on Linux needs a
+recent kernel/BlueZ/PipeWire stack (BlueZ 5.85 or later), and most consumer
+adapters — including self-contained USB audio dongles — remain unverified
+with this receiver. See [Supported LE Audio sources on
 Linux](docs/supported-sources.md) for the researched hardware matrix and
 software requirements.
+
+Linux sources come in two kinds. **Native HCI adapters** are the
+BlueZ/PipeWire path: the LE Audio stack runs on the PC, which is what this
+project validates. **Self-contained USB audio transmitters** (dongles) run
+the entire Bluetooth stack in their own firmware; the PC just plays audio
+to a USB sound card, and the dongle pairs directly with the receiver while
+both sides are in pairing mode — no matched transmitter/receiver pair is
+required. This project's priority — and its only project-validated source —
+is the native HCI path (the AX210); self-contained dongles remain untested
+secondary candidates with this receiver.
 
 As a development and test path, this repository includes a **central test
 tool** (`scripts/bap_central.py`) that streams LC3 test tones from a Linux PC
@@ -151,7 +161,7 @@ not a consumer feature.
 | Document | What it covers |
 |---|---|
 | [User guide](docs/user-guide.md) | What you need, what to expect, pairing modes, troubleshooting |
-| [Supported sources on Linux](docs/supported-sources.md) | Researched Linux LE Audio source hardware and software requirements (AX210 project-validated) |
+| [Supported sources on Linux](docs/supported-sources.md) | Researched Linux LE Audio source hardware and software requirements (AX210 project-validated via desktop PipeWire) |
 | [Hardware wiring](docs/hardware-wiring.md) | DAC choice and verified I2S pin wiring for both boards |
 | [Known limitations](docs/known-limitations.md) | Honest list of current gaps and caveats |
 | [Technology: nRF5340](docs/technology/nrf5340.md) | Dual-core architecture, controller, audio PLL, flashing constraints |

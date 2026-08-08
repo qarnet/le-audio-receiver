@@ -110,8 +110,17 @@ For Linux specifically, see [Supported LE Audio sources on
 Linux](supported-sources.md): it explains the BlueZ/PipeWire software
 requirements, distinguishes native HCI adapters from self-contained USB
 audio dongles, and lists researched hardware with honest status labels
-(the Intel Wi-Fi 6E AX210 is project-validated with this receiver; most
-other hardware remains unverified).
+(the Intel Wi-Fi 6E AX210 is project-validated with this receiver via the
+generic desktop PipeWire/WirePlumber UI; most other hardware remains
+unverified).
+
+Two kinds of Linux sources exist. **Native HCI adapters** are the
+recommended path: BlueZ/PipeWire on the PC runs the LE Audio stack, which
+is what this project validates (the Intel AX210). **Self-contained USB
+audio transmitters** (dongles) pair directly with the receiver while both
+sides are in pairing mode — Linux just sees a USB sound card and is not
+involved in the Bluetooth pairing. Dongles are untested secondary
+candidates with this receiver.
 
 ### Development / test path
 
