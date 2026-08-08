@@ -531,7 +531,7 @@ ZTEST(audio_shell_nrf54, test_wrapper_seam_flpr)
 	assert_output_has_line(out, "  Epoch        : 9 (ready=0 reboot=0)");
 }
 
-/* ── FLPR command handlers ─────────────────────────────────────────
+/* ── FLPR command handlers ─────────────────────────────
  * cmd_flpr_stress / ring test / ring reset / ring init / producer
  * stall / stall_flpr / stall_flpr_ms / ring acceptance / hang —
  * production shell handlers executed through the real shell registry.
@@ -586,8 +586,7 @@ ZTEST(audio_shell_nrf54, test_flpr_stress_success_summary)
 
 	zassert_equal(rc, 0);
 	assert_output_contains(out, "Starting 5 ping/pong stress...");
-	assert_output_contains(
-		out, "Sent=5 Recv=4 Timeout=1 Stale=0 Mismatch=0 ErrSend=0 (of 5 requested)");
+	assert_output_contains(out, "Sent=5 Recv=4 Timeout=1 Stale=0 Mismatch=0 ErrSend=0 (of 5 requested)");
 }
 
 ZTEST(audio_shell_nrf54, test_flpr_ring_test_invalid_count)

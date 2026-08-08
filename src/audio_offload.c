@@ -136,7 +136,7 @@ static uint32_t g_remote_epoch;
 static uint32_t g_heartbeat_dedup_count;
 static bool g_recovery_scheduled; /* prevent duplicate recovery scheduling */
 
-/* ── ASRC offload state ────────────────────────────────────── */
+/* ── ASRC offload state ────────────────────────────── */
 
 /* Module-static scratch receive buffer — 481 stereo frames (1924 B).
  * Serialised by submit_lock (same mutex as identity submit). */
@@ -322,7 +322,7 @@ static void schedule_prep(k_timeout_t delay)
 	k_work_schedule_for_queue(&g_offload_wq, &g_prep_work, delay);
 }
 
-/* ── Heartbeat supervisor ───────────────────────────────────────────
+/* ── Heartbeat supervisor ───────────────────────────────
  * Invoked from flpr_handshake heartbeat work context (outside spinlock)
  * on healthy→unhealthy transition.  Dedup: only fires once per transition
  * episode.  The first timeout (8ms output deadline) normally detects a
@@ -537,7 +537,7 @@ prep_retry: {
 }
 }
 
-/* ── Recovery work (staged approach) ────────────────────────────────
+/* ── Recovery work (staged approach) ─────────────────────
  * Runs on dedicated offload work queue — NEVER in BT callback.
  *
  * Staged algorithm:
@@ -957,7 +957,7 @@ void audio_offload_get_status(struct audio_offload_status *status)
 	k_spin_unlock(&g_lock, key);
 }
 
-/* ── ASRC offload ───────────────────────────────────────────────────
+/* ── ASRC offload ─────────────────────────────────────────
  *
  * audio_offload_process_asrc() is decomposed into private stage
  * helpers with one transaction/capture struct, one shared fault
@@ -1011,7 +1011,7 @@ static int asrc_validate_args(const struct asrc_txn *t)
 static bool asrc_lifecycle_ok_locked(const struct asrc_txn *t)
 {
 	bool ok = lifecycle_check_before_fault(t->captured_state, t->captured_generation,
-					       t->captured_epoch, t->sequence);
+						t->captured_epoch, t->sequence);
 
 	if (!ok) {
 		g_asrc_stats.fallback_count++;
@@ -1321,27 +1321,27 @@ static int asrc_shadow_verify(struct asrc_txn *t, const struct flpr_consume_asrc
 	/* Import must succeed — pre_state was exported by cpuapp.
 	 * Import failure is a fault: do NOT fall through as pass. */
 	if (imp_ret != 0) {
-		return asrc_fault_finalize(t, -EFAULT, NULL, &g_asrc_stats.verify_fault_count,
-					   true);
+		return asrc_fault_finalize(t, -EFAULT, NULL,
+					   &g_asrc_stats.verify_fault_count, true);
 	}
 
 	size_t consumed, produced;
 	int16_t nl, nr;
-	int asrc_ret = audio_asrc_process(&verify_ctx, t->input, OFFLOAD_EXPECTED_FRAMES,
-					  g_asrc_shadow, FLPR_RING_PAYLOAD_CAPACITY_FRAMES,
-					  t->correction_ppm, verify_prev_l, verify_prev_r,
-					  verify_prev_valid, &consumed, &produced, &nl, &nr);
+	int asrc_ret = audio_asrc_process(
+		&verify_ctx, t->input, OFFLOAD_EXPECTED_FRAMES, g_asrc_shadow,
+		FLPR_RING_PAYLOAD_CAPACITY_FRAMES, t->correction_ppm, verify_prev_l,
+		verify_prev_r, verify_prev_valid, &consumed, &produced, &nl, &nr);
 
 	/* Compare return code. */
 	if (asrc_ret != 0) {
-		return asrc_fault_finalize(t, -EFAULT, NULL, &g_asrc_stats.verify_fault_count,
-					   true);
+		return asrc_fault_finalize(t, -EFAULT, NULL,
+					   &g_asrc_stats.verify_fault_count, true);
 	}
 
 	/* Compare frame count. */
 	if (produced != cr->output_frames) {
-		return asrc_fault_finalize(t, -EFAULT, NULL, &g_asrc_stats.verify_fault_count,
-					   true);
+		return asrc_fault_finalize(t, -EFAULT, NULL,
+					   &g_asrc_stats.verify_fault_count, true);
 	}
 
 	/* Compare every sample. */
@@ -1523,6 +1523,7 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 	txn.owns_submit_lock = false;
 	return 0;
 }
+
 
 void audio_offload_get_asrc_stats(struct audio_offload_asrc_stats *s)
 {
