@@ -184,12 +184,6 @@ void flpr_ring_mgr_stall_producer(bool stall)
 	mock_stall_producer_active = stall;
 }
 
-void flpr_ring_mgr_set_consume_cb(flpr_ring_consume_cb_t cb, void *user_data)
-{
-	(void)cb;
-	(void)user_data;
-}
-
 int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint32_t rate_per_sec,
 				struct flpr_ring_status *out)
 {
@@ -240,7 +234,7 @@ void flpr_ring_mgr_get_status(struct flpr_ring_status *status)
 	}
 }
 
-/* ── Stage 4B recovery mocks ───────────────────────────────────── */
+/* ── Recovery mocks ─────────────────────────────────────────────── */
 
 /* Mock control variables for runtime restart and remote reinit. */
 int mock_runtime_restart_result;
@@ -286,9 +280,10 @@ int flpr_ring_mgr_remote_restarted(void)
 	return mock_remote_restarted_result;
 }
 
-/* ── Stage 3B: ASRC typed produce/consume stubs ──────────────────────
- * produce_asrc uses mock_produce_result (shared), notify/wait use shared
- * mock variables.  Only consume_asrc_result has its own mock data. */
+/* ── ASRC typed produce/consume stubs ──────────────────────────────
+ * produce_asrc uses mock_produce_result(shared),
+ * notify / wait use shared mock variables.  Only consume_asrc_result
+ * has its own mock data. */
 
 enum flpr_consume_result mock_asrc_consume_result;
 struct flpr_consume_asrc_result mock_asrc_consume_data;

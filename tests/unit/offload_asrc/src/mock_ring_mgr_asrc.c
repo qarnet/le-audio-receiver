@@ -146,12 +146,6 @@ void flpr_ring_mgr_stall_producer(bool stall)
 	mock_stall_producer_active = stall;
 }
 
-void flpr_ring_mgr_set_consume_cb(flpr_ring_consume_cb_t cb, void *user_data)
-{
-	(void)cb;
-	(void)user_data;
-}
-
 int flpr_ring_mgr_test_run_rate(uint32_t block_count, uint32_t timeout_ms, uint32_t rate_per_sec,
 				struct flpr_ring_status *out)
 {
@@ -297,7 +291,7 @@ enum flpr_consume_result flpr_ring_mgr_consume_asrc_result(int16_t *pcm_out,
 	return FLPR_CONSUME_OK;
 }
 
-/* ── Stage 4B recovery stubs ─────────────────────────────────────── */
+/* ── Recovery stubs ─────────────────────────────────────── */
 
 #include "flpr_runtime.h"
 

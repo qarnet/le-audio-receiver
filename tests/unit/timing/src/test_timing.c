@@ -8,7 +8,7 @@
  * The tested functions are compiled from src/audio_timing_math.c
  * directly, not replicated here.
  *
- * Timing measurement now uses PCLK-derived TIMER ticks (Phase 4b.1
+ * Timing measurement uses PCLK-derived TIMER ticks
  * revised 2026-07-26).  Hardware validation showed I2S FRAMESTART
  * fires at DMA buffer boundaries (~100 Hz), not LRCK edges
  * (~47,619 Hz) — FRAMESTART cannot measure sample-clock frequency.

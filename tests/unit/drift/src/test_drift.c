@@ -2,7 +2,7 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * Phase 4b.2: unit tests for the PCLK-feedforward + buffer-phase PI
+ * Unit tests for the PCLK-feedforward + buffer-phase PI
  * drift controller.  Tests the production audio_drift.c directly.
  *
  * All tests use CONFIG_AUDIO_DRIFT_OUTPUT_CLAMP=500 (default).
@@ -11,6 +11,9 @@
  */
 
 #include <zephyr/ztest.h>
+#include <zephyr/kernel.h>
+#include <limits.h>
+#include <stdint.h>
 #include <string.h>
 #include "audio_drift.h"
 
@@ -259,4 +262,233 @@ ZTEST(drift, test_phase_integral_clamped)
 		zassert_true(ppm >= -500 && ppm <= 500,
 			     "phase-only output in [-500,500], got %d at %d", ppm, i);
 	}
+}
+
+/* ── Defined arithmetic across the full int32/int range ─────────
+ * Every public input (frequency ppm and slab count) must be defined:
+ * int64_t intermediates, rails clamped before narrowing, no signed
+ * overflow (verified with -fsanitize=undefined in the focused run).
+ */
+
+ZTEST(drift, test_frequency_int32_max_clamps_negative)
+{
+	audio_drift_frequency_error_update(INT32_MAX);
+	audio_drift_controller_update(SETPOINT);
+	int32_t ppm = audio_drift_controller_update(SETPOINT);
+	zassert_equal(ppm, -500, "INT32_MAX local fast → -rail (got %d)", ppm);
+}
+
+ZTEST(drift, test_frequency_int32_min_clamps_positive)
+{
+	audio_drift_frequency_error_update(INT32_MIN);
+	audio_drift_controller_update(SETPOINT);
+	int32_t ppm = audio_drift_controller_update(SETPOINT);
+	zassert_equal(ppm, 500, "INT32_MIN local slow → +rail (got %d)", ppm);
+}
+
+ZTEST(drift, test_slab_int_max_clamps_negative)
+{
+	audio_drift_controller_update(SETPOINT);
+	int32_t ppm = audio_drift_controller_update(INT_MAX);
+	zassert_equal(ppm, -500, "slab INT_MAX → -rail (got %d)", ppm);
+}
+
+ZTEST(drift, test_slab_int_min_clamps_positive)
+{
+	audio_drift_controller_update(SETPOINT);
+	int32_t ppm = audio_drift_controller_update(INT_MIN);
+	zassert_equal(ppm, 500, "slab INT_MIN → +rail (got %d)", ppm);
+}
+
+ZTEST(drift, test_frequency_cross_extreme_ema_defined)
+{
+	/* Jumping from INT32_MIN to INT32_MAX must not overflow the
+	 * EMA delta; the filter stays clamped inside int32 range and
+	 * the output stays on the correct rail. */
+	audio_drift_frequency_error_update(INT32_MIN);
+	audio_drift_controller_update(SETPOINT);
+	zassert_equal(audio_drift_controller_update(SETPOINT), 500, "INT32_MIN baseline");
+
+	audio_drift_frequency_error_update(INT32_MAX);
+	int32_t ppm = audio_drift_controller_update(SETPOINT);
+	zassert_equal(ppm, 500, "cross-extreme EMA keeps positive correction (got %d)", ppm);
+
+	audio_drift_frequency_error_update(INT32_MAX);
+	ppm = audio_drift_controller_update(SETPOINT);
+	zassert_equal(ppm, 500, "EMA converges up but stays defined (got %d)", ppm);
+}
+
+ZTEST(drift, test_exact_rail_boundary_and_clamp_overshoot)
+{
+	/* Exactly ±500 ppm is accepted without clamping distortion. */
+	audio_drift_frequency_error_update(500);
+	audio_drift_controller_update(SETPOINT);
+	zassert_equal(audio_drift_controller_update(SETPOINT), -500, "exact +500 → -500");
+
+	audio_drift_reset();
+	audio_drift_frequency_error_update(-500);
+	audio_drift_controller_update(SETPOINT);
+	zassert_equal(audio_drift_controller_update(SETPOINT), 500, "exact -500 → +500");
+
+	/* One ppm past the rail clamps, not wraps. */
+	audio_drift_reset();
+	audio_drift_frequency_error_update(501);
+	audio_drift_controller_update(SETPOINT);
+	zassert_equal(audio_drift_controller_update(SETPOINT), -500, "+501 clamps -500");
+
+	audio_drift_reset();
+	audio_drift_frequency_error_update(-501);
+	audio_drift_controller_update(SETPOINT);
+	zassert_equal(audio_drift_controller_update(SETPOINT), 500, "-501 clamps +500");
+}
+
+/* ── Long-run boundedness and setpoint stability ─────────────── */
+
+#define LONG_RUN 100000
+
+ZTEST(drift, test_long_run_setpoint_stable)
+{
+	audio_drift_controller_update(SETPOINT);
+	for (int i = 0; i < LONG_RUN; i++) {
+		audio_drift_frequency_error_update(0);
+		int32_t ppm = audio_drift_controller_update(SETPOINT);
+		zassert_equal(ppm, 0, "setpoint stays 0 at iteration %d (got %d)", i, ppm);
+	}
+	zassert_equal(audio_drift_get_ppm(), 0, "final 0");
+}
+
+ZTEST(drift, test_long_run_positive_extreme_bounded)
+{
+	/* slab_free=0 → phase_err +6 → positive correction; output must
+	 * stay inside the rails for the whole run and settle at +500. */
+	audio_drift_controller_update(SETPOINT);
+	for (int i = 0; i < LONG_RUN; i++) {
+		int32_t ppm = audio_drift_controller_update(0);
+		zassert_true(ppm >= -500 && ppm <= 500, "bounded at iteration %d (got %d)", i, ppm);
+		if (i >= 50) {
+			zassert_equal(ppm, 500, "settled at +500 by %d (got %d)", i, ppm);
+		}
+	}
+	zassert_equal(audio_drift_get_ppm(), 500, "final +500");
+}
+
+ZTEST(drift, test_long_run_negative_extreme_bounded)
+{
+	/* slab_free=12 → phase_err -6 → negative correction; output must
+	 * stay inside the rails for the whole run and settle at -500. */
+	audio_drift_controller_update(SETPOINT);
+	for (int i = 0; i < LONG_RUN; i++) {
+		int32_t ppm = audio_drift_controller_update(12);
+		zassert_true(ppm >= -500 && ppm <= 500, "bounded at iteration %d (got %d)", i, ppm);
+		if (i >= 50) {
+			zassert_equal(ppm, -500, "settled at -500 by %d (got %d)", i, ppm);
+		}
+	}
+	zassert_equal(audio_drift_get_ppm(), -500, "final -500");
+}
+
+/* ── Symmetric feedforward-rail phase unwind ──────────────────── */
+
+ZTEST(drift, test_feedforward_rail_phase_unwind_symmetric)
+{
+	/* Positive rail: feedforward +2000 holds the output at +500
+	 * while draining blocks unwind the integral to its -500 clamp
+	 * (the feedforward must dominate the unwound phase sum). */
+	audio_drift_frequency_error_update(-2000);
+	audio_drift_controller_update(SETPOINT);
+	for (int i = 0; i < 100; i++) {
+		audio_drift_controller_update(8); /* draining → negative inc */
+	}
+	zassert_equal(audio_drift_get_ppm(), 500, "feedforward keeps +rail");
+
+	/* Removing the feedforward (EMA decays over ~100 cycles) must
+	 * expose the fully unwound integral: output reaches the
+	 * opposite rail. */
+	for (int i = 0; i < 100; i++) {
+		audio_drift_frequency_error_update(0);
+		audio_drift_controller_update(8);
+	}
+	zassert_equal(audio_drift_get_ppm(), -500, "unwound integral reaches -rail");
+
+	/* Mirror on the negative rail. */
+	audio_drift_reset();
+	audio_drift_frequency_error_update(2000);
+	audio_drift_controller_update(SETPOINT);
+	for (int i = 0; i < 100; i++) {
+		audio_drift_controller_update(4); /* filling → positive inc */
+	}
+	zassert_equal(audio_drift_get_ppm(), -500, "feedforward keeps -rail");
+
+	for (int i = 0; i < 100; i++) {
+		audio_drift_frequency_error_update(0);
+		audio_drift_controller_update(4);
+	}
+	zassert_equal(audio_drift_get_ppm(), 500, "unwound integral reaches +rail");
+}
+
+/* ── Concurrent update / frequency / reset ─────────────────────
+ * Real Zephyr threads hammering the controller while a reset thread
+ * runs; k_thread_join returning proves no deadlock, and a deterministic
+ * final reset leaves INIT / zero state.
+ */
+
+#define CONC_THREADS 4
+#define CONC_ITERS   4000
+
+static struct k_thread conc_threads[CONC_THREADS];
+K_THREAD_STACK_ARRAY_DEFINE(conc_stacks, CONC_THREADS, 1024);
+
+static void conc_controller_fn(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a);
+	ARG_UNUSED(b);
+	ARG_UNUSED(c);
+	for (int i = 0; i < CONC_ITERS; i++) {
+		audio_drift_controller_update((i & 1) ? 4 : 8);
+	}
+}
+
+static void conc_frequency_fn(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a);
+	ARG_UNUSED(b);
+	ARG_UNUSED(c);
+	for (int i = 0; i < CONC_ITERS; i++) {
+		audio_drift_frequency_error_update((i % 7) - 3);
+	}
+}
+
+static void conc_reset_fn(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a);
+	ARG_UNUSED(b);
+	ARG_UNUSED(c);
+	for (int i = 0; i < CONC_ITERS; i++) {
+		if ((i % 64) == 0) {
+			audio_drift_reset();
+		}
+	}
+}
+
+ZTEST(drift, test_concurrent_update_frequency_reset_no_deadlock)
+{
+	k_thread_create(&conc_threads[0], conc_stacks[0], K_THREAD_STACK_SIZEOF(conc_stacks[0]),
+			conc_controller_fn, NULL, NULL, NULL, 0, K_PREEMPT_THREAD, K_NO_WAIT);
+	k_thread_create(&conc_threads[1], conc_stacks[1], K_THREAD_STACK_SIZEOF(conc_stacks[1]),
+			conc_controller_fn, NULL, NULL, NULL, 0, K_PREEMPT_THREAD, K_NO_WAIT);
+	k_thread_create(&conc_threads[2], conc_stacks[2], K_THREAD_STACK_SIZEOF(conc_stacks[2]),
+			conc_frequency_fn, NULL, NULL, NULL, 0, K_PREEMPT_THREAD, K_NO_WAIT);
+	k_thread_create(&conc_threads[3], conc_stacks[3], K_THREAD_STACK_SIZEOF(conc_stacks[3]),
+			conc_reset_fn, NULL, NULL, NULL, 0, K_PREEMPT_THREAD, K_NO_WAIT);
+
+	/* k_thread_join returning for every thread proves no deadlock. */
+	for (int i = 0; i < CONC_THREADS; i++) {
+		k_thread_join(&conc_threads[i], K_FOREVER);
+	}
+
+	/* Deterministic final reset: INIT and zero state. */
+	audio_drift_reset();
+	zassert_true(strcmp(audio_drift_state_str(), "INIT") == 0, "INIT after final reset");
+	zassert_equal(audio_drift_get_ppm(), 0, "zero after final reset");
+	zassert_equal(audio_drift_controller_update(SETPOINT), 0, "first post-reset returns 0");
 }

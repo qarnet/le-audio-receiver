@@ -21,3 +21,9 @@ target_sources(app PRIVATE
   ../flpr_audio_process.c
   ../audio_asrc.c
 )
+
+# FLPR-image acceptance handlers (RING_TEST/STALL/STRESS/FAULT_HANG +
+# diagnostic counters) gated behind CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS
+# (src/flpr/Kconfig; enabled in src/flpr/prj.conf for the current lab
+# build).  Config-off images contain no acceptance symbols.
+zephyr_sources_ifdef(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS acceptance.c)

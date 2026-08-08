@@ -127,31 +127,31 @@ class TestReceiverSerialMocked(unittest.TestCase):
         """Lines containing 'error' or 'fail' should go to stderr."""
         self.mock_ser.reset_input_buffer = MagicMock()
         self.mock_ser.read.side_effect = [
-            b"bt unpair\r\nbt_unpair failed: -5\r\nuart:~$ ",
+            b"bt unpair\r\nbt_bap_pairing_reset failed: -5\r\nuart:~$ ",
             b"",
         ]
 
         stdout, stderr = self.rs.send_command("bt unpair", wait_ms=100)
-        self.assertIn("bt_unpair failed", stderr)
+        self.assertIn("bt_bap_pairing_reset failed", stderr)
         self.assertEqual(stdout, "")
 
     def test_bt_unpair_success(self):
-        """bt_unpair with 'All bonds cleared' returns True."""
+        """bt_unpair with reset success text returns True."""
         self.mock_ser.reset_input_buffer = MagicMock()
         self.mock_ser.read.side_effect = [
-            b"bt unpair\r\nAll bonds cleared.\r\nuart:~$ ",
+            b"bt unpair\r\nPairing mode reset: bonds cleared; open pairing enabled.\r\nuart:~$ ",
             b"",
         ]
 
         success, output = self.rs.bt_unpair()
         self.assertTrue(success)
-        self.assertIn("All bonds cleared", output)
+        self.assertIn("Pairing mode reset", output)
 
     def test_bt_unpair_failure(self):
         """bt_unpair with error returns False."""
         self.mock_ser.reset_input_buffer = MagicMock()
         self.mock_ser.read.side_effect = [
-            b"bt unpair\r\nbt_unpair failed: -5\r\nuart:~$ ",
+            b"bt unpair\r\nbt_bap_pairing_reset failed: -5\r\nuart:~$ ",
             b"",
         ]
 
@@ -498,6 +498,38 @@ class TestServiceResolutionMocked(unittest.TestCase):
             self.assertFalse(result["VCS"])
 
 
+class TestSharedRemoteUuids(unittest.TestCase):
+    """Phase3's remote-UUID check reads the base module's REMOTE_UUIDS
+    (one source of truth for PACS/ASCS/VCS shared with the Phase 2 gate)."""
+
+    def test_phase3_remote_uuids_come_from_base_module(self):
+        with tempfile.TemporaryDirectory() as td:
+            gate = Phase3Gate(log_dir=os.path.join(td, "uuids_shared"))
+            try:
+                # A UUID injected ONLY into _bg.REMOTE_UUIDS must be the
+                # one the phase3 check resolves against — proving the
+                # function reads the shared dict, not an inline copy.
+                fake_uuid = "00001899-0000-1000-8000-00805f9b34fb"
+                mock_props = MagicMock()
+                mock_props.Get.return_value = [fake_uuid]
+                mock_iface = MagicMock(return_value=mock_props)
+                with patch("dbus.SystemBus"), patch("dbus.Interface", mock_iface):
+                    with patch.object(
+                        _bg,
+                        "REMOTE_UUIDS",
+                        {"PACS": fake_uuid, "ASCS": "x", "VCS": "y"},
+                    ):
+                        result = gate.check_remote_uuids("AA:BB:CC:DD:EE:FF")
+                self.assertTrue(result["PACS"])
+                self.assertFalse(result["ASCS"])
+                self.assertFalse(result["VCS"])
+            finally:
+                try:
+                    gate.cleanup()
+                except Exception:
+                    pass
+
+
 class TestLogScoping(unittest.TestCase):
     """Test independent log capture per playback run."""
 
@@ -669,7 +701,7 @@ class TestFailureModeClassification(unittest.TestCase):
         rs._get_serial = MagicMock(return_value=mock_ser)
         mock_ser.reset_input_buffer = MagicMock()
         mock_ser.read.side_effect = [
-            b"bt unpair\r\nbt_unpair failed: -5\r\nuart:~$ ",
+            b"bt unpair\r\nbt_bap_pairing_reset failed: -5\r\nuart:~$ ",
             b"",
         ]
         success, _ = rs.bt_unpair()

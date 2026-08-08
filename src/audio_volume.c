@@ -19,10 +19,6 @@ LOG_MODULE_REGISTER(audio_volume, LOG_LEVEL_INF);
 #define VOL_UNPACK_VOL(v)   ((uint8_t)((v) & 0xFFU))
 #define VOL_UNPACK_MUTE(v)  ((uint8_t)(((v) >> 8) & 0x1U))
 
-#define DEFAULT_VOL                                                                                \
-	IS_ENABLED(CONFIG_BT_AUDIO_VOL_DEFAULT)                                                    \
-	? CONFIG_BT_AUDIO_VOL_DEFAULT : 195
-
 static atomic_t vol_state = ATOMIC_INIT(VOL_PACK(195, 0));
 
 #if defined(CONFIG_BT_VCP_VOL_REND)
@@ -85,6 +81,17 @@ bool audio_volume_is_muted(void)
 void audio_volume_apply(int16_t *buf, size_t samples)
 {
 	uint32_t t0 = audio_perf_cycle_start();
+
+	if (buf == NULL || samples == 0) {
+		/* Safe no-data exit: NULL with any sample count and zero
+		 * samples with any pointer are deterministic no-ops.  This
+		 * must precede the state read so mute/zero scaling never
+		 * runs memset on a NULL pointer (not a portable C
+		 * guarantee).
+		 */
+		audio_perf_cycle_end(t0, AUDIO_PERF_PATH_VOLUME);
+		return;
+	}
 
 	uint32_t state = (uint32_t)atomic_get(&vol_state);
 	uint8_t vol = VOL_UNPACK_VOL(state);

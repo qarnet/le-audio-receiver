@@ -35,9 +35,15 @@ int audio_clock_actuator_init(void)
 int audio_clock_actuator_apply_ppm(int32_t ppm)
 {
 #if NRF_CLOCK_HAS_HFCLKAUDIO
-	/* 1 APLL step ≈ 3.3 ppm. Integer: offset = (ppm * 10) / 33. */
-	int32_t offset = (ppm * 10) / 33;
-	int32_t reg = CLAMP((int32_t)APLL_CENTER + offset, (int32_t)APLL_MIN, (int32_t)APLL_MAX);
+	/* 1 APLL step ≈ 3.3 ppm.  Integer: offset = (ppm * 10) / 33,
+	 * preserving C truncation toward zero.  The conversion, the
+	 * center addition, and the rail clamp all happen in int64_t so
+	 * the full int32_t input range (INT32_MIN..INT32_MAX) is
+	 * defined before narrowing to the register value.
+	 */
+	int64_t offset64 = ((int64_t)ppm * 10) / 33;
+	int64_t reg64 = (int64_t)APLL_CENTER + offset64;
+	int32_t reg = (int32_t)CLAMP(reg64, (int64_t)APLL_MIN, (int64_t)APLL_MAX);
 
 	nrfx_clock_hfclkaudio_config_set((uint16_t)reg);
 	return 0;
@@ -55,9 +61,4 @@ int audio_clock_actuator_reset(void)
 #else
 	return 0;
 #endif
-}
-
-int audio_clock_actuator_consume_sample_adjustment(void)
-{
-	return 0;
 }

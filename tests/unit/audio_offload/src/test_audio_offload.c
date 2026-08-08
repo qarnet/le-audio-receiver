@@ -2,7 +2,7 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * Unit tests for audio_offload state machine — Phase 6 Stage 5.
+ * Unit tests for audio_offload state machine.
  *
  * Tests the production nRF54L15 code path with mocked flpr_ring_mgr
  * transport via audio_offload_process_asrc().  Uses direct invocation
@@ -20,7 +20,7 @@
  *   - Concurrent stop-during-submit with helper thread
  *   - Exact accounting: submit_count, fallback_count, busy_count
  *   - ASRC typed validation: sequence, frames, flags, state, CRC
- *   - Stage 4B recovery state machine
+ *   - Recovery state machine
  */
 
 #include "audio_offload.h"
@@ -55,7 +55,7 @@ extern enum flpr_consume_result mock_asrc_consume_result;
 extern struct flpr_consume_asrc_result mock_asrc_consume_data;
 extern int mock_asrc_consume_calls;
 
-/* ── Stage 4B recovery mock control variables (mock_ring_mgr.c) ───── */
+/* ── Recovery mock control variables (mock_ring_mgr.c) ───────── */
 extern int mock_runtime_restart_result;
 extern uint32_t mock_runtime_restart_calls;
 extern bool mock_runtime_restart_called;
@@ -207,7 +207,7 @@ static void setup_normal(void *fixture)
 	mock_wait_result = 0;
 	mock_wait_delay_ms = 0;
 
-	/* Stage 4B recovery mocks. */
+	/* Recovery mocks. */
 	mock_runtime_restart_result = 0;
 	mock_runtime_restart_calls = 0;
 	mock_runtime_restart_called = false;
@@ -643,6 +643,11 @@ ZTEST(audio_offload, test_is_healthy)
 {
 	zassert_true(audio_offload_is_healthy(), "healthy after init+start+prep");
 
+	/* NULL status snapshot is a deterministic no-op (keeps the
+	 * surviving get_status null-guard line covered after the
+	 * is_stopped() deletion). */
+	audio_offload_get_status(NULL);
+
 	trigger_fault_no_recover();
 	zassert_false(audio_offload_is_healthy(), "not healthy after fault");
 
@@ -916,7 +921,7 @@ ZTEST(audio_offload, test_recovery_bounded_5_attempts)
 	zassert_equal(s.recovery_attempts, base_attempts + 5, "still 5 successful recoveries");
 }
 
-/* ── Stage 4B recovery state machine tests ───────────────────────── */
+/* ── Recovery state machine tests ───────────────────────────────── */
 
 ZTEST(audio_offload, test_stage4b_short_reset_ok)
 {
@@ -1172,9 +1177,16 @@ static void verify_asrc_category(struct audio_offload_status *pre_s,
 }
 
 /* Setup for ASRC tests: stream started, state ACTIVE. */
+static enum asrc_test_stage stop_target;
+
 static void setup_asrc(void *fixture)
 {
 	(void)fixture;
+
+	asrc_test_stage_hook = NULL;
+	asrc_test_stage_user_data = NULL;
+	stop_target = (enum asrc_test_stage)0xFF;
+
 	audio_offload_init();
 	audio_offload_stream_start();
 	run_prep_work();
@@ -1203,8 +1215,127 @@ static void setup_asrc(void *fixture)
 static void teardown_asrc(void *fixture)
 {
 	(void)fixture;
+	asrc_test_stage_hook = NULL;
+	asrc_test_stage_user_data = NULL;
 	audio_offload_stream_stop();
 	memset(test_output, 0, sizeof(test_output));
+}
+
+/* ── Second-thread submit-mutex contention + stage hooks ─────────── */
+
+K_SEM_DEFINE(busy_holder_locked, 0, 1);
+K_SEM_DEFINE(busy_holder_release, 0, 1);
+
+/* Holds g_submit_lock until the test releases it — honest contention
+ * for the 8 ms mutex-timeout (busy) path. */
+static void busy_lock_holder_fn(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a);
+	ARG_UNUSED(b);
+	ARG_UNUSED(c);
+
+	k_mutex_lock(&g_submit_lock, K_FOREVER);
+	k_sem_give(&busy_holder_locked);
+	k_sem_take(&busy_holder_release, K_FOREVER);
+	k_mutex_unlock(&g_submit_lock);
+}
+
+/* Hook callback: lifecycle change at ONE chosen stage boundary.  The
+ * production hook fires at every boundary; the test filters so the stop
+ * happens exactly at the stage under test. */
+static void stop_at_stage_hook(enum asrc_test_stage stage, void *user_data)
+{
+	(void)user_data;
+	if (stage == stop_target) {
+		audio_offload_stream_stop();
+	}
+}
+
+/* ── Table-driven recovery-eligible fault snapshots ──────────────── */
+
+struct asrc_fault_row {
+	const char *name;
+	uint32_t sequence;
+	int expected_last_error;
+	uint32_t gen_timeout, gen_full, gen_stale, gen_seq, gen_frame;
+	uint32_t as_timeout, as_full, as_stale, as_seq, as_frame, as_state;
+};
+
+/* Every recovery-eligible post-lock fault stage: exact category deltas,
+ * exact last_error/last_error_seq, RECOVERING + one schedule, output and
+ * result untouched.  Category column order matches verify_asrc_category. */
+static const struct asrc_fault_row asrc_fault_rows[] = {
+	{"produce_full", 101, -ENOSPC, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0},
+	{"produce_other", 102, -EIO, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{"notify_error", 103, -EIO, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{"wait_timeout", 104, -ETIMEDOUT, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0},
+	{"consume_empty", 105, -ENOENT, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{"consume_stale", 106, -ESTALE, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0},
+	{"consume_other", 107, -EIO, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{"flpr_error_transport", 108, -5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{"frame_range", 109, -EFAULT, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0},
+	{"status_nonzero", 110, -EFAULT, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{"flags_wrong", 111, -EFAULT, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{"seq_mismatch", 112, -EFAULT, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0},
+	{"correction_mismatch", 113, -EFAULT, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{"reserved_nonzero", 114, -EFAULT, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+	{"post_state_import", 115, -EFAULT, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+	{"step_base_mismatch", 116, -EFAULT, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+};
+
+static void apply_asrc_fault_row(const struct asrc_fault_row *row)
+{
+	switch (row - asrc_fault_rows) {
+	case 0:
+		mock_produce_result = FLPR_PRODUCE_FULL;
+		break;
+	case 1:
+		mock_produce_result = (enum flpr_produce_result)99;
+		break;
+	case 2:
+		mock_notify_result = -EIO;
+		break;
+	case 3:
+		mock_wait_result = -ETIMEDOUT;
+		break;
+	case 4:
+		mock_asrc_consume_result = FLPR_CONSUME_EMPTY;
+		break;
+	case 5:
+		mock_asrc_consume_result = FLPR_CONSUME_STALE;
+		break;
+	case 6:
+		mock_asrc_consume_result = (enum flpr_consume_result)99;
+		break;
+	case 7:
+		mock_asrc_consume_data.processing_status = -5;
+		mock_asrc_consume_data.output_frames = 0;
+		break;
+	case 8:
+		mock_asrc_consume_data.output_frames = 0;
+		break;
+	case 9:
+		mock_asrc_consume_data.processing_status = 1;
+		break;
+	case 10:
+		mock_asrc_consume_data.flags = FLPR_SLOT_FLAG_VALID;
+		break;
+	case 11:
+		mock_asrc_consume_data.sequence = 9999;
+		break;
+	case 12:
+		mock_asrc_consume_data.correction_ppm = 123;
+		break;
+	case 13:
+		mock_asrc_consume_data.post_state.reserved[0] = 1;
+		break;
+	case 14:
+		mock_asrc_consume_data.post_state.step_base = 0;
+		break;
+	case 15:
+		mock_asrc_consume_data.post_state.step_base = test_pre_state.step_base + 1;
+		break;
+	}
 }
 
 /* ── ASRC tests: exact deltas per reachable branch ───────────────── */
@@ -1288,7 +1419,263 @@ ZTEST(audio_offload_asrc, test_asrc_not_active)
 
 ZTEST(audio_offload_asrc, test_asrc_busy)
 {
-	zassert_true(true, "busy path exists");
+	struct audio_offload_status pre_s, post_s;
+	struct audio_offload_asrc_stats pre_a, post_a;
+	struct audio_offload_asrc_result result;
+	struct k_thread holder;
+	static K_THREAD_STACK_DEFINE(holder_stack, 512);
+
+	ASRC_SNAPSHOT(pre_s, pre_a);
+
+	/* Honest second-thread contention: a helper thread holds the submit
+	 * mutex so the 8 ms lock deadline expires in the main thread. */
+	k_thread_create(&holder, holder_stack, K_THREAD_STACK_SIZEOF(holder_stack),
+			busy_lock_holder_fn, NULL, NULL, NULL, 3, 0, K_NO_WAIT);
+	zassert_equal(k_sem_take(&busy_holder_locked, K_MSEC(2000)), 0, "holder must lock");
+
+	int ret = audio_offload_process_asrc(test_input, TEST_ASRC_FRAMES, 42, 0, &test_pre_state,
+					     test_output, TEST_ASRC_CAPACITY, &result);
+
+	k_sem_give(&busy_holder_release);
+	k_thread_join(&holder, K_FOREVER);
+
+	ASRC_SNAPSHOT(post_s, post_a);
+
+	zassert_equal(ret, -EAGAIN, "mutex timeout rejects");
+	verify_asrc_deltas(&pre_s, &pre_a, &post_s, &post_a, 1, 0, 1, 1, 0, 1);
+	zassert_equal(ASRC_DELTA_U32(post_s, pre_s, busy_count), 1, "busy_count +1");
+	zassert_equal(post_s.last_error, -EBUSY, "last_error -EBUSY");
+	zassert_equal(post_s.last_error_seq, 42, "last_error_seq");
+	zassert_equal(post_s.state, AUDIO_OFFLOAD_RECOVERING, "RECOVERING");
+	zassert_false(post_s.healthy, "healthy false");
+	zassert_true(audio_offload_test_is_recovery_scheduled(), "one recovery schedule");
+	assert_output_untouched(0);
+
+	/* One recovery run consumes the schedule exactly once. */
+	run_recovery_work();
+	{
+		struct audio_offload_status s;
+		audio_offload_get_status(&s);
+		zassert_equal(s.state, AUDIO_OFFLOAD_ACTIVE, "ACTIVE after recovery");
+		zassert_false(audio_offload_test_is_recovery_scheduled(),
+			      "recovery schedule consumed");
+	}
+}
+
+ZTEST(audio_offload_asrc, test_asrc_post_mutex_not_active)
+{
+	struct audio_offload_status pre_s, post_s;
+	struct audio_offload_asrc_stats pre_a, post_a;
+	struct audio_offload_asrc_result result;
+
+	memset(&result, 0, sizeof(result));
+	ASRC_SNAPSHOT(pre_s, pre_a);
+
+	/* Mutex is acquired, then the lifecycle changes BEFORE the post-mutex
+	 * recheck: the special non-recovery epilogue must run (fallback +
+	 * last_error=-EAGAIN, no stale, no RECOVERING, no recovery). */
+	stop_target = ASRC_TEST_STAGE_MUTEX_ACQUIRED;
+	asrc_test_stage_hook = stop_at_stage_hook;
+	int ret = audio_offload_process_asrc(test_input, TEST_ASRC_FRAMES, 33, 0, &test_pre_state,
+					     test_output, TEST_ASRC_CAPACITY, &result);
+	asrc_test_stage_hook = NULL;
+
+	ASRC_SNAPSHOT(post_s, post_a);
+
+	zassert_equal(ret, -EAGAIN, "post-mutex non-ACTIVE rejects");
+	verify_asrc_deltas(&pre_s, &pre_a, &post_s, &post_a, 1, 0, 1, 1, 0, 1);
+	zassert_equal(ASRC_DELTA_U32(post_s, pre_s, stale_count), 0, "no stale count");
+	zassert_equal(ASRC_DELTA_U32(post_s, pre_s, busy_count), 0, "no busy count");
+	zassert_equal(post_s.last_error, -EAGAIN, "last_error -EAGAIN");
+	zassert_equal(post_s.last_error_seq, 33, "last_error_seq");
+	zassert_equal(post_s.state, AUDIO_OFFLOAD_STOPPED, "STOPPED preserved (no RECOVERING)");
+	zassert_false(audio_offload_test_is_recovery_scheduled(), "no recovery schedule");
+	assert_output_untouched(0);
+}
+
+ZTEST(audio_offload_asrc, test_asrc_mutex_timeout_lifecycle_changed)
+{
+	struct audio_offload_status pre_s, post_s;
+	struct audio_offload_asrc_stats pre_a, post_a;
+	struct audio_offload_asrc_result result;
+	struct k_thread holder;
+	static K_THREAD_STACK_DEFINE(holder_stack, 512);
+
+	memset(&result, 0, sizeof(result));
+	ASRC_SNAPSHOT(pre_s, pre_a);
+
+	/* Holder blocks the mutex; the hook fires when the 8 ms lock expires
+	 * and stops the stream BEFORE the busy finalizer's lifecycle recheck:
+	 * must count stale, NOT busy, and never schedule recovery. */
+	k_thread_create(&holder, holder_stack, K_THREAD_STACK_SIZEOF(holder_stack),
+			busy_lock_holder_fn, NULL, NULL, NULL, 3, 0, K_NO_WAIT);
+	zassert_equal(k_sem_take(&busy_holder_locked, K_MSEC(2000)), 0, "holder must lock");
+
+	stop_target = ASRC_TEST_STAGE_MUTEX_TIMEOUT;
+	asrc_test_stage_hook = stop_at_stage_hook;
+	int ret = audio_offload_process_asrc(test_input, TEST_ASRC_FRAMES, 34, 0, &test_pre_state,
+					     test_output, TEST_ASRC_CAPACITY, &result);
+	asrc_test_stage_hook = NULL;
+
+	k_sem_give(&busy_holder_release);
+	k_thread_join(&holder, K_FOREVER);
+
+	ASRC_SNAPSHOT(post_s, post_a);
+
+	zassert_equal(ret, -EAGAIN, "stale-during-mutex-timeout rejects");
+	verify_asrc_deltas(&pre_s, &pre_a, &post_s, &post_a, 1, 0, 1, 1, 0, 1);
+	zassert_equal(ASRC_DELTA_U32(post_s, pre_s, stale_count), 1, "stale_count +1");
+	zassert_equal(ASRC_DELTA_U32(post_s, pre_s, busy_count), 0, "busy_count NOT counted");
+	zassert_equal(post_s.last_error, -ESTALE, "last_error -ESTALE");
+	zassert_equal(post_s.last_error_seq, 34, "last_error_seq");
+	zassert_equal(post_s.state, AUDIO_OFFLOAD_STOPPED, "STOPPED preserved (no RECOVERING)");
+	zassert_false(audio_offload_test_is_recovery_scheduled(), "no recovery schedule");
+	assert_output_untouched(0);
+}
+
+ZTEST(audio_offload_asrc, test_asrc_commit_stale_race)
+{
+	struct audio_offload_status pre_s, post_s;
+	struct audio_offload_asrc_stats pre_a, post_a;
+	struct audio_offload_asrc_result result;
+
+	mock_asrc_defaults(44);
+	fill_output(0x77);
+	memset(&result, 0, sizeof(result));
+
+	ASRC_SNAPSHOT(pre_s, pre_a);
+
+	/* Full successful roundtrip, but the stream stops at the commit
+	 * boundary: the final lifecycle guard must count stale, leave output
+	 * and result untouched, and NOT commit success. */
+	stop_target = ASRC_TEST_STAGE_BEFORE_COMMIT;
+	asrc_test_stage_hook = stop_at_stage_hook;
+	int ret = audio_offload_process_asrc(test_input, TEST_ASRC_FRAMES, 44, 0, &test_pre_state,
+					     test_output, TEST_ASRC_CAPACITY, &result);
+	asrc_test_stage_hook = NULL;
+
+	ASRC_SNAPSHOT(post_s, post_a);
+
+	zassert_equal(ret, -EAGAIN, "commit stale rejects");
+	verify_asrc_deltas(&pre_s, &pre_a, &post_s, &post_a, 1, 0, 1, 1, 0, 1);
+	zassert_equal(ASRC_DELTA_U32(post_s, pre_s, stale_count), 1, "stale_count +1");
+	zassert_equal(post_s.last_error, -ESTALE, "last_error -ESTALE");
+	zassert_equal(post_s.last_error_seq, 44, "last_error_seq");
+	zassert_equal(post_s.state, AUDIO_OFFLOAD_STOPPED, "STOPPED preserved (no RECOVERING)");
+	zassert_false(audio_offload_test_is_recovery_scheduled(), "no recovery schedule");
+	assert_output_untouched((int16_t)0x7777);
+	zassert_equal(result.output_frames, 0, "result untouched");
+}
+
+ZTEST(audio_offload_asrc, test_asrc_fault_table)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(asrc_fault_rows); i++) {
+		const struct asrc_fault_row *row = &asrc_fault_rows[i];
+		struct audio_offload_status pre_s, post_s;
+		struct audio_offload_asrc_stats pre_a, post_a;
+		struct audio_offload_asrc_result result;
+
+		/* Fresh ACTIVE state per row without consuming recovery tries:
+		 * stop + start + prep resets per-stream counters and cancels
+		 * any pending recovery schedule. */
+		audio_offload_stream_stop();
+		audio_offload_stream_start();
+		run_prep_work();
+
+		mock_asrc_defaults(row->sequence);
+		apply_asrc_fault_row(row);
+		fill_output(0x55);
+		memset(&result, 0xFF, sizeof(result));
+
+		ASRC_SNAPSHOT(pre_s, pre_a);
+
+		int ret = audio_offload_process_asrc(test_input, TEST_ASRC_FRAMES, row->sequence, 0,
+						     &test_pre_state, test_output,
+						     TEST_ASRC_CAPACITY, &result);
+
+		ASRC_SNAPSHOT(post_s, post_a);
+
+		zassert_equal(ret, -EAGAIN, "row %s ret", row->name);
+		verify_asrc_deltas(&pre_s, &pre_a, &post_s, &post_a, 1, 0, 1, 1, 0, 1);
+		zassert_equal(post_s.last_error, row->expected_last_error, "row %s last_error",
+			      row->name);
+		zassert_equal(post_s.last_error_seq, row->sequence, "row %s last_error_seq",
+			      row->name);
+		zassert_equal(ASRC_DELTA_U32(post_s, pre_s, timeout_count), row->gen_timeout,
+			      "row %s gen timeout", row->name);
+		zassert_equal(ASRC_DELTA_U32(post_s, pre_s, full_count), row->gen_full,
+			      "row %s gen full", row->name);
+		zassert_equal(ASRC_DELTA_U32(post_s, pre_s, stale_count), row->gen_stale,
+			      "row %s gen stale", row->name);
+		zassert_equal(ASRC_DELTA_U32(post_s, pre_s, seq_fault_count), row->gen_seq,
+			      "row %s gen seq", row->name);
+		zassert_equal(ASRC_DELTA_U32(post_s, pre_s, frame_fault_count), row->gen_frame,
+			      "row %s gen frame", row->name);
+		zassert_equal(ASRC_DELTA_U32(post_a, pre_a, timeout_count), row->as_timeout,
+			      "row %s asrc timeout", row->name);
+		zassert_equal(ASRC_DELTA_U32(post_a, pre_a, full_count), row->as_full,
+			      "row %s asrc full", row->name);
+		zassert_equal(ASRC_DELTA_U32(post_a, pre_a, stale_count), row->as_stale,
+			      "row %s asrc stale", row->name);
+		zassert_equal(ASRC_DELTA_U32(post_a, pre_a, seq_fault_count), row->as_seq,
+			      "row %s asrc seq", row->name);
+		zassert_equal(ASRC_DELTA_U32(post_a, pre_a, frame_fault_count), row->as_frame,
+			      "row %s asrc frame", row->name);
+		zassert_equal(ASRC_DELTA_U32(post_a, pre_a, state_fault_count), row->as_state,
+			      "row %s asrc state", row->name);
+		zassert_equal(post_s.state, AUDIO_OFFLOAD_RECOVERING, "row %s RECOVERING",
+			      row->name);
+		zassert_false(post_s.healthy, "row %s healthy false", row->name);
+		zassert_true(audio_offload_test_is_recovery_scheduled(),
+			     "row %s one recovery schedule", row->name);
+		assert_output_untouched((int16_t)0x5555);
+		zassert_equal(result.output_frames, 0xFFFF, "row %s result untouched", row->name);
+	}
+}
+
+ZTEST(audio_offload_asrc, test_asrc_rtt_stats)
+{
+	struct audio_offload_asrc_stats pre, s;
+
+	/* RTT/cycles are lifetime counters (reset only at init); use deltas. */
+	audio_offload_get_asrc_stats(&pre);
+
+	mock_asrc_defaults(1);
+	mock_asrc_consume_data.rtt_cycles = 500;
+	{
+		struct audio_offload_asrc_result r;
+		memset(&r, 0, sizeof(r));
+		zassert_equal(audio_offload_process_asrc(test_input, TEST_ASRC_FRAMES, 1, 0,
+							 &test_pre_state, test_output,
+							 TEST_ASRC_CAPACITY, &r),
+			      0, "success 1");
+	}
+	mock_asrc_defaults(2);
+	mock_asrc_consume_data.rtt_cycles = 700;
+	{
+		struct audio_offload_asrc_result r;
+		memset(&r, 0, sizeof(r));
+		zassert_equal(audio_offload_process_asrc(test_input, TEST_ASRC_FRAMES, 2, 0,
+							 &test_pre_state, test_output,
+							 TEST_ASRC_CAPACITY, &r),
+			      0, "success 2");
+	}
+	mock_asrc_defaults(3);
+	mock_asrc_consume_data.rtt_cycles = 600;
+	{
+		struct audio_offload_asrc_result r;
+		memset(&r, 0, sizeof(r));
+		zassert_equal(audio_offload_process_asrc(test_input, TEST_ASRC_FRAMES, 3, 0,
+							 &test_pre_state, test_output,
+							 TEST_ASRC_CAPACITY, &r),
+			      0, "success 3");
+	}
+
+	audio_offload_get_asrc_stats(&s);
+	zassert_equal(s.rtt_count - pre.rtt_count, 3, "rtt_count delta 3");
+	zassert_equal(s.rtt_sum_cycles - pre.rtt_sum_cycles, 1800, "rtt_sum delta 1800");
+	zassert_equal(s.rtt_min_cycles, 500, "rtt_min 500 (extends range low)");
+	zassert_equal(s.rtt_max_cycles, 700, "rtt_max 700 (extends range high)");
 }
 
 ZTEST(audio_offload_asrc, test_asrc_state_changed_before_mutex)
@@ -1630,6 +2017,8 @@ ZTEST(audio_offload_asrc, test_asrc_reserved_nonzero)
 
 	zassert_equal(ret, -EAGAIN, "reserved nonzero");
 	verify_asrc_deltas(&pre_s, &pre_a, &post_s, &post_a, 1, 0, 1, 1, 0, 1);
+	verify_asrc_category(&pre_s, &post_s, &pre_a, &post_a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			     0, 1, 0);
 
 	run_recovery_work();
 }
@@ -1652,6 +2041,8 @@ ZTEST(audio_offload_asrc, test_asrc_state_import_fail)
 
 	zassert_equal(ret, -EAGAIN, "import fail");
 	verify_asrc_deltas(&pre_s, &pre_a, &post_s, &post_a, 1, 0, 1, 1, 0, 1);
+	verify_asrc_category(&pre_s, &post_s, &pre_a, &post_a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			     0, 1, 0);
 
 	run_recovery_work();
 }
@@ -1676,6 +2067,8 @@ ZTEST(audio_offload_asrc, test_asrc_step_base_mismatch)
 
 	zassert_equal(ret, -EAGAIN, "step base mismatch");
 	verify_asrc_deltas(&pre_s, &pre_a, &post_s, &post_a, 1, 0, 1, 1, 0, 1);
+	verify_asrc_category(&pre_s, &post_s, &pre_a, &post_a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			     0, 1, 0);
 
 	run_recovery_work();
 }

@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "baselined": "2026-08-01",
+  "description": "BabbleSim Stage 1 T4 BAP scenario matrix — versioned data consumed by scripts/bsim-stage1-run.sh and scripts/bsim_stage1_parse.py.  Values copied exactly from the earlier shell tables; never repin here without a deliberate two-run baselined repin.",
+  "notes": [
+    "Baselined 2026-08-01 from two identical post-review-fix workstation runs of the FNV-corrected oracle (samples converted to uint16_t before byte extraction; full/L/R prepend the 4-byte LE frame index).",
+    "reconnect_second_stream_10ms pins its second segment, which must equal a fresh mono 10 ms oracle.",
+    "Mode A re-baseline: the Mode A event assembler (audio_modea) defers decode to event resolution and synthesizes PLC for a missing channel, so Mode A totals are now exactly 2*(pushes+transients).  The 7.5 ms startup transients re-shuffle under sentinel pairing (trans 9 to 13, splc 22 to 24, zero post-start PLC preserved), so its hashes and total changed (0x00A5D3F9/0xEE461704/0x37E155C8/236 to 0x2D95D15C/0xE1D60E7B/0xA219B61E/226); modea_10ms/reverse/first_stop totals rose by exactly 1 (215 to 216, 215 to 216, 85 to 86) with hashes unchanged.",
+    "The one-CIS-loss scenario pins the lossless-mode left hash (0x32777D65 — the unaffected channel is byte-identical) and a deterministic right hash with 18 PLC concealments (0x9859F1D8).",
+    "duplicate_release_10ms (scenario 17, runs once): first Release from streaming closes the gate and cleans the slot once; the duplicate same-slot Release is TRANSPORT-VISIBLE — the client sends a second Release PDU, the ASCS server (already RELEASING) rejects it with INVALID_ASE_STATE (the receiver log carries exactly 'Invalid operation in state: releasing', the parser's narrow scenario-17 allowlist) and no app callback fires, so cleanup fires exactly once per first-time cleanup (obs_rel == 2 total across the streaming release and the reused-slot release); reconfiguring the same endpoint (slot reuse) and releasing again cleans a second time.  It pins its deliberate new oracle (known.total = segment frame total) from two identical baseline runs; every pre-existing hash/count is untouched."
+  ],
+  "scenarios": [
+    {
+      "name": "mono_10ms",
+      "runs": 2,
+      "dec_calls": 1,
+      "channel_mode": "mono",
+      "known": {"full": "0x22AB5C0D", "l": "0x32777D65", "r": "0x32777D65", "total": 108}
+    },
+    {
+      "name": "mono_7p5ms",
+      "runs": 2,
+      "dec_calls": 1,
+      "channel_mode": "mono",
+      "known": {"full": "0x01A3EB05", "l": "0x30F0308C", "r": "0x30F0308C", "total": 111}
+    },
+    {
+      "name": "modea_10ms",
+      "runs": 2,
+      "dec_calls": 2,
+      "channel_mode": "stereo",
+      "known": {"full": "0xBAE24F7E", "l": "0x32777D65", "r": "0xD3EE3722", "total": 216}
+    },
+    {
+      "name": "modea_7p5ms",
+      "runs": 2,
+      "dec_calls": 2,
+      "channel_mode": "stereo",
+      "known": {"full": "0x2D95D15C", "l": "0xE1D60E7B", "r": "0xA219B61E", "total": 226}
+    },
+    {
+      "name": "modea_reverse_start_10ms",
+      "runs": 2,
+      "dec_calls": 2,
+      "channel_mode": "stereo",
+      "known": {"full": "0xBAE24F7E", "l": "0x32777D65", "r": "0xD3EE3722", "total": 216}
+    },
+    {
+      "name": "modeb_10ms",
+      "runs": 2,
+      "dec_calls": 2,
+      "channel_mode": "stereo",
+      "known": {"full": "0xBAE24F7E", "l": "0x32777D65", "r": "0xD3EE3722", "total": 216}
+    },
+    {
+      "name": "modeb_7p5ms",
+      "runs": 2,
+      "dec_calls": 2,
+      "channel_mode": "stereo",
+      "known": {"full": "0xFF82CADB", "l": "0x30F0308C", "r": "0x129591EE", "total": 222}
+    },
+    {
+      "name": "invalid_sdu_resume_10ms",
+      "runs": 2,
+      "dec_calls": 1,
+      "channel_mode": "mono",
+      "known": {"full": "0x0C61918D", "total": 108}
+    },
+    {
+      "name": "modea_one_cis_loss_10ms",
+      "runs": 2,
+      "dec_calls": 2,
+      "channel_mode": "stereo",
+      "known": {"full": "0x30D6BAF0", "l": "0x32777D65", "r": "0x9859F1D8", "total": 216}
+    },
+    {
+      "name": "modea_first_stop_10ms",
+      "runs": 1,
+      "dec_calls": 2,
+      "channel_mode": "stereo",
+      "known": {"total": 86}
+    },
+    {
+      "name": "release_without_disable_10ms",
+      "runs": 1,
+      "dec_calls": 1,
+      "channel_mode": "mono",
+      "known": {"total": 56}
+    },
+    {
+      "name": "disconnect_streaming_10ms",
+      "runs": 1,
+      "dec_calls": 1,
+      "channel_mode": "mono",
+      "known": {"total": 63}
+    },
+    {
+      "name": "reconnect_second_stream_10ms",
+      "runs": 1,
+      "dec_calls": 1,
+      "channel_mode": "mono",
+      "known": {"full": "0x22AB5C0D", "total": 63}
+    },
+    {
+      "name": "unsupported_source_direction",
+      "runs": 1,
+      "dec_calls": 1,
+      "channel_mode": "mono"
+    },
+    {
+      "name": "no_free_sink_slot",
+      "runs": 1,
+      "dec_calls": 1,
+      "channel_mode": "mono"
+    },
+    {
+      "name": "invalid_codec_fields",
+      "runs": 1,
+      "dec_calls": 1,
+      "channel_mode": "mono"
+    },
+    {
+      "name": "duplicate_release_10ms",
+      "runs": 1,
+      "dec_calls": 1,
+      "channel_mode": "mono",
+      "known": {"total": 56}
+    }
+  ]
+}

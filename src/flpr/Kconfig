@@ -1,0 +1,24 @@
+# FLPR (RISC-V VPR) application Kconfig root.
+# The FLPR image is a sysbuild application (APPLICATION flpr); this file
+# is its app Kconfig.  Acceptance/diagnostic handlers are gated behind
+# CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS, enabled only in src/flpr/prj.conf
+# for the current nRF54L15 acceptance build.  This option must NOT
+# depend on SHELL (FLPR images build with CONFIG_SHELL=n).
+
+mainmenu "FLPR acceptance-aware image"
+
+config FLPR_ACCEPTANCE_DIAGNOSTICS
+	bool "FLPR acceptance diagnostics"
+	default n
+	help
+	  Compile the FLPR-image acceptance handlers (RING_TEST_START/STOP
+	  report cascade, RING_STALL/timed-stall timer + ACK echo,
+	  STRESS_PING/PONG, FAULT_HANG ACK-before-spin state, and the
+	  diagnostic counters/hooks invoked from production ring
+	  processing) into the FLPR firmware.  Enabled only in
+	  src/flpr/prj.conf for the current nRF54L15 acceptance build;
+	  the release default is off (separate work).  The cpuapp side of
+	  the acceptance harness is gated by the separate
+	  CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS symbol.
+
+source "Kconfig.zephyr"

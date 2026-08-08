@@ -2,30 +2,31 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * Unit tests for flpr_runtime Stage 4A reset-order sequence.
+ * Unit tests for the FLPR runtime restart manager — real production
+ * source execution (T1A).
  *
- * Tests:
- *   - DMCONTROL mask constants (DMACTIVE always Enabled)
- *   - Stage enum ordering
- *   - Full mocked success sequence (DMCONTROL write order)
- *   - Failure at each stage (correct failed_stage, cleanup)
- *   - Offload-healthy rejection
- *   - DMACTIVE never Disabled in any mask
+ * This suite compiles src/flpr_runtime.c with FLPR_RUNTIME_NATIVE_TEST,
+ * executing the actual nRF54 restart body against test-provided VPR
+ * register storage, source/execution arrays, a mock handshake transport,
+ * and time/cache/barrier hooks.  No copied restart algorithm is used.
  *
- * Compiled as a native_sim unit test.
+ * The mock handshake models FLPR reboot semantics: a successful
+ * disconnect arms a reboot and wait_new_ready() only succeeds once the
+ * mock FLPR epoch differs from the snapshot epoch.
  */
 #include <zephyr/ztest.h>
 #include <string.h>
+#include <errno.h>
 
 #include "flpr_runtime.h"
+#include "flpr_runtime_hooks.h"
+#include "mock_flpr_handshake.h"
 #include "mock_nrf_vpr.h"
 #include "mock_state.h"
-#include "mock_flpr_deps.h"
+#include "flpr_ring.h" /* production CRC for expected values */
 
-/* ── Recompute mask constants for verification ──────────────── */
+/* ── Expected DMCONTROL masks (same field constants as production) ── */
 
-/* These must match the DMCONTROL_RESET_ASSERT / DMCONTROL_RESET_RELEASE
- * in flpr_runtime.c.  DMACTIVE must be Enabled in both. */
 #define EXPECTED_RESET_ASSERT                                                                      \
 	((VPR_DEBUGIF_DMCONTROL_NDMRESET_Active << VPR_DEBUGIF_DMCONTROL_NDMRESET_Pos) |           \
 	 (VPR_DEBUGIF_DMCONTROL_DMACTIVE_Enabled << VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos))
@@ -34,427 +35,503 @@
 	((VPR_DEBUGIF_DMCONTROL_NDMRESET_Inactive << VPR_DEBUGIF_DMCONTROL_NDMRESET_Pos) |         \
 	 (VPR_DEBUGIF_DMCONTROL_DMACTIVE_Enabled << VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos))
 
-/* ── DMCONTROL mask tests ──────────────────────────────────── */
+#define SUCCESS_EVENTS                                                                             \
+	FLPR_RT_EV_SNAPSHOT, FLPR_RT_EV_SRC_CRC, FLPR_RT_EV_DISCONNECT, FLPR_RT_EV_STOP_CPURUN,    \
+		FLPR_RT_EV_ASSERT_RESET, FLPR_RT_EV_COPY, FLPR_RT_EV_CACHE_FLUSH_BARRIERS,         \
+		FLPR_RT_EV_EXEC_CRC, FLPR_RT_EV_INITPC, FLPR_RT_EV_RECONNECT,                      \
+		FLPR_RT_EV_SET_CPURUN, FLPR_RT_EV_RELEASE_RESET, FLPR_RT_EV_WAIT_BOUND,            \
+		FLPR_RT_EV_WAIT_READY, FLPR_RT_EV_SUCCESS
 
-/*
- * Test: DMCONTROL_RESET_ASSERT mask has DMACTIVE=Enabled.
- * The mask constant defined in flpr_runtime.c must match
- * the expected value computed from VPR register field definitions.
- */
-ZTEST(flpr_reset_order, test_mask_reset_assert_dmactive_enabled)
+/* ── Helpers ────────────────────────────────────────────────────── */
+
+static void rt_setup(void *fixture)
 {
-	uint32_t dmactive_mask = EXPECTED_RESET_ASSERT & VPR_DEBUGIF_DMCONTROL_DMACTIVE_Msk;
-	uint32_t dmactive_val = dmactive_mask >> VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos;
-
-	zassert_equal(dmactive_val, VPR_DEBUGIF_DMCONTROL_DMACTIVE_Enabled,
-		      "RESET_ASSERT must have DMACTIVE=Enabled");
-}
-
-/*
- * Test: DMCONTROL_RESET_ASSERT mask has NDMRESET=Active.
- */
-ZTEST(flpr_reset_order, test_mask_reset_assert_ndmreset_active)
-{
-	uint32_t ndmreset_mask = EXPECTED_RESET_ASSERT & VPR_DEBUGIF_DMCONTROL_NDMRESET_Msk;
-	uint32_t ndmreset_val = ndmreset_mask >> VPR_DEBUGIF_DMCONTROL_NDMRESET_Pos;
-
-	zassert_equal(ndmreset_val, VPR_DEBUGIF_DMCONTROL_NDMRESET_Active,
-		      "RESET_ASSERT must have NDMRESET=Active");
-}
-
-/*
- * Test: DMCONTROL_RESET_RELEASE mask has DMACTIVE=Enabled (never Disabled).
- */
-ZTEST(flpr_reset_order, test_mask_reset_release_dmactive_enabled)
-{
-	uint32_t dmactive_mask = EXPECTED_RESET_RELEASE & VPR_DEBUGIF_DMCONTROL_DMACTIVE_Msk;
-	uint32_t dmactive_val = dmactive_mask >> VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos;
-
-	zassert_equal(dmactive_val, VPR_DEBUGIF_DMCONTROL_DMACTIVE_Enabled,
-		      "RESET_RELEASE must have DMACTIVE=Enabled (never Disabled)");
-}
-
-/*
- * Test: DMCONTROL_RESET_RELEASE mask has NDMRESET=Inactive.
- */
-ZTEST(flpr_reset_order, test_mask_reset_release_ndmreset_inactive)
-{
-	uint32_t ndmreset_mask = EXPECTED_RESET_RELEASE & VPR_DEBUGIF_DMCONTROL_NDMRESET_Msk;
-	uint32_t ndmreset_val = ndmreset_mask >> VPR_DEBUGIF_DMCONTROL_NDMRESET_Pos;
-
-	zassert_equal(ndmreset_val, VPR_DEBUGIF_DMCONTROL_NDMRESET_Inactive,
-		      "RESET_RELEASE must have NDMRESET=Inactive");
-}
-
-/*
- * Test: DMACTIVE_Msk and NDMRESET_Msk are distinct non-overlapping fields.
- */
-ZTEST(flpr_reset_order, test_mask_fields_distinct)
-{
-	zassert_equal(VPR_DEBUGIF_DMCONTROL_DMACTIVE_Msk & VPR_DEBUGIF_DMCONTROL_NDMRESET_Msk, 0,
-		      "DMACTIVE and NDMRESET mask bits must not overlap");
-}
-
-/*
- * Test: RESET_ASSERT differs from RESET_RELEASE only in NDMRESET bit.
- */
-ZTEST(flpr_reset_order, test_masks_differ_only_ndmreset)
-{
-	uint32_t diff = EXPECTED_RESET_ASSERT ^ EXPECTED_RESET_RELEASE;
-
-	zassert_equal(diff, VPR_DEBUGIF_DMCONTROL_NDMRESET_Msk,
-		      "ASSERT and RELEASE masks must differ only in NDMRESET bit");
-}
-
-/* ── Stage enum ordering tests ─────────────────────────────── */
-
-/*
- * Test: Stages between assert and release come before the release stage.
- * The preparation stages (copy, flush, crc, initpc, reconnect, cpurun)
- * must happen while reset is asserted.
- */
-ZTEST(flpr_reset_order, test_prep_stages_before_release)
-{
-	/* Assert is after copy */
-	zassert_true(FLPR_STAGE_ASSERT_RESET < FLPR_STAGE_COPY, "assert must precede copy");
-	zassert_true(FLPR_STAGE_COPY < FLPR_STAGE_FLUSH_BARRIER, "copy must precede flush");
-	zassert_true(FLPR_STAGE_FLUSH_BARRIER < FLPR_STAGE_CRC_VERIFY,
-		     "flush must precede CRC verify");
-	zassert_true(FLPR_STAGE_CRC_VERIFY < FLPR_STAGE_INITPC, "CRC verify must precede INITPC");
-	zassert_true(FLPR_STAGE_INITPC < FLPR_STAGE_RECONNECT, "INITPC must precede reconnect");
-	zassert_true(FLPR_STAGE_RECONNECT < FLPR_STAGE_START_CPURUN,
-		     "reconnect must precede CPURUN");
-	zassert_true(FLPR_STAGE_START_CPURUN < FLPR_STAGE_RELEASE_RESET,
-		     "CPURUN must precede release reset");
-	zassert_true(FLPR_STAGE_RELEASE_RESET < FLPR_STAGE_WAIT_BOUND,
-		     "release must precede wait bound");
-}
-
-/*
- * Test: Success stage is the last enum value.
- */
-ZTEST(flpr_reset_order, test_success_is_last_stage)
-{
-	zassert_true(FLPR_STAGE_SUCCESS > FLPR_STAGE_WAIT_READY,
-		     "success must be after all operational stages");
-}
-
-/* ── Mocked operation-order tests ──────────────────────────── */
-
-/* Mock helper: reset all mock state for a clean test run. */
-static void mock_setup_success(void)
-{
+	(void)fixture;
+	flpr_rt_test_reset_all();
+	mock_hs_reset();
 	mock_reset();
-	mock_set_handshake_epoch(42);
-	mock_set_disconnect_result(0);
-	mock_set_reconnect_result(0);
-	mock_set_wait_bound_result(0);
-	mock_set_wait_ready_result(0);
-	mock_set_crc_match(true);
-	mock_set_offload_healthy(false);
 }
 
-/*
- * Test: Full success sequence.
- * Verify DMCONTROL write order:
- *   1. RESET_ASSERT (DMACTIVE=Enabled, NDMRESET=Active)
- *   2. RESET_RELEASE (DMACTIVE=Enabled, NDMRESET=Inactive)
- * Never DMACTIVE=Disabled.
- */
-ZTEST(flpr_reset_order, test_mocked_success_dmcontrol_order)
+/* Deterministic source image. */
+static void rt_fill_source(void)
 {
-	mock_setup_success();
-
-	/* Verify: DMCONTROL_RESET_ASSERT has DMACTIVE=Enabled. */
-	zassert_not_equal(EXPECTED_RESET_ASSERT & VPR_DEBUGIF_DMCONTROL_DMACTIVE_Msk,
-			  VPR_DEBUGIF_DMCONTROL_DMACTIVE_Disabled
-				  << VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos,
-			  "assert mask must have DMACTIVE=Enabled");
-
-	/* Verify: DMCONTROL_RESET_RELEASE has DMACTIVE=Enabled (never Disabled). */
-	zassert_not_equal(EXPECTED_RESET_RELEASE & VPR_DEBUGIF_DMCONTROL_DMACTIVE_Msk,
-			  VPR_DEBUGIF_DMCONTROL_DMACTIVE_Disabled
-				  << VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos,
-			  "release mask must have DMACTIVE=Enabled, never Disabled");
-}
-
-/*
- * Test: DMACTIVE is never zero (Disabled) in either mask.
- */
-ZTEST(flpr_reset_order, test_dmactive_never_disabled)
-{
-	uint32_t masks[] = {EXPECTED_RESET_ASSERT, EXPECTED_RESET_RELEASE};
-
-	for (int i = 0; i < 2; i++) {
-		uint32_t dm_val = (masks[i] & VPR_DEBUGIF_DMCONTROL_DMACTIVE_Msk) >>
-				  VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos;
-		zassert_equal(dm_val, VPR_DEBUGIF_DMCONTROL_DMACTIVE_Enabled,
-			      "mask[%d] must have DMACTIVE=Enabled", i);
+	for (uint32_t i = 0; i < FLPR_RT_TEST_IMAGE_SIZE; i++) {
+		flpr_rt_test_source[i] = (uint8_t)(i * 31U + 7U);
 	}
 }
 
-/*
- * Test: Offload-healthy rejects restart.
- */
-ZTEST(flpr_reset_order, test_offload_healthy_rejects)
+/* Standard success arrangement: epoch 42, reboot armed by disconnect. */
+static void rt_success_arrange(void)
 {
-	mock_setup_success();
-	(void)flpr_runtime_init();
+	rt_fill_source();
+	mock_hs_set_epoch(42);
+	zassert_ok(flpr_runtime_init(), "init");
+}
 
-	/* Set offload healthy → restart should be rejected. */
-	mock_set_offload_healthy(true);
+static void rt_assert_success_events(void)
+{
+	static const enum flpr_rt_test_event expected[] = {SUCCESS_EVENTS};
+	const uint32_t n = sizeof(expected) / sizeof(expected[0]);
+
+	zassert_equal(flpr_rt_test_event_count(), n, "event count");
+	for (uint32_t i = 0; i < n; i++) {
+		zassert_equal(flpr_rt_test_event_at(i), expected[i], "event[%u]", i);
+	}
+}
+
+/* ── Init ──────────────────────────────────────────────────────── */
+
+ZTEST(flpr_runtime, test_init_success)
+{
+	zassert_ok(flpr_runtime_init(), "init");
 
 	struct flpr_runtime_status s;
-	int ret = flpr_runtime_restart(1000);
-	(void)ret; /* on native_sim stub returns -ENOSYS */
-
-	/* On native_sim, the restart is a stub returning -ENOSYS,
-	 * but the offload-healthy guard is tested on hardware.
-	 * Here we verify the status struct exists and state is IDLE. */
 	flpr_runtime_get_status(&s);
-	zassert_equal(s.state, FLPR_RUNTIME_IDLE, "default state must be IDLE after init");
+	zassert_equal(s.state, FLPR_RUNTIME_IDLE, "state");
+	zassert_equal(s.requests, 0, "requests");
 }
 
-/* ── Failed stage tests (structural) ───────────────────────── */
-
-/*
- * Test: Each failed_stage value maps to a valid enum member.
- */
-ZTEST(flpr_reset_order, test_failed_stage_values_are_valid)
+ZTEST(flpr_runtime, test_init_idempotent)
 {
-	/* Verify all stage values are non-negative and in order. */
-	zassert_true(FLPR_STAGE_DISCONNECT >= 0);
-	zassert_true(FLPR_STAGE_ASSERT_RESET < FLPR_STAGE_COPY);
-	zassert_true(FLPR_STAGE_COPY < FLPR_STAGE_RELEASE_RESET);
-	zassert_true(FLPR_STAGE_RELEASE_RESET < FLPR_STAGE_SUCCESS);
-}
+	zassert_ok(flpr_runtime_init(), "first init");
+	zassert_ok(flpr_runtime_init(), "second init");
 
-/*
- * Test: Status struct has readbacks field.
- */
-ZTEST(flpr_reset_order, test_status_readbacks_exist)
-{
 	struct flpr_runtime_status s;
-	memset(&s, 0, sizeof(s));
-
-	/* Fields default to zero after memset. */
-	zassert_equal(s.readbacks.dmcontrol_after_assert, 0);
-	zassert_equal(s.readbacks.dmcontrol_before_release, 0);
-	zassert_equal(s.readbacks.dmcontrol_after_release, 0);
-	zassert_equal(s.readbacks.initpc_after_set, 0);
-	zassert_equal(s.readbacks.cpurun_after_assert, 0);
-	zassert_equal(s.readbacks.cpurun_after_set, 0);
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.state, FLPR_RUNTIME_IDLE, "state");
+	zassert_equal(s.requests, 0, "requests unchanged");
 }
 
-/*
- * Test: Status struct correctly sized (no padding surprises).
- */
-ZTEST(flpr_reset_order, test_status_size_reasonable)
+ZTEST(flpr_runtime, test_restart_before_init_enodev)
 {
-	/* The struct must be <= 256 bytes for stack-friendliness. */
-	zassert_true(sizeof(struct flpr_runtime_status) <= 256,
-		     "runtime_status must be <= 256 bytes");
+	int ret = flpr_runtime_restart(1000);
+	zassert_equal(ret, -ENODEV, "restart before init must be -ENODEV");
 }
 
-/* ── Mocked failure scenario tests (structural) ────────────── */
+/* ── Full success path ──────────────────────────────────────────── */
 
-/*
- * Test: CRC mismatch path identifies correct stage.
- */
-ZTEST(flpr_reset_order, test_failure_crc_stage_correct)
+ZTEST(flpr_runtime, test_full_success_event_order)
 {
-	/* Verify that the failed_stage for CRC_VERIFY is set
-	 * before the CRC comparison — structural test. */
-	zassert_equal(FLPR_STAGE_CRC_VERIFY, 5, "CRC_VERIFY stage must have expected enum value");
-	zassert_true(FLPR_STAGE_CRC_VERIFY > FLPR_STAGE_FLUSH_BARRIER);
-	zassert_true(FLPR_STAGE_CRC_VERIFY < FLPR_STAGE_INITPC);
+	rt_success_arrange();
+
+	zassert_ok(flpr_runtime_restart(1000), "restart");
+	rt_assert_success_events();
 }
 
-/*
- * Test: Reconnect failure stage ordering.
- */
-ZTEST(flpr_reset_order, test_failure_reconnect_stage_correct)
+ZTEST(flpr_runtime, test_exactly_two_dmcontrol_writes)
 {
-	zassert_true(FLPR_STAGE_RECONNECT > FLPR_STAGE_INITPC);
-	zassert_true(FLPR_STAGE_RECONNECT < FLPR_STAGE_START_CPURUN);
+	rt_success_arrange();
+
+	zassert_ok(flpr_runtime_restart(1000), "restart");
+
+	zassert_equal(mock_vpr.dmcontrol_write_count, 2, "exactly 2 DMCONTROL writes");
+	zassert_equal(mock_vpr.dmcontrol_writes[0], EXPECTED_RESET_ASSERT, "write 0 = assert");
+	zassert_equal(mock_vpr.dmcontrol_writes[1], EXPECTED_RESET_RELEASE, "write 1 = release");
 }
 
-/*
- * Test: After release reset, next stage is wait-bound.
- */
-ZTEST(flpr_reset_order, test_release_before_wait_bound)
+ZTEST(flpr_runtime, test_dmactive_enabled_in_both_masks)
 {
-	zassert_true(FLPR_STAGE_RELEASE_RESET < FLPR_STAGE_WAIT_BOUND,
-		     "release must precede wait-bound");
+	rt_success_arrange();
+
+	zassert_ok(flpr_runtime_restart(1000), "restart");
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+
+	uint32_t after_assert =
+		(s.readbacks.dmcontrol_after_assert & VPR_DEBUGIF_DMCONTROL_DMACTIVE_Msk) >>
+		VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos;
+	uint32_t after_release =
+		(s.readbacks.dmcontrol_after_release & VPR_DEBUGIF_DMCONTROL_DMACTIVE_Msk) >>
+		VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos;
+
+	zassert_equal(after_assert, VPR_DEBUGIF_DMCONTROL_DMACTIVE_Enabled,
+		      "DMACTIVE enabled after assert");
+	zassert_equal(after_release, VPR_DEBUGIF_DMCONTROL_DMACTIVE_Enabled,
+		      "DMACTIVE enabled after release");
 }
 
-/* ── Cleanup state tests ───────────────────────────────────── */
-
-/*
- * Test: State transitions from IDLE → BUSY → IDLE on success path.
- * Structural: verify the enum values.
- */
-ZTEST(flpr_reset_order, test_state_transitions_valid)
+ZTEST(flpr_runtime, test_cpurun_readbacks)
 {
-	zassert_equal(FLPR_RUNTIME_IDLE, 0);
-	zassert_equal(FLPR_RUNTIME_BUSY, 1);
-	zassert_equal(FLPR_RUNTIME_UNAVAILABLE, 2);
+	rt_success_arrange();
+
+	zassert_ok(flpr_runtime_restart(1000), "restart");
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+
+	zassert_false(s.readbacks.cpurun_after_assert, "CPURUN false after stop+assert");
+	zassert_true(s.readbacks.cpurun_after_set, "CPURUN true before release");
+	zassert_equal(mock_vpr.cpurun_set_count, 2, "cpurun set false then true");
 }
 
-/* ── Readback structure tests ──────────────────────────────── */
-
-/*
- * Test: Readback struct can hold full 32-bit DMCONTROL values.
- */
-ZTEST(flpr_reset_order, test_readbacks_dmcontrol_fullword)
+ZTEST(flpr_runtime, test_source_copied_exactly)
 {
-	struct flpr_runtime_readbacks rb;
-	memset(&rb, 0, sizeof(rb));
+	rt_success_arrange();
 
-	/* Write test values and verify they stick. */
-	rb.dmcontrol_after_assert = 0xDEAD0001;
-	rb.dmcontrol_before_release = 0xDEAD0001;
-	rb.dmcontrol_after_release = 0xDEAD0003;
+	zassert_ok(flpr_runtime_restart(1000), "restart");
 
-	zassert_equal(rb.dmcontrol_after_assert, 0xDEAD0001);
-	zassert_equal(rb.dmcontrol_before_release, 0xDEAD0001);
-	zassert_equal(rb.dmcontrol_after_release, 0xDEAD0003);
+	zassert_equal(memcmp(flpr_rt_test_source, flpr_rt_test_exec, FLPR_RT_TEST_IMAGE_SIZE), 0,
+		      "execution image must equal source image");
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.reload_bytes, FLPR_RT_TEST_IMAGE_SIZE, "reload_bytes");
 }
 
-/* ── Mocked operation-order sequence tests ──────────────────── */
-
-/*
- * Test: Execute the one-variable DMCONTROL sequence using mock VPR.
- * Simulates: assert → prepare → release with both writes tracked.
- * Verifies: exactly 2 DMCONTROL writes, correct masks, correct order.
- */
-ZTEST(flpr_reset_order, test_mock_sequence_two_writes)
+ZTEST(flpr_runtime, test_cache_flush_and_barriers_after_copy)
 {
-	mock_reset();
+	rt_success_arrange();
 
-	NRF_VPR_Type fake_vpr;
+	zassert_ok(flpr_runtime_restart(1000), "restart");
 
-	/* Step 1: Assert reset + DMACTIVE enabled (held). */
-	nrf_vpr_debugif_dmcontrol_mask_set(&fake_vpr, EXPECTED_RESET_ASSERT);
-	/* Step 2: Release reset, DMACTIVE still enabled. */
-	nrf_vpr_debugif_dmcontrol_mask_set(&fake_vpr, EXPECTED_RESET_RELEASE);
+	/* Hook observability. */
+	zassert_equal(flpr_rt_test_cache_flush_count(), 1, "one cache flush");
+	zassert_equal(flpr_rt_test_barrier_count(FLPR_RT_BARRIER_DSB), 1, "one DSB");
+	zassert_equal(flpr_rt_test_barrier_count(FLPR_RT_BARRIER_ISB), 1, "one ISB");
+	zassert_equal(flpr_rt_test_busy_wait_count(), 3, "three busy waits");
+	zassert_equal(flpr_rt_test_sleep_count(), 1, "one sleep");
 
-	/* Verify exactly 2 writes. */
-	zassert_equal(mock_vpr.dmcontrol_write_count, 2, "exactly 2 DMCONTROL writes in restart");
-}
-
-/*
- * Test: First DMCONTROL write is the assert mask.
- */
-ZTEST(flpr_reset_order, test_mock_sequence_first_write_is_assert)
-{
-	mock_reset();
-
-	NRF_VPR_Type fake_vpr;
-
-	nrf_vpr_debugif_dmcontrol_mask_set(&fake_vpr, EXPECTED_RESET_ASSERT);
-	nrf_vpr_debugif_dmcontrol_mask_set(&fake_vpr, EXPECTED_RESET_RELEASE);
-
-	zassert_equal(mock_vpr.dmcontrol_writes[0], EXPECTED_RESET_ASSERT,
-		      "first dmcontrol write must be RESET_ASSERT");
-}
-
-/*
- * Test: Second DMCONTROL write is the release mask (DMACTIVE still Enabled).
- */
-ZTEST(flpr_reset_order, test_mock_sequence_second_write_is_release)
-{
-	mock_reset();
-
-	NRF_VPR_Type fake_vpr;
-
-	nrf_vpr_debugif_dmcontrol_mask_set(&fake_vpr, EXPECTED_RESET_ASSERT);
-	nrf_vpr_debugif_dmcontrol_mask_set(&fake_vpr, EXPECTED_RESET_RELEASE);
-
-	zassert_equal(mock_vpr.dmcontrol_writes[1], EXPECTED_RESET_RELEASE,
-		      "second dmcontrol write must be RESET_RELEASE");
-}
-
-/*
- * Test: Release mask has DMACTIVE=Enabled (never zero/Disabled).
- */
-ZTEST(flpr_reset_order, test_mock_sequence_release_dmactive_not_disabled)
-{
-	uint32_t dm_val = (EXPECTED_RESET_RELEASE & VPR_DEBUGIF_DMCONTROL_DMACTIVE_Msk) >>
-			  VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos;
-
-	zassert_equal(dm_val, VPR_DEBUGIF_DMCONTROL_DMACTIVE_Enabled,
-		      "release DMCONTROL must never disable DMACTIVE");
-}
-
-/*
- * Test: Operation order — assert before release.
- * Verify that the two masks differ only in NDMRESET (assert=Active, release=Inactive).
- */
-ZTEST(flpr_reset_order, test_mock_sequence_assert_before_release_order)
-{
-	uint32_t assert_ndmreset = (EXPECTED_RESET_ASSERT & VPR_DEBUGIF_DMCONTROL_NDMRESET_Msk) >>
-				   VPR_DEBUGIF_DMCONTROL_NDMRESET_Pos;
-	uint32_t release_ndmreset = (EXPECTED_RESET_RELEASE & VPR_DEBUGIF_DMCONTROL_NDMRESET_Msk) >>
-				    VPR_DEBUGIF_DMCONTROL_NDMRESET_Pos;
-
-	zassert_equal(assert_ndmreset, VPR_DEBUGIF_DMCONTROL_NDMRESET_Active,
-		      "assert must set NDMRESET=Active");
-	zassert_equal(release_ndmreset, VPR_DEBUGIF_DMCONTROL_NDMRESET_Inactive,
-		      "release must set NDMRESET=Inactive");
-	zassert_not_equal(assert_ndmreset, release_ndmreset,
-			  "assert and release must differ in NDMRESET value");
-}
-
-/*
- * Test: Both masks keep DMACTIVE identical (Enabled).
- */
-ZTEST(flpr_reset_order, test_mock_sequence_dmactive_identical_in_both)
-{
-	uint32_t assert_dm = (EXPECTED_RESET_ASSERT & VPR_DEBUGIF_DMCONTROL_DMACTIVE_Msk) >>
-			     VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos;
-	uint32_t release_dm = (EXPECTED_RESET_RELEASE & VPR_DEBUGIF_DMCONTROL_DMACTIVE_Msk) >>
-			      VPR_DEBUGIF_DMCONTROL_DMACTIVE_Pos;
-
-	zassert_equal(assert_dm, release_dm,
-		      "DMACTIVE must be identical (Enabled) in both assert and release masks");
-	zassert_equal(assert_dm, VPR_DEBUGIF_DMCONTROL_DMACTIVE_Enabled);
-}
-
-/* ── Failure cleanup verification ───────────────────────────── */
-
-/*
- * Test: After simulated failure, the state enum reflects UNAVAILABLE.
- */
-ZTEST(flpr_reset_order, test_failure_state_unavailable)
-{
-	/* Structural: verify UNAVAILABLE enum is valid. */
-	zassert_equal(FLPR_RUNTIME_UNAVAILABLE, 2, "UNAVAILABLE state must be enum value 2");
-	zassert_not_equal(FLPR_RUNTIME_UNAVAILABLE, FLPR_RUNTIME_IDLE);
-	zassert_not_equal(FLPR_RUNTIME_UNAVAILABLE, FLPR_RUNTIME_BUSY);
-}
-
-/*
- * Test: Each failure stage is distinct.
- */
-ZTEST(flpr_reset_order, test_failure_stages_all_distinct)
-{
-	/* Verify no two stages share the same enum value. */
-	int stages[] = {
-		FLPR_STAGE_DISCONNECT,    FLPR_STAGE_STOP,          FLPR_STAGE_ASSERT_RESET,
-		FLPR_STAGE_COPY,          FLPR_STAGE_FLUSH_BARRIER, FLPR_STAGE_CRC_VERIFY,
-		FLPR_STAGE_INITPC,        FLPR_STAGE_RECONNECT,     FLPR_STAGE_START_CPURUN,
-		FLPR_STAGE_RELEASE_RESET, FLPR_STAGE_WAIT_BOUND,    FLPR_STAGE_WAIT_READY,
-		FLPR_STAGE_SUCCESS,
-	};
-
-	for (int i = 0; i < (int)(sizeof(stages) / sizeof(stages[0])); i++) {
-		for (int j = i + 1; j < (int)(sizeof(stages) / sizeof(stages[0])); j++) {
-			zassert_not_equal(stages[i], stages[j],
-					  "stage[%d]=%d must not equal stage[%d]=%d", i, stages[i],
-					  j, stages[j]);
+	/* Order: copy → flush+barriers → execution CRC. */
+	const uint32_t n = flpr_rt_test_event_count();
+	uint32_t copy_pos = 0;
+	uint32_t flush_pos = 0;
+	uint32_t crc_pos = 0;
+	for (uint32_t i = 0; i < n; i++) {
+		enum flpr_rt_test_event ev = flpr_rt_test_event_at(i);
+		if (ev == FLPR_RT_EV_COPY) {
+			copy_pos = i;
+		}
+		if (ev == FLPR_RT_EV_CACHE_FLUSH_BARRIERS) {
+			flush_pos = i;
+		}
+		if (ev == FLPR_RT_EV_EXEC_CRC) {
+			crc_pos = i;
 		}
 	}
+	zassert_true(copy_pos < flush_pos && flush_pos < crc_pos,
+		     "flush+barriers must occur after copy and before execution CRC");
 }
 
-ZTEST_SUITE(flpr_reset_order, NULL, NULL, NULL, NULL, NULL);
+ZTEST(flpr_runtime, test_matching_crc_success)
+{
+	rt_success_arrange();
+
+	zassert_ok(flpr_runtime_restart(1000), "restart");
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+
+	uint32_t expected = flpr_ring_crc32(flpr_rt_test_source, FLPR_RT_TEST_IMAGE_SIZE);
+	zassert_equal(s.source_crc, expected, "source_crc is real CRC of source image");
+	zassert_equal(s.execution_crc, expected, "execution_crc equals source CRC");
+	zassert_equal(s.last_errno, 0, "last_errno");
+	zassert_equal(s.state, FLPR_RUNTIME_IDLE, "state IDLE after success");
+}
+
+ZTEST(flpr_runtime, test_injected_corruption_crc_eio)
+{
+	rt_success_arrange();
+	flpr_rt_test_set_corrupt_after_copy(true);
+
+	int ret = flpr_runtime_restart(1000);
+	zassert_equal(ret, -EIO, "CRC mismatch must produce -EIO");
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.failed_stage, FLPR_STAGE_CRC_VERIFY, "stage CRC_VERIFY");
+	zassert_equal(s.fail_count, 1, "fail_count");
+	zassert_equal(s.last_errno, -EIO, "last_errno");
+	zassert_equal(s.state, FLPR_RUNTIME_UNAVAILABLE, "state UNAVAILABLE");
+	zassert_not_equal(s.source_crc, s.execution_crc, "execution CRC must differ");
+
+	/* Copy happened, flush happened, but no launch edges after CRC. */
+	zassert_equal(mock_vpr.dmcontrol_write_count, 1, "only assert write");
+	zassert_false(mock_vpr.cpurun, "CPURUN stays stopped");
+}
+
+/* ── Failure stages ──────────────────────────────────────────────── */
+
+ZTEST(flpr_runtime, test_disconnect_failure_no_vpr_touch)
+{
+	rt_success_arrange();
+	mock_hs_set_disconnect_result(-EIO);
+
+	int ret = flpr_runtime_restart(1000);
+	zassert_equal(ret, -EIO, "disconnect failure propagates");
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.failed_stage, FLPR_STAGE_DISCONNECT, "stage DISCONNECT");
+	zassert_equal(s.state, FLPR_RUNTIME_UNAVAILABLE, "state UNAVAILABLE");
+	zassert_equal(s.fail_count, 1, "fail_count");
+
+	/* VPR must be untouched: no cpurun, no dmcontrol, no initpc. */
+	zassert_equal(mock_vpr.cpurun_set_count, 0, "no cpurun writes");
+	zassert_equal(mock_vpr.dmcontrol_write_count, 0, "no dmcontrol writes");
+	zassert_equal(mock_vpr.initpc_set_count, 0, "no initpc writes");
+
+	/* Events: snapshot, source CRC, disconnect stage reached — no failure stop. */
+	zassert_equal(flpr_rt_test_event_count(), 3, "event count");
+	zassert_equal(flpr_rt_test_event_at(0), FLPR_RT_EV_SNAPSHOT, "ev 0");
+	zassert_equal(flpr_rt_test_event_at(1), FLPR_RT_EV_SRC_CRC, "ev 1");
+	zassert_equal(flpr_rt_test_event_at(2), FLPR_RT_EV_DISCONNECT, "ev 2");
+}
+
+ZTEST(flpr_runtime, test_reconnect_failure_reset_held)
+{
+	rt_success_arrange();
+	mock_hs_set_reconnect_result(-EIO);
+
+	int ret = flpr_runtime_restart(1000);
+	zassert_equal(ret, -EIO, "reconnect failure propagates");
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.failed_stage, FLPR_STAGE_RECONNECT, "stage RECONNECT");
+	zassert_equal(s.state, FLPR_RUNTIME_UNAVAILABLE, "state UNAVAILABLE");
+
+	/* CPURUN stopped (1 write: false); reset still asserted. */
+	zassert_equal(mock_vpr.cpurun_set_count, 1, "only the stop write");
+	zassert_false(mock_vpr.cpurun, "CPURUN false");
+	zassert_equal(mock_vpr.dmcontrol_write_count, 1, "only the assert write");
+	zassert_equal(mock_vpr.dmcontrol_writes[0], EXPECTED_RESET_ASSERT, "reset held");
+	zassert_equal(s.readbacks.dmcontrol_after_assert, EXPECTED_RESET_ASSERT,
+		      "readback shows held reset");
+}
+
+ZTEST(flpr_runtime, test_wait_bound_failure_stops_cpurun)
+{
+	rt_success_arrange();
+	mock_hs_set_wait_bound_result(-EAGAIN);
+
+	int ret = flpr_runtime_restart(1000);
+	zassert_equal(ret, -EAGAIN, "wait bound failure propagates");
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.failed_stage, FLPR_STAGE_WAIT_BOUND, "stage WAIT_BOUND");
+	zassert_equal(s.state, FLPR_RUNTIME_UNAVAILABLE, "state UNAVAILABLE");
+
+	/* stop(false) + start(true) + failure stop(false). */
+	zassert_equal(mock_vpr.cpurun_set_count, 3, "cpurun set false,true,false");
+	zassert_false(mock_vpr.cpurun, "CPURUN stopped on failure");
+
+	/* Release happened before waiting. */
+	zassert_equal(mock_vpr.dmcontrol_write_count, 2, "assert + release");
+	zassert_equal(mock_vpr.dmcontrol_writes[1], EXPECTED_RESET_RELEASE, "released");
+
+	/* Events end with failure stop. */
+	static const enum flpr_rt_test_event expected[] = {
+		FLPR_RT_EV_SNAPSHOT,
+		FLPR_RT_EV_SRC_CRC,
+		FLPR_RT_EV_DISCONNECT,
+		FLPR_RT_EV_STOP_CPURUN,
+		FLPR_RT_EV_ASSERT_RESET,
+		FLPR_RT_EV_COPY,
+		FLPR_RT_EV_CACHE_FLUSH_BARRIERS,
+		FLPR_RT_EV_EXEC_CRC,
+		FLPR_RT_EV_INITPC,
+		FLPR_RT_EV_RECONNECT,
+		FLPR_RT_EV_SET_CPURUN,
+		FLPR_RT_EV_RELEASE_RESET,
+		FLPR_RT_EV_WAIT_BOUND,
+		FLPR_RT_EV_FAILURE_STOP,
+	};
+	const uint32_t n = sizeof(expected) / sizeof(expected[0]);
+	zassert_equal(flpr_rt_test_event_count(), n, "event count");
+	for (uint32_t i = 0; i < n; i++) {
+		zassert_equal(flpr_rt_test_event_at(i), expected[i], "event[%u]", i);
+	}
+}
+
+ZTEST(flpr_runtime, test_wait_ready_failure_stops_cpurun)
+{
+	rt_success_arrange();
+	mock_hs_set_reboot_on_disconnect(false); /* same epoch → wait fails */
+
+	int ret = flpr_runtime_restart(1000);
+	zassert_equal(ret, -EAGAIN, "wait ready failure propagates");
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.failed_stage, FLPR_STAGE_WAIT_READY, "stage WAIT_READY");
+	zassert_equal(s.state, FLPR_RUNTIME_UNAVAILABLE, "state UNAVAILABLE");
+	zassert_equal(mock_vpr.cpurun_set_count, 3, "cpurun stopped on failure");
+	zassert_false(mock_vpr.cpurun, "CPURUN stopped");
+	zassert_equal(flpr_rt_test_event_at(flpr_rt_test_event_count() - 1),
+		      FLPR_RT_EV_FAILURE_STOP, "last event is failure stop");
+}
+
+ZTEST(flpr_runtime, test_changed_epoch_required_for_wait_ready)
+{
+	rt_success_arrange();
+	mock_hs_set_reboot_on_disconnect(false);
+
+	/* No reboot → same epoch → wait_new_ready must fail. */
+	int ret = flpr_runtime_restart(1000);
+	zassert_equal(ret, -EAGAIN, "same-epoch wait must fail");
+	zassert_equal(mock_hs_last_prev_epoch(), 42, "waited on snapshot epoch 42");
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.failed_stage, FLPR_STAGE_WAIT_READY, "stage WAIT_READY");
+
+	/* Reboot armed by disconnect → changed epoch → success. */
+	mock_hs_set_reboot_on_disconnect(true);
+	zassert_ok(flpr_runtime_restart(1000), "restart with changed epoch");
+
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.previous_epoch, 42, "snapshot epoch");
+	zassert_equal(s.new_epoch, 43, "mock FLPR rebooted to 43");
+	zassert_equal(mock_hs_last_prev_epoch(), 42, "waited on snapshot epoch again");
+}
+
+/* ── Mutex busy ──────────────────────────────────────────────────── */
+
+ZTEST(flpr_runtime, test_mutex_busy_ebusy)
+{
+	rt_success_arrange();
+
+	flpr_runtime_test_hold_mutex();
+
+	int ret = flpr_runtime_restart(0);
+	zassert_equal(ret, -EBUSY, "restart while busy must be -EBUSY");
+
+	/* Release before reading status: get_status() takes the same mutex. */
+	flpr_runtime_test_release_mutex();
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.busy_reject, 1, "busy_reject incremented");
+	zassert_equal(s.requests, 0, "requests NOT incremented");
+
+	zassert_ok(flpr_runtime_restart(1000), "restart after release");
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.requests, 1, "request counted after busy window");
+	zassert_equal(s.busy_reject, 1, "busy_reject unchanged");
+}
+
+/* ── Counters and accounting ─────────────────────────────────────── */
+
+ZTEST(flpr_runtime, test_counters_exact)
+{
+	rt_success_arrange();
+
+	zassert_ok(flpr_runtime_restart(1000), "restart 1");
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.requests, 1, "requests");
+	zassert_equal(s.success_count, 1, "successes");
+	zassert_equal(s.fail_count, 0, "fails");
+	zassert_equal(s.last_errno, 0, "last_errno");
+	zassert_equal(s.reload_bytes, FLPR_RT_TEST_IMAGE_SIZE, "reload_bytes");
+	zassert_equal(s.source_crc, flpr_ring_crc32(flpr_rt_test_source, FLPR_RT_TEST_IMAGE_SIZE),
+		      "source_crc");
+	zassert_equal(s.execution_crc, s.source_crc, "execution_crc");
+	zassert_equal(s.readbacks.initpc_after_set, (uint32_t)(uintptr_t)flpr_rt_test_exec,
+		      "INITPC = execution base");
+	zassert_equal(s.readbacks.dmcontrol_before_release, EXPECTED_RESET_ASSERT,
+		      "DMCONTROL before release = assert mask");
+
+	/* Failure resets the success markers. */
+	mock_hs_set_disconnect_result(-EIO);
+	zassert_equal(flpr_runtime_restart(1000), -EIO, "restart 2 fails");
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.requests, 2, "requests");
+	zassert_equal(s.success_count, 1, "successes");
+	zassert_equal(s.fail_count, 1, "fails");
+	zassert_equal(s.last_errno, -EIO, "last_errno");
+
+	mock_hs_set_disconnect_result(0);
+	zassert_ok(flpr_runtime_restart(1000), "restart 3");
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.requests, 3, "requests");
+	zassert_equal(s.success_count, 2, "successes");
+	zassert_equal(s.fail_count, 1, "fails");
+	zassert_equal(s.last_errno, 0, "last_errno");
+}
+
+ZTEST(flpr_runtime, test_duration_accounting_includes_failures)
+{
+	rt_success_arrange();
+
+	/* Success: one 200 ms sleep. */
+	zassert_ok(flpr_runtime_restart(1000), "restart 1");
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.total_duration_ms, 200, "total after success");
+	zassert_equal(s.max_duration_ms, 200, "max after success");
+
+	/* Wait-bound failure also reaches the 200 ms sleep. */
+	mock_hs_set_wait_bound_result(-EAGAIN);
+	zassert_equal(flpr_runtime_restart(1000), -EAGAIN, "restart 2 fails");
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.total_duration_ms, 400, "failed attempt counted");
+	zassert_equal(s.max_duration_ms, 200, "max unchanged");
+
+	/* Disconnect failure adds zero duration. */
+	mock_hs_set_wait_bound_result(0);
+	mock_hs_clear_wait_bound_result();
+	mock_hs_set_disconnect_result(-EIO);
+	zassert_equal(flpr_runtime_restart(1000), -EIO, "restart 3 fails early");
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.total_duration_ms, 400, "early failure adds nothing");
+	zassert_equal(s.max_duration_ms, 200, "max unchanged");
+
+	/* Longer failed attempt must extend max_duration_ms. */
+	mock_hs_set_disconnect_result(0);
+	flpr_rt_test_set_sleep_advance(500);
+	mock_hs_set_wait_bound_result(-EAGAIN);
+	zassert_equal(flpr_runtime_restart(1000), -EAGAIN, "restart 4 fails late");
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.total_duration_ms, 900, "total includes 500 ms failure");
+	zassert_equal(s.max_duration_ms, 500, "max includes failed attempt");
+
+	/* Success afterwards still tracks correctly. */
+	mock_hs_set_wait_bound_result(0);
+	mock_hs_clear_wait_bound_result();
+	zassert_ok(flpr_runtime_restart(1000), "restart 5 succeeds");
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.total_duration_ms, 1400, "total after long success");
+	zassert_equal(s.max_duration_ms, 500, "max unchanged");
+
+	flpr_rt_test_set_sleep_advance(0);
+	zassert_ok(flpr_runtime_restart(1000), "restart 6 succeeds");
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.total_duration_ms, 1600, "total after normal success");
+	zassert_equal(s.max_duration_ms, 500, "max still longest attempt");
+}
+
+ZTEST(flpr_runtime, test_second_run_early_failure_no_success_stage)
+{
+	rt_success_arrange();
+
+	zassert_ok(flpr_runtime_restart(1000), "restart 1 succeeds");
+
+	struct flpr_runtime_status s;
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.failed_stage, FLPR_STAGE_SUCCESS, "success stage recorded");
+
+	/* Second restart fails at disconnect: must NOT retain SUCCESS stage. */
+	mock_hs_set_disconnect_result(-EIO);
+	zassert_equal(flpr_runtime_restart(1000), -EIO, "restart 2 fails");
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.failed_stage, FLPR_STAGE_DISCONNECT,
+		      "failed_stage reset to DISCONNECT, not stale SUCCESS");
+}
+
+/* ── Status API ──────────────────────────────────────────────────── */
+
+ZTEST(flpr_runtime, test_null_status_output_harmless)
+{
+	flpr_runtime_get_status(NULL);
+
+	struct flpr_runtime_status s;
+	memset(&s, 0xAA, sizeof(s));
+	flpr_runtime_get_status(&s);
+	zassert_equal(s.state, FLPR_RUNTIME_IDLE, "status filled");
+}
+
+ZTEST_SUITE(flpr_runtime, NULL, NULL, rt_setup, NULL, NULL);

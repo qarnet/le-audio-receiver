@@ -78,7 +78,7 @@ struct audio_offload_status {
 	uint32_t probation_cleared;    /* times probation completed (100+ consecutive) */
 	uint32_t busy_count;           /* mutex-timeout rejections */
 
-	/* Stage 4B: runtime restart + heartbeat supervisor */
+	/* Runtime restart + heartbeat supervisor */
 	uint32_t runtime_restart_count;        /* times FLPR was runtime-restarted */
 	uint32_t runtime_restart_fail;         /* restart failures */
 	uint32_t runtime_restart_ms;           /* last restart duration */
@@ -149,19 +149,11 @@ void audio_offload_remote_unavailable(void);
 bool audio_offload_is_healthy(void);
 
 /**
- * @brief Check whether the offload path is fully stopped (no stream, no prep).
- *
- * nRF54L15: true when state == STOPPED.
- * nRF5340: always true.
- */
-bool audio_offload_is_stopped(void);
-
-/**
  * @brief Get a snapshot of offload status/instrumentation.
  */
 void audio_offload_get_status(struct audio_offload_status *status);
 
-/* ── Stage 3B: ASRC offload ──────────────────────────────────────── */
+/* ── ASRC offload ────────────────────────────────────────────────── */
 
 /** Typed result from FLPR ASRC processing. */
 struct audio_offload_asrc_result {
@@ -185,8 +177,9 @@ struct audio_offload_asrc_result {
  * unchanged step_base, and reserved bytes.  On any fault, output
  * and result are untouched.
  *
- * Error output from FLPR (status < 0, frames=0) is a valid transport
- * response returned as success with result.output_frames=0.
+ * Error output from FLPR (status < 0, frames = 0) is recorded as a
+ * fault: fallback is counted, recovery is scheduled, and the call
+ * returns -EAGAIN so the caller falls back to cpuapp ASRC.
  *
  * @param input           Input PCM (interleaved stereo 16-bit, 960 samples).
  * @param input_frames    Must equal 480.

@@ -58,7 +58,7 @@ BAP_UUIDS = {
     "VCS": "00001844-0000-1000-8000-00805f9b34fb",
 }
 
-# Required remote UUIDs per handoff (PACS/ASCS/VCS)
+# Required remote UUIDs (PACS/ASCS/VCS)
 REMOTE_UUIDS = {
     "PACS": "00001850-0000-1000-8000-00805f9b34fb",
     "ASCS": "0000184e-0000-1000-8000-00805f9b34fb",
@@ -72,6 +72,8 @@ DEFAULT_POLL_INTERVAL = 0.5
 
 # Minimum BlueZ version expected
 MIN_BLUEZ_VERSION = (5, 66)
+
+RECEIVER_ADDRESS_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -140,6 +142,7 @@ class BluezWirePlumberGate:
         controller_index: int = 0,
         poll_timeout: float = DEFAULT_POLL_TIMEOUT,
         output_dir: str = "/tmp",
+        receiver_address: Optional[str] = None,
     ) -> None:
         self.receiver_name = receiver_name
         self.duration = duration
@@ -147,8 +150,56 @@ class BluezWirePlumberGate:
         self.controller_index = controller_index
         self.poll_timeout = poll_timeout
         self.output_dir = output_dir
+        if receiver_address is not None and not RECEIVER_ADDRESS_RE.match(
+            receiver_address
+        ):
+            raise ValueError(
+                "receiver_address must match XX:XX:XX:XX:XX:XX, got %r"
+                % receiver_address
+            )
+        self.receiver_address = (
+            receiver_address.upper() if receiver_address is not None else None
+        )
+        # PipeWire-visible identity of the receiver (underscore form, e.g.
+        # DB_A6_0C_05_A2_AA), derived from --receiver-address or from the
+        # BlueZ device path once the receiver is found.  Every PipeWire
+        # device/sink must be associated with this address.
+        self._receiver_addr: Optional[str] = (
+            self._addr_underscore(self.receiver_address)
+            if self.receiver_address is not None
+            else None
+        )
 
         self._dbus_available: bool = False
+
+    @staticmethod
+    def _addr_underscore(addr: str) -> str:
+        """Normalize a BT address to the PipeWire underscore form."""
+        return addr.replace(":", "_").upper()
+
+    @staticmethod
+    def _object_bt_address(obj: Any) -> Optional[str]:
+        """Extract the BT address of a pw-dump BlueZ object.
+
+        SPA bluez5 objects carry ``bluez5.address`` (colon form) and/or a
+        ``bluez_card.``/``bluez_output.``/``bluez_input.``/``bluez_midi.``
+        prefixed name.  Returns the underscore form (``DB_A6_0C_05_A2_AA``)
+        or None when the object is not bound to a device.
+        """
+        props = obj.get("info", {}).get("props", {})
+        addr = props.get("bluez5.address")
+        if addr:
+            return BluezWirePlumberGate._addr_underscore(str(addr))
+        name = props.get("node.name") or props.get("device.name") or ""
+        for prefix in (
+            "bluez_output.",
+            "bluez_input.",
+            "bluez_card.",
+            "bluez_midi.",
+        ):
+            if name.startswith(prefix):
+                return name[len(prefix) :].split(".")[0].upper()
+        return None
 
     # ── Preflight ─────────────────────────────────────────────────────────
 
@@ -471,13 +522,28 @@ class BluezWirePlumberGate:
 
     def find_receiver(self) -> Optional[str]:
         """Find the receiver device path in BlueZ.  Return D-Bus object path
-        or None."""
+        or None.
+
+        Identity is exact, not substring-based: with ``receiver_address``
+        configured only that address matches; otherwise the device name must
+        equal the configured receiver name (case-insensitive).  A different
+        device that merely shares a name fragment never qualifies.
+        """
         try:
             proc = _run(["bluetoothctl", "devices"])
+            wanted = self.receiver_address or None
             for line in proc.stdout.splitlines():
-                if self.receiver_name in line:
-                    addr = line.split()[1]
-                    return f"/org/bluez/hci{self.controller_index}/dev_{addr.replace(':', '_').upper()}"
+                toks = line.split()
+                if len(toks) < 3 or toks[0] != "Device":
+                    continue
+                addr = toks[1].upper()
+                name = " ".join(toks[2:]).strip()
+                if wanted is not None:
+                    if addr != wanted:
+                        continue
+                elif name.lower() != self.receiver_name.lower():
+                    continue
+                return f"/org/bluez/hci{self.controller_index}/dev_{addr.replace(':', '_')}"
         except Exception:
             pass
         return None
@@ -515,6 +581,25 @@ class BluezWirePlumberGate:
                     all_ok = False
                     result.evidence.append(f"  FAIL: Cannot read {prop}: {e}")
 
+            # Identity consistency: the D-Bus object's Address must match the
+            # address the path was built from, so a name/address-matched
+            # device cannot be swapped for an unrelated BlueZ object.
+            path_addr = (
+                device_path.rsplit("/", 1)[-1].removeprefix("dev_").replace("_", ":")
+            )
+            try:
+                dev_addr = str(props_iface.Get(BLUEZ_IFACE_DEVICE, "Address")).upper()
+                result.evidence.append(f"  Address: {dev_addr}")
+                if dev_addr != path_addr.upper():
+                    all_ok = False
+                    result.evidence.append(
+                        f"  FAIL: Device Address {dev_addr} does not match "
+                        f"object path address {path_addr}"
+                    )
+            except Exception as e:
+                all_ok = False
+                result.evidence.append(f"  FAIL: Cannot read Address: {e}")
+
             # Check UUIDs
             try:
                 uuids = props_iface.Get(BLUEZ_IFACE_DEVICE, "UUIDs")
@@ -542,12 +627,18 @@ class BluezWirePlumberGate:
     # ── PipeWire / WirePlumber polling ───────────────────────────────────
 
     def poll_pipewire_objects(self, result: GateResult, timeout: float) -> bool:
-        """Poll pw-dump / wpctl until receiver bluetooth device, BAP profile,
-        and playback sink appear.  Report exact objects on timeout.
-        Return True if all three objects found."""
+        """Poll pw-dump / wpctl until the receiver's bluetooth device, BAP
+        profile, and audio playback sink appear.  Report exact objects on
+        timeout.  Return True if all three objects found.
+
+        Every object must be associated with the receiver's BT address and
+        the sink must be an actual Audio/Sink playback node: an unrelated
+        BlueZ device (mouse, keyboard, MIDI) never satisfies readiness.
+        """
         start = time.monotonic()
         result.evidence.append(f"Polling PipeWire objects (timeout={timeout}s)...")
 
+        receiver_addr = self._receiver_addr
         found_device = False
         found_profile = False
         found_sink = False
@@ -560,23 +651,29 @@ class BluezWirePlumberGate:
             if dump:
                 last_dump = dump
 
-                # Search for bluetooth device
-                devices = self._find_bt_devices(dump)
+                # Search for the receiver's bluetooth device (address-bound).
+                devices = self._find_bt_devices(dump, receiver_addr)
                 if devices:
                     found_device = True
                     result.evidence.append(f"  Found BT devices: {json.dumps(devices)}")
 
-                # Search for nodes with bluetooth audio
-                nodes = self._find_bt_nodes(dump)
-                if nodes:
+                # Search for the receiver's Audio/Sink playback node — never
+                # MIDI/source/unrelated nodes.
+                sinks = self._find_bt_sink_nodes(dump, receiver_addr)
+                if sinks:
                     found_sink = True
-                    result.evidence.append(f"  Found BT nodes: {json.dumps(nodes)}")
+                    result.evidence.append(f"  Found BT sinks: {json.dumps(sinks)}")
 
-            # Poll wpctl
+            # Poll wpctl: the receiver's node (address form) must appear so
+            # the audio profile is actually exposed, not merely any BlueZ
+            # object.
             try:
                 wproc = _run(["wpctl", "status"], timeout=10.0)
                 last_wpctl = wproc.stdout
-                if (
+                if receiver_addr:
+                    if receiver_addr in last_wpctl:
+                        found_profile = True
+                elif (
                     "LE Audio Receiver" in last_wpctl
                     or self.receiver_name in last_wpctl
                 ):
@@ -584,15 +681,16 @@ class BluezWirePlumberGate:
             except Exception:
                 pass
 
-            if found_device and found_sink:
+            if found_device and found_sink and found_profile:
                 break
 
             time.sleep(DEFAULT_POLL_INTERVAL)
 
-        if not found_device or not found_sink:
+        if not found_device or not found_sink or not found_profile:
             result.evidence.append("--- PipeWire object search timed out ---")
             result.evidence.append(
-                f"found_device={found_device} found_sink={found_sink}"
+                f"found_device={found_device} found_sink={found_sink} "
+                f"found_profile={found_profile} (receiver_addr={receiver_addr})"
             )
             result.evidence.append(f"Last wpctl status:\n{last_wpctl[:2000]}")
             result.evidence.append(
@@ -615,23 +713,66 @@ class BluezWirePlumberGate:
     @staticmethod
     def _find_bt_devices(
         dump: Any,
+        receiver_addr: Optional[str] = None,
     ) -> List[Dict[str, str]]:
-        """Search pw-dump for bluetooth device objects."""
+        """Search pw-dump for BlueZ device objects.
+
+        With ``receiver_addr`` (underscore form) set, only the object bound
+        to that address is returned — an unrelated BlueZ device never
+        matches the receiver.
+        """
         results = []
         for obj in dump:
             info = obj.get("info", {})
             props = info.get("props", {})
             device_api = props.get("device.api", "")
-            if "bluez" in device_api.lower():
-                results.append(
-                    {
-                        "id": obj.get("id"),
-                        "name": props.get("device.name", ""),
-                        "description": props.get("device.description", ""),
-                        "api": device_api,
-                        "media_class": props.get("media.class", ""),
-                    }
-                )
+            if "bluez" not in device_api.lower():
+                continue
+            if receiver_addr is not None:
+                if BluezWirePlumberGate._object_bt_address(obj) != receiver_addr:
+                    continue
+            results.append(
+                {
+                    "id": obj.get("id"),
+                    "name": props.get("device.name", ""),
+                    "description": props.get("device.description", ""),
+                    "api": device_api,
+                    "media_class": props.get("media.class", ""),
+                }
+            )
+        return results
+
+    @staticmethod
+    def _find_bt_sink_nodes(
+        dump: Any,
+        receiver_addr: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
+        """Search pw-dump for the receiver's actual audio playback nodes.
+
+        Only ``Audio/Sink`` media-class BlueZ nodes count; MIDI/source/
+        unrelated nodes never do.  With ``receiver_addr`` set, only nodes
+        bound to that address are returned.
+        """
+        results = []
+        for obj in dump:
+            info = obj.get("info", {})
+            props = info.get("props", {})
+            node_name = props.get("node.name", "")
+            if "bluez" not in node_name.lower():
+                continue
+            media_class = props.get("media.class", "")
+            if "Audio/Sink" not in media_class:
+                continue
+            if receiver_addr is not None:
+                if BluezWirePlumberGate._object_bt_address(obj) != receiver_addr:
+                    continue
+            results.append(
+                {
+                    "id": obj.get("id"),
+                    "name": node_name,
+                    "media_class": media_class,
+                }
+            )
         return results
 
     @staticmethod
@@ -1162,6 +1303,12 @@ class BluezWirePlumberGate:
             result.exit_code = EX_HOST_PREREQ
             return result
         result.evidence.append(f"Device path: {device_path}")
+        if self._receiver_addr is None:
+            # Derive the PipeWire address identity from the BlueZ object path
+            # (…/dev_DB_A6_0C_05_A2_AA) so every downstream check can bind
+            # PipeWire objects to the receiver.
+            self._receiver_addr = device_path.rsplit("/", 1)[-1].removeprefix("dev_")
+        result.evidence.append(f"Receiver address: {self._receiver_addr}")
 
         # 3. Check device state
         result.stage = "device_state"
@@ -1217,32 +1364,18 @@ class BluezWirePlumberGate:
         return result
 
     def _find_sink_name(self) -> Optional[str]:
-        """Find audio sink name from pw-dump for our receiver.
-        Prefer Audio/Sink media class over MIDI/other."""
+        """Find the receiver's audio playback sink name from pw-dump.
+
+        Only an Audio/Sink node bound to the receiver's address qualifies.
+        MIDI or other unrelated BlueZ nodes are never returned.
+        """
         dump = self._get_pw_dump()
         if not dump:
             return None
 
-        # Search for Audio/Sink nodes first
-        audio_sinks = []
-        midi_nodes = []
-        for obj in dump:
-            props = obj.get("info", {}).get("props", {})
-            node_name = props.get("node.name", "")
-            media_class = props.get("media.class", "")
-            if "bluez" in node_name.lower():
-                if "Audio/Sink" in media_class:
-                    audio_sinks.append(node_name)
-                elif "Midi" in media_class:
-                    midi_nodes.append(node_name)
-                else:
-                    audio_sinks.append(node_name)  # fallback
-
-        if audio_sinks:
-            return audio_sinks[0]
-        if midi_nodes:
-            result = getattr(self, "_last_gate_result", None)
-            return midi_nodes[0]
+        sinks = self._find_bt_sink_nodes(dump, self._receiver_addr)
+        if sinks:
+            return sinks[0]["name"]
         return None
 
 
@@ -1284,6 +1417,15 @@ def main() -> int:
         default="/tmp",
         help="Directory for generated files (default: /tmp)",
     )
+    parser.add_argument(
+        "--receiver-address",
+        default=None,
+        help=(
+            "Exact receiver BT address (XX:XX:XX:XX:XX:XX). When set, only "
+            "that device qualifies as the receiver and every PipeWire "
+            "device/sink must be bound to it."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1292,6 +1434,14 @@ def main() -> int:
     except Exception:
         pass
 
+    if args.receiver_address is not None and not RECEIVER_ADDRESS_RE.match(
+        args.receiver_address
+    ):
+        parser.error(
+            "--receiver-address must match XX:XX:XX:XX:XX:XX, got %r"
+            % args.receiver_address
+        )
+
     gate = BluezWirePlumberGate(
         receiver_name=args.receiver,
         duration=args.duration,
@@ -1299,6 +1449,7 @@ def main() -> int:
         controller_index=args.controller,
         poll_timeout=args.poll_timeout,
         output_dir=args.output_dir,
+        receiver_address=args.receiver_address,
     )
 
     gresult = gate.run()

@@ -106,7 +106,20 @@ config AUDIO_PERF_DEADLINE_US
 	  at runtime via k_us_to_cyc_ceil32().  Default 10000 us = 10 ms.
 	  Works correctly across all platforms and native_sim.
 
-# ── Stage 3B: FLPR ASRC offload ─────────────────────────────────────
+config AUDIO_ACCEPTANCE_DIAGNOSTICS
+	bool "FLPR acceptance diagnostics shell commands"
+	default n
+	depends on SOC_NRF54L15 && SHELL
+	help
+	  Gate the FLPR acceptance-harness shell commands (flpr ring *,
+	  flpr stress, flpr hang) behind an explicit diagnostics option so
+	  normal audio diagnostics never compile the acceptance harness.
+	  Enabled only in boards/nrf54l15dk_nrf54l15_cpuapp.conf; the
+	  nRF5340 target has no FLPR acceptance commands.  The FLPR-image
+	  fault-handler gating is the separate
+	  CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS option.
+
+# ── FLPR ASRC offload ──────────────────────────────────────────────
 
 config AUDIO_OFFLOAD_ASRC
 	bool "FLPR ASRC offload (nRF54L15 only)"
@@ -137,5 +150,177 @@ config AUDIO_OFFLOAD_ASRC_VERIFY
 
 	  Production builds must disable this option.  Development and
 	  acceptance testing enable it for cross-validation.
+
+config AUDIO_MODEA_MAX_FRAME_OCTETS
+	int "Mode A pending frame block size (octets per mono frame)"
+	default 120
+	range 20 240
+	help
+	  Bounded compressed-SDU buffer size for one Mode A half frame
+	  block held pending by the Mode A event assembler (audio_modea).
+	  The receiver advertises 20..120 octets per frame at 48 kHz and
+	  rejects any larger validated shape, so 120 covers every accepted
+	  Mode A mono configuration; the range ceiling exists only so the
+	  option can be raised without a code change.
+
+config AUDIO_MODEA_PENDING_DEPTH
+	int "Mode A pending halves per channel (fixed-depth queue)"
+	default 2
+	range 1 4
+	help
+	  Maximum unresolved half events buffered per Mode A channel by
+	  the event assembler.  Depth 2 covers the measured <=1-event
+	  cross-CIS callback skew plus single-SDU losses and a one-event
+	  loss burst on one channel while the other keeps delivering.  A
+	  third concurrent unresolved event on one channel (the other
+	  channel stalled >=2 events) overflows: the oldest entry is
+	  dropped and counted in the assembler stats (never silent).
+	  Bounded static state; no heap.
+
+config AUDIO_ISO_SEQ_MAX_CONCEAL
+	int "Per-CIS sequence-gap concealment bound (omitted SDUs per callback)"
+	default 8
+	range 1 64
+	help
+	  Maximum SDUs concealed as PLC per delivered callback when the
+	  ISO stack omits callbacks for lost SDUs (observed on the
+	  nRF5340 SW Split controller: no VALID and no LOST callback for
+	  some lost events; the next callback's Packet_Sequence_Number
+	  then jumps).  audio_iso_seq tracks each CIS's delivered
+	  sequences and reports the omitted count; the receive path
+	  conceals up to this many omitted SDUs as PLC before processing
+	  the current SDU, keeping I2S output cadence.
+
+	  8 omitted SDUs = 80 ms at 10 ms frames, half the 16-block I2S
+	  slab budget (~160 ms), so a bound-sized gap still fits the
+	  audio buffering while the drift controller re-converges.  A
+	  forward jump beyond this bound is treated as a discontinuity:
+	  the tracker resyncs and the receive path logs the evidence
+	  instead of synthesizing unbounded work (duplicates and
+	  backward sequences are likewise explicit resync outcomes).
+
+# ── User pairing control (P1): portable pairing-mode transition owner ──
+
+config USER_PAIRING_CONTROL
+	bool "User pairing control (pairing-mode transition owner)"
+	default n
+	select EVENTS
+	help
+	  Portable NORMAL/BONDING/RESETTING transition owner
+	  (src/pairing_mode.c).  Production boards enable this only when
+	  the full feature stack (input/LED adapter, Bluetooth adapter,
+	  lifecycle/shell integration) is wired — see
+	  docs/development/user-pairing-control-plan.md.  P1 keeps every
+	  production board config disabled.
+
+config USER_PAIRING_BOND_HOLD_MS
+	int "BONDING button-hold threshold (ms)"
+	default 3000
+	range 1 60000
+	depends on USER_PAIRING_CONTROL
+	help
+	  Debounced button hold duration that requests BONDING.  Consumed
+	  by the P2 input adapter; defined here so the relational timing
+	  BUILD_ASSERTs (reset threshold > bonding threshold) can live in
+	  the P1 controller.
+
+config USER_PAIRING_RESET_HOLD_MS
+	int "RESET button-hold threshold (ms)"
+	default 8000
+	range 1 120000
+	depends on USER_PAIRING_CONTROL
+	help
+	  Debounced button hold duration that requests RESET.  Consumed
+	  by the P2 input adapter; must exceed USER_PAIRING_BOND_HOLD_MS
+	  (BUILD_ASSERT in src/pairing_mode.c).
+
+config USER_PAIRING_BOND_LED_HALF_PERIOD_MS
+	int "BONDING LED half-period (ms)"
+	default 500
+	range 1 60000
+	depends on USER_PAIRING_CONTROL
+	help
+	  BONDING LED toggle interval: immediately active on entry, then
+	  one toggle per half-period.
+
+config USER_PAIRING_RESET_LED_HALF_PERIOD_MS
+	int "RESET LED half-period (ms)"
+	default 100
+	range 1 60000
+	depends on USER_PAIRING_CONTROL
+	help
+	  RESET feedback LED toggle interval.  USER_PAIRING_RESET_FEEDBACK_MS
+	  must be divisible by this value with a quotient of at least two
+	  (BUILD_ASSERT in src/pairing_mode.c).
+
+config USER_PAIRING_RESET_FEEDBACK_MS
+	int "RESET feedback indication duration (ms)"
+	default 1000
+	range 1 60000
+	depends on USER_PAIRING_CONTROL
+	help
+	  Duration of the rapid LED indication after bonds are deleted and
+	  before BONDING advertising starts.  At the production defaults
+	  (1000 ms / 100 ms half-period) this produces five complete rapid
+	  flashes.
+
+config USER_PAIRING_WORKQ_STACK_SIZE
+	int "Pairing-mode work-queue stack size (bytes)"
+	default 2048
+	range 1024 32768
+	depends on USER_PAIRING_CONTROL
+	help
+	  Stack for the controller's private work queue thread.
+
+config USER_PAIRING_WORKQ_PRIORITY
+	int "Pairing-mode work-queue thread priority"
+	default 5
+	range 0 15
+	depends on USER_PAIRING_CONTROL
+	help
+	  Priority of the controller's private work queue thread (lower
+	  number = higher priority).
+
+# ── User pairing control (P2): generic input and LED adapter ─────────
+
+config USER_PAIRING_INPUT
+	bool "User button and LED pairing control"
+	default n
+	depends on USER_PAIRING_CONTROL && INPUT
+	depends on DT_HAS_GPIO_KEYS_ENABLED
+	select GPIO
+	help
+	  Reusable user-button / user-LED pairing-control adapter
+	  (src/user_pairing_io.c).  Hardware is selected only through the
+	  'user-button' (child of a gpio-keys node) and 'user-led' (gpio-leds
+	  child) devicetree aliases; no board-number conditionals.  The
+	  gpio-keys driver owns debounce; this module schedules/cancels the
+	  BONDING/RESET hold thresholds and forwards them to pairing_mode.
+	  Production boards enable this only when the full feature stack is
+	  wired — see docs/development/user-pairing-control-plan.md.  P2
+	  keeps every production board config disabled.
+
+config USER_PAIRING_DEBOUNCE_MS
+	int "User pairing button debounce interval"
+	default 30
+	range 1 1000
+	depends on USER_PAIRING_INPUT
+	help
+	  Board/devicetree contract value: the selected gpio-keys node's
+	  resolved debounce-interval-ms must equal this value (BUILD_ASSERT
+	  in src/user_pairing_io.c).  The gpio-keys driver implements the
+	  debounce; this module adds no second debounce timer.
+
+config USER_PAIRING_SHELL_RESET_TIMEOUT_MS
+	int "Pairing reset shell timeout (ms)"
+	default 15000
+	range 1000 120000
+	depends on USER_PAIRING_INPUT && SHELL
+	help
+	  Bounded synchronous wait for the 'bt unpair' RESET transition
+	  (disconnect + 1-second feedback + BONDING advertising completion)
+	  with ample controller margin.  On timeout the shell prints an
+	  error and the transition continues asynchronously; success is
+	  printed only after BONDING advertising is active.
 
 source "Kconfig.zephyr"

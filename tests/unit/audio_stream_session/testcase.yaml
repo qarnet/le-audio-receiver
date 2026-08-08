@@ -1,0 +1,6 @@
+tests:
+  unit.audio_stream_session:
+    platform_allow: native_sim/native/64
+    integration_platforms:
+      - native_sim/native/64
+    tags: audio session

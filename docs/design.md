@@ -1,6 +1,36 @@
 # LE Audio Receiver — Design Document
 
-Status: **revised 2026-07-31** (Phase 5 closed — cpuapp ASRC accepted, Mode A+B 600s zero faults; Phase 6 FLPR offload Stages 0–5 complete; Phase 1 BlueZ/WirePlumber PACS availability landed; Phase 2 BlueZ/WirePlumber stock desktop gate accepted; Phase 3 BlueZ/WirePlumber pairing/reconnect lifecycle accepted; Phase 4 compatibility expansion not needed). Earlier history: accepted 2026-07-05.
+Status: **historical architecture and evidence** — revised 2026-08-06
+(R10 closeout).  Earlier history: accepted 2026-07-05, revised 2026-07-31
+(Phase 5 closed — cpuapp ASRC accepted, Mode A+B 600 s zero faults;
+Phase 6 FLPR offload Stages 0–5 complete; BZ1 BlueZ/WirePlumber PACS
+availability landed; BZ2 BlueZ/WirePlumber stock desktop gate accepted;
+BZ3 BlueZ/WirePlumber pairing/reconnect lifecycle accepted; BZ4
+compatibility expansion not needed).
+
+The accepted plan of record for the refactoring track (R0–R10) is
+`docs/development/refactor-plan.md`.  The T0–T8 behavior-lock track is
+COMPLETE/ACCEPTED — **historical evidence** (canonical gate 47 PASS /
+0 FAIL / 47 TOTAL, coverage baseline `1a5842d`, builds 3/3, build
+contract 76/76, both hardware matrices —
+`docs/testing/pre-refactor-hardware-baseline.md`).  The R0–R10 refactor
+track COMPLETE/ACCEPTED (2026-08-06) is the **historical refactor
+baseline**: canonical gate **55 PASS / 0 FAIL / 55 TOTAL** (31
+twister + 5 exec-only + 16 Python + coverage + matrix + BSim), coverage
+population **33** (4024/4402 L, 1695/2356 B, 289/289 F; committed
+baseline `54a6b8e`), builds 3/3, build contract 79/79, BSim Stage 1 17
+scenarios/26 runs pins byte-identical — final evidence in
+`docs/development/refactor-r10-results.md`.  The current authoritative
+state is the P1–P8 user pairing control closeout (2026-08-08): canonical
+gate **62 PASS / 0 FAIL / 62 TOTAL** (35 twister + 5 exec-only + 19
+Python + coverage + matrix + BSim), coverage population **36**
+(4665/5121 lines, 2023/2820 branches, 357/357 functions), build contract
+**95/95**, BSim 17 scenarios / 26 runs pins byte-identical — see
+`STATUS.md` and `docs/development/user-pairing-control-p8-results.md`.
+All
+"Phases 0–6" content below is dated architecture/evidence of the
+pre-refactor design and is superseded by the module ownership described
+in the current-architecture section that follows.
 
 This is the consolidated design doc for the firmware supporting both **nRF5340**
 and **nRF54L15**. It records current state, findings (historical), target
@@ -10,6 +40,69 @@ Each phase below is intentionally concrete-but-not-exhaustive: detailed handoff
 documents are written per phase when work on it starts.
 
 ---
+
+# Current architecture (post-R10, authoritative)
+
+The R0–R10 refactor track preserved the T8 accepted behavior (behavioral
+baseline T8 commit `971e6a4` — not an identical source tree; R0–R9 made
+structural production-source changes while preserving behavior, R10 is
+docs/evidence only) while reorganizing ownership.  The current module map:
+
+```
+src/main.c                     hardware wiring, watchdog, advertising-loop adapter
+src/app_lifecycle.c            pure fatal boot coordinator (ordered init, cold reboot,
+                               advertising restart) — T6 direct suite
+src/bt_bap.c                   BAP unicast server front end: ASCS/PACS, pairing,
+                               advertising, thin recv adapter (R6), and the ONE
+                               private teardown transition owner (R7:
+                               teardown_transition/teardown_close_path —
+                               first close wins, per-slot release once,
+                               close→drain→sink-stop→offload-stop→reset)
+src/bt_pairing_policy.c        pure OPEN/BONDED_ONLY policy snapshot
+src/audio_stream_session.c     R6: exclusive owner of app audio receive/session
+                               state (codec shape, decoders, per-CIS ISO seq
+                               trackers, Mode A assembler, receive counters,
+                               decode/conceal/volume/push, admission/lease
+                               rx_open/rx_close) — direct-suite covered
+src/audio_modea.c              bounded two-CIS event assembler + per-channel PLC
+src/audio_iso_seq.c            pure per-CIS omitted-callback sequence tracker
+src/audio_decode.c             LC3 decode + channel routing (mono / Mode A / Mode B)
+src/audio_sink.h → audio_i2s.c platform-neutral sink (init/push/stop +
+                               stream_open/stream_close admission + drain) over
+                               slab/DMA I2S, 48 kHz stereo
+src/audio_drift.c              dual-term PI clock-recovery controller (ppm output)
+src/audio_clock_actuator_*.c   actuator interface: APLL (nRF5340) / NONE (nRF54L15,
+                               ASRC consumes ppm directly)
+src/audio_timing_*.c           platform timing: nrf54 (GRTC+TIMER20 PCLK measure,
+                               feedforward) / none (nRF5340 no-op — no frequency
+                               update; see correction note below)
+src/audio_asrc.c + src/flpr/*  fixed-point linear stereo ASRC on FLPR (RISC-V VPR)
+                               with identical cpuapp fallback; handshake, rings,
+                               control-ACK, runtime; R8 split acceptance machinery
+                               into src/flpr_acceptance.c + src/flpr/acceptance.c
+src/audio_shell.c/bt_shell.c/  R4: shell command ownership split by subsystem;
+flpr_shell.c/flpr_acceptance_shell.c  acceptance harness behind
+                               CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS
+scripts/bap_central.py         R9: thin CLI coordinator; device/security/endpoint/
++ bap_central_{device,security,  session modules each own one domain; CentralCleanup
+endpoint,session}.py           single idempotent resource owner
+```
+
+Key ownership invariants (all covered by direct unit suites unless noted):
+
+- **Teardown**: one owner (`bt_bap.c`, R7); no callback composes low-level
+  stop/reset calls.
+- **Receive/session**: `audio_stream_session.c` (R6) owns all app audio
+  state; `bt_bap.c` owns Bluetooth objects/callbacks only.
+- **Admission**: `audio_sink_stream_open()/close()` (R1) gate push
+  admission; `audio_sink_stop()` drains admitted pushes before DROP.
+- **FLPR diagnostics**: acceptance-only machinery is configurable
+  (R4/R8); core ring/handshake/runtime files contain production logic.
+- **Central tooling**: discovery/security/endpoint/session/teardown each
+  have one module (R9).
+
+Full per-file coverage evidence: `docs/testing/coverage-matrix.md`;
+behavior contracts: `docs/testing/behavior-contract.md`.
 
 # Part I — Current state & findings
 
@@ -35,6 +128,12 @@ documents are written per phase when work on it starts.
   faults). Physical audibility UNAVAILABLE — see Phase 4/5 for completed
   measurable gates and evidence.
 - Clean small modules: `audio_stats`, `audio_volume`, `audio_shell`.
+- Current architecture modules: `app_lifecycle.c` (pure fatal boot
+  coordinator — ordered init, cold reboot, advertising restart),
+  `audio_modea.c` (bounded two-CIS event assembler with per-channel PLC),
+  `audio_iso_seq.c` (pure per-CIS omitted-callback sequence tracker),
+  `bt_pairing_policy.c` (pure OPEN/BONDED_ONLY policy snapshot; Bluetooth
+  controller work remains in `bt_bap.c`).
 
 ## Findings (historical — all resolved in Phases 0–4)
 
@@ -69,11 +168,21 @@ Single workflow: `nix-nrf-dev` flake → `mkNrfShell`. All helpers in
 ### F6 — Clock recovery was an FLL, not a PLL — RESOLVED Phases 3–4
 
 `audio_drift.c` now implements a dual-term ppm-based PI controller:
-frequency term from PCLK-vs-GRTC measurement (nRF54L15) or ISO timestamps
-(nRF5340), plus phase term from I2S buffer fill. Output in ppm, routed to
-platform-specific actuators (APLL or consumed by ASRC). The packet-repeat
-fallback no longer fires in steady state. See Part II §Clock recovery and
-`AGENTS.md` "Drift controller" for current production architecture.
+frequency term from PCLK-vs-GRTC measurement (nRF54L15), plus phase term
+from I2S buffer fill. Output in ppm, routed to platform-specific actuators
+(APLL or consumed by ASRC). The packet-repeat fallback no longer fires in
+steady state. See Part II §Clock recovery and `AGENTS.md` "Drift
+controller" for current production architecture.
+
+> **Correction (R10, 2026-08-06):** the historical text below and the
+> "Drift measurement (production)" bullet previously claimed the nRF5340
+> frequency term comes from "ISO `info->ts` deltas".  That is stale:
+> `audio_sink_sdu_ref_update()` was REMOVED (Phase 4b.2) and ISO
+> timestamps go ONLY to `audio_timing_sdu_ref_update()` — which is the
+> nRF5340 no-op `audio_timing_none.c` (no GRTC/TIMER20).  Current
+> production: **no frequency update on nRF5340** — feedforward term stays
+> zero; phase-only PI from I2S buffer fill.  nRF54L15 keeps the 1 s
+> PCLK-vs-GRTC feedforward.
 
 ### F7 — Misc — RESOLVED
 
@@ -177,8 +286,15 @@ only; a converged loop must not trigger it in steady state.
   GPPI, hardware-snapshotted. The GRTC ISR reads the captured count, computes
   unsigned delta and elapsed GRTC microseconds, derives integer ppm.
   `audio_drift_frequency_error_update()` feeds this into the PI controller.
-- **nRF5340**: ISO `info->ts` deltas (no GRTC/TIMER20 on this platform).
+- **nRF5340**: no frequency measurement.  `audio_timing_none.c` is the
+  production no-op timing module (no GRTC/TIMER20 on this platform);
+  `audio_drift_frequency_error_update()` is never called there.
   Feedforward term stays zero; phase-only PI using I2S buffer fill.
+  > **R10 correction:** earlier text claimed nRF5340 used "ISO
+  > `info->ts` deltas" for a frequency term.  That path was removed
+  > (Phase 4b.2): `audio_sink_sdu_ref_update()` no longer exists and ISO
+  > timestamps reach only the (no-op) `audio_timing_sdu_ref_update()`.
+  > The nRF5340 actuator (APLL) is driven by the phase-only PI output.
 
 **Historical (invalidated):** I2S20 FRAMESTART was considered as a sample-clock
 counter but FRAMESTART fires at DMA buffer boundaries (~100 Hz), not LRCK edges.
@@ -502,10 +618,15 @@ proven hardware or SDK impossibility that needs an explicit redesign
 
 ## BabbleSim — cross-cutting verification track
 
-BabbleSim is a planned research-then-implementation track that runs in
-parallel with Phases 5–6. It is not a release blocker until the
-environment is provisioned and the test scenario is valid. It complements,
-never substitutes, native unit tests and real-hardware central-driven tests.
+BabbleSim Stage 1 is an **accepted regular local gate**: the 17-scenario T4+R7
+BAP matrix over real `src/bt_bap.c`, `src/audio_decode.c`, real Zephyr
+BAP/ASCS/PACS, real ISO transport, and real liblc3
+(`scripts/bsim-stage1-run.sh`, scenarios 1–9 run twice, remaining eight
+once = 26 runs), with a strict PCM oracle and pinned deterministic hashes.  The official upstream smoke
+(`scripts/bsim-official-smoke.sh`) remains **PARTIAL** because of the
+documented upstream teardown disable-race and is **not** production
+acceptance.  It complements, never substitutes, native unit tests and
+real-hardware central-driven tests.
 
 ### Current state (NCS v3.3.0)
 
@@ -547,7 +668,15 @@ never substitutes, native unit tests and real-hardware central-driven tests.
   BAP unicast audio test, exits nonzero on known teardown disable-race → Baseline
   PARTIAL.
 
-### Stage 1 acceptance + cleanup (2026-07-29)
+### Stage 1 acceptance + cleanup (2026-07-29) — historical evidence
+
+> **Historical (pre-T2 oracle):** this stage-1 acceptance predates the T2B
+> mono overlap-safe expansion fix; the `0xFE0D4245` hash below locked in the
+> forward-expansion collapse defect and was superseded by the corrected T2
+> values and then by the T4/T4+R7 scenario matrix (see `STATUS.md` T2/T4
+> sections and `docs/development/bsim-stage1-results.md`).  Kept as dated
+> evidence only; the current accepted gate is
+> `scripts/bsim-stage1-run.sh`.
 
 - Advertising → pairing → PACS/ASCS → one sink ASE → CIS start → valid LC3
   fixture (48 kHz, 48_4_1 preset) → 104 client sends → 100 nonzero receiver pushes.
@@ -563,9 +692,10 @@ never substitutes, native unit tests and real-hardware central-driven tests.
 
 ### Planned beyond Stage 1
 
-Scope stops here.  Reconnect, Mode A/B, and error injection duplicate hardware
-coverage and add low value under unmodeled I2S/FLPR.  No further BSIM scenario
-expansion planned.
+The accepted BSim scenario set is the 17-scenario T4+R7 matrix
+(mono/Mode A/Mode B 7.5+10 ms incl. one-CIS-loss, lifecycle, reconnect,
+rejection, duplicate-release, and invalid-codec scenarios, run by
+`scripts/bsim-stage1-run.sh`).
 
 BabbleSim cannot validate ASRC quality, I2S behaviour, SDC realism, FLPR
 offload, or hardware stability — those remain hardware-only gates. It is

@@ -121,7 +121,8 @@ and result interpretation — avoiding Twister's implicit assumptions.
 west config manifest.group-filter +babblesim
 
 # Clone babblesim components manually (NCS toolchain git-remote-https needs libcurl/zlib)
-# See handoff for per-repo clone commands
+# (per-repo clone commands were recorded in the deleted T4 handoff; see
+#  the component revisions table and the clone workaround above)
 
 # Restore default filter
 west config -d manifest.group-filter

@@ -2,9 +2,16 @@
  * Copyright (c) 2021-2025 Nordic Semiconductor ASA
  * SPDX-License-Identifier: Apache-2.0
  *
- * LE Audio Receiver: main() lifecycle — watchdog, init ordering,
- * advertising restart loop. BT and decode logic live in bt_bap.c /
- * audio_decode.c. I2S output lives in audio_i2s.c behind audio_sink.h.
+ * LE Audio Receiver: main() lifecycle — watchdog device/thread/config,
+ * boot-coordinator wiring, advertising restart loop. The ordered fatal
+ * boot sequence itself lives in the narrow, unit-tested coordinator
+ * app_lifecycle.c; this file retains all hardware wiring and adapts the
+ * real subsystem calls to the coordinator's operations structure. Under
+ * CONFIG_USER_PAIRING_INPUT the final advertising adapter and the main
+ * loop delegate to the pairing-mode controller (P5); the legacy
+ * disconnect-wait/restart loop remains byte-for-byte for feature-off
+ * builds. BT and decode logic live in bt_bap.c / audio_decode.c. I2S
+ * output lives in audio_i2s.c behind audio_sink.h.
  */
 
 #include <errno.h>
@@ -18,14 +25,23 @@
 #include <zephyr/settings/settings.h>
 #include <zephyr/sys/reboot.h>
 
+#include "app_lifecycle.h"
 #include "audio_sink.h"
 #include "audio_volume.h"
 #include "audio_offload.h"
 #include "bt_bap.h"
 
+#if defined(CONFIG_USER_PAIRING_INPUT)
+#include "pairing_mode.h"
+#include "user_pairing_io.h"
+#endif
+
 #if defined(CONFIG_SOC_NRF54L15)
 #include "flpr_handshake.h"
 #include "flpr_runtime.h"
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+#include "flpr_acceptance.h"
+#endif
 #endif
 
 #if defined(CONFIG_WATCHDOG)
@@ -88,89 +104,196 @@ static inline int wdt_init(void)
 }
 #endif /* CONFIG_WATCHDOG */
 
-/* ── main ─────────────────────────────────────────────────────────── */
+/* ── lifecycle operations (adapted to app_lifecycle_ops) ───────── */
 
-int main(void)
+static int bluetooth_init(void)
 {
+	int err = bt_enable(NULL);
+
+	if (err == 0) {
+		LOG_INF("BLE ready");
+	}
+	return err;
+}
+
+static int settings_init(void)
+{
+	int err = settings_load();
+
+	if (err == 0) {
+		LOG_INF("settings_load() OK");
+	}
+	return err;
+}
+
+static int volume_init(void)
+{
+	return audio_volume_init();
+}
+
+static int bap_init(void)
+{
+	return bt_bap_init();
+}
+
+static int sink_init(void)
+{
+	return audio_sink_init();
+}
+
+#if defined(CONFIG_USER_PAIRING_INPUT)
+/*
+ * P5 full-stack boot adapter (replaces the legacy advertising_start
+ * under CONFIG_USER_PAIRING_INPUT): initialize the pairing-mode
+ * transition owner and the user I/O adapter, open the Bluetooth
+ * callback notification gate only after BOTH initializations
+ * succeeded, then enqueue the boot start.  Returns the first exact
+ * errno; pairing_mode_start() is enqueue-only — accepted P1 owns
+ * asynchronous platform failure and cold reboot.
+ */
+static void pairing_cold_reboot(void *ctx)
+{
+	ARG_UNUSED(ctx);
+	sys_reboot(SYS_REBOOT_COLD);
+}
+
+static int pairing_control_start(void)
+{
+	static const struct pairing_mode_ops pairing_ops = {
+		.set_access_mode = bt_bap_pairing_set_access_mode,
+		.advertising_suspend = bt_bap_pairing_advertising_suspend,
+		.advertising_start = bt_bap_pairing_advertising_start,
+		.disconnect_peer = bt_bap_pairing_disconnect_peer,
+		.delete_all_bonds = bt_bap_pairing_delete_all_bonds,
+		.request_security = bt_bap_pairing_request_security,
+		.led_set = user_pairing_io_led_set,
+		.cold_reboot = pairing_cold_reboot,
+	};
 	int err;
 
-	if (wdt_init()) {
-		LOG_ERR("Watchdog init failed");
-		sys_reboot(SYS_REBOOT_COLD);
+	err = pairing_mode_init(&pairing_ops, NULL);
+	if (err != 0) {
+		return err;
 	}
 
-	err = bt_enable(NULL);
-	if (err) {
-		LOG_ERR("Bluetooth init failed: %d", err);
-		sys_reboot(SYS_REBOOT_COLD);
-	}
-	LOG_INF("BLE ready");
-
-	err = settings_load();
-	if (err) {
-		LOG_ERR("settings_load() failed: %d", err);
-		sys_reboot(SYS_REBOOT_COLD);
-	}
-	LOG_INF("settings_load() OK");
-
-	/* CAS (Common Audio Service) is NOT registered — CONFIG_BT_CAP_ACCEPTOR=n
-	 * avoids the CAP context check on ASE Enable. Available contexts are
-	 * managed through bt_pacs_set_available_contexts() directly. */
-
-	err = audio_volume_init();
-	if (err) {
-		LOG_ERR("VCP init failed: %d", err);
-		sys_reboot(SYS_REBOOT_COLD);
+	err = user_pairing_io_init();
+	if (err != 0) {
+		return err;
 	}
 
-	err = bt_bap_init();
-	if (err) {
-		LOG_ERR("BAP init failed: %d", err);
-		sys_reboot(SYS_REBOOT_COLD);
-	}
+	bt_bap_pairing_notifications_enable();
 
-	err = audio_sink_init();
-	if (err) {
-		LOG_ERR("I2S init failed: %d", err);
-		sys_reboot(SYS_REBOOT_COLD);
-	}
+	return pairing_mode_start();
+}
+#else
+static int advertising_start(void)
+{
+	return bt_bap_restart_advertising();
+}
+#endif /* CONFIG_USER_PAIRING_INPUT */
+
+static void cold_reboot(void)
+{
+	sys_reboot(SYS_REBOOT_COLD);
+}
 
 #if defined(CONFIG_SOC_NRF54L15)
+static void platform_init(void)
+{
 	/* FLPR handshake: non-blocking, non-fatal if FLPR absent.
 	 * VPR launcher has already released FLPR from reset at this point
 	 * (NORDIC_VPR_LAUNCHER init at POST_KERNEL level). */
 	flpr_handshake_init();
 
-	/* Phase 6 Stage 2: init audio offload (FLPR ring transport).
+#if defined(CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS)
+	/* Register the FLPR acceptance diagnostic message handler
+	 * (report/stall-ack/stress-pong/fault-hang-ack) with the
+	 * handshake module.  Boot wiring only — the acceptance
+	 * orchestration lives in src/flpr_acceptance.c. */
+	flpr_acceptance_init();
+#endif
+
+	/* Init audio offload (FLPR ring transport).
 	 * Non-blocking — may defer ring init if FLPR not ready yet. */
 	audio_offload_init();
 
-	/* Phase 6 Stage 4A: init FLPR runtime restart manager.
+	/* Init FLPR runtime restart manager.
 	 * Derives DT addresses, non-blocking. */
 	flpr_runtime_init();
-#endif
+}
+#endif /* CONFIG_SOC_NRF54L15 */
 
-	err = bt_bap_restart_advertising();
-	if (err) {
-		LOG_ERR("Adv start failed: %d", err);
+/* ── main ─────────────────────────────────────────────────────────── */
+
+int main(void)
+{
+	static const struct app_lifecycle_ops ops = {
+		.watchdog_init = wdt_init,
+		.bluetooth_init = bluetooth_init,
+		.settings_init = settings_init,
+		.volume_init = volume_init,
+		.bap_init = bap_init,
+		.sink_init = sink_init,
+#if defined(CONFIG_SOC_NRF54L15)
+		.platform_init = platform_init,
+#endif
+#if defined(CONFIG_USER_PAIRING_INPUT)
+		/* Under the full-stack gate the pairing-mode controller owns
+		 * initial advertising (NORMAL) through the injected operations;
+		 * the legacy adapter remains only for the feature-off build. */
+		.advertising_start = pairing_control_start,
+#else
+		.advertising_start = advertising_start,
+#endif
+		.cold_reboot = cold_reboot,
+	};
+	int err;
+
+	/* Fatal init order is owned by the coordinator: watchdog, Bluetooth,
+	 * settings (after BT, before BAP/PACS registration), volume, BAP, I2S,
+	 * optional nonfatal platform init, initial advertising. */
+	err = app_lifecycle_boot(&ops);
+	if (err != 0) {
+		/* app_lifecycle_boot() already requested the cold reboot; reaching
+		 * this point means the reboot callback returned (production
+		 * sys_reboot() never returns). Never continue into normal
+		 * operation after a failed boot. */
 		sys_reboot(SYS_REBOOT_COLD);
+		while (true) {
+			k_sleep(K_FOREVER);
+		}
 	}
 
 	LOG_INF("Advertising as \"%s\"", CONFIG_BT_DEVICE_NAME);
 
+#if defined(CONFIG_USER_PAIRING_INPUT)
+	/* P5 full-stack: Bluetooth callbacks → pairing-mode notifications own
+	 * the advertising restart (idle disconnect restarts run inside the
+	 * controller; RESETTING keeps advertising suspended).  Passive
+	 * forever sleep — never consume sem_disconnected or call
+	 * app_lifecycle_restart_advertising() here. */
+	while (true) {
+		k_sleep(K_FOREVER);
+	}
+#else
 	while (true) {
 		/* Heartbeat runs via k_work_delayable (flpr_handshake_init).
 		 * No poll call needed in main loop. */
 		bt_bap_wait_disconnect();
 		LOG_INF("Restarting advertising...");
 
-		err = bt_bap_restart_advertising();
-		if (err) {
-			LOG_ERR("Adv restart failed: %d", err);
+		err = app_lifecycle_restart_advertising(&ops);
+		if (err != 0) {
+			/* Coordinator already requested the cold reboot; same
+			 * no-continue guard as boot. */
 			sys_reboot(SYS_REBOOT_COLD);
+			while (true) {
+				k_sleep(K_FOREVER);
+			}
 		}
 		LOG_INF("Advertising again");
 	}
+#endif /* CONFIG_USER_PAIRING_INPUT */
 
 	/* Unreachable — loop exits only on reboot */
 	return 0;

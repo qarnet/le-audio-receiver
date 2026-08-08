@@ -8,6 +8,32 @@ config INFO_REPORTING_INTERVAL
 	int "Number of SDUs between log reports"
 	default 0
 
+config BSIM_OBSERVER
+	bool "BSim-only passive BAP flow observer"
+	help
+	  Compiles the passive observer (tests/bsim/src/bsim_observer.c) into
+	  the receiver.  Emits/counts events from real production flow;
+	  never drives production state.  Production builds do not define
+	  this symbol.
+
+config BSIM_SOURCE_ASE
+	bool "BSim-only source PAC capability"
+	help
+	  Registers a source PAC capability so a BSim client can attempt a
+	  source-direction Config and exercise the repository's source
+	  rejection through the real ASCS server.  Production remains
+	  sink-only (CONFIG_BT_ASCS_MAX_ASE_SRC_COUNT=0).
+
+config BSIM_SINK_POOL_LIMIT
+	int "BSim-only repository sink stream pool limit"
+	default 2
+	depends on BSIM_OBSERVER
+	help
+	  Limits the repository bt_sink stream pool below the BSim ASCS sink
+	  ASE count so the NO_MEM callback path is reachable in BSim.
+	  Production keeps the pool equal to CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT
+	  with no seam symbol.
+
 choice AUDIO_RESAMPLER
 	prompt "Audio resampler"
 	default AUDIO_RESAMPLER_IDENTITY

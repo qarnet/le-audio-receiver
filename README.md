@@ -142,11 +142,25 @@ CJMCU-1334 outputs **line level** (no headphone amp on the breakout). Connect:
 ./scripts/test-all.sh
 
 # Requires: NCS v3.3.0 dev shell (direnv allow / nix develop).
-# BabbleSim Stage 1 is mandatory. scripts/bsim-env.sh derives BSIM_OUT_PATH;
+# BabbleSim Stage 1 is an accepted regular local gate: the 17-scenario
+# T4+R7 BAP matrix (scripts/bsim-stage1-run.sh, scenarios 1–9 run twice,
+# 10–17 once = 26 runs) with a strict PCM oracle and pinned deterministic
+# hashes. scripts/bsim-env.sh derives BSIM_OUT_PATH;
 # missing BabbleSim prerequisites fail the gate.
 # Production firmware and dongle builds are run separately:
 #   fw-build-5340 && fw-build-54l15 && fw-build-dongle
 ```
+
+The central test driver (`scripts/bap_central.py`) is split into
+single-domain modules: device resolution
+(`bap_central_device.py`), agent/pairing/connect strategies
+(`bap_central_security.py`), the BAP source endpoint + acquire
+(`bap_central_endpoint.py`), and the LC3 source/writer lifecycle
+(`bap_central_session.py`).  CLI flags, D-Bus object paths, LC3
+payloads, pacing, sudo boundary, exit codes, and the teardown tail are
+unchanged; the CLI's `CentralCleanup` owner releases every acquired
+resource on success and on fatal paths (each module raises a
+`CentralError` with the message already printed).
 
 ### If using the PCM5102A instead
 
@@ -210,22 +224,50 @@ bonded and now fails to pair after a firmware change, delete the bond on the
 central and re-scan, or mass-erase the chip (`nrf53_recover` via `openocd-master`)
 before reflashing — `west flash` does not erase the settings partition.
 
+### User pairing control (nRF54L15)
+
+The XIAO onboard user button and LED implement a three-mode access state
+machine (`CONFIG_USER_PAIRING_CONTROL`/`USER_PAIRING_INPUT`, feature-on only
+on nRF54L15; nRF5340 stays feature-off):
+
+- **NORMAL** (boot default): LED inactive, advertising with a
+  BONDED_ONLY filter accept list. Unbonded peers are rejected at the link
+  layer; saved bonds reconnect without re-pairing.
+- **BONDING**: press and hold the button through 3 s, release before 8 s.
+  Advertising suspends, any active peer disconnects, bonds are preserved,
+  and advertising restarts open with a slow LED blink (~500 ms on/off).
+  A fresh Just Works pair completes to NORMAL without disconnecting.
+- **RESET**: hold through 8 s (supersedes BONDING at 3 s). The peer
+  disconnects, all bonds are deleted, and the LED flashes rapidly
+  (~100 ms, five flashes over one second) before re-entering BONDING.
+  `bt unpair` drives the same RESET transition from the shell.
+
+See `docs/development/user-pairing-control-plan.md` and the P1–P8 results
+docs for the full contract and hardware acceptance evidence.
+
 ---
 
 ## Repository layout
 
 | Path | Purpose |
 |------|---------|
-| `src/main.c` | Lifecycle wiring, watchdog, advertising restart loop |
-| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising |
+| `src/main.c` | Hardware wiring, watchdog, and advertising-loop adapter (fatal boot order lives in `app_lifecycle.c`) |
+| `src/app_lifecycle.c` | Pure fatal boot coordinator: ordered init, cold reboot, advertising restart |
+| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising (app audio receive state lives in `audio_stream_session.c`; one private teardown transition owner — first close wins, per-slot release once, close→drain→sink-stop→offload-stop→reset) |
+| `src/bt_pairing_policy.c` | Pure OPEN/BONDED_ONLY policy snapshot; Bluetooth controller work stays in `bt_bap.c` |
+| `src/pairing_mode.c` | Portable NORMAL/BONDING/RESETTING transition owner — sole owner of modes, LED patterns, supersession, fatal recovery |
+| `src/user_pairing_io.c` | User button/LED adapter — debounced hold thresholds (3 s / 8 s) via gpio-keys, LED drive |
+| `src/bt_bap_pairing_adapter.c` | Bluetooth backend for the pairing-mode controller: access policy, advertising suspend/start, disconnect, bond deletion |
+| `src/audio_modea.c` | Bounded two-CIS event assembler and per-channel PLC |
+| `src/audio_iso_seq.c` | Pure per-CIS omitted-callback sequence tracker |
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
-| `src/audio_sink.h` | Platform-neutral audio-sink interface |
+| `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop; stream_open/stream_close admission + drain) |
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA) — implements `audio_sink.h` |
 | `src/audio_drift.c` | PI clock-recovery controller (ppm output, dual-platform) |
 | `src/audio_drift.h` | Controller API + APLL register constants |
 | `src/audio_asrc.c` | Fixed-point linear stereo ASRC (cpuapp path, FLPR fallback) |
 | `src/audio_asrc.h` | ASRC public API |
-| `src/audio_rate_convert.c` | Nearest-neighbor rate converter (PCLK32M mismatch fix) |
+| `src/audio_rate_convert.c` | Fixed-rate frame-count/remainder converter (I2S drain-rate matching; init/next_frames only, no resampling/copy API) |
 | `src/audio_rate_convert.h` | Rate converter public API |
 | `src/audio_offload.c` | FLPR offload manager (handshake, IPC routing, fallback) |
 | `src/audio_offload.h` | Offload manager public API |
@@ -234,31 +276,37 @@ before reflashing — `west flash` does not erase the settings partition.
 | `src/audio_timing_nrf54.c` | nRF54L15 TIMER20-vs-GRTC PCLK measurement |
 | `src/audio_timing_none.c` | nRF5340 no-op timing (no GRTC/TIMER20) |
 | `src/stream_lifecycle.c` | Stream start/stop lifecycle (unit-testable) |
-| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset, consume_sample_adjustment) |
+| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset) |
 | `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator |
 | `src/audio_clock_actuator_none.c` | nRF54L15 no-op actuator (ASRC consumes ppm directly) |
-| `src/audio_clock_actuator_sample_adjust.c` | Historical sample insert/drop (regression testing only) |
+| `tests/unit/actuator_sample_adjust_historical/src/audio_clock_actuator_sample_adjust_historical.c` | Historical sample insert/drop (regression testing only, test-local copy) |
 | `src/flpr/` | FLPR firmware (RISC-V VPR): ASRC offload, ICMsg/VEVIF IPC |
 | `src/flpr_handshake.{c,h}` | cpuapp↔FLPR boot handshake + VEVIF signalling |
 | `src/flpr_protocol.h` | Shared protocol constants (ring layout, commands) |
 | `src/flpr_ring.{c,h}` | SPSC ring buffer (shared SRAM) |
-| `src/flpr_ring_mgr.{c,h}` | Ring manager: paired input/output rings |
+| `src/flpr_ring_mgr.{c,h}` | Ring manager production core: paired rings, reset, typed ASRC produce/consume, notify, wait, remote restart |
+| `src/flpr_acceptance.{c,h}` | Cpuapp FLPR acceptance module: ring test, stalls, stale produce, report aggregation, stress, fault hang, gates 1–6 — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated |
+| `src/flpr_control_ack.{c,h}` | Shared control-ACK correlation engine: one owner for reset + stall ACK correlation |
 | `src/flpr_runtime.{c,h}` | FLPR runtime: IPC submit, watchdog, fault detection |
 | `src/flpr_audio_process.{c,h}` | FLPR audio block wrapper (metadata + PCM) |
 | `src/flpr_cache.c` | Cache maintenance for shared SRAM (ARMv8-M / RISC-V) |
 | `src/audio_perf.{c,h}` | Data-path CPU budget instrumentation |
 | `src/audio_stats.{c,h}` | Streaming statistics (RX, decode, PLC, I2S) |
-| `src/audio_shell.c` | Shell diagnostics (`audio status`, `flpr status`) |
+| `src/audio_shell.c` | Shell diagnostics (`audio status`, `audio perf`, stop/reset commands) |
+| `src/bt_shell.c` | Shell command `bt unpair` (pairing-mode reset, both targets) |
+| `src/flpr_shell.c` | FLPR production diagnostics (`flpr status/offload/runtime/restart`, nRF54L15) |
+| `src/flpr_acceptance_shell.c` | FLPR acceptance shell parsing/printing (`flpr ring *`, `flpr stress`, `flpr hang`) — delegates to `src/flpr_acceptance.c`, `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated |
+| `src/flpr/acceptance.{c,h}` | FLPR-image acceptance handlers: RING_TEST/STALL/STRESS/FAULT_HANG + diagnostic hooks — `CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS` |
 | `src/audio_volume.{c,h}` | VCP volume control |
+| `src/audio_stream_session.{c,h}` | App-owned BAP sink receive/session state: validated codec shape, decoder contexts, per-CIS ISO sequence trackers, Mode A assembler, receive counters, and decode/conceal/volume/push orchestration with admission/lease discipline |
 | `boards/ebyte/e83_nrf5340/` | Custom nRF5340 board: I2S0 pins, ACLK 12.288 MHz, QSPI disabled |
 | `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2, FLPR IPC SRAM, TIMER20 reserved |
 | `prj.conf` | App Kconfig |
 | `sysbuild.cmake` | Applies SW Split DT + Kconfig overlays to `hci_ipc` |
-| `tests/unit/` | 16 C test suites (396 tests) + 2 Python suites (36 tests) |
-| `tests/bsim/` | BabbleSim Stage 1: sink-only dual-core scenario |
-| `tests/hardware/` | Hardware validation scripts (I2S, GPIO, fault recovery) |
-| `scripts/test-all.sh` | Canonical full local gate (all C + Python + BSim Stage 1) |
-| `docs/design.md` | Accepted design doc + phased plan (Phases 0–6) |
+| `tests/unit/` | 35 twister C suites + 5 exec-only C suites + 19 Python suites (59 unit children; 62 gate children with coverage + matrix + BSim) |
+| `tests/bsim/` | BabbleSim Stage 1: 17-scenario T4+R7 BAP matrix (accepted regular local gate); scenario matrix, run counts, and pinned hashes live in `tests/bsim/stage1-scenarios.json` |
+| `scripts/test-all.sh` | Canonical full local gate (all C + Python + BSim Stage 1); suite discovery via `scripts/test_inventory.py` (single source shared with `test-coverage.sh` and `check-test-matrix.py`) |
+| `docs/design.md` | Historical architecture and evidence document (Phases 0–6); active plan of record is `docs/development/refactor-plan.md` |
 | `docs/flashing.md` | Dual-core flash workflow in depth |
 | `STATUS.md` | Current status, build diagnostics, test results, open issues |
 
@@ -269,8 +317,10 @@ before reflashing — `west flash` does not erase the settings partition.
 - **`AGENTS.md`** — the working knowledge base for this repo (gotchas, stack
   summary, key files, build/flash/console conventions). Also the source the
   agents read; `CLAUDE.md` is a symlink to it.
-- **`docs/design.md`** — what works, what is in flight, the target architecture,
-  and the phased plan. Start here for the "why".
+- **`docs/development/refactor-plan.md`** — the accepted plan of record for
+  the refactoring track (R0–R10, COMPLETE/ACCEPTED 2026-08-06).
+- **`docs/design.md`** — historical architecture and evidence (what works,
+  findings, Phases 0–6). Start here for the "why".
 - **`docs/flashing.md`** — OpenOCD, dual-core ordering, APPROTECT, recovery.
 
 ---

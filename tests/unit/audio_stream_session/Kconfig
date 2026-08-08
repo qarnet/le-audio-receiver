@@ -1,0 +1,32 @@
+# audio_stream_session unit test — local Kconfig seam.
+# Mirrors the BSim sink-pool seam so the production session header resolves
+# AUDIO_STREAM_SESSION_MAX_SLOTS to 2 without a BT build; the fake observer
+# compiles the production session's CONFIG_BSIM_OBSERVER call sites; the
+# perf instrumentation is enabled so real production audio_perf.c counters
+# (push-failure accounting) execute.
+
+mainmenu "LE Audio Receiver — audio_stream_session unit tests"
+
+config BSIM_OBSERVER
+	bool "Fake passive observer (unit test)"
+	help
+	  Enables the session's observer call sites against the suite-local
+	  fake bsim_observer implementation.
+
+config BSIM_SINK_POOL_LIMIT
+	int "Sink stream pool limit (unit test)"
+	default 2
+	help
+	  Same seam as the BSim build: caps the repository stream pool at 2
+	  so the session header resolves its slot count without a BT ASCS
+	  configuration.
+
+config AUDIO_PERF_MEASUREMENT
+	bool "Audio performance instrumentation"
+	default y
+
+config AUDIO_PERF_DEADLINE_US
+	int "Per-path deadline threshold in microseconds"
+	default 10000
+
+source "Kconfig.zephyr"

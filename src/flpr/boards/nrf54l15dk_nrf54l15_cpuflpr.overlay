@@ -23,7 +23,7 @@
 				reg = <0x2002A000 0x2000>;
 			};
 
-			/* Stage 1 PCM rings: 16 KiB at 0x2002C000.
+			/* PCM rings: 16 KiB at 0x2002C000.
 			 * Mirrors cpuapp overlay.
 			 */
 			pcm_ring: memory@2002C000 {

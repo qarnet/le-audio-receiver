@@ -74,19 +74,48 @@ diagnostics", not tolerated as warnings.
 
 ## Plan of record
 
-`docs/design.md` is the accepted design doc and phased plan (Phases 0–6) for
-supporting both nRF5340 and nRF54L15. Read it before structural changes.
-Current status: **Phase 5 landed and closed** — cpuapp fixed-point linear ASRC
-accepted (Mode A + Mode B, each 600 s, zero faults). Actuators reduced to two:
-APLL (nRF5340) and NONE (nRF54L15, ASRC consumes ppm). **Phase 6 (FLPR
-offload) complete** — Stages 0–5 accepted, 432 unit tests pass (396 C + 36
-Python), nRF54L15 hardware Mode A + Mode B 120 s at 100 fps zero faults.
-**BabbleSim Stage 1 accepted as regular local gate** — sink-only scenario,
-strict PCM oracle with local startup counters, fully deterministic across
-runs (hash=0xFE0D4245). Official upstream smoke remains PARTIAL. Scope stops
-here: reconnect/Mode A/B under BabbleSim duplicate hardware coverage.
-See `docs/design.md` for full staged plans and `docs/development/phase5-hardware-acceptance-results.md`
-for Phase 5 acceptance evidence.
+`docs/development/refactor-plan.md` is the accepted plan of record for the
+current refactoring track R0–R10. Read it before structural changes.
+`docs/design.md` remains the historical architecture and evidence document,
+not the active structural plan.
+
+Current status: **canonical gate 62 PASS / 0 FAIL / 62 TOTAL** on the
+clean tree (35 twister + 5 exec-only + 19 Python + coverage + matrix +
+BSim; clean-tree run recorded in
+`docs/development/documentation-hygiene-behavior-fix-results.md` at
+`b8bd633`), coverage population **36** (4665/5121 lines, 2023/2820
+branches, 357/357 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
+baseline unchanged), builds 3/3, build contract **95/95**, BSim Stage 1
+pins byte-identical, and P1–P8 user pairing control ACCEPTED (nRF54L15
+enabled, nRF5340 feature-off).  Historical baselines: T0–T8 locked
+behavior on production code `971e6a4` (T8 canonical gate **47 PASS /
+0 FAIL / 47 TOTAL**, coverage baseline `1a5842d` (26 files), build
+contract 76/76 — `docs/testing/pre-refactor-hardware-baseline.md`); the
+R0–R10 refactor track closed 2026-08-06 with gate **55 PASS / 0 FAIL /
+55 TOTAL** (31 twister + 5 exec-only + 16 Python + coverage + matrix +
+BSim), coverage population **33** (4024/4402 lines, 1695/2356 branches,
+289/289 functions, committed baseline `54a6b8e`), build contract
+**79/79**, and the full R10 hardware matrix passed on
+both targets.  R8/R9 acceptance details and the final evidence:
+`docs/development/refactor-r10-results.md`, `refactor-r9-results.md`,
+`refactor-r8-results.md`, and `STATUS.md`.
+**BabbleSim Stage 1 is an accepted regular local gate** — the
+**17-scenario** T4+R7 BAP matrix via `scripts/bsim-stage1-run.sh`
+(scenarios 1–9 run twice, 10–17 once = 26 runs), strict PCM oracle,
+deterministic across runs (mono 10 ms `0x22AB5C0D`, Mode A/B 10 ms
+`0xBAE24F7E`, reconnect = fresh mono oracle, `duplicate_release_10ms`).
+Official upstream smoke remains PARTIAL (documented upstream teardown
+disable-race) and is **not** production acceptance.
+
+Known behavior question (see `STATUS.md`): nRF54L15 360-frame (7.5 ms) calls
+fall back to cpuapp ASRC because the FLPR payload contract is 480 frames
+(`FLPR_RING_PAYLOAD_MAX_INPUT == 480U` in `src/flpr_ring.h`).  Witnesses:
+`tests/unit/audio_i2s` `test_offload_reject_360_input_falls_back` pins the
+exact 360-frame caller fallback; `tests/unit/audio_offload`
+`test_asrc_invalid_frames` pins general non-480 rejection (its current
+concrete input is 240); `tests/unit/flpr_ring` MAX_INPUT assertions pin the
+480 contract.  Not a new failure and not permission to implement 360-frame
+offload.
 
 Consequences for work in this repo today:
 
@@ -467,10 +496,12 @@ The `AUDIO_CLOCK_ACTUATOR` Kconfig choice selects the actuator. Two production o
 - `NONE` — `audio_clock_actuator_none.c`, nRF54L15 production. ASRC consumes
   controller ppm directly (no physical actuator on nRF54L15).
 
-`audio_clock_actuator_consume_sample_adjustment()` returns ±1/0; both APLL and
-NONE return 0 (data-path adjustment is a no-op for clock-steering actuators).
-Historical SAMPLE_ADJUST actuator source retained for regression testing only;
-no longer selectable in production Kconfig.
+The production actuator API is init/apply_ppm/reset only (clock steering,
+no data-path adjustment).  The historical SAMPLE_ADJUST actuator — including
+its retired `audio_clock_actuator_consume_sample_adjustment()` symbol — is
+retained for regression testing only as a test-local copy under
+`tests/unit/actuator_sample_adjust_historical/src/`; no longer selectable in
+production Kconfig.
 
 ### Drift controller: PCLK feedforward + per-block phase PI (Phase 4b.2)
 
@@ -546,6 +577,13 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 ## Stack
 
 - App: BAP Unicast Server sink-only, 2 sink ASEs, LC3 decode → I2S
+- Receive/session: `audio_stream_session.c` (R6 — exclusive owner of app
+  audio receive state: validated codec shape, decoder contexts, per-CIS
+  ISO sequence trackers, Mode A assembler, receive counters, mode
+  inference, decode/conceal/volume/push with admission/lease discipline);
+  `bt_bap.c` keeps only Bluetooth service/lifecycle orchestration plus
+  the R7 private teardown transition owner (first close wins, per-slot
+  release once, universal close→drain→sink-stop→offload-stop→reset)
 - Audio: `audio_sink.h` interface → `audio_i2s.c` (slab/DMA backend)
 - Clock recovery: `audio_drift.c` (PI controller, ppm output) → actuator interface (`audio_clock_actuator.h`) → `audio_clock_actuator_apll.c` (nRF5340 APLL) or `audio_clock_actuator_none.c` (nRF54L15, ASRC consumes ppm)
 - ASRC: `audio_asrc.c` (fixed-point linear stereo, cpuapp) + FLPR offload (`src/flpr/`, handshake/runtime/rings)
@@ -558,31 +596,43 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 
 | File | Purpose |
 |------|---------|
-| `src/main.c` | Lifecycle wiring + watchdog + advertising restart loop |
-| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising |
+| `src/main.c` | Hardware wiring, watchdog, and advertising-loop adapter (fatal boot order lives in `app_lifecycle.c`) |
+| `src/app_lifecycle.c` | Pure fatal boot coordinator: ordered init, cold reboot, advertising restart |
+| `src/bt_bap.c` | BAP unicast server, ASCS callbacks, PACS, pairing, advertising, the thin recv adapter (R6: app audio receive state lives in `audio_stream_session.c`), and the R7 private teardown transition owner (`teardown_transition`/`teardown_close_path`: first close wins, per-slot release once, universal close→drain→sink-stop→offload-stop→reset order) |
+| `src/bt_pairing_policy.c` | Pure OPEN/BONDED_ONLY policy snapshot; Bluetooth controller work stays in `bt_bap.c` |
+| `src/audio_stream_session.c` | Exclusive owner of app audio receive/session state (R6): validated codec shape, decoder ctx, per-CIS ISO seq trackers, Mode A assembler, recv counters, decode/conceal/volume/push, admission/lease (rx_open/rx_close) |
+| `src/audio_modea.c` | Bounded two-CIS event assembler and per-channel PLC |
+| `src/audio_iso_seq.c` | Pure per-CIS omitted-callback sequence tracker |
 | `src/audio_decode.c` | LC3 decode + channel routing (Mode A / Mode B / mono) |
-| `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop) |
+| `src/audio_sink.h` | Platform-neutral audio-sink interface (init, push, stop; R1 stream_open/stream_close admission + drain) |
 | `src/audio_i2s.c` | I2S TX driver (slab + DMA, 48 kHz stereo) — implements audio_sink.h |
+| `src/audio_shell.c` | Audio diagnostics shell commands (`audio status`, `audio perf`, reset-stats/perf-reset/stop) |
+| `src/bt_shell.c` | `bt unpair` pairing-mode reset command (R4) |
+| `src/flpr_shell.c` | FLPR production diagnostics (`flpr status/offload/runtime/restart`, R4) |
+| `src/flpr_acceptance_shell.c` | FLPR acceptance-harness commands (`flpr ring *`, `flpr stress`, `flpr hang`) — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated (R4) |
 | `src/audio_drift.c` | PI clock recovery controller (dual-term, ppm output) |
 | `src/audio_drift.h` | Controller API + APLL register constants |
-| `src/audio_rate_convert.c` | Nearest-neighbor rate converter (PCLK32M mismatch fix) |
+| `src/audio_rate_convert.c` | Fixed-rate frame-count/remainder converter (I2S drain-rate matching; init/next_frames only, no resampling/copy API) |
 | `src/audio_rate_convert.h` | Rate converter public API (unit-testable) |
 | `src/audio_timing.h` | Platform timing interface (frequency error, GRTC scheduling) |
 | `src/audio_timing_math.c` | Timing math shared across platforms |
 | `src/audio_timing_nrf54.c` | nRF54L15 TIMER20-vs-GRTC PCLK frequency measurement |
 | `src/audio_timing_none.c` | nRF5340 no-op timing (no GRTC/TIMER20) |
 | `src/stream_lifecycle.c` | Stream start/stop lifecycle (unit-testable) |
-| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset, consume_sample_adjustment) |
+| `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset) |
 | `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator (ppm → register trim) |
-| `src/audio_clock_actuator_sample_adjust.c` | Historical sample insert/drop actuator (regression testing only) |
+| `tests/unit/actuator_sample_adjust_historical/src/audio_clock_actuator_sample_adjust_historical.c` | Historical sample insert/drop actuator, test-local copy (regression testing only) |
 | `src/audio_clock_actuator_none.c` | nRF54L15 no-op actuator (ASRC consumes ppm directly) |
 | `src/audio_asrc.c` | Fixed-point linear stereo ASRC (cpuapp + FLPR fallback) |
 | `src/audio_offload.c` | FLPR offload manager (handshake, IPC, fallback path) |
 | `src/flpr/` | FLPR firmware (RISC-V VPR): ASRC, ICMsg/VEVIF IPC |
-| `src/flpr_handshake.c` | cpuapp↔FLPR boot handshake + VEVIF |
+| `src/flpr_handshake.c` | cpuapp↔FLPR boot handshake + VEVIF (R8: production slot reset/consumer + diagnostic slot registration; stress/fault-hang state moved to flpr_acceptance) |
 | `src/flpr_protocol.h` | Shared protocol constants (ring layout, commands) |
 | `src/flpr_ring.c` | SPSC ring buffer (shared SRAM, cache-safe) |
-| `src/flpr_ring_mgr.c` | Ring manager: paired input/output rings |
+| `src/flpr_ring_mgr.c` | Ring manager production core: paired rings, reset, typed ASRC produce/consume, notify, wait, remote restart (R8) |
+| `src/flpr_acceptance.c` | Cpuapp FLPR acceptance module (R8): ring test, stalls + ACK correlation, stale produce, report aggregation, stress, fault hang, gates 1–6 — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS` |
+| `src/flpr_control_ack.c` | Shared control-ACK correlation engine (R8): ONE owner for reset + stall ACK correlation |
+| `src/flpr/acceptance.c` | FLPR-image acceptance handlers (R8): RING_TEST/STALL/STRESS/FAULT_HANG + diagnostic hooks — `CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS` |
 | `src/flpr_runtime.c` | FLPR runtime: IPC submit, watchdog, fault detection |
 | `src/flpr_audio_process.c` | FLPR audio block wrapper (metadata + PCM) |
 | `boards/ebyte/e83_nrf5340/` | Custom board definition for Ebyte E83-2G4M03S: I2S0 pins, ACLK 12.288 MHz, QSPI disabled, i2s-audio alias, OpenOCD flash runner |
@@ -590,5 +640,9 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 | `prj.conf` | App Kconfig (ACL/ISO buffers, SMP, 2 ASEs, liblc3, FPU, ZMS) |
 | `sysbuild.cmake` | Applies SW Split DT overlay + Kconfig overlay to hci_ipc |
 | `Kconfig.sysbuild` | `NRF_DEFAULT_BLUETOOTH=y` conditional on nRF5340, gates netcore |
-| `scripts/bap_central.py` | BAP central test driver (Linux → receiver, LC3 sine stream) |
+| `scripts/bap_central.py` | BAP central test driver — thin CLI coordinator (argparse + wiring + flow) plus the `CentralCleanup` idempotent resource owner (fixed teardown order, safe from `finally`; every fatal path raises a module `CentralError` with the message already printed and exit 1 preserved) |
+| `scripts/bap_central_device.py` | Central device resolution (R9): adapter power, `--peer-addr` exact-peer path, existing Device1 enumeration, bounded `InterfacesAdded` discovery — `DiscoverySession` owns its signal match and StopDiscovery exactly once |
+| `scripts/bap_central_security.py` | Central agent/pairing/connect (R9): JustWorks agent factory, raw-HCI fresh-connect strategy (exact `sudo -n` argv, ready + Connected gates), BlueZ preserve-bond Connect strategy, `wait_for_helper_ready` (READY_PREFIX from `hci_raw_connect.py`), RemoveDevice fresh-only, Pairable/Trusted/async Pair, services-resolved, cleanup Disconnect |
+| `scripts/bap_central_endpoint.py` | Central BAP source endpoint (R9): constants/LC3 blobs, `MediaEndpoint1` class factory, registration, deferred async Acquire, pending/acquired fd ownership, second-ASE grace, all-or-nothing, mode inference |
+| `scripts/bap_central_session.py` | Central LC3 source/writer (R9): lazy liblc3 loader + encoder (stdlib-safe import), sine, per-mode payloads, `StreamSession` writer lifecycle + exact teardown tail |
 | `README.md` | Human-facing project overview, BOM, I2S wiring for both boards |

@@ -4,7 +4,7 @@ if(CONFIG_BOARD_EBYTE_E83_NRF5340_NRF5340_CPUAPP)
   board_set_flasher(openocd)
 
   # The probe serial is intentionally NOT baked in here. fw-flash-5340
-  # resolves the probe at flash time (by target identity via fw-probes, or
+  # resolves the probe at flash time (by target identity via nrf-probes, or
   # the scripts/probe-serial.local override) and passes it as an extra
   # runner arg: west flash -- --cmd-pre-init="adapter serial <SER>".
   # With no serial arg, OpenOCD auto-detects (single-probe setups).

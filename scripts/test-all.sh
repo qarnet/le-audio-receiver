@@ -2,11 +2,25 @@
 # Canonical full local gate script for le-audio-receiver.
 #
 # Runs every test suite:
-#   1. Twister C unit suites (12 suites with testcase.yaml)
-#   2. Exec-only C unit suites (4 suites: audio_offload, flpr_audio_process,
-#      flpr_ring, offload_asrc)
-#   3. Python unit suites (2: gate/test_gate.py, flpr_stall_gate/test_flpr_stall_gate.py)
-#   4. BabbleSim Stage 1 (sink-only scenario, deterministic across runs)
+#   1. Twister C unit suites (testcase.yaml under tests/unit/)
+#   2. Exec-only C unit suites (CMakeLists.txt without testcase.yaml under
+#      tests/unit/ — audio_offload, flpr_audio_process, flpr_ring,
+#      offload_asrc, offload_asrc_verify)
+#   3. Python unit suites (tests/unit/*/test_*.py in CMake-less dirs plus
+#      scripts/test_*.py)
+#   4. Coverage: rebuilds all native C suites with CONFIG_COVERAGE=y
+#      and enforces the committed tests/coverage-baseline.json
+#   5. Test-matrix checker: consumes the coverage run's coverage.json
+#      — zero-hit function enforcement, public API inventory, outcome ledger
+#   6. BabbleSim Stage 1 (canonical 17-scenario T4+R7 BAP matrix, scenarios
+#      1–9 run twice, remaining eight once; deterministic across runs)
+#
+# All suite discovery comes from scripts/test_inventory.py (the single
+# filesystem classification source shared with test-coverage.sh and
+# check-test-matrix.py) — adding a suite cannot silently omit it from the
+# gate.  Current inventory (scripts/test_inventory.py): 35 twister + 5
+# exec-only + 19 Python = 59 unit children; the canonical gate is 62
+# children (59 + coverage + matrix + BSim).
 #
 # Required: NCS v3.3.0 dev shell (nix develop / direnv allow).
 #   ZEPHYR_BASE must be set. BabbleSim dependencies must be provisioned;
@@ -14,6 +28,9 @@
 #
 # Production firmware builds and dongle build are NOT included — they are
 # run separately via fw-build-5340, fw-build-54l15, fw-build-dongle.
+# The resolved build-contract checker also runs separately after those
+# builds (scripts/check-build-contract.py) and does not depend on
+# pre-existing build directories.
 #
 # Exits non-zero on any child failure.
 
@@ -28,6 +45,10 @@ TOTAL=0
 TMP_ROOT=""
 
 die() { echo "FATAL: $*" >&2; exit 1; }
+
+inventory() { # flag -> stdout lines (one per line)
+    python3 "$SCRIPT_DIR/test_inventory.py" "$@" || die "test_inventory.py $* failed"
+}
 
 resolve_ncs() {
     # Resolve ZEPHYR_BASE if not set — prefer nrfutil toolchain env.
@@ -59,12 +80,13 @@ run_one() {
 
 # ---------- twister C suites ----------
 run_twister_suites() {
-    # Collect all testcase.yaml-based suites from tests/unit/
-    local suites=()
-    for d in "$REPO_ROOT"/tests/unit/*/; do
-        [ -f "$d/testcase.yaml" ] || continue
-        suites+=("$(basename "$d")")
-    done
+    # Collect all testcase.yaml-based suites from tests/unit/ via the
+    # shared inventory module.
+    local suites=() line
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        suites+=("$line")
+    done <<<"$(inventory --twister)"
 
     if [ ${#suites[@]} -eq 0 ]; then
         die "No twister suites found in tests/unit/"
@@ -84,7 +106,11 @@ run_twister_suites() {
 
 # ---------- exec-only C suites (no testcase.yaml) ----------
 run_exec_suites() {
-    local suites=(audio_offload flpr_audio_process flpr_ring offload_asrc)
+    local suites=() line
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        suites+=("$line")
+    done <<<"$(inventory --exec-only)"
 
     for suite in "${suites[@]}"; do
         run_one "exec: $suite" \
@@ -98,18 +124,29 @@ run_exec_suites() {
 
 # ---------- Python suites ----------
 run_python_suites() {
-    run_one "python: gate" \
-        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
-        python3 "$REPO_ROOT/tests/unit/gate/test_gate.py" || true
-    run_one "python: flpr_stall_gate" \
-        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
-        python3 "$REPO_ROOT/tests/unit/flpr_stall_gate/test_flpr_stall_gate.py" || true
-    run_one "python: bluez_wp_gate" \
-        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
-        python3 "$REPO_ROOT/scripts/test_bluez_wireplumber_gate.py" || true
-    run_one "python: bluez_wp_phase3_gate" \
-        env PYTHONPATH="$REPO_ROOT/scripts:$PYTHONPATH" \
-        python3 "$REPO_ROOT/scripts/test_bluez_wireplumber_phase3_gate.py" || true
+    # One run_one child per discovered python file (label<TAB>relpath).
+    local line label path
+    while IFS=$'\t' read -r label path; do
+        [ -n "$label" ] || continue
+        run_one "python: $label" \
+            env PYTHONPATH="$REPO_ROOT/scripts:${PYTHONPATH:-}" \
+            python3 "$REPO_ROOT/$path" || true
+    done <<<"$(inventory --python)"
+}
+
+# ---------- coverage (T7): rebuilds all native C suites, enforces baseline ----------
+run_coverage() {
+    # Enforces the committed tests/coverage-baseline.json (default mode);
+    # requires a clean worktree.  Writes reports into $TMP_ROOT/coverage.
+    run_one "coverage: native suites + baseline" \
+        bash "$SCRIPT_DIR/test-coverage.sh" --output "$TMP_ROOT/coverage" || true
+}
+
+# ---------- test-matrix checker (T7): consumes the coverage run ----------
+run_matrix_check() {
+    run_one "matrix: manifest + coverage.json" \
+        python3 "$SCRIPT_DIR/check-test-matrix.py" --repo-root "$REPO_ROOT" \
+            --coverage-json "$TMP_ROOT/coverage/coverage.json" || true
 }
 
 # ---------- BSim Stage 1 ----------
@@ -135,6 +172,8 @@ cd "$REPO_ROOT"
 run_twister_suites
 run_exec_suites
 run_python_suites
+run_coverage
+run_matrix_check
 
 # BSim is an accepted regular gate, not an optional smoke test. Missing
 # prerequisites therefore fail the gate through the runner's own checks.

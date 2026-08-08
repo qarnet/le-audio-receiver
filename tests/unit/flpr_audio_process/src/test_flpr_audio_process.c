@@ -650,7 +650,7 @@ ZTEST(flpr_audio_process, test_error_output_metadata_shape)
 	zassert_equal(output_meta.processing_status, 0, "processor doesn't write status on error");
 }
 
-/* ── Test: 60K block cumulative count matches Phase 5 reference ──── */
+/* ── 60K block cumulative count matches the ASRC reference ────── */
 
 ZTEST(flpr_audio_process, test_cumulative_60k_blocks_ppm_zero_count)
 {
@@ -837,7 +837,7 @@ ZTEST(flpr_audio_process, test_identity_no_asrc_flag_on_output)
 	zassert_equal(output_meta.processing_status, 0, "status = 0");
 }
 
-/* ── Stage 3A review: new tests ──────────────────────────────────── */
+/* ── New tests ──────────────────────────────────── */
 
 ZTEST(flpr_audio_process, test_identity_rejects_bad_crc)
 {

@@ -1,0 +1,9 @@
+# Copyright (c) 2025
+# SPDX-License-Identifier: Apache-2.0
+#
+# Test-local devicetree binding for the fake IPC backend used by the
+# FLPR handshake suite (native_sim).  Mirrors the NCS v3.3.0 pattern
+# from zephyr/tests/subsys/ipc/ipc_service/.
+description: Fake IPC backend for the FLPR handshake test
+
+compatible: "fake-ipc-backend"

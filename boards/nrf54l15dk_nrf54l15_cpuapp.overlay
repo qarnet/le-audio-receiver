@@ -22,6 +22,18 @@
 / {
 	aliases {
 		i2s-audio = &i2s20;
+		user-button = &button0;
+		user-led = &led0;
+		/* The inherited DK aliases led1/led2/led3 point at nodes this
+		 * overlay /delete-node/s; drop them or dtc fails on the
+		 * dangling label references. */
+		/delete-property/ led1;
+		/delete-property/ led2;
+		/delete-property/ led3;
+	};
+
+	buttons {
+		debounce-interval-ms = <30>;
 	};
 
 	/*
@@ -47,6 +59,50 @@
 		regulator-boot-on;
 	};
 };
+
+/*
+ * User pairing controls (P6): map the Seeed XIAO onboard user button and
+ * LED through the project aliases consumed by CONFIG_USER_PAIRING_INPUT.
+ *
+ * XIAO reference (zephyr/boards/seeed/xiao_nrf54l15/xiao_nrf54l15_common.dtsi):
+ *   user button: P0.00, pull-up, active-low
+ *   user LED:    P2.00, active-low
+ * We keep the inherited button0 zephyr,code = <INPUT_KEY_0> (P2 reads only
+ * the event code, not the physical button identity); sw0 and
+ * mcuboot-button0 therefore also resolve to the physical XIAO button.
+ *
+ * The stock DK gpio-keys children button1 (P1.09) and button2 (P1.08)
+ * collide with the XIAO UART20 bridge lines and must stay disabled;
+ * button3 (P0.04) is unused. gpio-keys uses
+ * DT_INST_FOREACH_CHILD_STATUS_OKAY, so disabling is sufficient there.
+ *
+ * gpio-leds uses ALL children regardless of status, so the inherited
+ * led1/led2/led3 must be /delete-node/, not merely disabled, or the
+ * LED_GPIO driver still configures their pins.
+ */
+&button0 {
+	gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+};
+
+&button1 {
+	status = "disabled";
+};
+
+&button2 {
+	status = "disabled";
+};
+
+&button3 {
+	status = "disabled";
+};
+
+&led0 {
+	gpios = <&gpio2 0 GPIO_ACTIVE_LOW>;
+};
+
+/delete-node/ &led1;
+/delete-node/ &led2;
+/delete-node/ &led3;
 
 &pinctrl {
 	uart20_default: uart20_default {
@@ -154,7 +210,7 @@
 				reg = <0x2002A000 0x2000>;
 			};
 
-			/* Stage 1 PCM rings: 16 KiB at 0x2002C000.
+			/* PCM rings: 16 KiB at 0x2002C000.
 			 * Split into two 8 KiB SPSC rings:
 			 *   cpuapp_to_flpr_ring: 0x2002C000
 			 *   flpr_to_cpuapp_ring: 0x2002E000

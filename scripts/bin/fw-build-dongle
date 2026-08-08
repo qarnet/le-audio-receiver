@@ -103,11 +103,21 @@ if [ -f "$HCI_IPC_HEX" ]; then
 	# Also copy the CPUNET hex (sysbuild places it at merged_CPUNET.hex)
 	cp "$HCI_IPC_HEX" "$BUILD_DIR/merged_CPUNET.hex"
 
-	# Regenerate merged hex (app + net)
-	python3 "$ZEPHYR_BASE/scripts/build/mergehex.py" \
+	# Regenerate merged hex (app + net). A stale merged.hex must never be
+	# mistaken for a fresh artifact: drop the target first, then merge.
+	# Any merge failure aborts with a nonzero exit and leaves no target,
+	# so a missing merged.hex is always a real missing merge, never a
+	# leftover.
+	rm -f "$BUILD_DIR/merged.hex"
+	if ! python3 "$ZEPHYR_BASE/scripts/build/mergehex.py" \
 		-o "$BUILD_DIR/merged.hex" \
 		"$BUILD_DIR/hci_uart/zephyr/zephyr.hex" \
-		"$SYSBUILD_HCI_IPC_HEX" 2>/dev/null || true
+		"$SYSBUILD_HCI_IPC_HEX" 2>"$BUILD_DIR/mergehex.err"; then
+		rm -f "$BUILD_DIR/merged.hex"
+		printf 'ERROR: mergehex.py failed; merged.hex not written (see %s)\n' \
+			"$BUILD_DIR/mergehex.err" >&2
+		exit 1
+	fi
 
 	printf 'Merged hexes written:\n'
 	printf '  merged.hex:        %s\n' "$BUILD_DIR/merged.hex"

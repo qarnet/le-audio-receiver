@@ -1,0 +1,576 @@
+{
+  "exclusions": {
+    "numeric_population": [
+      "src/bt_bap.c",
+      "src/flpr/main.c",
+      "src/main.c"
+    ],
+    "reasons": {
+      "src/bt_bap.c": "BAP unicast server, ASCS/PACS, pairing, and the R7 private teardown transition owner: integration-only through the accepted T4+R7 BabbleSim 17-scenario matrix (mono 7.5/10 ms, Mode A incl. reverse start, Mode B, malformed-SDU rejection + resume, one-CIS-loss, first-ASE stop, release-without-disable, disconnect-while-streaming, reconnect, source-direction rejection, NO_MEM third sink, nine invalid-codec-field rejections, two successes, duplicate same-slot release rejected + slot reuse) with strict PCM oracle and exact R7 teardown observer assertions (first close wins once, per-slot cleanup exactly once, release sink-stop only on a release-driven first edge, disconnect cleanup once); no native unit suite exists",
+      "src/flpr/main.c": "FLPR firmware entry point (RISC-V VPR): no RISC-V simulator infrastructure exists in this repo; hardware-only by design. R8: acceptance message handlers (RING_TEST/STALL/STRESS/FAULT_HANG + diagnostic counters) moved to src/flpr/acceptance.c, which IS direct-tested natively (tests/unit/flpr_acceptance_flpr); main.c retains READY/heartbeat/reset/producer/consumer + production ring processing.",
+      "src/main.c": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by production builds and boot logs"
+    }
+  },
+  "files": {
+    "src/app_lifecycle.c": {
+      "branches": [
+        50,
+        54
+      ],
+      "functions": [
+        4,
+        4
+      ],
+      "lines": [
+        47,
+        47
+      ]
+    },
+    "src/audio_asrc.c": {
+      "branches": [
+        76,
+        98
+      ],
+      "functions": [
+        7,
+        7
+      ],
+      "lines": [
+        112,
+        120
+      ]
+    },
+    "src/audio_clock_actuator_apll.c": {
+      "branches": [
+        4,
+        4
+      ],
+      "functions": [
+        3,
+        3
+      ],
+      "lines": [
+        15,
+        15
+      ]
+    },
+    "src/audio_clock_actuator_none.c": {
+      "branches": [
+        0,
+        0
+      ],
+      "functions": [
+        3,
+        3
+      ],
+      "lines": [
+        6,
+        6
+      ]
+    },
+    "src/audio_decode.c": {
+      "branches": [
+        100,
+        102
+      ],
+      "functions": [
+        5,
+        5
+      ],
+      "lines": [
+        121,
+        125
+      ]
+    },
+    "src/audio_drift.c": {
+      "branches": [
+        28,
+        31
+      ],
+      "functions": [
+        5,
+        5
+      ],
+      "lines": [
+        65,
+        68
+      ]
+    },
+    "src/audio_i2s.c": {
+      "branches": [
+        148,
+        194
+      ],
+      "functions": [
+        12,
+        12
+      ],
+      "lines": [
+        258,
+        264
+      ]
+    },
+    "src/audio_iso_seq.c": {
+      "branches": [
+        20,
+        24
+      ],
+      "functions": [
+        4,
+        4
+      ],
+      "lines": [
+        36,
+        38
+      ]
+    },
+    "src/audio_modea.c": {
+      "branches": [
+        61,
+        76
+      ],
+      "functions": [
+        11,
+        11
+      ],
+      "lines": [
+        109,
+        115
+      ]
+    },
+    "src/audio_offload.c": {
+      "branches": [
+        236,
+        353
+      ],
+      "functions": [
+        29,
+        29
+      ],
+      "lines": [
+        581,
+        633
+      ]
+    },
+    "src/audio_perf.c": {
+      "branches": [
+        19,
+        22
+      ],
+      "functions": [
+        8,
+        8
+      ],
+      "lines": [
+        82,
+        85
+      ]
+    },
+    "src/audio_rate_convert.c": {
+      "branches": [
+        0,
+        0
+      ],
+      "functions": [
+        2,
+        2
+      ],
+      "lines": [
+        10,
+        10
+      ]
+    },
+    "src/audio_shell.c": {
+      "branches": [
+        12,
+        12
+      ],
+      "functions": [
+        5,
+        5
+      ],
+      "lines": [
+        51,
+        51
+      ]
+    },
+    "src/audio_stats.c": {
+      "branches": [
+        0,
+        0
+      ],
+      "functions": [
+        7,
+        7
+      ],
+      "lines": [
+        30,
+        30
+      ]
+    },
+    "src/audio_stream_session.c": {
+      "branches": [
+        132,
+        192
+      ],
+      "functions": [
+        25,
+        25
+      ],
+      "lines": [
+        276,
+        292
+      ]
+    },
+    "src/audio_timing_math.c": {
+      "branches": [
+        4,
+        4
+      ],
+      "functions": [
+        4,
+        4
+      ],
+      "lines": [
+        16,
+        16
+      ]
+    },
+    "src/audio_timing_none.c": {
+      "branches": [
+        0,
+        0
+      ],
+      "functions": [
+        3,
+        3
+      ],
+      "lines": [
+        6,
+        6
+      ]
+    },
+    "src/audio_timing_nrf54.c": {
+      "branches": [
+        60,
+        78
+      ],
+      "functions": [
+        7,
+        7
+      ],
+      "lines": [
+        142,
+        143
+      ]
+    },
+    "src/audio_volume.c": {
+      "branches": [
+        24,
+        32
+      ],
+      "functions": [
+        5,
+        5
+      ],
+      "lines": [
+        36,
+        36
+      ]
+    },
+    "src/bt_bap_pairing_adapter.c": {
+      "branches": [
+        85,
+        106
+      ],
+      "functions": [
+        17,
+        17
+      ],
+      "lines": [
+        139,
+        140
+      ]
+    },
+    "src/bt_pairing_policy.c": {
+      "branches": [
+        34,
+        34
+      ],
+      "functions": [
+        9,
+        9
+      ],
+      "lines": [
+        79,
+        79
+      ]
+    },
+    "src/bt_shell.c": {
+      "branches": [
+        4,
+        4
+      ],
+      "functions": [
+        1,
+        1
+      ],
+      "lines": [
+        11,
+        11
+      ]
+    },
+    "src/flpr/acceptance.c": {
+      "branches": [
+        14,
+        18
+      ],
+      "functions": [
+        18,
+        18
+      ],
+      "lines": [
+        143,
+        143
+      ]
+    },
+    "src/flpr_acceptance.c": {
+      "branches": [
+        143,
+        293
+      ],
+      "functions": [
+        28,
+        28
+      ],
+      "lines": [
+        462,
+        647
+      ]
+    },
+    "src/flpr_acceptance_shell.c": {
+      "branches": [
+        78,
+        109
+      ],
+      "functions": [
+        11,
+        11
+      ],
+      "lines": [
+        160,
+        174
+      ]
+    },
+    "src/flpr_audio_process.c": {
+      "branches": [
+        46,
+        58
+      ],
+      "functions": [
+        4,
+        4
+      ],
+      "lines": [
+        97,
+        104
+      ]
+    },
+    "src/flpr_cache.c": {
+      "branches": [
+        0,
+        0
+      ],
+      "functions": [
+        3,
+        3
+      ],
+      "lines": [
+        9,
+        9
+      ]
+    },
+    "src/flpr_control_ack.c": {
+      "branches": [
+        25,
+        32
+      ],
+      "functions": [
+        9,
+        9
+      ],
+      "lines": [
+        94,
+        95
+      ]
+    },
+    "src/flpr_handshake.c": {
+      "branches": [
+        92,
+        120
+      ],
+      "functions": [
+        16,
+        16
+      ],
+      "lines": [
+        274,
+        281
+      ]
+    },
+    "src/flpr_ring.c": {
+      "branches": [
+        28,
+        32
+      ],
+      "functions": [
+        8,
+        8
+      ],
+      "lines": [
+        86,
+        87
+      ]
+    },
+    "src/flpr_ring_mgr.c": {
+      "branches": [
+        171,
+        258
+      ],
+      "functions": [
+        17,
+        17
+      ],
+      "lines": [
+        344,
+        367
+      ]
+    },
+    "src/flpr_runtime.c": {
+      "branches": [
+        34,
+        46
+      ],
+      "functions": [
+        3,
+        3
+      ],
+      "lines": [
+        126,
+        126
+      ]
+    },
+    "src/flpr_shell.c": {
+      "branches": [
+        34,
+        56
+      ],
+      "functions": [
+        7,
+        7
+      ],
+      "lines": [
+        96,
+        135
+      ]
+    },
+    "src/pairing_mode.c": {
+      "branches": [
+        171,
+        236
+      ],
+      "functions": [
+        39,
+        39
+      ],
+      "lines": [
+        354,
+        414
+      ]
+    },
+    "src/stream_lifecycle.c": {
+      "branches": [
+        34,
+        36
+      ],
+      "functions": [
+        7,
+        7
+      ],
+      "lines": [
+        62,
+        62
+      ]
+    },
+    "src/user_pairing_io.c": {
+      "branches": [
+        56,
+        106
+      ],
+      "functions": [
+        11,
+        11
+      ],
+      "lines": [
+        130,
+        147
+      ]
+    }
+  },
+  "gcov_version": "gcov (GCC) 14.3.0",
+  "gcovr_version": "gcovr 8.4",
+  "generated_commit": "b1885d2cc1ab08713b93426dbe083ec1e6fde040",
+  "population": [
+    "src/app_lifecycle.c",
+    "src/audio_asrc.c",
+    "src/audio_clock_actuator_apll.c",
+    "src/audio_clock_actuator_none.c",
+    "src/audio_decode.c",
+    "src/audio_drift.c",
+    "src/audio_i2s.c",
+    "src/audio_iso_seq.c",
+    "src/audio_modea.c",
+    "src/audio_offload.c",
+    "src/audio_perf.c",
+    "src/audio_rate_convert.c",
+    "src/audio_shell.c",
+    "src/audio_stats.c",
+    "src/audio_stream_session.c",
+    "src/audio_timing_math.c",
+    "src/audio_timing_none.c",
+    "src/audio_timing_nrf54.c",
+    "src/audio_volume.c",
+    "src/bt_bap_pairing_adapter.c",
+    "src/bt_pairing_policy.c",
+    "src/bt_shell.c",
+    "src/flpr/acceptance.c",
+    "src/flpr_acceptance.c",
+    "src/flpr_acceptance_shell.c",
+    "src/flpr_audio_process.c",
+    "src/flpr_cache.c",
+    "src/flpr_control_ack.c",
+    "src/flpr_handshake.c",
+    "src/flpr_ring.c",
+    "src/flpr_ring_mgr.c",
+    "src/flpr_runtime.c",
+    "src/flpr_shell.c",
+    "src/pairing_mode.c",
+    "src/stream_lifecycle.c",
+    "src/user_pairing_io.c"
+  ],
+  "schema_version": 1,
+  "totals": {
+    "branches": [
+      2023,
+      2820
+    ],
+    "functions": [
+      357,
+      357
+    ],
+    "lines": [
+      4665,
+      5121
+    ]
+  }
+}

@@ -19,20 +19,29 @@ source "$SCRIPT_DIR/fw-common.sh"
 
 _fw_require_env
 
-SERIAL=""
-if [ -s "$(_fw_repo_dir)/scripts/probe-serial.local" ]; then
-	SERIAL="$(head -n1 "$(_fw_repo_dir)/scripts/probe-serial.local" | tr -d '[:space:]')"
-elif SERIAL="$(nrf-probes --find nrf53 2>/dev/null)"; then
-	:
+# Probe selection: the dongle is an nRF5340DK and is reset over its onboard
+# Segger J-Link (interface/jlink.cfg), exactly like fw-flash-dongle.
+# scripts/probe-serial.local and nrf-probes identify CMSIS-DAP receiver
+# targets and are NEVER consulted here — a receiver probe serial must not be
+# passed to a J-Link invocation.  Default is OpenOCD J-Link auto-detection;
+# an explicit session-local override (FW_DONGLE_JLINK_SERIAL) selects one
+# J-Link by serial and is validated before OpenOCD starts.
+JLINK_SERIAL="${FW_DONGLE_JLINK_SERIAL:-}"
+if [ -n "$JLINK_SERIAL" ]; then
+	if ! [[ "$JLINK_SERIAL" =~ ^[[:alnum:]_.:-]+$ ]]; then
+		printf 'Invalid FW_DONGLE_JLINK_SERIAL %q: must match ^[[:alnum:]_.:-]+$\n' \
+			"$JLINK_SERIAL" >&2
+		exit 1
+	fi
+	printf 'Resetting nRF5340DK dongle (J-Link override, serial %s)...\n' "$JLINK_SERIAL"
 else
-	SERIAL=""
+	printf 'Resetting nRF5340DK dongle (J-Link auto-detection)...\n'
 fi
 
 OPENOCD_ARGS=(-f interface/jlink.cfg -c "transport select swd" -c "adapter speed 2000")
-if [ -n "$SERIAL" ]; then
-	OPENOCD_ARGS+=(-c "adapter serial $SERIAL")
+if [ -n "$JLINK_SERIAL" ]; then
+	OPENOCD_ARGS+=(-c "adapter serial $JLINK_SERIAL")
 fi
 OPENOCD_ARGS+=(-f target/nordic/nrf53.cfg -c init -c "reset run" -c shutdown)
 
-printf 'Resetting nRF5340DK dongle (J-Link %s)...\n' "${SERIAL:-auto}"
 exec openocd "${OPENOCD_ARGS[@]}"

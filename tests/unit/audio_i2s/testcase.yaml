@@ -1,0 +1,4 @@
+tests:
+  unit.audio_i2s:
+    platform_allow: native_sim/native/64
+    tags: audio i2s asrc

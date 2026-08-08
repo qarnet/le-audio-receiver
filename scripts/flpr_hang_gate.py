@@ -3,18 +3,26 @@
 """
 flpr_hang_gate.py — Automated FLPR FAULT_HANG gate for nRF54L15.
 
-Stage 4B: injects `flpr hang` via console shell, monitors full recovery
+Injects `flpr hang` via console shell, monitors full recovery
 chain (heartbeat→RECOVERING→runtime restart→ACTIVE→probation cleared).
 
 Gates checked (all must pass):
   - FAULT_HANG_ACK received
-  - Exactly ONE recovery (attempts==1, no duplicate restart)
-  - runtime_restart==1
+  - Exactly ONE recovery since baseline (recovery_attempts − baseline == 1;
+    relapses and duplicate restarts rejected)
+  - Exactly ONE runtime restart since baseline (runtime_restarts − baseline == 1)
   - New remote+ring epoch (epoch changes)
   - Probation cleared >=1
-  - Resumed success until end (success+fallback >= expected ~duration*100)
-  - Faults: verify=0, crc=0, seq=0, frame=0, state=0
-  - I2S/decode/push faults zero (from audio status)
+  - Resumed success until end: final success+fallback >= 85% of duration*100
+    (explicit tolerance grounded in the 100 fps cadence — the 15% slack
+    covers the pre-injection threshold, recovery downtime, and startup
+    variance)
+  - ASRC fallback triggered (fallback > 0 — the hang actually faulted)
+  - Faults: verify=0, crc=0, seq=0, frame=0, state=0 (ring faults from the
+    offload status block; verify/state from the ASRC section)
+  - Audio faults zero from final `audio status`/`audio perf`: decode
+    errors, I2S underruns, stream resets, push failures — each field must
+    be present in the captured output and exactly zero
   - No exhaustion (exhaustion==0)
 
 Usage:
@@ -30,36 +38,66 @@ import re
 import subprocess
 import sys
 import time
+from abc import ABC, abstractmethod
 from datetime import datetime
 
-import serial
+# Shared offload-status grammar (flpr_status.py is the single source of
+# truth for the console status block; both hardware gates consume it).
+from flpr_status import (  # noqa: E402
+    RE_COUNTERS,
+    RE_FAULTS,
+    RE_HB_DEDUP,
+    RE_PROBATION,
+    RE_RECOVERY,
+    RE_RECOVERY_OK,
+    RE_RUNTIME,
+    RE_STATE_LINE,
+    parse_audio_faults,
+    parse_offload_status,
+)
+
+# Resumed-success gate: final success+fallback must reach this fraction of
+# duration*100 (100 fps cadence).  The 15% slack covers the pre-injection
+# threshold (~10 s), recovery downtime, and startup/teardown variance.
+RESUMED_SUCCESS_TOLERANCE_FRACTION = 0.85
 
 
-# ── Regex patterns ─────────────────────────────────────────────────────
+# ── Command-specific regexes (hang gate owns these) ─────────────────────
 
-RE_STATE_LINE = re.compile(r"State\s*:\s*(\w+)\s*/\s*epoch=(\d+)\s+gen=(\d+)")
-RE_COUNTERS = re.compile(
-    r"Counters\s*:\s*submit=(\d+)\s+success=(\d+)\s+fallback=(\d+)\s+busy=(\d+)"
-)
-RE_RECOVERY = re.compile(
-    r"Recovery\s*:\s*attempts=(\d+)\s+fail=(\d+)\s+relapses=(\d+)\s+exhaustion=(\d+)"
-)
-RE_PROBATION = re.compile(
-    r"Probation\s*:\s*active=(\d+)\s+success=(\d+)\s+cleared=(\d+)"
-)
-RE_FAULTS = re.compile(
-    r"Faults\s*:\s*timeout=(\d+)\s+full=(\d+)\s+stale=(\d+)\s+seq=(\d+)\s+frame=(\d+)\s+crc=(\d+)\s+payload=(\d+)"
-)
-RE_RUNTIME = re.compile(
-    r"Runtime\s*:\s*restarts=(\d+)\s+fails=(\d+)\s+last_ms=(\d+)\s+remote_epoch=(\d+)"
-)
 RE_RUNTIME_RESTART_OK = re.compile(
-    r"FLPR restart OK:\s*(\d+)→(\d+)\s+crc=0x([0-9a-fA-F]+)\s+duration=total\s+(\d+)\s+ms"
+    r"FLPR restart OK: epoch\s+(\d+)→(\d+)\s+crc=0x([0-9a-fA-F]+)\s+duration=total\s+(\d+)\s+ms"
 )
 RE_FAULT_HANG_ACK = re.compile(r"FAULT_HANG_ACK received")
 RE_FAULT_HANG_FAIL = re.compile(r"FAULT_HANG failed:\s*(-?\d+)\s+\(no ACK\)")
-RE_RECOVERY_OK = re.compile(r"offload recovery OK:")
 RE_OFFLOAD_RECOVERING = re.compile(r"State\s*:\s*RECOVERING")
+
+
+def split_offload_blocks(text):
+    """Split accumulated console text into individual '--- Audio offload ---'
+    response blocks (the leading fragment before the first separator is
+    discarded; a trailing fragment is kept only when it carries a State
+    line, i.e. it is a complete response)."""
+    parts = re.split(r"--- Audio offload ---", text)
+    blocks = []
+    for part in parts[1:]:
+        if RE_STATE_LINE.search(part):
+            blocks.append(part)
+    return blocks
+
+
+def parse_last_offload_block(text):
+    """Return the LAST complete '--- Audio offload ---' block in text.
+
+    During a Mode A stream the receiver floods the console with 'Mode A:
+    stale half discarded' INF lines (RTN retransmission duplicates).  The
+    flood can delay the final status response and leave several earlier
+    'flpr offload' responses accumulated in the read buffer; parsing the
+    first match then yields a stale mid-stream snapshot.  Taking the last
+    complete block returns the newest state.  Falls back to the whole
+    text when no block separator is present."""
+    blocks = split_offload_blocks(text)
+    return blocks[-1] if blocks else text
+
 
 # ASRC stats (shadow-verify gate)
 RE_ASRC_COUNTERS = re.compile(
@@ -98,6 +136,12 @@ class GateResult:
         self.recovery_time = 0.0
         self.baseline_epoch = 0
         self.baseline_success = 0
+        self.baseline_recovery_attempts = 0
+        self.baseline_runtime_restarts = 0
+        self.baseline_runtime_fails = 0
+        self.baseline_relapses = 0
+        self.baseline_exhaustion = 0
+        self.baseline_probation_cleared = 0
         self.final_status = {}
         self.active_status = {}
         self.active_audio_text = ""
@@ -107,39 +151,165 @@ class GateResult:
         self.full_log = ""
 
 
-# ── Gate runner ────────────────────────────────────────────────────────
+# ── Console transport interface (fakeable boundary) ─────────────────────
 
 
-class HangGateRunner:
-    """Hang gate logic with pyserial console transport."""
+class HangTransport(ABC):
+    """Serial console boundary for the hang gate.
 
-    def __init__(self, port, baud, log_path):
-        self.port = port
-        self.baud = baud
-        self.log_path = log_path
+    The production backend is RealHangSerial (lazy pyserial); unit tests
+    inject a scripted fake, exactly like the stall gate's Transport.
+    """
+
+    @abstractmethod
+    def open(self, port, baud): ...
+    @abstractmethod
+    def write(self, data): ...
+    @abstractmethod
+    def flush(self): ...
+    @abstractmethod
+    def read(self, size) -> bytes: ...
+    @property
+    @abstractmethod
+    def in_waiting(self) -> int: ...
+    @abstractmethod
+    def reset_input(self): ...
+    @abstractmethod
+    def close(self): ...
+
+
+class RealHangSerial(HangTransport):
+    """pyserial backend — imported lazily so the module stays importable
+    (and unit-testable) without pyserial."""
+
+    def __init__(self):
         self._ser = None
-        self._log_fh = None
-        self._recv_buf = bytearray()
 
-    def open(self):
-        self._ser = serial.Serial(self.port, self.baud, timeout=0.05)
-        self._log_fh = open(self.log_path, "w", buffering=1)
+    def open(self, port, baud):
+        import serial
+
+        self._ser = serial.Serial(port, baud, timeout=0.05)
+
+    def write(self, data):
+        self._ser.write(data)
+
+    def flush(self):
+        self._ser.flush()
+
+    def read(self, size) -> bytes:
+        return self._ser.read(size)
+
+    @property
+    def in_waiting(self) -> int:
+        return self._ser.in_waiting
+
+    def reset_input(self):
+        self._ser.reset_input_buffer()
 
     def close(self):
         if self._ser and self._ser.is_open:
             self._ser.close()
+        self._ser = None
+
+
+# ── BAP process launcher (fakeable boundary) ─────────────────────────────
+
+
+def launch_bap_central(duration_s, stereo, peer_addr):
+    """Production launcher: Popen bap_central.py with the same argv the
+    pre-R3 gate built inline.  Returns a Popen with poll/communicate/
+    kill/wait/returncode."""
+    repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    bap_script = os.path.join(repo_dir, "scripts", "bap_central.py")
+    bap_args = [
+        "python3",
+        bap_script,
+        "--duration",
+        str(duration_s),
+    ]
+    if stereo:
+        bap_args.append("--stereo")
+    if peer_addr:
+        # Target one specific receiver: with several LE Audio
+        # Receiver boards on the bench, discovery may attach the
+        # wrong one.  --peer-addr pins the exact peer.
+        bap_args += ["--peer-addr", peer_addr]
+    return subprocess.Popen(
+        bap_args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+
+# ── Gate runner ────────────────────────────────────────────────────────
+
+
+class HangGateRunner:
+    """Hang gate logic with injectable console transport and BAP launcher.
+
+    Production defaults (RealHangSerial + launch_bap_central) retain the
+    exact pyserial/subprocess behavior of the pre-R3 gate; unit tests
+    inject scripted fakes for both boundaries.
+    """
+
+    def __init__(
+        self, port, baud, log_path, peer_addr=None, transport=None, launcher=None
+    ):
+        self.port = port
+        self.baud = baud
+        self.log_path = log_path
+        self.peer_addr = peer_addr
+        self._tr = transport if transport is not None else RealHangSerial()
+        self._launcher = launcher if launcher is not None else launch_bap_central
+        self._recv_buf = bytearray()
+        self._log_fh = None
+
+    def open(self):
+        self._tr.open(self.port, self.baud)
+        self._log_fh = open(self.log_path, "w", buffering=1)
+
+    def close(self):
         if self._log_fh:
             self._log_fh.close()
+            self._log_fh = None
+        self._tr.close()
 
     def _read_all(self):
-        waiting = self._ser.in_waiting
+        waiting = self._tr.in_waiting
         if waiting:
-            chunk = self._ser.read(waiting)
+            chunk = self._tr.read(waiting)
             self._recv_buf.extend(chunk)
-            self._log_fh.write(chunk.decode("utf-8", errors="replace"))
-            self._log_fh.flush()
+            if self._log_fh:
+                self._log_fh.write(chunk.decode("utf-8", errors="replace"))
+                self._log_fh.flush()
             return chunk
         return b""
+
+    def _read_status(self, settle_s=0.35, grace_s=0.15):
+        """Read until the console goes quiet, returning all accumulated text.
+
+        The status commands print over ~100-200 ms; a single in_waiting
+        read catches only a partial block and the parser then misses the
+        Counters line.  Drain until no new bytes arrive for grace_s.
+        """
+        self._clear_buf()
+        deadline = time.monotonic() + settle_s
+        while time.monotonic() < deadline:
+            if self._tr.in_waiting:
+                self._read_all()
+            time.sleep(0.02)
+        quiet = 0.0
+        while quiet < grace_s:
+            before = len(self._recv_buf)
+            self._read_all()
+            if len(self._recv_buf) == before:
+                quiet += 0.05
+            else:
+                quiet = 0.0
+            time.sleep(0.05)
+        return self._all_text()
 
     def _all_text(self):
         return self._recv_buf.decode("utf-8", errors="replace")
@@ -148,81 +318,13 @@ class HangGateRunner:
         self._recv_buf.clear()
 
     def _send_cmd(self, cmd):
-        self._ser.write((cmd + "\n").encode("utf-8"))
-        self._ser.flush()
+        self._tr.write((cmd + "\n").encode("utf-8"))
+        self._tr.flush()
         time.sleep(0.05)
 
     def parse_offload(self, text):
-        """Parse flpr offload status output into a dict."""
-        result = {
-            "state": None,
-            "epoch": -1,
-            "gen": -1,
-            "submit": -1,
-            "success": -1,
-            "fallback": -1,
-            "busy": -1,
-            "recovery_attempts": -1,
-            "recovery_fail": -1,
-            "relapses": -1,
-            "exhaustion": -1,
-            "probation_active": -1,
-            "probation_success": -1,
-            "probation_cleared": -1,
-            "fault_timeout": -1,
-            "fault_full": -1,
-            "fault_stale": -1,
-            "fault_seq": -1,
-            "fault_frame": -1,
-            "fault_crc": -1,
-            "fault_payload": -1,
-            "runtime_restarts": -1,
-            "runtime_fails": -1,
-            "runtime_last_ms": -1,
-            "remote_epoch": -1,
-            "hb_dedup": -1,
-        }
-        m = RE_STATE_LINE.search(text)
-        if m:
-            result["state"] = m.group(1)
-            result["epoch"] = int(m.group(2))
-            result["gen"] = int(m.group(3))
-        m = RE_COUNTERS.search(text)
-        if m:
-            result["submit"] = int(m.group(1))
-            result["success"] = int(m.group(2))
-            result["fallback"] = int(m.group(3))
-            result["busy"] = int(m.group(4))
-        m = RE_RECOVERY.search(text)
-        if m:
-            result["recovery_attempts"] = int(m.group(1))
-            result["recovery_fail"] = int(m.group(2))
-            result["relapses"] = int(m.group(3))
-            result["exhaustion"] = int(m.group(4))
-        m = RE_PROBATION.search(text)
-        if m:
-            result["probation_active"] = int(m.group(1))
-            result["probation_success"] = int(m.group(2))
-            result["probation_cleared"] = int(m.group(3))
-        m = RE_FAULTS.search(text)
-        if m:
-            result["fault_timeout"] = int(m.group(1))
-            result["fault_full"] = int(m.group(2))
-            result["fault_stale"] = int(m.group(3))
-            result["fault_seq"] = int(m.group(4))
-            result["fault_frame"] = int(m.group(5))
-            result["fault_crc"] = int(m.group(6))
-            result["fault_payload"] = int(m.group(7))
-        m = RE_RUNTIME.search(text)
-        if m:
-            result["runtime_restarts"] = int(m.group(1))
-            result["runtime_fails"] = int(m.group(2))
-            result["runtime_last_ms"] = int(m.group(3))
-            result["remote_epoch"] = int(m.group(4))
-        m = RE_HB_DEDUP.search(text)
-        if m:
-            result["hb_dedup"] = int(m.group(1))
-        return result
+        """Parse flpr offload status output into the shared superset dict."""
+        return parse_offload_status(text)
 
     def parse_asrc(self, text):
         """Parse ASRC offload section."""
@@ -267,14 +369,14 @@ class HangGateRunner:
         total_deadline = time.monotonic() + total_timeout_s
 
         try:
-            self._ser.reset_input_buffer()
+            self._tr.reset_input()
             self._clear_buf()
 
             # ── Step 1: Wait for device console to be responsive ──
             # Probe via shell command (don't rely on boot messages which may
             # have scrolled past before we opened the port).
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Probing device console...")
-            self._ser.reset_input_buffer()
+            self._tr.reset_input()
             self._clear_buf()
             console_ready = False
             probe_deadline = time.monotonic() + 15
@@ -296,26 +398,10 @@ class HangGateRunner:
             )
 
             # ── Step 2: Launch bap_central.py in background ──
-            repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            bap_script = os.path.join(repo_dir, "scripts", "bap_central.py")
-            bap_args = [
-                "python3",
-                bap_script,
-                "--duration",
-                str(duration_s),
-            ]
-            if stereo:
-                bap_args.append("--stereo")
-
+            bap_proc = self._launcher(duration_s, stereo, self.peer_addr)
             print(
-                f"[{datetime.now().strftime('%H:%M:%S')}] Running: {' '.join(bap_args)}"
-            )
-            bap_proc = subprocess.Popen(
-                bap_args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
+                f"[{datetime.now().strftime('%H:%M:%S')}] Running bap_central "
+                f"(duration={duration_s}s{' stereo' if stereo else ''})"
             )
 
             # ── Step 3: Wait for ACTIVE + success >= 1000 ──
@@ -329,11 +415,13 @@ class HangGateRunner:
                         f"bap_central.py exited early (code={bap_proc.returncode}):\n{bap_out[-500:]}"
                     )
 
+                # Read until the console goes quiet and parse the LAST
+                # complete block: a single in_waiting read can catch only
+                # a partial status block, and the baseline Runtime line
+                # (the last line of the block) then parses as -1, making
+                # the runtime_restarts baseline-diff fail by one.
                 self._send_cmd("flpr offload")
-                time.sleep(0.08)
-                self._clear_buf()
-                self._read_all()
-                st = self.parse_offload(self._all_text())
+                st = self.parse_offload(parse_last_offload_block(self._read_status()))
                 if st["state"] == "ACTIVE" and st["success"] >= inject_threshold:
                     break
                 time.sleep(0.4)
@@ -345,6 +433,15 @@ class HangGateRunner:
 
             result.baseline_epoch = st["epoch"]
             result.baseline_success = st["success"]
+            result.baseline_recovery_attempts = st["recovery_attempts"]
+            # The Runtime line is only printed after the first restart,
+            # so a pre-injection ACTIVE snapshot has no Runtime line and
+            # the parser leaves the -1 sentinel: the absence means zero.
+            result.baseline_runtime_restarts = max(0, st["runtime_restarts"])
+            result.baseline_runtime_fails = max(0, st["runtime_fails"])
+            result.baseline_relapses = st["relapses"]
+            result.baseline_exhaustion = st["exhaustion"]
+            result.baseline_probation_cleared = st["probation_cleared"]
             print(
                 f"[{datetime.now().strftime('%H:%M:%S')}] ACTIVE with success={st['success']}, "
                 f"epoch={st['epoch']}. Injecting flpr hang..."
@@ -452,10 +549,9 @@ class HangGateRunner:
                 f"Capturing active-stream status..."
             )
             self._send_cmd("flpr offload")
-            time.sleep(0.05)
-            self._clear_buf()
-            self._read_all()
-            active_st = self.parse_offload(self._all_text())
+            active_st = self.parse_offload(
+                parse_last_offload_block(self._read_status())
+            )
             result.active_status = active_st
             print(
                 f"  State={active_st['state']} submit={active_st['submit']} "
@@ -497,26 +593,35 @@ class HangGateRunner:
 
             # ── Step 8: Collect final status ──
             time.sleep(0.5)
-            for cmd in ("flpr offload", "flpr status", "flpr runtime", "audio status"):
+            # Send every final command, then drain until the console is
+            # quiet so ALL responses (including the audio status / perf
+            # blocks) are captured before parsing.  The final status
+            # commands are parsed below, not merely sent.
+            for cmd in (
+                "flpr offload",
+                "flpr status",
+                "flpr runtime",
+                "audio status",
+                "audio perf",
+            ):
                 self._send_cmd(cmd)
-                time.sleep(0.08)
-            self._read_all()
-            time.sleep(0.5)
-            self._read_all()
 
-            result.full_log = self._all_text()
+            result.full_log = self._read_status()
 
-            # Parse final status
+            # Parse final status (the drain already captured the full
+            # response; the last complete offload block is the newest)
             self._send_cmd("flpr offload")
-            time.sleep(0.05)
-            self._clear_buf()
-            self._read_all()
-            st_final = self.parse_offload(self._all_text())
+            st_final = self.parse_offload(parse_last_offload_block(self._read_status()))
             result.final_status = st_final
 
             # Parse ASRC section
-            asrc = self.parse_asrc(result.full_log)
+            asrc = self.parse_asrc(parse_last_offload_block(result.full_log))
             result.asrc_status = asrc
+
+            # Parse audio fault fields from the captured final
+            # `audio status` / `audio perf` output.
+            audio = parse_audio_faults(result.full_log)
+            result.audio_status = audio
 
             # ── Step 9: Verify all gates ──
             checks = {}
@@ -529,13 +634,17 @@ class HangGateRunner:
 
             # Gate: exactly one recovery (attempts >= 1, no multiple)
             attempts = st_final["recovery_attempts"]
-            checks["recovery_attempts_eq_1"] = attempts == 1
+            checks["recovery_attempts_eq_1"] = (
+                attempts - result.baseline_recovery_attempts
+            ) == 1
             if attempts != 1:
                 print(f"  WARNING: recovery_attempts={attempts} (expected 1)")
 
             # Gate: exactly one runtime restart (restarts==1)
             restarts = st_final["runtime_restarts"]
-            checks["runtime_restarts_eq_1"] = restarts == 1
+            checks["runtime_restarts_eq_1"] = (
+                restarts - result.baseline_runtime_restarts
+            ) == 1
             if restarts != 1:
                 print(f"  WARNING: runtime_restarts={restarts} (expected 1)")
 
@@ -544,7 +653,9 @@ class HangGateRunner:
             checks["exhaustion_zero"] = exhaustion == 0
 
             # Gate: probation cleared
-            checks["probation_cleared"] = st_final["probation_cleared"] >= 1
+            checks["probation_cleared"] = (
+                st_final["probation_cleared"] - result.baseline_probation_cleared
+            ) >= 1
 
             # Gate: back to ACTIVE (use active-stream snapshot, final state is
             # STOPPED after disconnect)
@@ -583,11 +694,40 @@ class HangGateRunner:
             )
 
             # Gate: resumed success after recovery (success must keep growing)
-            # We already checked probation_cleared >= 1 which requires 100 consecutive successes
+            # Explicit tolerance grounded in duration/cadence: final
+            # success+fallback must reach 85% of duration*100 frames.
+            resumed = st_final["success"] + st_final["fallback"]
+            resumed_expected = int(expected_frames * RESUMED_SUCCESS_TOLERANCE_FRACTION)
+            checks["resumed_success_until_end"] = resumed >= resumed_expected
+            if not checks["resumed_success_until_end"]:
+                print(
+                    f"  WARNING: resumed success+fallback={resumed} < "
+                    f"{resumed_expected} ({int(RESUMED_SUCCESS_TOLERANCE_FRACTION * 100)}% of "
+                    f"{expected_frames})"
+                )
 
             # Gate: ASRC fallback > 0 (we did trigger fallback)
             asrc_fallback_triggered = asrc["fallback"] > 0
             checks["asrc_fallback_triggered"] = asrc_fallback_triggered
+
+            # Gate: audio fault fields zero — each field must be present in
+            # the captured final `audio status`/`audio perf` output and
+            # exactly zero.  An absent/unparseable field is missing
+            # evidence, never zero.
+            checks["audio_status_seen"] = bool(audio["status_seen"])
+            for field in (
+                "decode_errors",
+                "i2s_underruns",
+                "stream_resets",
+                "push_failures",
+            ):
+                checks["audio_%s_zero" % field] = audio[field] == 0
+                if audio[field] != 0:
+                    print(f"  WARNING: audio {field}={audio[field]} (must be zero)")
+            if not audio["status_seen"]:
+                print(
+                    "  WARNING: final 'audio status' block missing from console output"
+                )
 
             # Determine overall pass
             required_checks = [
@@ -606,6 +746,13 @@ class HangGateRunner:
                 "relapses_zero",
                 "runtime_fails_zero",
                 "frame_count_plausible",
+                "resumed_success_until_end",
+                "asrc_fallback_triggered",
+                "audio_status_seen",
+                "audio_decode_errors_zero",
+                "audio_i2s_underruns_zero",
+                "audio_stream_resets_zero",
+                "audio_push_failures_zero",
             ]
 
             result.checks = checks
@@ -654,6 +801,13 @@ def main():
         default=None,
         help="Log file path (default: flpr_hang_gate_<mode>_<dur>s.log)",
     )
+    parser.add_argument(
+        "--peer-addr",
+        default=None,
+        help="Receiver BLE address to pass through to bap_central.py "
+        "(--peer-addr).  Required when several LE Audio Receiver boards "
+        "are on the bench so the gate targets the exact receiver.",
+    )
     args = parser.parse_args()
 
     if args.log is None:
@@ -671,7 +825,7 @@ def main():
     print(f"[gate] Log:  {log_full}")
     print(f"{'=' * 70}")
 
-    runner = HangGateRunner(args.port, args.baud, log_full)
+    runner = HangGateRunner(args.port, args.baud, log_full, peer_addr=args.peer_addr)
     runner.open()
     try:
         result = runner.run(args.duration, stereo=args.stereo)

@@ -36,7 +36,7 @@ extern "C" {
 #define FLPR_MSG_STRESS_PING   0x05U /* CPUAPP → FLPR: stress test */
 #define FLPR_MSG_STRESS_PONG   0x06U /* FLPR → CPUAPP: stress response */
 
-/* Stage 1: PCM ring control */
+/* PCM ring control */
 #define FLPR_MSG_RING_RESET       0x10U /* CPUAPP → FLPR: reset ring epoch */
 #define FLPR_MSG_RING_RESET_ACK   0x11U /* FLPR → CPUAPP: ack reset */
 #define FLPR_MSG_RING_TEST_START  0x12U /* CPUAPP → FLPR: start ring test (count in data) */
@@ -45,15 +45,15 @@ extern "C" {
 #define FLPR_MSG_RING_PRODUCER    0x15U /* CPUAPP → FLPR: input data available */
 #define FLPR_MSG_RING_CONSUMER    0x16U /* FLPR → CPUAPP: output data available */
 
-/* Stage 1: stall controls */
+/* Stall controls */
 #define FLPR_MSG_RING_STALL     0x17U /* CPUAPP → FLPR: stall config (data: packed mask+duration) */
 #define FLPR_MSG_RING_STALL_ACK 0x18U /* FLPR → CPUAPP: stall config applied */
 
-/* Stage 4B: fault injection and hang recovery */
+/* Fault injection and hang recovery */
 #define FLPR_MSG_FAULT_HANG     0x20U /* CPUAPP → FLPR: request FLPR to hang (halt ring+heartbeat) */
 #define FLPR_MSG_FAULT_HANG_ACK 0x21U /* FLPR → CPUAPP: ACK received, hang imminent */
 
-/* ── Stall data packing (Stage 2) ───────────────────────────────────
+/* ── Stall data packing ─────────────────────────────────────────────
  * data[7:0]   = stall mask (FLPR_STALL_CONSUMER_INPUT, etc.)
  * data[31:8]  = duration milliseconds (0 = persistent)
  *
@@ -129,6 +129,25 @@ static inline int16_t flpr_seq_diff(uint16_t a, uint16_t b)
 static inline uint16_t flpr_seq_gap(uint16_t after, uint16_t before)
 {
 	return (uint16_t)(after - before);
+}
+
+/* ── Control ACK constructor (R1) ──────────────────────────────────
+ * Builds the ACK for a control request (RING_RESET_ACK / RING_STALL_ACK):
+ * copies the request sequence token and the current protocol version, so
+ * the requester can correlate the ACK by sequence and reject late/stale
+ * ACKs.  Message layout/version/constants are unchanged.
+ */
+static inline struct flpr_msg flpr_control_ack_make(const struct flpr_msg *request,
+						    uint8_t ack_type, uint32_t data)
+{
+	struct flpr_msg ack = {
+		.type = ack_type,
+		.version = FLPR_PROTOCOL_VERSION,
+		.seq = request->seq,
+		.data = data,
+	};
+
+	return ack;
 }
 
 /* ── Per-peer state tracking ─────────────────────────────────────
@@ -210,6 +229,15 @@ static inline bool flpr_peer_handle_ready(struct flpr_peer *peer, uint32_t epoch
 		peer->epoch = epoch;
 		peer->reboot_count++;
 		peer->healthy = true;
+
+		/* R1 repair: a changed/new epoch invalidates the previous
+		 * session's ACK state — the caller must re-send READY_ACK
+		 * for this epoch before any wait/status may report success.
+		 * Without this, a failed READY_ACK send after a reboot
+		 * would leave stale `acked=true` from the prior epoch and
+		 * flpr_handshake_wait_new_ready() could take the fast path
+		 * against an un-acked epoch. */
+		peer->acked = false;
 
 		/* Reset rx-side tracking for the new boot. */
 		peer->rx_seq = 0;

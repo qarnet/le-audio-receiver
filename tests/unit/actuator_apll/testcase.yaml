@@ -1,0 +1,4 @@
+tests:
+  unit.actuator_apll:
+    platform_allow: native_sim/native/64
+    tags: audio actuator apll

@@ -1,0 +1,5 @@
+# Binary fixtures: never diff, merge, or apply text conversion.
+# The LC3 bitstreams and expected PCM are byte-exact golden data; text
+# attributes would corrupt them on CRLF platforms or in diffs.
+tests/fixtures/lc3/*.lc3 binary
+tests/fixtures/lc3/*.pcm binary

@@ -6,15 +6,19 @@ flpr_stall_gate.py — Automated FLPR timed-stall gate for nRF54L15.
 Single pyserial process owns UART for entire injection round-trip.
 No serial-MCP polling latency.
 
-Algorithm (v3 — timed 60ms auto-clear, no external on/wait/off):
+Algorithm — timed 60ms auto-clear, no external on/wait/off:
   1. Open configured console, preserve raw log to file.
   2. Send `flpr offload`; wait until State=ACTIVE AND success >= 500.
   3. Send `flpr ring stall_flpr_ms 1 60`.
   4. Require exact ACK: bits=0x01 duration=60.
   5. Read until at least one fault/fallback detected.
   6. Monitor status until ACTIVE, recovery>=1, exhaustion=0, probation_cleared>=1,
-     success increased by >=100 after injection, 0 I2S/decode/push/ASRC faults.
-  7. Send final status commands, close port.
+     success increased by >=100 after injection, 0 ASRC integrity faults.
+  7. Send final status commands, drain until the console is quiet, then
+     PARSE the captured responses (not merely send): the final offload
+     status becomes final_status and the final `audio status`/`audio perf`
+     fault fields (decode errors, I2S underruns, stream resets, push
+     failures) must each be present and exactly zero.  Close port.
      Exit 0 on success, nonzero on timeout or missing predicate.
 
 Testability: GateRunner class accepts a Transport interface.
@@ -27,31 +31,25 @@ import sys
 import time
 from abc import ABC, abstractmethod
 
-
-# ── Regex patterns against current shell/log output ─────────────────
-
-RE_STATE_LINE = re.compile(r"State\s*:\s*(\w+)\s*/\s*epoch=\d+\s+gen=\d+")
-RE_COUNTERS = re.compile(
-    r"Counters\s*:\s*submit=(\d+)\s+success=(\d+)\s+fallback=(\d+)\s+busy=(\d+)"
+# Shared offload-status grammar (flpr_status.py is the single source of
+# truth for the console status block; both hardware gates consume it).
+from flpr_status import (  # noqa: E402
+    RE_COUNTERS,
+    RE_FAULTS,
+    RE_PROBATION,
+    RE_RECOVERY,
+    RE_RECOVERY_OK,
+    RE_STATE_LINE,
+    parse_audio_faults,
+    parse_offload_status,
 )
-RE_RECOVERY = re.compile(
-    r"Recovery\s*:\s*attempts=(\d+)\s+fail=(\d+)\s+relapses=(\d+)\s+exhaustion=(\d+)"
-)
-RE_PROBATION = re.compile(
-    r"Probation\s*:\s*active=(\d+)\s+success=(\d+)\s+cleared=(\d+)"
-)
 
-# Stage 2 timed stall ACK: "FLPR timed stall applied: bits=0x01 duration=60 ms"
+# ── Regex patterns against current shell/log output ─────────────────────
+
+# Timed stall ACK: "FLPR timed stall applied: bits=0x01 duration=60 ms"
 RE_STALL_TIMED_ACK = re.compile(
     r"FLPR timed stall applied:\s*bits=0x([0-9a-fA-F]+)\s+duration=(\d+)\s+ms"
 )
-
-# Fault counters (must be zero at end).
-RE_FAULTS = re.compile(
-    r"Faults\s*:\s*timeout=(\d+)\s+full=(\d+)\s+stale=(\d+)\s+seq=(\d+)\s+frame=(\d+)\s+crc=(\d+)\s+payload=(\d+)"
-)
-
-RE_RECOVERY_OK = re.compile(r"offload recovery OK:")
 
 
 class StallGateError(Exception):
@@ -69,6 +67,7 @@ class GateResult:
         self.first_fallback_time: float = 0.0
         self.baseline_success: int = -1
         self.final_status: dict = {}
+        self.audio_status: dict = {}
         self.full_log: str = ""
 
 
@@ -186,58 +185,8 @@ class GateRunner:
 
     @staticmethod
     def parse_offload(text):
-        """Parse flpr offload status output into a dict."""
-        result = {
-            "state": None,
-            "submit": -1,
-            "success": -1,
-            "fallback": -1,
-            "busy": -1,
-            "recovery_attempts": -1,
-            "recovery_fail": -1,
-            "relapses": -1,
-            "exhaustion": -1,
-            "probation_active": -1,
-            "probation_success": -1,
-            "probation_cleared": -1,
-            "fault_timeout": -1,
-            "fault_full": -1,
-            "fault_stale": -1,
-            "fault_seq": -1,
-            "fault_frame": -1,
-            "fault_crc": -1,
-            "fault_payload": -1,
-        }
-        m = RE_STATE_LINE.search(text)
-        if m:
-            result["state"] = m.group(1)
-        m = RE_COUNTERS.search(text)
-        if m:
-            result["submit"] = int(m.group(1))
-            result["success"] = int(m.group(2))
-            result["fallback"] = int(m.group(3))
-            result["busy"] = int(m.group(4))
-        m = RE_RECOVERY.search(text)
-        if m:
-            result["recovery_attempts"] = int(m.group(1))
-            result["recovery_fail"] = int(m.group(2))
-            result["relapses"] = int(m.group(3))
-            result["exhaustion"] = int(m.group(4))
-        m = RE_PROBATION.search(text)
-        if m:
-            result["probation_active"] = int(m.group(1))
-            result["probation_success"] = int(m.group(2))
-            result["probation_cleared"] = int(m.group(3))
-        m = RE_FAULTS.search(text)
-        if m:
-            result["fault_timeout"] = int(m.group(1))
-            result["fault_full"] = int(m.group(2))
-            result["fault_stale"] = int(m.group(3))
-            result["fault_seq"] = int(m.group(4))
-            result["fault_frame"] = int(m.group(5))
-            result["fault_crc"] = int(m.group(6))
-            result["fault_payload"] = int(m.group(7))
-        return result
+        """Parse flpr offload status output into the shared superset dict."""
+        return parse_offload_status(text)
 
     def __init__(
         self, transport: Transport, total_timeout: float, status_interval: float = 0.5
@@ -264,6 +213,21 @@ class GateRunner:
     def _send_cmd(self, cmd):
         self._tr.write((cmd + "\n").encode("utf-8"))
         time.sleep(0.05)
+
+    def _drain_until_quiet(self, grace_s=0.15, max_iter=50):
+        """Read until no new bytes arrive for grace_s (bounded by max_iter
+        so an always-noisy transport cannot hang the gate)."""
+        quiet = 0.0
+        iters = 0
+        while quiet < grace_s and iters < max_iter:
+            iters += 1
+            before = len(self._recv_buf)
+            self._read_all()
+            if len(self._recv_buf) == before:
+                quiet += 0.05
+            else:
+                quiet = 0.0
+            time.sleep(0.05)
 
     def run(self) -> GateResult:
         result = GateResult()
@@ -397,19 +361,51 @@ class GateRunner:
                     f"Last status: {result.final_status}"
                 )
 
-            # ── Step 7: Final status dump ──────────────────────────────
+            # ── Step 7: Final status dump (parsed, not merely sent) ─────
+            # Start from a clean buffer so the parsed final offload status
+            # and audio fault fields reflect ONLY the final responses —
+            # a stale mid-stream status can never be mistaken for the
+            # post-run snapshot.
+            self._recv_buf.clear()
             for cmd in (
                 "flpr offload",
                 "flpr ring status",
                 "flpr status",
                 "audio status",
+                "audio perf",
             ):
                 self._send_cmd(cmd)
-                time.sleep(0.05)
-            self._read_all()
+            self._drain_until_quiet()
+            result.full_log = self._all_text()
+
+            # Parse the final offload status from the captured responses.
+            st_final = self.parse_offload(result.full_log)
+            if st_final["state"] is not None:
+                result.final_status = st_final
+
+            # Parse audio fault fields: each must be present and zero.
+            audio = parse_audio_faults(result.full_log)
+            result.audio_status = audio
+            if not audio["status_seen"]:
+                raise StallGateError(
+                    "final 'audio status' block missing from console output"
+                )
+            for field in (
+                "decode_errors",
+                "i2s_underruns",
+                "stream_resets",
+                "push_failures",
+            ):
+                if audio[field] is None:
+                    raise StallGateError(
+                        "audio fault field %s missing from final status" % field
+                    )
+                if audio[field] != 0:
+                    raise StallGateError(
+                        "audio fault field %s=%s (must be zero)" % (field, audio[field])
+                    )
 
             result.passed = True
-            result.full_log = self._all_text()
 
         except StallGateError as e:
             result.error = str(e)
@@ -425,9 +421,7 @@ class GateRunner:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="FLPR timed-stall gate automation (Stage 2)"
-    )
+    parser = argparse.ArgumentParser(description="FLPR timed-stall gate automation")
     parser.add_argument("--port", default="/dev/ttyACM0")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--timeout", type=float, default=30.0)

@@ -2,12 +2,18 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * CPUAPP side of FLPR handshake, heartbeat (k_work_delayable), and stress.
+ * CPUAPP side of FLPR handshake and heartbeat (k_work_delayable).
  * Uses flpr_peer state machine from flpr_protocol.h.
+ *
+ * Production runtime only.  The stress-test ping/pong state and the
+ * fault-hang request state moved to src/flpr_acceptance.c; the four
+ * diagnostic message types (STRESS_PONG, RING_TEST_REPORT,
+ * RING_STALL_ACK, FAULT_HANG_ACK) route to the registered diagnostic
+ * handler slot.
  *
  * Lock discipline: all global state accessed only under flpr_lock.
  * ipc_service_send MUST NOT be called under spinlock — IPC callbacks
- * may re-enter.  Stress semaphore give is done outside lock.
+ * may re-enter.
  *
  * All state transitions go through PRODUCTION helpers in flpr_protocol.h.
  * No raw field assignment on the peer struct — helpers enforce invariants
@@ -43,37 +49,24 @@ static bool session_available; /* false between disconnect / reconnect */
 static struct k_work_delayable hb_work;
 static bool hb_started; /* protected by flpr_lock */
 
-/* ── Stress ─────────────────────────────────────────────────────── */
-
-static struct k_sem stress_sem;
-
-static uint32_t stress_count;    /* protected by flpr_lock */
-static uint32_t stress_sent;     /* protected by flpr_lock */
-static uint32_t stress_recv;     /* protected by flpr_lock */
-static uint32_t stress_timeouts; /* protected by flpr_lock */
-static bool stress_active;       /* protected by flpr_lock */
-static uint32_t stress_cookie;   /* protected by flpr_lock */
-static uint32_t stress_stale;    /* protected by flpr_lock */
-static uint32_t stress_mismatch; /* protected by flpr_lock */
-static uint32_t stress_err_send; /* protected by flpr_lock */
-
 /* ── Ring control handlers (registered by flpr_ring_mgr) ──────────── */
 
 static flpr_handshake_ring_handler_t ring_reset_ack_fn;
 static flpr_handshake_ring_handler_t ring_consumer_fn;
-static flpr_handshake_ring_handler_t ring_report_fn;
-static flpr_handshake_ring_handler_t ring_stall_ack_fn;
 static void *ring_handler_user_data;
+
+/* ── Diagnostic handler (registered by flpr_acceptance) ────────────
+ * Receives STRESS_PONG, RING_TEST_REPORT, RING_STALL_ACK, and
+ * FAULT_HANG_ACK.  NULL (unregistered) → messages silently dropped
+ * (identical to the pre-R8 inert acceptance state). */
+
+static flpr_handshake_ring_handler_t diag_fn;
+static void *diag_user_data;
 
 /* ── Health transition callback ────────────────────────────────── */
 
 static flpr_health_transition_cb_t health_cb;
 static void *health_cb_user_data;
-
-/* ── Fault hang ACK ───────────────────────────────────────────── */
-
-static struct k_sem hang_ack_sem;
-static bool hang_ack_received;
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 
@@ -89,6 +82,22 @@ static int send_msg(const struct flpr_msg *msg)
 	}
 	return ret;
 }
+
+/* ── Heartbeat work scheduling ─────────────────────────────────────
+ * Test mode (FLPR_HANDSHAKE_NATIVE_TEST) records the READY-triggered
+ * async start instead of submitting it, so the system workqueue never
+ * runs the handler concurrently with the single-threaded ztest runner;
+ * tests invoke heartbeat iterations synchronously and teardown cancels
+ * the reschedule before it fires. */
+
+#if defined(FLPR_HANDSHAKE_NATIVE_TEST)
+#include "flpr_handshake_hooks.h"
+#define FLPR_HS_WORK_START()      flpr_handshake_test_work_start()
+#define FLPR_HS_WORK_RESCHEDULE() flpr_handshake_test_work_reschedule()
+#else
+#define FLPR_HS_WORK_START()      k_work_schedule(&hb_work, K_NO_WAIT)
+#define FLPR_HS_WORK_RESCHEDULE() k_work_schedule(&hb_work, K_MSEC(FLPR_HEARTBEAT_INTERVAL_MS))
+#endif
 
 /* ── Heartbeat work handler ─────────────────────────────────────── */
 
@@ -125,17 +134,28 @@ static void hb_work_fn(struct k_work *work)
 		int ret = send_msg(&msg);
 		if (ret >= 0) {
 			bool now_unhealthy = false;
+			flpr_health_transition_cb_t cb;
+			void *cb_ud;
 
 			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 			flpr.tx_seq++;
 			/* Periodic health check of remote (FLPR) heartbeats. */
 			(void)flpr_peer_check_health(&flpr, now_ms);
 			now_unhealthy = !flpr.healthy;
+			/* Snapshot the health callback + user-data under the
+			 * lock together with the transition state, then invoke
+			 * OUTSIDE the lock. */
+			if (was_healthy && now_unhealthy) {
+				cb = health_cb;
+				cb_ud = health_cb_user_data;
+			} else {
+				cb = NULL;
+				cb_ud = NULL;
+			}
 			k_spin_unlock(&flpr_lock, key);
 
-			/* Invoke health transition callback OUTSIDE lock. */
-			if (was_healthy && now_unhealthy && health_cb) {
-				health_cb(health_cb_user_data);
+			if (cb) {
+				cb(cb_ud);
 			}
 		}
 		/* On send error: tx_seq not incremented, counted in err_send.
@@ -143,7 +163,11 @@ static void hb_work_fn(struct k_work *work)
 	}
 
 reschedule:
-	k_work_schedule(&hb_work, K_MSEC(FLPR_HEARTBEAT_INTERVAL_MS));
+	/* R1 note: cancelling the heartbeat from inside its own running
+	 * work item cannot prevent this final reschedule; that is by design.
+	 * A later wake after teardown is a no-op because the inactive
+	 * checks (acked/session_available) gate every send. */
+	FLPR_HS_WORK_RESCHEDULE();
 }
 
 /* ── IPC callbacks ──────────────────────────────────────────────── */
@@ -198,8 +222,16 @@ static void ep_received(const void *data, size_t len, void *priv)
 	ARG_UNUSED(priv);
 	uint32_t now_ms = k_uptime_get_32();
 
-	/* Shared validation — rejects short/oversize and wrong version. */
-	if (!flpr_msg_validate((const struct flpr_msg *)data, len, &flpr)) {
+	/* Shared validation runs under flpr_lock because it mutates
+	 * err_len/err_version read by flpr_handshake_get_status(). */
+	bool valid;
+
+	{
+		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+		valid = flpr_msg_validate((const struct flpr_msg *)data, len, &flpr);
+		k_spin_unlock(&flpr_lock, key);
+	}
+	if (!valid) {
 		return;
 	}
 
@@ -212,10 +244,14 @@ static void ep_received(const void *data, size_t len, void *priv)
 		bool is_new_epoch;
 		bool start_hb_now = false;
 		bool give_new_ready = false;
+		uint32_t ready_count;
 
 		{
 			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 			is_new_epoch = flpr_peer_handle_ready(&flpr, epoch);
+			/* Capture the READY count under the lock so the log
+			 * below never reads a concurrently mutated counter. */
+			ready_count = flpr.ready_count;
 			if (session_available && !hb_started) {
 				hb_started = true;
 				start_hb_now = true;
@@ -227,7 +263,7 @@ static void ep_received(const void *data, size_t len, void *priv)
 			k_spin_unlock(&flpr_lock, key);
 		}
 
-		LOG_INF("FLPR READY (epoch=%u, count=%u, %s)", epoch, flpr.ready_count,
+		LOG_INF("FLPR READY (epoch=%u, count=%u, %s)", epoch, ready_count,
 			is_new_epoch ? "new" : "duplicate");
 
 		/* Send READY_ACK outside lock. */
@@ -258,7 +294,7 @@ static void ep_received(const void *data, size_t len, void *priv)
 
 		/* Start heartbeat work outside lock. */
 		if (start_hb_now) {
-			k_work_schedule(&hb_work, K_NO_WAIT);
+			FLPR_HS_WORK_START();
 		}
 		break;
 	}
@@ -301,79 +337,71 @@ static void ep_received(const void *data, size_t len, void *priv)
 		break;
 	}
 
-	case FLPR_MSG_STRESS_PONG: {
-		/* Classify cookie with pure helper, act under lock. */
-		uint32_t cookie;
-		bool active;
-		enum flpr_stress_pong_class cls;
-
-		{
-			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-			cookie = msg->data;
-			active = stress_active;
-
-			if (!active) {
-				k_spin_unlock(&flpr_lock, key);
-				break;
-			}
-
-			cls = flpr_classify_stress_pong(cookie, stress_cookie, active);
-
-			switch (cls) {
-			case FLPR_PONG_MATCH:
-				stress_recv++;
-				break;
-			case FLPR_PONG_STALE:
-				stress_stale++;
-				break;
-			case FLPR_PONG_FUTURE:
-				stress_mismatch++;
-				break;
-			default:
-				break;
-			}
-			k_spin_unlock(&flpr_lock, key);
-		}
-
-		/* Signal outside lock ONLY on MATCH. */
-		if (cls == FLPR_PONG_MATCH) {
-			k_sem_give(&stress_sem);
-		}
-		break;
-	}
-
 	case FLPR_MSG_STRESS_PING:
 	case FLPR_MSG_READY_ACK:
 		/* CPUAPP receives these — unexpected but not errors. */
 		break;
 
-	/* ── Stage 1: ring control — route to ring manager ──────── */
-	case FLPR_MSG_RING_RESET_ACK:
-		if (ring_reset_ack_fn) {
-			ring_reset_ack_fn(msg, ring_handler_user_data);
-		}
-		break;
-	case FLPR_MSG_RING_CONSUMER:
-		if (ring_consumer_fn) {
-			ring_consumer_fn(msg, ring_handler_user_data);
-		}
-		break;
-	case FLPR_MSG_RING_TEST_REPORT:
-		if (ring_report_fn) {
-			ring_report_fn(msg, ring_handler_user_data);
-		}
-		break;
-	case FLPR_MSG_RING_STALL_ACK:
-		if (ring_stall_ack_fn) {
-			ring_stall_ack_fn(msg, ring_handler_user_data);
-		}
-		break;
+	/* ── Ring control — route to ring manager ────────────────
+	 * Snapshot the handler function + shared user-data under
+	 * flpr_lock, then invoke OUTSIDE the lock (a handler may call
+	 * back into get_status / take ring locks). */
+	case FLPR_MSG_RING_RESET_ACK: {
+		flpr_handshake_ring_handler_t fn;
+		void *ud;
 
-	/* ── Stage 4B: fault hang ACK ───────────────────────── */
-	case FLPR_MSG_FAULT_HANG_ACK:
-		hang_ack_received = true;
-		k_sem_give(&hang_ack_sem);
+		{
+			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+			fn = ring_reset_ack_fn;
+			ud = ring_handler_user_data;
+			k_spin_unlock(&flpr_lock, key);
+		}
+		if (fn) {
+			fn(msg, ud);
+		}
 		break;
+	}
+	case FLPR_MSG_RING_CONSUMER: {
+		flpr_handshake_ring_handler_t fn;
+		void *ud;
+
+		{
+			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+			fn = ring_consumer_fn;
+			ud = ring_handler_user_data;
+			k_spin_unlock(&flpr_lock, key);
+		}
+		if (fn) {
+			fn(msg, ud);
+		}
+		break;
+	}
+
+	/* ── Diagnostic message types ─────────────────────────────
+	 * STRESS_PONG, RING_TEST_REPORT, RING_STALL_ACK, and
+	 * FAULT_HANG_ACK route to the diagnostic handler slot registered
+	 * by flpr_acceptance_init().  Same snapshot-under-lock /
+	 * invoke-outside-lock semantics as the production slot.  With no
+	 * handler registered the messages are silently dropped (an
+	 * unregistered acceptance state is inert). */
+	case FLPR_MSG_STRESS_PONG:
+	case FLPR_MSG_RING_TEST_REPORT:
+	case FLPR_MSG_RING_STALL_ACK:
+	case FLPR_MSG_FAULT_HANG_ACK: {
+		flpr_handshake_ring_handler_t fn;
+		void *ud;
+
+		{
+			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+			fn = diag_fn;
+			ud = diag_user_data;
+			k_spin_unlock(&flpr_lock, key);
+		}
+		if (fn) {
+			fn(msg, ud);
+		}
+		break;
+	}
 
 	default: {
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
@@ -408,8 +436,6 @@ int flpr_handshake_init(void)
 	int ret;
 
 	k_work_init_delayable(&hb_work, hb_work_fn);
-	k_sem_init(&stress_sem, 0, FLPR_STRESS_MAX_COUNT + 1);
-	k_sem_init(&hang_ack_sem, 0, 1);
 
 	{
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
@@ -468,134 +494,20 @@ void flpr_handshake_get_status(struct flpr_status *status)
 	status->rx_ooo = flpr.rx_ooo;
 	status->rx_last_ms = flpr.rx_last_ms;
 	status->rx_missed_total = flpr.rx_missed_total;
-	status->stress_active = stress_active;
-	status->stress_count = stress_count;
-	status->stress_sent = stress_sent;
-	status->stress_recv = stress_recv;
-	status->stress_timeouts = stress_timeouts;
-	status->stress_stale = stress_stale;
-	status->stress_mismatch = stress_mismatch;
-	status->stress_err_send = stress_err_send;
+
+	/* Stress fields are acceptance-owned (flpr_acceptance.c).
+	 * Zero them so the shared flpr_status is never garbage; the
+	 * shell merges flpr_acceptance_stress_snapshot() when the
+	 * acceptance config is enabled. */
+	status->stress_active = false;
+	status->stress_count = 0;
+	status->stress_sent = 0;
+	status->stress_recv = 0;
+	status->stress_timeouts = 0;
+	status->stress_stale = 0;
+	status->stress_mismatch = 0;
+	status->stress_err_send = 0;
 	k_spin_unlock(&flpr_lock, key);
-}
-
-void flpr_handshake_stress(uint32_t count, struct flpr_status *out)
-{
-	if (count == 0) {
-		return;
-	}
-	if (count > FLPR_STRESS_MAX_COUNT) {
-		count = FLPR_STRESS_MAX_COUNT;
-	}
-
-	/* Guard: reject if not ready+healthy or if already active. */
-	{
-		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		if (stress_active) {
-			k_spin_unlock(&flpr_lock, key);
-			if (out) {
-				flpr_handshake_get_status(out);
-			}
-			return;
-		}
-		if (!flpr.ready || !flpr.acked) {
-			k_spin_unlock(&flpr_lock, key);
-			LOG_WRN("FLPR stress rejected: FLPR not ready");
-			if (out) {
-				flpr_handshake_get_status(out);
-			}
-			return;
-		}
-		/* Reset stress state under lock. */
-		stress_active = true;
-		stress_count = count;
-		stress_sent = 0;
-		stress_recv = 0;
-		stress_timeouts = 0;
-		stress_cookie = 0;
-		stress_stale = 0;
-		stress_mismatch = 0;
-		stress_err_send = 0;
-		k_spin_unlock(&flpr_lock, key);
-	}
-
-	/* Drain any stale semaphore give from a previous interrupted run.
-	 * k_sem_reset is not available; use k_sem_take with K_NO_WAIT
-	 * until semaphore is empty. */
-	while (k_sem_take(&stress_sem, K_NO_WAIT) == 0) {
-		/* drain */
-	}
-
-	LOG_INF("FLPR stress start: %u pings", count);
-
-	for (uint32_t i = 0; i < count; i++) {
-
-		/* Drain semaphore before EVERY iteration: guards against late-PONG
-		 * from a previous timed-out iteration. */
-		while (k_sem_take(&stress_sem, K_NO_WAIT) == 0) {
-			/* drain */
-		}
-
-		/* Snapshot cookie under lock. */
-		uint32_t cookie;
-		{
-			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-			stress_cookie++;
-			cookie = stress_cookie;
-			k_spin_unlock(&flpr_lock, key);
-		}
-
-		struct flpr_msg ping = {
-			.type = FLPR_MSG_STRESS_PING,
-			.version = FLPR_PROTOCOL_VERSION,
-			.seq = (uint16_t)(i & 0xFFFFU),
-			.data = cookie,
-		};
-
-		int ret = ipc_service_send(&flpr_ep, &ping, sizeof(ping));
-		if (ret < 0) {
-			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-			stress_err_send++;
-			k_spin_unlock(&flpr_lock, key);
-			LOG_WRN("FLPR stress ping %u send failed: %d", i, ret);
-			k_msleep(1);
-			continue;
-		}
-
-		/* Count sent after successful send. */
-		{
-			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-			stress_sent++;
-			k_spin_unlock(&flpr_lock, key);
-		}
-
-		/* Wait for matching PONG with 200 ms timeout. */
-		ret = k_sem_take(&stress_sem, K_MSEC(200));
-		if (ret != 0) {
-			/* Timeout: invalidate expected cookie so any late PONG
-			 * for THIS iteration is classified as stale, not
-			 * mistaken for the next iteration's match. */
-			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-			stress_timeouts++;
-			stress_cookie++; /* invalidate → late PONG is stale */
-			k_spin_unlock(&flpr_lock, key);
-		}
-	}
-
-	LOG_INF("FLPR stress done: sent=%u recv=%u lost=%u timeouts=%u "
-		"stale=%u mismatch=%u err=%u",
-		stress_sent, stress_recv, count - stress_recv, stress_timeouts, stress_stale,
-		stress_mismatch, stress_err_send);
-
-	{
-		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		stress_active = false;
-		k_spin_unlock(&flpr_lock, key);
-	}
-
-	if (out) {
-		flpr_handshake_get_status(out);
-	}
 }
 
 /* ── Runtime restart API ──────────────────────────────────────────── */
@@ -673,9 +585,12 @@ int flpr_handshake_wait_new_ready(uint32_t previous_epoch, k_timeout_t timeout)
 			k_spin_unlock(&flpr_lock, key);
 			return -ECANCELED;
 		}
-		/* If epoch already different from previous, sem already given? */
-		if (flpr.ready && flpr.epoch != previous_epoch) {
-			/* Epoch already new — drain sem and succeed. */
+		/* Fast path: epoch already different from previous AND the
+		 * READY_ACK for it succeeded.  The new-ready semaphore is only
+		 * given after a successful ACK send, so acked is required here
+		 * too — a changed epoch whose ACK failed must not succeed. */
+		if (flpr.ready && flpr.acked && flpr.epoch != previous_epoch) {
+			/* Epoch already new and acked — drain sem and succeed. */
 			k_spin_unlock(&flpr_lock, key);
 			while (k_sem_take(&new_ready_sem, K_NO_WAIT) == 0) {
 			}
@@ -700,22 +615,33 @@ int flpr_handshake_send_msg(const struct flpr_msg *msg)
 	if (!msg) {
 		return -EINVAL;
 	}
-	return ipc_service_send(&flpr_ep, msg, sizeof(*msg));
+	/* Route through send_msg() so send failures increment err_send
+	 * exactly as documented in the header. */
+	return send_msg(msg);
 }
 
 void flpr_handshake_register_ring_handlers(flpr_handshake_ring_handler_t reset_ack_fn,
 					   flpr_handshake_ring_handler_t consumer_fn,
-					   flpr_handshake_ring_handler_t report_fn,
-					   flpr_handshake_ring_handler_t stall_ack_fn,
 					   void *user_data)
 {
 	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 
 	ring_reset_ack_fn = reset_ack_fn;
 	ring_consumer_fn = consumer_fn;
-	ring_report_fn = report_fn;
-	ring_stall_ack_fn = stall_ack_fn;
 	ring_handler_user_data = user_data;
+
+	k_spin_unlock(&flpr_lock, key);
+}
+
+/* ── Diagnostic handler registration (R8) ─────────────────────────── */
+
+void flpr_handshake_register_diag_handlers(flpr_handshake_ring_handler_t diag_handle_fn,
+					   void *user_data)
+{
+	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+
+	diag_fn = diag_handle_fn;
+	diag_user_data = user_data;
 
 	k_spin_unlock(&flpr_lock, key);
 }
@@ -730,41 +656,97 @@ void flpr_handshake_register_health_cb(flpr_health_transition_cb_t cb, void *use
 	k_spin_unlock(&flpr_lock, key);
 }
 
-/* ── Fault hang injection ────────────────────────────────────────── */
+#if defined(FLPR_HANDSHAKE_NATIVE_TEST)
+/* GCOVR_EXCL_START — test-only helpers, absent from production builds */
 
-int flpr_handshake_send_fault_hang(uint32_t timeout_ms)
+/* ── Test-only helpers ─────────────────────────────────────────────
+ * Compiled only under FLPR_HANDSHAKE_NATIVE_TEST (native_sim suite).
+ * Production builds contain none of these symbols.  These helpers reset
+ * module-static state, drive one heartbeat iteration synchronously, and
+ * arrange peer health/timestamp state; they never replace protocol
+ * helpers or callback switch logic. */
+
+static uint32_t test_hb_start_requests;
+static uint32_t test_hb_reschedules;
+
+void flpr_handshake_test_reset(void)
 {
-	/* Drain any stale semaphore give. */
-	while (k_sem_take(&hang_ack_sem, K_NO_WAIT) == 0) {
-	}
-	hang_ack_received = false;
+	k_work_cancel_delayable(&hb_work);
+	k_sem_reset(&bound_sem);
+	k_sem_reset(&new_ready_sem);
 
-	struct flpr_msg hang_msg = {
-		.type = FLPR_MSG_FAULT_HANG,
-		.version = FLPR_PROTOCOL_VERSION,
-		.seq = 0,
-		.data = 0,
-	};
-	int ret = ipc_service_send(&flpr_ep, &hang_msg, sizeof(hang_msg));
-	if (ret < 0) {
-		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
-		flpr.err_send++;
-		k_spin_unlock(&flpr_lock, key);
-		LOG_ERR("FAULT_HANG send failed: %d", ret);
-		return -EIO;
-	}
+	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+	flpr_peer_reset(&flpr);
+	hb_started = false;
+	session_available = false;
+	ring_reset_ack_fn = NULL;
+	ring_consumer_fn = NULL;
+	ring_handler_user_data = NULL;
+	diag_fn = NULL;
+	diag_user_data = NULL;
+	health_cb = NULL;
+	health_cb_user_data = NULL;
+	k_spin_unlock(&flpr_lock, key);
 
-	/* Wait for FAULT_HANG_ACK from FLPR. */
-	ret = k_sem_take(&hang_ack_sem, K_MSEC(timeout_ms));
-	if (ret != 0) {
-		LOG_WRN("FAULT_HANG_ACK timeout (%u ms)", timeout_ms);
-		return -ETIMEDOUT;
-	}
-
-	if (!hang_ack_received) {
-		return -EIO;
-	}
-
-	LOG_INF("FAULT_HANG_ACK received — FLPR hang imminent");
-	return 0;
+	test_hb_start_requests = 0;
+	test_hb_reschedules = 0;
 }
+
+void flpr_handshake_test_heartbeat_once(void)
+{
+	hb_work_fn(&hb_work.work);
+}
+
+void flpr_handshake_test_set_peer_state(bool bound, bool ready, bool acked, bool healthy,
+					uint32_t rx_last_ms)
+{
+	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+	flpr.bound = bound;
+	flpr.ready = ready;
+	flpr.acked = acked;
+	flpr.healthy = healthy;
+	flpr.rx_last_ms = rx_last_ms;
+	k_spin_unlock(&flpr_lock, key);
+}
+
+void flpr_handshake_test_work_start(void)
+{
+	/* Record the READY-triggered async start; do NOT submit it. */
+	test_hb_start_requests++;
+}
+
+void flpr_handshake_test_work_reschedule(void)
+{
+	/* Real reschedule at the documented interval; test teardown
+	 * cancels it before it fires (tests complete well under 1 s). */
+	test_hb_reschedules++;
+	k_work_schedule(&hb_work, K_MSEC(FLPR_HEARTBEAT_INTERVAL_MS));
+}
+
+uint32_t flpr_handshake_test_hb_start_requests(void)
+{
+	return test_hb_start_requests;
+}
+
+uint32_t flpr_handshake_test_hb_reschedules(void)
+{
+	return test_hb_reschedules;
+}
+
+bool flpr_handshake_test_work_pending(void)
+{
+	return k_work_delayable_is_pending(&hb_work);
+}
+
+uint32_t flpr_handshake_test_bound_sem_count(void)
+{
+	return k_sem_count_get(&bound_sem);
+}
+
+uint32_t flpr_handshake_test_new_ready_sem_count(void)
+{
+	return k_sem_count_get(&new_ready_sem);
+}
+/* GCOVR_EXCL_STOP */
+
+#endif /* FLPR_HANDSHAKE_NATIVE_TEST */
