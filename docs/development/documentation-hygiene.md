@@ -5,7 +5,7 @@
 
 # Documentation hygiene baseline
 
-Baseline revision: `a3dc65f2a101cff4430a060ca56226f4136d1a81`
+Baseline revision: `72cb188c7e78b8d6d8b79feb5e34b5ebb9cec78e`
 
 This marker records the last successful full-repository documentation
 audit. Subsequent runs audit incrementally (branch divergence plus
