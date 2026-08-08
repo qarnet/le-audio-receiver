@@ -713,8 +713,8 @@ nonfatal and void.
 ### APP-007 — Shell diagnostic formatting (T6)
 
 The production shell command bodies in `src/audio_shell.c` are executed
-directly by `tests/unit/audio_shell/` (15 tests, perf enabled),
-`tests/unit/audio_shell_noperf/` (10 tests, perf disabled), and
+directly by `tests/unit/audio_shell/` (14 tests, perf enabled),
+`tests/unit/audio_shell_noperf/` (11 tests, perf disabled), and
 `tests/unit/audio_shell_nrf54/` (43 tests, FLPR fields) through the real
 Zephyr dummy backend and `shell_execute_cmd()` against mocked subsystem
 APIs:

@@ -31,13 +31,16 @@ skills, and reconcile the P8 evidence wording.
   historical snapshot with a pointer to the P8/STATUS current state.
 - `docs/testing/coverage-matrix.md`: Python inventory 16 → 19, gate
   children 59 → 62, current suite counts corrected against the sources
-  (lifecycle 33, timing_nrf54 21, audio_shell 15, audio_shell_nrf54 43,
+  (lifecycle 33, timing_nrf54 21, audio_shell 14, audio_shell_noperf 11,
+  audio_shell_nrf54 43,
   decode 43, audio_stream_session 35, flpr_handshake 34, flpr_ring_mgr
   45, bt_pairing_policy 23), stale "32 twister"/"55 children"/
   "population 33" claims updated, and the `bt_bap.c` row's BSim matrix
   updated to the 17-scenario T4+R7 set.
 - `docs/testing/behavior-contract.md`: lifecycle 33, timing_nrf54 21,
-  audio_shell 15, audio_shell_nrf54 43, CV-001 baseline provenance moved
+  audio_shell 14 (perf enabled; 15 declared incl. the perf-disabled-only
+  test that runs in audio_shell_noperf 11), audio_shell_nrf54 43, CV-001
+  baseline provenance moved
   to the current P5 baseline (`94c2742`, 36 files, 4665/5121, 2023/2820,
   357/357) with the R4/R6/R8 and P1/P2/P4/P5 migration chain recorded.
 - `docs/testing/t4-bap-bsim-matrix.md`: current runner stated as
