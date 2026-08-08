@@ -215,23 +215,28 @@ and CLI check with real temp log files.
 
 ### Canonical gate
 
-Final `./scripts/test-all.sh` on the committed tree: **62 TOTAL — 60 PASS / 2
-FAIL**, where the 2 were `coverage` and `matrix` — both caused by the
-dirty-worktree guard while the results doc was still staged. After the final
-commit (clean tree), the same two children pass standalone against identical
-inputs: `scripts/test-coverage.sh --output <fresh>/coverage` (baseline mode)
-rc=0 — exact committed-baseline match, no migration — and
-`check-test-matrix.py --coverage-json <fresh>/coverage/coverage.json`
-0 errors / 0 notes. All 60 other children pass, including the full T4 stage1
-matrix (all 17 scenarios, pinned hashes byte-identical, `duplicate_release_10ms`
-intact):
+Full `./scripts/test-all.sh` run on the clean committed tree (HEAD
+`b8bd633`, worktree clean — `git status --porcelain` empty), captured to
+`/tmp/gate-clean-final.log`:
 
 ```
+baseline enforcement: 0 error(s)
+baseline enforcement PASS (against .../tests/coverage-baseline.json)
+  PASS: coverage: native suites + baseline
+check-test-matrix: 0 error(s), 0 note(s)
+  PASS: matrix: manifest + coverage.json
 === STAGE1 (T4 matrix) PASS — all scenarios strict-checked ===
   PASS: bsim: stage1
+Gate complete: 62 PASS / 0 FAIL / 62 TOTAL
 ```
 
-Effective gate result: **62/62**.
+- Process exit code 0.
+- All 62 children pass: twister C suites, exec-only C suites, all 19 python
+  children, coverage (baseline enforcement, numeric exactly matching the
+  committed baseline — 36 files, 4665/5121 lines, 2023/2820 branches,
+  357/357 functions; no migration), matrix (0 errors / 0 notes), and the full
+  T4 stage1 matrix (all 17 scenarios, pinned hashes byte-identical,
+  `duplicate_release_10ms` intact).
 
 ## Deviations
 
