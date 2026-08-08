@@ -152,12 +152,33 @@ Restart OpenCode for the skill changes to take effect.
 ### Canonical gate
 
 Full `./scripts/test-all.sh` run on the clean committed tree (worktree
-clean), captured to the session log.  Expected outcome: **Gate complete:
-62 PASS / 0 FAIL / 62 TOTAL**, exit 0, with coverage baseline
-enforcement 0 errors (numeric exactly matching the committed baseline —
-36 files, 4665/5121 lines, 2023/2820 branches, 357/357 functions),
-matrix 0 errors / 0 notes, and the full 17-scenario T4+R7 BSim stage1
-matrix with all pinned hashes byte-identical.
+clean), captured to the session log:
+
+```
+baseline enforcement: 0 error(s)
+baseline enforcement PASS (against .../tests/coverage-baseline.json)
+  PASS: coverage: native suites + baseline
+check-test-matrix: 0 error(s), 0 note(s)
+  PASS: matrix: manifest + coverage.json
+=== STAGE1 (T4 matrix) PASS — all scenarios strict-checked ===
+  PASS: bsim: stage1
+Gate complete: 62 PASS / 0 FAIL / 62 TOTAL
+```
+
+- Process exit code 0.
+- All 62 children pass: twister C suites, exec-only C suites, all 19 python
+  children, coverage (baseline enforcement, numeric exactly matching the
+  committed baseline — 36 files, 4665/5121 lines, 2023/2820 branches,
+  357/357 functions; no migration), matrix (0 errors / 0 notes), and the
+  full 17-scenario T4+R7 BSim stage1 matrix with all pinned hashes
+  byte-identical.
+
+One gate-discovered regression during the run was fixed before the clean
+re-run: comment cleanup had corrupted the shell command registry
+(`reset - stats` / `perf - reset` spaced names, unreachable per T6
+findings); the exact `reset-stats` / `perf-reset` names were restored,
+and incidental clang-format reflow churn in `audio_offload.c` and the
+`audio_shell_nrf54` test was reverted — the final diff is comment-only.
 
 ## Deviations
 
