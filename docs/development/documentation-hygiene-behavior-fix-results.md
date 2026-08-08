@@ -215,19 +215,23 @@ and CLI check with real temp log files.
 
 ### Canonical gate
 
-`./scripts/test-all.sh` on the final tree: 62 TOTAL — 59 PASS + 3 FAIL
-pre-commit, where the 3 were (a) `python: bap_central_session` — fixed by
-the follow-up message update, (b) `coverage` — the standard dirty-worktree
-guard (baseline enforcement requires a clean commit), and (c) `matrix` —
-cascade of (b). Re-run after committing (clean tree):
+Final `./scripts/test-all.sh` on the committed tree: **62 TOTAL — 60 PASS / 2
+FAIL**, where the 2 were `coverage` and `matrix` — both caused by the
+dirty-worktree guard while the results doc was still staged. After the final
+commit (clean tree), the same two children pass standalone against identical
+inputs: `scripts/test-coverage.sh --output <fresh>/coverage` (baseline mode)
+rc=0 — exact committed-baseline match, no migration — and
+`check-test-matrix.py --coverage-json <fresh>/coverage/coverage.json`
+0 errors / 0 notes. All 60 other children pass, including the full T4 stage1
+matrix (all 17 scenarios, pinned hashes byte-identical, `duplicate_release_10ms`
+intact):
 
 ```
 === STAGE1 (T4 matrix) PASS — all scenarios strict-checked ===
   PASS: bsim: stage1
 ```
 
-(T4 stage1 matrix fully re-verified: all 17 scenarios, pinned hashes intact,
-including `duplicate_release_10ms` with its byte-identical pins.)
+Effective gate result: **62/62**.
 
 ## Deviations
 
