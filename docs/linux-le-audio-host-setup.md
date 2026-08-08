@@ -57,7 +57,8 @@ flags:
 bluetoothd -E -K 6fbaf188-05e0-496a-9885-d6ddfdb4e03e
 ```
 
-Use either the configuration file or the flags — **not both**. After changing
+Either is sufficient; using both is redundant — they configure the same
+experimental features. After changing
 the configuration, restart the daemon (`systemctl restart bluetooth`).
 
 ### PipeWire and WirePlumber

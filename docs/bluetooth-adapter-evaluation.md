@@ -32,12 +32,13 @@ HCI source is the **Intel Wi-Fi 6E AX210**.
   setup](linux-le-audio-host-setup.md) page.
 - **Status:** **Supported / project-validated.**
 
-### Intel BE200 — Rejected as candidate
+### Intel BE200 — Not supported
 
-The Intel BE200 is **not supported and not an active candidate**. It has
-public reports of reaching LE Audio setup but crashing during streaming, so
-this project makes no support claim for it
-([BlueZ issue 1149](https://github.com/bluez/bluez/issues/1149)).
+The Intel BE200 is **not supported** and is **not an active candidate**. This
+project has not validated it, and it has public reports of reaching LE Audio
+setup but crashing during streaming
+([BlueZ issue 1149](https://github.com/bluez/bluez/issues/1149)) — so no
+support or candidate claim is made.
 
 ### Plug-in USB HCI adapters — none validated yet
 
@@ -132,7 +133,14 @@ unexplained warnings, timeouts, resets, and underruns.
 
 | Date | Product | Chipset | VID:PID or PCI ID | Bus | Kernel | Driver | Firmware | BlueZ | PipeWire | WirePlumber | `cis-central` | ISO MTU/count | Mono | Two-CIS stereo | Reconnect | Verdict | Evidence link |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 2026 (see host setup baseline) | Intel Wi-Fi 6E AX210 | Intel AX210 (Wi-Fi 6E) | `8087:0032` (Bluetooth function) | internal USB (M.2 combo card) | 7.1.5 | `btusb`/`btintel` | linux-firmware (`ibt-*`) | 5.86 | 1.6.6 | 0.5.14 | yes | validated (sufficient) | pass | pass | pass | **Supported / project-validated** | [host setup](linux-le-audio-host-setup.md#project-tested-baseline) + repo test history |
+| not recorded | Intel Wi-Fi 6E AX210 | Intel AX210 (Wi-Fi 6E) | `8087:0032` (Bluetooth function) | internal USB (M.2 combo card) | 7.1.5 | not recorded | not recorded | 5.86 | 1.6.6 | 0.5.14 | yes | not recorded | not recorded | not recorded | not recorded | **Supported / project-validated** | [host setup](linux-le-audio-host-setup.md#project-tested-baseline) + repo test history |
+
+Note: the AX210 row's `not recorded` fields reflect that the prior project
+validation predates this formal record template. The repository did not
+capture those details retroactively, so missing retrospective fields do not
+become fabricated — they are simply absent from the record. Future
+re-validation of the AX210 (or evaluation of any new adapter) should populate
+every field.
 
 Template use: populate one row per evaluated adapter, fill every field, keep
 the verdict consistent with [Status vocabulary](#status-vocabulary), and link
@@ -143,8 +151,9 @@ the evidence (test logs, `btmon` captures, result documents).
 - **Supported / project-validated** — the dynamic acceptance sequence passed
   end-to-end against this receiver.
 - **Candidate / under evaluation** — being evaluated; not supported yet.
-- **Rejected** — evaluated and failed, or known-broken (for example the BE200
-  note above).
+- **Rejected** — the project evaluated the adapter against the acceptance
+  sequence and it failed, or conclusive evidence documents incompatibility.
+  A single public report does not qualify.
 - **Unverified** — no project test and no vendor confirmation for the specific
   claim.
 

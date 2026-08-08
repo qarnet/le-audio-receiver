@@ -127,10 +127,10 @@ builds — it is not the basis for the AX210 project-validation claim above.
 | **Intel Wi-Fi 6E AX210** | M.2 (NGFF) combo card — Wi-Fi over PCIe, Bluetooth function over internal USB; on a desktop the carrier needs a USB header connection, and `lsusb` commonly shows `8087:0032 Intel Corp. AX210 Bluetooth` | **Project-validated** | **Project-validated** | Validated as a BAP unicast source with this receiver on Linux via a **generic desktop PipeWire/WirePlumber UI** (the normal desktop flow) and exercised with the repository's `scripts/bap_central.py` development/test tool. Intel's [specifications](https://www.intel.com/content/www/us/en/products/sku/239216/intel-wifi-6e-ax210-gig-embedded/specifications.html) list the Bluetooth function over USB. A practical Linux LE Audio report (Raspberry Pi 5 with an AX210 module, BlueZ/PipeWire/WirePlumber) is at [AK-Experiments](https://ak-experiments.blogspot.com/2025/08/bluetooth-le-audio-on-raspberry-pi-with.html). Needs the current kernel/BlueZ/PipeWire stack — see [host setup](linux-le-audio-host-setup.md) and [adapter evaluation](bluetooth-adapter-evaluation.md). |
 
 The **Intel AX210 is the only project-validated native adapter** — see the
-[adapter evaluation page](bluetooth-adapter-evaluation.md) for rejected
-candidates and the evaluation contract. This project found **no plug-in USB
-HCI stick with verified Linux CIS support**. Generic "Bluetooth 5.3" or
-"Bluetooth 5.4" USB dongles do not prove LE Audio support — see the
+[adapter evaluation page](bluetooth-adapter-evaluation.md) for the
+unsupported-device notes and the evaluation contract. This project found **no
+plug-in USB HCI stick with verified Linux CIS support**. Generic "Bluetooth
+5.3" or "Bluetooth 5.4" USB dongles do not prove LE Audio support — see the
 version-numbers caveat above — so do not buy one on that basis alone.
 
 ### Self-contained USB transmitters (secondary candidates)
