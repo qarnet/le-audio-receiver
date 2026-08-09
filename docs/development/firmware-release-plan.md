@@ -159,6 +159,9 @@ own evidence.
 
 ### FR1: package contract and packager
 
+**FR1 ACCEPTED (2026-08-09)** at implementation commit `f3cd4c4`; evidence in
+`docs/development/firmware-release-fr1-results.md`.  FR2-FR5 remain planned.
+
 Add deterministic, stdlib-only packaging logic plus public-boundary tests. No
 CI and no version choice yet. Packager takes version, commit, NCS version,
 build root, and output directory explicitly. Missing/malformed inputs fail

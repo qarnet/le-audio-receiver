@@ -98,15 +98,16 @@ current refactoring track R0–R10. Read it before structural changes.
 `docs/design.md` remains the historical architecture and evidence document,
 not the active structural plan.
 
-Current status: **canonical gate 62 PASS / 0 FAIL / 62 TOTAL** on the
-clean tree (35 twister + 5 exec-only + 19 Python + coverage + matrix +
-BSim; clean-tree run recorded in
+Current status: **canonical gate 63 PASS / 0 FAIL / 63 TOTAL** on the
+clean tree (35 twister + 5 exec-only + 20 Python + coverage + matrix +
+BSim; clean-tree run at `f3cd4c4`, the FR1 deterministic-packager
+implementation commit; earlier clean runs recorded in
 `docs/development/documentation-hygiene-behavior-fix-results.md` at
-`b8bd633`; latest production-fix clean canonical run at `f2f9336`, after
-the empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
+`b8bd633` and the production-fix canonical run at `f2f9336`, after the
+empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
 (`f2f9336`) fixes — the committed coverage baseline is unchanged),
-coverage population **36** (4665/5121 lines, 2023/2820
-branches, 357/357 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
+coverage population **36** (4674/5130 lines, 2030/2824
+branches, 358/358 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
 baseline unchanged), builds 3/3, build contract **95/95**, BSim Stage 1
 pins byte-identical, and P1–P8 user pairing control ACCEPTED (nRF54L15
 enabled, nRF5340 feature-off).  Historical baselines: T0–T8 locked
