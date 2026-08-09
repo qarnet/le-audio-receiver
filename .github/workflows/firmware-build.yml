@@ -244,14 +244,13 @@ jobs:
             "dist/le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip" \
             dist/SHA256SUMS \
             release-metadata/release-provenance.json
-      - name: Verify draft release and tag
+      - name: Verify draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="$(python3 scripts/project-version.py)"
           tag="v$version"
           gh release view "$tag" --json tagName,isDraft,isPrerelease,assets,targetCommitish,url > release-check.json
-          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" > tag-check.json
           python3 - "$tag" "$version" "$GITHUB_SHA" <<'PYEOF'
           import json
           import sys
@@ -270,10 +269,5 @@ jobs:
           ]
           names = sorted(asset["name"] for asset in release["assets"])
           assert names == expected, names
-          with open("tag-check.json", "r", encoding="utf-8") as fh:
-              tag_data = json.load(fh)
-          assert tag_data["ref"] == "refs/tags/" + tag, tag_data["ref"]
-          assert tag_data["object"]["type"] == "commit", tag_data["object"]["type"]
-          assert tag_data["object"]["sha"] == sha, tag_data["object"]["sha"]
           print("draft release URL: %s" % release["url"])
           PYEOF

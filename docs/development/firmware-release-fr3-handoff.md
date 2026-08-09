@@ -7,10 +7,11 @@ Date: 2026-08-09
 Implement FR3 from `docs/development/firmware-release-plan.md`: a trusted
 `main` push that changes the root `VERSION` file must build the same factory
 tuples as FR2, pass exact version/commit and artifact checks, then have CI
-create the version tag at that exact commit and one **draft** GitHub Release
-with exact factory ZIPs, top-level checksums, and deterministic provenance.
-Maintainers must not push release tags manually; CI owns automatic tag
-creation.
+create one **draft** GitHub Release with exact factory ZIPs, top-level
+checksums, and deterministic provenance. The draft's `tagName` and
+`targetCommitish` reserve `v<version>` at the exact main commit; GitHub
+creates the lightweight git tag only when the draft is manually published.
+Maintainers must not push release tags manually; CI owns release initiation.
 
 FR3 implementation must not create or push a tag, create a release during
 local/PR verification, publish any release, or begin hardware acceptance.
@@ -25,8 +26,10 @@ user approval after implementation review.
 - If that push changed root `VERSION` relative to `github.event.before`, the
   release job derives `v<version>`, proves the exact commit and artifact set,
   requires both tag and release to be absent, then creates one draft release
-  with `--target "$GITHUB_SHA"`. GitHub creates the lightweight version tag at
-  that exact commit as part of release creation.
+  with `--target "$GITHUB_SHA"`. GitHub does not create the git tag while the
+  release stays a draft: the draft's `tagName` and `targetCommitish` reserve
+  `v<version>` at that exact commit, and the lightweight tag is created
+  automatically only when the draft is manually published after FR4.
 - A normal `main` push that did not change `VERSION` skips the release job.
   This lets later documentation or maintenance commits use the same version
   without touching the pending or published release.
@@ -41,14 +44,16 @@ user approval after implementation review.
 
 ## In scope
 
-- Trusted-main automatic tag creation replacing manual tag-push initiation.
+- Trusted-main automatic draft creation replacing manual tag-push initiation;
+  the version tag is created by GitHub only at manual publication.
 - Root `VERSION` diff gate for the current main push.
 - Concurrency that prevents a newer main run from cancelling a run that began
   release creation.
 - Fail-closed absence probes for both the release and the git tag before the
   first write.
-- One draft release plus automatic lightweight tag at exact `GITHUB_SHA`
-  through `gh release create --target`.
+- One untagged draft release at exact `GITHUB_SHA` through `gh release create
+  --target`; the lightweight tag is created by GitHub at manual publication,
+  not by draft creation.
 - Provenance workflow-ref contract `refs/heads/main`.
 - Static workflow contract tests and the already-accepted Python gate child
   for the release preparation CLI.
@@ -89,9 +94,13 @@ Grounding:
 - `serial-mcp/.github/workflows/release.yml` derives `v<version>` and uses
   `gh release create --target "$SHA"`; no maintainer `git push` creates its
   release tag.
-- Installed GitHub CLI 2.97.0 documents that `gh release create` automatically
-  creates a missing tag and that `--target` selects the branch or full commit
-  for that tag. `--verify-tag` forbids this behavior and must not be used.
+- Installed GitHub CLI 2.97.0 documents that `--target` selects the branch or
+  full commit for the tag. Hosted evidence (main run `31332962453` and
+  `serial-mcp/.github/workflows/release.yml` lines 225-228) shows a draft
+  release stays untagged: `git/ref/tags/<tag>` does not exist until the draft
+  is published, at which point GitHub creates the lightweight tag at the
+  stored target SHA. `--verify-tag` forbids automatic tag creation and must
+  not be used.
 - `origin/main` has no root `VERSION`; PR 8 adds `VERSION` 0.1.0. The eventual
   merge push therefore changes `VERSION` and requests the first release
   exactly once.
@@ -358,7 +367,7 @@ For each probe:
 This is a one-shot version release. Never reuse an existing lightweight or
 annotated tag, existing draft, or published release.
 
-### Draft plus automatic tag creation
+### Draft creation with target commit (tag at publication)
 
 Create command:
 
@@ -381,19 +390,20 @@ Never use `--verify-tag`, `--generate-notes`, `--latest`, `--prerelease`,
 
 Verify the created release and additionally request/check
 `targetCommitish` equals `GITHUB_SHA` passed as a Python argument or env
-value. Then query `repos/$GITHUB_REPOSITORY/git/ref/tags/$tag` and validate
-without shell text parsing that:
+value. The draft is untagged: GitHub creates `refs/tags/<tag>` only at manual
+publication, so no git-ref query belongs here. Exact checks: `tagName`,
+draft true, prerelease false, `targetCommitish` equals `GITHUB_SHA`, the
+exact four sorted asset names, and the release URL printed last.
 
-- `ref` equals `refs/tags/<tag>`;
-- `object.type` equals `commit` (lightweight tag);
-- `object.sha` equals `GITHUB_SHA`.
-
-Use `gh api` JSON piped/filed into a small stdlib Python check, not `jq`. Print
-the release URL only after release fields, exact four assets, target commit,
-and tag object all pass. Failure leaves draft unpublished and fails job; no
-cleanup. If `gh release create` partially creates a draft before asset
-failure, rerun must fail on existing release/tag; deliberate human
-inspection/deletion is needed. Do not automate destructive cleanup.
+Use `gh release view --json` piped/filed into a small stdlib Python check,
+not `jq`. Print the release URL only after every release field and asset
+passes. Failure leaves draft unpublished and fails job; no cleanup. The
+git-ref endpoint appears exactly once in the whole workflow: the pre-write
+collision probe. FR5 verifies the lightweight tag (`ref`, `object.type`,
+`object.sha`) after manual publication. If `gh release create` partially
+creates a draft before asset failure, rerun must fail on existing
+release/tag; deliberate human inspection/deletion is needed. Do not automate
+destructive cleanup.
 
 ## Tests
 
@@ -442,8 +452,10 @@ Extend static public workflow checks:
 - create command includes exact `--target "$GITHUB_SHA"` and `--draft`, and
   excludes `--verify-tag` plus every old forbidden mutation/publication path;
 - metadata workflow ref is passed unchanged and CLI tests pin `refs/heads/main`;
-- post-create release checks `targetCommitish`, and the tag API checks
-  lightweight tag ref/type/SHA;
+- post-create release checks `tagName`, draft, prerelease, `targetCommitish`,
+  and the exact four sorted assets; the git-ref endpoint appears exactly once,
+  in the pre-write collision probe only, and no tag-check/tag-data appears in
+  the post-create step;
 - all five action uses references are full 40-hex SHAs;
 - no direct `${{ ... }}` interpolation appears in any run script.
 
@@ -455,9 +467,11 @@ coverage matrix count change is needed.
 In implementation commit only:
 
 - `docs/development/firmware-release-plan.md`: lifecycle and FR3 phase
-  describe the trusted-main model (VERSION-changing main push creates draft
-  plus version tag at exact main commit; unchanged-version pushes skip; CI
-  never publishes).
+  describe the trusted-main model (VERSION-changing main push creates an
+  untagged draft whose tagName and targetCommitish reserve the version at the
+  exact main commit; unchanged-version pushes skip; CI never publishes;
+  manual publication after FR4 creates the lightweight tag, and FR5 verifies
+  it).
 - `docs/development/firmware-release-fr3-handoff.md`: this document, carrying
   the final automatic trusted-main design.
 
@@ -524,8 +538,9 @@ question, and smallest hypothesis. Never weaken checks or auto-clean a release.
 
 ## Return
 
-Return files/behavior, automatic-tag trigger and one-shot collision semantics,
-provenance ref change, schema/CLI/workflow contracts, exact pins, focused test
+Return files/behavior, trusted-main draft trigger and one-shot collision
+semantics, untagged-draft/targetCommitish tag reservation, provenance ref
+change, schema/CLI/workflow contracts, exact pins, focused test
 counts, inventory/matrix, implementation commit, canonical 65-child result,
 clean status, deviations/blockers, PR hosted run pending, and explicit
 statement that no tag/release/merge/push/PR edit or hardware action occurred.

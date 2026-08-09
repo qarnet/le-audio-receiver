@@ -115,17 +115,22 @@ Do not install J-Link in build-only CI.
 
 - Pull requests and manual dispatch build and upload workflow artifacts.
 - A trusted `main` push that changes the root `VERSION` file runs the same
-  build/package path, then CI creates the version tag at the exact main
-  commit and one draft GitHub Release with the exact CI-built artifacts.
+  build/package path, then CI creates one draft GitHub Release with the
+  exact CI-built artifacts. The draft's `tagName` and `targetCommitish`
+  reserve `v<version>` at the exact main commit; GitHub does not create the
+  git tag while the release stays a draft.
 - Later `main` pushes that do not change `VERSION` skip release creation, so
   documentation or maintenance commits reuse the same version without
   touching a pending or published release.
-- Maintainers must not push release tags manually; CI owns automatic tag
-  creation.
+- Maintainers must not push release tags manually; CI owns release
+  initiation, and GitHub creates the lightweight tag at the draft's stored
+  target SHA when the release is manually published.
 - GitHub-hosted CI never publishes the draft automatically.
 - Maintainer downloads exact draft attachments, flashes those bytes, runs
   software and hardware acceptance, records results, then manually publishes.
 - Failed hardware acceptance leaves the release draft unpublished.
+- After manual publication, verify the created lightweight tag:
+  `refs/tags/v<version>` must point at the release's target commit (FR5).
 
 ## Hardware acceptance
 
@@ -192,10 +197,12 @@ release version is chosen.
 
 ### FR3: draft release publication
 
-Add trusted-main automatic tag creation: a `main` push that changes the
-root `VERSION` runs the accepted build/package path, then a protected
-`contents: write` release job creates the version tag at the exact main
-commit plus a draft release with provenance and exact attachments. A main
+Add trusted-main automatic release initiation: a `main` push that changes
+the root `VERSION` runs the accepted build/package path, then a protected
+`contents: write` release job creates a draft release with provenance and
+exact attachments whose `tagName`/`targetCommitish` reserve `v<version>` at
+the exact main commit. Drafts stay untagged: GitHub creates the lightweight
+version tag only when the draft is manually published after FR4. A main
 push without a `VERSION` change skips the release job. CI never
 auto-publishes.
 
