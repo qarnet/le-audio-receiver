@@ -362,6 +362,81 @@ ZTEST(audio_stream_session, test_lost_sdu_plc_push)
 	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
 }
 
+/* ── valid empty ISO SDU concealment ───────────────────────────────
+ * Some controllers send empty HCI ISO packets (BT_ISO_FLAGS_VALID set,
+ * zero length) when the remote produced no SDU.  These are NOT malformed
+ * LC3 payloads: each is counted as one empty-SDU event and rendered as
+ * PLC at normal cadence — no decode-error increment, no malformed
+ * observer event, and the following valid SDU resumes normally.
+ */
+
+ZTEST(audio_stream_session, test_valid_empty_sdu_mono_plc_resumes)
+{
+	setup_mono();
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, NULL, 0U));
+	zassert_equal(1U, audio_stats_get().empty_sdus, "one empty-SDU event");
+	zassert_equal(1U, fake_sink_push_count(), "PLC to one push");
+	zassert_equal(1U, audio_stats_get().plc_frames, "one PLC frame");
+	zassert_equal(1U, audio_stats_get().total_frames, "PLC accounts as total");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no decode errors");
+	zassert_equal(0U, fake_observer_malformed_sdu(), "no malformed observer event");
+	zassert_false(fake_observer_last_push_l_valid(), "normalized PLC push never source-valid");
+	zassert_false(fake_observer_last_push_r_valid(), "normalized PLC push never source-valid");
+
+	/* The next valid SDU resumes normally and stays contiguous. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 2000, 2, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(2U, fake_sink_push_count(), "valid SDU pushes");
+	zassert_equal(2U, audio_stats_get().total_frames, "one PLC + one decoded");
+	zassert_equal(1U, audio_stats_get().empty_sdus, "empty count unchanged by valid input");
+	zassert_equal(0U, audio_stats_get().decode_errors, "still no errors");
+}
+
+ZTEST(audio_stream_session, test_valid_empty_sdu_modeb_plc)
+{
+	setup_modeb();
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, NULL, 0U));
+	zassert_equal(1U, audio_stats_get().empty_sdus, "one empty-SDU event");
+	zassert_equal(1U, fake_sink_push_count(), "one stereo push");
+	zassert_equal(2U, audio_stats_get().plc_frames, "one PLC per channel");
+	zassert_equal(2U, audio_stats_get().total_frames, "two PLC decoders accounted");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no decode errors");
+	zassert_equal(0U, fake_observer_malformed_sdu(), "no malformed observer event");
+}
+
+ZTEST(audio_stream_session, test_valid_empty_sdu_modea_pairs_by_ts)
+{
+	setup_modea();
+
+	/* Left: valid empty SDU WITH a timestamp — normalized source-invalid
+	 * but must keep its event position so it pairs with the right
+	 * half at the same event timestamp. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 10000, 1, NULL, 0U));
+	zassert_equal(0U, fake_sink_push_count(), "empty left half alone does not emit");
+	zassert_equal(1U, audio_stats_get().empty_sdus, "one empty-SDU event");
+
+	zassert_ok(audio_stream_session_recv(1, true, true, 10000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "equal-TS pair emits once");
+	zassert_false(fake_observer_last_push_l_valid(),
+		      "empty side concealed, never source-valid");
+	zassert_true(fake_observer_last_push_r_valid(), "real side source-valid");
+
+	struct audio_stats stats = audio_stats_get();
+
+	zassert_equal(1U, stats.plc_frames, "one PLC half");
+	zassert_equal(1U, stats.total_frames - stats.plc_frames, "one decoded half");
+	zassert_equal(0U, stats.decode_errors, "no errors");
+	zassert_equal(0U, fake_observer_malformed_sdu(), "no malformed observer event");
+
+	/* No stale mutation: the next fully valid event pairs normally. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 20000, 2, mono10_lc3, MONO_LC3_LEN));
+	zassert_ok(audio_stream_session_recv(1, true, true, 20000, 2, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(2U, fake_sink_push_count(), "next event emits once");
+	zassert_equal(4U, audio_stats_get().total_frames, "two events, two decoders each");
+	zassert_equal(1U, audio_stats_get().empty_sdus, "empty count unchanged");
+}
+
 ZTEST(audio_stream_session, test_decoder_not_ready_skip)
 {
 	full_reset();

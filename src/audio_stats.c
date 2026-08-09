@@ -12,6 +12,7 @@ static atomic_t plc_frames;
 static atomic_t decode_errors;
 static atomic_t i2s_underruns;
 static atomic_t stream_resets;
+static atomic_t empty_sdus;
 
 void audio_stats_frame_decoded(void)
 {
@@ -21,6 +22,10 @@ void audio_stats_frame_plc(void)
 {
 	atomic_inc(&plc_frames);
 	atomic_inc(&total_frames);
+}
+void audio_stats_empty_sdu(void)
+{
+	atomic_inc(&empty_sdus);
 }
 void audio_stats_decode_error(void)
 {
@@ -42,6 +47,7 @@ void audio_stats_reset(void)
 	atomic_set(&decode_errors, 0);
 	atomic_set(&i2s_underruns, 0);
 	atomic_set(&stream_resets, 0);
+	atomic_set(&empty_sdus, 0);
 }
 
 struct audio_stats audio_stats_get(void)
@@ -52,5 +58,6 @@ struct audio_stats audio_stats_get(void)
 		.decode_errors = (uint32_t)atomic_get(&decode_errors),
 		.i2s_underruns = (uint32_t)atomic_get(&i2s_underruns),
 		.stream_resets = (uint32_t)atomic_get(&stream_resets),
+		.empty_sdus = (uint32_t)atomic_get(&empty_sdus),
 	};
 }

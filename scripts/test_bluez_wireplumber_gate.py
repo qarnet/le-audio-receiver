@@ -743,6 +743,51 @@ class TestParseReceiverLog(unittest.TestCase):
         ok = self.gate.parse_receiver_log(result)
         self.assertTrue(ok, f"All-zero faults must pass: {result.evidence}")
 
+    # ── Optional trailing empty_sdu=<N> summary field ─────────────
+
+    def test_summary_old_form_no_empty_sdu_field(self):
+        """Historical summary form (no empty_sdu) still parses; the
+        optional field stays absent rather than defaulting to zero."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=100 decoded=100 plc=0 decode_err=0 i2s_underrun=0 stream_reset=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok, f"Old summary form must pass: {result.evidence}")
+        self.assertNotIn("empty_sdu_summary", result.receiver_counters)
+        self.assertIn("SDUs=100", "\n".join(result.evidence))
+
+    def test_summary_with_trailing_empty_sdu_captured(self):
+        """New summary form with optional trailing empty_sdu=<N> parses
+        and is captured as empty_sdu_summary.  Nonzero empty SDUs are
+        observable PLC-causing transport events, NOT gate failures."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=100 decoded=95 plc=5 decode_err=0 i2s_underrun=0 stream_reset=0 empty_sdu=7
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(
+            ok, f"Nonzero empty_sdu must NOT fail the gate: {result.evidence}"
+        )
+        self.assertEqual(result.receiver_counters.get("empty_sdu_summary"), 7)
+        self.assertIn("empty_sdu=7", "\n".join(result.evidence))
+
+    def test_summary_with_trailing_empty_sdu_zero(self):
+        """New summary form with empty_sdu=0 parses and captures zero."""
+        content = """[00:00:10] ASCS: ASE configured
+[00:00:12] ASCS: stream started
+[00:00:13] I2S DMA started
+[00:00:30] Stream[0] summary: SDUs=100 decoded=100 plc=0 decode_err=0 i2s_underrun=0 stream_reset=0 empty_sdu=0
+"""
+        result = self._write_log(content)
+        ok = self.gate.parse_receiver_log(result)
+        self.assertTrue(ok, f"empty_sdu=0 must pass: {result.evidence}")
+        self.assertEqual(result.receiver_counters.get("empty_sdu_summary"), 0)
+
     # ── Phase 2 strict: duration-consistent SDU counts ────────────
 
     def test_sdu_count_consistent_7_5ms_30s_passes(self):

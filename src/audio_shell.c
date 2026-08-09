@@ -45,6 +45,7 @@ static int cmd_status(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "  Decode errors  : %u", s.decode_errors);
 	shell_print(sh, "  I2S underruns  : %u", s.i2s_underruns);
 	shell_print(sh, "  Stream resets  : %u", s.stream_resets);
+	shell_print(sh, "  Empty SDUs     : %u", s.empty_sdus);
 	shell_print(sh, "  Drift state    : %s", audio_drift_state_str());
 	shell_print(sh, "  Drift ppm      : %" PRId32, audio_drift_get_ppm());
 	shell_print(sh, "  Resampler      : %s", RESAMPLER_NAME);

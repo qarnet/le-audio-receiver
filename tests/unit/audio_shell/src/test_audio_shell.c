@@ -81,6 +81,7 @@ ZTEST(audio_shell, test_status_exact_fields)
 		.decode_errors = 2,
 		.i2s_underruns = 3,
 		.stream_resets = 1,
+		.empty_sdus = 4,
 	};
 
 	test_shell_set_stats(&s);
@@ -95,6 +96,7 @@ ZTEST(audio_shell, test_status_exact_fields)
 	assert_output_has_line(out, "  Decode errors  : 2");
 	assert_output_has_line(out, "  I2S underruns  : 3");
 	assert_output_has_line(out, "  Stream resets  : 1");
+	assert_output_has_line(out, "  Empty SDUs     : 4");
 	assert_output_has_line(out, "  Drift state    : STEADY");
 	assert_output_has_line(out, "  Drift ppm      : -5");
 	assert_output_has_line(out, "  Resampler      : identity");
@@ -115,6 +117,7 @@ ZTEST(audio_shell, test_status_zero_frames_no_div0)
 
 	assert_output_has_line(out, "  Frames decoded : 0");
 	assert_output_has_line(out, "  PLC frames     : 0 (0%)");
+	assert_output_has_line(out, "  Empty SDUs     : 0");
 }
 
 /* Unmuted volume: no suffix. */

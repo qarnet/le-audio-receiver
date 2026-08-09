@@ -887,6 +887,11 @@
      "witness": "test_decode_error_does_not_increment_total"
     },
     {
+     "api": "audio_stats_empty_sdu",
+     "outcome": "void",
+     "witness": "test_empty_sdu_increments_own_counter_only"
+    },
+    {
      "api": "audio_stats_i2s_underrun",
      "outcome": "void",
      "witness": "test_underrun_and_reset_increment_own_counters"

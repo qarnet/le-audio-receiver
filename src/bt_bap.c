@@ -625,10 +625,10 @@ static bool teardown_transition(enum teardown_event ev, size_t slot)
 		struct audio_stats stats = audio_stats_get();
 
 		LOG_INF("Stream[%zu] summary: SDUs=%zu decoded=%u plc=%u "
-			"decode_err=%u i2s_underrun=%u stream_reset=%u",
+			"decode_err=%u i2s_underrun=%u stream_reset=%u empty_sdu=%u",
 			slot, audio_stream_session_recv_count(slot), stats.total_frames,
 			stats.plc_frames, stats.decode_errors, stats.i2s_underruns,
-			stats.stream_resets);
+			stats.stream_resets, stats.empty_sdus);
 
 		/* Stats reset once per disabled completion.  No second
 		 * unconditional audio_sink_stop on a duplicate disabled
