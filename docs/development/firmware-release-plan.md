@@ -15,9 +15,16 @@ MCUboot/DFU research, which stays a distinct track.
 
 The first release track publishes factory-flash firmware only. MCUboot and
 signed DFU are a separate future track and do not block useful release
-artifacts. Factory-flash means the images are flashed exactly as produced by
-the release build, replacing the existing application and any settings region
-implications of a full flash, with no bootloader update layer.
+artifacts. Factory-flash means the packaged images are flashed directly via
+the probe/OpenOCD paths, replacing the firmware image in its address range,
+with no bootloader update layer.
+
+The current normal flash helpers (`scripts/bin/fw-flash-5340` and
+`scripts/bin/fw-flash-54l15`) program firmware address ranges and preserve
+settings and bonds; they do not perform a clean-state erase. Any destructive
+clean-state or recovery procedure (for example a full chip erase) is
+separate, target-specific, and must be explicitly documented and tested
+rather than implied by the release package.
 
 ## Grounding evidence
 
@@ -119,7 +126,9 @@ Do not install J-Link in build-only CI.
 Require the canonical software gate first (the repository test gate: twister
 unit tests, build contract, and BSim Stage 1 where applicable). Then flash
 packaged files from an extracted release ZIP, not files from a local build
-tree.
+tree. Flashing the packaged images preserves settings and bonds; acceptance
+verifies settings load from preserved storage, and does not imply or require
+a clean-state erase.
 
 nRF5340 acceptance:
 
