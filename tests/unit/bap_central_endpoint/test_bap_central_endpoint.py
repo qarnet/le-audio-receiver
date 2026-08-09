@@ -734,6 +734,7 @@ class TestMonoEndpoint(unittest.TestCase):
             self.assertEqual(endpoint._pending_transports, [])
             self.assertEqual(endpoint.transports, [])
             self.assertFalse(endpoint.config_done)
+            self.assertIsNone(endpoint._mono_selected_channel)
 
     def test_mono_first_fl_or_fr_setconfiguration_queues_one(self):
         for alloc in (0x01, 0x02):
@@ -891,6 +892,223 @@ class TestMonoEndpoint(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         props = calls[0][1][1]
         self.assertEqual(bytes(bytearray(props["Capabilities"])), CAPS_MONO)
+
+
+class TestMonoSelectionReservation(unittest.TestCase):
+    """Pre-configuration mono selection reservation (BlueZ 5.86 race).
+
+    BlueZ 5.86 selects FL and FR concurrently before calling either
+    SetConfiguration; the reservation rejects the second selection before
+    BlueZ creates a second setup/CIS, while default Mode A and Mode B
+    behavior stays untouched.
+    """
+
+    REJECTED = "org.bluez.Error.Rejected"
+
+    def _select(self, endpoint, channel_alloc, caps=CAPS_MONO):
+        props = {
+            "Capabilities": list(caps),
+            "ChannelAllocation": channel_alloc,
+            "QoS": {},
+            "Locations": 0,
+        }
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ret = endpoint.SelectProperties(props)
+        return ret, out.getvalue()
+
+    def _select_rejected(self, endpoint, channel_alloc):
+        with self.assertRaises(fakes.DBusException) as cm:
+            endpoint.SelectProperties(
+                {
+                    "Capabilities": list(CAPS_MONO),
+                    "ChannelAllocation": channel_alloc,
+                    "QoS": {},
+                    "Locations": 0,
+                }
+            )
+        self.assertEqual(cm.exception._dbus_error_name, self.REJECTED)
+
+    def _set_rejected(self, endpoint, channel_alloc):
+        with self.assertRaises(fakes.DBusException) as cm:
+            endpoint.SetConfiguration(
+                TP2, {"Configuration": list(ltv_config(channel_alloc))}
+            )
+        self.assertEqual(cm.exception._dbus_error_name, self.REJECTED)
+
+    def _acquire_mono(self, bus, dbus, endpoint):
+        tr = transport_iface(bus, TP1)
+        tr.script("Acquire", lambda *a, **k: k["reply_handler"](7, 0, 120))
+        result, out = capture(
+            lambda: ep.acquire_transports(
+                bus,
+                dbus,
+                fakes.FakeGLib,
+                endpoint,
+                config_timeout_s=0.1,
+                grace_s=0.02,
+                acquire_timeout_s=0.5,
+            )
+        )
+        return result, out
+
+    def test_hardware_callback_order_fl_first(self):
+        """Exact retained hardware order: FL select OK, FR select rejected
+        before any SetConfiguration, matching FL config queues one, one
+        deferred Acquire infers mono with 120-byte SDU."""
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        ret, out = self._select(endpoint, 0x01)
+        self.assertEqual(
+            bytes(bytearray(ret["Capabilities"])),
+            CONFIG_MONO + bytes([0x05, 0x03, 0x01, 0x00, 0x00, 0x00]),
+        )
+        self.assertEqual(int(ret["QoS"]["SDU"]), 120)
+        self.assertEqual(endpoint._mono_selected_channel, 0x01)
+        # Concurrent FR selection rejected pre-configuration.
+        self._select_rejected(endpoint, 0x02)
+        self.assertEqual(endpoint._mono_selected_channel, 0x01)
+        self.assertEqual(endpoint._pending_transports, [])
+        self.assertEqual(endpoint.transports, [])
+        self.assertFalse(endpoint.config_done)
+        # Matching FL SetConfiguration consumes the reservation.
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        self.assertEqual(
+            endpoint._pending_transports, [{"path": TP1, "channel_alloc": 0x01}]
+        )
+        self.assertTrue(endpoint.config_done)
+        self.assertIsNone(endpoint._mono_selected_channel)
+        # One deferred Acquire infers mono.
+        (transports, stream_mode, sdu_size), out2 = self._acquire_mono(
+            bus, dbus, endpoint
+        )
+        self.assertEqual(stream_mode, "mono")
+        self.assertEqual(sdu_size, 120)
+        self.assertEqual(len(transports), 1)
+        self.assertEqual(transports[0]["channel_alloc"], 0x01)
+        self.assertIn("[main] Stream mode: mono, SDU size: 120 bytes", out2)
+
+    def test_hardware_callback_order_fr_first(self):
+        """Symmetric path: FR select OK, FL select rejected, matching FR
+        config queues one and consumes the reservation."""
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        ret, _ = self._select(endpoint, 0x02)
+        self.assertEqual(
+            bytes(bytearray(ret["Capabilities"])),
+            CONFIG_MONO + bytes([0x05, 0x03, 0x02, 0x00, 0x00, 0x00]),
+        )
+        self.assertEqual(endpoint._mono_selected_channel, 0x02)
+        self._select_rejected(endpoint, 0x01)
+        self.assertEqual(endpoint._mono_selected_channel, 0x02)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x02))})
+        self.assertEqual(len(endpoint._pending_transports), 1)
+        self.assertIsNone(endpoint._mono_selected_channel)
+
+    def test_second_selection_rejection_keeps_reservation_intact(self):
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        self._select(endpoint, 0x01)
+        self._select_rejected(endpoint, 0x02)
+        self.assertEqual(endpoint._mono_selected_channel, 0x01)
+        self.assertEqual(endpoint._pending_transports, [])
+        self.assertEqual(endpoint.transports, [])
+        self.assertFalse(endpoint.config_done)
+        # First reservation behavior intact: matching config still accepted.
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        self.assertEqual(len(endpoint._pending_transports), 1)
+        self.assertTrue(endpoint.config_done)
+        self.assertIsNone(endpoint._mono_selected_channel)
+
+    def test_matching_setconfiguration_consumes_reservation(self):
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        self._select(endpoint, 0x01)
+        self.assertEqual(endpoint._mono_selected_channel, 0x01)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        self.assertEqual(len(endpoint._pending_transports), 1)
+        self.assertTrue(endpoint.config_done)
+        self.assertIsNone(endpoint._mono_selected_channel)
+
+    def test_mismatched_setconfiguration_rejected_atomic_then_retry(self):
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        self._select(endpoint, 0x01)
+        self.assertEqual(endpoint._mono_selected_channel, 0x01)
+        # Mismatched FR configuration rejects atomically.
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self._set_rejected(endpoint, 0x02)
+        self.assertIn(
+            "[endpoint] Mono selection reservation mismatch: rejecting 0x02",
+            out.getvalue(),
+        )
+        self.assertEqual(endpoint._mono_selected_channel, 0x01)
+        self.assertEqual(endpoint._pending_transports, [])
+        self.assertFalse(endpoint.config_done)
+        # Reservation remains usable only by the matching configuration.
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        self.assertEqual(len(endpoint._pending_transports), 1)
+        self.assertIsNone(endpoint._mono_selected_channel)
+
+    def test_release_before_configuration_clears_reservation(self):
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        self._select(endpoint, 0x01)
+        self.assertEqual(endpoint._mono_selected_channel, 0x01)
+        endpoint.Release()
+        self.assertIsNone(endpoint._mono_selected_channel)
+        self.assertEqual(endpoint._pending_transports, [])
+        self.assertFalse(endpoint.config_done)
+        # Fresh first selection succeeds again.
+        ret, _ = self._select(endpoint, 0x02)
+        self.assertEqual(endpoint._mono_selected_channel, 0x02)
+        self.assertEqual(int(ret["QoS"]["SDU"]), 120)
+
+    def test_release_after_configuration_retains_reuse(self):
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        self._select(endpoint, 0x01)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        self.assertIsNone(endpoint._mono_selected_channel)
+        self.assertTrue(endpoint.config_done)
+        endpoint.Release()
+        self.assertEqual(endpoint._pending_transports, [])
+        self.assertFalse(endpoint.config_done)
+        # Endpoint remains reusable for a fresh mono session.
+        self._select(endpoint, 0x01)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        self.assertEqual(len(endpoint._pending_transports), 1)
+
+    def test_combined_or_unknown_first_selection_creates_no_reservation(self):
+        for alloc in (0x03, 0x00):
+            bus, dbus, endpoint = make_endpoint(mono=True)
+            self._select_rejected(endpoint, alloc)
+            self.assertIsNone(endpoint._mono_selected_channel)
+            self.assertEqual(endpoint._pending_transports, [])
+            self.assertFalse(endpoint.config_done)
+
+    def test_direct_setconfiguration_without_selection_accepted(self):
+        """Backward-compatible test seams call SetConfiguration directly."""
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        self.assertIsNone(endpoint._mono_selected_channel)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        self.assertEqual(len(endpoint._pending_transports), 1)
+        self.assertTrue(endpoint.config_done)
+
+    def test_default_mode_a_two_selections_and_configs_unchanged(self):
+        bus, dbus, endpoint = make_endpoint()
+        ret1, _ = self._select(endpoint, 0x01)
+        ret2, _ = self._select(endpoint, 0x02)
+        # Reservation is mono-only state; Mode A sees no admission limit.
+        self.assertIsNone(endpoint._mono_selected_channel)
+        self.assertEqual(int(ret1["QoS"]["SDU"]), 120)
+        self.assertEqual(int(ret2["QoS"]["SDU"]), 120)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        endpoint.SetConfiguration(TP2, {"Configuration": list(ltv_config(0x02))})
+        self.assertEqual(len(endpoint._pending_transports), 2)
+
+    def test_stereo_mode_b_combined_selection_unchanged(self):
+        bus, dbus, endpoint = make_endpoint(stereo=True)
+        ret, _ = self._select(endpoint, 0x03, caps=CAPS_STEREO)
+        self.assertEqual(bytes(bytearray(ret["Capabilities"])), CONFIG_STEREO)
+        self.assertEqual(int(ret["QoS"]["SDU"]), 240)
+        self.assertIsNone(endpoint._mono_selected_channel)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x03))})
+        self.assertEqual(len(endpoint._pending_transports), 1)
 
 
 if __name__ == "__main__":

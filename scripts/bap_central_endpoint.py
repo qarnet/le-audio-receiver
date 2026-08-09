@@ -173,6 +173,14 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
             self.path = path
             self.stereo = stereo
             self.mono = mono
+            # Mono selection reservation: one FL/FR SelectProperties can be
+            # reserved before BlueZ calls SetConfiguration (BlueZ 5.86
+            # bt_bap_select() invokes per-ASE selection concurrently for
+            # both channels before configuration).  `None` = no selection
+            # awaiting configuration; 0x01/0x02 = one reserved channel that
+            # matching SetConfiguration consumes.  This is the pre-config
+            # admission guard that keeps the second CIS out of the CIG.
+            self._mono_selected_channel = None
             # Multi-transport support: BlueZ may call SetConfiguration once
             # per ASE (Mode A: two mono ASEs, one per channel) or once for
             # a single stereo ASE (Mode B). Track all transports we acquire.
@@ -203,6 +211,7 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
             self.transports = []
             self._pending_transports = []
             self.config_done = False
+            self._mono_selected_channel = None
 
         @dbus_service_mod.method(
             "org.bluez.MediaEndpoint1", in_signature="o", out_signature=""
@@ -249,10 +258,17 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
             print("[endpoint]  Locations={}".format(p.get("Locations", 0)))
 
             # Mono admission invariant: at most one accepted transport across
-            # pending + acquired. Mirror BlueZ 5.86 endpoint_select_properties()
-            # (client/player.c), which rejects once the count is exhausted.
+            # pending + acquired, and at most one selection reservation
+            # awaiting configuration. Mirror BlueZ 5.86
+            # endpoint_select_properties() (client/player.c), which rejects
+            # once the count is exhausted; the reservation additionally
+            # rejects a concurrent second per-ASE selection before BlueZ
+            # creates a second setup/CIS.
             if self.mono:
-                if len(self._pending_transports) + len(self.transports) >= 1:
+                if (
+                    len(self._pending_transports) + len(self.transports) >= 1
+                    or self._mono_selected_channel is not None
+                ):
                     print("[endpoint] Mono transport limit reached: rejecting")
                     raise _Rejected(
                         "org.bluez.Error.Rejected: mono transport limit reached"
@@ -359,6 +375,12 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
                 print("[endpoint] Returning config: {}".format(plain_ret))
             except Exception as e:  # noqa: BLE001
                 print("[endpoint] Returning config: <log failed: {}>".format(e))
+
+            # Mono: reserve the exact selected channel immediately before
+            # returning, so a concurrent second BlueZ selection is rejected
+            # pre-configuration. Consumed by the matching SetConfiguration.
+            if self.mono:
+                self._mono_selected_channel = channels
             return ret
 
         @dbus_service_mod.method(
@@ -432,6 +454,24 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
                     "org.bluez.Error.Rejected: mono requires FL or FR allocation"
                 )
 
+            # Mono reservation match: when a pre-configuration selection
+            # reserved a channel, the configuration must carry exactly that
+            # channel. A mismatch rejects atomically and leaves the
+            # reservation usable only by the matching configuration. Without
+            # a reservation (direct SetConfiguration test seams / callers),
+            # exact FL/FR remains accepted.
+            if (
+                self.mono
+                and self._mono_selected_channel is not None
+                and channel_alloc != self._mono_selected_channel
+            ):
+                print(
+                    "[endpoint] Mono selection reservation mismatch: "
+                    "rejecting {:#04x}".format(channel_alloc),
+                    flush=True,
+                )
+                raise _Rejected("org.bluez.Error.Rejected: mono reservation mismatch")
+
             # Queue the transport for async Acquire in the main loop.
             # Do NOT call Acquire here — that blocks BlueZ from creating
             # the CIS and produces "Input/output error".
@@ -442,6 +482,11 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
                 }
             )
             self.config_done = True
+
+            # Consume the reservation only after queue mutation succeeded;
+            # pending ownership then blocks any later selection/config.
+            if self.mono and self._mono_selected_channel is not None:
+                self._mono_selected_channel = None
             print(
                 "[endpoint] SetConfiguration: queued transport for async acquire "
                 "(pending={})".format(len(self._pending_transports)),
