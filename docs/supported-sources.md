@@ -18,6 +18,7 @@ Status labels used in the matrix below:
 | Label | Meaning |
 |---|---|
 | **Project-validated** | This project tested the hardware end-to-end as an LE Audio source streaming to this receiver, on Linux. |
+| **Project-tested (dev tool)** | This project exercised the hardware end-to-end with its development/test tool (`scripts/bap_central.py`) streaming to this receiver, but the normal desktop path remains unverified. |
 | **Vendor-supported** | The vendor officially documents the capability (LE Audio unicast, Linux support, or both). Vendor claims are not independently verified here. |
 | **Unverified** | No project test and no vendor confirmation for the specific claim (Linux support and/or interoperability with this receiver). |
 
@@ -125,7 +126,7 @@ builds — it is not the basis for the AX210 project-validation claim above.
 | Hardware | Host model | Linux status | Receiver status | Notes |
 |---|---|---|---|---|
 | **Intel Wi-Fi 6E AX210** | M.2 (NGFF) combo card — Wi-Fi over PCIe, Bluetooth function over internal USB; on a desktop the carrier needs a USB header connection, and `lsusb` commonly shows `8087:0032 Intel Corp. AX210 Bluetooth` | **Project-validated** | **Project-validated** | Validated as a BAP unicast source with this receiver on Linux via a **generic desktop PipeWire/WirePlumber UI** (the normal desktop flow) and exercised with the repository's `scripts/bap_central.py` development/test tool. Intel's [specifications](https://www.intel.com/content/www/us/en/products/sku/239216/intel-wifi-6e-ax210-gig-embedded/specifications.html) list the Bluetooth function over USB. A practical Linux LE Audio report (Raspberry Pi 5 with an AX210 module, BlueZ/PipeWire/WirePlumber) is at [AK-Experiments](https://ak-experiments.blogspot.com/2025/08/bluetooth-le-audio-on-raspberry-pi-with.html). Needs the current kernel/BlueZ/PipeWire stack — see [host setup](linux-le-audio-host-setup.md) and [adapter evaluation](bluetooth-adapter-evaluation.md). |
-| **ASUS USB-BT540** | USB adapter | **Vendor-supported** (Linux) | **Unverified** | **Candidate / under evaluation** — not supported. ASUS officially lists Linux, Bluetooth 5.4, LC3/LE Audio, and LE 2M. Chipset, VID:PID, `cis-central`, ISO MTU/count, and dynamic receiver tests remain unrecorded. See [ASUS USB-BT540](https://www.asus.com/networking-iot-servers/adapters/all-series/usb-bt540/) and [tech specs](https://www.asus.com/networking-iot-servers/wireless-adapters/all-series/usb-bt540/techspec/). |
+| **ASUS USB-BT540** | USB adapter | **Vendor-supported** (Linux) | **Project-tested (dev tool)** | Measured 2026-08-09: project development-tool tests passed via `scripts/bap_central.py --adapter hci1` — fresh discovery, pairing, encrypted GATT, PACS/ASCS resolution, 48 kHz LC3 (10 ms, PHY 2M), two-CIS Mode A, bonded reconnect, and one-CIS Mode B; the receiver reported zero decode errors, zero I2S underruns, and zero stream resets. Not Supported / project-validated: the normal desktop BlueZ + PipeWire + WirePlumber path is untested, one-CIS mono is unrun, cold unplug/replug repeat is unrun, audible-output confirmation was not recorded, a kernel codec-capability init warning (`-22`) remains, and receiver PLC is unexplained. Status is **candidate**, not recommendation. ASUS officially lists Linux, Bluetooth 5.4, LC3/LE Audio, and LE 2M. See [ASUS USB-BT540](https://www.asus.com/networking-iot-servers/adapters/all-series/usb-bt540/), [tech specs](https://www.asus.com/networking-iot-servers/wireless-adapters/all-series/usb-bt540/techspec/), and [adapter evaluation](bluetooth-adapter-evaluation.md). |
 | **ASUS USB-BT600** | USB adapter | **Vendor-supported** (Linux) | **Unverified** | **Candidate / under evaluation** — not supported. ASUS officially lists Linux, Bluetooth 6.0, and LC3/LE Audio. Chipset, VID:PID, `cis-central`, ISO MTU/count, availability/maturity, and dynamic receiver tests remain unrecorded. See [ASUS USB-BT600](https://www.asus.com/networking-iot-servers/wireless-adapters/all-series/usb-bt600/). |
 | **Nordic nRF5340 DK (HCI UART)** | Development kit — Bluetooth controller on cpunet, H4 UART on cpuapp | **Unverified** | **Unverified** | **Candidate / under evaluation** as a native HCI development adapter. NCS v3.3.0 supports the controller on cpunet with H4 UART on cpuapp; this repository's `dongle/` is a working source-controller implementation. The hardware source path is not project-validated (existing public evidence does not establish full dynamic acceptance). HCI UART is the supported route — NCS v3.3.0's USB HCI class cannot carry LE ISO. See [adapter evaluation](bluetooth-adapter-evaluation.md). |
 | **Nordic nRF54L15 DK (HCI UART)** | Development kit — `samples/bluetooth/hci_uart` on `nrf54l15dk/nrf54l15/cpuapp` | **Unverified** | **Unverified** | **Candidate / under evaluation** as a native HCI development adapter. NCS v3.3.0's `samples/bluetooth/hci_uart` supports `nrf54l15dk/nrf54l15/cpuapp`; the H4 transport handles packet type `0x05` (ISO). Dynamic Linux and receiver validation remains required. See [adapter evaluation](bluetooth-adapter-evaluation.md). |
@@ -133,11 +134,14 @@ builds — it is not the basis for the AX210 project-validation claim above.
 The **Intel AX210 is the only project-validated native adapter** — see the
 [adapter evaluation page](bluetooth-adapter-evaluation.md) for the
 unsupported-device notes and the evaluation contract. This project found **no
-plug-in USB HCI stick with verified Linux CIS support**. Generic "Bluetooth
-5.3" or "Bluetooth 5.4" USB dongles do not prove LE Audio support — see the
-version-numbers caveat above — so do not buy one on that basis alone. The ASUS
-USB-BT540 and USB-BT600 are listed as candidates under evaluation, and the
-Nordic nRF5340/nRF54L15 development kits as HCI UART candidates, on the
+plug-in USB HCI stick that is project-validated**: the ASUS USB-BT540 has
+passed static capability checks and development-tool dynamic tests only, and
+its normal desktop path and remaining acceptance items are still open. Generic
+"Bluetooth 5.3" or "Bluetooth 5.4" USB dongles do not prove LE Audio support —
+see the version-numbers caveat above — so do not buy one on that basis alone.
+The ASUS USB-BT540 (candidate / project-tested with the development tool) and
+USB-BT600 are listed as candidates under evaluation, and the Nordic
+nRF5340/nRF54L15 development kits as HCI UART candidates, on the
 [adapter evaluation page](bluetooth-adapter-evaluation.md).
 
 ### Self-contained USB transmitters (secondary candidates)

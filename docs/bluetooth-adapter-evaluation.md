@@ -52,16 +52,64 @@ ASUS sticks and the Nordic development kits are candidates under evaluation,
 the UGREEN model 75073 is incompatible with the native path, and the UGREEN
 CM591 remains unverified (not a candidate).
 
-### ASUS USB-BT540 — Candidate / under evaluation
+### ASUS USB-BT540 — Candidate / project-tested with development tool
 
 ASUS officially lists Linux, Bluetooth 5.4, LC3/LE Audio, and LE 2M
 ([product page](https://www.asus.com/networking-iot-servers/adapters/all-series/usb-bt540/),
 [tech specs](https://www.asus.com/networking-iot-servers/wireless-adapters/all-series/usb-bt540/techspec/)).
-Chipset, VID:PID, `cis-central`, ISO MTU/count, and the dynamic receiver
-sequence (fresh boot, pairing, PACS/ASCS, 48 kHz negotiation, mono, two-CIS
-Mode A stereo, reconnect, cold-boot repeat) remain unrecorded. Vendor claims
-do not constitute acceptance — status is **Candidate / under evaluation**, not
-supported.
+Measured on 2026-08-09 (row in the [evaluation record](#evaluation-record)):
+
+- **Identity:** USB ID `0b05:1bef`, USB manufacturer string `Realtek`,
+  full-speed USB; Linux device `hci1` via `btusb`; controller address
+  `A0:AD:9F:7B:C7:95`.
+- **HCI/LMP:** Bluetooth 5.4; HCI revision 14; LMP subversion `0x8761`.
+- **Test host:** Linux 7.1.1, BlueZ 5.86, PipeWire 1.6.6, WirePlumber 0.5.14.
+- **Static checks passed:** LE 2M; CIS Central and Peripheral; ISO
+  Broadcaster and Sync Receiver; ISO MTU 251 and ISO packet count 20;
+  required CIG/CIS and ISO data-path commands present; transparent codec
+  reports LE CIS and LE BIS transports.
+- **Dynamic checks passed with the development tool** (`scripts/bap_central.py
+  --adapter hci1`): fresh discovery, pairing, encrypted GATT, and PACS/ASCS
+  resolution; 48 kHz LC3, 10 ms, PHY 2M, SDU 120 per mono ASE; two-CIS Mode A
+  for 30 seconds (3000 source frames at 100 fps); bonded two-CIS reconnect for
+  15 seconds (1500 source frames at 100 fps); one-CIS Mode B for 15 seconds
+  (1500 source frames at 100 fps, SDU 240). The receiver reported zero decode
+  errors, zero I2S underruns, and zero stream resets; `btmon` observed the CIG
+  parameters, Create CIS, both Setup ISO Data Path commands, continuous ISO
+  TX, and completed-packet credits.
+
+Verdict: **Candidate / project-tested with development tool** — not
+**Supported / project-validated**. Remaining gates before recommendation:
+
+1. Normal desktop BlueZ + PipeWire + WirePlumber playback/UI path is not yet
+   tested — explicitly required before recommendation.
+2. One-CIS mono scenario remains unrun; one-CIS evidence is stereo Mode B.
+3. Physical cold unplug/replug repeat remains unrun.
+4. Audible-output confirmation was not recorded.
+5. Kernel initialization log: `Bluetooth: hci1: Failed to read codec
+   capabilities (-22)`.
+6. Receiver PLC remains unexplained: Mode A 30 s — 78 PLC frames; Mode A
+   reconnect 15 s — 70; Mode B 15 s — 72; repeat Mode B 10 s — 76.
+
+Issue analysis:
+
+- **Codec warning:** `btmon` shows Read Local Supported Codecs V2 advertises
+  the transparent codec for ACL, SCO/eSCO, LE CIS, and LE BIS. Linux v7.1
+  `net/bluetooth/hci_codec.c::hci_read_codec_capabilities()` correctly queries
+  every advertised transport. The controller succeeds through the LE CIS
+  transport and returns `Invalid HCI Command Parameters (0x12)` for the LE
+  BIS transport, which the kernel maps to `-EINVAL` / `-22`. This is a
+  controller capability-report inconsistency. It did not prevent unicast CIS
+  streaming, but it remains a real initialization warning and blocks
+  unconditional recommendation.
+- **PLC:** the repeat Mode B serial capture contained no `ISO seq gap` or
+  resync logs, so the PLC came from delivered non-valid ISO SDU callbacks, not
+  from omitted callbacks detected by the receiver's sequence tracker. Host
+  `btmon` showed continuous ISO TX and completed-packet credits, which prove
+  USB/controller submission, not over-air delivery. The cause could be an
+  RF/controller/QoS/receiver interaction and is not assigned yet; compare
+  against the AX210 under the same receiver placement, QoS, and RF conditions
+  on the next branch.
 
 ### ASUS USB-BT600 — Candidate / under evaluation
 
@@ -112,6 +160,25 @@ NCS v3.3.0's `samples/bluetooth/hci_uart` supports
 `nrf54l15dk/nrf54l15/cpuapp`, and the H4 transport handles packet type `0x05`
 (ISO). Status: **Candidate / under evaluation** as a native HCI development
 adapter; dynamic Linux and receiver validation remains required.
+
+### Seeed XIAO nRF54L15 hardware — Not an adapter candidate
+
+The Seeed XIAO nRF54L15 **board** is distinct from the nRF54L15 DK above and
+is **not** an HCI adapter candidate:
+
+- The nRF54L15 has no USB device peripheral.
+- The XIAO's USB-C D+/D- connect to the onboard SAMD11 CMSIS-DAP, not the
+  nRF54L15.
+- The existing SAMD11 CDC UART uses nRF P1.9/P1.8 only; there is no RTS/CTS
+  wiring.
+- Zephyr HCI UART requires hardware flow control; CDC + `btattach` is not
+  robust or plug-and-play.
+- A reliable lab route needs an external four-wire USB-UART plus `btattach`.
+- True single-cable plug-and-play would require replacement SAMD11 firmware
+  implementing USB Bluetooth HCI plus lossless custom UART bridging in 16 KiB
+  flash / 4 KiB RAM, likely sacrificing the factory CMSIS-DAP/CDC and needing
+  external SWD recovery. Prototype feasibility only; not an active adapter
+  candidate.
 
 ## Adapter requirements and evaluation
 
@@ -198,6 +265,7 @@ unexplained warnings, timeouts, resets, and underruns.
 | Date | Product | Chipset | VID:PID or PCI ID | Bus | Kernel | Driver | Firmware | BlueZ | PipeWire | WirePlumber | `cis-central` | ISO MTU/count | Mono | Two-CIS stereo | Reconnect | Verdict | Evidence link |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | not recorded | Intel Wi-Fi 6E AX210 | Intel AX210 (Wi-Fi 6E) | `8087:0032` (Bluetooth function) | internal USB (M.2 combo card) | 7.1.5 | not recorded | not recorded | 5.86 | 1.6.6 | 0.5.14 | yes | not recorded | not recorded | not recorded | not recorded | **Supported / project-validated** | [host setup](linux-le-audio-host-setup.md#project-tested-baseline) + repo test history |
+| 2026-08-09 | ASUS USB-BT540 | not recorded (USB manufacturer string `Realtek`) | `0b05:1bef` | USB (full-speed) | 7.1.1 | `btusb` | not recorded | 5.86 | 1.6.6 | 0.5.14 | yes | 251 / 20 | no (one-CIS run was stereo Mode B) | yes | yes | **Candidate / project-tested with development tool** | [BT540 section](#asus-usb-bt540--candidate--project-tested-with-development-tool) |
 
 Note: the AX210 row's `not recorded` fields reflect that the prior project
 validation predates this formal record template. The repository did not
@@ -215,6 +283,11 @@ the evidence (test logs, `btmon` captures, result documents).
 - **Supported / project-validated** — the dynamic acceptance sequence passed
   end-to-end against this receiver.
 - **Candidate / under evaluation** — being evaluated; not supported yet.
+- **Candidate / project-tested with development tool** — the dynamic sequence
+  passed against this receiver using the repository's `scripts/bap_central.py`
+  development/test tool, but the normal desktop BlueZ/PipeWire/WirePlumber
+  path and the remaining acceptance items are not yet validated. A candidate,
+  not supported yet.
 - **Rejected** — the project evaluated the adapter against the acceptance
   sequence and it failed, or conclusive evidence documents incompatibility.
   A single public report does not qualify.
