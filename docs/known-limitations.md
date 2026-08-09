@@ -1,7 +1,7 @@
 # Known limitations
 
 An honest list of current gaps, caveats, and open questions. This is a
-living document — keep it in sync with the [Planned
+living document: keep it in sync with the [Planned
 features](../PLANNED_FEATURES.md) backlog.
 
 ## 1. 48 kHz only
@@ -16,7 +16,7 @@ rejected. Multi-rate support is planned (see
 
 On the nRF54L15, the FLPR (secondary processor) ASRC offload contract takes
 **480 input frames** per call. Stream shapes that produce a different call
-size — specifically **360-frame (7.5 ms)** calls — fall back to the identical
+size (specifically **360-frame (7.5 ms)** calls) fall back to the identical
 cpuapp ASRC implementation. This is a documented behavior, not a failure; the
 audio still plays, just without the FLPR offload for those streams.
 
@@ -29,7 +29,7 @@ the top of the range are barely audible. The mechanism is the linear scaling;
 no specific psychoacoustic cause is asserted. A perceptual/logarithmic curve
 is planned (see [Planned features](../PLANNED_FEATURES.md) item B).
 
-## 4. Startup pop after long idle — observed, root cause unconfirmed
+## 4. Startup pop after long idle (observed, root cause unconfirmed)
 
 An audible pop has been observed when playback starts after a long idle
 period. The root cause is **not yet confirmed**. A likely area to investigate
@@ -37,10 +37,10 @@ is DAC/I2S idle and power sequencing (stop/start order, startup prefill,
 silence/ramp/mute sequencing), but this is an investigation direction, not a
 confirmed cause. Tracked in [Planned features](../PLANNED_FEATURES.md) item C.
 
-## 5. Duplicate BONDING advertisements — observed, root cause unconfirmed
+## 5. Duplicate BONDING advertisements (observed, root cause unconfirmed)
 
 During BONDING, **two scanner entries / advertisements have been observed**,
-and only one of them pairs. The root cause is **unconfirmed** — it may be an
+and only one of them pairs. The root cause is **unconfirmed**; it may be an
 advertising-set, identity/address, or central-side discovery artifact. The
 invariant we want is exactly one connectable receiver advertisement at any
 time. Tracked in [Planned features](../PLANNED_FEATURES.md) item D. This is a
@@ -49,7 +49,7 @@ distinction.
 
 ## 6. nRF5340 physical pairing button not wired
 
-The nRF5340 build has **no physical pairing controls** — the button/LED
+The nRF5340 build has **no physical pairing controls**: the button/LED
 pairing controller is feature-off for this build (`CONFIG_USER_PAIRING_CONTROL`
 / `CONFIG_USER_PAIRING_INPUT` not enabled; the pairing-mode controller is not
 compiled in). There is no user button, no mode LED, and no NORMAL/BONDING/
@@ -78,10 +78,10 @@ Tracked in [Planned features](../PLANNED_FEATURES.md) item F.
 The nRF54L15 build supports **point-to-point** LE Audio, but the chip has **no
 dedicated Audio PLL**, and Nordic's official position is that the nRF54L
 series is therefore **not its ideal/recommended platform for all LE Audio /
-audio-streaming uses** — Nordic states that a subset of LE Audio use cases can
+audio-streaming uses**: Nordic states that a subset of LE Audio use cases can
 be supported, and recommends the nRF5340 for audio today. This is a scope
 caveat, not a claim that Bluetooth ISO/BAP is impossible. Not every LE Audio
-use case — for example TWS-style synchronized playback between two earbuds —
+use case (for example TWS-style synchronized playback between two earbuds)
 is covered. See [Technology: nRF54L15](technology/nrf54l15.md) for the
 architecture, Nordic's guidance with citation, and what this means in
 practice.

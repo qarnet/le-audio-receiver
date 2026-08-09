@@ -72,6 +72,24 @@ empty library; not fixable without an unsupported DT node or losing
 watchdog on nRF5340). These are documented in `STATUS.md` "Build warning
 diagnostics", not tolerated as warnings.
 
+## Style rule: no em dashes in user-facing documentation
+
+User-facing documentation must not contain the Unicode em dash (U+2014).
+Rewrite em dashes with commas, parentheses, colons, semicolons, or separate
+sentences, preserving meaning and formatting (links, tables, code spans,
+numeric ranges, and warning strength).
+
+User-facing scope: `README.md`, `PLANNED_FEATURES.md`, and the public docs
+listed in the README Documentation table (`docs/user-guide.md`,
+`docs/supported-sources.md`, `docs/linux-le-audio-host-setup.md`,
+`docs/bluetooth-adapter-evaluation.md`, `docs/hardware-wiring.md`,
+`docs/known-limitations.md`, `docs/technology/nrf5340.md`,
+`docs/technology/nrf54l15.md`, `docs/flashing.md`).
+
+Internal and historical contributor docs (for example `docs/development/`,
+`docs/testing/`, `STATUS.md`) are outside this style rule unless explicitly
+requested.
+
 ## Plan of record
 
 `docs/development/refactor-plan.md` is the accepted plan of record for the

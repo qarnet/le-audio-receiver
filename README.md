@@ -64,7 +64,7 @@ imperfect options:
   debugger** and battery charging. The catch: it has **no dedicated Audio
   PLL**, and Nordic's official position is that the nRF54L series is therefore
   **not its ideal/recommended platform for all LE Audio / audio-streaming
-  uses** — Nordic states that a subset of LE Audio use cases can be supported,
+  uses**: Nordic states that a subset of LE Audio use cases can be supported,
   and recommends the nRF5340 for audio today ([Nordic DevZone](https://devzone.nordicsemi.com/f/nordic-q-a/117778/nrf54l15-support-le-audio)).
   Bluetooth ISO/BAP streaming is not impossible here: point-to-point LE Audio
   works on it, while use cases that depend on a tunable audio clock (such as

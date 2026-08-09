@@ -9,7 +9,7 @@
 - **Dev board base**: nRF5340DK footprint, custom UART0 pinout (CH340X USB-serial), no QSPI
 - **Debug probe**: Raspberry Pi Pico running CMSIS-DAP firmware. The probe is
   identified at flash time by the chip behind it (`nrf-probes --find nrf53`);
-  never assume a serial↔board mapping from docs — run `nrf-probes`.
+  never assume a serial↔board mapping from docs; run `nrf-probes`.
 
 ## Build system
 
@@ -21,11 +21,12 @@ Project uses Zephyr sysbuild (multi-image). Two images built:
 | `hci_ipc` | `ebyte_e83_nrf5340/nrf5340/cpunet` | `build/nrf5340/hci_ipc/zephyr/zephyr.{elf,hex}` |
 
 Sysbuild produces top-level merged hexes at:
-- `build/nrf5340/merged.hex` — app core (app image only; no MCUboot)
-- `build/nrf5340/merged_CPUNET.hex` — net core (hci_ipc image only; no MCUboot)
+- `build/nrf5340/merged.hex`: app core (app image only; no MCUboot)
+- `build/nrf5340/merged_CPUNET.hex`: net core (hci_ipc image only; no MCUboot)
 
-`hci_ipc` is marked `BUILD_ONLY TRUE` in `sysbuild.cmake` — excluded from `flash_order`,
-flashed by the app domain runner instead of by a separate west domain flash.
+`hci_ipc` is marked `BUILD_ONLY TRUE` in `sysbuild.cmake`; it is excluded from
+`flash_order` and flashed by the app domain runner instead of by a separate
+west domain flash.
 
 ## Flash workflow
 
@@ -33,9 +34,9 @@ flashed by the app domain runner instead of by a separate west domain flash.
 fw-flash-5340
 ```
 
-This helper resolves the probe at flash time — `scripts/probe-serial.local`
+This helper resolves the probe at flash time: `scripts/probe-serial.local`
 override if present, else `nrf-probes --find nrf53` (auto-detect by target
-identity), else OpenOCD auto-detection — and runs
+identity), else OpenOCD auto-detection; it then runs
 `west flash --build-dir build/nrf5340 -- --cmd-pre-init="adapter serial <SER>"`.
 Flashes both cores in one session.
 
@@ -63,12 +64,12 @@ openocd
 1. Flashes app core (`merged.hex`, passed as arg by runner)
 2. Programs `UICR.APPROTECT`/`UICR.SECUREAPPROTECT` = Unprotected
    (`0x50FA50FA`) so debug access survives resets (see AGENTS.md APPROTECT
-   gotcha — an erased UICR hard-locks the debug AP at every reset)
+   gotcha: an erased UICR hard-locks the debug AP at every reset)
 3. Releases net core from FORCEOFF (`nrf53_cpunet_release`)
 4. Switches target to `nrf53.cpunet`, halts, probes flash bank 2
 5. Flashes net core (`merged_CPUNET.hex`, from `global NET_CORE_HEX`)
 6. Programs net `UICR.APPROTECT` = Unprotected
-7. `reset run` — both cores start
+7. `reset run`: both cores start
 
 `check_approtect` proc: if app core APPROTECT is engaged, runs `nrf53_recover` before
 the runner's `reset init`, otherwise a no-op.
@@ -81,19 +82,19 @@ flash runner and configures all runner arguments. This replaces the previous
 in `CMakeLists.txt`.
 
 **board.cmake (cpuapp)** calls `board_set_flasher(openocd)` (not
-`board_set_flasher_ifnset`) — OpenOCD is the sole flasher for this board. The
+`board_set_flasher_ifnset`): OpenOCD is the sole flasher for this board. The
 runner args (`--config`, `--cmd-pre-init`, `--cmd-pre-load`, `--cmd-load`) are
 set directly via `board_runner_args(openocd ...)`. One value comes from
 `CMakeLists.txt` as a CMake variable (set before `find_package(Zephyr)`):
 
-- `_NET_CORE_HEX` — derived as `${CMAKE_BINARY_DIR}/../merged_CPUNET.hex`,
+- `_NET_CORE_HEX`: derived as `${CMAKE_BINARY_DIR}/../merged_CPUNET.hex`,
   resolving to the sysbuild top-level net core hex.
 
 The probe serial is intentionally NOT a configure-time value (it went stale
 whenever probes were replugged); `fw-flash-5340` passes it as an extra
 runner arg at flash time.
 
-The cpunet board target does not register a flasher — the app-domain runner
+The cpunet board target does not register a flasher; the app-domain runner
 flashes both cores in one OpenOCD session (`BUILD_ONLY TRUE` on hci_ipc in
 `sysbuild.cmake`).
 
@@ -101,7 +102,7 @@ Items that remain project-level in `CMakeLists.txt` (sysbuild/project-specific,
 not board-specific):
 
 - `_NET_CORE_HEX` path derivation (depends on sysbuild output layout)
-- `BOARD_ROOT` — exposes the project's `boards/` dir for custom board discovery
+- `BOARD_ROOT`: exposes the project's `boards/` dir for custom board discovery
 
 ## Board definition (`boards/ebyte/e83_nrf5340/`)
 
@@ -110,9 +111,9 @@ was previously an overlay on the nRF5340DK. The board files are:
 
 | File | Absorbs |
 |------|---------|
-| `*_cpuapp.dts` | Pinctrl (UART0, I2S0), I2S0 enable, QSPI disable, `i2s-audio` alias, clock config — previously in `boards/nrf5340dk_nrf5340_cpuapp.overlay` |
+| `*_cpuapp.dts` | Pinctrl (UART0, I2S0), I2S0 enable, QSPI disable, `i2s-audio` alias, clock config (previously in `boards/nrf5340dk_nrf5340_cpuapp.overlay`) |
 | `*_cpunet.dts` | Net core pinctrl, flash partitions, shared RAM layout |
-| `board.cmake` | Runner registration — previously the `BOARD_FLASH_RUNNER` CACHE hack + `app_set_runner_args()` macro in `CMakeLists.txt` |
+| `board.cmake` | Runner registration (previously the `BOARD_FLASH_RUNNER` CACHE hack + `app_set_runner_args()` macro in `CMakeLists.txt`) |
 | `Kconfig.defconfig` | `BT_HCI_IPC` default, heap pool sizing for cpuapp |
 | `Kconfig.ebyte_e83_nrf5340` | SoC selection for cpuapp/cpunet |
 | `pre_dt_board.cmake` | DTC warning suppression (overlapping unit addresses) |
