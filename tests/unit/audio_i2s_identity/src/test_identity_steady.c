@@ -158,7 +158,9 @@ ZTEST(audio_i2s, test_repeat_fallback_at_threshold)
 ZTEST(audio_i2s, test_repeat_not_triggered_below_threshold)
 {
 	test_start_stream();
-	/* Free = 7 < 12: no repeat attempt. */
+	/* After the 11-block startup pre-fill, free = 16 − 11 = 5.  Two
+	 * releases bring free to 7, still below DRIFT_THRESHOLD (12): no
+	 * repeat attempt. */
 	fake_i2s_release(fake_i2s_queued_ptr(0));
 	fake_i2s_release(fake_i2s_queued_ptr(0)); /* free = 7 */
 

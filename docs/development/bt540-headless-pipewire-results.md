@@ -93,12 +93,13 @@ Host: `thomas-workstation`, headless/SSH user session.
    components and data path, but Plasma/Bluedevil UI on `thomas-main` remains
    untested.
 
-## Cleanup state and next research
+## Cleanup state and next research (original run — historical)
 
 - Normal WirePlumber user service restored active.
 - Nordic `hci0` restored powered.
 - No persistent host config changed.
-- Next research order:
+- Next research order as recorded for the original 0.5.14 run (**historical**;
+  the post-fix 0.5.15 rerun below resolved items 1–3, items 4–6 remain open):
   1. classify WirePlumber/BlueZ registration diagnostics and obtain clean
      headless startup;
   2. correlate first 16 over host, controller, and receiver boundaries;
@@ -129,11 +130,18 @@ A controlled rerun on `thomas-workstation` (Linux 7.1.5, BlueZ 5.86, PipeWire
   1.0128 s**.
 - **Receiver summary (exact):**
   `Stream[0] summary: SDUs=1712 decoded=3678 plc=284 decode_err=0 i2s_underrun=0 stream_reset=0 empty_sdu=15`
+  (`decoded` is a legacy field label carrying total rendered frames
+  including PLC, so decoded = good decodes + plc — not 3678 good decodes
+  plus 284 PLC)
   with zero `<wrn>` / `<err>` / `Next buffers not supplied` / resets in the
   complete stream-time serial. The startup zero-length SDUs are separately
   concealed (15 empty SDUs, zero malformed-SDU errors); PLC 284 = 2×15 (empty)
-  + 2×127 (omitted) reconciles exactly; the 11-block I2S startup reservoir
-  survived the ~1.013 s TX-to-Disable gap without underrun.
+  + 2×127 (omitted) reconciles exactly; the eleven queued 7.5 ms I2S blocks
+  provide an 82.5 ms total startup queue (about 77 ms transition coverage
+  after playback begins), and continued invalid/omitted callbacks generated
+  PLC that kept the queue supplied through the observed ~1.013 s final host-TX
+  to ASCS Disable interval — the reservoir alone does not span that whole
+  second — without underrun.
 - **WirePlumber shutdown (exact systemd properties):** run as a transient
   systemd user service with direct ExecStart (MainPID exe verified as the
   0.5.15 store binary), `systemctl --user stop` produced **`Result=success`,

@@ -159,10 +159,11 @@ actuator / timing (and ASRC) failure, input-frame-selection preservation.
 
 The counts and the coverage list below describe the **current** suites:
 the original T3 50/48 cases plus the later R1 admission/drain concurrency
-additions (shared `test_sink_concurrent.c`, +8 per suite) and the
-2026-08-09 startup-reservoir follow-up (11-block startup, +1 per suite).
-The original-T3 run evidence (50/50 and 48/48 focused runs, 25-child
-gate) is preserved verbatim in the next section.
+additions (+10 per suite across the shared common tests) and the
+2026-08-09 startup-reservoir follow-up (11-block startup, +1 per suite),
+so 50 + 10 + 1 = 61 and 48 + 10 + 1 = 59.  The original-T3 run evidence
+(50/50 and 48/48 focused runs, 25-child gate) is preserved verbatim in
+the next section.
 
 Coverage of the required behaviors:
 

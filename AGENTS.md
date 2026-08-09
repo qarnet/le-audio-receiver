@@ -83,7 +83,10 @@ Current status: **canonical gate 62 PASS / 0 FAIL / 62 TOTAL** on the
 clean tree (35 twister + 5 exec-only + 19 Python + coverage + matrix +
 BSim; clean-tree run recorded in
 `docs/development/documentation-hygiene-behavior-fix-results.md` at
-`b8bd633`), coverage population **36** (4665/5121 lines, 2023/2820
+`b8bd633`; latest production-fix clean canonical run at `f2f9336`, after
+the empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
+(`f2f9336`) fixes — the committed coverage baseline is unchanged),
+coverage population **36** (4665/5121 lines, 2023/2820
 branches, 357/357 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
 baseline unchanged), builds 3/3, build contract **95/95**, BSim Stage 1
 pins byte-identical, and P1–P8 user pairing control ACCEPTED (nRF54L15

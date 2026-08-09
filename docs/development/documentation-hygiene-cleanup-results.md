@@ -146,6 +146,12 @@ gate name, and the BlueZ/WirePlumber "Phase 2/3" gate names.
 
 Restart OpenCode for the skill changes to take effect.
 
+Note: these repo-local skills (`.agents/skills/commit-and-push/` and
+`.agents/skills/monitor-and-analyze/`) were later **removed** in commit
+`9fca1a9` ("Delete old skills"); the paths above describe the prior audit
+state of this documentation-hygiene run, not the current repository
+layout.
+
 ## 5. Remaining script prose
 
 - Phase-3 gate serial lifecycle, current `main.c` refs, and atexit

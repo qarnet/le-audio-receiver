@@ -104,11 +104,11 @@ void audio_sink_set_input_frames(uint16_t frames)
 #define DRIFT_THRESHOLD (BLOCK_COUNT - 4)
 
 /* Startup pre-fill depth: ten distinct silence blocks plus the first data
- * block (11 total).  Eleven 7.5 ms blocks provide an 82.5 ms reservoir that
- * enters the accepted 9..11-block steady queue range immediately, so short
- * controller callback gaps at PipeWire suspend cannot drain nrfx I2S into
- * ERROR before ASCS Disable arrives.  Slab capacity and the nrfx TX queue
- * depth both support 11 startup blocks (compile-time proven below).
+ * block (11 total).  Eleven 7.5 ms blocks provide an 82.5 ms reservoir
+ * (11 × 7.5 ms), so short controller callback gaps at PipeWire suspend
+ * cannot drain nrfx I2S into ERROR before ASCS Disable arrives.  Slab
+ * capacity and the nrfx TX queue depth both support 11 startup blocks
+ * (compile-time proven below).
  */
 #define STARTUP_SILENCE_BLOCKS 10
 #define STARTUP_TOTAL_BLOCKS   (STARTUP_SILENCE_BLOCKS + 1)

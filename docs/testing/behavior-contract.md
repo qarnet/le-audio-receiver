@@ -383,10 +383,9 @@ into the fixed 481-frame (1924-byte) slab block.  No buffer write may exceed
 On first push, the sink queues ten distinct silence blocks (zero-filled,
 rate-converter-selected sizes), then the first audio data block, then issues
 `i2s_trigger(START)`.  No audio output before START.  The 11-block startup
-enters the accepted 9..11-block steady queue range immediately and provides
-an 82.5 ms reservoir at 7.5 ms/frame, covering short controller callback
-gaps (e.g. PipeWire suspend) without draining nrfx I2S into ERROR before
-ASCS Disable arrives.
+provides an 82.5 ms reservoir at 7.5 ms/frame (11 × 7.5 ms), covering short
+controller callback gaps (e.g. PipeWire suspend) without draining nrfx I2S
+into ERROR before ASCS Disable arrives.
 
 Startup is transactional.  For any startup allocation/write/START failure the
 sink returns the exact primary failure (`-ENOMEM` for slab exhaustion, the

@@ -621,7 +621,10 @@ static bool teardown_transition(enum teardown_event ev, size_t slot)
 		 * the gate can extract explicit SDUs/decoded/I2S evidence.
 		 * audio_sink_stop() never mutates audio_stats, so the
 		 * sink-before-offload delta does not change the summary
-		 * values (output shape unchanged). */
+		 * values (output shape unchanged).  The gate-stable legacy
+		 * `decoded` label carries stats.total_frames (good + PLC),
+		 * while `plc` carries stats.plc_frames; do not rename either
+		 * field because the gates parse this format. */
 		struct audio_stats stats = audio_stats_get();
 
 		LOG_INF("Stream[%zu] summary: SDUs=%zu decoded=%u plc=%u "

@@ -18,7 +18,7 @@ Status labels used in the matrix below:
 | Label | Meaning |
 |---|---|
 | **Project-validated** | This project tested the hardware end-to-end as an LE Audio source streaming to this receiver, on Linux. |
-| **Project-tested (dev tool)** | This project exercised the hardware end-to-end with its development/test tool (`scripts/bap_central.py`) streaming to this receiver, but the normal desktop path remains unverified. |
+| **Project-tested (dev tool)** | This project exercised the hardware end-to-end with its development/test tool (`scripts/bap_central.py`) streaming to this receiver. Development-tool validation alone does not establish the production BlueZ/PipeWire/WirePlumber path, so the candidate remains not supported until the listed acceptance gates pass; a candidate may additionally have production-path evidence (for example the BT540 headless run) without changing that boundary. |
 | **Vendor-supported** | The vendor officially documents the capability (LE Audio unicast, Linux support, or both). Vendor claims are not independently verified here. |
 | **Unverified** | No project test and no vendor confirmation for the specific claim (Linux support and/or interoperability with this receiver). |
 
@@ -110,22 +110,19 @@ WirePlumber **0.5.15 or newer** (the project-accepted clean host lifecycle
 floor; see below).
 
 This project validated the native path end-to-end with the **Intel AX210** on
-a host running Linux 7.1.5, BlueZ 5.86, PipeWire 1.6.6, WirePlumber 0.5.14
-(the exact baseline is on the host setup page). That BlueZ 5.86 build carried
-a downstream QoS-property spelling patch
-(`MimimumDelay`/`PreferredMimimumDelay` → `MinimumDelay`/`PreferredMinimumDelay`).
-The typo was fixed upstream on 2026-05-07 (commit
-[`d45fd43a1cc3ba791858f11c144112c518a9ad84`](https://github.com/bluez/bluez/commit/d45fd43a1cc3ba791858f11c144112c518a9ad84)),
-so current BlueZ master has the correct keys. That historical AX210
-validation used WirePlumber **0.5.14** and demonstrated functional BAP
-streaming; the current project acceptance floor is WirePlumber **0.5.15 or
-newer**, because the 0.5.14 shutdown warning behavior (three leaked PipeWire
-proxies under project test) fails this project's zero-warning host lifecycle
-policy. The AX210 adapter validation stands; the floor governs the host
-lifecycle under which new acceptance runs are accepted. The repository's own
-`scripts/bap_central.py` (a BlueZ BAP source that streams LC3 test tones)
-remains a separate, deterministic development/test path for verifying receiver
-builds — it is not the basis for the AX210 project-validation claim above.
+the exact baseline recorded on the [host setup
+page](linux-le-audio-host-setup.md#project-tested-baseline) (including the
+disclosed BlueZ QoS-property spelling patch, fixed upstream 2026-05-07).  That
+historical AX210 validation used WirePlumber **0.5.14** and demonstrated
+functional BAP streaming; the current project acceptance floor is WirePlumber
+**0.5.15 or newer** for a clean host lifecycle (the 0.5.14→0.5.15 rationale
+and the project-tested baseline are on the [host setup
+page](linux-le-audio-host-setup.md)).  The AX210 adapter validation stands;
+the floor governs the host lifecycle under which new acceptance runs are
+accepted.  The repository's own `scripts/bap_central.py` (a BlueZ BAP source
+that streams LC3 test tones) remains a separate, deterministic
+development/test path for verifying receiver builds — it is not the basis for
+the AX210 project-validation claim above.
 
 ## Hardware matrix
 
