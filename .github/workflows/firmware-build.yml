@@ -207,20 +207,61 @@ jobs:
           release_probe="$(mktemp)"
           tag_probe="$(mktemp)"
           trap 'rm -f "$release_probe" "$tag_probe"' EXIT
+          # Draft releases are untagged, so the release-by-tag REST lookup
+          # cannot see them.  An authenticated paginated list (which includes
+          # drafts) is the collision proof.
           set +e
-          gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$tag" >"$release_probe" 2>&1
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$release_probe" 2>&1
           release_status=$?
-          gh api --include "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >"$tag_probe" 2>&1
-          tag_status=$?
           set -e
-          if [ "$release_status" -eq 0 ]; then
+          if [ "$release_status" -ne 0 ]; then
+            echo "::error::existing-release list probe failed for tag $tag"
+            exit 1
+          fi
+          set +e
+          python3 - "$tag" "$release_probe" <<'PYEOF'
+          import json
+          import sys
+          tag, probe_path = sys.argv[1], sys.argv[2]
+          try:
+              with open(probe_path, "r", encoding="utf-8") as fh:
+                  pages = json.load(fh)
+          except (OSError, ValueError) as exc:
+              sys.stderr.write("release list is not valid JSON: %s\n" % exc)
+              sys.exit(1)
+          if not isinstance(pages, list):
+              sys.stderr.write("release list must be an outer list of pages\n")
+              sys.exit(1)
+          for page in pages:
+              if not isinstance(page, list):
+                  sys.stderr.write("release page must be a list\n")
+                  sys.exit(1)
+              for record in page:
+                  if not isinstance(record, dict):
+                      sys.stderr.write("release record must be an object\n")
+                      sys.exit(1)
+                  if not isinstance(record.get("tag_name"), str):
+                      sys.stderr.write("release tag_name must be a string\n")
+                      sys.exit(1)
+          for page in pages:
+              for record in page:
+                  if record.get("tag_name") == tag:
+                      sys.exit(2)
+          PYEOF
+          scan_status=$?
+          set -e
+          if [ "$scan_status" -eq 2 ]; then
             echo "::error::release already exists for tag $tag"
             exit 1
           fi
-          if ! grep -Eq '^HTTP/[0-9.]+ 404' "$release_probe"; then
-            echo "::error::existing-release probe failed for tag $tag (expected HTTP 404)"
+          if [ "$scan_status" -ne 0 ]; then
+            echo "::error::existing-release list probe failed for tag $tag (malformed response)"
             exit 1
           fi
+          set +e
+          gh api --include "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >"$tag_probe" 2>&1
+          tag_status=$?
+          set -e
           if [ "$tag_status" -eq 0 ]; then
             echo "::error::git tag already exists for tag $tag"
             exit 1
