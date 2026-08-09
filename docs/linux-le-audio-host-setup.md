@@ -22,7 +22,7 @@ limitations](known-limitations.md)).
 | Linux kernel | **6.4 minimum**; newer stable preferred (ongoing ISO fixes) | 7.1.5 |
 | BlueZ | **5.85 minimum** — first stable release containing the PAC callback fix ([commit `6b0a087`](https://github.com/bluez/bluez/commit/6b0a08776ae44a9102d7c6875a77e83dc6a11a37)) | 5.86 |
 | PipeWire | current release, built with the BlueZ SPA and LC3 support | 1.6.6 |
-| WirePlumber | current release | 0.5.14 |
+| WirePlumber | **0.5.15 minimum for project acceptance** (host lifecycle/zero-warning requirement — see version notes) | 0.5.15 |
 
 Version notes:
 
@@ -31,6 +31,14 @@ Version notes:
   prove LC3 support (see [Checking PipeWire for LC3](#checking-pipewire-for-lc3)).
 - **BlueZ:** building or patching older BlueZ releases yourself is not
   recommended; use 5.85 or later.
+- **WirePlumber:** 0.5.14 remains protocol-functional and streamed to this
+  receiver, but its shutdown leaked three PipeWire proxies under project test.
+  0.5.15 fixes proxy cleanup and shutdown ordering
+  ([release notes](https://pipewire.pages.freedesktop.org/wireplumber/resources/releases.html))
+  and is this project's acceptance floor for a clean host lifecycle. This is a
+  host lifecycle/zero-warning requirement, not a receiver firmware or BAP
+  wire-protocol requirement, and not a floor for every distribution's LE Audio
+  operation.
 - These are the *protocol floor*. A system that satisfies every number can
   still fail in practice — see [Protocol floor vs. project
   baseline](#protocol-floor-vs-project-baseline).
@@ -103,7 +111,7 @@ the final proof is an end-to-end stream (see below).
 | Kernel version | `uname -r` | 6.4 or newer; newer stable preferred |
 | BlueZ version | `bluetoothd --version` | 5.85 or newer |
 | PipeWire version | `pipewire --version` | current release (project baseline 1.6.6); version alone does not prove LC3 |
-| WirePlumber version | `wireplumber --version` | current release (project baseline 0.5.14) |
+| WirePlumber version | `wireplumber --version` | 0.5.15 or newer (project acceptance floor) |
 | BlueZ service | `systemctl is-active bluetooth` | `active` |
 | Audio session | `systemctl --user is-active pipewire wireplumber` | both `active` in the current logind user session |
 | BlueZ experimental | `bluetoothctl show` | exposes `ExperimentalFeatures: BlueZ Experimental ISO ...` (plus the kernel ISO feature from `KernelExperimental`) |
@@ -180,9 +188,11 @@ below uses placeholders — substitute the peer's addresses and node names:
 
 `main-embedded` is a diagnostic profile, not a permanent desktop
 recommendation — prefer supported seat-monitoring configuration for
-day-to-day desktop use. Concrete worked evidence for this workflow (including
-the failure items still under investigation) is recorded in the [BT540
-headless production-stack results](development/bt540-headless-pipewire-results.md).
+day-to-day desktop use. Concrete worked evidence for this workflow is
+recorded in the [BT540 headless production-stack
+results](development/bt540-headless-pipewire-results.md): the original 0.5.14
+run with its failure items, plus the post-fix 0.5.15 rerun that passed clean
+acceptance for the headless production-path subset.
 
 ### Project-tested baseline
 
@@ -200,6 +210,33 @@ evaluation](bluetooth-adapter-evaluation.md)) on a host running exactly:
   flags)
 - PipeWire and WirePlumber enabled in the logind user session, PulseAudio
   disabled, rtkit enabled
+
+That historical AX210 validation ran on **WirePlumber 0.5.14**, which
+demonstrated functional BAP streaming to this receiver and remains a valid
+end-to-end adapter-validation claim. New acceptance runs for this project
+require **WirePlumber 0.5.15 or newer**: the 0.5.14 shutdown leaked three
+PipeWire proxies under project test, failing this project's zero-warning host
+lifecycle policy (see the version notes above). The AX210 claim is
+not retracted — it validated the adapter and the protocol path, which 0.5.14
+demonstrably supports; the 0.5.15 floor governs the host lifecycle under which
+this project now accepts runs.
+
+#### Current clean-lifecycle baseline
+
+The current clean-lifecycle baseline on `thomas-workstation` (NixOS
+generation 19, `nixpkgs-unstable`) is:
+
+- Linux kernel **7.1.5**
+- BlueZ **5.86**
+- PipeWire **1.6.6**
+- WirePlumber **0.5.15**
+
+This is the host configuration of the post-fix headless production-path rerun
+recorded in the [BT540 headless production-stack
+results](development/bt540-headless-pipewire-results.md): one-CIS Mode B
+streamed with zero receiver warnings, errors, and resets, and WirePlumber shut
+down cleanly (`Result=success`, `ExecMainCode=0`, `ExecMainStatus=0`, zero
+leaked proxies).
 
 **Tested-baseline disclosure:** that BlueZ 5.86 build carried a small
 downstream patch to `profiles/audio/bap.c` fixing a QoS-property spelling

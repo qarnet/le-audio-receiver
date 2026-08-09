@@ -77,19 +77,33 @@ Measured on 2026-08-09 (row in the [evaluation record](#evaluation-record)):
   errors, zero I2S underruns, and zero stream resets; `btmon` observed the CIG
   parameters, Create CIS, both Setup ISO Data Path commands, continuous ISO
   TX, and completed-packet credits.
-- **Headless production-stack run (2026-08-09):** the normal BlueZ + PipeWire
-  + WirePlumber production path (the same components KDE drives) was exercised
-  headless and without `scripts/bap_central.py`:
+- **Headless production-stack run (2026-08-09, WirePlumber 0.5.14):** the
+  normal BlueZ + PipeWire + WirePlumber production path (the same components
+  KDE drives) was exercised headless and without `scripts/bap_central.py`:
   `bluetoothctl`/BlueZ -> WirePlumber BlueZ monitor -> PipeWire Bluetooth sink
   -> PipeWire LC3 encoder -> Linux ISO socket -> BT540 -> receiver. The BlueZ
   sink appeared and one-CIS stereo Mode B LC3 streamed (48 kHz, 7.5 ms frame,
   117 octets per channel, 234-byte SDU, ISO interval 7500 us, PHY 2M, RTN 13,
-  transport latency 75 ms, presentation delay 40000 us). Clean acceptance
-  failed due 16 startup zero-length malformed SDUs, a stop-boundary I2S
-  underrun with a diagnostic-accounting mismatch, and unresolved WirePlumber
-  startup diagnostics. KDE/Bluedevil on `thomas-main`, one-CIS mono, cold
-  replug, and audible confirmation remain open. Full evidence: [BT540 headless
-  production-stack results](development/bt540-headless-pipewire-results.md).
+  transport latency 75 ms, presentation delay 40000 us) on the original test
+  host (Linux 7.1.1, BlueZ 5.86, PipeWire 1.6.6, WirePlumber 0.5.14). Clean
+  acceptance failed due 16 startup zero-length malformed SDUs, a stop-boundary
+  I2S underrun with a diagnostic-accounting mismatch, and unresolved
+  WirePlumber startup diagnostics.
+- **Post-fix production-path rerun (2026-08-09, WirePlumber 0.5.15):** after
+  receiver fixes (empty-SDU concealment `9dc0859`, deeper 11-block I2S startup
+  reservoir `f2f9336`) and the WirePlumber 0.5.15 upgrade, the same headless
+  one-CIS Mode B production path passed on `thomas-workstation` (Linux 7.1.5,
+  BlueZ 5.86, PipeWire 1.6.6, WirePlumber 0.5.15): the 16 startup zero-length
+  SDUs are separately concealed (15 empty SDUs, zero malformed-SDU errors),
+  the 11-block reservoir survived the ~1.013 s final-TX-to-Disable gap with
+  zero receiver warnings/errors/resets (`SDUs=1712 decoded=3678 plc=284
+  decode_err=0 i2s_underrun=0 stream_reset=0 empty_sdu=15`), and WirePlumber
+  shut down with `Result=success`, `ExecMainCode=0`, `ExecMainStatus=0`, zero
+  `destroy_proxy` / `leaked proxy`. The original clean-failure items no longer
+  block this headless production-path subset.
+- KDE/Bluedevil on `thomas-main`, one-CIS mono, cold replug, and audible
+  confirmation remain open. Full evidence: [BT540 headless production-stack
+  results](development/bt540-headless-pipewire-results.md).
 
 Verdict: **Candidate / project-tested with development tool** — not
 **Supported / project-validated**. Remaining gates before recommendation:
@@ -279,7 +293,7 @@ unexplained warnings, timeouts, resets, and underruns.
 | Date | Product | Chipset | VID:PID or PCI ID | Bus | Kernel | Driver | Firmware | BlueZ | PipeWire | WirePlumber | `cis-central` | ISO MTU/count | Mono | Two-CIS stereo | Reconnect | Verdict | Evidence link |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | not recorded | Intel Wi-Fi 6E AX210 | Intel AX210 (Wi-Fi 6E) | `8087:0032` (Bluetooth function) | internal USB (M.2 combo card) | 7.1.5 | not recorded | not recorded | 5.86 | 1.6.6 | 0.5.14 | yes | not recorded | not recorded | not recorded | not recorded | **Supported / project-validated** | [host setup](linux-le-audio-host-setup.md#project-tested-baseline) + repo test history |
-| 2026-08-09 | ASUS USB-BT540 | not recorded (USB manufacturer string `Realtek`) | `0b05:1bef` | USB (full-speed) | 7.1.1 | `btusb` | not recorded | 5.86 | 1.6.6 | 0.5.14 | yes | 251 / 20 | no (one-CIS run was stereo Mode B) | yes | yes | **Candidate / project-tested with development tool** | [BT540 section](#asus-usb-bt540--candidate--project-tested-with-development-tool) + [headless results](development/bt540-headless-pipewire-results.md) |
+| 2026-08-09 | ASUS USB-BT540 | not recorded (USB manufacturer string `Realtek`) | `0b05:1bef` | USB (full-speed) | 7.1.5 | `btusb` | not recorded | 5.86 | 1.6.6 | 0.5.15 | yes | 251 / 20 | no (one-CIS run was stereo Mode B) | yes | yes | **Candidate / project-tested with development tool** | [BT540 section](#asus-usb-bt540--candidate--project-tested-with-development-tool) + [headless results](development/bt540-headless-pipewire-results.md) |
 
 Note: the AX210 row's `not recorded` fields reflect that the prior project
 validation predates this formal record template. The repository did not

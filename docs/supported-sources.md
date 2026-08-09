@@ -49,7 +49,8 @@ What this path needs:
   (`cis-central` for a source).
 - A **current Linux software stack**: Linux kernel 6.4 or later, BlueZ 5.85
   or later, and a current PipeWire/WirePlumber whose BlueZ SPA plugin
-  provides LC3 encoding (via `liblc3`), plus BlueZ experimental
+  provides LC3 encoding (via `liblc3`) — WirePlumber **0.5.15 or newer** for
+  a project-accepted clean host lifecycle — plus BlueZ experimental
   configuration for the ISO socket. Full setup and verification are on the
   [host setup page](linux-le-audio-host-setup.md).
 - **Bluetooth version numbers do not prove LE Audio support.** "Bluetooth
@@ -105,7 +106,8 @@ the [Linux LE Audio host setup](linux-le-audio-host-setup.md) page. In brief,
 the native path needs Linux kernel 6.4+, BlueZ 5.85+ (the first stable release
 with the PAC configuration callback fix), and a current PipeWire built with
 the BlueZ SPA and LC3 (`liblc3`), with the `bap_source` role enabled in
-WirePlumber.
+WirePlumber **0.5.15 or newer** (the project-accepted clean host lifecycle
+floor; see below).
 
 This project validated the native path end-to-end with the **Intel AX210** on
 a host running Linux 7.1.5, BlueZ 5.86, PipeWire 1.6.6, WirePlumber 0.5.14
@@ -114,7 +116,13 @@ a downstream QoS-property spelling patch
 (`MimimumDelay`/`PreferredMimimumDelay` → `MinimumDelay`/`PreferredMinimumDelay`).
 The typo was fixed upstream on 2026-05-07 (commit
 [`d45fd43a1cc3ba791858f11c144112c518a9ad84`](https://github.com/bluez/bluez/commit/d45fd43a1cc3ba791858f11c144112c518a9ad84)),
-so current BlueZ master has the correct keys. The repository's own
+so current BlueZ master has the correct keys. That historical AX210
+validation used WirePlumber **0.5.14** and demonstrated functional BAP
+streaming; the current project acceptance floor is WirePlumber **0.5.15 or
+newer**, because the 0.5.14 shutdown warning behavior (three leaked PipeWire
+proxies under project test) fails this project's zero-warning host lifecycle
+policy. The AX210 adapter validation stands; the floor governs the host
+lifecycle under which new acceptance runs are accepted. The repository's own
 `scripts/bap_central.py` (a BlueZ BAP source that streams LC3 test tones)
 remains a separate, deterministic development/test path for verifying receiver
 builds — it is not the basis for the AX210 project-validation claim above.
@@ -126,7 +134,7 @@ builds — it is not the basis for the AX210 project-validation claim above.
 | Hardware | Host model | Linux status | Receiver status | Notes |
 |---|---|---|---|---|
 | **Intel Wi-Fi 6E AX210** | M.2 (NGFF) combo card — Wi-Fi over PCIe, Bluetooth function over internal USB; on a desktop the carrier needs a USB header connection, and `lsusb` commonly shows `8087:0032 Intel Corp. AX210 Bluetooth` | **Project-validated** | **Project-validated** | Validated as a BAP unicast source with this receiver on Linux via a **generic desktop PipeWire/WirePlumber UI** (the normal desktop flow) and exercised with the repository's `scripts/bap_central.py` development/test tool. Intel's [specifications](https://www.intel.com/content/www/us/en/products/sku/239216/intel-wifi-6e-ax210-gig-embedded/specifications.html) list the Bluetooth function over USB. A practical Linux LE Audio report (Raspberry Pi 5 with an AX210 module, BlueZ/PipeWire/WirePlumber) is at [AK-Experiments](https://ak-experiments.blogspot.com/2025/08/bluetooth-le-audio-on-raspberry-pi-with.html). Needs the current kernel/BlueZ/PipeWire stack — see [host setup](linux-le-audio-host-setup.md) and [adapter evaluation](bluetooth-adapter-evaluation.md). |
-| **ASUS USB-BT540** | USB adapter | **Vendor-supported** (Linux) | **Project-tested (dev tool)** | Measured 2026-08-09: project development-tool tests passed via `scripts/bap_central.py --adapter hci1` — fresh discovery, pairing, encrypted GATT, PACS/ASCS resolution, 48 kHz LC3 (10 ms, PHY 2M), two-CIS Mode A, bonded reconnect, and one-CIS Mode B; the receiver reported zero decode errors, zero I2S underruns, and zero stream resets. Not Supported / project-validated: the normal desktop BlueZ + PipeWire + WirePlumber path is untested, one-CIS mono is unrun, cold unplug/replug repeat is unrun, audible-output confirmation was not recorded, a kernel codec-capability init warning (`-22`) remains, and receiver PLC is unexplained. Status is **candidate**, not recommendation. ASUS officially lists Linux, Bluetooth 5.4, LC3/LE Audio, and LE 2M. See [ASUS USB-BT540](https://www.asus.com/networking-iot-servers/adapters/all-series/usb-bt540/), [tech specs](https://www.asus.com/networking-iot-servers/wireless-adapters/all-series/usb-bt540/techspec/), and [adapter evaluation](bluetooth-adapter-evaluation.md). |
+| **ASUS USB-BT540** | USB adapter | **Vendor-supported** (Linux) | **Project-tested (dev tool)** | Measured 2026-08-09: project development-tool tests passed via `scripts/bap_central.py --adapter hci1` — fresh discovery, pairing, encrypted GATT, PACS/ASCS resolution, 48 kHz LC3 (10 ms, PHY 2M), two-CIS Mode A, bonded reconnect, and one-CIS Mode B; the receiver reported zero decode errors, zero I2S underruns, and zero stream resets. The headless BlueZ + PipeWire + WirePlumber production path also passed one-CIS Mode B (48 kHz, 7.5 ms, 234-byte SDU, PHY 2M) after receiver fixes (empty-SDU concealment, deeper I2S startup reservoir) and the WirePlumber 0.5.15 upgrade, including a clean host shutdown. Not Supported / project-validated: the desktop (KDE/Bluedevil) UI route is untested, one-CIS mono is unrun, cold unplug/replug repeat is unrun, audible-output confirmation was not recorded, a kernel codec-capability init warning (`-22`) remains, and receiver PLC from the development-tool runs is unexplained. Status is **candidate**, not recommendation. ASUS officially lists Linux, Bluetooth 5.4, LC3/LE Audio, and LE 2M. See [ASUS USB-BT540](https://www.asus.com/networking-iot-servers/adapters/all-series/usb-bt540/), [tech specs](https://www.asus.com/networking-iot-servers/wireless-adapters/all-series/usb-bt540/techspec/), and [adapter evaluation](bluetooth-adapter-evaluation.md). |
 | **ASUS USB-BT600** | USB adapter | **Vendor-supported** (Linux) | **Unverified** | **Candidate / under evaluation** — not supported. ASUS officially lists Linux, Bluetooth 6.0, and LC3/LE Audio. Chipset, VID:PID, `cis-central`, ISO MTU/count, availability/maturity, and dynamic receiver tests remain unrecorded. See [ASUS USB-BT600](https://www.asus.com/networking-iot-servers/wireless-adapters/all-series/usb-bt600/). |
 | **Nordic nRF5340 DK (HCI UART)** | Development kit — Bluetooth controller on cpunet, H4 UART on cpuapp | **Unverified** | **Unverified** | **Candidate / under evaluation** as a native HCI development adapter. NCS v3.3.0 supports the controller on cpunet with H4 UART on cpuapp; this repository's `dongle/` is a working source-controller implementation. The hardware source path is not project-validated (existing public evidence does not establish full dynamic acceptance). HCI UART is the supported route — NCS v3.3.0's USB HCI class cannot carry LE ISO. See [adapter evaluation](bluetooth-adapter-evaluation.md). |
 | **Nordic nRF54L15 DK (HCI UART)** | Development kit — `samples/bluetooth/hci_uart` on `nrf54l15dk/nrf54l15/cpuapp` | **Unverified** | **Unverified** | **Candidate / under evaluation** as a native HCI development adapter. NCS v3.3.0's `samples/bluetooth/hci_uart` supports `nrf54l15dk/nrf54l15/cpuapp`; the H4 transport handles packet type `0x05` (ISO). Dynamic Linux and receiver validation remains required. See [adapter evaluation](bluetooth-adapter-evaluation.md). |
@@ -135,8 +143,9 @@ The **Intel AX210 is the only project-validated native adapter** — see the
 [adapter evaluation page](bluetooth-adapter-evaluation.md) for the
 unsupported-device notes and the evaluation contract. This project found **no
 plug-in USB HCI stick that is project-validated**: the ASUS USB-BT540 has
-passed static capability checks and development-tool dynamic tests only, and
-its normal desktop path and remaining acceptance items are still open. Generic
+passed static capability checks, development-tool dynamic tests, and a
+headless production-path one-CIS Mode B run, but its desktop (KDE/Bluedevil)
+UI route and remaining acceptance items are still open. Generic
 "Bluetooth 5.3" or "Bluetooth 5.4" USB dongles do not prove LE Audio support —
 see the version-numbers caveat above — so do not buy one on that basis alone.
 The ASUS USB-BT540 (candidate / project-tested with the development tool) and
