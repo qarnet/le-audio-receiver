@@ -596,16 +596,26 @@ class TestReleaseJobContract(unittest.TestCase):
     def test_post_create_verification_exact(self):
         text = workflow_text()
         for needle in (
-            'gh release view "$tag" --json tag,isDraft,isPrerelease,assets',
-            'assert data["tag"] == tag',
+            'gh release view "$tag" --json tagName,isDraft,isPrerelease,assets,url',
+            'assert data["tagName"] == tag',
             'assert data["isDraft"] is True',
             'assert data["isPrerelease"] is False',
+            'print("draft release URL: %s" % data["url"])',
             '"SHA256SUMS",',
             '"release-provenance.json",',
             "le-audio-receiver-v%s-nrf5340-e83-factory.zip",
             "le-audio-receiver-v%s-nrf54l15-xiao-factory.zip",
         ):
             self.assertIn(needle, text, "missing %r" % needle)
+        # gh release view --json supports tagName/url, not tag/html_url;
+        # the old invalid field names must fail this static check.
+        for forbidden in (
+            "--json tag,isDraft",
+            'data["tag"] ==',
+            'data["html_url"]',
+            "html_url",
+        ):
+            self.assertNotIn(forbidden, text, "invalid field %r present" % forbidden)
 
     def test_no_forbidden_release_configuration(self):
         text = workflow_text()

@@ -34,6 +34,7 @@ Guarantees:
   one line per ZIP only, no duplicates, and both hashes match the files;
 - both ZIPs pass integrity checks, have no duplicate/directory/
   path-traversal members, and exactly the FR1 member order;
+- each ZIP's ``FLASHING.md`` is strict UTF-8;
 - each internal SHA256SUMS is exact/sorted and hashes every member except
   itself;
 - each release-manifest.json matches the exact FR1 schema and reports the
@@ -503,6 +504,13 @@ def _validate_zip(
                 raise ReleaseError(
                     "%s member %r cannot be read: %s" % (path, info.filename, exc)
                 )
+    flashing = mapping.get("FLASHING.md")
+    if flashing is None:
+        raise ReleaseError("%s is missing FLASHING.md" % path)
+    try:
+        flashing.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ReleaseError("%s FLASHING.md is not valid UTF-8: %s" % (path, exc))
     _validate_internal_sums(mapping, members, path)
     _validate_manifest(
         mapping,
@@ -603,10 +611,15 @@ def _run(args):
         run_attempt, "run attempt must be a canonical positive decimal integer: "
     )
 
+    # 0. Validate the path arguments as string inputs before any filesystem
+    #    action, so control characters/newlines cannot reach the filesystem.
+    artifact_dir = _validate_string_input(args.artifact_dir, "artifact directory")
+    output_dir_arg = _validate_string_input(args.output_dir, "output directory")
+
     # 1. Validate the artifact directory and every artifact before any
     #    output creation.
-    _validate_artifact_dir(args.artifact_dir, version)
-    _validate_top_checksum(args.artifact_dir, version)
+    _validate_artifact_dir(artifact_dir, version)
+    _validate_top_checksum(artifact_dir, version)
 
     zip_names = (
         _expected_zip_name("nrf5340-e83", version),
@@ -614,7 +627,7 @@ def _run(args):
     )
     mappings = {
         zip_names[0]: _validate_zip(
-            os.path.join(args.artifact_dir, zip_names[0]),
+            os.path.join(artifact_dir, zip_names[0]),
             version,
             commit,
             ncs,
@@ -624,7 +637,7 @@ def _run(args):
             IMAGES_5340,
         ),
         zip_names[1]: _validate_zip(
-            os.path.join(args.artifact_dir, zip_names[1]),
+            os.path.join(artifact_dir, zip_names[1]),
             version,
             commit,
             ncs,
@@ -636,7 +649,7 @@ def _run(args):
     }
 
     # 2. Require the output directory absent.
-    output_dir = os.path.abspath(args.output_dir)
+    output_dir = os.path.abspath(output_dir_arg)
     if os.path.lexists(output_dir):
         raise ReleaseError("output directory already exists: %s" % output_dir)
 

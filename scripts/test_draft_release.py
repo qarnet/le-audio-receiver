@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import warnings
 import zipfile
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -140,6 +141,7 @@ def run_prepare(
     tmp,
     dist,
     output_dir=None,
+    artifact_dir=None,
     tag=TAG,
     version=VERSION,
     commit=COMMIT,
@@ -153,6 +155,8 @@ def run_prepare(
 ):
     if output_dir is None:
         output_dir = os.path.join(tmp, OUTPUT_DIR)
+    if artifact_dir is None:
+        artifact_dir = dist
     cmd = [
         sys.executable,
         PREPARE_SCRIPT,
@@ -175,7 +179,7 @@ def run_prepare(
         "--run-attempt",
         run_attempt,
         "--artifact-dir",
-        dist,
+        artifact_dir,
         "--output-dir",
         output_dir,
     ]
@@ -461,6 +465,40 @@ class TestInvalidInputs(unittest.TestCase):
                         os.path.exists(output), "output must stay absent: %s" % name
                     )
 
+    def test_control_chars_in_path_arguments_fail_cleanly(self):
+        """Control characters/newlines in either path argument must fail
+        before any filesystem action: no final output, no staging sibling,
+        one clean diagnostic."""
+        cases = [
+            ("artifact_dir_newline", dict(artifact_dir="dist\n")),
+            ("artifact_dir_tab", dict(artifact_dir="dist\t")),
+            ("artifact_dir_bell", dict(artifact_dir="dist\x07")),
+            ("output_dir_newline", dict(output_dir="meta\nx")),
+            ("output_dir_tab", dict(output_dir="meta\tx")),
+            ("output_dir_bell", dict(output_dir="meta\x07x")),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = build_dist(tmp)
+            for name, kwargs in cases:
+                with self.subTest(variant=name):
+                    output = os.path.join(tmp, OUTPUT_DIR)
+                    res = run_prepare(tmp, dist, **kwargs)
+                    self.assertNotEqual(res.returncode, 0, "must fail: %s" % name)
+                    self.assertTrue(res.stderr.startswith(ERROR_PREFIX), res.stderr)
+                    self.assertNotIn("Traceback", res.stderr)
+                    self.assertEqual(res.stdout, "")
+                    self.assertFalse(
+                        os.path.exists(output), "output must stay absent: %s" % name
+                    )
+                    leftovers = [
+                        entry
+                        for entry in os.listdir(tmp)
+                        if entry.startswith(STAGING_PREFIX)
+                    ]
+                    self.assertEqual(
+                        leftovers, [], "no staging sibling allowed: %s" % name
+                    )
+
 
 class TestArtifactDirectory(unittest.TestCase):
     """Test 4: missing/extra/directory/symlink/nonregular artifact entries
@@ -620,7 +658,19 @@ class TestZipIntegrity(unittest.TestCase):
             members = zip_members(os.path.join(dist, ZIP5340))
             self.assertEqual(members[0][0], "FLASHING.md")
             dup = members + [members[0]]
-            rewrite_zip(os.path.join(dist, ZIP5340), dup)
+            # The deliberate duplicate fixture write triggers zipfile's own
+            # duplicate-name diagnostic once.  Capture and pin that exact
+            # warning locally so it cannot leak into the gate log; the
+            # duplicate member is the fixture for the validator rejection.
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                rewrite_zip(os.path.join(dist, ZIP5340), dup)
+            self.assertEqual(
+                len(caught), 1, "expected exactly one duplicate-name warning"
+            )
+            self.assertTrue(issubclass(caught[0].category, UserWarning))
+            self.assertIn("Duplicate name", str(caught[0].message))
+            self.assertIn("FLASHING.md", str(caught[0].message))
             rehash_top_sums(dist)
             res = run_prepare(tmp, dist)
             self.assertNotEqual(res.returncode, 0)
@@ -774,6 +824,24 @@ class TestInternalSumsAndManifest(unittest.TestCase):
             res = run_prepare(tmp, dist)
             self.assertNotEqual(res.returncode, 0)
             self.assertIn("malformed", res.stderr.lower())
+            self.assertFalse(os.path.exists(os.path.join(tmp, OUTPUT_DIR)))
+
+    def test_invalid_utf8_flashing_note_fails(self):
+        """A ZIP whose FLASHING.md is not valid UTF-8 must fail cleanly.
+        Internal and top-level checksums are recomputed so the rejection
+        is specifically the invalid note, not a checksum mismatch."""
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = build_dist(tmp)
+            path = os.path.join(dist, ZIP5340)
+            replace_member(path, "FLASHING.md", b"\xff\xfe\x00 not text\n")
+            rehash_zip(path)
+            rehash_top_sums(dist)
+            res = run_prepare(tmp, dist)
+            self.assertNotEqual(res.returncode, 0)
+            self.assertTrue(res.stderr.startswith(ERROR_PREFIX), res.stderr)
+            self.assertIn("UTF-8", res.stderr)
+            self.assertIn("FLASHING.md", res.stderr)
+            self.assertNotIn("Traceback", res.stderr)
             self.assertFalse(os.path.exists(os.path.join(tmp, OUTPUT_DIR)))
 
     def _mutated_manifest_case(self, tmp, mutate, check):

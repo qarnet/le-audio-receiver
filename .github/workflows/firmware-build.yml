@@ -223,14 +223,14 @@ jobs:
         run: |
           version="$(python3 scripts/project-version.py)"
           tag="v$version"
-          gh release view "$tag" --json tag,isDraft,isPrerelease,assets > release-check.json
+          gh release view "$tag" --json tagName,isDraft,isPrerelease,assets,url > release-check.json
           python3 - "$tag" "$version" <<'PYEOF'
           import json
           import sys
           tag, version = sys.argv[1], sys.argv[2]
           with open("release-check.json", "r", encoding="utf-8") as fh:
               data = json.load(fh)
-          assert data["tag"] == tag, data["tag"]
+          assert data["tagName"] == tag, data["tagName"]
           assert data["isDraft"] is True, data["isDraft"]
           assert data["isPrerelease"] is False, data["isPrerelease"]
           expected = [
@@ -241,5 +241,5 @@ jobs:
           ]
           names = sorted(asset["name"] for asset in data["assets"])
           assert names == expected, names
-          print("draft release URL: %s" % data["html_url"])
+          print("draft release URL: %s" % data["url"])
           PYEOF
