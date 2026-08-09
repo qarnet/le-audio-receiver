@@ -7,11 +7,11 @@ subprocess against the repository ``VERSION`` and temporary fixtures.
 Tests 5-8 statically validate the committed workflow YAML text: the
 workflow is declarative public behavior and hosted execution is unavailable
 before remote push.  Tests 9+ extend the same static validation to the FR3
-trusted-main release job: automatic version-tag creation from a VERSION
-change on main, fail-closed identity and collision probes, draft creation
-at the exact main commit, and post-create release/tag verification.  No
-third-party YAML parser, no private-helper assertions, and no mock of the
-workflow.
+trusted-main release job: automatic version-tag initiation from a VERSION
+change on main, fail-closed identity and collision probes, creation of an
+untagged draft at the exact main commit (GitHub creates the git tag only at
+manual publication), and post-create draft verification.  No third-party
+YAML parser, no private-helper assertions, and no mock of the workflow.
 """
 
 import os
@@ -643,14 +643,11 @@ class TestReleaseJobContract(unittest.TestCase):
         text = workflow_text()
         for needle in (
             'gh release view "$tag" --json tagName,isDraft,isPrerelease,assets,targetCommitish,url',
-            'gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" > tag-check.json',
             'assert release["tagName"] == tag',
             'assert release["isDraft"] is True',
             'assert release["isPrerelease"] is False',
             'assert release["targetCommitish"] == sha',
-            'assert tag_data["ref"] == "refs/tags/" + tag',
-            'assert tag_data["object"]["type"] == "commit"',
-            'assert tag_data["object"]["sha"] == sha',
+            "assert names == expected, names",
             'print("draft release URL: %s" % release["url"])',
             '"SHA256SUMS",',
             '"release-provenance.json",',
@@ -658,16 +655,38 @@ class TestReleaseJobContract(unittest.TestCase):
             "le-audio-receiver-v%s-nrf54l15-xiao-factory.zip",
         ):
             self.assertIn(needle, text, "missing %r" % needle)
-        # gh release view --json supports tagName/url, not tag/html_url;
-        # the old invalid field names must fail this static check.
+        # Draft releases are untagged (GitHub creates the git tag only at
+        # publication), so the post-create check must never query the git
+        # ref or read a tag-check file.
         for forbidden in (
             "--json tag,isDraft",
             'data["tag"] ==',
             'data["html_url"]',
             "html_url",
             "--verify-tag",
+            "tag-check.json",
+            "tag_data",
         ):
-            self.assertNotIn(forbidden, text, "invalid field %r present" % forbidden)
+            self.assertNotIn(forbidden, text, "forbidden %r present" % forbidden)
+
+    def test_git_ref_endpoint_only_in_preflight_probe(self):
+        text = workflow_text()
+        self.assertEqual(
+            text.count("git/ref/tags/$tag"),
+            1,
+            "git-ref endpoint must appear exactly once, in the pre-write "
+            "collision probe only",
+        )
+        self.assertIn(
+            'gh api --include "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >"$tag_probe" 2>&1',
+            text,
+            "pre-write tag absence probe must remain",
+        )
+        self.assertNotIn(
+            "> tag-check.json",
+            text,
+            "post-create must not query the git ref (drafts are untagged)",
+        )
 
     def test_no_forbidden_release_configuration(self):
         text = workflow_text()
