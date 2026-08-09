@@ -48,6 +48,9 @@ jobs:
           test "$(git -C nrf rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
           test "$(tr -d '\r\n' < nrf/VERSION)" = "3.3.0"
           test "$(west topdir)" = "$GITHUB_WORKSPACE/workspace"
+          zephyr_base="$GITHUB_WORKSPACE/workspace/zephyr"
+          test -d "$zephyr_base"
+          printf 'ZEPHYR_BASE=%s\n' "$zephyr_base" >> "$GITHUB_ENV"
       - name: Project version
         id: project-version
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver

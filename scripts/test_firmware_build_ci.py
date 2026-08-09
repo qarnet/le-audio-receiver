@@ -272,6 +272,32 @@ class TestWorkflowCommands(unittest.TestCase):
         ):
             self.assertIn(command, text, "missing %r" % command)
 
+    def test_zephyr_base_export_after_workspace_verification(self):
+        text = workflow_text()
+        for line in (
+            'zephyr_base="$GITHUB_WORKSPACE/workspace/zephyr"',
+            'test -d "$zephyr_base"',
+            'printf \'ZEPHYR_BASE=%s\\n\' "$zephyr_base" >> "$GITHUB_ENV"',
+        ):
+            self.assertIn(line, text, "missing %r" % line)
+        env_index = text.index('"$GITHUB_ENV"')
+        for command in (
+            "west init -l nrf",
+            "west update --narrow -o=--depth=1",
+            "west zephyr-export",
+            "west topdir",
+        ):
+            self.assertLess(
+                text.index(command),
+                env_index,
+                "ZEPHYR_BASE export must appear after %r" % command,
+            )
+        self.assertNotIn(
+            "ZEPHYR_BASE=",
+            text[: text.index("west init -l nrf")],
+            "ZEPHYR_BASE must not be set before west init",
+        )
+
     def test_build_contract_and_version_steps_exact(self):
         text = workflow_text()
         for command in (
