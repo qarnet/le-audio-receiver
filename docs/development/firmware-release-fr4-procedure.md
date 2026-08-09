@@ -400,31 +400,62 @@ and re-pairing. Any reset failure blocks the row.
    concurrent console capture:
 
    ```bash
-   # nRF5340 example; nRF54L15 uses the same pattern with its own names
-   # (live Xiao CDC port resolved at execution time, normally ttyACM0).
+   # nRF5340 example; nRF54L15 uses the same fail-closed pattern with
+   # nrf54l15-7p5-* names and its live CDC port (resolved at execution
+   # time, normally ttyACM0).
    mkdir -p "$RUN_DIR/metadata/nrf5340-7p5"
    python3 scripts/read_acm.py ttyUSB0 \
      "$RUN_DIR/logs/nrf5340-7p5-receiver.log" 60 \
      > "$RUN_DIR/logs/nrf5340-7p5-reader.log" 2>&1 &
    READER_PID=$!
-   # Wait until the reader has opened the console port.
+
+   # Fail closed: wait up to 10 s for exact "Opened" evidence in the
+   # reader log; never rely on a bounded loop falling through.
+   READER_OPENED=0
    for _ in $(seq 1 50); do
-     grep -q "Opened" "$RUN_DIR/logs/nrf5340-7p5-reader.log" 2>/dev/null && break
+     if grep -q "Opened" "$RUN_DIR/logs/nrf5340-7p5-reader.log" 2>/dev/null; then
+       READER_OPENED=1
+       break
+     fi
      sleep 0.2
    done
+   if [ "$READER_OPENED" -ne 1 ]; then
+     kill "$READER_PID" 2>/dev/null || true
+     wait "$READER_PID" 2>/dev/null || true
+     echo "FR4 FAIL: reader did not open nRF5340 console within 10 s" >&2
+     exit 1
+   fi
+
+   # Retain gate stdout+stderr; capture exit status without skipping
+   # reader cleanup.
    python3 scripts/bluez-wireplumber-gate.py --receiver-address <live> \
      --duration 30 --log "$RUN_DIR/logs/nrf5340-7p5-receiver.log" \
-     --output-dir "$RUN_DIR/metadata/nrf5340-7p5/"
+     --output-dir "$RUN_DIR/metadata/nrf5340-7p5/" \
+     > "$RUN_DIR/logs/nrf5340-7p5-gate.log" 2>&1
+   GATE_STATUS=$?
+
    wait "$READER_PID"
+   READER_STATUS=$?
+
+   if [ "$GATE_STATUS" -ne 0 ] || [ "$READER_STATUS" -ne 0 ]; then
+     echo "FR4 FAIL: gate=$GATE_STATUS reader=$READER_STATUS" >&2
+     exit 1
+   fi
    ```
 
    Use the current system PipeWire/WirePlumber; require parsed
    `Frame Duration: 7500 us`, about 133.3 fps, duration-consistent SDUs,
    and zero fault fields. Never overwrite one target's evidence with the
-   other: nRF5340 evidence lives under `nrf5340-7p5*` names and nRF54L15
-   under `nrf54l15-7p5*` names
+   other: nRF5340 evidence lives under `nrf5340-7p5*` names
+   (`$RUN_DIR/logs/nrf5340-7p5-receiver.log`,
+   `$RUN_DIR/logs/nrf5340-7p5-gate.log`,
+   `$RUN_DIR/metadata/nrf5340-7p5/`). nRF54L15 uses the same fail-closed
+   pattern with `nrf54l15-7p5-*` names
    (`$RUN_DIR/logs/nrf54l15-7p5-receiver.log`,
-   `$RUN_DIR/metadata/nrf54l15-7p5/`).
+   `$RUN_DIR/logs/nrf54l15-7p5-gate.log`,
+   `$RUN_DIR/metadata/nrf54l15-7p5/`) and its live CDC port (resolved at
+   execution time, normally `ttyACM0`), including the 10 s reader-open
+   gate and the gate+reader exit-zero requirement.
 
 **Why this order**: `bt unpair` before every fresh row guarantees the
 receiver is in open pairing mode with zero bonds, so the fresh central
