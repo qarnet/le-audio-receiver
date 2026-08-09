@@ -167,7 +167,7 @@ ZTEST(audio_i2s, test_stop_drains_admitted_push)
 
 	k_sem_reset(&w_entered);
 	k_sem_reset(&w_release);
-	fake_i2s_block_write_at(7, &w_entered, &w_release);
+	fake_i2s_block_write_at(STARTUP_FIRST_STEADY_WRITE_IDX, &w_entered, &w_release);
 
 	struct push_ctx pc = {
 		.in = test_input_480(),
@@ -220,7 +220,7 @@ ZTEST(audio_i2s, test_two_overlapping_stops_finalize_once)
 
 	k_sem_reset(&w_entered);
 	k_sem_reset(&w_release);
-	fake_i2s_block_write_at(7, &w_entered, &w_release);
+	fake_i2s_block_write_at(STARTUP_FIRST_STEADY_WRITE_IDX, &w_entered, &w_release);
 
 	struct push_ctx pc = {
 		.in = test_input_480(),
@@ -283,14 +283,14 @@ ZTEST(audio_i2s, test_closed_rejection_and_reconnect)
 	zassert_equal(mock_drift_update_calls, 0, "no drift while closed");
 	zassert_false(audio_i2s_test_is_started(), "still stopped");
 
-	/* Explicit stream open then a push performs a fresh seven-block
+	/* Explicit stream open then a push performs a fresh eleven-block
 	 * prefill and START without reconfigure. */
 	zassert_equal(audio_sink_stream_open(), 0, "stream open");
 	zassert_true(audio_i2s_test_is_accepting(), "admission open");
 
 	fake_i2s_reset();
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0, "reconnect push");
-	zassert_equal(fake_i2s_write_calls(), 7, "fresh seven-block prefill");
+	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "fresh eleven-block prefill");
 	zassert_equal(fake_i2s_trigger_calls(), 1, "fresh START");
 	zassert_equal(fake_i2s_trigger_rec(0)->cmd, I2S_TRIGGER_START, "START");
 	zassert_true(audio_i2s_test_is_started(), "started again");
@@ -320,7 +320,7 @@ ZTEST(audio_i2s, test_failure_exits_release_admission)
 	test_reset_all();
 	test_start_stream();
 	fake_i2s_set_write_fail_errno(-EBUSY);
-	fake_i2s_fail_write_at(7);
+	fake_i2s_fail_write_at(STARTUP_FIRST_STEADY_WRITE_IDX);
 
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), -EBUSY,
 		      "steady write failure");
@@ -339,7 +339,7 @@ ZTEST(audio_i2s, test_open_waits_for_full_stop_cohort)
 
 	k_sem_reset(&w_entered);
 	k_sem_reset(&w_release);
-	fake_i2s_block_write_at(7, &w_entered, &w_release);
+	fake_i2s_block_write_at(STARTUP_FIRST_STEADY_WRITE_IDX, &w_entered, &w_release);
 
 	struct push_ctx pc = {
 		.in = test_input_480(),
@@ -393,7 +393,7 @@ ZTEST(audio_i2s, test_close_is_nonblocking)
 
 	k_sem_reset(&w_entered);
 	k_sem_reset(&w_release);
-	fake_i2s_block_write_at(7, &w_entered, &w_release);
+	fake_i2s_block_write_at(STARTUP_FIRST_STEADY_WRITE_IDX, &w_entered, &w_release);
 
 	struct push_ctx pc = {
 		.in = test_input_480(),
@@ -449,7 +449,7 @@ ZTEST(audio_i2s, test_stop_wakes_sleeping_non_owner)
 
 	k_sem_reset(&w_entered);
 	k_sem_reset(&w_release);
-	fake_i2s_block_write_at(7, &w_entered, &w_release);
+	fake_i2s_block_write_at(STARTUP_FIRST_STEADY_WRITE_IDX, &w_entered, &w_release);
 
 	struct push_ctx pc = {
 		.in = test_input_480(),
@@ -537,11 +537,11 @@ ZTEST(audio_i2s, test_admitted_push_uses_single_input_frames_snapshot)
 	zassert_equal(pc.ret, 0, "admitted push returns 0");
 
 	/* Every block of the admitted operation retained the 480-frame
-	 * shape: six silence blocks + one 480-frame data block. */
-	zassert_equal(fake_i2s_write_calls(), 7, "seven startup writes");
+	 * shape: ten silence blocks + one 480-frame data block. */
+	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "eleven startup writes");
 	zassert_equal(fake_i2s_trigger_calls(), 1, "one START");
 	zassert_equal(fake_i2s_trigger_rec(0)->cmd, I2S_TRIGGER_START, "START");
-	for (int i = 0; i < 6; i++) {
+	for (int i = 0; i < STARTUP_SILENCE_BLOCKS; i++) {
 		zassert_true(test_rec_silence(fake_i2s_write_rec(i)), "silence block %d", i);
 		zassert_equal(fake_i2s_write_rec(i)->size, TEST_BYTES_480,
 			      "silence size 480 frames %d", i);
@@ -549,38 +549,47 @@ ZTEST(audio_i2s, test_admitted_push_uses_single_input_frames_snapshot)
 	zassert_equal(mock_rate_convert_last_input_frames, TEST_FRAMES_480,
 		      "rate converter fed the 480-frame snapshot");
 #if defined(AUDIO_I2S_TEST_MARKER_ASRC)
-	zassert_equal(fake_i2s_write_rec(6)->size, TEST_BYTES_480, "data size 480 output");
-	zassert_true(test_rec_pattern(fake_i2s_write_rec(6), 0xCC, 0x33),
+	zassert_equal(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX)->size, TEST_BYTES_480,
+		      "data size 480 output");
+	zassert_true(test_rec_pattern(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX), 0xCC, 0x33),
 		     "offload output pattern queued");
 #else
-	zassert_equal(fake_i2s_write_rec(6)->size, TEST_BYTES_480, "data size 480");
-	zassert_true(test_rec_matches_input(fake_i2s_write_rec(6), test_input_480()),
+	zassert_equal(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX)->size, TEST_BYTES_480,
+		      "data size 480");
+	zassert_true(test_rec_matches_input(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX),
+					    test_input_480()),
 		     "exact 480-frame input bytes queued");
 #endif
-	zassert_equal(fake_i2s_queued_count(), 7, "seven queued");
-	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 7, "no overflow / leak");
+	zassert_equal(fake_i2s_queued_count(), STARTUP_TOTAL_BLOCKS, "eleven queued");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - STARTUP_TOTAL_BLOCKS,
+		      "no overflow / leak");
 	zassert_true(audio_i2s_test_is_started(), "started");
 
 	/* Next push uses the NEW 360 setting: a 480-sample count is
 	 * rejected by exact validation against the new snapshot. */
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), -EINVAL,
 		      "480 sample count rejected after setter");
-	zassert_equal(fake_i2s_write_calls(), 7, "no writes from rejected push");
+	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "no writes from rejected push");
 
 	/* A 360-frame push is admitted with the new setting. */
 	zassert_equal(audio_sink_push(test_input_360(), TEST_FRAMES_360 * 2), 0,
 		      "360 push uses new setting");
-	zassert_equal(fake_i2s_write_calls(), 8, "one steady write");
+	zassert_equal(fake_i2s_write_calls(), STARTUP_FIRST_STEADY_WRITE_IDX + 1,
+		      "one steady write");
 #if defined(AUDIO_I2S_TEST_MARKER_ASRC)
 	zassert_equal(mock_offload_last_input_frames, TEST_FRAMES_360,
 		      "offload fed the 360-frame snapshot");
-	zassert_equal(fake_i2s_write_rec(7)->size, TEST_BYTES_480, "ASRC output size");
+	zassert_equal(fake_i2s_write_rec(STARTUP_FIRST_STEADY_WRITE_IDX)->size, TEST_BYTES_480,
+		      "ASRC output size");
 #else
-	zassert_equal(fake_i2s_write_rec(7)->size, TEST_BYTES_360, "data size 360");
-	zassert_true(test_rec_matches_input(fake_i2s_write_rec(7), test_input_360()),
+	zassert_equal(fake_i2s_write_rec(STARTUP_FIRST_STEADY_WRITE_IDX)->size, TEST_BYTES_360,
+		      "data size 360");
+	zassert_true(test_rec_matches_input(fake_i2s_write_rec(STARTUP_FIRST_STEADY_WRITE_IDX),
+					    test_input_360()),
 		     "exact 360-frame input bytes queued");
 #endif
-	zassert_equal(fake_i2s_queued_count(), 8, "eight queued");
-	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 8, "slab consistent");
+	zassert_equal(fake_i2s_queued_count(), STARTUP_TOTAL_BLOCKS + 1, "twelve queued");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - (STARTUP_TOTAL_BLOCKS + 1),
+		      "slab consistent");
 	test_assert_no_duplicate_writes();
 }

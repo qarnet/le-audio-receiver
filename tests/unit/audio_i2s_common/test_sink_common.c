@@ -148,12 +148,12 @@ ZTEST(audio_i2s, test_reinit_active_stream_preserves_queue_state)
 {
 	test_start_stream();
 
-	zassert_equal(fake_i2s_queued_count(), 7, "seven queued");
-	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 7, "nine free");
+	zassert_equal(fake_i2s_queued_count(), STARTUP_TOTAL_BLOCKS, "eleven queued");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - STARTUP_TOTAL_BLOCKS, "five free");
 
-	void *ptr_before[7];
+	void *ptr_before[STARTUP_TOTAL_BLOCKS];
 
-	for (int i = 0; i < 7; i++) {
+	for (int i = 0; i < STARTUP_TOTAL_BLOCKS; i++) {
 		ptr_before[i] = fake_i2s_queued_ptr(i);
 	}
 	int writes_before = fake_i2s_write_calls();
@@ -168,9 +168,10 @@ ZTEST(audio_i2s, test_reinit_active_stream_preserves_queue_state)
 	zassert_equal(audio_sink_init(), 0, "re-init while streaming returns 0");
 
 	/* Exact queue/pointers/free count unchanged. */
-	zassert_equal(fake_i2s_queued_count(), 7, "queue count unchanged");
-	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 7, "free count unchanged");
-	for (int i = 0; i < 7; i++) {
+	zassert_equal(fake_i2s_queued_count(), STARTUP_TOTAL_BLOCKS, "queue count unchanged");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - STARTUP_TOTAL_BLOCKS,
+		      "free count unchanged");
+	for (int i = 0; i < STARTUP_TOTAL_BLOCKS; i++) {
 		zassert_equal(fake_i2s_queued_ptr(i), ptr_before[i], "pointer %d unchanged", i);
 	}
 	zassert_equal(fake_i2s_write_calls(), writes_before, "no new writes");

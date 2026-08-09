@@ -49,10 +49,10 @@ extern uint32_t mock_rate_convert_last_out_rate;
 extern size_t mock_rate_convert_next_ret;
 extern int mock_rate_convert_next_calls;
 extern size_t mock_rate_convert_last_input_frames;
-/* Optional per-call return sequence (startup pre-fill uses exactly 6
+/* Optional per-call return sequence (startup pre-fill uses exactly 10
  * calls).  When seq_len > 0, call i returns seq[i] for i < seq_len, then
  * falls back to mock_rate_convert_next_ret. */
-#define MOCK_RATE_CONVERT_SEQ_MAX 8
+#define MOCK_RATE_CONVERT_SEQ_MAX 10
 extern size_t mock_rate_convert_next_seq[MOCK_RATE_CONVERT_SEQ_MAX];
 extern int mock_rate_convert_next_seq_len;
 extern int mock_rate_convert_next_seq_pos;

@@ -69,11 +69,11 @@ ZTEST(audio_i2s, test_offload_success_frame_counts)
 			      "offload %u frames", frame_counts[i]);
 
 		zassert_equal(mock_asrc_process_calls, 0, "no CPU process on offload success");
-		zassert_equal(fake_i2s_write_calls(), 7, "seven writes");
-		zassert_equal(fake_i2s_write_rec(6)->size, (size_t)frame_counts[i] * 4,
-			      "exact output bytes queued");
+		zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "eleven writes");
+		zassert_equal(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX)->size,
+			      (size_t)frame_counts[i] * 4, "exact output bytes queued");
 
-		const struct fake_i2s_write_rec *data = fake_i2s_write_rec(6);
+		const struct fake_i2s_write_rec *data = fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX);
 
 		if (frame_counts[i] == 1) {
 			/* Only 4 bytes written; the rest of the block is
@@ -132,9 +132,11 @@ ZTEST(audio_i2s, test_offload_error_classes_fallback_cpu)
 		zassert_equal(mock_asrc_last_prev_l, 0, "CPU from unchanged pre-state l");
 		zassert_equal(mock_asrc_last_prev_r, 0, "CPU from unchanged pre-state r");
 		zassert_false(mock_asrc_last_prev_valid, "CPU from unchanged pre-state valid");
-		zassert_equal(fake_i2s_write_rec(6)->size, TEST_BYTES_480, "CPU output queued");
-		zassert_true(test_rec_pattern(fake_i2s_write_rec(6), 0x22, 0x11),
-			     "CPU pattern queued");
+		zassert_equal(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX)->size, TEST_BYTES_480,
+			      "CPU output queued");
+		zassert_true(
+			test_rec_pattern(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX), 0x22, 0x11),
+			"CPU pattern queued");
 		zassert_equal(audio_i2s_test_offload_sequence(), 1,
 			      "sequence advances on fallback block");
 		zassert_true(audio_i2s_test_asrc_prev_valid(), "CPU committed prev");
@@ -155,10 +157,11 @@ ZTEST(audio_i2s, test_offload_zero_and_oversized_fallback)
 
 		zassert_equal(mock_asrc_process_calls, 1, "CPU fallback ran");
 		zassert_equal(mock_asrc_state_import_calls, 0, "no import for invalid frames");
-		zassert_equal(fake_i2s_write_rec(6)->size, TEST_BYTES_480,
+		zassert_equal(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX)->size, TEST_BYTES_480,
 			      "CPU output overwrites untrusted offload output");
-		zassert_true(test_rec_pattern(fake_i2s_write_rec(6), 0x22, 0x11),
-			     "CPU pattern (untrusted offload bytes overwritten)");
+		zassert_true(
+			test_rec_pattern(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX), 0x22, 0x11),
+			"CPU pattern (untrusted offload bytes overwritten)");
 		zassert_equal(audio_i2s_test_offload_sequence(), 1, "sequence advanced once");
 	}
 }
@@ -175,8 +178,9 @@ ZTEST(audio_i2s, test_offload_import_reject_falls_back)
 	zassert_equal(mock_asrc_process_calls, 1, "CPU fallback ran");
 	zassert_equal(mock_asrc_last_prev_l, 0, "CPU from unchanged pre-state");
 	zassert_false(mock_asrc_last_prev_valid, "pre-state still invalid");
-	zassert_equal(fake_i2s_write_rec(6)->size, TEST_BYTES_480, "CPU output queued");
-	zassert_true(test_rec_pattern(fake_i2s_write_rec(6), 0x22, 0x11),
+	zassert_equal(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX)->size, TEST_BYTES_480,
+		      "CPU output queued");
+	zassert_true(test_rec_pattern(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX), 0x22, 0x11),
 		     "untrusted offload output overwritten");
 	zassert_true(audio_i2s_test_asrc_prev_valid(), "CPU committed prev");
 	zassert_equal(audio_i2s_test_offload_sequence(), 1, "sequence advanced once");
@@ -195,8 +199,10 @@ ZTEST(audio_i2s, test_cpu_fallback_updates_prev_and_queues_output)
 	zassert_equal(audio_i2s_test_asrc_prev_l(), -7, "prev l updated");
 	zassert_equal(audio_i2s_test_asrc_prev_r(), 9, "prev r updated");
 	zassert_true(audio_i2s_test_asrc_prev_valid(), "prev valid");
-	zassert_equal(fake_i2s_write_rec(6)->size, 477 * 4, "exact CPU output frames queued");
-	zassert_true(test_rec_pattern(fake_i2s_write_rec(6), 0x22, 0x11), "CPU pattern");
+	zassert_equal(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX)->size, 477 * 4,
+		      "exact CPU output frames queued");
+	zassert_true(test_rec_pattern(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX), 0x22, 0x11),
+		     "CPU pattern");
 }
 
 /* ── CPU failure paths ───────────────────────────────────────────── */
@@ -265,7 +271,8 @@ ZTEST(audio_i2s, test_offload_reject_360_input_falls_back)
 
 	zassert_equal(mock_offload_last_input_frames, TEST_FRAMES_360, "offload saw 360 frames");
 	zassert_equal(mock_asrc_last_input_frames, TEST_FRAMES_360, "CPU saw 360 frames");
-	zassert_equal(fake_i2s_write_rec(6)->size, TEST_BYTES_480, "CPU output frames queued");
+	zassert_equal(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX)->size, TEST_BYTES_480,
+		      "CPU output frames queued");
 	zassert_equal(fake_i2s_write_rec(0)->size, TEST_BYTES_480, "silence size 480-based");
 }
 
@@ -306,11 +313,13 @@ ZTEST(audio_i2s, test_repeat_uses_separate_slab_asrc)
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0, "steady push");
 
 	zassert_equal(mock_perf_repeat_fallback_calls, 1, "repeat counted once");
-	zassert_equal(fake_i2s_write_calls(), 9, "7 startup + data + repeat block");
+	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS + 2,
+		      "11 startup + data + repeat block");
 	zassert_equal(fake_i2s_queued_count(), 2, "both queued");
 
-	const struct fake_i2s_write_rec *data = fake_i2s_write_rec(7);
-	const struct fake_i2s_write_rec *dup = fake_i2s_write_rec(8);
+	const struct fake_i2s_write_rec *data = fake_i2s_write_rec(STARTUP_FIRST_STEADY_WRITE_IDX);
+	const struct fake_i2s_write_rec *dup =
+		fake_i2s_write_rec(STARTUP_FIRST_STEADY_WRITE_IDX + 1);
 
 	zassert_not_equal(dup->ptr, data->ptr, "separate slab block");
 	zassert_equal(dup->size, data->size, "repeat copies saved frame size");
