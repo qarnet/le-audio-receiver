@@ -6,10 +6,10 @@
  *
  * The session is the exclusive owner of app audio receive state: validated
  * codec shape per sink slot, LC3 decoder contexts, per-CIS ISO sequence
- * trackers, the shared Mode A event assembler, configured occupancy,
- * presentation delay, receive counters, and the
- * decode/conceal/volume/push mechanics with their statistics, perf, and
- * BSim-observer calls.
+ * trackers and timestamp-cadence trackers, the shared Mode A event
+ * assembler, configured occupancy, presentation delay, receive counters,
+ * and the decode/conceal/volume/push mechanics with their statistics,
+ * perf, and BSim-observer calls.
  *
  * It NEVER owns or clears Bluetooth stack objects: struct bt_bap_stream,
  * conn, ep, codec_cfg, qos, iso all stay with bt_bap.c/ASCS.  The receive
@@ -20,7 +20,8 @@
  * (at the successful stream_started gate-open edge) enables admission;
  * config/release/reset_all never reopen it.  Teardown calls rx_close(),
  * which closes admission, bumps the generation, and waits for admitted
- * receive leases to drain before any decoder/assembler/sequence reset.
+ * receive leases to drain before any decoder/assembler/sequence/cadence
+ * reset.
  */
 
 #ifndef AUDIO_STREAM_SESSION_H
@@ -67,9 +68,9 @@ int audio_stream_session_init(void);
 /**
  * Store the validated codec shape for sink @p idx (ASCS Config success).
  * Resets the slot's receive count, presentation delay, decoder context,
- * and sequence tracker, and increments the configured count.  The slot
- * becomes "configured" (occupancy for the lifecycle gate) but receive
- * admission is NOT opened here.
+ * sequence tracker, and timestamp-cadence tracker, and increments the
+ * configured count.  The slot becomes "configured" (occupancy for the
+ * lifecycle gate) but receive admission is NOT opened here.
  *
  * @param idx   sink slot index (< AUDIO_STREAM_SESSION_MAX_SLOTS)
  * @param shape validated codec shape (non-NULL)
@@ -108,26 +109,26 @@ int audio_stream_session_enable(size_t idx);
 void audio_stream_session_disable(size_t idx);
 
 /**
- * Clear the Mode A assembler and every per-slot ISO sequence tracker
- * (ASCS Start, gate-open edge, non-forced teardown).  The next stream's
- * first delivered callback re-bases instead of misreading a gap across
- * stream boundaries.
+ * Clear the Mode A assembler and every per-slot ISO sequence and
+ * timestamp-cadence tracker (ASCS Start, gate-open edge, non-forced
+ * teardown).  The next stream's first delivered callback/timestamp
+ * re-bases instead of misreading a gap across stream boundaries.
  */
 void audio_stream_session_start_clear(void);
 
 /**
  * Release sink @p idx (ASCS Release): after receive admission was closed
- * and drained by the caller, reset the slot's decoder/sequence state,
- * clear shape/pd/recv count, and decrement the configured count.  Does
- * not touch the bt_bap_stream object and does not reopen admission.
+ * and drained by the caller, reset the slot's decoder/sequence/cadence
+ * state, clear shape/pd/recv count, and decrement the configured count.
+ * Does not touch the bt_bap_stream object and does not reopen admission.
  */
 void audio_stream_session_release(size_t idx);
 
 /**
  * Reset ALL session state (ACL disconnect): close is already done by the
  * caller via rx_close(); this clears every slot (shape, recv count, pd,
- * decoder, sequence), the Mode A assembler, and the configured count.
- * Receive admission stays closed.
+ * decoder, sequence, cadence), the Mode A assembler, and the configured
+ * count.  Receive admission stays closed.
  */
 void audio_stream_session_reset_all(void);
 
@@ -150,12 +151,15 @@ void audio_stream_session_rx_close(void);
  *
  * Copies only the decomposed scalars/data; acquires a receive lease under
  * the session mutex, then runs the whole decode/conceal/volume/push path
- * OUTSIDE the lock.  Handles: per-CIS sequence-gap concealment (PLC push
- * or synthetic Mode A LOST sentinel), malformed-SDU rejection (exactly one
- * decode-error increment, no decode/push/Mode A mutation, before the
- * current decode/store), Mode B / Mode A / mono decode with volume and
- * one sink push, hard decode-error skip, and the Mode A missing-TS
- * rejection.  All statistics, perf, and BSim-observer calls happen here.
+ * OUTSIDE the lock.  Handles: per-CIS sequence-gap concealment plus
+ * timestamp-cadence concealment for one-CIS modes (mono / Mode B merge
+ * the two evidence sources with MAX so one physical omission is never
+ * concealed twice; Mode A keeps the sequence-only synthetic-LOST
+ * sentinel path), malformed-SDU rejection (exactly one decode-error
+ * increment, no decode/push/Mode A mutation, before the current
+ * decode/store), Mode B / Mode A / mono decode with volume and one sink
+ * push, hard decode-error skip, and the Mode A missing-TS rejection.
+ * All statistics, perf, and BSim-observer calls happen here.
  *
  * @retval 0 on every handled receive path
  * @retval -EINVAL on admission closed / out-of-range idx / unconfigured

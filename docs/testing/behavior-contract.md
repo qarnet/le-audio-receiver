@@ -224,8 +224,9 @@ disconnect cleanup, `rel_ss_seq < disc_seq`).
 Some controllers send empty HCI ISO packets (`BT_ISO_FLAGS_VALID` set,
 zero SDU length) when the remote side produced no SDU for an event.
 The session receive path detects `valid && len == 0` after decoder
-readiness and per-CIS sequence-gap work but before exact payload-shape
-validation, counts the callback as exactly one `empty_sdus` event
+readiness and per-CIS sequence/cadence-gap work but before exact
+payload-shape validation, counts the callback as exactly one
+`empty_sdus` event
 (`audio_stats_empty_sdu()`), and normalizes the local validity to
 source-invalid for the remaining decode/conceal path — never mutating
 caller data or the public API.  Mono and Mode B render the callback
@@ -242,6 +243,53 @@ CODEC-011 malformed hard-evidence path; non-valid zero-length callbacks
 `empty_sdus`.  `audio_decode_sdu()` itself still rejects `valid=true`
 with zero length (CODEC-008) — the session normalization happens before
 it is called, so CODEC-008 is unchanged.
+
+### CODEC-015 — Timestamp-cadence concealment (mono / Mode B)
+
+HCI packet sequence continuity does not prove delivery continuity: the
+nRF5340 SW Split controller advances its per-session sequence number
+only when an SDU is emitted to the host (isoal.c), so a radio event
+with no received PDU emits no HCI SDU and consumes no sequence number.
+Controller-side omissions therefore leave app-visible `seq_num`
+contiguous (FR4 mono evidence: 12000 SDUs transmitted, 8876 callbacks,
+zero sequence gaps, 225 I2S restarts).  The delivered ISO timestamps
+of the callbacks around such an omission jump by the integer multiple
+of the SDU interval the omitted events span.
+
+For one-CIS modes (mono and Mode B) every delivered callback — VALID,
+LOST, empty, or malformed — feeds the per-CIS timestamp-cadence tracker
+(`audio_iso_cadence`, alongside the sequence tracker) before empty/
+malformed payload validation, preserving the no-double-conceal contract
+for delivered rejected packets.  The merged omission count is
+
+    omitted = MAX(seq_omitted, cadence_omitted)
+
+and never the sum: a host-side dropped HCI SDU produces both a sequence
+jump and a timestamp jump for the same missing output event (MAX
+conceals it once), while a controller-side radio omission produces only
+a timestamp jump.  The bounded PLC loop and the process-current-after-
+PLC order are unchanged.  Mode A does not run timestamp-cadence
+synthesis; it keeps the sequence-only synthetic-LOST sentinel path
+(CODEC-016 ordering applies there).
+
+Cadence classification: a callback without a timestamp (`BT_ISO_FLAGS_TS`
+absent) is a delivered position and never synthesizes (timestamp absence
+is allowed by the public host contract); a backward timestamp is an
+expected controller wrap/rebase (`WRAP`, rebased, no synthesis, no
+resync count); a forward delta is resolved to the nearest integer event
+count on the SDU grid with a fixed `ISO_TS_DELTA_TOLERANCE_US` of 10 us
+(64-bit arithmetic, no floating point).  Duplicate timestamps,
+non-integral deltas beyond tolerance, event counts below delivered
+positions, and omissions beyond `ISO_SEQ_MAX_CONCEAL` are counted
+resyncs (`RESYNC`, rebased, no synthesis, one `LOG_WRN`); `WRAP` never
+warns.  Per-gap `LOG_INF` is suppressed for cadence-only gaps — FR4
+observed thousands of omitted events and per-gap UART logging could
+perturb real-time behavior; a `LOG_DBG` line and the existing aggregate
+PLC and stream-reset summary remain public evidence.
+
+Reset discipline: the cadence tracker is reset at every site that
+resets the sequence tracker (config, start-clear, release, reset-all),
+so no cadence gap can cross a session boundary.
 
 ## Statistics contract (`STAT-*`)
 

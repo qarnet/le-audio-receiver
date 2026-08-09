@@ -71,6 +71,16 @@ struct audio_stream_slot {
 	 * SW Split) so they can be concealed as PLC before the current
 	 * SDU is processed. */
 	struct audio_iso_seq seq;
+
+	/* Per-CIS ISO timestamp-cadence tracker (audio_iso_seq.c): detects
+	 * the same omitted output events from delivered ISO timestamps
+	 * when the controller emits no HCI SDU for a lost radio event.
+	 * SW Split advances its session sequence number only on emitted
+	 * SDUs, so such omissions stay invisible to @p seq (FR4 mono:
+	 * 8876 callbacks, zero sequence gaps, 225 I2S restarts).  Mono and
+	 * Mode B merge the two evidence sources with MAX; Mode A keeps the
+	 * sequence-only sentinel path. */
+	struct audio_iso_cadence cadence;
 };
 
 struct audio_stream_session_data {
@@ -152,6 +162,7 @@ int audio_stream_session_config(size_t idx, const struct audio_stream_codec_shap
 	sl->recv_cnt = 0U;
 	audio_decode_reset(&sl->decode);
 	audio_iso_seq_reset(&sl->seq);
+	audio_iso_cadence_reset(&sl->cadence);
 	s.configured_count++;
 
 	/* Admission stays closed: only rx_open() at the gate-open edge
@@ -238,9 +249,12 @@ static void session_start_clear_locked(void)
 
 	/* Per-CIS sequence trackers reset with the assembler: the next
 	 * stream's first delivered callback re-bases instead of
-	 * misreading a gap across stream boundaries. */
+	 * misreading a gap across stream boundaries.  The per-CIS
+	 * timestamp-cadence trackers reset with them so no cadence gap
+	 * can cross a session boundary either. */
 	for (size_t i = 0; i < AUDIO_STREAM_SESSION_MAX_SLOTS; i++) {
 		audio_iso_seq_reset(&s.slots[i].seq);
+		audio_iso_cadence_reset(&s.slots[i].cadence);
 	}
 #endif /* CONFIG_LIBLC3 */
 }
@@ -265,6 +279,7 @@ void audio_stream_session_release(size_t idx)
 #if defined(CONFIG_LIBLC3)
 	audio_decode_reset(&sl->decode);
 	audio_iso_seq_reset(&sl->seq);
+	audio_iso_cadence_reset(&sl->cadence);
 #endif
 	sl->recv_cnt = 0U;
 	sl->pd_us = 0U;
@@ -286,6 +301,7 @@ void audio_stream_session_reset_all(void)
 #if defined(CONFIG_LIBLC3)
 		audio_decode_reset(&s.slots[i].decode);
 		audio_iso_seq_reset(&s.slots[i].seq);
+		audio_iso_cadence_reset(&s.slots[i].cadence);
 #endif
 		s.slots[i].configured = false;
 		memset(&s.slots[i].shape, 0, sizeof(s.slots[i].shape));
@@ -499,9 +515,69 @@ static void session_recv_path(size_t idx, struct audio_stream_slot *sl, bool val
 		LOG_WRN("stream[%zu]: ISO seq discontinuity at %u (resyncs=%u) — no synthesis", idx,
 			seq, audio_iso_seq_get_resyncs(&sl->seq));
 	}
+
+	/* ── ISO timestamp-cadence concealment (mono / Mode B) ────────
+	 * The HCI packet sequence number stays contiguous when the
+	 * controller emits no SDU for a lost radio event (SW Split
+	 * advances its session sequence only on emitted SDUs), so a
+	 * sequence tracker alone misses those omissions (FR4 mono: 8876
+	 * callbacks, zero seq gaps, 225 I2S restarts).  Delivered ISO
+	 * timestamps jump by the integer multiple of the SDU interval the
+	 * omitted events span, so for one-CIS modes every delivered
+	 * callback (valid, LOST, empty, malformed — all before payload
+	 * validation, preserving the no-double-conceal contract) feeds
+	 * the cadence tracker, and the merged omission count is the MAX of
+	 * the sequence- and timestamp-derived counts: a host-side dropped
+	 * HCI SDU produces both a sequence jump and a timestamp jump for
+	 * the same missing output event (MAX conceals it once); a
+	 * controller-side radio omission produces only a timestamp jump.
+	 * Never add the two sources.  Mode A keeps its sequence-only
+	 * synthetic-sentinel path; timestamp-only Mode A synthesis needs
+	 * event-position/sentinel design beyond this blocker.
+	 *
+	 * Cadence WRAP (controller timestamp wrap/rebase, expected) never
+	 * warns; cadence RESYNC is unexpected and logs one clear warning.
+	 * No INFO per gap — FR4 observed thousands of omitted events and
+	 * per-gap UART logging could perturb real-time behavior; a LOG_DBG
+	 * line and the existing aggregate PLC/stream-reset evidence
+	 * suffice.
+	 */
+	if (mode != AUDIO_STREAM_MODE_MODEA) {
+		uint32_t cad_omitted = 0U;
+		enum audio_iso_cadence_result cres = audio_iso_cadence_update(
+			&sl->cadence, has_ts, ts, sl->shape.frame_dur_us, &cad_omitted);
+
+		switch (cres) {
+		case AUDIO_ISO_CADENCE_RES_GAP:
+			if (cad_omitted > omitted) {
+				omitted = cad_omitted;
+			}
+			LOG_DBG("stream[%zu]: ISO ts cadence gap: %u omitted event(s) — conceal",
+				idx, cad_omitted);
+			break;
+		case AUDIO_ISO_CADENCE_RES_RESYNC:
+			LOG_WRN("stream[%zu]: ISO ts cadence resync at %u (interval %u us, "
+				"resyncs=%u) — no synthesis",
+				idx, ts, sl->shape.frame_dur_us,
+				audio_iso_cadence_get_resyncs(&sl->cadence));
+			break;
+		case AUDIO_ISO_CADENCE_RES_FIRST:
+		case AUDIO_ISO_CADENCE_RES_NO_TS:
+		case AUDIO_ISO_CADENCE_RES_CONTIG:
+		case AUDIO_ISO_CADENCE_RES_WRAP:
+			break;
+		}
+	}
+
 	if (omitted > 0U) {
-		LOG_INF("stream[%zu]: ISO seq gap: %u omitted SDU(s) (first %u, cur %u) — conceal",
-			idx, omitted, first_seq, seq);
+		/* The seq-evidence INFO stays gated on an actual sequence
+		 * gap; a cadence-only gap (sequence contiguous, timestamp
+		 * jump) is logged at DBG only, never per-gap INFO. */
+		if (sres == AUDIO_ISO_SEQ_RES_GAP) {
+			LOG_INF("stream[%zu]: ISO seq gap: %u omitted SDU(s) (first %u, cur %u) — "
+				"conceal",
+				idx, omitted, first_seq, seq);
+		}
 		if (mode != AUDIO_STREAM_MODE_MODEA) {
 			/* Mode B / mono single ASE: one PLC push per omitted
 			 * SDU through the production decode helper. */

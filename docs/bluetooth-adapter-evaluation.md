@@ -141,7 +141,15 @@ Issue analysis:
   unconditional recommendation.
 - **PLC:** the repeat Mode B serial capture contained no `ISO seq gap` or
   resync logs, so the PLC came from delivered non-valid ISO SDU callbacks, not
-  from omitted callbacks detected by the receiver's sequence tracker. Host
+  from omitted callbacks detected by the receiver's sequence tracker.  Note
+  that HCI packet sequence continuity cannot rule out silent controller-side
+  omissions: on the nRF5340 SW Split controller a radio event with no received
+  PDU emits no HCI SDU and consumes no sequence number, so a lost event can
+  leave `seq_num` contiguous while the delivered ISO timestamps jump.  The
+  receiver's timestamp-cadence detection (see the FR4 mono runtime fix)
+  covers exactly that case; the FR4 mono capture (8876 callbacks for 12000
+  transmitted SDUs, zero sequence gaps, 225 I2S restarts) is the measured
+  evidence.  Host
   `btmon` showed continuous ISO TX and completed-packet credits, which prove
   USB/controller submission, not over-air delivery. The cause could be an
   RF/controller/QoS/receiver interaction and is not assigned yet; compare

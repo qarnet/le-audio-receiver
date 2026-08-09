@@ -178,26 +178,38 @@ config AUDIO_MODEA_PENDING_DEPTH
 	  Bounded static state; no heap.
 
 config AUDIO_ISO_SEQ_MAX_CONCEAL
-	int "Per-CIS sequence-gap concealment bound (omitted SDUs per callback)"
+	int "Per-CIS omission concealment bound (omitted SDUs/events per delivered callback)"
 	default 8
 	range 1 64
 	help
-	  Maximum SDUs concealed as PLC per delivered callback when the
-	  ISO stack omits callbacks for lost SDUs (observed on the
+	  Shared bound for sequence- and timestamp-detected ISO omissions:
+	  maximum SDUs/events concealed as PLC per delivered callback when
+	  the ISO stack omits callbacks for lost events (observed on the
 	  nRF5340 SW Split controller: no VALID and no LOST callback for
-	  some lost events; the next callback's Packet_Sequence_Number
-	  then jumps).  audio_iso_seq tracks each CIS's delivered
-	  sequences and reports the omitted count; the receive path
-	  conceals up to this many omitted SDUs as PLC before processing
-	  the current SDU, keeping I2S output cadence.
+	  some lost events).  audio_iso_seq tracks each CIS's delivered
+	  HCI packet sequence numbers and reports the omitted count when
+	  the next callback's Packet_Sequence_Number jumps; audio_iso_cadence
+	  tracks delivered ISO timestamps and reports the omitted count
+	  when the timestamp advances by more than the SDU interval.  Note
+	  that HCI packet sequence can stay CONTIGUOUS for controller-side
+	  omission: SW Split advances its session sequence number only when
+	  an SDU is emitted to the host, so a radio event with no received
+	  PDU emits no HCI SDU and consumes no sequence number (FR4 mono
+	  evidence: 12000 SDUs transmitted, 8876 callbacks, zero sequence
+	  gaps, 225 I2S restarts).  The receive path conceals up to this
+	  many omitted events as PLC before processing the current SDU,
+	  taking the MAX of the sequence- and timestamp-derived counts so
+	  one physical omission is never concealed twice, and keeping I2S
+	  output cadence.
 
 	  8 omitted SDUs = 80 ms at 10 ms frames, half the 16-block I2S
 	  slab budget (~160 ms), so a bound-sized gap still fits the
 	  audio buffering while the drift controller re-converges.  A
 	  forward jump beyond this bound is treated as a discontinuity:
-	  the tracker resyncs and the receive path logs the evidence
-	  instead of synthesizing unbounded work (duplicates and
-	  backward sequences are likewise explicit resync outcomes).
+	  the trackers resync and the receive path logs the evidence
+	  instead of synthesizing unbounded work (duplicates, backward
+	  sequences, timestamp wraps are likewise explicit resync/wrap
+	  outcomes).
 
 # ── User pairing control (P1): portable pairing-mode transition owner ──
 

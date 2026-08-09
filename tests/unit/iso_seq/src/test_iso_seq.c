@@ -2,11 +2,18 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * Unit tests for the per-CIS ISO sequence tracker (src/audio_iso_seq.c)
+ * Unit tests for the per-CIS ISO omission trackers (src/audio_iso_seq.c)
  * plus the receiver-side gap-concealment integration contract:
  *
- *   - pure tracker: first, contiguous, single gap, multi-gap, 16-bit
- *     wrap, duplicate, backward, over-bound resync, reset, counters;
+ *   - pure sequence tracker: first, contiguous, single gap, multi-gap,
+ *     16-bit wrap, duplicate, backward, over-bound resync, reset,
+ *     counters;
+ *   - pure timestamp-cadence tracker (audio_iso_cadence): NULL/reset/
+ *     first, contiguous 10 ms and 7.5 ms grids, timestamp-only
+ *     omissions, +-10 us tolerance boundaries, missing-TS callbacks
+ *     without false concealment, missing-TS plus a real omitted event,
+ *     LOST-style delivered callbacks, backward timestamp wrap, bounded
+ *     resync classes, concealment bound, counters/reset;
  *   - Mode B / mono: an omitted callback produces exactly one PLC push
  *     per omitted SDU through the production decode helper (the helper
  *     mirror is exercised through a fake decoder + fake sink);
@@ -15,13 +22,19 @@
  *     gap produces one PLC-backed event with the unaffected channel
  *     valid.
  *
- * The tracker is pure counting/ordering logic (no liblc3).  The
+ * Both trackers are pure counting/ordering logic (no liblc3).  The
  * integration tests mirror the production stream_recv sequencing: run
- * the sequence tracker, then for each omitted SDU conceal (Mode B =
- * direct PLC, Mode A = synthetic LOST sentinel into the assembler),
- * then process the current packet — proving the externally observable
+ * the trackers, then for each omitted event conceal (Mode B = direct
+ * PLC, Mode A = synthetic LOST sentinel into the assembler), then
+ * process the current packet — proving the externally observable
  * contract (exact PLC accounting, cadence, no cross-pairing, no
  * double-concealment of a malformed delivered packet).
+ *
+ * Note: HCI packet sequence continuity does NOT prove delivery
+ * continuity.  Controller-side omission (a radio event with no received
+ * PDU emits no HCI SDU and consumes no sequence number on SW Split)
+ * leaves seq_num contiguous while timestamps jump — the cadence tracker
+ * is the independent evidence source for those omissions.
  */
 
 #include <zephyr/ztest.h>
@@ -569,6 +582,280 @@ ZTEST(iso_seq, test_modea_over_bound_resync_no_synthesis)
 
 	modea_get_stats(&ma, &mastats);
 	zassert_equal(0U, mastats.resolved_events, "resync must not synthesize events");
+}
+
+/* ── ISO timestamp-cadence tracker tests ─────────────────────────── */
+
+static struct audio_iso_cadence cad;
+
+static void setup_cad(void)
+{
+	audio_iso_cadence_reset(&cad);
+}
+
+static enum audio_iso_cadence_result cadfeed(bool has_ts, uint32_t ts, uint32_t interval,
+					     uint32_t *omitted)
+{
+	return audio_iso_cadence_update(&cad, has_ts, ts, interval, omitted);
+}
+
+ZTEST(iso_seq, test_cadence_null_reset_first)
+{
+	/* NULL state: FIRST with no output mutation beyond zeroed omitted. */
+	uint32_t omitted = 99U;
+
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST,
+		      audio_iso_cadence_update(NULL, true, 10000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(0U, audio_iso_cadence_get_concealed(NULL));
+	zassert_equal(0U, audio_iso_cadence_get_resyncs(NULL));
+
+	setup_cad();
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	zassert_equal(0U, omitted, "first timestamp must not report a gap");
+	zassert_equal(0U, audio_iso_cadence_get_concealed(&cad));
+	zassert_equal(0U, audio_iso_cadence_get_resyncs(&cad));
+
+	/* Reset clears all state: a fresh base re-establishes. */
+	audio_iso_cadence_reset(&cad);
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 5000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+}
+
+ZTEST(iso_seq, test_cadence_contiguous_10ms_and_75ms)
+{
+	setup_cad();
+	uint32_t omitted = 99U;
+
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 20000, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 30000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(0U, audio_iso_cadence_get_concealed(&cad));
+	zassert_equal(0U, audio_iso_cadence_get_resyncs(&cad));
+
+	setup_cad();
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 7500, 7500, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 15000, 7500, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 22500, 7500, &omitted));
+	zassert_equal(0U, omitted, "7.5 ms grid stays contiguous");
+}
+
+ZTEST(iso_seq, test_cadence_timestamp_only_omissions)
+{
+	setup_cad();
+	uint32_t omitted = 99U;
+
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	/* 20000 us span = 2 grid events, one delivered: one omitted. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_GAP, cadfeed(true, 30000, 10000, &omitted));
+	zassert_equal(1U, omitted);
+	/* 30000 us span = 3 grid events, one delivered: two omitted. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_GAP, cadfeed(true, 60000, 10000, &omitted));
+	zassert_equal(2U, omitted);
+	zassert_equal(3U, audio_iso_cadence_get_concealed(&cad));
+	zassert_equal(0U, audio_iso_cadence_get_resyncs(&cad));
+}
+
+ZTEST(iso_seq, test_cadence_tolerance_boundaries)
+{
+	setup_cad();
+	uint32_t omitted = 99U;
+
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	/* +10 us within tolerance: still exactly 2 events, 1 omitted. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_GAP, cadfeed(true, 30010, 10000, &omitted));
+	zassert_equal(1U, omitted);
+	/* -10 us within tolerance. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_GAP, cadfeed(true, 50000, 10000, &omitted));
+	zassert_equal(1U, omitted);
+	/* +11 us beyond tolerance: counted resync, no synthesis. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_RESYNC, cadfeed(true, 70011, 10000, &omitted));
+	zassert_equal(0U, omitted);
+	/* -11 us beyond tolerance. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_RESYNC, cadfeed(true, 90000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(2U, audio_iso_cadence_get_resyncs(&cad));
+	zassert_equal(2U, audio_iso_cadence_get_concealed(&cad), "only the in-tolerance gaps");
+
+	/* Rebased after resyncs: contiguous continues from the new base. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 100000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+}
+
+ZTEST(iso_seq, test_cadence_missing_ts_no_false_omission)
+{
+	setup_cad();
+	uint32_t omitted = 99U;
+
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	/* One delivered no-TS callback between valid timestamps: two
+	 * delivered positions, two grid events — zero omissions. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 30000, 10000, &omitted));
+	zassert_equal(0U, omitted, "no-TS callback consumed its grid position");
+
+	/* Multiple no-TS callbacks: every delivered position consumed. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 70000, 10000, &omitted));
+	zassert_equal(0U, omitted, "4 delivered positions cover 4 grid events");
+	zassert_equal(0U, audio_iso_cadence_get_concealed(&cad));
+	zassert_equal(0U, audio_iso_cadence_get_resyncs(&cad));
+}
+
+ZTEST(iso_seq, test_cadence_missing_ts_plus_real_omission)
+{
+	setup_cad();
+	uint32_t omitted = 99U;
+
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	/* One no-TS callback (covers position 2) then a 3-event timestamp
+	 * span: 2 delivered positions, 3 grid events — exactly one
+	 * omitted. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_GAP, cadfeed(true, 40000, 10000, &omitted));
+	zassert_equal(1U, omitted, "3 events minus 2 delivered positions");
+	zassert_equal(1U, audio_iso_cadence_get_concealed(&cad));
+}
+
+ZTEST(iso_seq, test_cadence_lost_callbacks_no_extra_omission)
+{
+	setup_cad();
+	uint32_t omitted = 99U;
+
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	/* LOST-style callback (delivered, no TS) for the next grid event
+	 * consumes its position: the following valid timestamp at the
+	 * following grid position stays contiguous. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 30000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(0U, audio_iso_cadence_get_concealed(&cad));
+
+	/* Same LOST-style callback inside a real burst: it covers one grid
+	 * position and the remaining span is exactly one true omission. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_GAP, cadfeed(true, 60000, 10000, &omitted));
+	zassert_equal(1U, omitted, "3 grid events minus 2 delivered positions");
+	zassert_equal(1U, audio_iso_cadence_get_concealed(&cad));
+}
+
+ZTEST(iso_seq, test_cadence_backward_wrap_rebase)
+{
+	setup_cad();
+	uint32_t omitted = 99U;
+
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 20000, 10000, &omitted));
+	/* Backward timestamp: nRF5340 SW Split wraps ~every 512 s.  WRAP
+	 * rebases with NO synthesis and NO resync increment. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_WRAP, cadfeed(true, 3000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(0U, audio_iso_cadence_get_concealed(&cad));
+	zassert_equal(0U, audio_iso_cadence_get_resyncs(&cad));
+
+	/* Contiguous from the rebased base. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 13000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(0U, audio_iso_cadence_get_resyncs(&cad));
+}
+
+ZTEST(iso_seq, test_cadence_resync_classes)
+{
+	uint32_t omitted = 99U;
+
+	/* Duplicate timestamp: zero event advance. */
+	setup_cad();
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_RESYNC, cadfeed(true, 10000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(1U, audio_iso_cadence_get_resyncs(&cad));
+	zassert_equal(0U, audio_iso_cadence_get_concealed(&cad));
+	/* Contiguous after the duplicate rebase. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 20000, 10000, &omitted));
+
+	/* Non-integral forward delta (half-interval offset): resync. */
+	setup_cad();
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_RESYNC, cadfeed(true, 15000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(1U, audio_iso_cadence_get_resyncs(&cad));
+
+	/* Zero interval: counted resync, initialization state untouched. */
+	setup_cad();
+	zassert_equal(AUDIO_ISO_CADENCE_RES_RESYNC, cadfeed(true, 10000, 0, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(1U, audio_iso_cadence_get_resyncs(&cad));
+	/* Still uninitialized: the next valid-interval call is FIRST. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+
+	/* Event count below delivered positions: three no-TS callbacks then
+	 * a one-interval timestamp cannot be a real omission. */
+	setup_cad();
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_RESYNC, cadfeed(true, 20000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(1U, audio_iso_cadence_get_resyncs(&cad));
+	/* Rebased: the next interval is contiguous. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 30000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+}
+
+ZTEST(iso_seq, test_cadence_concealment_bound)
+{
+	setup_cad();
+	uint32_t omitted = 99U;
+
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	/* Exactly MAX+1 events in the span, one delivered: MAX omitted —
+	 * accepted at the exact bound. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_GAP,
+		      cadfeed(true, 10000U + (uint32_t)(ISO_SEQ_MAX_CONCEAL + 1U) * 10000U, 10000,
+			      &omitted));
+	zassert_equal((uint32_t)ISO_SEQ_MAX_CONCEAL, omitted);
+	zassert_equal((uint32_t)ISO_SEQ_MAX_CONCEAL, audio_iso_cadence_get_concealed(&cad));
+	zassert_equal(0U, audio_iso_cadence_get_resyncs(&cad));
+
+	/* One more event beyond the bound: resync, no synthesis. */
+	zassert_equal(AUDIO_ISO_CADENCE_RES_RESYNC,
+		      cadfeed(true,
+			      10000U + (uint32_t)(ISO_SEQ_MAX_CONCEAL + 1U) * 10000U +
+				      (uint32_t)(ISO_SEQ_MAX_CONCEAL + 2U) * 10000U,
+			      10000, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(1U, audio_iso_cadence_get_resyncs(&cad));
+	zassert_equal((uint32_t)ISO_SEQ_MAX_CONCEAL, audio_iso_cadence_get_concealed(&cad),
+		      "over-bound gap must not synthesize");
+}
+
+ZTEST(iso_seq, test_cadence_counters_and_reset)
+{
+	setup_cad();
+	uint32_t omitted = 99U;
+
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_GAP, cadfeed(true, 40000, 10000, &omitted));
+	zassert_equal(2U, omitted);
+	zassert_equal(AUDIO_ISO_CADENCE_RES_RESYNC, cadfeed(true, 40000, 10000, &omitted));
+	zassert_equal(0U, omitted);
+	zassert_equal(AUDIO_ISO_CADENCE_RES_GAP, cadfeed(true, 80000, 10000, &omitted));
+	zassert_equal(3U, omitted);
+
+	zassert_equal(5U, audio_iso_cadence_get_concealed(&cad));
+	zassert_equal(1U, audio_iso_cadence_get_resyncs(&cad));
+
+	audio_iso_cadence_reset(&cad);
+	zassert_equal(0U, audio_iso_cadence_get_concealed(&cad));
+	zassert_equal(0U, audio_iso_cadence_get_resyncs(&cad));
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 70000, 10000, &omitted));
+	zassert_equal(0U, omitted, "fresh base after reset");
 }
 
 ZTEST_SUITE(iso_seq, NULL, NULL, NULL, NULL, NULL);
