@@ -39,9 +39,12 @@ Version notes:
   host lifecycle/zero-warning requirement, not a receiver firmware or BAP
   wire-protocol requirement, and not a floor for every distribution's LE Audio
   operation.
-- These are the *protocol floor*. A system that satisfies every number can
-  still fail in practice — see [Protocol floor vs. project
-  baseline](#protocol-floor-vs-project-baseline).
+- The kernel and BlueZ numbers are the *protocol floor*. A system that
+  satisfies every protocol-floor number can still fail in practice — the
+  PipeWire LC3 requirement and the WirePlumber 0.5.15 floor describe this
+  project's host acceptance baseline and clean-lifecycle policy, not BAP
+  wire-protocol floors (see [Protocol floor vs. project
+  baseline](#protocol-floor-vs-project-baseline)).
 
 ### BlueZ configuration
 

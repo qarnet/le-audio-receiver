@@ -140,8 +140,13 @@ A controlled rerun on `thomas-workstation` (Linux 7.1.5, BlueZ 5.86, PipeWire
   `ExecMainCode=0` (exited), `ExecMainStatus=0`** with **zero**
   `destroy_proxy` / `leaked proxy` and zero shutdown warning/error/fault lines
   in the complete journal through shutdown (baseline 0.5.14: three leaked
-  proxies at shutdown). The three classified startup diagnostics (1× UPower
-  `NameHasNoOwner`, 2× `No available A2DP codecs`) are unchanged and allowed.
+  proxies at shutdown). The three startup diagnostics (1× UPower
+  `NameHasNoOwner`, 2× `No available A2DP codecs`) are preserved and
+  separately classified: they are startup-only, distinct from the
+  proxy-shutdown failures 0.5.15 fixed, and are not hidden or normalized.
+  The zero claim is scoped — it covers the shutdown warning/error/fault lines
+  in the WirePlumber journal and the receiver stream-time serial above, not
+  every host log line.
 - **Remaining adapter gates (unchanged):** KDE/Bluedevil UI route on
   `thomas-main`, one-CIS mono, cold unplug/replug repeat, audible-output
   confirmation, the kernel codec-capability init warning (`-22`), and the
