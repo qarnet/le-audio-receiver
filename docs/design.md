@@ -30,14 +30,18 @@ coverage + matrix + BSim), coverage population **36** (4665/5121 lines,
 closeout (2026-08-09, canonical gate **63 PASS / 0 FAIL / 63 TOTAL** at
 `1671a9f`, 35 twister + 5 exec-only + 20 Python + coverage + matrix + BSim)
 is historical evidence — see
-`docs/development/firmware-release-fr1-results.md`.  The current
-authoritative state is the FR2 firmware-build CI closeout (2026-08-09):
-canonical gate **64 PASS / 0 FAIL / 64 TOTAL** (35 twister + 5 exec-only
-+ 21 Python + coverage + matrix + BSim), coverage population **36**
-(4674/5130 lines, 2030/2824 branches, 358/358 functions), build contract
-**95/95**, BSim 17 scenarios / 26 runs pins byte-identical, GitHub-hosted
-firmware run PASS — see `STATUS.md` and
-`docs/development/firmware-release-fr2-results.md`.
+`docs/development/firmware-release-fr1-results.md`.  The FR2 firmware-build
+CI closeout (2026-08-09, canonical gate **64 PASS / 0 FAIL / 64 TOTAL** at
+`75a8093`, 35 twister + 5 exec-only + 21 Python + coverage + matrix + BSim)
+is historical evidence — see
+`docs/development/firmware-release-fr2-results.md`.  The current
+authoritative state is the FR3 automatic draft-release closeout
+(2026-08-09): canonical gate **65 PASS / 0 FAIL / 65 TOTAL** (35 twister +
+5 exec-only + 22 Python + coverage + matrix + BSim), coverage population
+**36** (4674/5130 lines, 2030/2824 branches, 358/358 functions), build
+contract **95/95**, BSim 17 scenarios / 26 runs pins byte-identical, final
+merged GitHub-hosted workflow at `b70b978` PASS — see `STATUS.md` and
+`docs/development/firmware-release-fr3-results.md`.
 All
 "Phases 0–6" content below is dated architecture/evidence of the
 pre-refactor design and is superseded by the module ownership described

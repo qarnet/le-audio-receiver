@@ -184,7 +184,8 @@ currently only possible through the developer shell (`bt unpair`).
 ### F. Public GitHub release binaries
 
 **Priority:** High (blocking public use)
-**Status:** In progress; FR1-FR2 accepted, nothing published yet
+**Status:** In progress; FR1-FR3 accepted, exact untagged draft `v0.1.0`
+awaits FR4 hardware acceptance, nothing published yet
 
 #### Problem
 

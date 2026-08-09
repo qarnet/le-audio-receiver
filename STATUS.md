@@ -3,11 +3,11 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-> **Current state (2026-08-09):** canonical gate **64 PASS / 0 FAIL /
-> 64 TOTAL** on the clean tree (35 twister + 5 exec-only + 21 Python +
-> coverage + matrix + BSim Stage 1; clean-tree run at `75a8093`, the
-> FR2 Zephyr-environment correction commit; the FR1 clean run at
-> `1671a9f` and earlier clean runs recorded in
+> **Current state (2026-08-09):** canonical gate **65 PASS / 0 FAIL /
+> 65 TOTAL** on the clean tree (35 twister + 5 exec-only + 22 Python +
+> coverage + matrix + BSim Stage 1; the FR2 clean-tree run at `75a8093`
+> and the FR1 clean run at `1671a9f` are historical, with earlier clean
+> runs recorded in
 > `docs/development/documentation-hygiene-behavior-fix-results.md` at
 > `b8bd633` and the production-fix canonical run at `f2f9336`, after
 > the empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
@@ -19,10 +19,42 @@
 > feature-off), FR1 deterministic firmware packager ACCEPTED, FR2
 > firmware-build CI ACCEPTED (hosted run 31326612845 PASS, workflow
 > artifacts only — no tag, GitHub Release, published binary, hardware
-> acceptance, MCUboot, or DFU).  The R0–R10 refactor figures below (gate 55/0/55,
+> acceptance, MCUboot, or DFU), and FR3 automatic draft-release creation
+> ACCEPTED (final merged hosted run `b70b978` PASS with release SKIPPED
+> on unchanged `VERSION`; exact untagged draft `v0.1.0` private and
+> unpublished, awaiting FR4 hardware acceptance; nothing published).
+> The R0–R10 refactor figures below (gate 55/0/55,
 > population 33, contract 79/79) are the **historical** R10 baseline
 > (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
 > for their own commits.
+
+## Firmware release — FR3 ACCEPTED (2026-08-09)
+
+**FR3 — automatic draft-release creation from trusted main — ACCEPTED**:
+implementation `8ef8a80` (`ci: create draft releases from version tags`);
+review corrections `a3eef05` (`fix: validate draft release metadata
+checks`), `4892a6a` (`ci: create release tags from trusted main`),
+`4c837af` (`fix: verify untagged draft releases`), and `2532fea`
+(`fix: detect existing draft releases`).  One trusted-main run
+`31332962453` (main push `3d9a918...`, job `93294798104`) created the exact
+untagged draft release `367572702` (`tag_name=v0.1.0`, draft, prerelease
+false, target `3d9a918...`, created `2026-08-09T20:04:01Z`); its only
+failure was the obsolete post-create assumption that a draft already had a
+git tag.  Corrected read-only checks passed independently against that same
+draft; the later hosted correction runs passed firmware and PR topology,
+and the final merged main run `31334643418` (main push `b70b978...`, job
+`93298378307`) PASS with release correctly SKIPPED on unchanged `VERSION`.
+Draft `v0.1.0` is
+private, unpublished, and intentionally untagged (authenticated git-ref
+lookup returns HTTP 404 as expected); the corrected paginated collision
+check detects it without printing release bodies.  No git tag, published
+binary, hardware acceptance, MCUboot, or DFU exists yet.  Local evidence:
+canonical gate **65 PASS / 0 FAIL / 65 TOTAL** (35 twister + 5 exec-only +
+22 Python + coverage + matrix + BSim Stage 1), build contract **95/95**,
+coverage unchanged (population 36, 4674/5130 L, 2030/2824 B, 358/358 F),
+BSim pins byte-identical.  Evidence:
+`docs/development/firmware-release-fr3-results.md`; plan:
+`docs/development/firmware-release-plan.md`.  FR4-FR5 remain planned.
 
 ## User pairing control — P1 ACCEPTED (2026-08-07)
 

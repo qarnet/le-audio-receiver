@@ -102,9 +102,9 @@ Stage 1 matrix, run counts, and pinned hashes live in
 > run at `1671a9f`) is historical FR1 evidence — see
 > `docs/development/firmware-release-fr1-results.md`.  The **current
 > accepted gate count is tracked in the "Current suite inventory" table
-> above** (64 children: 35 twister + 5 exec-only + 21 Python + coverage
-> + matrix + BSim, clean-tree 64/64 run at `75a8093`) — see
-> `docs/development/firmware-release-fr2-results.md`.
+> above** (65 children: 35 twister + 5 exec-only + 22 Python + coverage
+> + matrix + BSim, clean-tree 65/65) — see
+> `docs/development/firmware-release-fr3-results.md`.
 
 ## Explicit weak-test facts
 
