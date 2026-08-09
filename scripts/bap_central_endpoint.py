@@ -151,14 +151,28 @@ def _dict_items(dbus_dict):
 def make_endpoint_class(dbus_mod, dbus_service_mod):
     """Return a BAPSourceEndpoint class bound to the given dbus modules."""
 
+    class _Rejected(dbus_mod.exceptions.DBusException):
+        """Raised to reject a mono SelectProperties/SetConfiguration.
+
+        Subclasses the injected dbus exceptions namespace (real dbus-python
+        or the stdlib fakes); ``_dbus_error_name`` makes dbus-python
+        propagate exactly ``org.bluez.Error.Rejected`` to BlueZ, mirroring
+        BlueZ 5.86 client/player.c endpoint admission.
+        """
+
+        _dbus_error_name = "org.bluez.Error.Rejected"
+
     class BAPSourceEndpoint(dbus_service_mod.Object):
         """org.bluez.MediaEndpoint1 implementation for BAP unicast source."""
 
-        def __init__(self, bus, path, stereo=False):
+        def __init__(self, bus, path, stereo=False, mono=False):
+            if stereo and mono:
+                raise ValueError("stereo and mono are mutually exclusive")
             super().__init__(bus, path)
             self.bus = bus
             self.path = path
             self.stereo = stereo
+            self.mono = mono
             # Multi-transport support: BlueZ may call SetConfiguration once
             # per ASE (Mode A: two mono ASEs, one per channel) or once for
             # a single stereo ASE (Mode B). Track all transports we acquire.
@@ -233,6 +247,24 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
             print("[endpoint]  ChannelAllocation={:#06x}".format(channels))
             print("[endpoint]  QoS={}".format(p.get("QoS", {})))
             print("[endpoint]  Locations={}".format(p.get("Locations", 0)))
+
+            # Mono admission invariant: at most one accepted transport across
+            # pending + acquired. Mirror BlueZ 5.86 endpoint_select_properties()
+            # (client/player.c), which rejects once the count is exhausted.
+            if self.mono:
+                if len(self._pending_transports) + len(self.transports) >= 1:
+                    print("[endpoint] Mono transport limit reached: rejecting")
+                    raise _Rejected(
+                        "org.bluez.Error.Rejected: mono transport limit reached"
+                    )
+                if channels not in (0x01, 0x02):
+                    print(
+                        "[endpoint] Mono mode requires FL or FR allocation: "
+                        "rejecting {:#04x}".format(channels)
+                    )
+                    raise _Rejected(
+                        "org.bluez.Error.Rejected: mono requires FL or FR allocation"
+                    )
 
             # Build LC3 config that matches the requested ChannelAllocation.
             # BlueZ may call SelectProperties once per mono ASE (FL=0x01, FR=0x02)
@@ -350,6 +382,17 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
             print("[endpoint] SetConfiguration({})".format(tp), flush=True)
             print("[endpoint]  props={}".format(_to_plain(p, dbus_mod)), flush=True)
 
+            # Mono admission limit: reject before any queue mutation when a
+            # mono transport is already pending or acquired. BlueZ 5.86
+            # endpoint_set_configuration() (client/player.c lines 1222-1252)
+            # rejects with org.bluez.Error.Rejected once max_transports==0,
+            # and restores capacity only on ClearConfiguration.
+            if self.mono and len(self._pending_transports) + len(self.transports) >= 1:
+                print("[endpoint] Mono transport limit reached: rejecting", flush=True)
+                raise _Rejected(
+                    "org.bluez.Error.Rejected: mono transport limit reached"
+                )
+
             # Extract channel allocation from the config caps if present.
             channel_alloc = 0x03  # default FL|FR
             try:
@@ -376,6 +419,19 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
             except Exception as e:  # noqa: BLE001
                 print("[endpoint]  LTV parse error: {}".format(e), flush=True)
 
+            # Mono mode accepts exactly one transport with FL (0x01) or FR
+            # (0x02) allocation. Combined or unknown allocations fail closed;
+            # a stereo configuration is never returned under --mono.
+            if self.mono and channel_alloc not in (0x01, 0x02):
+                print(
+                    "[endpoint] Mono mode requires FL or FR allocation: "
+                    "rejecting {:#04x}".format(channel_alloc),
+                    flush=True,
+                )
+                raise _Rejected(
+                    "org.bluez.Error.Rejected: mono requires FL or FR allocation"
+                )
+
             # Queue the transport for async Acquire in the main loop.
             # Do NOT call Acquire here — that blocks BlueZ from creating
             # the CIS and produces "Input/output error".
@@ -399,11 +455,19 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
 
 
 def register_endpoint(
-    media_iface, bus, dbus_mod, endpoint_cls, path=ENDPOINT_PATH, stereo=False
+    media_iface,
+    bus,
+    dbus_mod,
+    endpoint_cls,
+    path=ENDPOINT_PATH,
+    stereo=False,
+    mono=False,
 ):
     """RegisterEndpoint with the exact props (UUID/Codec/Caps);
     prints the registration line.  Returns the endpoint instance."""
-    endpoint = endpoint_cls(bus, path, stereo=stereo)
+    endpoint = endpoint_cls(bus, path, stereo=stereo, mono=mono)
+    # Stereo Mode B advertises the two-channel capability blob; mono and
+    # default Mode A both advertise the existing one-channel LC3_CAPS.
     endpoint_caps = LC3_CAPS_STEREO if stereo else LC3_CAPS
     props = dbus_mod.Dictionary(
         {

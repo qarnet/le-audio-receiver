@@ -642,6 +642,7 @@ class TestCliGolden(unittest.TestCase):
     def test_defaults(self):
         args = self.parser.parse_args([])
         self.assertFalse(args.stereo)
+        self.assertFalse(args.mono)
         self.assertEqual(args.duration, 30)
         self.assertEqual(args.freq, 1000.0)
         self.assertEqual(args.adapter, "hci0")
@@ -664,15 +665,48 @@ class TestCliGolden(unittest.TestCase):
             ]
         )
         self.assertTrue(args.stereo)
+        self.assertFalse(args.mono)
         self.assertEqual(args.duration, 15)
         self.assertEqual(args.freq, 440.0)
         self.assertEqual(args.adapter, "hci1")
         self.assertEqual(args.peer_addr, PEER)
         self.assertTrue(args.preserve_bond)
 
+    def test_all_flags_parse_mono(self):
+        args = self.parser.parse_args(
+            [
+                "--mono",
+                "--duration",
+                "15",
+                "--freq",
+                "440",
+                "--adapter",
+                "hci1",
+                "--peer-addr",
+                PEER,
+                "--preserve-bond",
+            ]
+        )
+        self.assertTrue(args.mono)
+        self.assertFalse(args.stereo)
+        self.assertEqual(args.duration, 15)
+        self.assertEqual(args.freq, 440.0)
+        self.assertEqual(args.adapter, "hci1")
+        self.assertEqual(args.peer_addr, PEER)
+        self.assertTrue(args.preserve_bond)
+
+    def test_mono_stereo_mutually_exclusive(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.parser.parse_args(["--mono", "--stereo"])
+        self.assertEqual(cm.exception.code, 2)
+        with self.assertRaises(SystemExit) as cm:
+            self.parser.parse_args(["--stereo", "--mono"])
+        self.assertEqual(cm.exception.code, 2)
+
     def test_help_mentions_all_flags(self):
         help_text = self.parser.format_help()
         for flag in (
+            "--mono",
             "--stereo",
             "--duration",
             "--freq",
@@ -725,6 +759,7 @@ class TestCliGolden(unittest.TestCase):
         self.assertEqual(lines[0], "False")  # dbus never imported
         self.assertEqual(lines[1], "True")  # liblc3 never loaded
         self.assertIn("--preserve-bond", proc.stdout)
+        self.assertIn("--mono", proc.stdout)
 
 
 if __name__ == "__main__":

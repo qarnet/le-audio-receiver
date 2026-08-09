@@ -106,12 +106,12 @@ def capture(fn):
     return result, buf.getvalue()
 
 
-def make_endpoint(stereo=False):
+def make_endpoint(stereo=False, mono=False):
     bus = fakes.FakeBus()
     dbus = fakes.FakeDbusModule()
     svc = fakes.FakeServiceModule()
     cls = ep.make_endpoint_class(dbus, svc)
-    endpoint = cls(bus, ep.ENDPOINT_PATH, stereo=stereo)
+    endpoint = cls(bus, ep.ENDPOINT_PATH, stereo=stereo, mono=mono)
     return bus, dbus, endpoint
 
 
@@ -660,6 +660,219 @@ class TestRegisterUnregisterEndpoint(unittest.TestCase):
         media.script("UnregisterEndpoint", boom)
         _, out = capture(lambda: ep.unregister_endpoint(media))
         self.assertIn("[cleanup] Endpoint unregister error: gone", out)
+
+
+class TestMonoEndpoint(unittest.TestCase):
+    """Public-boundary tests for the strict one-ASE mono mode.
+
+    The admission contract mirrors BlueZ 5.86 client/player.c: at most one
+    accepted transport (pending or acquired), exact FL (0x01) or FR (0x02)
+    channel allocation, and org.bluez.Error.Rejected on every violation with
+    no state mutation. Capacity is restored from actual owned-list state on
+    ClearConfiguration/Release, never from a drifting counter.
+    """
+
+    REJECTED = "org.bluez.Error.Rejected"
+
+    def _select(self, endpoint, channel_alloc, caps=CAPS_MONO):
+        props = {
+            "Capabilities": list(caps),
+            "ChannelAllocation": channel_alloc,
+            "QoS": {},
+            "Locations": 0,
+        }
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ret = endpoint.SelectProperties(props)
+        return ret, out.getvalue()
+
+    def _assert_rejected(self, fn):
+        with self.assertRaises(fakes.DBusException) as cm:
+            fn()
+        self.assertEqual(cm.exception._dbus_error_name, self.REJECTED)
+        return cm.exception
+
+    def test_mono_first_fl_selectproperties_exact(self):
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        ret, out = self._select(endpoint, 0x01)
+        self.assertEqual(
+            bytes(bytearray(ret["Capabilities"])),
+            CONFIG_MONO + bytes([0x05, 0x03, 0x01, 0x00, 0x00, 0x00]),
+        )
+        self.assertEqual(int(ret["QoS"]["SDU"]), 120)
+        self.assertIn("ChannelAllocation=0x0001", out)
+
+    def test_mono_combined_and_unknown_select_rejected_no_mutation(self):
+        for alloc in (0x03, 0x00):
+            bus, dbus, endpoint = make_endpoint(mono=True)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self._assert_rejected(
+                    lambda: endpoint.SelectProperties(
+                        {
+                            "Capabilities": list(CAPS_MONO),
+                            "ChannelAllocation": alloc,
+                            "QoS": {},
+                            "Locations": 0,
+                        }
+                    )
+                )
+            text = out.getvalue()
+            self.assertIn(
+                "[endpoint] Mono mode requires FL or FR allocation: "
+                "rejecting {:#04x}".format(alloc),
+                text,
+            )
+            # Fail closed: no stereo config returned, no state mutation.
+            self.assertEqual(endpoint._pending_transports, [])
+            self.assertEqual(endpoint.transports, [])
+            self.assertFalse(endpoint.config_done)
+
+    def test_mono_first_fl_or_fr_setconfiguration_queues_one(self):
+        for alloc in (0x01, 0x02):
+            bus, dbus, endpoint = make_endpoint(mono=True)
+            endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(alloc))})
+            self.assertEqual(len(endpoint._pending_transports), 1)
+            self.assertEqual(endpoint._pending_transports[0]["path"], TP1)
+            self.assertEqual(endpoint._pending_transports[0]["channel_alloc"], alloc)
+            self.assertTrue(endpoint.config_done)
+
+    def test_mono_second_setconfiguration_rejected_unchanged(self):
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        first_record = endpoint._pending_transports[0]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self._assert_rejected(
+                lambda: endpoint.SetConfiguration(
+                    TP2, {"Configuration": list(ltv_config(0x02))}
+                )
+            )
+        self.assertIn(
+            "[endpoint] Mono transport limit reached: rejecting", out.getvalue()
+        )
+        # First record, config_done, and ownership state all unchanged.
+        self.assertEqual(endpoint._pending_transports, [first_record])
+        self.assertEqual(endpoint.transports, [])
+        self.assertTrue(endpoint.config_done)
+
+    def test_mono_malformed_or_combined_setconfiguration_rejected_atomically(self):
+        for cfg in ([], list(ltv_config(0x03))):
+            bus, dbus, endpoint = make_endpoint(mono=True)
+            self._assert_rejected(
+                lambda: endpoint.SetConfiguration(TP1, {"Configuration": cfg})
+            )
+            self.assertEqual(endpoint._pending_transports, [])
+            self.assertEqual(endpoint.transports, [])
+            self.assertFalse(endpoint.config_done)
+
+    def test_mono_select_after_pending_or_acquired_transport_rejected(self):
+        # One pending transport already accepted.
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self._assert_rejected(
+                lambda: endpoint.SelectProperties(
+                    {
+                        "Capabilities": list(CAPS_MONO),
+                        "ChannelAllocation": 0x02,
+                        "QoS": {},
+                        "Locations": 0,
+                    }
+                )
+            )
+        self.assertIn(
+            "[endpoint] Mono transport limit reached: rejecting", out.getvalue()
+        )
+        # One acquired transport also exhausts the mono limit.
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        endpoint.transports = [
+            {"path": TP1, "fd": 5, "write_mtu": 120, "channel_alloc": 0x02}
+        ]
+        self._assert_rejected(
+            lambda: endpoint.SelectProperties(
+                {
+                    "Capabilities": list(CAPS_MONO),
+                    "ChannelAllocation": 0x01,
+                    "QoS": {},
+                    "Locations": 0,
+                }
+            )
+        )
+        self.assertEqual(len(endpoint.transports), 1)
+
+    def test_mono_clear_pending_restores_capacity(self):
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        endpoint.ClearConfiguration(TP1)
+        # Fresh first configuration accepted again.
+        endpoint.SetConfiguration(TP2, {"Configuration": list(ltv_config(0x02))})
+        self.assertEqual(len(endpoint._pending_transports), 1)
+        self.assertEqual(endpoint._pending_transports[0]["path"], TP2)
+        self.assertEqual(endpoint._pending_transports[0]["channel_alloc"], 0x02)
+
+    def test_mono_clear_acquired_restores_capacity(self):
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        endpoint.transports = [
+            {"path": TP1, "fd": 5, "write_mtu": 120, "channel_alloc": 0x01}
+        ]
+        endpoint.ClearConfiguration(TP1)
+        endpoint.SetConfiguration(TP2, {"Configuration": list(ltv_config(0x01))})
+        self.assertEqual(len(endpoint._pending_transports), 1)
+
+    def test_mono_release_clears_ownership_and_permits_fresh(self):
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        self.assertTrue(endpoint.config_done)
+        endpoint.Release()
+        self.assertEqual(endpoint._pending_transports, [])
+        self.assertEqual(endpoint.transports, [])
+        self.assertFalse(endpoint.config_done)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        self.assertEqual(len(endpoint._pending_transports), 1)
+        self.assertTrue(endpoint.config_done)
+
+    def test_default_mode_a_two_transports_unchanged(self):
+        bus, dbus, endpoint = make_endpoint()
+        # Both FL and FR accepted for Mode A; no mono admission.
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        endpoint.SetConfiguration(TP2, {"Configuration": list(ltv_config(0x02))})
+        self.assertEqual(len(endpoint._pending_transports), 2)
+        ret, _ = self._select(endpoint, 0x02)
+        self.assertEqual(int(ret["QoS"]["SDU"]), 120)
+
+    def test_stereo_mode_b_unchanged(self):
+        bus, dbus, endpoint = make_endpoint(stereo=True)
+        ret, _ = self._select(endpoint, 0x03, caps=CAPS_STEREO)
+        self.assertEqual(bytes(bytearray(ret["Capabilities"])), CONFIG_STEREO)
+        self.assertEqual(int(ret["QoS"]["SDU"]), 240)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x03))})
+        self.assertEqual(len(endpoint._pending_transports), 1)
+        self.assertEqual(endpoint._pending_transports[0]["channel_alloc"], 0x03)
+
+    def test_constructor_rejects_mono_stereo_atomically(self):
+        bus = fakes.FakeBus()
+        dbus = fakes.FakeDbusModule()
+        svc = fakes.FakeServiceModule()
+        cls = ep.make_endpoint_class(dbus, svc)
+        with self.assertRaises(ValueError):
+            cls(bus, ep.ENDPOINT_PATH, stereo=True, mono=True)
+
+    def test_register_mono_forwards_flag_one_channel_caps(self):
+        bus = fakes.FakeBus()
+        dbus = fakes.FakeDbusModule()
+        svc = fakes.FakeServiceModule()
+        cls = ep.make_endpoint_class(dbus, svc)
+        media = bus.iface(HCI_PATH, "org.bluez.Media1")
+        endpoint = ep.register_endpoint(media, bus, dbus, cls, mono=True)
+        self.assertIsInstance(endpoint, cls)
+        self.assertTrue(endpoint.mono)
+        self.assertFalse(endpoint.stereo)
+        calls = media.calls_for("RegisterEndpoint")
+        self.assertEqual(len(calls), 1)
+        props = calls[0][1][1]
+        self.assertEqual(bytes(bytearray(props["Capabilities"])), CAPS_MONO)
 
 
 if __name__ == "__main__":
