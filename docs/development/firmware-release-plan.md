@@ -159,7 +159,9 @@ own evidence.
 
 ### FR1: package contract and packager
 
-**FR1 ACCEPTED (2026-08-09)** at implementation commit `f3cd4c4`; evidence in
+**FR1 ACCEPTED (2026-08-09)** at implementation commit `f3cd4c4`, with the
+review-fix correction commit `1671a9f` (`fix: handle firmware packaging I/O
+failures`); evidence in
 `docs/development/firmware-release-fr1-results.md`.  FR2-FR5 remain planned.
 
 Add deterministic, stdlib-only packaging logic plus public-boundary tests. No

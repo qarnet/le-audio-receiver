@@ -5,8 +5,8 @@
 
 > **Current state (2026-08-09):** canonical gate **63 PASS / 0 FAIL /
 > 63 TOTAL** on the clean tree (35 twister + 5 exec-only + 20 Python +
-> coverage + matrix + BSim Stage 1; clean-tree run at `f3cd4c4`, the
-> FR1 deterministic-packager implementation commit; earlier clean runs
+> coverage + matrix + BSim Stage 1; clean-tree run at `1671a9f`, the
+> FR1 packaging I/O-failure correction commit; earlier clean runs
 > recorded in
 > `docs/development/documentation-hygiene-behavior-fix-results.md` at
 > `b8bd633` and the production-fix canonical run at `f2f9336`, after

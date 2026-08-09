@@ -2,8 +2,9 @@
 
 Accepted: 2026-08-09.  Handoff `docs/development/firmware-release-fr1-handoff.md`;
 implementation commit `f3cd4c4` (`feat: add deterministic firmware packager`);
-acceptance commit (this document's commit) `docs: record FR1 firmware packaging
-acceptance`.
+review-fix handoff `docs/development/firmware-release-fr1-fix-handoff.md`;
+correction commit `1671a9f` (`fix: handle firmware packaging I/O failures`);
+acceptance commit (this document's commit) `docs: record FR1 packaging error fix`.
 
 FR1 packages existing production build outputs.  It does not build firmware,
 run in GitHub Actions, select a release version, create a tag/release, alter
@@ -20,14 +21,56 @@ root `VERSION` change, no tag/release created, no push/merge/PR.
 - `AGENTS.md` — no-em-dash user-facing scope now includes
   `release/flashing/*.md`.
 
+## Review defect and correction
+
+Review found one defect in the accepted implementation.  `main()` in
+`scripts/package-firmware-release.py` caught `PackagerError` only.  Output
+creation and ZIP writing can raise `OSError` after all caller inputs pass
+validation; that `OSError` escaped `main()` and Python printed a traceback,
+violating the stable `package-firmware-release: error: ...` contract.
+
+Public-boundary reproduction with a valid fixture and a 100-byte
+`RLIMIT_FSIZE` on the child process observed:
+
+- exit code 1;
+- final output directory absent;
+- no `.firmware-release-*` staging sibling remained;
+- stderr contained three chained `OSError: [Errno 27] File too large`
+  tracebacks rather than one stable prefixed diagnostic.
+
+The existing test 13 failed before staging was created, so it did not prove
+cleanup after a packaging write failure.
+
+Correction (`1671a9f`):
+
+- `main()` now catches `(PackagerError, OSError)`, prints exactly one line
+  using the existing `ERROR_PREFIX` and exception text, and returns the
+  existing nonzero code `1`.  Successful runs still return `0`.  No broad
+  `Exception` or `BaseException` handling was added to `main()`.
+- The existing `except BaseException` staging cleanup in `_run()` is
+  unchanged: it owns cleanup, re-raises, and `main()` owns conversion of
+  expected caller/I/O failures into process diagnostics.
+- New Linux public-subprocess regression (test 19) in
+  `scripts/test_package_firmware_release.py`: launches the copied CLI with a
+  `preexec_fn` applying `resource.setrlimit(resource.RLIMIT_FSIZE, (100, 100))`
+  so the failure happens during ZIP writing after staging creation, then
+  asserts nonzero exit, stderr starts with `ERROR_PREFIX`, no `Traceback`,
+  stderr contains `File too large`, final output directory absent, and no
+  staging sibling.  Test is Linux-specific and deterministic; it does not
+  inspect packager private functions or mock ZIP helpers.
+
 ## Focused verification (before implementation commit)
 
 | Command | Result |
 |---------|--------|
-| `python3 scripts/test_package_firmware_release.py` | 18 tests, OK, 0 failures |
-| `python3 scripts/test_inventory.py --python` | 20 children; new `package_firmware_release` discovered |
+| `python3 scripts/test_package_firmware_release.py` | 19 tests, OK, 0 failures |
+| `python3 scripts/test_inventory.py --python` | 20 children (unchanged); `package_firmware_release` present |
 | `python3 scripts/check-test-matrix.py` | 0 error(s), 0 note(s) |
 | `git diff --check` | clean |
+
+Focused suite grew from 18 to 19 tests: one new test method inside the
+existing `package_firmware_release` Python child, so the inventory child count
+and canonical total stayed at 20 Python children and 63 total.
 
 ## Real-build smoke package
 
@@ -66,9 +109,13 @@ Verified on the smoke artifacts:
 - A second invocation into a different output location produced
   byte-identical ZIPs and checksum file.
 
+The correction commit does not alter the artifact contract: ZIP names,
+layout, manifest schema, checksum format, compression, success stdout, and
+flash notes are unchanged.
+
 ## Canonical gate
 
-Clean worktree at `f3cd4c4`; `./scripts/test-all.sh`:
+Clean worktree at `1671a9f`; `./scripts/test-all.sh`:
 
 ```
 Gate complete: 63 PASS / 0 FAIL / 63 TOTAL
@@ -78,22 +125,27 @@ Sub-gates (all PASS):
 
 - 35 twister C suites.
 - 5 exec-only C suites.
-- 20 Python children (19 prior + `package_firmware_release`).
+- 20 Python children (19 prior + `package_firmware_release`; test count now
+  19 within that child).
 - Coverage: native suites rebuilt with `CONFIG_COVERAGE=y`, baseline
   enforcement `0 error(s)` against the committed
   `tests/coverage-baseline.json` (unchanged); numeric population 36 files,
   4674/5130 lines (91.1%), 2030/2824 branches (71.9%), 358/358 functions.
 - Matrix: `check-test-matrix.py --coverage-json` 0 error(s), 0 note(s).
-- BSim Stage 1: 17-scenario T4+R7 matrix strict-checked PASS, all existing
-  pins byte-identical (mono 10 ms `0x22AB5C0D`, Mode A/B 10 ms
-  `0xBAE24F7E`, reconnect = fresh mono oracle, `duplicate_release_10ms`).
+- BSim Stage 1: 17-scenario T4+R7 BAP matrix strict-checked PASS, all
+  existing pins byte-identical (mono 10 ms `0x22AB5C0D`, Mode A/B 10 ms
+  `0xBAE24F7E`, `duplicate_release_10ms` `0xAEBD23A1`, reconnect = fresh
+  mono oracle).
 
-The expected inventory after adding one Python child was 63 total; actual
+The expected inventory at the correction commit was 63 total; actual
 discovery matched (35 + 5 + 20 + coverage + matrix + BSim).  No gate child
-was weakened or skipped.
+was weakened or skipped.  The correction touches only Python test/source, so
+coverage population, coverage counts, build contract, and BSim facts are
+unchanged from the implementation-commit gate.
 
 ## Status
 
-FR1 `ACCEPTED`.  FR2-FR5 remain planned in
-`docs/development/firmware-release-plan.md`.  The smoke package is evidence
-that the packager handles the real build outputs; it is not a release.
+FR1 `ACCEPTED` at original implementation plus review correction.  FR2-FR5
+remain planned in `docs/development/firmware-release-plan.md`.  The smoke
+package is evidence that the packager handles the real build outputs; it is
+not a release.
