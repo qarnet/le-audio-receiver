@@ -193,11 +193,15 @@ Public users need ready-made firmware binaries.
 
 #### Plan
 
-- Binary releases for both targets (nRF5340 dual-image merged hexes and
-  nRF54L15 image).
+- Factory image releases are first, per
+  [the firmware release plan](docs/development/firmware-release-plan.md).
+  Release artifacts are factory-flash ZIPs, one per receiver target:
+  nRF5340 dual-core merged hexes, and nRF54L15 cpuapp plus FLPR images.
 - Checksums for every artifact.
 - Versioning scheme and release notes.
 - Flashing documentation for each published artifact.
+- MCUboot and signed DFU are a separate future track (item I) and do not
+  block factory image releases.
 
 #### Acceptance
 
@@ -259,6 +263,41 @@ method (easy tooling, no specialized developer toolchain) needs evaluation.
 #### Acceptance
 
 - A non-developer can flash the nRF54L15 build following documented steps.
+
+---
+
+### I. MCUboot and signed firmware update
+
+**Priority:** Medium
+**Status:** Research
+
+#### Problem
+
+Factory image releases (item F) cover fresh flashing only. Over-the-air or
+in-field firmware update needs MCUboot and signed images, which is a separate
+track from factory releases.
+
+#### Plan
+
+- Require an ADR before implementation, resolving companion-image
+  compatibility, signing-key custody, rollback, power-loss behavior, settings
+  preservation, downgrade policy, and transport.
+- BLE SMP in a physically gated DFU mode is the preferred transport
+  hypothesis, not an accepted implementation.
+- Build target-specific prototypes before any acceptance claim.
+
+#### Acceptance
+
+- Signature rejection, rollback, interrupted transfer, power-loss recovery,
+  companion-image compatibility, settings/bond preservation, and post-update
+  audio all pass acceptance.
+
+#### NCS constraints
+
+- nRF54L15 stock MCUboot updates cpuapp only, not the custom FLPR image.
+- nRF5340 full app/net update is supported by NCS but the internal-flash
+  budget for this firmware is currently unresolved.
+- No DFU support claim exists yet.
 
 ---
 
