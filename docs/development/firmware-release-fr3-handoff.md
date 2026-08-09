@@ -106,11 +106,18 @@ Grounding:
   exactly once.
 - Repository currently has no release and no `v0.1.0` tag. The historical
   `v0.0.1` tag is annotated and unrelated.
-- GitHub's REST endpoint `GET /repos/{owner}/{repo}/releases/tags/{tag}` and
-  `GET /repos/{owner}/{repo}/git/ref/tags/{tag}` each return HTTP 404 when no
-  matching release/tag exists. Use `gh api --include` so only an observed 404
-  permits creation; authentication, network, rate-limit, or other API failures
-  must stop before any write.
+- Hosted evidence: draft release ID 367572702 has `tag_name=v0.1.0`, draft
+  true, target commit `3d9a918...`, and the exact four assets. `gh release
+  view v0.1.0` succeeds, but REST
+  `GET /repos/{owner}/{repo}/releases/tags/v0.1.0` returns HTTP 404 because
+  the draft is untagged, while the authenticated
+  `GET /repos/{owner}/{repo}/releases` list includes the draft. Therefore the
+  release collision proof must use the authenticated paginated release list,
+  not the release-by-tag endpoint. The git-ref endpoint
+  `GET /repos/{owner}/{repo}/git/ref/tags/{tag}` returns HTTP 404 when no tag
+  exists and stays the tag-collision proof; use `gh api --include` so only an
+  observed 404 permits continuation; authentication, network, rate-limit, or
+  other API failures must stop before any write.
 - Current public repository has no release, environment, ruleset, or branch
   protection. Job-scoped `contents: write` must therefore exist only on a
   trusted main push that changed `VERSION`, after read-only build succeeds.
@@ -351,13 +358,25 @@ atomic output behavior remain unchanged.
 
 ### Fail-closed tag and release absence
 
-Before any write, probe both endpoints with `gh api --include`, using separate
-private `mktemp` files removed by one trap:
+Before any write, prove both the release and the git tag absent, using
+separate private `mktemp` files removed by one trap:
 
-1. `repos/$GITHUB_REPOSITORY/releases/tags/$tag`
-2. `repos/$GITHUB_REPOSITORY/git/ref/tags/$tag`
+1. Release collision: an authenticated paginated release list
+   `gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100"`
+   into a private file. Draft releases are untagged, so the release-by-tag
+   REST lookup (`releases/tags/<tag>`) returns 404 even when a draft exists
+   and cannot be used as the absence proof. Any nonzero API status prints one
+   `::error::existing-release list probe failed for tag <tag>` and exits.
+   Parse the slurped JSON (outer list of pages, every page a list, every
+   record an object with string `tag_name`) with inline stdlib Python, tag
+   passed as argv; malformed shape fails nonzero. If any record has exact
+   `tag_name == tag`, the shell emits `::error::release already exists for
+   tag <tag>` and exits. Never use `gh release view` generic failure, jq,
+   grep over JSON, or print release bodies.
+2. Tag collision: `gh api --include "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag"`
+   with the fail-closed exact-404 rule below.
 
-For each probe:
+For the tag probe:
 
 - HTTP success means collision and fails with one `::error::`;
 - only an exact HTTP 404 status permits continuation;
@@ -448,7 +467,10 @@ Extend static public workflow checks:
 - PR/manual paths default false;
 - release condition is exact trusted main push plus true output;
 - identity checks event/ref/ref-name/current SHA and no pre-existing tag check;
-- release and git-tag endpoint probes both require exact 404 and trap files;
+- release collision uses the authenticated paginated `--slurp` release list
+  with an exact `tag_name` scan (no release-by-tag REST endpoint), and the
+  git-tag probe keeps the exact-404 fail-closed contract, both with trap
+  files;
 - create command includes exact `--target "$GITHUB_SHA"` and `--draft`, and
   excludes `--verify-tag` plus every old forbidden mutation/publication path;
 - metadata workflow ref is passed unchanged and CLI tests pin `refs/heads/main`;

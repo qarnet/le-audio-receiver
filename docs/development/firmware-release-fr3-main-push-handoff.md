@@ -82,6 +82,16 @@ user approval after review.
   is published, at which point GitHub creates the lightweight tag at the
   stored target SHA. `--verify-tag` forbids automatic tag creation and must
   not be used.
+- Hosted evidence: draft release ID 367572702 has `tag_name=v0.1.0`, draft
+  true, target commit `3d9a918...`, and the exact four assets. `gh release
+  view v0.1.0` succeeds, but REST
+  `GET /repos/{owner}/{repo}/releases/tags/v0.1.0` returns HTTP 404 because
+  the draft is untagged, while the authenticated
+  `GET /repos/{owner}/{repo}/releases` list includes the draft. Therefore the
+  release collision proof must use the authenticated paginated release list,
+  not the release-by-tag endpoint. The git-ref endpoint
+  `GET /repos/{owner}/{repo}/git/ref/tags/{tag}` returns HTTP 404 when no tag
+  exists and stays the tag-collision proof.
 - `origin/main` has no root `VERSION`; PR 8 adds `VERSION` 0.1.0. Therefore the
   eventual merge push changes `VERSION` and requests the first release exactly
   once.
@@ -175,13 +185,25 @@ atomic output behavior remain unchanged.
 
 ### Fail-closed tag and release absence
 
-Before any write, probe both endpoints with `gh api --include`, using separate
-private `mktemp` files removed by one trap:
+Before any write, prove both the release and the git tag absent, using
+separate private `mktemp` files removed by one trap:
 
-1. `repos/$GITHUB_REPOSITORY/releases/tags/$tag`
-2. `repos/$GITHUB_REPOSITORY/git/ref/tags/$tag`
+1. Release collision: an authenticated paginated release list
+   `gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100"`
+   into a private file. Draft releases are untagged, so the release-by-tag
+   REST lookup (`releases/tags/<tag>`) returns 404 even when a draft exists
+   and cannot be used as the absence proof. Any nonzero API status prints one
+   `::error::existing-release list probe failed for tag <tag>` and exits.
+   Parse the slurped JSON (outer list of pages, every page a list, every
+   record an object with string `tag_name`) with inline stdlib Python, tag
+   passed as argv; malformed shape fails nonzero. If any record has exact
+   `tag_name == tag`, the shell emits `::error::release already exists for
+   tag <tag>` and exits. Never use `gh release view` generic failure, jq,
+   grep over JSON, or print release bodies.
+2. Tag collision: `gh api --include "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag"`
+   with the fail-closed exact-404 rule below.
 
-For each probe:
+For the tag probe:
 
 - HTTP success means collision and fails with one `::error::`;
 - only an exact HTTP 404 status permits continuation;
@@ -262,7 +284,10 @@ Update `scripts/test_firmware_build_ci.py` to prove public workflow behavior:
 - PR/manual paths default false;
 - release condition is exact trusted main push plus true output;
 - identity checks event/ref/ref-name/current SHA and no pre-existing tag check;
-- release and git-tag endpoint probes both require exact 404 and trap files;
+- release collision uses the authenticated paginated `--slurp` release list
+  with an exact `tag_name` scan (no release-by-tag REST endpoint), and the
+  git-tag probe keeps the exact-404 fail-closed contract, both with trap
+  files;
 - create command includes exact `--target "$GITHUB_SHA"` and `--draft`, and
   excludes `--verify-tag` plus every old forbidden mutation/publication path;
 - metadata workflow ref is passed unchanged and CLI tests pin refs/heads/main;

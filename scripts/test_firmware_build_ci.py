@@ -620,20 +620,55 @@ class TestReleaseJobContract(unittest.TestCase):
 
     def test_existing_release_probe_fail_closed(self):
         text = workflow_text()
-        self.assertIn("gh api --include", text)
-        self.assertIn("repos/$GITHUB_REPOSITORY/releases/tags/$tag", text)
-        self.assertIn("repos/$GITHUB_REPOSITORY/git/ref/tags/$tag", text)
+        # Draft releases are untagged and invisible to the release-by-tag
+        # REST lookup, so the collision proof must be an authenticated
+        # paginated release list that includes drafts.
+        self.assertIn(
+            'gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$release_probe" 2>&1',
+            text,
+            "release collision proof must use the paginated slurped release list",
+        )
+        self.assertIn(
+            'python3 - "$tag" "$release_probe"',
+            text,
+            "release list must be scanned by inline stdlib Python with tag as argv",
+        )
+        self.assertIn('record.get("tag_name") == tag', text)
+        self.assertIn("isinstance(pages, list)", text)
+        self.assertIn("isinstance(page, list)", text)
+        self.assertIn("isinstance(record, dict)", text)
+        self.assertIn('isinstance(record.get("tag_name"), str)', text)
+        self.assertIn("sys.exit(2)", text)
         self.assertIn("release_status", text)
-        self.assertIn("tag_status", text)
+        self.assertIn("scan_status", text)
+        self.assertIn("::error::existing-release list probe failed for tag", text)
         self.assertIn("::error::release already exists for tag", text)
-        self.assertIn("::error::existing-release probe failed for tag", text)
+        self.assertNotIn(
+            "releases/tags/$tag",
+            text,
+            "release-by-tag REST endpoint must not be used (drafts are untagged)",
+        )
+        self.assertNotIn(
+            "gh release view",
+            text.split("Require no existing release or tag")[1].split(
+                "Create draft release"
+            )[0],
+            "the collision probe must not rely on gh release view",
+        )
+        self.assertNotIn("jq", text, "jq must not be used for JSON parsing")
+        # The git-ref collision check stays the fail-closed exact-404 probe.
+        self.assertIn(
+            'gh api --include "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >"$tag_probe" 2>&1',
+            text,
+        )
+        self.assertIn("tag_status", text)
         self.assertIn("::error::git tag already exists for tag", text)
         self.assertIn("::error::existing-tag probe failed for tag", text)
-        self.assertIn("404", text, "probes must permit only an exact HTTP 404")
+        self.assertIn("404", text, "tag probe must permit only an exact HTTP 404")
         self.assertRegex(
             text,
             r"\^HTTP/\[0-9\.\]\+ 404",
-            "probes must match an exact HTTP 404 status line",
+            "tag probe must match an exact HTTP 404 status line",
         )
         self.assertIn("trap", text, "private probe responses must be trapped")
         self.assertIn('rm -f "$release_probe" "$tag_probe"', text)
