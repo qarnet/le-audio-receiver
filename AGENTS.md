@@ -98,10 +98,10 @@ current refactoring track R0–R10. Read it before structural changes.
 `docs/design.md` remains the historical architecture and evidence document,
 not the active structural plan.
 
-Current status: **canonical gate 63 PASS / 0 FAIL / 63 TOTAL** on the
-clean tree (35 twister + 5 exec-only + 20 Python + coverage + matrix +
-BSim; clean-tree run at `1671a9f`, the FR1 packaging I/O-failure
-correction commit; earlier clean runs recorded in
+Current status: **canonical gate 64 PASS / 0 FAIL / 64 TOTAL** on the
+clean tree (35 twister + 5 exec-only + 21 Python + coverage + matrix +
+BSim; clean-tree run at `75a8093`, the FR2 Zephyr-environment correction
+commit; the FR1 clean run at `1671a9f` and earlier clean runs recorded in
 `docs/development/documentation-hygiene-behavior-fix-results.md` at
 `b8bd633` and the production-fix canonical run at `f2f9336`, after the
 empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
@@ -109,8 +109,10 @@ empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
 coverage population **36** (4674/5130 lines, 2030/2824
 branches, 358/358 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
 baseline unchanged), builds 3/3, build contract **95/95**, BSim Stage 1
-pins byte-identical, and P1–P8 user pairing control ACCEPTED (nRF54L15
-enabled, nRF5340 feature-off).  Historical baselines: T0–T8 locked
+pins byte-identical, P1–P8 user pairing control ACCEPTED (nRF54L15
+enabled, nRF5340 feature-off), FR1 deterministic firmware packager
+ACCEPTED, and FR2 firmware-build CI ACCEPTED (hosted run 31326612845
+PASS; workflow artifacts only, no tag/release/hardware acceptance).  Historical baselines: T0–T8 locked
 behavior on production code `971e6a4` (T8 canonical gate **47 PASS /
 0 FAIL / 47 TOTAL**, coverage baseline `1a5842d` (26 files), build
 contract 76/76 — `docs/testing/pre-refactor-hardware-baseline.md`); the

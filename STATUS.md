@@ -3,11 +3,11 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-> **Current state (2026-08-09):** canonical gate **63 PASS / 0 FAIL /
-> 63 TOTAL** on the clean tree (35 twister + 5 exec-only + 20 Python +
-> coverage + matrix + BSim Stage 1; clean-tree run at `1671a9f`, the
-> FR1 packaging I/O-failure correction commit; earlier clean runs
-> recorded in
+> **Current state (2026-08-09):** canonical gate **64 PASS / 0 FAIL /
+> 64 TOTAL** on the clean tree (35 twister + 5 exec-only + 21 Python +
+> coverage + matrix + BSim Stage 1; clean-tree run at `75a8093`, the
+> FR2 Zephyr-environment correction commit; the FR1 clean run at
+> `1671a9f` and earlier clean runs recorded in
 > `docs/development/documentation-hygiene-behavior-fix-results.md` at
 > `b8bd633` and the production-fix canonical run at `f2f9336`, after
 > the empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
@@ -16,7 +16,10 @@
 > branches, 358/358 functions, committed baseline unchanged), build
 > contract **95/95**, BSim 17 scenarios / 26 runs pins byte-identical,
 > P1–P8 user pairing control ACCEPTED (nRF54L15 enabled, nRF5340
-> feature-off).  The R0–R10 refactor figures below (gate 55/0/55,
+> feature-off), FR1 deterministic firmware packager ACCEPTED, FR2
+> firmware-build CI ACCEPTED (hosted run 31326612845 PASS, workflow
+> artifacts only — no tag, GitHub Release, published binary, hardware
+> acceptance, MCUboot, or DFU).  The R0–R10 refactor figures below (gate 55/0/55,
 > population 33, contract 79/79) are the **historical** R10 baseline
 > (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
 > for their own commits.

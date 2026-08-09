@@ -162,7 +162,7 @@ own evidence.
 **FR1 ACCEPTED (2026-08-09)** at implementation commit `f3cd4c4`, with the
 review-fix correction commit `1671a9f` (`fix: handle firmware packaging I/O
 failures`); evidence in
-`docs/development/firmware-release-fr1-results.md`.  FR2-FR5 remain planned.
+`docs/development/firmware-release-fr1-results.md`.  FR3-FR5 remain planned.
 
 Add deterministic, stdlib-only packaging logic plus public-boundary tests. No
 CI and no version choice yet. Packager takes version, commit, NCS version,
@@ -171,6 +171,13 @@ atomically with no partial final ZIP. Repeated identical input produces
 byte-identical ZIP output.
 
 ### FR2: reproducible firmware build CI
+
+**FR2 ACCEPTED (2026-08-09)** at implementation commit `a54e17d`, with
+correction commits `117bc92` (`fix: upload packaged firmware from workspace`)
+and `75a8093` (`fix: export Zephyr workspace to firmware builds`); successful
+GitHub-hosted run `31326612845` (job `93277895593`) at PR head `75a8093`;
+evidence in `docs/development/firmware-release-fr2-results.md`.  FR3-FR5
+remain planned.
 
 Add pinned-container GitHub Actions build, exact NCS workspace setup, both
 production receiver builds, build-contract verification, package generation,

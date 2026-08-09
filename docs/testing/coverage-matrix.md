@@ -103,8 +103,8 @@ Stage 1 matrix, run counts, and pinned hashes live in
 > `docs/development/firmware-release-fr1-results.md`.  The **current
 > accepted gate count is tracked in the "Current suite inventory" table
 > above** (64 children: 35 twister + 5 exec-only + 21 Python + coverage
-> + matrix + BSim).  FR2 hosted acceptance is pending: the firmware-build
-> workflow implementation has not run on GitHub-hosted Actions.
+> + matrix + BSim, clean-tree 64/64 run at `75a8093`) — see
+> `docs/development/firmware-release-fr2-results.md`.
 
 ## Explicit weak-test facts
 
