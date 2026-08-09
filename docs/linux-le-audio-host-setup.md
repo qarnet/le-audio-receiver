@@ -145,6 +145,45 @@ output never proves this. The dynamic acceptance procedure lives on the
 [Bluetooth adapter support and evaluation](bluetooth-adapter-evaluation.md)
 page.
 
+#### Headless production-path verification (no GUI required)
+
+The same production data path can be verified headless. KDE and the command
+line drive the same components:
+
+- Bluetooth UI pair/connect = BlueZ D-Bus (`bluetoothctl` is a CLI client for
+  the same API).
+- KDE audio output selection = WirePlumber/PipeWire default-target selection
+  (`wpctl`).
+- Audio playback = an ordinary PipeWire client (`pw-play`).
+
+So a GUI is not required to test the production data path. The safe workflow
+below uses placeholders — substitute the peer's addresses and node names:
+
+1. Ensure one intended HCI adapter owns the peer; disconnect/power down
+   competing adapters for test isolation.
+2. Ensure the receiver is paired/trusted/connected with `bluetoothctl` and
+   verify PACS/ASCS UUIDs.
+3. On a true headless host, disable WirePlumber BlueZ seat monitoring through
+   supported configuration, or use an isolated temporary `main-embedded`
+   profile. Running two WirePlumber instances concurrently is invalid: stop
+   the normal user service before starting the temporary instance and restore
+   it afterward.
+4. Verify `wpctl status --name` contains `bluez_card.<peer>` and
+   `bluez_output.<peer>.*`.
+5. Select the sink with `wpctl set-default <sink-id>` or target it directly
+   with `pw-play --target <node-name> <48-kHz-test-file>`.
+6. Capture `btmon`, WirePlumber journal/output, PipeWire graph, and receiver
+   serial concurrently.
+7. Pass only with the expected BAP/LC3/QoS, sustained ISO, reconnect/cold
+   repeat, and no unexplained warnings, malformed SDUs, PLC, decode errors,
+   underruns, or teardown failures.
+
+`main-embedded` is a diagnostic profile, not a permanent desktop
+recommendation — prefer supported seat-monitoring configuration for
+day-to-day desktop use. Concrete worked evidence for this workflow (including
+the failure items still under investigation) is recorded in the [BT540
+headless production-stack results](development/bt540-headless-pipewire-results.md).
+
 ### Project-tested baseline
 
 This project validated the native HCI path end-to-end with the **Intel Wi-Fi

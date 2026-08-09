@@ -77,12 +77,26 @@ Measured on 2026-08-09 (row in the [evaluation record](#evaluation-record)):
   errors, zero I2S underruns, and zero stream resets; `btmon` observed the CIG
   parameters, Create CIS, both Setup ISO Data Path commands, continuous ISO
   TX, and completed-packet credits.
+- **Headless production-stack run (2026-08-09):** the normal BlueZ + PipeWire
+  + WirePlumber production path (the same components KDE drives) was exercised
+  headless and without `scripts/bap_central.py`:
+  `bluetoothctl`/BlueZ -> WirePlumber BlueZ monitor -> PipeWire Bluetooth sink
+  -> PipeWire LC3 encoder -> Linux ISO socket -> BT540 -> receiver. The BlueZ
+  sink appeared and one-CIS stereo Mode B LC3 streamed (48 kHz, 7.5 ms frame,
+  117 octets per channel, 234-byte SDU, ISO interval 7500 us, PHY 2M, RTN 13,
+  transport latency 75 ms, presentation delay 40000 us). Clean acceptance
+  failed due 16 startup zero-length malformed SDUs, a stop-boundary I2S
+  underrun with a diagnostic-accounting mismatch, and unresolved WirePlumber
+  startup diagnostics. KDE/Bluedevil on `thomas-main`, one-CIS mono, cold
+  replug, and audible confirmation remain open. Full evidence: [BT540 headless
+  production-stack results](development/bt540-headless-pipewire-results.md).
 
 Verdict: **Candidate / project-tested with development tool** — not
 **Supported / project-validated**. Remaining gates before recommendation:
 
-1. Normal desktop BlueZ + PipeWire + WirePlumber playback/UI path is not yet
-   tested — explicitly required before recommendation.
+1. KDE/Bluedevil UI route on `thomas-main` remains untested — the headless
+   CLI run above used the same production audio components and data path, but
+   the Plasma UI path is still open.
 2. One-CIS mono scenario remains unrun; one-CIS evidence is stereo Mode B.
 3. Physical cold unplug/replug repeat remains unrun.
 4. Audible-output confirmation was not recorded.
@@ -265,7 +279,7 @@ unexplained warnings, timeouts, resets, and underruns.
 | Date | Product | Chipset | VID:PID or PCI ID | Bus | Kernel | Driver | Firmware | BlueZ | PipeWire | WirePlumber | `cis-central` | ISO MTU/count | Mono | Two-CIS stereo | Reconnect | Verdict | Evidence link |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | not recorded | Intel Wi-Fi 6E AX210 | Intel AX210 (Wi-Fi 6E) | `8087:0032` (Bluetooth function) | internal USB (M.2 combo card) | 7.1.5 | not recorded | not recorded | 5.86 | 1.6.6 | 0.5.14 | yes | not recorded | not recorded | not recorded | not recorded | **Supported / project-validated** | [host setup](linux-le-audio-host-setup.md#project-tested-baseline) + repo test history |
-| 2026-08-09 | ASUS USB-BT540 | not recorded (USB manufacturer string `Realtek`) | `0b05:1bef` | USB (full-speed) | 7.1.1 | `btusb` | not recorded | 5.86 | 1.6.6 | 0.5.14 | yes | 251 / 20 | no (one-CIS run was stereo Mode B) | yes | yes | **Candidate / project-tested with development tool** | [BT540 section](#asus-usb-bt540--candidate--project-tested-with-development-tool) |
+| 2026-08-09 | ASUS USB-BT540 | not recorded (USB manufacturer string `Realtek`) | `0b05:1bef` | USB (full-speed) | 7.1.1 | `btusb` | not recorded | 5.86 | 1.6.6 | 0.5.14 | yes | 251 / 20 | no (one-CIS run was stereo Mode B) | yes | yes | **Candidate / project-tested with development tool** | [BT540 section](#asus-usb-bt540--candidate--project-tested-with-development-tool) + [headless results](development/bt540-headless-pipewire-results.md) |
 
 Note: the AX210 row's `not recorded` fields reflect that the prior project
 validation predates this formal record template. The repository did not
