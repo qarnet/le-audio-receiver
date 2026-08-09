@@ -1,0 +1,113 @@
+name: Firmware build
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:f24d8932ff081ebcd8da9c248f4449bdabe461c0620a7a4ac9e95eb577ba2276
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: workspace/le-audio-receiver
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout sdk-nrf
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: nrfconnect/sdk-nrf
+          ref: ba167d9f3db4abbdc9b67887ca3ea66c64f2d956
+          path: workspace/nrf
+          persist-credentials: false
+      - name: Initialize NCS workspace
+        working-directory: ${{ github.workspace }}/workspace
+        run: |
+          test "$(git -C nrf rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
+          test "$(tr -d '\r\n' < nrf/VERSION)" = "3.3.0"
+          west init -l nrf
+          west update --narrow -o=--depth=1
+          west zephyr-export
+          test "$(git -C nrf rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
+          test "$(tr -d '\r\n' < nrf/VERSION)" = "3.3.0"
+          test "$(west topdir)" = "$GITHUB_WORKSPACE/workspace"
+      - name: Project version
+        id: project-version
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          version="$(python3 scripts/project-version.py)"
+          test "$version" = "0.1.0"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build nRF5340
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: ./scripts/bin/fw-build-5340
+      - name: Build nRF54L15
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: ./scripts/bin/fw-build-54l15
+      - name: Check build contract
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: |
+          python3 scripts/check-build-contract.py \
+            --nrf5340 build/nrf5340 \
+            --nrf54l15 build/nrf54l15
+      - name: Verify application version headers
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: |
+          grep -E '#define[[:space:]]+APP_VERSION_STRING[[:space:]]+"0\.1\.0"' \
+            build/nrf5340/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h
+          grep -E '#define[[:space:]]+APP_VERSION_STRING[[:space:]]+"0\.1\.0"' \
+            build/nrf54l15/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h
+      - name: Package firmware
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: |
+          version="$(python3 scripts/project-version.py)"
+          python3 scripts/package-firmware-release.py \
+            --version "$version" \
+            --git-commit "$GITHUB_SHA" \
+            --ncs-version v3.3.0 \
+            --build-root build \
+            --output-dir dist
+      - name: Verify package
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: |
+          test -z "$(find dist -maxdepth 1 -type l)"
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 3
+          for f in \
+            le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip \
+            le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip \
+            SHA256SUMS ; do
+            test -f "dist/$f"
+          done
+          (cd dist && sha256sum --strict -c SHA256SUMS)
+          python3 -m zipfile --test dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip
+          python3 -m zipfile --test dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: firmware-v${{ steps.project-version.outputs.version }}-${{ github.sha }}
+          path: |
+            dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip
+            dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: false

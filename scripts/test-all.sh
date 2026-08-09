@@ -19,8 +19,8 @@
 # filesystem classification source shared with test-coverage.sh and
 # check-test-matrix.py) — adding a suite cannot silently omit it from the
 # gate.  Current inventory (scripts/test_inventory.py): 35 twister + 5
-# exec-only + 20 Python = 60 unit children; the canonical gate is 63
-# children (60 + coverage + matrix + BSim).
+# exec-only + 21 Python = 61 unit children; the canonical gate is 64
+# children (61 + coverage + matrix + BSim).
 #
 # Required: NCS v3.3.0 dev shell (nix develop / direnv allow).
 #   ZEPHYR_BASE must be set. BabbleSim dependencies must be provisioned;
