@@ -14,7 +14,7 @@ Public CLI (all arguments required):
       --ncs-version v3.3.0 \
       --repository qarnet/le-audio-receiver \
       --workflow "Firmware build" \
-      --workflow-ref qarnet/le-audio-receiver/.github/workflows/firmware-build.yml@refs/tags/v0.1.0 \
+      --workflow-ref qarnet/le-audio-receiver/.github/workflows/firmware-build.yml@refs/heads/main \
       --run-id 123456 \
       --run-attempt 1 \
       --artifact-dir dist \
@@ -79,7 +79,7 @@ TOOLCHAIN_IMAGE = (
 )
 TOOLCHAIN_SDK_NRF_COMMIT = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
 
-WORKFLOW_REF_TEMPLATE = "%s/.github/workflows/firmware-build.yml@refs/tags/%s"
+WORKFLOW_REF_TEMPLATE = "%s/.github/workflows/firmware-build.yml@refs/heads/main"
 
 # Canonical MAJOR.MINOR.PATCH: each part numeric, no leading zeros except
 # the literal zero.
@@ -599,7 +599,7 @@ def _run(args):
         raise ReleaseError(
             "workflow %r is not %r for this release track" % (workflow, WORKFLOW_NAME)
         )
-    expected_ref = WORKFLOW_REF_TEMPLATE % (repository, tag)
+    expected_ref = WORKFLOW_REF_TEMPLATE % repository
     if workflow_ref != expected_ref:
         raise ReleaseError(
             "workflow ref %r does not equal %r" % (workflow_ref, expected_ref)

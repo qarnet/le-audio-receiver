@@ -7,10 +7,11 @@ subprocess against the repository ``VERSION`` and temporary fixtures.
 Tests 5-8 statically validate the committed workflow YAML text: the
 workflow is declarative public behavior and hosted execution is unavailable
 before remote push.  Tests 9+ extend the same static validation to the FR3
-tag-triggered release job: tag/version guards, fail-closed identity, exact
-download/pin contracts, release preparation inputs, the existing-release
-probe, draft creation, and post-create verification.  No third-party YAML
-parser, no private-helper assertions, and no mock of the workflow.
+trusted-main release job: automatic version-tag creation from a VERSION
+change on main, fail-closed identity and collision probes, draft creation
+at the exact main commit, and post-create release/tag verification.  No
+third-party YAML parser, no private-helper assertions, and no mock of the
+workflow.
 """
 
 import os
@@ -256,9 +257,10 @@ class TestWorkflowContract(unittest.TestCase):
         )
         self.assertEqual(
             self._dash_values(push_block, "tags"),
-            ["'v*'"],
-            "push must add exactly the quoted tag pattern 'v*'",
+            [],
+            "push must have no tags block or pattern",
         )
+        self.assertNotIn("'v*'", text, "quoted tag pattern must be removed entirely")
         self.assertIn("permissions:", text)
         self.assertIn("contents: read", text)
         self.assertEqual(
@@ -280,6 +282,19 @@ class TestWorkflowContract(unittest.TestCase):
             self.assertNotIn(
                 "${{", script, "direct expression interpolation in run script"
             )
+
+    def test_concurrency_cancellation_pr_only(self):
+        text = workflow_text()
+        self.assertIn(
+            "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+            text,
+            "only PR runs may cancel; trusted main runs must not be cancelled",
+        )
+        self.assertNotIn(
+            "cancel-in-progress: true",
+            text,
+            "main runs must never be cancelled by a newer run",
+        )
 
     def test_pinned_runner_container_and_actions(self):
         text = workflow_text()
@@ -449,7 +464,8 @@ class TestWorkflowArtifactContract(unittest.TestCase):
 
 
 class TestReleaseJobContract(unittest.TestCase):
-    """FR3 tests 9+: tag-triggered draft-release job static contract."""
+    """FR3 tests 9+: trusted-main automatic draft-release job static
+    contract."""
 
     def _release_block(self):
         text = workflow_text()
@@ -468,9 +484,10 @@ class TestReleaseJobContract(unittest.TestCase):
         block = self._release_block()
         self.assertIn("needs: firmware", block, "release must need firmware")
         self.assertIn(
-            "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
+            "if: github.event_name == 'push' && github.ref == 'refs/heads/main' "
+            "&& needs.firmware.outputs.release-requested == 'true'",
             block,
-            "release must run only on a normal tag push",
+            "release must run only on a trusted main push that changed VERSION",
         )
         self.assertIn("runs-on: ubuntu-22.04", block)
         self.assertIn("timeout-minutes: 15", block)
@@ -485,37 +502,59 @@ class TestReleaseJobContract(unittest.TestCase):
         self.assertNotIn("environment:", block)
         self.assertNotIn("privileged", block)
 
-    def test_firmware_job_version_output_and_tag_guard(self):
+    def test_firmware_job_version_output_and_release_decision(self):
         text = workflow_text()
         self.assertIn(
             "version: ${{ steps.project-version.outputs.version }}",
             text,
             "firmware job must expose the validated version output",
         )
+        self.assertIn(
+            "release-requested: ${{ steps.project-version.outputs.release-requested }}",
+            text,
+            "firmware job must expose the release-requested output",
+        )
         for needle in (
-            'if [[ "$GITHUB_REF" == refs/tags/* ]]; then',
-            'test "$GITHUB_EVENT_NAME" = "push"',
-            'test "$GITHUB_REF_NAME" = "v$version"',
+            "BEFORE_SHA: ${{ github.event.before }}",
+            "release_requested=false",
+            'if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then',
+            '[[ "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ ]]',
+            'test "$BEFORE_SHA" != 0000000000000000000000000000000000000000',
+            'git rev-parse --verify --quiet "$BEFORE_SHA^{commit}" >/dev/null',
+            'git diff --quiet "$BEFORE_SHA" "$GITHUB_SHA" -- VERSION',
+            "diff_status=$?",
+            'if [ "$diff_status" -eq 1 ]; then',
+            "release_requested=true",
+            'elif [ "$diff_status" -ne 0 ]; then',
+            'echo "release-requested=$release_requested" >> "$GITHUB_OUTPUT"',
             'test "$version" = "0.1.0"',
         ):
             self.assertIn(needle, text, "missing %r" % needle)
+        self.assertNotIn("refs/tags/*", text, "old tag-push guard must be removed")
 
     def test_release_identity_step_exact(self):
         text = workflow_text()
         for needle in (
-            "Verify tag identity",
+            "Verify release identity",
             "FW_VERSION: ${{ needs.firmware.outputs.version }}",
+            "RELEASE_REQUESTED: ${{ needs.firmware.outputs.release-requested }}",
             'version="$(python3 scripts/project-version.py)"',
             'tag="v$version"',
             'test "$version" = "$FW_VERSION"',
-            'test "$tag" = "$GITHUB_REF_NAME"',
-            'test "$GITHUB_REF" = "refs/tags/$tag"',
+            'test "$RELEASE_REQUESTED" = "true"',
+            'test "$GITHUB_EVENT_NAME" = "push"',
+            'test "$GITHUB_REF" = "refs/heads/main"',
+            'test "$GITHUB_REF_NAME" = "main"',
             'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
-            'test "$(git rev-list -n 1 "$tag")" = "$GITHUB_SHA"',
             'echo "version=$version" >> "$GITHUB_OUTPUT"',
             'echo "tag=$tag" >> "$GITHUB_OUTPUT"',
         ):
             self.assertIn(needle, text, "missing %r" % needle)
+        # No pre-existing tag check belongs here: collision is proven by the
+        # fail-closed API probes, and no local tag exists before creation.
+        self.assertNotIn(
+            "git rev-list", text, "identity step must not check a local tag"
+        )
 
     def test_download_contract_exact(self):
         text = workflow_text()
@@ -557,8 +596,8 @@ class TestReleaseJobContract(unittest.TestCase):
         text = workflow_text()
         for needle in (
             'gh release create "$tag"',
+            '--target "$GITHUB_SHA"',
             "--draft",
-            "--verify-tag",
             '--title "LE Audio Receiver $tag"',
             "--notes-file release-metadata/release-notes.md",
             '"dist/le-audio-receiver-v${version}-nrf5340-e83-factory.zip"',
@@ -568,12 +607,14 @@ class TestReleaseJobContract(unittest.TestCase):
         ):
             self.assertIn(needle, text, "missing %r" % needle)
         for forbidden in (
+            "--verify-tag",
             "--generate-notes",
             "--latest",
             "--prerelease",
             "--clobber",
             "gh release edit",
             "gh release delete",
+            "gh release upload",
         ):
             self.assertNotIn(forbidden, text, "forbidden %r present" % forbidden)
 
@@ -581,26 +622,36 @@ class TestReleaseJobContract(unittest.TestCase):
         text = workflow_text()
         self.assertIn("gh api --include", text)
         self.assertIn("repos/$GITHUB_REPOSITORY/releases/tags/$tag", text)
-        self.assertIn("probe_status", text)
+        self.assertIn("repos/$GITHUB_REPOSITORY/git/ref/tags/$tag", text)
+        self.assertIn("release_status", text)
+        self.assertIn("tag_status", text)
         self.assertIn("::error::release already exists for tag", text)
         self.assertIn("::error::existing-release probe failed for tag", text)
-        self.assertIn("404", text, "probe must permit only an exact HTTP 404")
+        self.assertIn("::error::git tag already exists for tag", text)
+        self.assertIn("::error::existing-tag probe failed for tag", text)
+        self.assertIn("404", text, "probes must permit only an exact HTTP 404")
         self.assertRegex(
             text,
             r"\^HTTP/\[0-9\.\]\+ 404",
-            "probe must match an exact HTTP 404 status line",
+            "probes must match an exact HTTP 404 status line",
         )
-        self.assertIn("trap", text, "private probe response must be trapped")
+        self.assertIn("trap", text, "private probe responses must be trapped")
+        self.assertIn('rm -f "$release_probe" "$tag_probe"', text)
         self.assertIn("exit 1", text)
 
     def test_post_create_verification_exact(self):
         text = workflow_text()
         for needle in (
-            'gh release view "$tag" --json tagName,isDraft,isPrerelease,assets,url',
-            'assert data["tagName"] == tag',
-            'assert data["isDraft"] is True',
-            'assert data["isPrerelease"] is False',
-            'print("draft release URL: %s" % data["url"])',
+            'gh release view "$tag" --json tagName,isDraft,isPrerelease,assets,targetCommitish,url',
+            'gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" > tag-check.json',
+            'assert release["tagName"] == tag',
+            'assert release["isDraft"] is True',
+            'assert release["isPrerelease"] is False',
+            'assert release["targetCommitish"] == sha',
+            'assert tag_data["ref"] == "refs/tags/" + tag',
+            'assert tag_data["object"]["type"] == "commit"',
+            'assert tag_data["object"]["sha"] == sha',
+            'print("draft release URL: %s" % release["url"])',
             '"SHA256SUMS",',
             '"release-provenance.json",',
             "le-audio-receiver-v%s-nrf5340-e83-factory.zip",
@@ -614,6 +665,7 @@ class TestReleaseJobContract(unittest.TestCase):
             'data["tag"] ==',
             'data["html_url"]',
             "html_url",
+            "--verify-tag",
         ):
             self.assertNotIn(forbidden, text, "invalid field %r present" % forbidden)
 

@@ -30,7 +30,7 @@ COMMIT = "0123456789abcdef0123456789abcdef01234567"
 NCS = "v3.3.0"
 REPOSITORY = "qarnet/le-audio-receiver"
 WORKFLOW = "Firmware build"
-WORKFLOW_REF = REPOSITORY + "/.github/workflows/firmware-build.yml@refs/tags/" + TAG
+WORKFLOW_REF = REPOSITORY + "/.github/workflows/firmware-build.yml@refs/heads/main"
 RUN_ID = "123456"
 RUN_ATTEMPT = "1"
 
@@ -426,16 +426,30 @@ class TestInvalidInputs(unittest.TestCase):
                 ),
             ),
             (
+                "workflow_ref_old_tag_contract",
+                dict(
+                    workflow_ref=REPOSITORY
+                    + "/.github/workflows/firmware-build.yml@refs/tags/v0.1.0"
+                ),
+            ),
+            (
+                "workflow_ref_other_branch",
+                dict(
+                    workflow_ref=REPOSITORY
+                    + "/.github/workflows/firmware-build.yml@refs/heads/develop"
+                ),
+            ),
+            (
                 "workflow_ref_wrong_repo",
                 dict(
-                    workflow_ref="other/repo/.github/workflows/firmware-build.yml@refs/tags/v0.1.0"
+                    workflow_ref="other/repo/.github/workflows/firmware-build.yml@refs/heads/main"
                 ),
             ),
             (
                 "workflow_ref_wrong_path",
                 dict(
                     workflow_ref=REPOSITORY
-                    + "/.github/workflows/other.yml@refs/tags/v0.1.0"
+                    + "/.github/workflows/other.yml@refs/heads/main"
                 ),
             ),
             ("run_id_zero", dict(run_id="0")),

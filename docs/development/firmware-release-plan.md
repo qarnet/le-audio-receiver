@@ -113,9 +113,15 @@ Do not install J-Link in build-only CI.
 
 ## Release lifecycle
 
-- Pull requests, `main`, and manual dispatch build and upload workflow
-  artifacts.
-- A `v*` tag creates a draft GitHub release with exact CI-built artifacts.
+- Pull requests and manual dispatch build and upload workflow artifacts.
+- A trusted `main` push that changes the root `VERSION` file runs the same
+  build/package path, then CI creates the version tag at the exact main
+  commit and one draft GitHub Release with the exact CI-built artifacts.
+- Later `main` pushes that do not change `VERSION` skip release creation, so
+  documentation or maintenance commits reuse the same version without
+  touching a pending or published release.
+- Maintainers must not push release tags manually; CI owns automatic tag
+  creation.
 - GitHub-hosted CI never publishes the draft automatically.
 - Maintainer downloads exact draft attachments, flashes those bytes, runs
   software and hardware acceptance, records results, then manually publishes.
@@ -186,8 +192,12 @@ release version is chosen.
 
 ### FR3: draft release publication
 
-Add tag/version consistency checks, protected `contents: write` release job,
-draft creation, release attachments, and provenance. Never auto-publish.
+Add trusted-main automatic tag creation: a `main` push that changes the
+root `VERSION` runs the accepted build/package path, then a protected
+`contents: write` release job creates the version tag at the exact main
+commit plus a draft release with provenance and exact attachments. A main
+push without a `VERSION` change skips the release job. CI never
+auto-publishes.
 
 ### FR4: exact-artifact hardware acceptance
 

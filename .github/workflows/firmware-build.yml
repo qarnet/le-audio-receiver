@@ -5,8 +5,6 @@ on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -14,7 +12,7 @@ permissions:
 
 concurrency:
   group: firmware-build-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   firmware:
@@ -27,6 +25,7 @@ jobs:
         shell: bash
     outputs:
       version: ${{ steps.project-version.outputs.version }}
+      release-requested: ${{ steps.project-version.outputs.release-requested }}
     steps:
       - name: Checkout application
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -58,15 +57,30 @@ jobs:
       - name: Project version
         id: project-version
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           version="$(python3 scripts/project-version.py)"
           test "$version" = "0.1.0"
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            test "$GITHUB_EVENT_NAME" = "push"
-            test "$GITHUB_REF_NAME" = "v$version"
+          release_requested=false
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
+            [[ "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            test "$BEFORE_SHA" != 0000000000000000000000000000000000000000
+            git rev-parse --verify --quiet "$BEFORE_SHA^{commit}" >/dev/null
+            set +e
+            git diff --quiet "$BEFORE_SHA" "$GITHUB_SHA" -- VERSION
+            diff_status=$?
+            set -e
+            if [ "$diff_status" -eq 1 ]; then
+              release_requested=true
+            elif [ "$diff_status" -ne 0 ]; then
+              echo "::error::VERSION diff check failed with status $diff_status"
+              exit 1
+            fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release-requested=$release_requested" >> "$GITHUB_OUTPUT"
       - name: Build nRF5340
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
         run: ./scripts/bin/fw-build-5340
@@ -126,7 +140,7 @@ jobs:
 
   release:
     needs: firmware
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.firmware.outputs.release-requested == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     permissions:
@@ -135,23 +149,25 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: Checkout workflow tag
+      - name: Checkout main commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify tag identity
-        id: tag-identity
+      - name: Verify release identity
+        id: release-identity
         env:
           FW_VERSION: ${{ needs.firmware.outputs.version }}
+          RELEASE_REQUESTED: ${{ needs.firmware.outputs.release-requested }}
         run: |
           version="$(python3 scripts/project-version.py)"
           tag="v$version"
           test "$version" = "$FW_VERSION"
-          test "$tag" = "$GITHUB_REF_NAME"
-          test "$GITHUB_REF" = "refs/tags/$tag"
+          test "$RELEASE_REQUESTED" = "true"
+          test "$GITHUB_EVENT_NAME" = "push"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_REF_NAME" = "main"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-list -n 1 "$tag")" = "$GITHUB_SHA"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Download firmware artifact
@@ -182,24 +198,35 @@ jobs:
             --run-attempt "$RUN_ATTEMPT" \
             --artifact-dir dist \
             --output-dir release-metadata
-      - name: Require no existing release
+      - name: Require no existing release or tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="$(python3 scripts/project-version.py)"
           tag="v$version"
-          probe="$(mktemp)"
-          trap 'rm -f "$probe"' EXIT
+          release_probe="$(mktemp)"
+          tag_probe="$(mktemp)"
+          trap 'rm -f "$release_probe" "$tag_probe"' EXIT
           set +e
-          gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$tag" >"$probe" 2>&1
-          probe_status=$?
+          gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$tag" >"$release_probe" 2>&1
+          release_status=$?
+          gh api --include "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >"$tag_probe" 2>&1
+          tag_status=$?
           set -e
-          if [ "$probe_status" -eq 0 ]; then
+          if [ "$release_status" -eq 0 ]; then
             echo "::error::release already exists for tag $tag"
             exit 1
           fi
-          if ! grep -Eq '^HTTP/[0-9.]+ 404' "$probe"; then
+          if ! grep -Eq '^HTTP/[0-9.]+ 404' "$release_probe"; then
             echo "::error::existing-release probe failed for tag $tag (expected HTTP 404)"
+            exit 1
+          fi
+          if [ "$tag_status" -eq 0 ]; then
+            echo "::error::git tag already exists for tag $tag"
+            exit 1
+          fi
+          if ! grep -Eq '^HTTP/[0-9.]+ 404' "$tag_probe"; then
+            echo "::error::existing-tag probe failed for tag $tag (expected HTTP 404)"
             exit 1
           fi
       - name: Create draft release
@@ -209,37 +236,44 @@ jobs:
           version="$(python3 scripts/project-version.py)"
           tag="v$version"
           gh release create "$tag" \
+            --target "$GITHUB_SHA" \
             --draft \
-            --verify-tag \
             --title "LE Audio Receiver $tag" \
             --notes-file release-metadata/release-notes.md \
             "dist/le-audio-receiver-v${version}-nrf5340-e83-factory.zip" \
             "dist/le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip" \
             dist/SHA256SUMS \
             release-metadata/release-provenance.json
-      - name: Verify draft release
+      - name: Verify draft release and tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="$(python3 scripts/project-version.py)"
           tag="v$version"
-          gh release view "$tag" --json tagName,isDraft,isPrerelease,assets,url > release-check.json
-          python3 - "$tag" "$version" <<'PYEOF'
+          gh release view "$tag" --json tagName,isDraft,isPrerelease,assets,targetCommitish,url > release-check.json
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" > tag-check.json
+          python3 - "$tag" "$version" "$GITHUB_SHA" <<'PYEOF'
           import json
           import sys
-          tag, version = sys.argv[1], sys.argv[2]
+          tag, version, sha = sys.argv[1], sys.argv[2], sys.argv[3]
           with open("release-check.json", "r", encoding="utf-8") as fh:
-              data = json.load(fh)
-          assert data["tagName"] == tag, data["tagName"]
-          assert data["isDraft"] is True, data["isDraft"]
-          assert data["isPrerelease"] is False, data["isPrerelease"]
+              release = json.load(fh)
+          assert release["tagName"] == tag, release["tagName"]
+          assert release["isDraft"] is True, release["isDraft"]
+          assert release["isPrerelease"] is False, release["isPrerelease"]
+          assert release["targetCommitish"] == sha, release["targetCommitish"]
           expected = [
               "SHA256SUMS",
               "le-audio-receiver-v%s-nrf5340-e83-factory.zip" % version,
               "le-audio-receiver-v%s-nrf54l15-xiao-factory.zip" % version,
               "release-provenance.json",
           ]
-          names = sorted(asset["name"] for asset in data["assets"])
+          names = sorted(asset["name"] for asset in release["assets"])
           assert names == expected, names
-          print("draft release URL: %s" % data["url"])
+          with open("tag-check.json", "r", encoding="utf-8") as fh:
+              tag_data = json.load(fh)
+          assert tag_data["ref"] == "refs/tags/" + tag, tag_data["ref"]
+          assert tag_data["object"]["type"] == "commit", tag_data["object"]["type"]
+          assert tag_data["object"]["sha"] == sha, tag_data["object"]["sha"]
+          print("draft release URL: %s" % release["url"])
           PYEOF
