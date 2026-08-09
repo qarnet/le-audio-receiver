@@ -31,6 +31,11 @@ nRF5340 7.5 ms shell example with an exact pattern that:
 Do not rely on a bounded loop falling through. Do not lose gate stdout/stderr.
 Keep 30 s gate/60 s reader duration and every existing 7.5 ms assertion.
 
+The status-capture form must remain correct when the caller has `set -e`:
+initialize each status to zero, run the gate and `wait` as guarded commands
+(`... || STATUS=$?`), then evaluate both statuses. A bare command followed by
+`STATUS=$?` is insufficient because errexit can terminate before cleanup.
+
 ## Scope and verification
 
 Touch exactly:

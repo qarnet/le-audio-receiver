@@ -427,15 +427,17 @@ and re-pairing. Any reset failure blocks the row.
    fi
 
    # Retain gate stdout+stderr; capture exit status without skipping
-   # reader cleanup.
+   # reader cleanup. Guarded capture keeps cleanup correct under `set -e`:
+   # statuses are initialized zero and each command runs as
+   # `... || STATUS=$?`, never as a bare command followed by `$?`.
+   GATE_STATUS=0
    python3 scripts/bluez-wireplumber-gate.py --receiver-address <live> \
      --duration 30 --log "$RUN_DIR/logs/nrf5340-7p5-receiver.log" \
      --output-dir "$RUN_DIR/metadata/nrf5340-7p5/" \
-     > "$RUN_DIR/logs/nrf5340-7p5-gate.log" 2>&1
-   GATE_STATUS=$?
+     > "$RUN_DIR/logs/nrf5340-7p5-gate.log" 2>&1 || GATE_STATUS=$?
 
-   wait "$READER_PID"
-   READER_STATUS=$?
+   READER_STATUS=0
+   wait "$READER_PID" || READER_STATUS=$?
 
    if [ "$GATE_STATUS" -ne 0 ] || [ "$READER_STATUS" -ne 0 ]; then
      echo "FR4 FAIL: gate=$GATE_STATUS reader=$READER_STATUS" >&2
