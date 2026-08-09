@@ -692,6 +692,13 @@ class TestMonoEndpoint(unittest.TestCase):
         self.assertEqual(cm.exception._dbus_error_name, self.REJECTED)
         return cm.exception
 
+    def _closed(self, fd):
+        try:
+            os.fstat(fd)
+            return False
+        except OSError:
+            return True
+
     def test_mono_first_fl_selectproperties_exact(self):
         bus, dbus, endpoint = make_endpoint(mono=True)
         ret, out = self._select(endpoint, 0x01)
@@ -814,12 +821,23 @@ class TestMonoEndpoint(unittest.TestCase):
 
     def test_mono_clear_acquired_restores_capacity(self):
         bus, dbus, endpoint = make_endpoint(mono=True)
-        endpoint.transports = [
-            {"path": TP1, "fd": 5, "write_mtu": 120, "channel_alloc": 0x01}
-        ]
-        endpoint.ClearConfiguration(TP1)
-        endpoint.SetConfiguration(TP2, {"Configuration": list(ltv_config(0x01))})
-        self.assertEqual(len(endpoint._pending_transports), 1)
+        # Real owned pipe descriptor (never a literal fd number).
+        r, w = os.pipe()
+        try:
+            endpoint.transports = [
+                {"path": TP1, "fd": w, "write_mtu": 120, "channel_alloc": 0x01}
+            ]
+            endpoint.ClearConfiguration(TP1)
+            # Production closed the endpoint-owned end exactly once.
+            self.assertTrue(self._closed(w))
+            endpoint.SetConfiguration(TP2, {"Configuration": list(ltv_config(0x01))})
+            self.assertEqual(len(endpoint._pending_transports), 1)
+        finally:
+            os.close(r)
+            # Clean up the owned end only if the test failed before
+            # production closed it (fstat raises once it is closed).
+            if not self._closed(w):
+                os.close(w)
 
     def test_mono_release_clears_ownership_and_permits_fresh(self):
         bus, dbus, endpoint = make_endpoint(mono=True)

@@ -43,9 +43,13 @@ gh api repos/qarnet/le-audio-receiver/releases/367572702 \
   > "$RUN_DIR/metadata/release.json"
 ```
 
-Require, by exact comparison of the parsed JSON, repository
-`qarnet/le-audio-receiver`, release ID `367572702`, `tag_name == v0.1.0`,
-`draft == true`, `prerelease == false`, target commit
+Repository identity is bound by querying the exact endpoint
+`repos/qarnet/le-audio-receiver/releases/367572702`; the GitHub release
+JSON has no standalone repository-name field, so no such property is
+demanded. Require, by exact comparison of the parsed JSON, exact `url`
+(or exact owner/repo URL prefix) for `qarnet/le-audio-receiver`, release
+ID `367572702`, `tag_name == v0.1.0`, `draft == true`,
+`prerelease == false`, target commit
 `3d9a9186ec288484a637dac1dc7460319daf5e84`, and the exact asset
 ID/name/size/digest set below. Never print the release body or any secret.
 
@@ -128,12 +132,27 @@ After download, in order:
    ```
 
 7. Require the git-ref lookup for `refs/tags/v0.1.0` to return exact
-   HTTP 404 (the draft is untagged):
+   HTTP 404 (the draft is untagged). Keep the private captured response
+   but parse only the first HTTP status line with stdlib Python using the
+   anchored expression `^HTTP/\S+\s+(\d{3})\b`; require exactly one parsed
+   status and exact code 404. Any missing/malformed status, success,
+   auth/network/rate-limit error, or other code fails. Never print the
+   response body; do not use grep/jq over JSON or hardcode an HTTP
+   protocol version:
 
    ```bash
    gh api --include repos/qarnet/le-audio-receiver/git/ref/tags/v0.1.0 \
      > "$RUN_DIR/logs/tag-ref-lookup.txt" 2>&1 || true
-   grep -q "HTTP/1.1 404" "$RUN_DIR/logs/tag-ref-lookup.txt"
+   python3 - "$RUN_DIR/logs/tag-ref-lookup.txt" <<'PY'
+   import re
+   import sys
+
+   with open(sys.argv[1], "rb") as fh:
+       response = fh.read()
+   statuses = re.findall(rb"^HTTP/\S+\s+(\d{3})\b", response, re.MULTILINE)
+   if len(statuses) != 1 or statuses[0] != b"404":
+       raise SystemExit("tag ref lookup: expected exactly one HTTP 404 status")
+   PY
    ```
 
 ## 4. Extraction
@@ -226,6 +245,7 @@ openocd -f interface/cmsis-dap.cfg -c "adapter serial $PROBE" \
   -c "reset halt" \
   -c "wait_halt 2000" \
   -c "flash write_image erase $APP_HEX" \
+  -c "verify_image $APP_HEX" \
   -c "uicr_unprotect_app" \
   -c "nrf53_cpunet_release nrf53" \
   -c "nrf53.cpunet arp_examine" \
@@ -234,12 +254,16 @@ openocd -f interface/cmsis-dap.cfg -c "adapter serial $PROBE" \
   -c "wait_halt 2000" \
   -c "flash probe 2" \
   -c "flash write_image erase $NET_HEX" \
+  -c "verify_image $NET_HEX" \
   -c "uicr_unprotect_net" \
   -c "reset run" \
   -c shutdown
 ```
 
-Preserve the full log. Any UICR warning, recovery line, verify/error, or
+Preserve the full log. Both exact extracted images must report
+verification success (`verify_image` for `merged.hex` on cpuapp and for
+`merged_CPUNET.hex` on cpunet, each immediately after its write and
+before UICR handling). Any UICR warning, recovery line, verify/error, or
 unexpected warning blocks acceptance. Normal range erase preserves
 settings and bonds.
 
@@ -319,9 +343,19 @@ historical receiver addresses as assumed truth.
 
 All durations below are minima. Each row needs exact command, exit
 status, central mode/fps/frame count, receiver summaries, and warning
-scan.
+scan. For **each target**, run rows in this exact stateful order.
 
-For **each target**:
+Before each of fresh mono, fresh Mode A, and fresh Mode B, invoke the
+production `bt unpair` command on the receiver and require the
+target-correct exact success text:
+
+- nRF5340 (feature-off legacy path):
+  `Pairing mode reset: bonds cleared; open pairing enabled.`
+- nRF54L15 (feature-on path):
+  `Pairing reset complete: bonds cleared; BONDING advertising active.`
+
+The default `bap_central.py` fresh strategy owns central Device1 removal
+and re-pairing. Any reset failure blocks the row.
 
 1. Fresh mono 120 s:
 
@@ -348,21 +382,62 @@ For **each target**:
 
    Require exactly one transport, `Stream mode: stereo_b`, 240-byte SDU.
 
-4. Preserved-bond reconnect 120 s: rerun one stereo mode with
-   `--preserve-bond`; require Pair skipped, encrypted bonded reconnect,
-   clean disconnect, advertising restart, and stream success.
-
-5. 7.5 ms 30 s minimum:
+4. Preserved-bond Mode B 120 s: run immediately after successful fresh
+   Mode B with no intervening receiver `bt unpair` or central
+   `RemoveDevice`, so the exact bond created by that fresh row is
+   retained:
 
    ```bash
+   python3 scripts/bap_central.py --stereo --peer-addr <live> \
+     --preserve-bond --duration 120
+   ```
+
+   Require Pair skipped, encrypted bonded reconnect, clean disconnect,
+   advertising restart, and stream success.
+
+5. Exact-address 7.5 ms PipeWire gate 30 s minimum, against that retained
+   bond. Use target-specific receiver log and output directory with
+   concurrent console capture:
+
+   ```bash
+   # nRF5340 example; nRF54L15 uses the same pattern with its own names
+   # (live Xiao CDC port resolved at execution time, normally ttyACM0).
+   mkdir -p "$RUN_DIR/metadata/nrf5340-7p5"
+   python3 scripts/read_acm.py ttyUSB0 \
+     "$RUN_DIR/logs/nrf5340-7p5-receiver.log" 60 \
+     > "$RUN_DIR/logs/nrf5340-7p5-reader.log" 2>&1 &
+   READER_PID=$!
+   # Wait until the reader has opened the console port.
+   for _ in $(seq 1 50); do
+     grep -q "Opened" "$RUN_DIR/logs/nrf5340-7p5-reader.log" 2>/dev/null && break
+     sleep 0.2
+   done
    python3 scripts/bluez-wireplumber-gate.py --receiver-address <live> \
-     --duration 30 --log "$RUN_DIR/logs/wireplumber-receiver.log" \
-     --output-dir "$RUN_DIR/metadata"
+     --duration 30 --log "$RUN_DIR/logs/nrf5340-7p5-receiver.log" \
+     --output-dir "$RUN_DIR/metadata/nrf5340-7p5/"
+   wait "$READER_PID"
    ```
 
    Use the current system PipeWire/WirePlumber; require parsed
    `Frame Duration: 7500 us`, about 133.3 fps, duration-consistent SDUs,
-   and zero fault fields.
+   and zero fault fields. Never overwrite one target's evidence with the
+   other: nRF5340 evidence lives under `nrf5340-7p5*` names and nRF54L15
+   under `nrf54l15-7p5*` names
+   (`$RUN_DIR/logs/nrf54l15-7p5-receiver.log`,
+   `$RUN_DIR/metadata/nrf54l15-7p5/`).
+
+**Why this order**: `bt unpair` before every fresh row guarantees the
+receiver is in open pairing mode with zero bonds, so the fresh central
+strategy (central `RemoveDevice` + re-pairing) is never rejected by a
+stale receiver bond. In NORMAL/BONDED_ONLY mode a surviving bond can make
+the receiver reject or demote a supposedly fresh central, which would
+masquerade as a fresh-pair success. Running preserved-bond Mode B
+immediately after fresh Mode B, with no intervening bond deletion on
+either side, then proves persisted-bond reconnect against the exact bond
+the fresh row created: Pair skipped, encrypted bonded reconnect, clean
+disconnect, advertising restart. The exact-address 7.5 ms gate runs
+against that same retained bond, proving the PipeWire path on the bonded
+receiver without ever weakening the fresh-pair rows.
 
 For nRF5340 also capture mid-stream `audio status` during a bonded Mode B
 row: drift ACTIVE, APLL path/resampler identity, zero decode errors, I2S
