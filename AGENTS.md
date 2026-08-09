@@ -645,4 +645,9 @@ SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 | `scripts/bap_central_security.py` | Central agent/pairing/connect (R9): JustWorks agent factory, raw-HCI fresh-connect strategy (exact `sudo -n` argv, ready + Connected gates), BlueZ preserve-bond Connect strategy, `wait_for_helper_ready` (READY_PREFIX from `hci_raw_connect.py`), RemoveDevice fresh-only, Pairable/Trusted/async Pair, services-resolved, cleanup Disconnect |
 | `scripts/bap_central_endpoint.py` | Central BAP source endpoint (R9): constants/LC3 blobs, `MediaEndpoint1` class factory, registration, deferred async Acquire, pending/acquired fd ownership, second-ASE grace, all-or-nothing, mode inference |
 | `scripts/bap_central_session.py` | Central LC3 source/writer (R9): lazy liblc3 loader + encoder (stdlib-safe import), sine, per-mode payloads, `StreamSession` writer lifecycle + exact teardown tail |
-| `README.md` | Human-facing project overview, BOM, I2S wiring for both boards |
+| `README.md` | Public LE Audio explainer: what the project does, board tradeoff matrix, supported sources, docs links |
+| `docs/user-guide.md` | Public user guide: boot, pairing modes (NORMAL/BONDING/RESET), flashing notes, troubleshooting |
+| `docs/hardware-wiring.md` | Public wiring: DAC choice, verified E83/Xiao I2S pin tables, config pins, line-level warning |
+| `docs/known-limitations.md` | Public known-limitations list (48 kHz only, 360-frame FLPR fallback, linear volume, pop, duplicate adv, etc.) |
+| `docs/supported-sources.md` | Public researched Linux LE Audio source hardware + software requirements (status labels Project-validated / Vendor-supported / Unverified; Intel AX210 project-validated, dongles unverified) |
+| `docs/technology/nrf5340.md`, `docs/technology/nrf54l15.md` | Public per-platform technology notes (architecture, clock recovery/rate matching) |
