@@ -403,7 +403,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         _run(args)
-    except PackagerError as exc:
+    except (PackagerError, OSError) as exc:
         print("%s%s" % (ERROR_PREFIX, exc), file=sys.stderr)
         return 1
     return 0

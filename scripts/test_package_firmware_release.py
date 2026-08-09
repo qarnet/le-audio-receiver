@@ -14,6 +14,7 @@ script) is controlled per test.
 import hashlib
 import json
 import os
+import resource
 import shutil
 import subprocess
 import sys
@@ -136,7 +137,9 @@ def make_fixture(base, images=None, notes=None):
     return repo
 
 
-def run_cli(repo, output_dir, version=VERSION, commit=COMMIT, ncs=NCS, extra=()):
+def run_cli(
+    repo, output_dir, version=VERSION, commit=COMMIT, ncs=NCS, extra=(), preexec_fn=None
+):
     script = os.path.join(repo, "scripts", CLI_NAME)
     cmd = [
         sys.executable,
@@ -152,12 +155,21 @@ def run_cli(repo, output_dir, version=VERSION, commit=COMMIT, ncs=NCS, extra=())
         "--output-dir",
         output_dir,
     ] + list(extra)
-    return subprocess.run(cmd, capture_output=True, text=True, cwd=repo)
+    return subprocess.run(
+        cmd, capture_output=True, text=True, cwd=repo, preexec_fn=preexec_fn
+    )
 
 
 def read_zip(path):
     with zipfile.ZipFile(path, "r") as zf:
         return [(info, zf.read(info.filename)) for info in zf.infolist()]
+
+
+def limit_file_size_100():
+    """preexec_fn for the Linux RLIMIT_FSIZE regression: cap the child's
+    largest file at 100 bytes so the first ZIP write fails with
+    ``OSError: [Errno 27] File too large`` after staging creation."""
+    resource.setrlimit(resource.RLIMIT_FSIZE, (100, 100))
 
 
 class TestHappyPath(unittest.TestCase):
@@ -626,6 +638,30 @@ class TestProcessContract(unittest.TestCase):
                     "/", line, "stdout must name output-relative files only"
                 )
                 self.assertNotIn("..", line)
+
+
+class TestOutputIoFailure(unittest.TestCase):
+    """Linux RLIMIT_FSIZE regression: an output-side OSError during ZIP
+    writing must produce the stable stderr diagnostic without a traceback
+    and leave no staging sibling or final output directory."""
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"), "Linux RLIMIT_FSIZE regression"
+    )
+    def test_zip_write_failure_clean_diagnostic_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_fixture(tmp)
+            dist = os.path.join(tmp, "dist")
+            res = run_cli(repo, dist, preexec_fn=limit_file_size_100)
+            self.assertNotEqual(res.returncode, 0, res.stderr)
+            self.assertTrue(res.stderr.startswith(ERROR_PREFIX), res.stderr)
+            self.assertNotIn("Traceback", res.stderr)
+            self.assertIn("File too large", res.stderr)
+            self.assertFalse(os.path.exists(dist), "output must stay absent")
+            leftovers = [
+                name for name in os.listdir(tmp) if name.startswith(STAGING_PREFIX)
+            ]
+            self.assertEqual(leftovers, [])
 
 
 if __name__ == "__main__":
