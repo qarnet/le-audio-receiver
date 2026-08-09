@@ -38,7 +38,7 @@ compatibility decision before it can be supported.
 - Test fixtures (LC3 golden PCM at each rate).
 - BSim scenarios and hardware acceptance.
 
-Do not promise all rates blindly — land rates one at a time with fixtures and
+Do not promise all rates blindly: land rates one at a time with fixtures and
 acceptance evidence.
 
 #### Acceptance
@@ -58,7 +58,7 @@ acceptance evidence.
 #### Problem
 
 Current volume implementation (`src/audio_volume.c`) multiplies each PCM
-sample by `volume / 255` — a **linear** scale. Reported behavior: the first
+sample by `volume / 255`, a **linear** scale. Reported behavior: the first
 roughly **third of the slider** causes most of the perceived loudness change,
 and adjustments near the top of the range are barely audible. Keep the
 linear-scaling explanation as the mechanism; do not assert an exact
@@ -96,7 +96,7 @@ investigation below has been done.
 
 A startup/audible pop has been observed after long idle periods. The root
 cause is **not yet confirmed**. An energy-saving cause (e.g. clock or DAC
-power-down during idle) is a **hypothesis only** — do not treat it as fact
+power-down during idle) is a **hypothesis only**: do not treat it as fact
 until instrumented.
 
 #### Plan
@@ -159,7 +159,7 @@ research below as a follow-up.
 
 The nRF54L15 build has user pairing control (button + LED, see
 `docs/development/user-pairing-control-plan.md`); the **nRF5340 build does
-not** — no physical pairing button is wired yet (see
+not**: no physical pairing button is wired yet (see
 [Known limitations](docs/known-limitations.md)). Pairing reset on nRF5340 is
 currently only possible through the developer shell (`bt unpair`).
 
@@ -169,7 +169,7 @@ currently only possible through the developer shell (`bt unpair`).
   nRF54L15 feature stack (`CONFIG_USER_PAIRING_CONTROL` /
   `CONFIG_USER_PAIRING_INPUT`).
 - Same user experience as nRF54L15: 3 s hold = BONDING, 8 s hold = RESET.
-- **Candidate pin defined only after hardware review** — do not invent a pin
+- **Candidate pin defined only after hardware review**: do not invent a pin
   assignment now.
 - Feature-parity tests and hardware acceptance on the nRF5340.
 
@@ -184,7 +184,7 @@ currently only possible through the developer shell (`bt unpair`).
 ### F. Public GitHub release binaries
 
 **Priority:** High (blocking public use)
-**Status:** Planned — nothing published yet
+**Status:** Planned; nothing published yet
 
 #### Problem
 
@@ -209,13 +209,13 @@ Public users need ready-made firmware binaries.
 ### G. (Research) nRF54L15 as a native Linux LE Audio USB dongle
 
 **Priority:** Low (research only)
-**Status:** Research — feasibility **not** claimed
+**Status:** Research; feasibility **not** claimed
 
 #### Problem / idea
 
 The nRF54L15 (Seeed Xiao) is cheap and has an onboard USB bridge. Could it
 serve as a native Linux LE Audio source dongle (plug-and-play USB LE Audio
-source)? This is an **open research question** — enumerate the architecture
+source)? This is an **open research question**: enumerate the architecture
 before claiming anything.
 
 #### Plan
@@ -313,7 +313,7 @@ and returns to NORMAL without disconnecting it.
   not this feature. Fix item D first and establish the one-connectable-
   advertisement invariant **before** implementing payload differentiation.
 - Do **not** adopt **two simultaneous advertisements** as the default fix for
-  either issue — running a second advertisement (set or identity) has bond,
+  either issue: running a second advertisement (set or identity) has bond,
   privacy, and connection-slot consequences documented in research item 4, and
   the duplicate-entry symptom itself needs a root cause first.
 - After item D is resolved, revisit the marker approach above.

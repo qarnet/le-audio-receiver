@@ -10,13 +10,13 @@ Linux](supported-sources.md) overview/source matrix.
 Native HCI adapters are this project's primary source path: Linux owns the
 Bluetooth stack, and BlueZ + PipeWire implement BAP, ISO, and LC3 on the host.
 **Self-contained USB Audio Class transmitters** (which run the entire stack in
-dongle firmware) are outside this native-HCI support contract — see
+dongle firmware) are outside this native-HCI support contract; see
 [supported-sources.md](supported-sources.md) for that separate, unverified
 research matrix.
 
 ## Tested and supported adapters
 
-### Intel Wi-Fi 6E AX210 — Supported (project-validated)
+### Intel Wi-Fi 6E AX210: Supported (project-validated)
 
 The **only** adapter this project has tested and supported as a native Linux
 HCI source is the **Intel Wi-Fi 6E AX210**.
@@ -32,18 +32,18 @@ HCI source is the **Intel Wi-Fi 6E AX210**.
   setup](linux-le-audio-host-setup.md) page.
 - **Status:** **Supported / project-validated.**
 
-### Intel BE200 — Not supported
+### Intel BE200: Not supported
 
 The Intel BE200 is **not supported** and is **not an active candidate**. This
 project has not validated it, and it has public reports of reaching LE Audio
 setup but crashing during streaming
-([BlueZ issue 1149](https://github.com/bluez/bluez/issues/1149)) — so no
+([BlueZ issue 1149](https://github.com/bluez/bluez/issues/1149)): so no
 support or candidate claim is made.
 
-### Plug-in USB HCI adapters — none validated yet
+### Plug-in USB HCI adapters: none validated yet
 
 No plug-in USB HCI adapter is project-validated yet. Generic "Bluetooth 5.3"
-or "Bluetooth 5.4" USB dongles do not prove ISO support — a marketing version
+or "Bluetooth 5.4" USB dongles do not prove ISO support; a marketing version
 is not a capability claim (see [Mandatory controller
 contract](#mandatory-controller-contract)). USB sticks are eligible for
 evaluation on any bus (see [Bus independence](#bus-independence)); they just
@@ -52,7 +52,7 @@ ASUS sticks and the Nordic development kits are candidates under evaluation,
 the UGREEN model 75073 is incompatible with the native path, and the UGREEN
 CM591 remains unverified (not a candidate).
 
-### ASUS USB-BT540 — Candidate / project-tested with development tool
+### ASUS USB-BT540: Candidate / project-tested with development tool
 
 ASUS officially lists Linux, Bluetooth 5.4, LC3/LE Audio, and LE 2M
 ([product page](https://www.asus.com/networking-iot-servers/adapters/all-series/usb-bt540/),
@@ -100,8 +100,8 @@ Measured on 2026-08-09 (row in the [evaluation record](#evaluation-record)):
   eleven queued 7.5 ms I2S blocks provide an 82.5 ms total startup queue
   (about 77 ms transition coverage after playback begins), and continued
   invalid/omitted callbacks generated PLC that kept the queue supplied through
-  the observed ~1.013 s final host-TX to ASCS Disable interval — the reservoir
-  alone does not span that whole second — with zero receiver
+  the observed ~1.013 s final host-TX to ASCS Disable interval (the reservoir
+  alone does not span that whole second), with zero receiver
   warnings/errors/resets (`SDUs=1712 decoded=3678 plc=284
   decode_err=0 i2s_underrun=0 stream_reset=0 empty_sdu=15`; `decoded` is a
   legacy field label carrying total rendered frames including PLC, so
@@ -114,10 +114,10 @@ Measured on 2026-08-09 (row in the [evaluation record](#evaluation-record)):
   confirmation remain open. Full evidence: [BT540 headless production-stack
   results](development/bt540-headless-pipewire-results.md).
 
-Verdict: **Candidate / project-tested with development tool** — not
+Verdict: **Candidate / project-tested with development tool**, not
 **Supported / project-validated**. Remaining gates before recommendation:
 
-1. KDE/Bluedevil UI route on `thomas-main` remains untested — the headless
+1. KDE/Bluedevil UI route on `thomas-main` remains untested; the headless
    CLI run above used the same production audio components and data path, but
    the Plasma UI path is still open.
 2. One-CIS mono scenario remains unrun; one-CIS evidence is stereo Mode B.
@@ -125,8 +125,8 @@ Verdict: **Candidate / project-tested with development tool** — not
 4. Audible-output confirmation was not recorded.
 5. Kernel initialization log: `Bluetooth: hci1: Failed to read codec
    capabilities (-22)`.
-6. Receiver PLC remains unexplained: Mode A 30 s — 78 PLC frames; Mode A
-   reconnect 15 s — 70; Mode B 15 s — 72; repeat Mode B 10 s — 76.
+6. Receiver PLC remains unexplained: Mode A 30 s, 78 PLC frames; Mode A
+   reconnect 15 s, 70; Mode B 15 s, 72; repeat Mode B 10 s, 76.
 
 Issue analysis:
 
@@ -148,7 +148,7 @@ Issue analysis:
   against the AX210 under the same receiver placement, QoS, and RF conditions
   on the next branch.
 
-### ASUS USB-BT600 — Candidate / under evaluation
+### ASUS USB-BT600: Candidate / under evaluation
 
 ASUS officially lists Linux, Bluetooth 6.0, and LC3/LE Audio
 ([product page](https://www.asus.com/networking-iot-servers/wireless-adapters/all-series/usb-bt600/)).
@@ -156,7 +156,7 @@ Chipset, VID:PID, `cis-central`, ISO MTU/count, availability/maturity, and the
 dynamic receiver sequence remain unrecorded. Status is **Candidate / under
 evaluation**, not supported.
 
-### UGREEN CM591 / product 90225 — Unverified / not a candidate
+### UGREEN CM591 / product 90225: Unverified / not a candidate
 
 Public Linux USB evidence identifies the ATS2851 chipset and USB ID
 `10d7:b012`
@@ -164,10 +164,10 @@ Public Linux USB evidence identifies the ATS2851 chipset and USB ID
 authoritative CIS/ISO proof and no project test exist for this device. Normal
 Bluetooth operation does not prove LE Audio (see the [Mandatory controller
 contract](#mandatory-controller-contract)). Status: **Unverified / not a
-candidate** — the identity evidence alone does not establish incompatibility,
+candidate**: the identity evidence alone does not establish incompatibility,
 and no support or candidate claim is made.
 
-### UGREEN Bluetooth 6.0 model 75073 — Incompatible
+### UGREEN Bluetooth 6.0 model 75073: Incompatible
 
 The vendor product listing documents Windows only, Linux unsupported, SBC/AAC
 codecs, and LE Audio unsupported
@@ -177,28 +177,28 @@ different product from UGREEN's separate USB-C self-contained LE Audio
 transmitter (which runs the stack in dongle firmware and is outside the
 native-HCI contract); do not conflate the two.
 
-### Nordic nRF5340 DK (HCI UART controller) — Candidate / under evaluation
+### Nordic nRF5340 DK (HCI UART controller): Candidate / under evaluation
 
 NCS v3.3.0 supports running the Bluetooth controller on cpunet with H4 UART on
 cpuapp, and this repository's `dongle/` directory is a working
 source-controller implementation. USB caveat: NCS v3.3.0's Zephyr USB device
-HCI class (`subsys/usb/device_next/class/bt_hci.c`) cannot carry LE HCI ISO —
+HCI class (`subsys/usb/device_next/class/bt_hci.c`) cannot carry LE HCI ISO:
 the controller-to-host TX path handles EVT and ACL only and drops HCI ISO
 packet type `0x05`, and the bulk OUT path is hard-coded to ACL buffers and ACL
 header parsing. (This is not a missing-USB-isochronous-endpoints issue; those
 descriptors concern SCO.) HCI UART is the supported route. Status: **Candidate
 / under evaluation** as a native HCI development adapter; the hardware source
-path is not project-validated — existing public evidence does not establish
+path is not project-validated; existing public evidence does not establish
 full dynamic acceptance.
 
-### Nordic nRF54L15 DK (HCI UART controller) — Candidate / under evaluation
+### Nordic nRF54L15 DK (HCI UART controller): Candidate / under evaluation
 
 NCS v3.3.0's `samples/bluetooth/hci_uart` supports
 `nrf54l15dk/nrf54l15/cpuapp`, and the H4 transport handles packet type `0x05`
 (ISO). Status: **Candidate / under evaluation** as a native HCI development
 adapter; dynamic Linux and receiver validation remains required.
 
-### Seeed XIAO nRF54L15 hardware — Not an adapter candidate
+### Seeed XIAO nRF54L15 hardware: Not an adapter candidate
 
 The Seeed XIAO nRF54L15 **board** is distinct from the nRF54L15 DK above and
 is **not** an HCI adapter candidate:
@@ -227,7 +227,7 @@ plus an ISO-capable transport** for the adapter.
 
 ### Mandatory controller contract
 
-- **Bluetooth Core 5.2+ behavior** — but the marketing version is
+- **Bluetooth Core 5.2+ behavior**, but the marketing version is
   insufficient. Version numbers describe the radio generation, not the
   implemented feature set.
 - **LE feature "Connected Isochronous Stream - Central"**: Linux checks
@@ -278,7 +278,7 @@ list.
 - Confirm the LE 2M PHY is supported.
 - Capture controller initialization with `btmon`; inspect Supported Commands
   and the nonzero ISO values from `HCI LE Read Buffer Size V2`.
-- `btmgmt info` alone cannot prove full support — it is a necessary, not
+- `btmgmt info` alone cannot prove full support; it is a necessary, not
   sufficient, check.
 
 ### Dynamic acceptance checklist
@@ -315,7 +315,7 @@ for both runs' environments).
 Note: the AX210 row's `not recorded` fields reflect that the prior project
 validation predates this formal record template. The repository did not
 capture those details retroactively, so missing retrospective fields do not
-become fabricated — they are simply absent from the record. Future
+become fabricated; they are simply absent from the record. Future
 re-validation of the AX210 (or evaluation of any new adapter) should populate
 every field.
 
@@ -325,27 +325,27 @@ the evidence (test logs, `btmon` captures, result documents).
 
 ### Status vocabulary
 
-- **Supported / project-validated** — the dynamic acceptance sequence passed
+- **Supported / project-validated**: the dynamic acceptance sequence passed
   end-to-end against this receiver.
-- **Candidate / under evaluation** — being evaluated; not supported yet.
-- **Candidate / project-tested with development tool** — the dynamic sequence
+- **Candidate / under evaluation**: being evaluated; not supported yet.
+- **Candidate / project-tested with development tool**: the dynamic sequence
   passed against this receiver using the repository's `scripts/bap_central.py`
   development/test tool.  Development-tool validation alone does not
   establish the production BlueZ/PipeWire/WirePlumber path, so the candidate
   is not supported until the listed acceptance gates pass; a candidate may
   have additional production-path evidence (e.g. a headless production run)
   without changing that boundary.  A candidate, not supported yet.
-- **Rejected** — the project evaluated the adapter against the acceptance
+- **Rejected**: the project evaluated the adapter against the acceptance
   sequence and it failed, or conclusive evidence documents incompatibility.
   A single public report does not qualify.
-- **Unverified** — no project test and no vendor confirmation for the specific
+- **Unverified**: no project test and no vendor confirmation for the specific
   claim.
-- **Incompatible / not eligible** — documented evidence shows a mandatory
+- **Incompatible / not eligible**: documented evidence shows a mandatory
   requirement is absent or the transport cannot support it, so the device
   cannot serve as a native Linux LE Audio HCI source. No project test is
   needed for this verdict. It is distinct from **Rejected** (project-evaluated
   and failed) and from **Unverified** (no project test and no vendor
-  confirmation — absence of evidence alone does not establish
+  confirmation; absence of evidence alone does not establish
   incompatibility).
 
 **No candidate gets Supported status from feature bits or vendor claim alone.**

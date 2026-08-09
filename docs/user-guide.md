@@ -2,7 +2,7 @@
 
 This guide covers the receiver as a device: what you need, what to expect on
 boot, how to pair, and how the pairing modes behave. It is written to be
-platform-agnostic — most of it applies the same way to both supported boards
+platform-agnostic: most of it applies the same way to both supported boards
 (the nRF5340 build and the nRF54L15 build).
 
 ## What you need
@@ -11,7 +11,7 @@ platform-agnostic — most of it applies the same way to both supported boards
   [Getting firmware on the board](#getting-firmware-on-the-board)).
 - An I2S DAC wired to the board (see
   [Hardware wiring](hardware-wiring.md)).
-- A Bluetooth LE Audio **source** device — a phone, tablet, or computer that
+- A Bluetooth LE Audio **source** device: a phone, tablet, or computer that
   supports Bluetooth LE Audio with BAP unicast source. LE Audio source devices
   are still uncommon; a device that only supports classic Bluetooth audio
   (A2DP) will not work. See [Supported source
@@ -47,7 +47,7 @@ current pairing mode (below).
 1. Power the receiver and wait for it to start advertising.
 2. On your source device, scan for Bluetooth devices and look for **"LE Audio
    Receiver"**.
-3. Select it and pair. Pairing is **Just Works** — no PIN or passkey is
+3. Select it and pair. Pairing is **Just Works**: no PIN or passkey is
    needed.
 4. After pairing, the source device can start streaming audio to the
    receiver. Use the source's volume controls: the receiver implements the
@@ -58,7 +58,7 @@ current pairing mode (below).
 
 The receiver has three modes. The button behavior below applies to the
 **nRF54L15 (Seeed Xiao)** build, which has a physical user button and LED.
-**The nRF5340 build has no physical pairing button yet** — see the note at
+**The nRF5340 build has no physical pairing button yet**: see the note at
 the end of this section.
 
 | Mode | How to enter | LED | What it means |
@@ -99,7 +99,7 @@ LE Audio is a newer standard and source devices remain uncommon. Capabilities
 to look for:
 
 - **LE Audio / BAP unicast source** support (check the spec sheet or
-  settings — e.g. "LE Audio" or "Bluetooth LE Audio" toggle).
+  settings, e.g. "LE Audio" or "Bluetooth LE Audio" toggle).
 - **LC3** codec support at 48 kHz (the receiver currently accepts 48 kHz
   only; see [Known limitations](known-limitations.md)).
 
@@ -118,7 +118,7 @@ Two kinds of Linux sources exist. **Native HCI adapters** are the
 recommended path: BlueZ/PipeWire on the PC runs the LE Audio stack, which
 is what this project validates (the Intel AX210). **Self-contained USB
 audio transmitters** (dongles) pair directly with the receiver while both
-sides are in pairing mode — Linux just sees a USB sound card and is not
+sides are in pairing mode: Linux just sees a USB sound card and is not
 involved in the Bluetooth pairing. Dongles are untested secondary
 candidates with this receiver.
 
@@ -134,7 +134,7 @@ receiver builds during development.
 
 | Symptom | Likely cause / check |
 |---|---|
-| Device not visible in scan | Receiver still booting; check power. If previously paired, NORMAL mode only shows to bonded devices — enter BONDING to pair a new device. |
+| Device not visible in scan | Receiver still booting; check power. If previously paired, NORMAL mode only shows to bonded devices; enter BONDING to pair a new device. |
 | Pairing fails or device won't connect | The source device may have a stale bond from an earlier firmware version. Remove the receiver from the source's paired-device list, or hold the button for 8 seconds (RESET) to clear bonds on the receiver. |
 | No sound | Check DAC wiring (see [Hardware wiring](hardware-wiring.md)) and that the DAC board is powered. On some PCM5102A clones the SCK pad must be bridged to ground. |
 | Volume does nothing | Use the source device's volume controls (VCP). If the source has no LE Audio volume integration, playback runs at the receiver's default volume. |

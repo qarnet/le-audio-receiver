@@ -20,14 +20,14 @@ limitations](known-limitations.md)).
 | Component | Requirement | Project-tested baseline |
 |---|---|---|
 | Linux kernel | **6.4 minimum**; newer stable preferred (ongoing ISO fixes) | 7.1.5 |
-| BlueZ | **5.85 minimum** — first stable release containing the PAC callback fix ([commit `6b0a087`](https://github.com/bluez/bluez/commit/6b0a08776ae44a9102d7c6875a77e83dc6a11a37)) | 5.86 |
+| BlueZ | **5.85 minimum**: first stable release containing the PAC callback fix ([commit `6b0a087`](https://github.com/bluez/bluez/commit/6b0a08776ae44a9102d7c6875a77e83dc6a11a37)) | 5.86 |
 | PipeWire | current release, built with the BlueZ SPA and LC3 support | 1.6.6 |
-| WirePlumber | **0.5.15 minimum for project acceptance** (host lifecycle/zero-warning requirement — see version notes) | 0.5.15 |
+| WirePlumber | **0.5.15 minimum for project acceptance** (host lifecycle/zero-warning requirement; see version notes) | 0.5.15 |
 
 Version notes:
 
 - **PipeWire:** the historical BAP floor (0.3.59) is context, not a
-  recommendation — use a current release. A version number alone does not
+  recommendation; use a current release. A version number alone does not
   prove LC3 support (see [Checking PipeWire for LC3](#checking-pipewire-for-lc3)).
 - **BlueZ:** building or patching older BlueZ releases yourself is not
   recommended; use 5.85 or later.
@@ -40,7 +40,7 @@ Version notes:
   wire-protocol requirement, and not a floor for every distribution's LE Audio
   operation.
 - The kernel and BlueZ numbers are the *protocol floor*. A system that
-  satisfies every protocol-floor number can still fail in practice — the
+  satisfies every protocol-floor number can still fail in practice: the
   PipeWire LC3 requirement and the WirePlumber 0.5.15 floor describe this
   project's host acceptance baseline and clean-lifecycle policy, not BAP
   wire-protocol floors (see [Protocol floor vs. project
@@ -68,7 +68,7 @@ flags:
 bluetoothd -E -K 6fbaf188-05e0-496a-9885-d6ddfdb4e03e
 ```
 
-Either is sufficient; using both is redundant — they configure the same
+Either is sufficient; using both is redundant: they configure the same
 experimental features. After changing
 the configuration, restart the daemon (`systemctl restart bluetooth`).
 
@@ -101,7 +101,7 @@ monitor.bluez.properties = {
 logind user session. WirePlumber's BlueZ monitor only creates device and node
 objects for the active logind session (seat monitoring), so an
 inactive-session or headless setup needs attention. No separate PulseAudio
-daemon may own the Bluetooth audio — `pipewire-pulse` is fine. rtkit is
+daemon may own the Bluetooth audio; `pipewire-pulse` is fine. rtkit is
 **recommended** (real-time scheduling), not protocol-mandatory.
 
 ### Verification procedure
@@ -118,22 +118,22 @@ the final proof is an end-to-end stream (see below).
 | BlueZ service | `systemctl is-active bluetooth` | `active` |
 | Audio session | `systemctl --user is-active pipewire wireplumber` | both `active` in the current logind user session |
 | BlueZ experimental | `bluetoothctl show` | exposes `ExperimentalFeatures: BlueZ Experimental ISO ...` (plus the kernel ISO feature from `KernelExperimental`) |
-| Controller capabilities | `btmgmt --index hci0 info` | `le` and `cis-central` present in supported settings — **necessary, not sufficient** |
+| Controller capabilities | `btmgmt --index hci0 info` | `le` and `cis-central` present in supported settings; **necessary, not sufficient** |
 
 Fail interpretations:
 
 - `bluetoothctl show` missing the experimental features line: the BlueZ
-  experimental configuration is not effective — the daemon was not restarted,
+  experimental configuration is not effective: the daemon was not restarted,
   the config file was not read, or the equivalent flags were not used.
-- `btmgmt` missing `cis-central`: the controller cannot act as an ISO central —
+- `btmgmt` missing `cis-central`: the controller cannot act as an ISO central;
   stop here; the adapter cannot be accepted (see [Bluetooth adapter support and
   evaluation](bluetooth-adapter-evaluation.md)).
 
 #### Checking WirePlumber for `bap_source`
 
-Inspect the effective WirePlumber configuration — system directories such as
+Inspect the effective WirePlumber configuration (system directories such as
 `/etc/wireplumber/` plus user overrides in `~/.config/wireplumber/`, including
-fragments under `wireplumber.conf.d/` — for
+fragments under `wireplumber.conf.d/`) for
 `monitor.bluez.properties` → `bluez5.roles`. The default includes
 `bap_source`; only a custom role list can remove it. WirePlumber's
 documentation lists the supported roles and defaults.
@@ -144,7 +144,7 @@ There is no one universal distro command. Consult your distro's package and
 build metadata: PipeWire must be built with the BlueZ SPA and with
 `-Dbluez5-codec-lc3=enabled`, with `liblc3` available at build time. The
 authoritative runtime evidence is the negotiated BAP endpoint/profile once a
-session is active — PipeWire's `pw-cli`, `pw-dump`, or WirePlumber's `wpctl`
+session is active; PipeWire's `pw-cli`, `pw-dump`, or WirePlumber's `wpctl`
 can list nodes and endpoints. Package/build metadata and the runtime BAP
 endpoint are authoritative, not a static version string.
 
@@ -168,7 +168,7 @@ line drive the same components:
 - Audio playback = an ordinary PipeWire client (`pw-play`).
 
 So a GUI is not required to test the production data path. The safe workflow
-below uses placeholders — substitute the peer's addresses and node names:
+below uses placeholders; substitute the peer's addresses and node names:
 
 1. Ensure one intended HCI adapter owns the peer; disconnect/power down
    competing adapters for test isolation.
@@ -190,7 +190,7 @@ below uses placeholders — substitute the peer's addresses and node names:
    underruns, or teardown failures.
 
 `main-embedded` is a diagnostic profile, not a permanent desktop
-recommendation — prefer supported seat-monitoring configuration for
+recommendation; prefer supported seat-monitoring configuration for
 day-to-day desktop use. Concrete worked evidence for this workflow is
 recorded in the [BT540 headless production-stack
 results](development/bt540-headless-pipewire-results.md): the original 0.5.14
@@ -220,7 +220,7 @@ end-to-end adapter-validation claim. New acceptance runs for this project
 require **WirePlumber 0.5.15 or newer**: the 0.5.14 shutdown leaked three
 PipeWire proxies under project test, failing this project's zero-warning host
 lifecycle policy (see the version notes above). The AX210 claim is
-not retracted — it validated the adapter and the protocol path, which 0.5.14
+not retracted: it validated the adapter and the protocol path, which 0.5.14
 demonstrably supports; the 0.5.15 floor governs the host lifecycle under which
 this project now accepts runs.
 
@@ -291,7 +291,7 @@ negotiate:
 - **PACS + ASCS** GATT services (the receiver registers both).
 - **Sink ASEs** (the receiver exposes two sink ASEs; stereo Mode A uses two
   mono CIS, Mode B one stereo ASE).
-- **LC3 at 48 kHz** — the receiver accepts LC3 48 kHz only (see [Known
+- **LC3 at 48 kHz**: the receiver accepts LC3 48 kHz only (see [Known
   limitations](known-limitations.md)).
 - Compatible codec configuration, QoS, PHY, and presentation delay.
 - Pairing/encryption when the receiver's pairing policy requires it.
@@ -302,7 +302,7 @@ The minimum versions in [Required and recommended
 versions](#required-and-recommended-versions) are a *floor*: BlueZ 5.85 is the
 first stable release with the PAC callback fix, and kernel 6.4 is the
 practical floor for the ISO path. Satisfying the floor is **not a promise**
-that a system works — firmware, driver, and stack interactions differ per
+that a system works; firmware, driver, and stack interactions differ per
 host. The project-tested baseline is the configuration this project validated
 end-to-end. The dynamic acceptance procedure on the [Bluetooth adapter support
 and evaluation](bluetooth-adapter-evaluation.md) page is the final arbiter.
