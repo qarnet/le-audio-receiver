@@ -84,7 +84,8 @@ listed in the README Documentation table (`docs/user-guide.md`,
 `docs/supported-sources.md`, `docs/linux-le-audio-host-setup.md`,
 `docs/bluetooth-adapter-evaluation.md`, `docs/hardware-wiring.md`,
 `docs/known-limitations.md`, `docs/technology/nrf5340.md`,
-`docs/technology/nrf54l15.md`, `docs/flashing.md`).
+`docs/technology/nrf54l15.md`, `docs/flashing.md`), plus
+`release/flashing/*.md`.
 
 Internal and historical contributor docs (for example `docs/development/`,
 `docs/testing/`, `STATUS.md`) are outside this style rule unless explicitly
