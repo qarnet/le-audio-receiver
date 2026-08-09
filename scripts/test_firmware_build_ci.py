@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Public-boundary tests for FR2: project-version CLI and firmware-build
+"""Public-boundary tests for FR2+FR3: project-version CLI and firmware-build
 workflow (stdlib unittest).
 
 Tests 1-4 exercise the real ``scripts/project-version.py`` CLI as a
 subprocess against the repository ``VERSION`` and temporary fixtures.
 Tests 5-8 statically validate the committed workflow YAML text: the
 workflow is declarative public behavior and hosted execution is unavailable
-before remote push.  No third-party YAML parser, no private-helper
-assertions, and no mock of the workflow.
+before remote push.  Tests 9+ extend the same static validation to the FR3
+tag-triggered release job: tag/version guards, fail-closed identity, exact
+download/pin contracts, release preparation inputs, the existing-release
+probe, draft creation, and post-create verification.  No third-party YAML
+parser, no private-helper assertions, and no mock of the workflow.
 """
 
 import os
@@ -37,6 +40,7 @@ CONTAINER_IMAGE = (
 )
 CHECKOUT_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 UPLOAD_SHA = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+DOWNLOAD_SHA = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
 NRF_COMMIT = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
 
 
@@ -59,6 +63,27 @@ def workflow_text():
 
 def workflow_lines():
     return workflow_text().splitlines()
+
+
+def run_scripts():
+    """Extract every ``run: |`` block body as one string, so run-script
+    content can be checked without expression interpolation."""
+    lines = workflow_lines()
+    scripts = []
+    for i, line in enumerate(lines):
+        if not re.match(r"^\s*run: \|", line):
+            continue
+        indent = len(line) - len(line.lstrip())
+        body = []
+        for following in lines[i + 1 :]:
+            if not following.strip():
+                body.append("")
+                continue
+            if len(following) - len(following.lstrip()) <= indent:
+                break
+            body.append(following)
+        scripts.append("\n".join(body))
+    return scripts
 
 
 class TestProjectVersionCli(unittest.TestCase):
@@ -202,6 +227,21 @@ class TestProjectVersionCli(unittest.TestCase):
 class TestWorkflowContract(unittest.TestCase):
     """Tests 5-6: event/permission and immutable-pin contract."""
 
+    @staticmethod
+    def _dash_values(block, key):
+        """Values of one ``key:`` list inside a YAML block."""
+        marker = re.search(r"^\s*%s:\s*$" % key, block, re.MULTILINE)
+        if not marker:
+            return []
+        values = []
+        for line in block[marker.end() :].splitlines():
+            stripped = line.strip()
+            if stripped.startswith("-"):
+                values.append(stripped[1:].strip())
+            elif stripped:
+                break
+        return values
+
     def test_event_and_permission_contract(self):
         text = workflow_text()
         self.assertIn("pull_request:", text, "normal PR trigger missing")
@@ -209,19 +249,26 @@ class TestWorkflowContract(unittest.TestCase):
         push_match = re.search(r"(?ms)^\s*push:\s*\n(.*?)^\S", text)
         self.assertIsNotNone(push_match, "push trigger missing")
         push_block = push_match.group(1) if push_match else ""
-        self.assertIn("main", push_block, "main branch push missing")
-        other_branches = [
-            line.split("-", 1)[1].strip()
-            for line in push_block.splitlines()
-            if line.strip().startswith("-")
-        ]
-        self.assertEqual(other_branches, ["main"], "push must target main only")
+        self.assertEqual(
+            self._dash_values(push_block, "branches"),
+            ["main"],
+            "push branches must be main only",
+        )
+        self.assertEqual(
+            self._dash_values(push_block, "tags"),
+            ["'v*'"],
+            "push must add exactly the quoted tag pattern 'v*'",
+        )
         self.assertIn("permissions:", text)
         self.assertIn("contents: read", text)
+        self.assertEqual(
+            text.count("contents: write"),
+            1,
+            "contents: write must exist only on the release job",
+        )
         for forbidden in (
             "pull_request_target",
             "workflow_run",
-            "contents: write",
             "id-token",
             "secrets:",
             "environment:",
@@ -229,6 +276,10 @@ class TestWorkflowContract(unittest.TestCase):
             "ACCEPT_JLINK_LICENSE",
         ):
             self.assertNotIn(forbidden, text, "forbidden %r present" % forbidden)
+        for script in run_scripts():
+            self.assertNotIn(
+                "${{", script, "direct expression interpolation in run script"
+            )
 
     def test_pinned_runner_container_and_actions(self):
         text = workflow_text()
@@ -238,6 +289,7 @@ class TestWorkflowContract(unittest.TestCase):
         self.assertIn("shell: bash", text)
         self.assertIn("actions/checkout@%s" % CHECKOUT_SHA, text)
         self.assertIn("actions/upload-artifact@%s" % UPLOAD_SHA, text)
+        self.assertIn("actions/download-artifact@%s" % DOWNLOAD_SHA, text)
         self.assertIn("ref: %s" % NRF_COMMIT, text)
         self.assertIn("nrf/VERSION", text)
         self.assertIn('"3.3.0"', text)
@@ -254,7 +306,12 @@ class TestWorkflowContract(unittest.TestCase):
             for line in workflow_lines()
             if line.strip().startswith("uses:")
         ]
-        self.assertEqual(len(uses_lines), 3, "expected two checkouts plus one upload")
+        self.assertEqual(
+            len(uses_lines),
+            5,
+            "expected two checkouts, one upload, one download, and one "
+            "release checkout",
+        )
 
 
 class TestWorkflowCommands(unittest.TestCase):
@@ -389,6 +446,185 @@ class TestWorkflowArtifactContract(unittest.TestCase):
                 "bare workspace-root dist/ upload entry: %s" % line.strip(),
             )
         self.assertNotIn("dist/*", text, "wildcard upload path forbidden")
+
+
+class TestReleaseJobContract(unittest.TestCase):
+    """FR3 tests 9+: tag-triggered draft-release job static contract."""
+
+    def _release_block(self):
+        text = workflow_text()
+        marker = re.search(r"(?ms)^  release:\s*\n", text)
+        if marker is None:
+            raise AssertionError("release job missing")
+        start = marker.end()
+        tail = text[start:]
+        m = re.search(r"(?m)^\S", tail)
+        end = len(tail)
+        if m is not None:
+            end = m.start()
+        return text[start : start + end]
+
+    def test_release_job_guard_and_topology(self):
+        block = self._release_block()
+        self.assertIn("needs: firmware", block, "release must need firmware")
+        self.assertIn(
+            "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
+            block,
+            "release must run only on a normal tag push",
+        )
+        self.assertIn("runs-on: ubuntu-22.04", block)
+        self.assertIn("timeout-minutes: 15", block)
+        self.assertNotIn("container:", block, "release job must have no container")
+        self.assertIn("contents: write", block)
+        self.assertNotIn(
+            "contents: read",
+            block.split("contents: write")[0] or "x",
+            "release job must not set a broader read permission",
+        )
+        self.assertNotIn("pull_request_target", block)
+        self.assertNotIn("environment:", block)
+        self.assertNotIn("privileged", block)
+
+    def test_firmware_job_version_output_and_tag_guard(self):
+        text = workflow_text()
+        self.assertIn(
+            "version: ${{ steps.project-version.outputs.version }}",
+            text,
+            "firmware job must expose the validated version output",
+        )
+        for needle in (
+            'if [[ "$GITHUB_REF" == refs/tags/* ]]; then',
+            'test "$GITHUB_EVENT_NAME" = "push"',
+            'test "$GITHUB_REF_NAME" = "v$version"',
+            'test "$version" = "0.1.0"',
+        ):
+            self.assertIn(needle, text, "missing %r" % needle)
+
+    def test_release_identity_step_exact(self):
+        text = workflow_text()
+        for needle in (
+            "Verify tag identity",
+            "FW_VERSION: ${{ needs.firmware.outputs.version }}",
+            'version="$(python3 scripts/project-version.py)"',
+            'tag="v$version"',
+            'test "$version" = "$FW_VERSION"',
+            'test "$tag" = "$GITHUB_REF_NAME"',
+            'test "$GITHUB_REF" = "refs/tags/$tag"',
+            'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+            'test "$(git rev-list -n 1 "$tag")" = "$GITHUB_SHA"',
+            'echo "version=$version" >> "$GITHUB_OUTPUT"',
+            'echo "tag=$tag" >> "$GITHUB_OUTPUT"',
+        ):
+            self.assertIn(needle, text, "missing %r" % needle)
+
+    def test_download_contract_exact(self):
+        text = workflow_text()
+        self.assertIn("actions/download-artifact@%s" % DOWNLOAD_SHA, text)
+        self.assertIn(
+            "name: firmware-v${{ needs.firmware.outputs.version }}-${{ github.sha }}",
+            text,
+            "release download must use the exact firmware artifact name",
+        )
+        self.assertIn("path: dist", text)
+        self.assertIn("digest-mismatch: error", text)
+        self.assertNotIn("run-id:", text, "release download must use current run")
+        self.assertNotIn("skip-decompress:", text)
+
+    def test_prepare_inputs_exact(self):
+        text = workflow_text()
+        for needle in (
+            "scripts/prepare-draft-release.py",
+            "--tag",
+            "--version",
+            '--git-commit "$GITHUB_SHA"',
+            "--ncs-version v3.3.0",
+            '--repository "$REPOSITORY"',
+            '--workflow "$WORKFLOW"',
+            '--workflow-ref "$WORKFLOW_REF"',
+            '--run-id "$RUN_ID"',
+            '--run-attempt "$RUN_ATTEMPT"',
+            "--artifact-dir dist",
+            "--output-dir release-metadata",
+            "RUN_ID: ${{ github.run_id }}",
+            "RUN_ATTEMPT: ${{ github.run_attempt }}",
+            "REPOSITORY: ${{ github.repository }}",
+            "WORKFLOW: ${{ github.workflow }}",
+            "WORKFLOW_REF: ${{ github.workflow_ref }}",
+        ):
+            self.assertIn(needle, text, "missing %r" % needle)
+
+    def test_create_command_exact(self):
+        text = workflow_text()
+        for needle in (
+            'gh release create "$tag"',
+            "--draft",
+            "--verify-tag",
+            '--title "LE Audio Receiver $tag"',
+            "--notes-file release-metadata/release-notes.md",
+            '"dist/le-audio-receiver-v${version}-nrf5340-e83-factory.zip"',
+            '"dist/le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip"',
+            "dist/SHA256SUMS",
+            "release-metadata/release-provenance.json",
+        ):
+            self.assertIn(needle, text, "missing %r" % needle)
+        for forbidden in (
+            "--generate-notes",
+            "--latest",
+            "--prerelease",
+            "--clobber",
+            "gh release edit",
+            "gh release delete",
+        ):
+            self.assertNotIn(forbidden, text, "forbidden %r present" % forbidden)
+
+    def test_existing_release_probe_fail_closed(self):
+        text = workflow_text()
+        self.assertIn("gh api --include", text)
+        self.assertIn("repos/$GITHUB_REPOSITORY/releases/tags/$tag", text)
+        self.assertIn("probe_status", text)
+        self.assertIn("::error::release already exists for tag", text)
+        self.assertIn("::error::existing-release probe failed for tag", text)
+        self.assertIn("404", text, "probe must permit only an exact HTTP 404")
+        self.assertRegex(
+            text,
+            r"\^HTTP/\[0-9\.\]\+ 404",
+            "probe must match an exact HTTP 404 status line",
+        )
+        self.assertIn("trap", text, "private probe response must be trapped")
+        self.assertIn("exit 1", text)
+
+    def test_post_create_verification_exact(self):
+        text = workflow_text()
+        for needle in (
+            'gh release view "$tag" --json tag,isDraft,isPrerelease,assets',
+            'assert data["tag"] == tag',
+            'assert data["isDraft"] is True',
+            'assert data["isPrerelease"] is False',
+            '"SHA256SUMS",',
+            '"release-provenance.json",',
+            "le-audio-receiver-v%s-nrf5340-e83-factory.zip",
+            "le-audio-receiver-v%s-nrf54l15-xiao-factory.zip",
+        ):
+            self.assertIn(needle, text, "missing %r" % needle)
+
+    def test_no_forbidden_release_configuration(self):
+        text = workflow_text()
+        for forbidden in (
+            "--generate-notes",
+            "--latest",
+            "--prerelease",
+            "--clobber",
+            "gh release edit",
+            "pull_request_target",
+            "workflow_run",
+            "id-token",
+            "privileged",
+            "ACCEPT_JLINK_LICENSE",
+            "permissions: write-all",
+            "actions: write",
+            "environment:",
+        ):
+            self.assertNotIn(forbidden, text, "forbidden %r present" % forbidden)
 
 
 if __name__ == "__main__":
