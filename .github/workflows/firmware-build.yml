@@ -89,7 +89,8 @@ jobs:
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
         run: |
           test -z "$(find dist -maxdepth 1 -type l)"
-          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 3
+          test "$(find dist -mindepth 1 -maxdepth 1 | wc -l)" -eq 3
+          test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 3
           for f in \
             le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip \
             le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip \
@@ -104,9 +105,9 @@ jobs:
         with:
           name: firmware-v${{ steps.project-version.outputs.version }}-${{ github.sha }}
           path: |
-            dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip
-            dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip
-            dist/SHA256SUMS
+            workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip
+            workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip
+            workspace/le-audio-receiver/dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
           compression-level: 0

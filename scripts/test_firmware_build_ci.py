@@ -311,6 +311,16 @@ class TestWorkflowArtifactContract(unittest.TestCase):
     def test_checksum_and_zip_verification(self):
         text = workflow_text()
         self.assertIn("sha256sum --strict -c SHA256SUMS", text)
+        self.assertIn(
+            'test "$(find dist -mindepth 1 -maxdepth 1 | wc -l)" -eq 3',
+            text,
+            "exact total top-level entry count check missing",
+        )
+        self.assertIn(
+            'test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 3',
+            text,
+            "exact regular-file top-level count check missing",
+        )
         for zip_name in (
             "le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip",
             "le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip",
@@ -332,18 +342,26 @@ class TestWorkflowArtifactContract(unittest.TestCase):
         path_index = next(i for i, line in enumerate(upload_lines) if "path: |" in line)
         listed = []
         for line in upload_lines[path_index + 1 :]:
-            if not line.strip().startswith("dist/"):
+            if not line.strip().startswith("workspace/le-audio-receiver/dist/"):
                 break
             listed.append(line.strip())
         self.assertEqual(
             listed,
             [
-                "dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip",
-                "dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip",
-                "dist/SHA256SUMS",
+                "workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip",
+                "workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip",
+                "workspace/le-audio-receiver/dist/SHA256SUMS",
             ],
-            "upload path must list exactly the three files individually",
+            "upload path must list exactly the three workspace-root-relative "
+            "files individually",
         )
+        for line in upload_lines[path_index + 1 :]:
+            if not line.strip():
+                break
+            self.assertFalse(
+                line.strip().startswith("dist/"),
+                "bare workspace-root dist/ upload entry: %s" % line.strip(),
+            )
         self.assertNotIn("dist/*", text, "wildcard upload path forbidden")
 
 
