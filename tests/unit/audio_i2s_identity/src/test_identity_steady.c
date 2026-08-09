@@ -160,7 +160,7 @@ ZTEST(audio_i2s, test_repeat_not_triggered_below_threshold)
 	test_start_stream();
 	/* Free = 7 < 12: no repeat attempt. */
 	fake_i2s_release(fake_i2s_queued_ptr(0));
-	fake_i2s_release(fake_i2s_queued_ptr(0)); /* free = 11 */
+	fake_i2s_release(fake_i2s_queued_ptr(0)); /* free = 7 */
 
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0, "steady push");
 	zassert_equal(mock_perf_repeat_fallback_calls, 0, "no repeat below threshold");

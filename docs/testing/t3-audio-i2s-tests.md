@@ -157,6 +157,13 @@ actuator / timing (and ASRC) failure, input-frame-selection preservation.
 | `tests/unit/audio_i2s_identity/` (identity/APLL) | 59 | 59/59 PASS |
 | **Total** | **120** | **120/120 PASS** |
 
+The counts and the coverage list below describe the **current** suites:
+the original T3 50/48 cases plus the later R1 admission/drain concurrency
+additions (shared `test_sink_concurrent.c`, +8 per suite) and the
+2026-08-09 startup-reservoir follow-up (11-block startup, +1 per suite).
+The original-T3 run evidence (50/50 and 48/48 focused runs, 25-child
+gate) is preserved verbatim in the next section.
+
 Coverage of the required behaviors:
 
 - common/init/input: device-not-ready (no dependency calls), exact I2S
@@ -200,7 +207,7 @@ Coverage of the required behaviors:
   without re-init, saved-frame/sequence cleared, stop trigger errors keep
   configuration with no double free.
 
-## Verification commands and results
+## Original T3 verification commands and results
 
 Focused suites (desktop `thomas-main`, NCS v3.3.0 dev shell):
 
