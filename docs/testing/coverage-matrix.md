@@ -79,11 +79,11 @@ Stage 1 matrix, run counts, and pinned hashes live in
 |----------|-------|--------|
 | Twister C (testcase.yaml) | 35 | actuator_apll, actuator_apll_nohfclk, actuator_none, actuator_sample_adjust_historical, app_lifecycle, asrc, audio_i2s, audio_i2s_identity, audio_shell, audio_shell_noperf, audio_shell_nrf54, audio_stream_session, bt_bap_pairing_adapter, bt_pairing_policy, bt_shell_pairing, decode, drift, flpr_acceptance, flpr_acceptance_flpr, flpr_handshake, flpr_protocol, flpr_ring_mgr, flpr_runtime, iso_seq, lifecycle, modea, pairing_mode, perf, rate_convert, stats, timing, timing_none, timing_nrf54, user_pairing_io, volume |
 | Exec-only C (CMakeLists.txt, no testcase.yaml) | 5 | audio_offload, flpr_audio_process, flpr_ring, offload_asrc, offload_asrc_verify |
-| Python | 19 | bsim_official_smoke (test_bsim_official_smoke_parse.py), fw_build_dongle (test_fw_build_dongle.py), fw_flash_dongle (test_fw_flash_dongle.py), fw_reset_dongle (test_fw_reset_dongle.py), flpr_stall_gate (test_flpr_stall_gate.py), flpr_hang_gate (test_flpr_hang_gate.py), bluez_wireplumber_gate (test_bluez_wireplumber_gate.py), bluez_wireplumber_phase3_gate (test_bluez_wireplumber_phase3_gate.py), bsim_runner (test_bsim_stage1_parse.py), build_contract (test_build_contract.py), hci_raw_connect (test_hci_raw_connect.py), bap_central_policy (test_bap_central_policy.py), bap_central_writer (test_bap_central_writer.py), test_matrix (test_check_test_matrix.py), test_coverage_runner (test_test_coverage_runner.py), bap_central_device (test_bap_central_device.py), bap_central_security (test_bap_central_security.py), bap_central_endpoint (test_bap_central_endpoint.py), bap_central_session (test_bap_central_session.py) |
+| Python | 20 | bsim_official_smoke (test_bsim_official_smoke_parse.py), fw_build_dongle (test_fw_build_dongle.py), fw_flash_dongle (test_fw_flash_dongle.py), fw_reset_dongle (test_fw_reset_dongle.py), flpr_stall_gate (test_flpr_stall_gate.py), flpr_hang_gate (test_flpr_hang_gate.py), bluez_wireplumber_gate (test_bluez_wireplumber_gate.py), bluez_wireplumber_phase3_gate (test_bluez_wireplumber_phase3_gate.py), bsim_runner (test_bsim_stage1_parse.py), build_contract (test_build_contract.py), hci_raw_connect (test_hci_raw_connect.py), bap_central_policy (test_bap_central_policy.py), bap_central_writer (test_bap_central_writer.py), test_matrix (test_check_test_matrix.py), test_coverage_runner (test_test_coverage_runner.py), bap_central_device (test_bap_central_device.py), bap_central_security (test_bap_central_security.py), bap_central_endpoint (test_bap_central_endpoint.py), bap_central_session (test_bap_central_session.py), package_firmware_release (test_package_firmware_release.py) |
 | Coverage | 1 | coverage (test-coverage.sh default mode: rebuilds the 35 twister + 5 exec suites with CONFIG_COVERAGE=y, enforces the committed baseline) |
 | Test-matrix checker | 1 | matrix (check-test-matrix.py --coverage-json on the coverage run's coverage.json) |
 | BabbleSim | 1 | bsim_stage1 (T4+R7 17-scenario BAP matrix, scenarios 1–9 twice, remaining eight once) |
-| **Total gate children** | **62** | |
+| **Total gate children** | **63** | |
 
 > **T7 canonical gate ACCEPTED (2026-08-02) — historical 41-child evidence.**
 >  The 41-child composition
@@ -98,10 +98,10 @@ Stage 1 matrix, run counts, and pinned hashes live in
 > The **historical T8 accepted 47-child composition** (28 twister + 4
 > exec-only + 12 Python + coverage + matrix + BSim) is the T8 gate
 > described below; the **current accepted gate count is tracked in the
-> "Current suite inventory" table above** (62 children: 35 twister + 5
-> exec-only + 19 Python + coverage + matrix + BSim, clean-tree 62/62
-> run at `b8bd633` — see
-> `docs/development/documentation-hygiene-behavior-fix-results.md`).
+> "Current suite inventory" table above** (63 children: 35 twister + 5
+> exec-only + 20 Python + coverage + matrix + BSim, clean-tree 63/63
+> run at `1671a9f` — see
+> `docs/development/firmware-release-fr1-results.md`).
 
 ## Explicit weak-test facts
 
