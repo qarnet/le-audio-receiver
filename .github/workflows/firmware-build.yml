@@ -1,0 +1,279 @@
+name: Firmware build
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  firmware:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:f24d8932ff081ebcd8da9c248f4449bdabe461c0620a7a4ac9e95eb577ba2276
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      version: ${{ steps.project-version.outputs.version }}
+      release-requested: ${{ steps.project-version.outputs.release-requested }}
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: workspace/le-audio-receiver
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout sdk-nrf
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: nrfconnect/sdk-nrf
+          ref: ba167d9f3db4abbdc9b67887ca3ea66c64f2d956
+          path: workspace/nrf
+          persist-credentials: false
+      - name: Initialize NCS workspace
+        working-directory: ${{ github.workspace }}/workspace
+        run: |
+          test "$(git -C nrf rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
+          test "$(tr -d '\r\n' < nrf/VERSION)" = "3.3.0"
+          west init -l nrf
+          west update --narrow -o=--depth=1
+          west zephyr-export
+          test "$(git -C nrf rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
+          test "$(tr -d '\r\n' < nrf/VERSION)" = "3.3.0"
+          test "$(west topdir)" = "$GITHUB_WORKSPACE/workspace"
+          zephyr_base="$GITHUB_WORKSPACE/workspace/zephyr"
+          test -d "$zephyr_base"
+          printf 'ZEPHYR_BASE=%s\n' "$zephyr_base" >> "$GITHUB_ENV"
+      - name: Project version
+        id: project-version
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          version="$(python3 scripts/project-version.py)"
+          test "$version" = "0.1.0"
+          release_requested=false
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
+            [[ "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            test "$BEFORE_SHA" != 0000000000000000000000000000000000000000
+            git rev-parse --verify --quiet "$BEFORE_SHA^{commit}" >/dev/null
+            set +e
+            git diff --quiet "$BEFORE_SHA" "$GITHUB_SHA" -- VERSION
+            diff_status=$?
+            set -e
+            if [ "$diff_status" -eq 1 ]; then
+              release_requested=true
+            elif [ "$diff_status" -ne 0 ]; then
+              echo "::error::VERSION diff check failed with status $diff_status"
+              exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release-requested=$release_requested" >> "$GITHUB_OUTPUT"
+      - name: Build nRF5340
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: ./scripts/bin/fw-build-5340
+      - name: Build nRF54L15
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: ./scripts/bin/fw-build-54l15
+      - name: Check build contract
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: |
+          python3 scripts/check-build-contract.py \
+            --nrf5340 build/nrf5340 \
+            --nrf54l15 build/nrf54l15
+      - name: Verify application version headers
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: |
+          grep -E '#define[[:space:]]+APP_VERSION_STRING[[:space:]]+"0\.1\.0"' \
+            build/nrf5340/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h
+          grep -E '#define[[:space:]]+APP_VERSION_STRING[[:space:]]+"0\.1\.0"' \
+            build/nrf54l15/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h
+      - name: Package firmware
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: |
+          version="$(python3 scripts/project-version.py)"
+          python3 scripts/package-firmware-release.py \
+            --version "$version" \
+            --git-commit "$GITHUB_SHA" \
+            --ncs-version v3.3.0 \
+            --build-root build \
+            --output-dir dist
+      - name: Verify package
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: |
+          test -z "$(find dist -maxdepth 1 -type l)"
+          test "$(find dist -mindepth 1 -maxdepth 1 | wc -l)" -eq 3
+          test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 3
+          for f in \
+            le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip \
+            le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip \
+            SHA256SUMS ; do
+            test -f "dist/$f"
+          done
+          (cd dist && sha256sum --strict -c SHA256SUMS)
+          python3 -m zipfile --test dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip
+          python3 -m zipfile --test dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: firmware-v${{ steps.project-version.outputs.version }}-${{ github.sha }}
+          path: |
+            workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip
+            workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip
+            workspace/le-audio-receiver/dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: false
+
+  release:
+    needs: firmware
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.firmware.outputs.release-requested == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify release identity
+        id: release-identity
+        env:
+          FW_VERSION: ${{ needs.firmware.outputs.version }}
+          RELEASE_REQUESTED: ${{ needs.firmware.outputs.release-requested }}
+        run: |
+          version="$(python3 scripts/project-version.py)"
+          tag="v$version"
+          test "$version" = "$FW_VERSION"
+          test "$RELEASE_REQUESTED" = "true"
+          test "$GITHUB_EVENT_NAME" = "push"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_REF_NAME" = "main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Download firmware artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: firmware-v${{ needs.firmware.outputs.version }}-${{ github.sha }}
+          path: dist
+          digest-mismatch: error
+      - name: Prepare draft release metadata
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW: ${{ github.workflow }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          version="$(python3 scripts/project-version.py)"
+          tag="v$version"
+          python3 scripts/prepare-draft-release.py \
+            --tag "$tag" \
+            --version "$version" \
+            --git-commit "$GITHUB_SHA" \
+            --ncs-version v3.3.0 \
+            --repository "$REPOSITORY" \
+            --workflow "$WORKFLOW" \
+            --workflow-ref "$WORKFLOW_REF" \
+            --run-id "$RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" \
+            --artifact-dir dist \
+            --output-dir release-metadata
+      - name: Require no existing release or tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(python3 scripts/project-version.py)"
+          tag="v$version"
+          release_probe="$(mktemp)"
+          tag_probe="$(mktemp)"
+          trap 'rm -f "$release_probe" "$tag_probe"' EXIT
+          set +e
+          gh api --include "repos/$GITHUB_REPOSITORY/releases/tags/$tag" >"$release_probe" 2>&1
+          release_status=$?
+          gh api --include "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >"$tag_probe" 2>&1
+          tag_status=$?
+          set -e
+          if [ "$release_status" -eq 0 ]; then
+            echo "::error::release already exists for tag $tag"
+            exit 1
+          fi
+          if ! grep -Eq '^HTTP/[0-9.]+ 404' "$release_probe"; then
+            echo "::error::existing-release probe failed for tag $tag (expected HTTP 404)"
+            exit 1
+          fi
+          if [ "$tag_status" -eq 0 ]; then
+            echo "::error::git tag already exists for tag $tag"
+            exit 1
+          fi
+          if ! grep -Eq '^HTTP/[0-9.]+ 404' "$tag_probe"; then
+            echo "::error::existing-tag probe failed for tag $tag (expected HTTP 404)"
+            exit 1
+          fi
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(python3 scripts/project-version.py)"
+          tag="v$version"
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --draft \
+            --title "LE Audio Receiver $tag" \
+            --notes-file release-metadata/release-notes.md \
+            "dist/le-audio-receiver-v${version}-nrf5340-e83-factory.zip" \
+            "dist/le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip" \
+            dist/SHA256SUMS \
+            release-metadata/release-provenance.json
+      - name: Verify draft release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(python3 scripts/project-version.py)"
+          tag="v$version"
+          gh release view "$tag" --json tagName,isDraft,isPrerelease,assets,targetCommitish,url > release-check.json
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" > tag-check.json
+          python3 - "$tag" "$version" "$GITHUB_SHA" <<'PYEOF'
+          import json
+          import sys
+          tag, version, sha = sys.argv[1], sys.argv[2], sys.argv[3]
+          with open("release-check.json", "r", encoding="utf-8") as fh:
+              release = json.load(fh)
+          assert release["tagName"] == tag, release["tagName"]
+          assert release["isDraft"] is True, release["isDraft"]
+          assert release["isPrerelease"] is False, release["isPrerelease"]
+          assert release["targetCommitish"] == sha, release["targetCommitish"]
+          expected = [
+              "SHA256SUMS",
+              "le-audio-receiver-v%s-nrf5340-e83-factory.zip" % version,
+              "le-audio-receiver-v%s-nrf54l15-xiao-factory.zip" % version,
+              "release-provenance.json",
+          ]
+          names = sorted(asset["name"] for asset in release["assets"])
+          assert names == expected, names
+          with open("tag-check.json", "r", encoding="utf-8") as fh:
+              tag_data = json.load(fh)
+          assert tag_data["ref"] == "refs/tags/" + tag, tag_data["ref"]
+          assert tag_data["object"]["type"] == "commit", tag_data["object"]["type"]
+          assert tag_data["object"]["sha"] == sha, tag_data["object"]["sha"]
+          print("draft release URL: %s" % release["url"])
+          PYEOF

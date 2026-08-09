@@ -20,13 +20,24 @@ twister + 5 exec-only + 16 Python + coverage + matrix + BSim), coverage
 population **33** (4024/4402 L, 1695/2356 B, 289/289 F; committed
 baseline `54a6b8e`), builds 3/3, build contract 79/79, BSim Stage 1 17
 scenarios/26 runs pins byte-identical — final evidence in
-`docs/development/refactor-r10-results.md`.  The current authoritative
-state is the P1–P8 user pairing control closeout (2026-08-08): canonical
-gate **62 PASS / 0 FAIL / 62 TOTAL** (35 twister + 5 exec-only + 19
-Python + coverage + matrix + BSim), coverage population **36**
-(4665/5121 lines, 2023/2820 branches, 357/357 functions), build contract
-**95/95**, BSim 17 scenarios / 26 runs pins byte-identical — see
-`STATUS.md` and `docs/development/user-pairing-control-p8-results.md`.
+`docs/development/refactor-r10-results.md`.  The P1–P8 user pairing
+control closeout (2026-08-08) is historical evidence: canonical gate
+**62 PASS / 0 FAIL / 62 TOTAL** (35 twister + 5 exec-only + 19 Python +
+coverage + matrix + BSim), coverage population **36** (4665/5121 lines,
+2023/2820 branches, 357/357 functions), build contract **95/95**, BSim
+17 scenarios / 26 runs pins byte-identical — see `STATUS.md` and
+`docs/development/user-pairing-control-p8-results.md`.  The FR1 packaging
+closeout (2026-08-09, canonical gate **63 PASS / 0 FAIL / 63 TOTAL** at
+`1671a9f`, 35 twister + 5 exec-only + 20 Python + coverage + matrix + BSim)
+is historical evidence — see
+`docs/development/firmware-release-fr1-results.md`.  The current
+authoritative state is the FR2 firmware-build CI closeout (2026-08-09):
+canonical gate **64 PASS / 0 FAIL / 64 TOTAL** (35 twister + 5 exec-only
++ 21 Python + coverage + matrix + BSim), coverage population **36**
+(4674/5130 lines, 2030/2824 branches, 358/358 functions), build contract
+**95/95**, BSim 17 scenarios / 26 runs pins byte-identical, GitHub-hosted
+firmware run PASS — see `STATUS.md` and
+`docs/development/firmware-release-fr2-results.md`.
 All
 "Phases 0–6" content below is dated architecture/evidence of the
 pre-refactor design and is superseded by the module ownership described
