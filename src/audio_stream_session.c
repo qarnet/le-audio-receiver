@@ -522,6 +522,25 @@ static void session_recv_path(size_t idx, struct audio_stream_slot *sl, bool val
 	}
 
 	/*
+	 * Valid zero-length ISO SDUs (empty HCI packets some controllers
+	 * send when the remote produced no SDU for this event) are NOT
+	 * malformed LC3 payloads: record exactly one empty-SDU event and
+	 * normalize the local validity to source-invalid so the remaining
+	 * decode/conceal path renders PLC at normal cadence (mono and Mode
+	 * B via the existing PLC decode/push path, Mode A through the
+	 * assembler preserving any original timestamp so the empty half
+	 * pairs at its exact event position).  No malformed-SDU observer
+	 * evidence and no decode-error increment are produced; the caller's
+	 * data and the public API are untouched.  Non-valid zero-length
+	 * callbacks (LOST) never reach this branch and keep their existing
+	 * behavior without counting empty_sdus.
+	 */
+	if (valid && len == 0U) {
+		audio_stats_empty_sdu();
+		valid = false;
+	}
+
+	/*
 	 * Exact SDU payload validation (valid packets only).  A valid-flag
 	 * packet whose length does not match the configured shape is
 	 * rejected BEFORE any decode/pull/copy: exactly one

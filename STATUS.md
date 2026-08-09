@@ -1,13 +1,16 @@
-# STATUS — le-audio-receiver — 2026-08-08
+# STATUS — le-audio-receiver — 2026-08-09
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-> **Current state (2026-08-08):** canonical gate **62 PASS / 0 FAIL /
+> **Current state (2026-08-09):** canonical gate **62 PASS / 0 FAIL /
 > 62 TOTAL** on the clean tree (35 twister + 5 exec-only + 19 Python +
 > coverage + matrix + BSim Stage 1; clean-tree run recorded in
 > `docs/development/documentation-hygiene-behavior-fix-results.md` at
-> `b8bd633`), coverage population **36** (4665/5121 lines, 2023/2820
+> `b8bd633`; latest production-fix clean canonical run at `f2f9336`,
+> after the empty-SDU concealment (`9dc0859`) and 11-block startup
+> reservoir (`f2f9336`) fixes — the committed coverage baseline is
+> unchanged), coverage population **36** (4665/5121 lines, 2023/2820
 > branches, 357/357 functions, committed baseline unchanged), build
 > contract **95/95**, BSim 17 scenarios / 26 runs pins byte-identical,
 > P1–P8 user pairing control ACCEPTED (nRF54L15 enabled, nRF5340

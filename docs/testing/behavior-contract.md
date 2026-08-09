@@ -168,7 +168,10 @@ Before any decode/pull/copy, a valid-flag packet whose length does not
 match the configured shape (`octets_per_frame × frame_blocks_per_sdu`,
 times the channel count for Mode B) increments decode-error evidence
 exactly once, never calls liblc3, never mutates left/right pairing
-state, and never applies volume or pushes stale PCM.  Mono/Mode B
+state, and never applies volume or pushes stale PCM.  A valid-flag
+zero-length SDU is NOT a malformed payload: it is a valid empty ISO
+SDU normalized to source-invalid concealment before this validation
+(CODEC-014) and produces no decode-error evidence.  Mono/Mode B
 negative `audio_decode_sdu()` returns skip volume and sink push; Mode A
 hard decoder errors skip that half and cannot pair it.  PLC
 (`valid=false`) remains supported with the configured byte shape and
@@ -216,6 +219,30 @@ cleans while the gate is already closed.  The release-driven first edge
 fires `release_sink_stop` once, at the same relative order (before the
 disconnect cleanup, `rel_ss_seq < disc_seq`).
 
+### CODEC-014 — Valid empty ISO SDU concealment
+
+Some controllers send empty HCI ISO packets (`BT_ISO_FLAGS_VALID` set,
+zero SDU length) when the remote side produced no SDU for an event.
+The session receive path detects `valid && len == 0` after decoder
+readiness and per-CIS sequence-gap work but before exact payload-shape
+validation, counts the callback as exactly one `empty_sdus` event
+(`audio_stats_empty_sdu()`), and normalizes the local validity to
+source-invalid for the remaining decode/conceal path — never mutating
+caller data or the public API.  Mono and Mode B render the callback
+through the existing PLC decode/push path (one PLC frame per channel,
+one stereo push); Mode A feeds the source-invalid half into the
+assembler preserving the original ISO timestamp/event position, so an
+empty half pairs at its exact event and only that half is concealed.
+No malformed-SDU observer evidence and no `decode_errors` increment are
+produced.  The PLC produced for the same callback remains accounted
+through the normal `audio_stats_frame_plc()` calls, preserving
+`total = decoded + PLC`.  Valid nonzero wrong lengths retain the
+CODEC-011 malformed hard-evidence path; non-valid zero-length callbacks
+(LOST) keep their existing PLC behavior without incrementing
+`empty_sdus`.  `audio_decode_sdu()` itself still rejects `valid=true`
+with zero length (CODEC-008) — the session normalization happens before
+it is called, so CODEC-008 is unchanged.
+
 ## Statistics contract (`STAT-*`)
 
 ### STAT-001 — Counter coupling
@@ -224,9 +251,13 @@ disconnect cleanup, `rel_ss_seq < disc_seq`).
 `audio_stats_frame_plc()` increments `plc_frames` and `total_frames`
 exactly once each.  `audio_stats_decode_error()`, `audio_stats_i2s_underrun()`,
 and `audio_stats_stream_reset()` increment only their own counter — a
-decode error never counts as a total frame.  Snapshots are returned by
-value; reading them never mutates state.  All counters are atomic and
-exact under concurrent access, including `total = decoded + PLC`.
+decode error never counts as a total frame.  `audio_stats_empty_sdu()`
+increments only `empty_sdus` — it never increments `total_frames`,
+`plc_frames`, or `decode_errors` itself; PLC rendered for the same
+callback is still accounted through separate `audio_stats_frame_plc()`
+calls, so `total = decoded + PLC` is preserved (CODEC-014).  Snapshots
+are returned by value; reading them never mutates state.  All counters
+are atomic, reset together, and exact under concurrent access.
 
 ## Stream lifecycle contract (`LIFE-*`)
 
@@ -349,9 +380,12 @@ into the fixed 481-frame (1924-byte) slab block.  No buffer write may exceed
 
 ### I2S-002 — Transactional startup pre-fill
 
-On first push, the sink queues six distinct silence blocks (zero-filled,
+On first push, the sink queues ten distinct silence blocks (zero-filled,
 rate-converter-selected sizes), then the first audio data block, then issues
-`i2s_trigger(START)`.  No audio output before START.
+`i2s_trigger(START)`.  No audio output before START.  The 11-block startup
+provides an 82.5 ms reservoir at 7.5 ms/frame (11 × 7.5 ms), covering short
+controller callback gaps (e.g. PipeWire suspend) without draining nrfx I2S
+into ERROR before ASCS Disable arrives.
 
 Startup is transactional.  For any startup allocation/write/START failure the
 sink returns the exact primary failure (`-ENOMEM` for slab exhaustion, the
@@ -401,7 +435,7 @@ Slab allocation failure in the main push path is a different event: it logs
 An `i2s_write` returning `-EIO` frees the caller block, records a stream reset
 counter, calls `i2s_trigger(PREPARE)` to return the peripheral to READY state,
 and marks the stream as not-started so the next push performs a fresh
-six-silence pre-fill and re-triggers START.  A non-`-EIO` write error frees the
+ten-silence pre-fill and re-triggers START.  A non-`-EIO` write error frees the
 caller block and keeps the stream started.
 
 ### I2S-007 — Stop order

@@ -103,6 +103,22 @@ void audio_sink_set_input_frames(uint16_t frames)
 
 #define DRIFT_THRESHOLD (BLOCK_COUNT - 4)
 
+/* Startup pre-fill depth: ten distinct silence blocks plus the first data
+ * block (11 total).  Eleven 7.5 ms blocks provide an 82.5 ms reservoir
+ * (11 × 7.5 ms), so short controller callback gaps at PipeWire suspend
+ * cannot drain nrfx I2S into ERROR before ASCS Disable arrives.  Slab
+ * capacity and the nrfx TX queue depth both support 11 startup blocks
+ * (compile-time proven below).
+ */
+#define STARTUP_SILENCE_BLOCKS 10
+#define STARTUP_TOTAL_BLOCKS   (STARTUP_SILENCE_BLOCKS + 1)
+
+BUILD_ASSERT(STARTUP_TOTAL_BLOCKS <= BLOCK_COUNT, "startup pre-fill exceeds slab block capacity");
+#if !defined(AUDIO_I2S_NATIVE_TEST)
+BUILD_ASSERT(STARTUP_TOTAL_BLOCKS <= CONFIG_I2S_NRFX_TX_BLOCK_COUNT,
+	     "startup pre-fill exceeds nrfx I2S TX queue depth");
+#endif
+
 K_MEM_SLAB_DEFINE_STATIC(i2s_slab, BLOCK_SIZE, BLOCK_COUNT, 4);
 
 static const struct device *i2s_dev;
@@ -438,14 +454,14 @@ static int do_push(uint16_t input_frames_snapshot, const int16_t *stereo_data, s
 	}
 
 	if (!started) {
-		/* Transactional startup: queue six distinct silence blocks,
+		/* Transactional startup: queue ten distinct silence blocks,
 		 * then the data block, then START.  On any allocation/write/
 		 * START failure: return the exact primary failure, free every
 		 * caller-owned block (failed write or never submitted), and
 		 * DROP-purge previously queued driver-owned blocks.  START is
 		 * never issued after an incomplete pre-fill.
 		 */
-		for (int pre = 0; pre < 6; pre++) {
+		for (int pre = 0; pre < STARTUP_SILENCE_BLOCKS; pre++) {
 			size_t pre_frames =
 				audio_rate_converter_next_frames(&rate_ctx, input_frames_snapshot);
 
@@ -491,7 +507,7 @@ static int do_push(uint16_t input_frames_snapshot, const int16_t *stereo_data, s
 
 		ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
 		if (ret < 0) {
-			/* All seven blocks are driver-owned now; purge via DROP,
+			/* All 11 blocks are driver-owned now; purge via DROP,
 			 * never free them directly.
 			 */
 			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);

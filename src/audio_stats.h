@@ -14,10 +14,12 @@ struct audio_stats {
 	uint32_t decode_errors; /* hard LC3 decode failures (err<0) */
 	uint32_t i2s_underruns; /* I2S slab-full drops */
 	uint32_t stream_resets; /* I2S DMA restarts due to underrun */
+	uint32_t empty_sdus;    /* valid zero-length ISO SDUs normalized to PLC */
 };
 
 void audio_stats_frame_decoded(void);
 void audio_stats_frame_plc(void);
+void audio_stats_empty_sdu(void);
 void audio_stats_decode_error(void);
 void audio_stats_i2s_underrun(void);
 void audio_stats_stream_reset(void);

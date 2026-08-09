@@ -63,7 +63,8 @@ Measured on 2026-08-09 (row in the [evaluation record](#evaluation-record)):
   full-speed USB; Linux device `hci1` via `btusb`; controller address
   `A0:AD:9F:7B:C7:95`.
 - **HCI/LMP:** Bluetooth 5.4; HCI revision 14; LMP subversion `0x8761`.
-- **Test host:** Linux 7.1.1, BlueZ 5.86, PipeWire 1.6.6, WirePlumber 0.5.14.
+- **Test host (historical WirePlumber 0.5.14 environment, original
+  measurement):** Linux 7.1.1, BlueZ 5.86, PipeWire 1.6.6, WirePlumber 0.5.14.
 - **Static checks passed:** LE 2M; CIS Central and Peripheral; ISO
   Broadcaster and Sync Receiver; ISO MTU 251 and ISO packet count 20;
   required CIG/CIS and ISO data-path commands present; transparent codec
@@ -77,12 +78,48 @@ Measured on 2026-08-09 (row in the [evaluation record](#evaluation-record)):
   errors, zero I2S underruns, and zero stream resets; `btmon` observed the CIG
   parameters, Create CIS, both Setup ISO Data Path commands, continuous ISO
   TX, and completed-packet credits.
+- **Headless production-stack run (2026-08-09, WirePlumber 0.5.14):** the
+  normal BlueZ + PipeWire + WirePlumber production path (the same components
+  KDE drives) was exercised headless and without `scripts/bap_central.py`:
+  `bluetoothctl`/BlueZ -> WirePlumber BlueZ monitor -> PipeWire Bluetooth sink
+  -> PipeWire LC3 encoder -> Linux ISO socket -> BT540 -> receiver. The BlueZ
+  sink appeared and one-CIS stereo Mode B LC3 streamed (48 kHz, 7.5 ms frame,
+  117 octets per channel, 234-byte SDU, ISO interval 7500 us, PHY 2M, RTN 13,
+  transport latency 75 ms, presentation delay 40000 us) on the original test
+  host (Linux 7.1.1, BlueZ 5.86, PipeWire 1.6.6, WirePlumber 0.5.14). Clean
+  acceptance failed due 16 startup zero-length malformed SDUs, a stop-boundary
+  I2S underrun with a diagnostic-accounting mismatch, and unresolved
+  WirePlumber startup diagnostics.
+- **Post-fix production-path rerun (2026-08-09, WirePlumber 0.5.15):** after
+  receiver fixes (empty-SDU concealment `9dc0859`, deeper 11-block I2S startup
+  reservoir `f2f9336`) and the WirePlumber 0.5.15 upgrade, the same headless
+  one-CIS Mode B production path passed on `thomas-workstation` (Linux 7.1.5,
+  BlueZ 5.86, PipeWire 1.6.6, WirePlumber 0.5.15).  The 16 startup
+  zero-length malformed SDUs of the original run are gone: the rerun saw 15
+  empty SDUs that were separately concealed (zero malformed-SDU errors).  The
+  eleven queued 7.5 ms I2S blocks provide an 82.5 ms total startup queue
+  (about 77 ms transition coverage after playback begins), and continued
+  invalid/omitted callbacks generated PLC that kept the queue supplied through
+  the observed ~1.013 s final host-TX to ASCS Disable interval — the reservoir
+  alone does not span that whole second — with zero receiver
+  warnings/errors/resets (`SDUs=1712 decoded=3678 plc=284
+  decode_err=0 i2s_underrun=0 stream_reset=0 empty_sdu=15`; `decoded` is a
+  legacy field label carrying total rendered frames including PLC, so
+  decoded = good decodes + plc, not 3678 good decodes plus 284 PLC), and
+  WirePlumber
+  shut down with `Result=success`, `ExecMainCode=0`, `ExecMainStatus=0`, zero
+  `destroy_proxy` / `leaked proxy`. The original clean-failure items no longer
+  block this headless production-path subset.
+- KDE/Bluedevil on `thomas-main`, one-CIS mono, cold replug, and audible
+  confirmation remain open. Full evidence: [BT540 headless production-stack
+  results](development/bt540-headless-pipewire-results.md).
 
 Verdict: **Candidate / project-tested with development tool** — not
 **Supported / project-validated**. Remaining gates before recommendation:
 
-1. Normal desktop BlueZ + PipeWire + WirePlumber playback/UI path is not yet
-   tested — explicitly required before recommendation.
+1. KDE/Bluedevil UI route on `thomas-main` remains untested — the headless
+   CLI run above used the same production audio components and data path, but
+   the Plasma UI path is still open.
 2. One-CIS mono scenario remains unrun; one-CIS evidence is stereo Mode B.
 3. Physical cold unplug/replug repeat remains unrun.
 4. Audible-output confirmation was not recorded.
@@ -265,7 +302,15 @@ unexplained warnings, timeouts, resets, and underruns.
 | Date | Product | Chipset | VID:PID or PCI ID | Bus | Kernel | Driver | Firmware | BlueZ | PipeWire | WirePlumber | `cis-central` | ISO MTU/count | Mono | Two-CIS stereo | Reconnect | Verdict | Evidence link |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | not recorded | Intel Wi-Fi 6E AX210 | Intel AX210 (Wi-Fi 6E) | `8087:0032` (Bluetooth function) | internal USB (M.2 combo card) | 7.1.5 | not recorded | not recorded | 5.86 | 1.6.6 | 0.5.14 | yes | not recorded | not recorded | not recorded | not recorded | **Supported / project-validated** | [host setup](linux-le-audio-host-setup.md#project-tested-baseline) + repo test history |
-| 2026-08-09 | ASUS USB-BT540 | not recorded (USB manufacturer string `Realtek`) | `0b05:1bef` | USB (full-speed) | 7.1.1 | `btusb` | not recorded | 5.86 | 1.6.6 | 0.5.14 | yes | 251 / 20 | no (one-CIS run was stereo Mode B) | yes | yes | **Candidate / project-tested with development tool** | [BT540 section](#asus-usb-bt540--candidate--project-tested-with-development-tool) |
+| 2026-08-09 | ASUS USB-BT540 | not recorded (USB manufacturer string `Realtek`) | `0b05:1bef` | USB (full-speed) | 7.1.5 | `btusb` | not recorded | 5.86 | 1.6.6 | 0.5.15 | yes | 251 / 20 | no (one-CIS run was stereo Mode B) | yes | yes | **Candidate / project-tested with development tool** | [BT540 section](#asus-usb-bt540--candidate--project-tested-with-development-tool) + [headless results](development/bt540-headless-pipewire-results.md) |
+
+The table consolidates environments into one row per adapter.  For the BT540
+row: the static capability checks and the development-tool dynamic
+two-CIS/reconnect evidence came from the historical Linux 7.1.1 / WirePlumber
+0.5.14 run; the kernel 7.1.5 and WirePlumber 0.5.15 columns identify the
+post-fix headless one-CIS Mode B production-path rerun environment (see the
+[BT540 section](#asus-usb-bt540--candidate--project-tested-with-development-tool)
+for both runs' environments).
 
 Note: the AX210 row's `not recorded` fields reflect that the prior project
 validation predates this formal record template. The repository did not
@@ -285,9 +330,11 @@ the evidence (test logs, `btmon` captures, result documents).
 - **Candidate / under evaluation** — being evaluated; not supported yet.
 - **Candidate / project-tested with development tool** — the dynamic sequence
   passed against this receiver using the repository's `scripts/bap_central.py`
-  development/test tool, but the normal desktop BlueZ/PipeWire/WirePlumber
-  path and the remaining acceptance items are not yet validated. A candidate,
-  not supported yet.
+  development/test tool.  Development-tool validation alone does not
+  establish the production BlueZ/PipeWire/WirePlumber path, so the candidate
+  is not supported until the listed acceptance gates pass; a candidate may
+  have additional production-path evidence (e.g. a headless production run)
+  without changing that boundary.  A candidate, not supported yet.
 - **Rejected** — the project evaluated the adapter against the acceptance
   sequence and it failed, or conclusive evidence documents incompatibility.
   A single public report does not qualify.

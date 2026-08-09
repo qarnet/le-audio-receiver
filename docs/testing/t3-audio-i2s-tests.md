@@ -153,9 +153,17 @@ actuator / timing (and ASRC) failure, input-frame-selection preservation.
 
 | Suite | Tests | Result |
 |-------|-------|--------|
-| `tests/unit/audio_i2s/` (ASRC/offload) | 50 | 50/50 PASS |
-| `tests/unit/audio_i2s_identity/` (identity/APLL) | 48 | 48/48 PASS |
-| **Total** | **98** | **98/98 PASS** |
+| `tests/unit/audio_i2s/` (ASRC/offload) | 61 | 61/61 PASS |
+| `tests/unit/audio_i2s_identity/` (identity/APLL) | 59 | 59/59 PASS |
+| **Total** | **120** | **120/120 PASS** |
+
+The counts and the coverage list below describe the **current** suites:
+the original T3 50/48 cases plus the later R1 admission/drain concurrency
+additions (+10 per suite across the shared common tests) and the
+2026-08-09 startup-reservoir follow-up (11-block startup, +1 per suite),
+so 50 + 10 + 1 = 61 and 48 + 10 + 1 = 59.  The original-T3 run evidence
+(50/50 and 48/48 focused runs, 25-child gate) is preserved verbatim in
+the next section.
 
 Coverage of the required behaviors:
 
@@ -169,13 +177,15 @@ Coverage of the required behaviors:
   360/480 vs 0/1/359/361/479/481/65535, all push rejection classes,
   malformed push zero side effects, push-before-init `-EIO` with no slab
   allocation;
-- startup/ownership: seven-block ordering for 480 and 360 input,
-  rate-converter-selected silence sizes, zero-filled silence, exact data
-  block, distinct pointers, START only after seventh write, silence-alloc
-  failure at each of the six positions, silence-write failure at each index,
-  data-write failure, START failure purging all seven, DROP-failure
-  observability without double free, rate-converter 482/0/partial-then-482
-  bounds;
+- startup/ownership: eleven-block ordering for 480 and 360 input
+  (ten zero-filled silence blocks, then the data block, then START),
+  rate-converter-selected silence sizes, distinct pointers, START only
+  after the eleventh write, silence-alloc failure at each of the ten
+  positions, silence-write failure at each index, data-write failure,
+  START failure purging all eleven, DROP-failure observability without
+  double free, rate-converter 482/0/partial-then-482 bounds, and the
+  ten-block-gap reservoir regression (ten ordered DMA completions leave
+  one driver-owned block, slab free 15, zero duplicate writes);
 - identity/APLL steady state: no drift before START, one drift update per
   started block with pre-allocation free count, zero ppm never applied,
   ±ppm applied exactly once, exact data bytes/size, non-`-EIO` write error
@@ -198,7 +208,7 @@ Coverage of the required behaviors:
   without re-init, saved-frame/sequence cleared, stop trigger errors keep
   configuration with no double free.
 
-## Verification commands and results
+## Original T3 verification commands and results
 
 Focused suites (desktop `thomas-main`, NCS v3.3.0 dev shell):
 

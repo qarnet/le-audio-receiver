@@ -1029,9 +1029,13 @@ class BluezWirePlumberGate:
 
             # Parse stream summary for all fields including faults.
             # Pattern: "Stream[0] summary: SDUs=123 decoded=456 plc=7 decode_err=0 i2s_underrun=0 stream_reset=0"
+            # The trailing empty_sdu=<N> field is optional so historical
+            # logs and existing fixtures (older firmware without the
+            # field) still parse with the same ordered prefix.
             m = re.search(
                 r"Stream\[\d+\]\s+summary:\s+SDUs=(\d+)\s+decoded=(\d+)\s+plc=(\d+)\s+"
-                r"decode_err=(\d+)\s+i2s_underrun=(\d+)\s+stream_reset=(\d+)",
+                r"decode_err=(\d+)\s+i2s_underrun=(\d+)\s+stream_reset=(\d+)"
+                r"(?:\s+empty_sdu=(\d+))?",
                 line,
             )
             if m:
@@ -1041,6 +1045,7 @@ class BluezWirePlumberGate:
                 dec_err_val = int(m.group(4))
                 i2s_under_val = int(m.group(5))
                 sreset_val = int(m.group(6))
+                empty_val = int(m.group(7)) if m.group(7) is not None else None
                 valid_sdus = max(valid_sdus, sdu_val)
                 decoded_frames = max(decoded_frames, dec_val)
                 summary_seen = True
@@ -1050,10 +1055,15 @@ class BluezWirePlumberGate:
                 result.receiver_counters["decode_err_summary"] = dec_err_val
                 result.receiver_counters["i2s_underrun_summary"] = i2s_under_val
                 result.receiver_counters["stream_reset_summary"] = sreset_val
+                if empty_val is not None:
+                    result.receiver_counters["empty_sdu_summary"] = empty_val
+                evidence_tail = (
+                    f" empty_sdu={empty_val}" if empty_val is not None else ""
+                )
                 result.evidence.append(
                     f"  Stream summary: SDUs={sdu_val} decoded={dec_val} plc={plc_val} "
                     f"decode_err={dec_err_val} i2s_underrun={i2s_under_val} "
-                    f"stream_reset={sreset_val}"
+                    f"stream_reset={sreset_val}{evidence_tail}"
                 )
 
             # Fatal firmware-side error patterns

@@ -34,6 +34,7 @@ ZTEST(stats, test_initial_snapshot_zero)
 	zassert_equal(st.decode_errors, 0, "errors");
 	zassert_equal(st.i2s_underruns, 0, "underruns");
 	zassert_equal(st.stream_resets, 0, "resets");
+	zassert_equal(st.empty_sdus, 0, "empty");
 }
 
 ZTEST(stats, test_frame_decoded_increments_total_only)
@@ -72,6 +73,21 @@ ZTEST(stats, test_decode_error_does_not_increment_total)
 	zassert_equal(st.plc_frames, 0, "plc untouched");
 }
 
+ZTEST(stats, test_empty_sdu_increments_own_counter_only)
+{
+	audio_stats_empty_sdu();
+	audio_stats_empty_sdu();
+
+	struct audio_stats st = audio_stats_get();
+
+	zassert_equal(st.empty_sdus, 2, "empty 2");
+	zassert_equal(st.total_frames, 0, "total untouched");
+	zassert_equal(st.plc_frames, 0, "plc untouched");
+	zassert_equal(st.decode_errors, 0, "errors untouched");
+	zassert_equal(st.i2s_underruns, 0, "underruns untouched");
+	zassert_equal(st.stream_resets, 0, "resets untouched");
+}
+
 ZTEST(stats, test_underrun_and_reset_increment_own_counters)
 {
 	audio_stats_i2s_underrun();
@@ -85,6 +101,7 @@ ZTEST(stats, test_underrun_and_reset_increment_own_counters)
 	zassert_equal(st.i2s_underruns, 3, "underruns 3");
 	zassert_equal(st.stream_resets, 2, "resets 2");
 	zassert_equal(st.total_frames, 0, "total untouched");
+	zassert_equal(st.empty_sdus, 0, "empty untouched");
 }
 
 ZTEST(stats, test_mixed_sequence_exact_snapshot)
@@ -96,6 +113,7 @@ ZTEST(stats, test_mixed_sequence_exact_snapshot)
 	audio_stats_decode_error();  /* error 1 */
 	audio_stats_i2s_underrun();  /* underrun 1 */
 	audio_stats_stream_reset();  /* reset 1 */
+	audio_stats_empty_sdu();     /* empty 1 */
 	audio_stats_frame_decoded(); /* 4 decoded, total 5 */
 
 	struct audio_stats st = audio_stats_get();
@@ -105,6 +123,7 @@ ZTEST(stats, test_mixed_sequence_exact_snapshot)
 	zassert_equal(st.decode_errors, 1, "errors 1");
 	zassert_equal(st.i2s_underruns, 1, "underruns 1");
 	zassert_equal(st.stream_resets, 1, "resets 1");
+	zassert_equal(st.empty_sdus, 1, "empty 1");
 }
 
 ZTEST(stats, test_reset_after_nonzero_clears_every_counter)
@@ -114,6 +133,7 @@ ZTEST(stats, test_reset_after_nonzero_clears_every_counter)
 	audio_stats_decode_error();
 	audio_stats_i2s_underrun();
 	audio_stats_stream_reset();
+	audio_stats_empty_sdu();
 
 	audio_stats_reset();
 
@@ -124,6 +144,7 @@ ZTEST(stats, test_reset_after_nonzero_clears_every_counter)
 	zassert_equal(st.decode_errors, 0, "errors");
 	zassert_equal(st.i2s_underruns, 0, "underruns");
 	zassert_equal(st.stream_resets, 0, "resets");
+	zassert_equal(st.empty_sdus, 0, "empty");
 }
 
 ZTEST(stats, test_snapshot_by_value_no_mutation)
@@ -212,6 +233,7 @@ static void inc_io_fn(void *a, void *b, void *c)
 	for (int i = 0; i < CONCURRENT_COUNT; i++) {
 		audio_stats_i2s_underrun();
 		audio_stats_stream_reset();
+		audio_stats_empty_sdu();
 	}
 }
 
@@ -241,4 +263,5 @@ ZTEST(stats, test_concurrent_threads_exact_atomic_counts)
 	zassert_equal(st.decode_errors, CONCURRENT_COUNT, "errors exact");
 	zassert_equal(st.i2s_underruns, CONCURRENT_COUNT, "underruns exact");
 	zassert_equal(st.stream_resets, CONCURRENT_COUNT, "resets exact");
+	zassert_equal(st.empty_sdus, CONCURRENT_COUNT, "empty exact");
 }

@@ -101,13 +101,13 @@ ZTEST(audio_i2s, test_push_after_stop_starts_fresh_prefill)
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0,
 		      "push after stop without re-init");
 
-	zassert_equal(fake_i2s_write_calls(), 7, "fresh seven-block prefill");
+	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "fresh eleven-block prefill");
 	zassert_equal(fake_i2s_trigger_calls(), 1, "fresh START");
 	zassert_equal(fake_i2s_trigger_rec(0)->cmd, I2S_TRIGGER_START, "START");
 	zassert_true(audio_i2s_test_is_started(), "started again");
 	zassert_true(audio_i2s_test_is_configured(), "configured retained");
 	zassert_equal(fake_i2s_configure_calls(), 0, "no re-configure");
-	test_assert_distinct_pointers(0, 7);
+	test_assert_distinct_pointers(0, STARTUP_TOTAL_BLOCKS);
 	test_assert_no_duplicate_writes();
 }
 
@@ -148,8 +148,10 @@ ZTEST(audio_i2s, test_stop_trigger_errors_keep_config_no_double_free)
 	zassert_equal(fake_i2s_trigger_calls(), 3, "START + both stop triggers attempted");
 	zassert_false(audio_i2s_test_is_started(), "started false");
 	zassert_true(audio_i2s_test_is_configured(), "configured never flipped");
-	zassert_equal(fake_i2s_queued_count(), 7, "failed triggers did not purge");
-	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 7, "driver still owns blocks");
+	zassert_equal(fake_i2s_queued_count(), STARTUP_TOTAL_BLOCKS,
+		      "failed triggers did not purge");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - STARTUP_TOTAL_BLOCKS,
+		      "driver still owns blocks");
 
 	/* No double free: blocks freed exactly once via the captured slab. */
 	fake_i2s_release_all();
