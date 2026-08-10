@@ -151,10 +151,13 @@ Stage 1 matrix, run counts, and pinned hashes live in
    actuator path selection, host/controller ISO buffer agreement, pin
    assignments, RF-switch polarity, crystal capacitance, exact
    non-overlapping FLPR/ring memory ranges, and both SW Split overlays.
-    The checker's own suite (`tests/unit/build_contract/`, 51 tests) uses
+    The checker's own suite (`tests/unit/build_contract/`, 52 tests) uses
     minimal temporary fixtures and never depends on pre-existing firmware
     build directories; the real contract run happens after pristine
-    production builds.
+    production builds.  The suite now also pins the hardware-validated
+    nRF5340 system-workqueue stack budget (`5340-032`,
+    `CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE == 2048`) and its mutation
+    regression.
 8. **Hardware evidence** comes from logs and autonomous central automated
    streams.  These verify end-to-end data flow but do not replace direct
    branch/error-path unit tests.

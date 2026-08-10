@@ -1001,7 +1001,15 @@ work-queue stack / heap / debounce / shell timeout values, a missing
 `CONFIG_INPUT` dependency, wrong
 `user-button`/`user-led` alias targets, wrong button pin/polarity/code,
 re-enabled inherited buttons, wrong LED pin/polarity, and a reintroduced
-inherited LED node.
+inherited LED node.  **FR4:** the nRF5340 system-workqueue stack fix grows
+the checker to **96 assertions** and the suite to **52 tests** — a new
+resolved app-config assertion `5340-032` requires
+`CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE == 2048` (hardware-validated budget:
+fresh strict-mono stream establishment on nRF5340 faulted with a
+`sysworkq` stack overflow at the 1024-byte resolved size during the
+Config/QoS transition, so the board config doubles it to 2048 with ample
+448 KB-region headroom; the nRF54L15 target already resolves 2048), with a
+mutation test proving a regression to 1024 fails `5340-032`.
 
 ### BUILD-008 — 48 kHz capability proof split (T6)
 

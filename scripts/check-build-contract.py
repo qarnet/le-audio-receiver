@@ -782,6 +782,17 @@ def run_nrf5340_checks(
         "got %r" % app_cfg.get("CONFIG_USER_PAIRING_INPUT"),
     )
 
+    # Hardware-validated system-workqueue stack budget: fresh strict-mono
+    # stream establishment faulted with a sysworkq stack overflow at the
+    # 1024-byte resolved size, so the board config pins 2048.
+    result.add(
+        config_int(app_cfg, "CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE") == 2048,
+        "5340-032",
+        "app CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2048 (hardware-validated "
+        "system-workqueue stack budget)",
+        "got %r" % config_int(app_cfg, "CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE"),
+    )
+
 
 def run_nrf54_checks(
     app_cfg, app_dts, labels_app, flpr_cfg, flpr_dts, labels_flpr, result

@@ -46,6 +46,7 @@ CONFIG_BT_FILTER_ACCEPT_LIST=y
 # CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS is not set
 # CONFIG_USER_PAIRING_CONTROL is not set
 # CONFIG_USER_PAIRING_INPUT is not set
+CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2048
 """
 
 NET_CONFIG = """\
@@ -978,6 +979,21 @@ class TestPairingControlAssertions(unittest.TestCase):
         )
         self.assertEqual(rc, 1)
         self.assertIn("5340-031", fails)
+
+    def test_5340_wrong_system_workqueue_stack(self):
+        # The hardware-validated 2048-byte system-workqueue stack budget must
+        # not silently regress to the faulting 1024-byte size.
+        rc, fails = self._rc_and_fails(
+            lambda fx: write(
+                fx.config("5340", "le-audio-receiver"),
+                APP5340_CONFIG.replace(
+                    "CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2048",
+                    "CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=1024",
+                ),
+            )
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("5340-032", fails)
 
     def test_54l15_control_off_fails(self):
         rc, fails = self._rc_and_fails(

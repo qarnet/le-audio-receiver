@@ -31,7 +31,8 @@ touch GitHub release/tag state, VERSION, remote branches, or CI.
 - Canonical gate: 65 PASS / 0 FAIL / 65 TOTAL.
 - Coverage: 4751/5208 lines, 2074/2878 branches, 362/362 functions,
   population 36.
-- Build contract: 95/95.
+- Build contract: 96/96 (includes the FR4 nRF5340
+  `CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2048` assertion `5340-032`).
 - BSim hashes unchanged.
 
 ## Commit handoff before hardware
@@ -230,6 +231,13 @@ starting `scripts/read_acm.py`. Never reuse one row's receiver log filename.
 
 Run rows in this order on nRF5340, then repeat same order on nRF54L15. Stop on
 first failed row; do not flash second target after nRF5340 failure.
+
+After each target's rows complete successfully, run the receiver shell
+`kernel thread stacks` over the current console and retain the exact output.
+For nRF5340 require the `sysworkq` line to report stack size 2048 and retain
+the used/unused high-water evidence; a stack command failure or an unreadable
+`sysworkq` line blocks acceptance of that target. On nRF54L15 retain the same
+command output for evidence.
 
 ### Row 1: strict fresh mono, 120 s
 
