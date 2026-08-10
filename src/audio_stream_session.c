@@ -66,18 +66,19 @@ struct audio_stream_slot {
 	size_t recv_cnt;
 	struct audio_decode_ctx decode;
 
-	/* Per-CIS ISO packet sequence tracker (audio_iso_seq.c): detects
-	 * SDUs whose callbacks the ISO stack omitted entirely (nRF5340
-	 * SW Split) so they can be concealed as PLC before the current
-	 * SDU is processed. */
+	/* Per-CIS HCI packet-sequence tracker (audio_iso_seq.c): detects
+	 * emitted HCI SDUs omitted after controller sequencing
+	 * (controller-to-host or host-side loss), which appear as a jump
+	 * in the delivered packet sequence number, so they can be
+	 * concealed as PLC before the current SDU is processed. */
 	struct audio_iso_seq seq;
 
 	/* Per-CIS ISO timestamp-cadence tracker (audio_iso_seq.c): detects
 	 * the same omitted output events from delivered ISO timestamps
-	 * when the controller emits no HCI SDU for a lost radio event.
-	 * SW Split advances its session sequence number only on emitted
-	 * SDUs, so such omissions stay invisible to @p seq (FR4 mono:
-	 * 8876 callbacks, zero sequence gaps, 225 I2S restarts).  Mono and
+	 * when a controller-side radio event emits no HCI SDU (SW Split
+	 * advances its session sequence number only on emitted SDUs, so
+	 * those omissions stay invisible to @p seq — FR4 mono: 8876
+	 * callbacks, zero sequence gaps, 225 I2S restarts).  Mono and
 	 * Mode B merge the two evidence sources with MAX; Mode A keeps the
 	 * sequence-only sentinel path. */
 	struct audio_iso_cadence cadence;
@@ -492,10 +493,13 @@ static void session_recv_path(size_t idx, struct audio_stream_slot *sl, bool val
 	}
 
 	/* ── Per-CIS sequence-gap concealment ────────────────────────
-	 * The nRF5340 SW Split controller sometimes omits the ISO
-	 * callback entirely for a lost SDU (no VALID and no LOST event;
-	 * the next delivered callback's Packet_Sequence_Number then
-	 * jumps).  Without a response the audio path starves
+	 * HCI packet-sequence evidence: emitted HCI SDUs omitted after
+	 * controller sequencing (controller-to-host or host-side loss)
+	 * appear as a jump in the delivered Packet_Sequence_Number;
+	 * controller-side radio events with no emitted HCI SDU keep the
+	 * sequence contiguous and are detected by timestamp cadence
+	 * below instead (FR4 mono: 8876 callbacks, zero sequence gaps,
+	 * 225 I2S resets).  Without a response the audio path starves
 	 * (`i2s_nrfx: Next buffers not supplied on time`) while PLC stays
 	 * near zero.  Every delivered callback advances the per-CIS
 	 * tracker; a wrap-safe forward delta in [2, MAX+1] conceals the
@@ -507,9 +511,11 @@ static void session_recv_path(size_t idx, struct audio_stream_slot *sl, bool val
 	 * still consumed its sequence position here, so it is never later
 	 * double-concealed.
 	 */
-	uint32_t omitted = 0U;
+	uint32_t seq_omitted = 0U;
 	uint16_t first_seq = 0U;
-	enum audio_iso_seq_result sres = audio_iso_seq_update(&sl->seq, seq, &omitted, &first_seq);
+	enum audio_iso_seq_result sres =
+		audio_iso_seq_update(&sl->seq, seq, &seq_omitted, &first_seq);
+	uint32_t omitted = seq_omitted;
 
 	if (sres == AUDIO_ISO_SEQ_RES_RESYNC) {
 		LOG_WRN("stream[%zu]: ISO seq discontinuity at %u (resyncs=%u) — no synthesis", idx,
@@ -571,12 +577,15 @@ static void session_recv_path(size_t idx, struct audio_stream_slot *sl, bool val
 
 	if (omitted > 0U) {
 		/* The seq-evidence INFO stays gated on an actual sequence
-		 * gap; a cadence-only gap (sequence contiguous, timestamp
-		 * jump) is logged at DBG only, never per-gap INFO. */
+		 * gap and prints the SEQUENCE-derived count (never the
+		 * merged count): a cadence-only gap (sequence contiguous,
+		 * timestamp jump) is logged at DBG only, and a merged gap
+		 * must not label timestamp-only positions as sequence
+		 * omissions. */
 		if (sres == AUDIO_ISO_SEQ_RES_GAP) {
 			LOG_INF("stream[%zu]: ISO seq gap: %u omitted SDU(s) (first %u, cur %u) — "
 				"conceal",
-				idx, omitted, first_seq, seq);
+				idx, seq_omitted, first_seq, seq);
 		}
 		if (mode != AUDIO_STREAM_MODE_MODEA) {
 			/* Mode B / mono single ASE: one PLC push per omitted

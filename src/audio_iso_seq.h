@@ -2,25 +2,38 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * Per-CIS ISO packet sequence tracker — receiver-side gap detection for
- * callbacks the ISO stack omits entirely.
+ * Per-CIS ISO omission trackers — receiver-side gap detection for
+ * callbacks the ISO stack omits entirely, from two independent evidence
+ * sources:
+ *
+ *   - audio_iso_seq: HCI packet sequence numbers;
+ *   - audio_iso_cadence: delivered ISO timestamps (mono / Mode B).
  *
  * Production BAP audio on the nRF5340 SW Split controller usually
  * delivers either a VALID-flag callback or a LOST-flag callback for every
  * CIG event.  Observed on hardware (E83, Mode B and bonded rows): the
  * controller SOMETIMES delivers NO callback at all for a lost SDU — no
- * valid packet, no LOST event.  The next delivered callback's
- * Packet_Sequence_Number then jumps by more than one.  Without a
- * response the audio path starves: the I2S DMA queue drains
- * (`i2s_nrfx: Next buffers not supplied on time`) while the PLC counter
- * stays near zero, because a LOST callback never arrived to trigger
- * concealment.
+ * valid packet, no LOST event.  Without a response the audio path
+ * starves: the I2S DMA queue drains (`i2s_nrfx: Next buffers not
+ * supplied on time`) while the PLC counter stays near zero, because a
+ * LOST callback never arrived to trigger concealment.
  *
- * This module tracks one CIS's delivered sequence numbers and reports
- * how many SDUs were omitted between consecutive callbacks, so the
- * caller can conceal exactly those events as PLC BEFORE processing the
- * current SDU.  It is pure ordering/counting logic (no Zephyr
- * dependencies), unit-testable directly.
+ * The two trackers report how many events were omitted between
+ * consecutive callbacks, so the caller can conceal exactly those events
+ * as PLC BEFORE processing the current SDU.  They are pure
+ * ordering/counting logic (no Zephyr dependencies), unit-testable
+ * directly.
+ *
+ * Sequence gaps (audio_iso_seq) detect emitted HCI SDUs that were
+ * omitted after controller sequencing (controller-to-host or host-side
+ * loss): they appear as a jump in the delivered HCI packet sequence
+ * number.  Controller-side radio events with no emitted HCI SDU keep
+ * the sequence numbers contiguous (the SW Split controller advances its
+ * session sequence number only when an SDU is emitted to the host) and
+ * are detected by timestamp cadence (audio_iso_cadence) instead.  Mode
+ * A retains sequence-only synthetic LOST sentinels; mono / Mode B merge
+ * the two evidence sources with MAX so one physical omission is never
+ * concealed twice.
  *
  * Sequence semantics (documented contract):
  *

@@ -2,8 +2,16 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * Per-CIS ISO packet sequence tracker — implementation (pure logic, no
- * Zephyr deps).
+ * Per-CIS ISO omission trackers — implementation (pure logic, no Zephyr
+ * deps).  Two independent evidence sources:
+ *
+ *   - audio_iso_seq: HCI packet sequence numbers — gaps detect emitted
+ *     HCI SDUs omitted after controller sequencing (controller-to-host
+ *     or host-side loss), visible as a jump in the delivered packet
+ *     sequence number;
+ *   - audio_iso_cadence: delivered ISO timestamps (mono / Mode B) —
+ *     controller-side radio events with no emitted HCI SDU keep the
+ *     sequence numbers contiguous and require timestamp cadence.
  *
  * See audio_iso_seq.h for the contract.  Summary of the resolution
  * model: a wrap-safe 16-bit delta against the last delivered sequence

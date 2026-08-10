@@ -450,12 +450,57 @@
      "outcome": "UINT32",
      "witness": "test_single_gap"
     },
-    {
-     "api": "audio_iso_seq_get_resyncs",
-     "outcome": "UINT32",
-     "witness": "test_duplicate_is_explicit_resync"
-    }
-   ],
+     {
+      "api": "audio_iso_seq_get_resyncs",
+      "outcome": "UINT32",
+      "witness": "test_duplicate_is_explicit_resync"
+     },
+     {
+      "api": "audio_iso_cadence_reset",
+      "outcome": "void",
+      "witness": "test_cadence_null_reset_first"
+     },
+     {
+      "api": "audio_iso_cadence_update",
+      "outcome": "AUDIO_ISO_CADENCE_RES_FIRST",
+      "witness": "test_cadence_null_reset_first"
+     },
+     {
+      "api": "audio_iso_cadence_update",
+      "outcome": "AUDIO_ISO_CADENCE_RES_NO_TS",
+      "witness": "test_cadence_missing_ts_no_false_omission"
+     },
+     {
+      "api": "audio_iso_cadence_update",
+      "outcome": "AUDIO_ISO_CADENCE_RES_CONTIG",
+      "witness": "test_cadence_contiguous_10ms_and_75ms"
+     },
+     {
+      "api": "audio_iso_cadence_update",
+      "outcome": "AUDIO_ISO_CADENCE_RES_GAP",
+      "witness": "test_cadence_timestamp_only_omissions"
+     },
+     {
+      "api": "audio_iso_cadence_update",
+      "outcome": "AUDIO_ISO_CADENCE_RES_WRAP",
+      "witness": "test_cadence_backward_wrap_rebase"
+     },
+     {
+      "api": "audio_iso_cadence_update",
+      "outcome": "AUDIO_ISO_CADENCE_RES_RESYNC",
+      "witness": "test_cadence_resync_classes"
+     },
+     {
+      "api": "audio_iso_cadence_get_concealed",
+      "outcome": "UINT32",
+      "witness": "test_cadence_counters_and_reset"
+     },
+     {
+      "api": "audio_iso_cadence_get_resyncs",
+      "outcome": "UINT32",
+      "witness": "test_cadence_counters_and_reset"
+     }
+    ],
    "state_transitions": [
     {
      "transition": "uninitialized->first-delivery",
@@ -485,11 +530,39 @@
      "transition": "delivered->over-bound-resync",
      "witness": "test_over_bound_gap_is_resync"
     },
-    {
-     "transition": "any->reset",
-     "witness": "test_reset_clears_all"
-    }
-   ],
+     {
+      "transition": "any->reset",
+      "witness": "test_reset_clears_all"
+     },
+     {
+      "transition": "cadence-uninitialized->first-timestamp",
+      "witness": "test_cadence_null_reset_first"
+     },
+     {
+      "transition": "cadence-timestamped->no-ts-position-counted",
+      "witness": "test_cadence_missing_ts_no_false_omission"
+     },
+     {
+      "transition": "cadence-timestamped->contiguous",
+      "witness": "test_cadence_contiguous_10ms_and_75ms"
+     },
+     {
+      "transition": "cadence-timestamped->gap-concealed",
+      "witness": "test_cadence_timestamp_only_omissions"
+     },
+     {
+      "transition": "cadence-timestamped->wrap-rebase",
+      "witness": "test_cadence_backward_wrap_rebase"
+     },
+     {
+      "transition": "cadence-timestamped->resync",
+      "witness": "test_cadence_resync_classes"
+     },
+     {
+      "transition": "cadence-any->reset",
+      "witness": "test_cadence_counters_and_reset"
+     }
+    ],
    "function_exclusions": [],
    "hardware_acceptance": [],
    "stateful": true

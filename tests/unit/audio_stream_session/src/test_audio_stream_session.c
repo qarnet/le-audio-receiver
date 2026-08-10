@@ -1170,4 +1170,34 @@ ZTEST(audio_stream_session, test_ts_cadence_reset_rebase_sessions)
 	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
 }
 
+ZTEST(audio_stream_session, test_lost_with_ts_consumes_cadence_position)
+{
+	setup_mono();
+
+	/* A delivered LOST callback that CARRIES a timestamp (SW Split emits
+	 * a timestamp on START/SINGLE HCI ISO packets, including emitted
+	 * LOST SDUs) must consume its own cadence grid position: timestamps
+	 * 10000/20000/30000 stay exactly contiguous, so the cadence tracker
+	 * synthesizes nothing and the only PLC is the LOST SDU's own
+	 * render.  Without position consumption the 10000 -> 30000 span
+	 * would read as one omitted event and add an extra PLC push. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 10000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "first valid SDU");
+	zassert_equal(0U, audio_stats_get().plc_frames, "no PLC yet");
+
+	zassert_ok(audio_stream_session_recv(0, false, true, 20000, 2, NULL, 0U));
+	zassert_equal(2U, fake_sink_push_count(), "LOST renders its own PLC push");
+	zassert_equal(1U, audio_stats_get().plc_frames, "exactly one PLC frame from the LOST SDU");
+	zassert_equal(2U, audio_stats_get().total_frames, "one decoded + one PLC");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 30000, 3, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(3U, fake_sink_push_count(), "no extra cadence PLC before third callback");
+	zassert_equal(1U, audio_stats_get().plc_frames, "still exactly one PLC frame");
+	zassert_equal(3U, audio_stats_get().total_frames, "two decoded + one PLC");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+	zassert_true(fake_observer_last_push_l_valid(), "final push valid");
+	zassert_true(fake_observer_last_push_r_valid(), "final push valid");
+}
+
 ZTEST_SUITE(audio_stream_session, NULL, NULL, NULL, NULL, NULL);
