@@ -23,29 +23,30 @@ This is pre-release diagnostic validation of local build outputs. It is not
 FR4 exact-artifact acceptance and cannot accept or publish `v0.1.0`. Do not
 touch GitHub release/tag state, VERSION, remote branches, or CI.
 
-## Current software evidence
+## Current resume software evidence
 
-- Expected start HEAD: `606fbed` `fix: complete ISO cadence verification`.
-- Expected worktree: only this untracked handoff.
-- Focused suites: `audio.iso_seq` 29/29; `audio_stream_session` 46/46.
+- Expected start HEAD: `ec8c846` `fix: increase nRF5340 system workqueue stack`.
+- Expected worktree: clean.
+- Focused suites: `audio.iso_seq` 39/39; `audio_stream_session` 47/47;
+  build-contract checker tests 52/52.
 - Canonical gate: 65 PASS / 0 FAIL / 65 TOTAL.
-- Coverage: 4751/5208 lines, 2074/2878 branches, 362/362 functions,
-  population 36.
+- Coverage population: 36; committed baseline enforcement passes.
 - Build contract: 96/96 (includes the FR4 nRF5340
   `CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2048` assertion `5340-032`).
 - BSim hashes unchanged.
 
-## Commit handoff before hardware
+## Handoff commit state
 
 Read full project `AGENTS.md`, both cadence-fix handoffs, FR4 procedure, and
-this file. Inspect status/log. Stage and commit only this handoff before build
-or hardware:
+this file. Inspect status/log. The original hardware handoff is already
+committed at:
 
 ```text
-docs: record cadence hardware validation handoff
+3da4862 docs: record cadence hardware validation handoff
 ```
 
-Do not amend, push, merge, or open a PR. Require clean worktree after commit.
+Do not recommit that original handoff, amend, push, merge, or open a PR. Require
+clean worktree before building.
 
 ## Authorization and prohibitions
 
