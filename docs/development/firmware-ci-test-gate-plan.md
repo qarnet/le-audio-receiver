@@ -99,11 +99,18 @@ with `firmware` and does not checkout sdk-nrf separately:
 
 - checkout application at the repository root, `fetch-depth: 0`, credentials
   disabled;
+- free disk space early (grounded in the accepted serial-mcp hosted
+  native-sim pattern): remove only well-known preinstalled toolchain caches
+  (`/usr/share/dotnet`, `/usr/local/lib/android`, `/opt/ghc`,
+  `/opt/hostedtoolcache/CodeQL`, docker image/builder prunes) because the
+  Nix closure (~4.5 GiB) plus the NCS SDK/toolchain (~4.6 GiB) plus retained
+  native build trees exceed the ephemeral runner disk; no project or user
+  data path is touched;
 - install Nix with the pinned `DeterminateSystems/nix-installer-action`, cache
   the Nix store with the pinned `nix-community/cache-nix-action` keyed from
   `flake.lock` with a bounded `gc-max-store-size` (6G, grounded in the measured
   dev-shell closure), and cache `/home/runner/ncs` with the pinned
-  `actions/cache` keyed `ncs-v3.3.0-911f4c5c26`;
+  `actions/cache` keyed `ncs-v3.3.0-911f4c5c26` and `id: cache-ncs`;
 - provision `nrfutil sdk-manager` 1.16.1 only: download the exact versioned
   URL with `curl --fail-with-body --show-error --location` and bounded
   retries/timeouts, verify the exact SHA-256 before extraction, extract with
@@ -111,9 +118,10 @@ with `firmware` and does not checkout sdk-nrf separately:
   and append that bin to `$GITHUB_PATH`. nrfutil core is never downloaded or
   replaced; the locked Nix shell provides it;
 - install the SDK through the locked shell, setting the install directory on
-  every run and installing only on cache miss:
-  `nrfutil sdk-manager config install-dir set "$HOME/ncs"` then, when
-  `$HOME/ncs/v3.3.0/nrf` is absent, `nrfutil sdk-manager install v3.3.0`;
+  every run and branching on the NCS cache step's exact `cache-hit` output
+  (`CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}`), never on directory
+  presence alone: on an exact hit, require `$HOME/ncs/v3.3.0/nrf` to exist
+  and skip install; otherwise run `nrfutil sdk-manager install v3.3.0`;
 - verify through the locked shell and fail closed: `gcovr` first line `gcovr 8.4`,
   `gcov` first line `gcov (GCC) 14.3.0`, `ZEPHYR_BASE` resolves to
   `$HOME/ncs/v3.3.0/zephyr` (the shell hook derives it from the sdk-manager

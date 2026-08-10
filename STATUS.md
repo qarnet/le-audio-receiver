@@ -51,6 +51,11 @@ plugin (versioned URL, SHA-256 verified before extraction, nrfutil core
 never downloaded).  Nix is installed with the pinned Determinate
 installer and the Nix store is cached keyed from `flake.lock` with a
 bounded gc; `/home/runner/ncs` is cached keyed `ncs-v3.3.0-911f4c5c26`.
+An early disk cleanup step frees only well-known preinstalled toolchain
+caches (Nix closure ~4.5 GiB + NCS/toolchain ~4.6 GiB + retained native
+build trees exceed the ephemeral runner disk); the NCS install step
+branches on the cache step's exact `cache-hit` output, never on directory
+presence alone.
 The job verifies the committed baseline tool first lines, `ZEPHYR_BASE`
 (`$HOME/ncs/v3.3.0/zephyr`), sdk-nrf HEAD
 `ba167d9f3db4abbdc9b67887ca3ea66c64f2d956`, `nrf/VERSION` `3.3.0`, and

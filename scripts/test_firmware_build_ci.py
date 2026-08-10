@@ -571,6 +571,44 @@ class TestTestsJobContract(unittest.TestCase):
         self.assertNotIn("permissions:", block, "tests job must inherit top-level read")
         self.assertNotIn("outputs:", block, "tests job must not expose outputs")
 
+    def test_tests_job_free_disk_space_before_nix(self):
+        # Early disk cleanup grounded in the accepted serial-mcp hosted
+        # native-sim pattern: only well-known preinstalled toolchain caches
+        # are removed, after the application checkout and before Nix
+        # installation, and no cleanup command targets project or user data.
+        block = self._tests_block()
+        self.assertIn("Free disk space", block)
+        self.assertIn("df -h /", block)
+        self.assertIn(
+            "sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc "
+            "/opt/hostedtoolcache/CodeQL",
+            block,
+        )
+        self.assertIn("sudo docker image prune --all --force || true", block)
+        self.assertIn("sudo docker builder prune -a --force || true", block)
+        self.assertLess(
+            block.index("Free disk space"),
+            block.index("Install Nix"),
+            "disk cleanup must precede Nix installation",
+        )
+        self.assertLess(
+            block.index("Checkout application"),
+            block.index("Free disk space"),
+            "disk cleanup must follow the application checkout",
+        )
+        # The rm -rf is one fixed well-known list; nothing in it may target
+        # the workspace, the home tree, the NCS cache, or /nix.
+        rm_lines = [line.strip() for line in block.splitlines() if "rm -rf" in line]
+        self.assertEqual(len(rm_lines), 1, "exactly one fixed rm -rf list must exist")
+        for forbidden in (
+            "$GITHUB_WORKSPACE",
+            "$HOME",
+            "/home/runner/ncs",
+            "/nix",
+            "~",
+        ):
+            self.assertNotIn(forbidden, rm_lines[0])
+
     def test_tests_job_checkout_at_repo_root_only(self):
         block = self._tests_block()
         for needle in (
@@ -611,13 +649,18 @@ class TestTestsJobContract(unittest.TestCase):
             'printf \'%s\\n\' "$RUNNER_TEMP/nrfutil/bin" >> "$GITHUB_PATH"',
         ):
             self.assertIn(needle, block, "missing %r in tests job" % needle)
-        for forbidden in (
-            "sudo",
-            "curl -sL",
-            "| bash",
-            "nrfutil core",
-        ):
-            self.assertNotIn(forbidden, block, "forbidden %r in tests job" % forbidden)
+        # The provisioning step itself must never use sudo or shell piping
+        # of the download; sudo is confined to the separate Free disk space
+        # step that precedes Nix installation.
+        provision = block.split("Install NCS SDK and toolchain", 1)[0].split(
+            "Provision nrfutil sdk-manager", 1
+        )[1]
+        for forbidden in ("sudo", "curl -sL", "| bash", "nrfutil core"):
+            self.assertNotIn(
+                forbidden,
+                provision,
+                "forbidden %r in sdk-manager provisioning" % forbidden,
+            )
 
     def test_tests_job_ncs_install_locked_shell(self):
         block = self._tests_block()
@@ -625,10 +668,25 @@ class TestTestsJobContract(unittest.TestCase):
             "nix develop --accept-flake-config --command bash -s <<'EOF'",
             'nrfutil sdk-manager config install-dir set "$HOME/ncs"',
             "nrfutil sdk-manager install v3.3.0",
-            'if [ -d "$HOME/ncs/v3.3.0/nrf" ]; then',
-            'echo "NCS v3.3.0 present (cache hit); skipping sdk-manager install"',
+            'if [ "$CACHE_HIT" = "true" ]; then',
+            'test -d "$HOME/ncs/v3.3.0/nrf"',
+            'echo "NCS v3.3.0 restored from cache; skipping sdk-manager install"',
         ):
             self.assertIn(needle, block, "missing %r in tests job" % needle)
+
+    def test_tests_job_ncs_cache_hit_contract(self):
+        # The NCS cache step must expose its cache-hit output and the install
+        # step must branch on that exact output, never on directory presence
+        # alone: a partial or stale tree must not masquerade as a cache hit.
+        block = self._tests_block()
+        self.assertIn("id: cache-ncs", block)
+        self.assertIn("CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}", block)
+        self.assertNotIn(
+            'if [ -d "$HOME/ncs/v3.3.0/nrf" ]; then',
+            block,
+            "install must not infer cache hit from directory existence",
+        )
+        self.assertIn('if [ "$CACHE_HIT" = "true" ]; then', block)
 
     def test_tests_job_environment_verification_exact(self):
         block = self._tests_block()

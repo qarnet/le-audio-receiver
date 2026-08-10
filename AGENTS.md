@@ -131,7 +131,10 @@ on the plain host runner inside the locked Nix dev shell with the exact
 NCS v3.3.0 SDK + `911f4c5c26` toolchain installed by pinned
 `nrfutil sdk-manager` 1.16.1 (hosted run `31422292550` failed pre-gate on
 the container's incompatible gcov first-line assertion; `firmware` and
-`release` were correctly skipped).  Implementation is pending hosted PR
+`release` were correctly skipped); an early disk-cleanup step frees only
+well-known preinstalled toolchain caches, and the NCS install branches on
+the exact `cache-hit` output of the NCS cache step, never on directory
+presence.  Implementation is pending hosted PR
 validation (plan: `docs/development/firmware-ci-test-gate-plan.md`), no
 hosted pass is claimed.  Historical baselines: T0–T8 locked
 behavior on production code `971e6a4` (T8 canonical gate **47 PASS /

@@ -139,7 +139,12 @@ repository's locked Nix dev shell, which provides the exact flake tools
 (`gcovr 8.4`, `gcov (GCC) 14.3.0`, nrfutil core, west); the exact NCS
 v3.3.0 SDK and `911f4c5c26` toolchain are installed into `$HOME/ncs` by
 the pinned `nrfutil sdk-manager` 1.16.1 plugin (versioned URL, SHA-256
-verified before extraction, no nrfutil-core replacement).  The job
+verified before extraction, no nrfutil-core replacement).  An early disk
+cleanup step frees only well-known preinstalled toolchain caches (the Nix
+closure ~4.5 GiB plus NCS/toolchain ~4.6 GiB plus retained native build
+trees exceed the ephemeral runner disk); the NCS cache is keyed
+`ncs-v3.3.0-911f4c5c26` and the install step branches on its exact
+`cache-hit` output, never on directory presence alone.  The job
 verifies the committed baseline's tool first lines plus
 `ZEPHYR_BASE`, the exact sdk-nrf HEAD `ba167d9f3db4abbdc9b67887ca3ea66c64f2d956`,
 `nrf/VERSION` `3.3.0`, and toolchain ID `911f4c5c26`; builds the imported

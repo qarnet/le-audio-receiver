@@ -27,6 +27,19 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Free disk space
+        # The locked Nix dev-shell closure (~4.5 GiB) plus the NCS
+        # SDK/toolchain (~4.6 GiB) plus retained native build trees exceed
+        # the ephemeral runner disk. Free only well-known preinstalled
+        # toolchain caches; never touch project or user data, the
+        # workspace, $HOME, /home/runner/ncs, or /nix.
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          sudo docker builder prune -a --force || true
+          df -h /
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
       - name: Cache Nix store
@@ -35,6 +48,7 @@ jobs:
           primary-key: nix-${{ hashFiles('flake.lock') }}
           gc-max-store-size: 6G
       - name: Cache NCS SDK and toolchain
+        id: cache-ncs
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: /home/runner/ncs
@@ -53,12 +67,15 @@ jobs:
           test -x "$RUNNER_TEMP/nrfutil/bin/nrfutil-sdk-manager"
           printf '%s\n' "$RUNNER_TEMP/nrfutil/bin" >> "$GITHUB_PATH"
       - name: Install NCS SDK and toolchain
+        env:
+          CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}
         run: |
           nix develop --accept-flake-config --command bash -s <<'EOF'
           set -euo pipefail
           nrfutil sdk-manager config install-dir set "$HOME/ncs"
-          if [ -d "$HOME/ncs/v3.3.0/nrf" ]; then
-            echo "NCS v3.3.0 present (cache hit); skipping sdk-manager install"
+          if [ "$CACHE_HIT" = "true" ]; then
+            test -d "$HOME/ncs/v3.3.0/nrf"
+            echo "NCS v3.3.0 restored from cache; skipping sdk-manager install"
           else
             nrfutil sdk-manager install v3.3.0
           fi
