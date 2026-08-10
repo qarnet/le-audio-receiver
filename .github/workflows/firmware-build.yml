@@ -18,8 +18,6 @@ jobs:
   tests:
     runs-on: ubuntu-22.04
     timeout-minutes: 240
-    container:
-      image: ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:f24d8932ff081ebcd8da9c248f4449bdabe461c0620a7a4ac9e95eb577ba2276
     defaults:
       run:
         shell: bash
@@ -27,70 +25,87 @@ jobs:
       - name: Checkout application
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          path: workspace/le-audio-receiver
           fetch-depth: 0
           persist-credentials: false
-      - name: Checkout sdk-nrf
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          repository: nrfconnect/sdk-nrf
-          ref: ba167d9f3db4abbdc9b67887ca3ea66c64f2d956
-          path: workspace/nrf
-          persist-credentials: false
-      - name: Initialize NCS workspace
-        working-directory: ${{ github.workspace }}/workspace
+          primary-key: nix-${{ hashFiles('flake.lock') }}
+          gc-max-store-size: 6G
+      - name: Cache NCS SDK and toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: /home/runner/ncs
+          key: ncs-v3.3.0-911f4c5c26
+      - name: Provision nrfutil sdk-manager
         run: |
-          test "$(git -C nrf rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
-          test "$(tr -d '\r\n' < nrf/VERSION)" = "3.3.0"
-          west init -l nrf
-          west update --narrow -o=--depth=1
-          west zephyr-export
-          test "$(git -C nrf rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
-          test "$(tr -d '\r\n' < nrf/VERSION)" = "3.3.0"
-          test "$(west topdir)" = "$GITHUB_WORKSPACE/workspace"
-          zephyr_base="$GITHUB_WORKSPACE/workspace/zephyr"
-          test -d "$zephyr_base"
-          printf 'ZEPHYR_BASE=%s\n' "$zephyr_base" >> "$GITHUB_ENV"
-      - name: Provision canonical test tools
-        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+          set -euo pipefail
+          sdk_manager_url="https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/packages/nrfutil-sdk-manager/nrfutil-sdk-manager-x86_64-unknown-linux-gnu-1.16.1.tar.gz"
+          sdk_manager_sha256="d2fe97f143f888a679223d9c6e0b51d730eb60b4a5f4a5dafc970acd2020fe38"
+          archive="$RUNNER_TEMP/nrfutil-sdk-manager.tar.gz"
+          curl --fail-with-body --show-error --location --retry 3 --retry-delay 5 \
+            --connect-timeout 20 --max-time 600 -o "$archive" "$sdk_manager_url"
+          printf '%s  %s\n' "$sdk_manager_sha256" "$archive" | sha256sum --strict -c -
+          mkdir -p "$RUNNER_TEMP/nrfutil"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/nrfutil" --strip-components=2
+          test -x "$RUNNER_TEMP/nrfutil/bin/nrfutil-sdk-manager"
+          printf '%s\n' "$RUNNER_TEMP/nrfutil/bin" >> "$GITHUB_PATH"
+      - name: Install NCS SDK and toolchain
         run: |
-          # gcovr 8.4 lives in an isolated venv under the container home;
-          # the container/system Python is never modified.
-          python3 -m venv "$HOME/gcovr-venv"
-          "$HOME/gcovr-venv/bin/python" -m pip install --no-cache-dir gcovr==8.4
-          test "$("$HOME/gcovr-venv/bin/gcovr" --version | head -n1)" = "gcovr 8.4"
-          test "$(gcov --version | head -n1)" = "gcov (GCC) 14.3.0"
-          printf '%s\n' "$HOME/gcovr-venv/bin" >> "$GITHUB_PATH"
+          nix develop --accept-flake-config --command bash -s <<'EOF'
+          set -euo pipefail
+          nrfutil sdk-manager config install-dir set "$HOME/ncs"
+          if [ -d "$HOME/ncs/v3.3.0/nrf" ]; then
+            echo "NCS v3.3.0 present (cache hit); skipping sdk-manager install"
+          else
+            nrfutil sdk-manager install v3.3.0
+          fi
+          EOF
+      - name: Verify canonical test environment
+        run: |
+          nix develop --accept-flake-config --command bash -s <<'EOF'
+          set -euo pipefail
+          gcovr_line="$(gcovr --version | head -n1)"
+          gcov_line="$(gcov --version | head -n1)"
+          echo "gcovr: $gcovr_line"
+          echo "gcov: $gcov_line"
+          test "$gcovr_line" = "gcovr 8.4"
+          test "$gcov_line" = "gcov (GCC) 14.3.0"
+          test "$ZEPHYR_BASE" = "$HOME/ncs/v3.3.0/zephyr"
+          test -d "$ZEPHYR_BASE"
+          test "$(git -C "$HOME/ncs/v3.3.0/nrf" rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
+          test "$(tr -d '\r\n' < "$HOME/ncs/v3.3.0/nrf/VERSION")" = "3.3.0"
+          nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh | grep -q "911f4c5c26"
+          echo "canonical test environment verified"
+          EOF
       - name: Build BabbleSim components
-        working-directory: ${{ github.workspace }}/workspace
         run: |
-          BSIM_BUILD_FAIL_ASAP=1 make -C "$GITHUB_WORKSPACE/workspace/tools/bsim" everything
-          test -x "$GITHUB_WORKSPACE/workspace/tools/bsim/bin/bs_2G4_phy_v1"
+          nix develop --accept-flake-config --command bash -s <<'EOF'
+          set -euo pipefail
+          BSIM_BUILD_FAIL_ASAP=1 make -C "$HOME/ncs/v3.3.0/tools/bsim" everything
+          test -x "$HOME/ncs/v3.3.0/tools/bsim/bin/bs_2G4_phy_v1"
+          EOF
       - name: Prepare canonical test output root
-        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
         run: |
-          # The committed coverage runner only accepts output under /tmp or
-          # $HOME; GitHub mounts the job home (</github/home>) from the
-          # runner temp tree, so the retained root under $HOME is still
-          # runner-temp-owned on the host.
           results_dir="$HOME/le-audio-test-results"
           mkdir -p "$results_dir/bsim"
           printf 'TEST_OUTPUT_DIR=%s\n' "$results_dir" >> "$GITHUB_ENV"
           printf 'BSIM_LOG_ROOT=%s/bsim\n' "$results_dir" >> "$GITHUB_ENV"
       - name: Run canonical test gate
-        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
         run: |
           set -o pipefail
+          nix develop --accept-flake-config --command bash -s <<'EOF'
+          set -euo pipefail
           ./scripts/test-all.sh 2>&1 | tee "$TEST_OUTPUT_DIR/test-all.log"
+          EOF
       - name: Upload test results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: le-audio-test-results-${{ github.sha }}
-          # The upload action runs inside the container and reaches the
-          # results root (the container's $HOME) through the runner temp
-          # mount at <runner.temp>/_github_home.
-          path: ${{ runner.temp }}/_github_home/le-audio-test-results
+          path: /home/runner/le-audio-test-results
           if-no-files-found: warn
           retention-days: 7
 

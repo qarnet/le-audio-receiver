@@ -42,22 +42,26 @@ accepted.**  PR 11 (`feature/firmware-release-acceptance`) adds a distinct
 `tests` job to `.github/workflows/firmware-build.yml` as the canonical
 65-child software gate that `firmware` (and therefore `release`) must
 wait for: `tests` → `firmware` → `release` (trusted main only).  The
-`tests` job uses the same pinned ubuntu-22.04 runner, digest-pinned NCS
-v3.3.0 toolchain container, exact application/sdk-nrf checkouts, and
-verified west workspace sequence as the firmware job; provisions exact
-`gcovr==8.4` in an isolated venv under the container home (exposed to later
-steps through `$GITHUB_PATH`) and verifies the committed baseline tool first
-lines (`gcovr 8.4`, `gcov (GCC) 14.3.0`); builds the imported BabbleSim
-components with `BSIM_BUILD_FAIL_ASAP=1 make -C .../tools/bsim everything`
+`tests` job runs on the plain ubuntu-22.04 host runner (no Nordic
+container) inside the repository's locked Nix dev shell: the flake
+provides the exact tools (`gcovr 8.4`, `gcov (GCC) 14.3.0`, nrfutil core,
+west), and the exact NCS v3.3.0 SDK plus `911f4c5c26` toolchain are
+installed into `$HOME/ncs` by the pinned `nrfutil sdk-manager` 1.16.1
+plugin (versioned URL, SHA-256 verified before extraction, nrfutil core
+never downloaded).  Nix is installed with the pinned Determinate
+installer and the Nix store is cached keyed from `flake.lock` with a
+bounded gc; `/home/runner/ncs` is cached keyed `ncs-v3.3.0-911f4c5c26`.
+The job verifies the committed baseline tool first lines, `ZEPHYR_BASE`
+(`$HOME/ncs/v3.3.0/zephyr`), sdk-nrf HEAD
+`ba167d9f3db4abbdc9b67887ca3ea66c64f2d956`, `nrf/VERSION` `3.3.0`, and
+toolchain ID `911f4c5c26`; builds BabbleSim components with
+`BSIM_BUILD_FAIL_ASAP=1 make -C "$HOME/ncs/v3.3.0/tools/bsim" everything`
 and verifies `bs_2G4_phy_v1`; runs `scripts/test-all.sh` exactly once
-with the gate's real exit status preserved through `set -o pipefail` and
-full console output teed to `test-all.log`; and uploads the retained
-output with the pinned `upload-artifact` action, `if: always()`, 7-day
-retention, `if-no-files-found: warn`.  The retained root lives under the
-container `$HOME` (GitHub mounts the job home from `<runner.temp>/_github_home`)
-because the committed coverage runner only accepts output canonically
-under `/tmp` or `$HOME`; the upload action reaches the same directory
-through the runner temp mount.  `scripts/test-all.sh` gained optional
+through the locked shell with the gate's real exit status preserved
+through `set -o pipefail` and full console output teed to `test-all.log`;
+and uploads `/home/runner/le-audio-test-results` with the pinned
+`upload-artifact` action, `if: always()`, 7-day retention,
+`if-no-files-found: warn`.  `scripts/test-all.sh` gained optional
 `TEST_OUTPUT_DIR` (coverage → `$TEST_OUTPUT_DIR/coverage`) and
 `scripts/bsim-stage1-run.sh` gained optional `BSIM_LOG_ROOT` (caller-owned
 logs, always preserved, never deleted, nonempty destination refused);
@@ -66,10 +70,13 @@ tests in `scripts/test_firmware_build_ci.py` pin the topology, pins,
 provisioning, invocation, artifact retention, and release trust boundary;
 focused fixture tests cover the new output-root validation without real
 Zephyr or BabbleSim builds.  Local focused checks pass (inventory **62**,
-workflow contract 35/35, `test_coverage_runner` 34/34, `bsim_runner`
+workflow contract 37/37, `test_coverage_runner` 34/34, `bsim_runner`
 61/61); the full local canonical gate on the clean implementation commit
 `ca55e9d` is **65 PASS / 0 FAIL / 65 TOTAL** with unchanged coverage
-baseline and byte-identical BSim pins.  No hosted run exists yet; no
+baseline and byte-identical BSim pins.  Hosted run `31422292550` failed
+pre-gate: the Nordic container's gcovr (8.6) and gcov first lines did not
+match the committed baseline, and `firmware`/`release` were correctly
+skipped; the Nix-runner correction is pending hosted validation.  No
 hosted pass is claimed.  Plan of
 record: `docs/development/firmware-ci-test-gate-plan.md`.
 

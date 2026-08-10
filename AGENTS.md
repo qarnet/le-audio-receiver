@@ -126,10 +126,14 @@ candidate must be created through the trusted-main lifecycle and its
 exact assets must pass FR4 before FR5 can publish anything; nothing
 published.  PR 11 (`feature/firmware-release-acceptance`) adds the hosted
 canonical software gate as a distinct `tests` job that must pass before
-the firmware builds run (`tests` → `firmware` → `release`); implementation
-is pending hosted PR validation (plan:
-`docs/development/firmware-ci-test-gate-plan.md`), no hosted pass is
-claimed.  Historical baselines: T0–T8 locked
+the firmware builds run (`tests` → `firmware` → `release`); the job runs
+on the plain host runner inside the locked Nix dev shell with the exact
+NCS v3.3.0 SDK + `911f4c5c26` toolchain installed by pinned
+`nrfutil sdk-manager` 1.16.1 (hosted run `31422292550` failed pre-gate on
+the container's incompatible gcov first-line assertion; `firmware` and
+`release` were correctly skipped).  Implementation is pending hosted PR
+validation (plan: `docs/development/firmware-ci-test-gate-plan.md`), no
+hosted pass is claimed.  Historical baselines: T0–T8 locked
 behavior on production code `971e6a4` (T8 canonical gate **47 PASS /
 0 FAIL / 47 TOTAL**, coverage baseline `1a5842d` (26 files), build
 contract 76/76 — `docs/testing/pre-refactor-hardware-baseline.md`); the

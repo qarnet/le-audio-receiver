@@ -342,9 +342,10 @@ class TestWorkflowContract(unittest.TestCase):
         ]
         self.assertEqual(
             len(uses_lines),
-            8,
-            "expected five checkouts (firmware, tests, release), two "
-            "uploads (firmware, tests), and one download (release)",
+            10,
+            "expected three checkouts (firmware, tests, release), one Nix "
+            "installer, one Nix store cache, one NCS cache, two uploads "
+            "(firmware, tests), and one download (release)",
         )
 
 
@@ -371,7 +372,12 @@ class TestWorkflowCommands(unittest.TestCase):
             'printf \'ZEPHYR_BASE=%s\\n\' "$zephyr_base" >> "$GITHUB_ENV"',
         ):
             self.assertIn(line, text, "missing %r" % line)
-        env_index = text.index('"$GITHUB_ENV"')
+        # Scope the ordering check to the firmware job: the tests job also
+        # writes $GITHUB_ENV (its output-root step), so a whole-text first
+        # occurrence of "$GITHUB_ENV" is ambiguous.
+        fw = job_block("firmware")
+        env_line = 'printf \'ZEPHYR_BASE=%s\\n\' "$zephyr_base" >> "$GITHUB_ENV"'
+        env_index = fw.index(env_line)
         for command in (
             "west init -l nrf",
             "west update --narrow -o=--depth=1",
@@ -379,13 +385,13 @@ class TestWorkflowCommands(unittest.TestCase):
             "west topdir",
         ):
             self.assertLess(
-                text.index(command),
+                fw.index(command),
                 env_index,
                 "ZEPHYR_BASE export must appear after %r" % command,
             )
         self.assertNotIn(
             "ZEPHYR_BASE=",
-            text[: text.index("west init -l nrf")],
+            fw[: fw.index("west init -l nrf")],
             "ZEPHYR_BASE must not be set before west init",
         )
 
@@ -529,9 +535,21 @@ class TestWorkflowArtifactContract(unittest.TestCase):
 
 class TestTestsJobContract(unittest.TestCase):
     """Canonical software test gate (PR 11): the `tests` job must be the
-    single mandatory pre-build gate, pinned identically to the firmware
-    job, invoked as scripts/test-all.sh, and always uploading its retained
-    output."""
+    single mandatory pre-build gate running the exact Nix/NCS locked
+    environment on a plain host runner, invoked as scripts/test-all.sh,
+    and always uploading its retained output."""
+
+    SDK_MANAGER_URL = (
+        "https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/"
+        "packages/nrfutil-sdk-manager/"
+        "nrfutil-sdk-manager-x86_64-unknown-linux-gnu-1.16.1.tar.gz"
+    )
+    SDK_MANAGER_SHA256 = (
+        "d2fe97f143f888a679223d9c6e0b51d730eb60b4a5f4a5dafc970acd2020fe38"
+    )
+    NIX_INSTALLER_SHA = "ef8a148080ab6020fd15196c2084a2eea5ff2d25"
+    CACHE_NIX_SHA = "7df957e333c1e5da7721f60227dbba6d06080569"
+    ACTIONS_CACHE_SHA = "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
 
     def _tests_block(self):
         text = workflow_text()
@@ -542,62 +560,97 @@ class TestTestsJobContract(unittest.TestCase):
         )
         return job_block("tests")
 
-    def test_tests_job_pinned_runner_container_and_shell(self):
+    def test_tests_job_host_runner_no_container(self):
         block = self._tests_block()
         self.assertIn("runs-on: ubuntu-22.04", block)
-        self.assertIn(CONTAINER_IMAGE, block)
         self.assertIn("timeout-minutes: 240", block)
         self.assertIn("shell: bash", block)
+        self.assertNotIn("container:", block, "tests job must run on the host runner")
+        self.assertNotIn(CONTAINER_IMAGE, block)
         self.assertNotIn("contents: write", block, "tests job must stay read-only")
         self.assertNotIn("permissions:", block, "tests job must inherit top-level read")
         self.assertNotIn("outputs:", block, "tests job must not expose outputs")
 
-    def test_tests_job_checkout_and_workspace_exact(self):
+    def test_tests_job_checkout_at_repo_root_only(self):
         block = self._tests_block()
         for needle in (
             "actions/checkout@%s" % CHECKOUT_SHA,
-            "path: workspace/le-audio-receiver",
-            "path: workspace/nrf",
-            "ref: %s" % NRF_COMMIT,
-            "west init -l nrf",
-            "west update --narrow -o=--depth=1",
-            "west zephyr-export",
-            "git -C nrf rev-parse HEAD",
-            '"3.3.0"',
-            'zephyr_base="$GITHUB_WORKSPACE/workspace/zephyr"',
-            'printf \'ZEPHYR_BASE=%s\\n\' "$zephyr_base" >> "$GITHUB_ENV"',
+            "fetch-depth: 0",
+            "persist-credentials: false",
         ):
             self.assertIn(needle, block, "missing %r in tests job" % needle)
+        self.assertNotIn("path: workspace/le-audio-receiver", block)
+        self.assertNotIn("repository: nrfconnect/sdk-nrf", block)
+        self.assertNotIn("west init", block)
+        self.assertNotIn("west update", block)
+        self.assertNotIn("west zephyr-export", block)
 
-    def test_tests_job_tool_provisioning_exact(self):
+    def test_tests_job_nix_install_and_caches_pinned(self):
+        block = self._tests_block()
+        self.assertIn(
+            "DeterminateSystems/nix-installer-action@%s" % self.NIX_INSTALLER_SHA,
+            block,
+        )
+        self.assertIn("nix-community/cache-nix-action@%s" % self.CACHE_NIX_SHA, block)
+        self.assertIn("primary-key: nix-${{ hashFiles('flake.lock') }}", block)
+        self.assertIn("gc-max-store-size: 6G", block)
+        self.assertIn("actions/cache@%s" % self.ACTIONS_CACHE_SHA, block)
+        self.assertIn("path: /home/runner/ncs", block)
+        self.assertIn("key: ncs-v3.3.0-911f4c5c26", block)
+
+    def test_tests_job_sdk_manager_provisioning_exact(self):
         block = self._tests_block()
         for needle in (
-            'python3 -m venv "$HOME/gcovr-venv"',
-            '"$HOME/gcovr-venv/bin/python" -m pip install --no-cache-dir gcovr==8.4',
-            'test "$("$HOME/gcovr-venv/bin/gcovr" --version | head -n1)" = "gcovr 8.4"',
-            'test "$(gcov --version | head -n1)" = "gcov (GCC) 14.3.0"',
-            'printf \'%s\\n\' "$HOME/gcovr-venv/bin" >> "$GITHUB_PATH"',
+            self.SDK_MANAGER_URL,
+            self.SDK_MANAGER_SHA256,
+            "curl --fail-with-body --show-error --location --retry 3 --retry-delay 5",
+            "--connect-timeout 20 --max-time 600",
+            "sha256sum --strict -c -",
+            "--strip-components=2",
+            "$RUNNER_TEMP/nrfutil/bin",
+            'printf \'%s\\n\' "$RUNNER_TEMP/nrfutil/bin" >> "$GITHUB_PATH"',
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+        for forbidden in (
+            "sudo",
+            "curl -sL",
+            "| bash",
+            "nrfutil core",
+        ):
+            self.assertNotIn(forbidden, block, "forbidden %r in tests job" % forbidden)
+
+    def test_tests_job_ncs_install_locked_shell(self):
+        block = self._tests_block()
+        for needle in (
+            "nix develop --accept-flake-config --command bash -s <<'EOF'",
+            'nrfutil sdk-manager config install-dir set "$HOME/ncs"',
+            "nrfutil sdk-manager install v3.3.0",
+            'if [ -d "$HOME/ncs/v3.3.0/nrf" ]; then',
+            'echo "NCS v3.3.0 present (cache hit); skipping sdk-manager install"',
         ):
             self.assertIn(needle, block, "missing %r in tests job" % needle)
 
-    def test_tests_job_gcovr_isolated_in_venv(self):
-        # gcovr 8.4 must be provisioned inside an isolated venv under the
-        # container home, never into the container/system Python; the venv
-        # bin dir is exposed to later steps through $GITHUB_PATH so the
-        # canonical gate resolves the exact gcovr.
+    def test_tests_job_environment_verification_exact(self):
         block = self._tests_block()
-        self.assertNotIn(
-            "python3 -m pip install", block, "system python must not install gcovr"
-        )
-        self.assertIn('"$HOME/gcovr-venv/bin/python" -m pip install', block)
-        self.assertIn("$GITHUB_PATH", block)
+        for needle in (
+            'test "$gcovr_line" = "gcovr 8.4"',
+            'test "$gcov_line" = "gcov (GCC) 14.3.0"',
+            'test "$ZEPHYR_BASE" = "$HOME/ncs/v3.3.0/zephyr"',
+            'git -C "$HOME/ncs/v3.3.0/nrf" rev-parse HEAD',
+            NRF_COMMIT,
+            "nrf/VERSION",
+            "nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh",
+            "911f4c5c26",
+            "canonical test environment verified",
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
 
     def test_tests_job_bsim_build_fail_fast_exact(self):
         block = self._tests_block()
         for needle in (
             "BSIM_BUILD_FAIL_ASAP=1",
-            'make -C "$GITHUB_WORKSPACE/workspace/tools/bsim" everything',
-            'test -x "$GITHUB_WORKSPACE/workspace/tools/bsim/bin/bs_2G4_phy_v1"',
+            'make -C "$HOME/ncs/v3.3.0/tools/bsim" everything',
+            'test -x "$HOME/ncs/v3.3.0/tools/bsim/bin/bs_2G4_phy_v1"',
         ):
             self.assertIn(needle, block, "missing %r in tests job" % needle)
         self.assertNotIn(
@@ -626,16 +679,14 @@ class TestTestsJobContract(unittest.TestCase):
             'printf \'BSIM_LOG_ROOT=%s/bsim\\n\' "$results_dir" >> "$GITHUB_ENV"',
         ):
             self.assertIn(needle, block, "missing %r in tests job" % needle)
-        self.assertNotIn("TEST_OUTPUT_DIR: ${{", block)
+        self.assertNotIn("_github_home", block, "no container path translation")
 
     def test_tests_job_artifact_upload_always(self):
         block = self._tests_block()
         self.assertIn("actions/upload-artifact@%s" % UPLOAD_SHA, block)
         self.assertIn("if: always()", block)
         self.assertIn("name: le-audio-test-results-${{ github.sha }}", block)
-        self.assertIn(
-            "path: ${{ runner.temp }}/_github_home/le-audio-test-results", block
-        )
+        self.assertIn("path: /home/runner/le-audio-test-results", block)
         self.assertIn("if-no-files-found: warn", block)
         self.assertIn("retention-days: 7", block)
 

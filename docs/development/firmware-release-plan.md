@@ -134,29 +134,37 @@ Implementation (plan of record:
 in `.github/workflows/firmware-build.yml` runs the gate exactly once
 before `firmware` (topology `tests` → `firmware` → `release`, with
 `release` still trusted-main-only and write-capable only there).  The
-`tests` job reuses the firmware job's exact pinned runner, digest-pinned
-NCS v3.3.0 toolchain container, checkout pins, and verified west
-workspace sequence; provisions exact `gcovr==8.4` in an isolated venv
-under the container home (exposed to later steps through `$GITHUB_PATH`)
-and verifies the committed baseline's tool first lines (`gcovr 8.4`,
-`gcov (GCC) 14.3.0`);
-builds the imported BabbleSim components with fail-fast behavior
-(`BSIM_BUILD_FAIL_ASAP=1 make -C .../tools/bsim everything` plus a
-`bs_2G4_phy_v1` existence check); invokes `scripts/test-all.sh` with
-`TEST_OUTPUT_DIR` and `BSIM_LOG_ROOT` pointing at a retained output root
-outside the checkout and tees the full console output to `test-all.log`
-while preserving the gate's real exit status through `set -o pipefail`;
-and uploads the retained output with the pinned `upload-artifact` action,
-`if: always()`, 7-day retention, and `if-no-files-found: warn`.
+`tests` job runs on the plain `ubuntu-22.04` host runner inside the
+repository's locked Nix dev shell, which provides the exact flake tools
+(`gcovr 8.4`, `gcov (GCC) 14.3.0`, nrfutil core, west); the exact NCS
+v3.3.0 SDK and `911f4c5c26` toolchain are installed into `$HOME/ncs` by
+the pinned `nrfutil sdk-manager` 1.16.1 plugin (versioned URL, SHA-256
+verified before extraction, no nrfutil-core replacement).  The job
+verifies the committed baseline's tool first lines plus
+`ZEPHYR_BASE`, the exact sdk-nrf HEAD `ba167d9f3db4abbdc9b67887ca3ea66c64f2d956`,
+`nrf/VERSION` `3.3.0`, and toolchain ID `911f4c5c26`; builds the imported
+BabbleSim components with fail-fast behavior
+(`BSIM_BUILD_FAIL_ASAP=1 make -C "$HOME/ncs/v3.3.0/tools/bsim" everything`
+plus a `bs_2G4_phy_v1` existence check); invokes `scripts/test-all.sh`
+with `TEST_OUTPUT_DIR` and `BSIM_LOG_ROOT` pointing at
+`$HOME/le-audio-test-results` and tees the full console output to
+`test-all.log` while preserving the gate's real exit status through
+`set -o pipefail`; and uploads `/home/runner/le-audio-test-results` with
+the pinned `upload-artifact` action, `if: always()`, 7-day retention, and
+`if-no-files-found: warn`.
 
 Status: implementation pending hosted PR validation on PR 11.  Not
-accepted; no hosted pass is claimed.  Local focused checks pass
-(inventory 62, workflow contract 35/35, `test_coverage_runner` 34/34,
-`bsim_runner` 61/61), and the full local canonical gate on the clean
-implementation commit `ca55e9d` is **65 PASS / 0 FAIL / 65 TOTAL** with
-unchanged coverage baseline and byte-identical BSim pins.  Once PR checks
-exist, branch protection should require both `tests` and `firmware`;
-`release` stays unrequired because it skips on pull requests.
+accepted; no hosted pass is claimed.  Hosted run `31422292550` failed
+pre-gate: the Nordic container's gcovr (8.6) and gcov first lines did not
+match the committed baseline, and `firmware`/`release` were correctly
+skipped; the correction (Nix host runner) is pending hosted validation.
+Local focused checks pass (inventory 62, workflow contract 37/37,
+`test_coverage_runner` 34/34, `bsim_runner` 61/61), and the full local
+canonical gate on the clean implementation commit `ca55e9d` is
+**65 PASS / 0 FAIL / 65 TOTAL** with unchanged coverage baseline and
+byte-identical BSim pins.  Once PR checks exist, branch protection should
+require both `tests` and `firmware`; `release` stays unrequired because
+it skips on pull requests.
 
 ## Release lifecycle
 

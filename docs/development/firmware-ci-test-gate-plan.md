@@ -1,6 +1,12 @@
 # Firmware CI canonical test gate plan
 
-Status: implementation plan for PR 11. Date: 2026-08-10.
+Status: implementation plan for PR 11. Date: 2026-08-10. Corrected after the
+first hosted run: hosted run `31422292550` failed pre-gate because the Nordic
+container's gcovr (8.6) and gcov first lines did not match the committed
+baseline (`gcovr 8.4`, `gcov (GCC) 14.3.0`); `firmware` and `release` were
+correctly skipped. The tests job now runs on the plain host runner inside the
+locked Nix shell, which provides the exact flake tools. Correction pending
+hosted validation; no hosted pass is claimed.
 
 ## Goal
 
@@ -37,12 +43,13 @@ draft-release creation.
 ### In scope
 
 1. Add a distinct `tests` job to `.github/workflows/firmware-build.yml`.
-2. Use the same runner, digest-pinned Nordic toolchain container, Bash shell,
-   exact application checkout, exact sdk-nrf commit, and west initialization
-   contract as the existing firmware job.
-3. Install exact `gcovr==8.4` in the test job, verify `gcovr` and `gcov` first
-   lines, build the pinned BabbleSim components with fail-fast behavior, then
-   run `scripts/test-all.sh` once.
+2. Run the canonical gate on the plain `ubuntu-22.04` host runner inside the
+   locked repository Nix dev shell (the same flake the local gate uses), with
+   the exact NCS v3.3.0 SDK and `911f4c5c26` toolchain installed by
+   `nrfutil sdk-manager` 1.16.1.
+3. Verify exact `gcovr 8.4` and `gcov (GCC) 14.3.0` first lines, build the
+   pinned BabbleSim components with fail-fast behavior, then run
+   `scripts/test-all.sh` once.
 4. Preserve canonical test output outside the checkout and upload it with
    `if: always()` so failures remain diagnosable.
 5. Make `firmware` depend on successful `tests` completion.
@@ -84,36 +91,45 @@ tests -> firmware -> release (trusted main only)
 
 ### 2. Test workspace and prerequisites
 
-The `tests` job duplicates the existing verified checkout/workspace sequence
-rather than sharing mutable build state with `firmware`:
+The `tests` job runs on the plain `ubuntu-22.04` host runner (no Nordic
+container): the repository's locked Nix dev shell provides the exact toolchain
+tools (gcovr 8.4, gcov 14.3.0, nrfutil core, west), and `nrfutil sdk-manager`
+owns the exact NCS v3.3.0 installation. It does not share mutable build state
+with `firmware` and does not checkout sdk-nrf separately:
 
-- checkout application at `workspace/le-audio-receiver`, `fetch-depth: 0`,
-  credentials disabled;
-- checkout sdk-nrf at exact commit
-  `ba167d9f3db4abbdc9b67887ca3ea66c64f2d956`;
-- `west init -l nrf`, `west update --narrow -o=--depth=1`, and
-  `west zephyr-export`;
-- verify sdk HEAD, NCS `3.3.0`, west topdir, and Zephyr directory before
-  publishing `ZEPHYR_BASE` through `$GITHUB_ENV`.
+- checkout application at the repository root, `fetch-depth: 0`, credentials
+  disabled;
+- install Nix with the pinned `DeterminateSystems/nix-installer-action`, cache
+  the Nix store with the pinned `nix-community/cache-nix-action` keyed from
+  `flake.lock` with a bounded `gc-max-store-size` (6G, grounded in the measured
+  dev-shell closure), and cache `/home/runner/ncs` with the pinned
+  `actions/cache` keyed `ncs-v3.3.0-911f4c5c26`;
+- provision `nrfutil sdk-manager` 1.16.1 only: download the exact versioned
+  URL with `curl --fail-with-body --show-error --location` and bounded
+  retries/timeouts, verify the exact SHA-256 before extraction, extract with
+  `--strip-components=2` to `$RUNNER_TEMP/nrfutil/bin`, verify the executable,
+  and append that bin to `$GITHUB_PATH`. nrfutil core is never downloaded or
+  replaced; the locked Nix shell provides it;
+- install the SDK through the locked shell, setting the install directory on
+  every run and installing only on cache miss:
+  `nrfutil sdk-manager config install-dir set "$HOME/ncs"` then, when
+  `$HOME/ncs/v3.3.0/nrf` is absent, `nrfutil sdk-manager install v3.3.0`;
+- verify through the locked shell and fail closed: `gcovr` first line `gcovr 8.4`,
+  `gcov` first line `gcov (GCC) 14.3.0`, `ZEPHYR_BASE` resolves to
+  `$HOME/ncs/v3.3.0/zephyr` (the shell hook derives it from the sdk-manager
+  toolchain env with a `$HOME/ncs` fallback), sdk-nrf HEAD is exactly
+  `ba167d9f3db4abbdc9b67887ca3ea66c64f2d956`, `nrf/VERSION` is exactly `3.3.0`,
+  and `nrfutil sdk-manager toolchain env --ncs-version v3.3.0` output contains
+  toolchain ID/path `911f4c5c26`.
 
-Provision `gcovr==8.4` in an isolated virtual environment under the container
-home (`python3 -m venv "$HOME/gcovr-venv"`, install with the venv python),
-never into the container/system Python. Verify the exact venv executable's
-first line and the toolchain `gcov` first line, then append the venv `bin`
-directory to `$GITHUB_PATH` so `scripts/test-all.sh` resolves the exact gcovr
-in the gate step. Do not alter the firmware job or repository dependencies.
-Verify:
-
-```text
-gcovr 8.4
-gcov (GCC) 14.3.0
-```
+The committed baseline intentionally requires the Nix-flake tools; weakening
+tool-version enforcement or changing the baseline is forbidden.
 
 Build imported BabbleSim components before the gate:
 
 ```bash
-BSIM_BUILD_FAIL_ASAP=1 make -C "$GITHUB_WORKSPACE/workspace/tools/bsim" everything
-test -x "$GITHUB_WORKSPACE/workspace/tools/bsim/bin/bs_2G4_phy_v1"
+BSIM_BUILD_FAIL_ASAP=1 make -C "$HOME/ncs/v3.3.0/tools/bsim" everything
+test -x "$HOME/ncs/v3.3.0/tools/bsim/bin/bs_2G4_phy_v1"
 ```
 
 No component build failure may be normalized by BabbleSim's default
@@ -130,17 +146,13 @@ Add optional output-root support without changing gate discovery or results:
   directory. When set, it must use that directory instead of `mktemp`, refuse
   a nonempty destination, preserve logs, and never delete caller-owned output.
   Existing local behavior remains unchanged when unset.
-- CI invokes the gate with both variables pointing at `$HOME/le-audio-test-results`
-  (the container home): GitHub mounts the job home from the host runner temp
-  tree at `${{ runner.temp }}/_github_home`, so the retained root is
-  runner-temp-owned on the host while still satisfying the committed coverage
-  runner's `/tmp`-or-`$HOME` output containment. Full console output is teed
-  to `test-all.log` while preserving the gate's real exit status through
-  `set -o pipefail`.
-- Upload `${{ runner.temp }}/_github_home/le-audio-test-results/` (the
-  container's `$HOME` reached through the runner temp mount) with the already
-  pinned `actions/upload-artifact` action, `if: always()`, seven-day retention,
-  and `if-no-files-found: warn`.
+- CI invokes the gate through the locked shell with both variables pointing
+  at `$HOME/le-audio-test-results` (the host runner home; no container path
+  translation). Full console output is teed to `test-all.log` while
+  preserving the gate's real exit status through `set -o pipefail`.
+- Upload `/home/runner/le-audio-test-results/` with the already pinned
+  `actions/upload-artifact` action, `if: always()`, seven-day retention, and
+  `if-no-files-found: warn`.
 
 Expected retained evidence:
 
@@ -152,9 +164,14 @@ Expected retained evidence:
 
 Extend `scripts/test_firmware_build_ci.py` to prove public workflow behavior:
 
-- exactly one `tests` job exists and uses the pinned runner/container/shell;
-- test checkout and NCS initialization retain exact pins and identity checks;
-- exact gcovr/gcov checks and fail-fast BabbleSim build exist;
+- exactly one `tests` job exists, on the host runner (no container) with the
+  pinned runner/shell and read-only permissions;
+- checkout at the repository root only, with the exact Nix installer, Nix
+  store cache, and NCS cache pins;
+- exact sdk-manager 1.16.1 provisioning (versioned URL, SHA-256 before
+  extraction, no sudo, no pipe-to-shell) and locked-shell NCS install;
+- exact gcovr/gcov/ZEPHYR_BASE/sdk-HEAD/VERSION/toolchain-ID verification and
+  fail-fast BabbleSim build exist;
 - canonical invocation is `scripts/test-all.sh`, not copied suite lists;
 - test artifacts upload with `if: always()`;
 - `firmware` has `needs: tests`;
@@ -196,7 +213,9 @@ command remains:
 Expected gate result is `65 PASS / 0 FAIL / 65 TOTAL` with unchanged coverage
 baseline and BSim pins. Hosted PR acceptance requires observable ordering:
 
-1. `tests` starts and passes.
+1. `tests` starts and passes (the first hosted attempt, run `31422292550`,
+   failed pre-gate on the incompatible container gcov first-line assertion
+   and must not be counted as a pass).
 2. `firmware` starts only after `tests` passes.
 3. Pull request never runs `release`.
 4. The executable workflow contract in `scripts/test_firmware_build_ci.py`
