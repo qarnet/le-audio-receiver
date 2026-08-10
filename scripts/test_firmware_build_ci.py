@@ -87,6 +87,25 @@ def run_scripts():
     return scripts
 
 
+def job_block(name):
+    """Text of one top-level job block (between its header and the next
+    job header or top-level key), or AssertionError when the job is
+    missing."""
+    text = workflow_text()
+    marker = re.search(r"(?ms)^  %s:\s*\n" % re.escape(name), text)
+    if marker is None:
+        raise AssertionError("%s job missing" % name)
+    start = marker.end()
+    tail = text[start:]
+    # Job headers sit at exactly two-space indent; any other top-level key
+    # starts at column 0.  Stop at whichever comes first.
+    m = re.search(r"(?m)^(?:[^\s]|  [A-Za-z_][A-Za-z0-9_]*:\s*$)", tail)
+    end = len(tail)
+    if m is not None:
+        end = m.start()
+    return text[start : start + end]
+
+
 class TestProjectVersionCli(unittest.TestCase):
     """Tests 1-4: version reader observable behavior."""
 
@@ -323,9 +342,9 @@ class TestWorkflowContract(unittest.TestCase):
         ]
         self.assertEqual(
             len(uses_lines),
-            5,
-            "expected two checkouts, one upload, one download, and one "
-            "release checkout",
+            8,
+            "expected five checkouts (firmware, tests, release), two "
+            "uploads (firmware, tests), and one download (release)",
         )
 
 
@@ -508,22 +527,118 @@ class TestWorkflowArtifactContract(unittest.TestCase):
         self.assertNotIn("dist/*", text, "wildcard upload path forbidden")
 
 
+class TestTestsJobContract(unittest.TestCase):
+    """Canonical software test gate (PR 11): the `tests` job must be the
+    single mandatory pre-build gate, pinned identically to the firmware
+    job, invoked as scripts/test-all.sh, and always uploading its retained
+    output."""
+
+    def _tests_block(self):
+        text = workflow_text()
+        self.assertEqual(
+            len(re.findall(r"(?m)^  tests:\s*$", text)),
+            1,
+            "exactly one tests job must exist",
+        )
+        return job_block("tests")
+
+    def test_tests_job_pinned_runner_container_and_shell(self):
+        block = self._tests_block()
+        self.assertIn("runs-on: ubuntu-22.04", block)
+        self.assertIn(CONTAINER_IMAGE, block)
+        self.assertIn("timeout-minutes: 240", block)
+        self.assertIn("shell: bash", block)
+        self.assertNotIn("contents: write", block, "tests job must stay read-only")
+        self.assertNotIn("permissions:", block, "tests job must inherit top-level read")
+        self.assertNotIn("outputs:", block, "tests job must not expose outputs")
+
+    def test_tests_job_checkout_and_workspace_exact(self):
+        block = self._tests_block()
+        for needle in (
+            "actions/checkout@%s" % CHECKOUT_SHA,
+            "path: workspace/le-audio-receiver",
+            "path: workspace/nrf",
+            "ref: %s" % NRF_COMMIT,
+            "west init -l nrf",
+            "west update --narrow -o=--depth=1",
+            "west zephyr-export",
+            "git -C nrf rev-parse HEAD",
+            '"3.3.0"',
+            'zephyr_base="$GITHUB_WORKSPACE/workspace/zephyr"',
+            'printf \'ZEPHYR_BASE=%s\\n\' "$zephyr_base" >> "$GITHUB_ENV"',
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+
+    def test_tests_job_tool_provisioning_exact(self):
+        block = self._tests_block()
+        for needle in (
+            "python3 -m pip install --no-cache-dir gcovr==8.4",
+            'test "$(gcovr --version | head -n1)" = "gcovr 8.4"',
+            'test "$(gcov --version | head -n1)" = "gcov (GCC) 14.3.0"',
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+
+    def test_tests_job_bsim_build_fail_fast_exact(self):
+        block = self._tests_block()
+        for needle in (
+            "BSIM_BUILD_FAIL_ASAP=1",
+            'make -C "$GITHUB_WORKSPACE/workspace/tools/bsim" everything',
+            'test -x "$GITHUB_WORKSPACE/workspace/tools/bsim/bin/bs_2G4_phy_v1"',
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+        self.assertNotIn(
+            "make -C", block.split("BSIM_BUILD_FAIL_ASAP=1")[0], "fail-fast must be set"
+        )
+
+    def test_tests_job_gate_invocation_is_test_all_sh(self):
+        block = self._tests_block()
+        self.assertIn("Run canonical test gate", block)
+        self.assertIn("./scripts/test-all.sh", block)
+        self.assertIn("set -o pipefail", block)
+        self.assertIn('tee "$TEST_OUTPUT_DIR/test-all.log"', block)
+        # The gate is the shared suite-discovery script, never a copied
+        # suite list: the tests job must not build suites directly.
+        self.assertNotIn("west build", block, "suite lists must not be copied")
+        gate_marker = "Run canonical test gate"
+        gate_body = block.split(gate_marker, 1)[1]
+        self.assertIn("TEST_OUTPUT_DIR", gate_body)
+        self.assertNotIn("--twister", gate_body, "gate must not enumerate suites")
+
+    def test_tests_job_output_root_under_home(self):
+        block = self._tests_block()
+        for needle in (
+            'results_dir="$HOME/le-audio-test-results"',
+            'printf \'TEST_OUTPUT_DIR=%s\\n\' "$results_dir" >> "$GITHUB_ENV"',
+            'printf \'BSIM_LOG_ROOT=%s/bsim\\n\' "$results_dir" >> "$GITHUB_ENV"',
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+        self.assertNotIn("TEST_OUTPUT_DIR: ${{", block)
+
+    def test_tests_job_artifact_upload_always(self):
+        block = self._tests_block()
+        self.assertIn("actions/upload-artifact@%s" % UPLOAD_SHA, block)
+        self.assertIn("if: always()", block)
+        self.assertIn("name: le-audio-test-results-${{ github.sha }}", block)
+        self.assertIn(
+            "path: ${{ runner.temp }}/_github_home/le-audio-test-results", block
+        )
+        self.assertIn("if-no-files-found: warn", block)
+        self.assertIn("retention-days: 7", block)
+
+    def test_firmware_needs_tests(self):
+        block = job_block("firmware")
+        self.assertIn("needs: tests", block, "firmware must wait for tests")
+
+
 class TestReleaseJobContract(unittest.TestCase):
     """FR3 tests 9+: trusted-main automatic draft-release job static
     contract."""
 
+    def _job_block(self, name):
+        return job_block(name)
+
     def _release_block(self):
-        text = workflow_text()
-        marker = re.search(r"(?ms)^  release:\s*\n", text)
-        if marker is None:
-            raise AssertionError("release job missing")
-        start = marker.end()
-        tail = text[start:]
-        m = re.search(r"(?m)^\S", tail)
-        end = len(tail)
-        if m is not None:
-            end = m.start()
-        return text[start : start + end]
+        return self._job_block("release")
 
     def test_release_job_guard_and_topology(self):
         block = self._release_block()

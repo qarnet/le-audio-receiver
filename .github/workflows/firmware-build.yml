@@ -15,7 +15,83 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  tests:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+    container:
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:f24d8932ff081ebcd8da9c248f4449bdabe461c0620a7a4ac9e95eb577ba2276
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: workspace/le-audio-receiver
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout sdk-nrf
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: nrfconnect/sdk-nrf
+          ref: ba167d9f3db4abbdc9b67887ca3ea66c64f2d956
+          path: workspace/nrf
+          persist-credentials: false
+      - name: Initialize NCS workspace
+        working-directory: ${{ github.workspace }}/workspace
+        run: |
+          test "$(git -C nrf rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
+          test "$(tr -d '\r\n' < nrf/VERSION)" = "3.3.0"
+          west init -l nrf
+          west update --narrow -o=--depth=1
+          west zephyr-export
+          test "$(git -C nrf rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
+          test "$(tr -d '\r\n' < nrf/VERSION)" = "3.3.0"
+          test "$(west topdir)" = "$GITHUB_WORKSPACE/workspace"
+          zephyr_base="$GITHUB_WORKSPACE/workspace/zephyr"
+          test -d "$zephyr_base"
+          printf 'ZEPHYR_BASE=%s\n' "$zephyr_base" >> "$GITHUB_ENV"
+      - name: Provision canonical test tools
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: |
+          python3 -m pip install --no-cache-dir gcovr==8.4
+          test "$(gcovr --version | head -n1)" = "gcovr 8.4"
+          test "$(gcov --version | head -n1)" = "gcov (GCC) 14.3.0"
+      - name: Build BabbleSim components
+        working-directory: ${{ github.workspace }}/workspace
+        run: |
+          BSIM_BUILD_FAIL_ASAP=1 make -C "$GITHUB_WORKSPACE/workspace/tools/bsim" everything
+          test -x "$GITHUB_WORKSPACE/workspace/tools/bsim/bin/bs_2G4_phy_v1"
+      - name: Prepare canonical test output root
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: |
+          # The committed coverage runner only accepts output under /tmp or
+          # $HOME; GitHub mounts the job home (</github/home>) from the
+          # runner temp tree, so the retained root under $HOME is still
+          # runner-temp-owned on the host.
+          results_dir="$HOME/le-audio-test-results"
+          mkdir -p "$results_dir/bsim"
+          printf 'TEST_OUTPUT_DIR=%s\n' "$results_dir" >> "$GITHUB_ENV"
+          printf 'BSIM_LOG_ROOT=%s/bsim\n' "$results_dir" >> "$GITHUB_ENV"
+      - name: Run canonical test gate
+        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        run: |
+          set -o pipefail
+          ./scripts/test-all.sh 2>&1 | tee "$TEST_OUTPUT_DIR/test-all.log"
+      - name: Upload test results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: le-audio-test-results-${{ github.sha }}
+          # The upload action runs inside the container and reaches the
+          # results root (the container's $HOME) through the runner temp
+          # mount at <runner.temp>/_github_home.
+          path: ${{ runner.temp }}/_github_home/le-audio-test-results
+          if-no-files-found: warn
+          retention-days: 7
+
   firmware:
+    needs: tests
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     container:

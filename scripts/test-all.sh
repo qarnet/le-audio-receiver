@@ -22,6 +22,13 @@
 # exec-only + 22 Python = 62 unit children; the canonical gate is 65
 # children (62 + coverage + matrix + BSim).
 #
+# Optional external output root: TEST_OUTPUT_DIR.  When set to an absolute
+# directory outside the repository, coverage reports are retained at
+# $TEST_OUTPUT_DIR/coverage instead of the private mktemp root (which still
+# holds all build trees and is still removed on exit).  When unset, the
+# historical mktemp behavior is unchanged.  CI sets it under the runner's
+# temp tree so failures remain diagnosable from uploaded artifacts.
+#
 # Required: NCS v3.3.0 dev shell (nix develop / direnv allow).
 #   ZEPHYR_BASE must be set. BabbleSim dependencies must be provisioned;
 #   scripts/bsim-stage1-run.sh derives BSIM_OUT_PATH via scripts/bsim-env.sh.
@@ -43,8 +50,40 @@ FAILURES=0
 PASSES=0
 TOTAL=0
 TMP_ROOT=""
+TEST_OUTPUT_DIR="${TEST_OUTPUT_DIR:-}"
+COVERAGE_DIR=""
 
 die() { echo "FATAL: $*" >&2; exit 1; }
+
+validate_test_output_dir() {
+    # TEST_OUTPUT_DIR (optional): absolute directory outside the repository
+    # for retained canonical gate output; coverage lands in
+    # $TEST_OUTPUT_DIR/coverage.  Never accept empty/root/home/relative
+    # paths, paths inside the repository, paths that contain it, or paths
+    # that alias it.  Runs before any suite, so a bad root fails fast.
+    [ -n "$TEST_OUTPUT_DIR" ] || return 0
+    case "$TEST_OUTPUT_DIR" in
+        /*) : ;;
+        *) die "TEST_OUTPUT_DIR must be an absolute path: $TEST_OUTPUT_DIR" ;;
+    esac
+    [ "$TEST_OUTPUT_DIR" != "/" ] || die "TEST_OUTPUT_DIR must not be /"
+    [ "$TEST_OUTPUT_DIR" != "$HOME" ] || \
+        die "TEST_OUTPUT_DIR must not be the home directory: $TEST_OUTPUT_DIR"
+    local canon repo_canon
+    canon="$(realpath -m "$TEST_OUTPUT_DIR")" || \
+        die "cannot canonicalize TEST_OUTPUT_DIR: $TEST_OUTPUT_DIR"
+    repo_canon="$(realpath -m "$REPO_ROOT")" || \
+        die "cannot canonicalize repository root: $REPO_ROOT"
+    [ "$canon" != "/" ] || die "TEST_OUTPUT_DIR must not be /"
+    [ "$canon" != "$repo_canon" ] || \
+        die "TEST_OUTPUT_DIR must not be the repository root: $TEST_OUTPUT_DIR"
+    case "$canon" in
+        "$repo_canon"/*) die "TEST_OUTPUT_DIR must not be inside the repository: $TEST_OUTPUT_DIR" ;;
+    esac
+    case "$repo_canon" in
+        "$canon"/*) die "TEST_OUTPUT_DIR must not contain the repository root: $TEST_OUTPUT_DIR" ;;
+    esac
+}
 
 inventory() { # flag -> stdout lines (one per line)
     python3 "$SCRIPT_DIR/test_inventory.py" "$@" || die "test_inventory.py $* failed"
@@ -137,16 +176,18 @@ run_python_suites() {
 # ---------- coverage (T7): rebuilds all native C suites, enforces baseline ----------
 run_coverage() {
     # Enforces the committed tests/coverage-baseline.json (default mode);
-    # requires a clean worktree.  Writes reports into $TMP_ROOT/coverage.
+    # requires a clean worktree.  Writes reports into $COVERAGE_DIR (the
+    # TEST_OUTPUT_DIR/coverage subtree when TEST_OUTPUT_DIR is set, else
+    # the private mktemp root).
     run_one "coverage: native suites + baseline" \
-        bash "$SCRIPT_DIR/test-coverage.sh" --output "$TMP_ROOT/coverage" || true
+        bash "$SCRIPT_DIR/test-coverage.sh" --output "$COVERAGE_DIR" || true
 }
 
 # ---------- test-matrix checker (T7): consumes the coverage run ----------
 run_matrix_check() {
     run_one "matrix: manifest + coverage.json" \
         python3 "$SCRIPT_DIR/check-test-matrix.py" --repo-root "$REPO_ROOT" \
-            --coverage-json "$TMP_ROOT/coverage/coverage.json" || true
+            --coverage-json "$COVERAGE_DIR/coverage.json" || true
 }
 
 # ---------- BSim Stage 1 ----------
@@ -163,9 +204,20 @@ printf '=== le-audio-receiver full local gate ===\n'
 printf 'Repo: %s\n' "$REPO_ROOT"
 printf '\n'
 
+validate_test_output_dir
+if [ -n "$TEST_OUTPUT_DIR" ]; then
+    printf 'TEST_OUTPUT_DIR=%s (coverage -> %s/coverage)\n' \
+        "$TEST_OUTPUT_DIR" "$TEST_OUTPUT_DIR"
+fi
 resolve_ncs
 TMP_ROOT="$(mktemp -d)" || die "mktemp failed"
 trap 'rm -rf "$TMP_ROOT"' EXIT
+
+if [ -n "$TEST_OUTPUT_DIR" ]; then
+    COVERAGE_DIR="$TEST_OUTPUT_DIR/coverage"
+else
+    COVERAGE_DIR="$TMP_ROOT/coverage"
+fi
 
 cd "$REPO_ROOT"
 

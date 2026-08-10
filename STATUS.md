@@ -35,6 +35,40 @@
 > (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
 > for their own commits.
 
+## Firmware CI — canonical test gate (PR 11, 2026-08-10)
+
+**Hosted software gate implementation — PENDING PR VALIDATION, not
+accepted.**  PR 11 (`feature/firmware-release-acceptance`) adds a distinct
+`tests` job to `.github/workflows/firmware-build.yml` as the canonical
+65-child software gate that `firmware` (and therefore `release`) must
+wait for: `tests` → `firmware` → `release` (trusted main only).  The
+`tests` job uses the same pinned ubuntu-22.04 runner, digest-pinned NCS
+v3.3.0 toolchain container, exact application/sdk-nrf checkouts, and
+verified west workspace sequence as the firmware job; installs exact
+`gcovr==8.4` and verifies the committed baseline tool first lines
+(`gcovr 8.4`, `gcov (GCC) 14.3.0`); builds the imported BabbleSim
+components with `BSIM_BUILD_FAIL_ASAP=1 make -C .../tools/bsim everything`
+and verifies `bs_2G4_phy_v1`; runs `scripts/test-all.sh` exactly once
+with the gate's real exit status preserved through `set -o pipefail` and
+full console output teed to `test-all.log`; and uploads the retained
+output with the pinned `upload-artifact` action, `if: always()`, 7-day
+retention, `if-no-files-found: warn`.  The retained root lives under the
+container `$HOME` (GitHub mounts the job home from `<runner.temp>/_github_home`)
+because the committed coverage runner only accepts output canonically
+under `/tmp` or `$HOME`; the upload action reaches the same directory
+through the runner temp mount.  `scripts/test-all.sh` gained optional
+`TEST_OUTPUT_DIR` (coverage → `$TEST_OUTPUT_DIR/coverage`) and
+`scripts/bsim-stage1-run.sh` gained optional `BSIM_LOG_ROOT` (caller-owned
+logs, always preserved, never deleted, nonempty destination refused);
+both keep historical mktemp behavior when unset.  Workflow contract
+tests in `scripts/test_firmware_build_ci.py` pin the topology, pins,
+provisioning, invocation, artifact retention, and release trust boundary;
+focused fixture tests cover the new output-root validation without real
+Zephyr or BabbleSim builds.  Local focused checks pass (inventory **62**,
+workflow contract 34/34, `test_coverage_runner` 34/34, `bsim_runner`
+61/61).  No hosted run exists yet; no hosted pass is claimed.  Plan of
+record: `docs/development/firmware-ci-test-gate-plan.md`.
+
 ## Firmware release — FR4 BLOCKED (2026-08-10)
 
 **FR4 — exact-artifact hardware acceptance — BLOCKED, not accepted**:

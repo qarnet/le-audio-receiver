@@ -120,6 +120,40 @@ floating tag. In the CI job:
 
 Do not install J-Link in build-only CI.
 
+## Canonical software test gate in CI (PR 11)
+
+Every pull request and every protected `main` merge must pass the
+repository's canonical software gate (currently 65 children: 62 unit
+suites plus coverage-baseline enforcement, test-matrix validation, and
+BabbleSim Stage 1) before either production receiver firmware build can
+start.  A failed test gate must prevent firmware packaging, artifact
+upload, and draft-release creation.
+
+Implementation (plan of record:
+`docs/development/firmware-ci-test-gate-plan.md`): a distinct `tests` job
+in `.github/workflows/firmware-build.yml` runs the gate exactly once
+before `firmware` (topology `tests` → `firmware` → `release`, with
+`release` still trusted-main-only and write-capable only there).  The
+`tests` job reuses the firmware job's exact pinned runner, digest-pinned
+NCS v3.3.0 toolchain container, checkout pins, and verified west
+workspace sequence; provisions exact `gcovr==8.4` and verifies the
+committed baseline's tool first lines (`gcovr 8.4`, `gcov (GCC) 14.3.0`);
+builds the imported BabbleSim components with fail-fast behavior
+(`BSIM_BUILD_FAIL_ASAP=1 make -C .../tools/bsim everything` plus a
+`bs_2G4_phy_v1` existence check); invokes `scripts/test-all.sh` with
+`TEST_OUTPUT_DIR` and `BSIM_LOG_ROOT` pointing at a retained output root
+outside the checkout and tees the full console output to `test-all.log`
+while preserving the gate's real exit status through `set -o pipefail`;
+and uploads the retained output with the pinned `upload-artifact` action,
+`if: always()`, 7-day retention, and `if-no-files-found: warn`.
+
+Status: implementation pending hosted PR validation on PR 11.  Not
+accepted; no hosted pass is claimed.  Local focused checks pass
+(inventory 62, workflow contract 34/34, `test_coverage_runner` 34/34,
+`bsim_runner` 61/61).  Once PR checks exist, branch protection should
+require both `tests` and `firmware`; `release` stays unrequired because
+it skips on pull requests.
+
 ## Release lifecycle
 
 - Pull requests and manual dispatch build and upload workflow artifacts.
