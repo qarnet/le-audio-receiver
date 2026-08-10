@@ -92,7 +92,8 @@ canonical gate **65 PASS / 0 FAIL / 65 TOTAL** (35 twister + 5 exec-only +
 coverage unchanged (population 36, 4674/5130 L, 2030/2824 B, 358/358 F),
 BSim pins byte-identical.  Evidence:
 `docs/development/firmware-release-fr3-results.md`; plan:
-`docs/development/firmware-release-plan.md`.  FR4-FR5 remain planned.
+`docs/development/firmware-release-plan.md`.  At FR3 closeout, FR4-FR5
+remained planned; see the current FR4 BLOCKED section above.
 
 ## User pairing control — P1 ACCEPTED (2026-08-07)
 

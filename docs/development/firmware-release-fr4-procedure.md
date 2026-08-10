@@ -16,13 +16,16 @@ hardware acceptance of draft release `367572702` (`v0.1.0`, target
 validation, extraction, no-recovery flashing, autonomous streaming, and
 evidence retention for both receiver targets.
 
-Hardware execution requires explicit user approval after the FR4 tooling
-commit is reviewed. Until that approval, nothing below is run.
+Hardware execution for this procedure required explicit user approval
+after the FR4 tooling commit was reviewed; approval was received for the
+2026-08-10 run against exact draft `v0.1.0`.  Future hardware execution
+still requires fresh explicit approval.
 
 ## 1. Safety and phase boundary
 
-- Hardware execution requires explicit user approval after the FR4
-  tooling commit is reviewed.
+- Hardware execution required explicit user approval after the FR4
+  tooling commit was reviewed; approval was received for the 2026-08-10
+  run. Future hardware execution still requires fresh explicit approval.
 - Flashing replaces firmware on both receiver targets. No mass erase,
   nRF53 recovery, settings erase, probe-rs, release publication, or tag
   action is ever performed by this procedure.

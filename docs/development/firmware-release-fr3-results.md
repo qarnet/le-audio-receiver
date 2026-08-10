@@ -126,7 +126,8 @@ Run URL form:
 
 ## Status
 
-FR3 `ACCEPTED`.  FR4-FR5 remain planned in
-`docs/development/firmware-release-plan.md`.  FR3 created a private,
-unpublished, untagged draft release only; no git tag, published binary,
-hardware acceptance, MCUboot, or DFU exists yet.
+FR3 `ACCEPTED`.  At FR3 closeout, FR4-FR5 remained planned in
+`docs/development/firmware-release-plan.md`; the current FR4 state is
+BLOCKED, see `docs/development/firmware-release-fr4-results.md`.  FR3
+created a private, unpublished, untagged draft release only; no git tag,
+published binary, hardware acceptance, MCUboot, or DFU exists yet.

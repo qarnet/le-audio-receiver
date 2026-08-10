@@ -183,7 +183,8 @@ own evidence.
 **FR1 ACCEPTED (2026-08-09)** at implementation commit `f3cd4c4`, with the
 review-fix correction commit `1671a9f` (`fix: handle firmware packaging I/O
 failures`); evidence in
-`docs/development/firmware-release-fr1-results.md`.  FR4-FR5 remain planned.
+`docs/development/firmware-release-fr1-results.md`.  At this phase
+closeout, FR4-FR5 remained planned.
 
 Add deterministic, stdlib-only packaging logic plus public-boundary tests. No
 CI and no version choice yet. Packager takes version, commit, NCS version,
@@ -197,8 +198,8 @@ byte-identical ZIP output.
 correction commits `117bc92` (`fix: upload packaged firmware from workspace`)
 and `75a8093` (`fix: export Zephyr workspace to firmware builds`); successful
 GitHub-hosted run `31326612845` (job `93277895593`) at PR head `75a8093`;
-evidence in `docs/development/firmware-release-fr2-results.md`.  FR4-FR5
-remain planned.
+evidence in `docs/development/firmware-release-fr2-results.md`.  At this
+phase closeout, FR4-FR5 remained planned.
 
 Add pinned-container GitHub Actions build, exact NCS workspace setup, both
 production receiver builds, build-contract verification, package generation,
@@ -223,8 +224,8 @@ auto-publishes.
 (`fix: verify untagged draft releases`), and `2532fea`
 (`fix: detect existing draft releases`); successful one-shot draft creation
 at trusted-main target `3d9a918...`; accepted merged state `b70b978...`;
-evidence in `docs/development/firmware-release-fr3-results.md`.  FR4-FR5
-remain planned.
+evidence in `docs/development/firmware-release-fr3-results.md`.  At this
+phase closeout, FR4-FR5 remained planned.
 
 ### FR4: exact-artifact hardware acceptance
 
