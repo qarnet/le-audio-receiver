@@ -123,6 +123,14 @@ uint32_t audio_iso_seq_get_resyncs(const struct audio_iso_seq *st)
  * in uint64_t for any uint32_t timestamp delta / interval combination,
  * so the "cannot be represented safely" resync condition is inherently
  * satisfied by the wide arithmetic (kept as a documented guard).
+ *
+ * The off-grid tolerance is clock/span-scaled (ISO_TS_BASE_TOLERANCE_US
+ * + combined-SCA drift over the spanned events, capped at a quarter
+ * interval), because SW Split peripheral ISO RX timestamps derive from
+ * a local RTC/radio-timer anchor measurement plus nominal ISO-interval
+ * corrections and their error grows with the elapsed event span.  The
+ * exact RESYNC reason and the computed evidence are recorded in the
+ * optional observation for structured classification.
  */
 
 void audio_iso_cadence_reset(struct audio_iso_cadence *st)
@@ -133,12 +141,24 @@ void audio_iso_cadence_reset(struct audio_iso_cadence *st)
 	memset(st, 0, sizeof(*st));
 }
 
-enum audio_iso_cadence_result audio_iso_cadence_update(struct audio_iso_cadence *st, bool has_ts,
-						       uint32_t ts, uint32_t interval_us,
-						       uint32_t *omitted)
+/* Saturated narrowing for observation fields (diagnostic only). */
+static uint32_t u32_sat_u64(uint64_t v)
+{
+	return v > (uint64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)v;
+}
+
+enum audio_iso_cadence_result
+audio_iso_cadence_update(struct audio_iso_cadence *st, bool has_ts, uint32_t ts,
+			 uint32_t interval_us, uint32_t *omitted,
+			 struct audio_iso_cadence_observation *observation)
 {
 	if (omitted != NULL) {
 		*omitted = 0U;
+	}
+	if (observation != NULL) {
+		/* Every call zeroes the observation; the reason stays
+		 * REASON_NONE unless this call classifies as RESYNC. */
+		memset(observation, 0, sizeof(*observation));
 	}
 	if (st == NULL) {
 		return AUDIO_ISO_CADENCE_RES_FIRST;
@@ -159,6 +179,9 @@ enum audio_iso_cadence_result audio_iso_cadence_update(struct audio_iso_cadence 
 		/* No grid to measure against: explicit counted outcome,
 		 * no synthesis, initialization state untouched. */
 		st->resyncs++;
+		if (observation != NULL) {
+			observation->reason = AUDIO_ISO_CADENCE_REASON_ZERO_INTERVAL;
+		}
 		return AUDIO_ISO_CADENCE_RES_RESYNC;
 	}
 
@@ -195,16 +218,45 @@ enum audio_iso_cadence_result audio_iso_cadence_update(struct audio_iso_cadence 
 	const uint64_t event_count =
 		(delta_us + (uint64_t)interval_us / 2U) / (uint64_t)interval_us;
 
+	/* Clock/span-scaled tolerance: 32 us base (one 32768 Hz tick plus
+	 * capture quantization) plus the combined worst-case SCA drift
+	 * (1000 ppm) over the spanned events, capped at a quarter
+	 * interval so the nearest-integer event count can never approach
+	 * half-interval ambiguity.  The drift budget is a ceil division;
+	 * for tiny intervals where interval_us / 4 == 0 the cap makes the
+	 * tolerance exactly zero (no underflow). */
+	const uint64_t drift_budget_us =
+		(event_count * (uint64_t)interval_us * (uint64_t)ISO_TS_MAX_COMBINED_SCA_PPM +
+		 999999U) /
+		1000000U;
+	const uint64_t raw_tolerance_us = (uint64_t)ISO_TS_BASE_TOLERANCE_US + drift_budget_us;
+	const uint64_t ambiguity_cap_us = (uint64_t)interval_us / 4U;
+	const uint64_t tolerance_us =
+		raw_tolerance_us < ambiguity_cap_us ? raw_tolerance_us : ambiguity_cap_us;
+
+	if (observation != NULL) {
+		observation->delta_us = u32_sat_u64(delta_us);
+		observation->delivered_positions = u32_sat_u64(delivered);
+		observation->event_count = u32_sat_u64(event_count);
+		observation->tolerance_us = u32_sat_u64(tolerance_us);
+	}
+
 	/* Unresolvable cadence: counted resync, no synthesis. */
 	if (event_count == 0U) {
 		/* Duplicate timestamp (ts == last_ts): zero event advance. */
 		st->resyncs++;
+		if (observation != NULL) {
+			observation->reason = AUDIO_ISO_CADENCE_REASON_ZERO_ADVANCE;
+		}
 		return AUDIO_ISO_CADENCE_RES_RESYNC;
 	}
 	if (event_count < delivered) {
 		/* More delivered positions than grid events: cannot be a
 		 * real omission. */
 		st->resyncs++;
+		if (observation != NULL) {
+			observation->reason = AUDIO_ISO_CADENCE_REASON_DELIVERED_GT_EVENTS;
+		}
 		return AUDIO_ISO_CADENCE_RES_RESYNC;
 	}
 	{
@@ -212,9 +264,16 @@ enum audio_iso_cadence_result audio_iso_cadence_update(struct audio_iso_cadence 
 		const uint64_t err =
 			delta_us > nearest_us ? delta_us - nearest_us : nearest_us - delta_us;
 
-		if (err > (uint64_t)ISO_TS_DELTA_TOLERANCE_US) {
-			/* Non-integral forward delta beyond tolerance. */
+		if (observation != NULL) {
+			observation->error_us = u32_sat_u64(err);
+		}
+		if (err > tolerance_us) {
+			/* Non-integral forward delta beyond the scaled
+			 * clock/span tolerance. */
 			st->resyncs++;
+			if (observation != NULL) {
+				observation->reason = AUDIO_ISO_CADENCE_REASON_DELTA_OFF_GRID;
+			}
 			return AUDIO_ISO_CADENCE_RES_RESYNC;
 		}
 	}
@@ -228,6 +287,9 @@ enum audio_iso_cadence_result audio_iso_cadence_update(struct audio_iso_cadence 
 	if (omitted64 > (uint64_t)ISO_SEQ_MAX_CONCEAL) {
 		/* Beyond the concealment bound: discontinuity, not a burst. */
 		st->resyncs++;
+		if (observation != NULL) {
+			observation->reason = AUDIO_ISO_CADENCE_REASON_OVER_BOUND;
+		}
 		return AUDIO_ISO_CADENCE_RES_RESYNC;
 	}
 

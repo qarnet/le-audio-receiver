@@ -190,7 +190,13 @@ config AUDIO_ISO_SEQ_MAX_CONCEAL
 	  HCI packet sequence numbers and reports the omitted count when
 	  the next callback's Packet_Sequence_Number jumps; audio_iso_cadence
 	  tracks delivered ISO timestamps and reports the omitted count
-	  when the timestamp advances by more than the SDU interval.  Note
+	  when the timestamp advances by more than the SDU interval.  The
+	  timestamp-cadence grid classification uses a clock/span-scaled
+	  tolerance, not a fixed value: a 32 us base (one 32768 Hz tick
+	  plus capture quantization) plus a combined worst-case SCA drift
+	  budget (1000 ppm) over the spanned events, capped at a quarter
+	  interval so the nearest-integer event count can never approach
+	  half-interval ambiguity.  Note
 	  that HCI packet sequence can stay CONTIGUOUS for controller-side
 	  omission: SW Split advances its session sequence number only when
 	  an SDU is emitted to the host, so a radio event with no received

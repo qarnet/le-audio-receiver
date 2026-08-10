@@ -122,24 +122,46 @@
  *     (delta_us + interval/2) / interval.  Zero or negative remaining
  *     positions -> CONTIG; 1..ISO_SEQ_MAX_CONCEAL -> GAP (counted);
  *     beyond the bound, or any unresolvable arithmetic (duplicate
- *     timestamp, non-integral delta beyond ISO_TS_DELTA_TOLERANCE_US,
- *     event count below delivered positions, zero interval) -> RESYNC
- *     (counted, rebased, no synthesis).
+ *     timestamp, non-integral delta beyond the scaled tolerance, event
+ *     count below delivered positions, zero interval) -> RESYNC
+ *     (counted, rebased, no synthesis, reason recorded in the
+ *     observation).
  *
- * ISO_TS_DELTA_TOLERANCE_US (10 us) matches installed nrf5340_audio's
- * SDU_REF_CH_DELTA_MAX_US for 10 ms frames and safely covers the 7.5 ms
- * receiver shape.  All event-count arithmetic uses 64-bit intermediates
- * (no floating point); for uint32_t timestamp deltas and interval the
- * products fit in 64 bits, so the "cannot be represented safely"
- * resync condition is inherently satisfied by the wide intermediates.
+ * The off-grid tolerance is clock/span-scaled, not a fixed value:
+ * ISO_TS_BASE_TOLERANCE_US (32 us) covers one 32768 Hz tick plus
+ * capture quantization, and ISO_TS_MAX_COMBINED_SCA_PPM (1000 us per
+ * second) budgets the combined worst-case SCA drift of both endpoints
+ * over the spanned events.  The raw sum is capped at a quarter
+ * interval (interval_us / 4), deliberately stricter than the
+ * mathematical half-interval uniqueness bound, so the nearest-integer
+ * event count can never approach ambiguity; for tiny intervals where
+ * interval_us / 4 == 0 the tolerance is exactly zero (no underflow).
+ * A non-integral forward delta is accepted only when its absolute
+ * error is <= the scaled tolerance.  Timestamp error grows with the
+ * elapsed event span (SW Split peripheral ISO RX timestamps derive
+ * from a local RTC/radio-timer anchor measurement plus nominal
+ * ISO-interval corrections), so the fixed 10 us single-event-style
+ * tolerance was not valid across gaps of multiple ISO intervals.
+ *
+ * All event-count arithmetic uses 64-bit intermediates (no floating
+ * point); for uint32_t timestamp deltas and interval the products fit
+ * in 64 bits, so the "cannot be represented safely" resync condition
+ * is inherently satisfied by the wide intermediates.
  *
  * Missing-TS callbacks must not become false omissions: they count as
  * delivered positions, so timestamps at 10000 and 30000 with one
  * no-TS callback between them represent two delivered positions and
  * zero omissions, while the same timestamp pair without the no-TS
  * callback represents one omitted event.
+ *
+ * The RESYNC reasons (duplicate/zero advance, delivered positions
+ * above the event count, off-grid delta, over-bound gap, zero
+ * interval) are recorded in struct audio_iso_cadence_observation so
+ * the caller can classify future RESYNCs from structured evidence
+ * instead of a bare timestamp.
  */
-#define ISO_TS_DELTA_TOLERANCE_US 10U
+#define ISO_TS_BASE_TOLERANCE_US    32U
+#define ISO_TS_MAX_COMBINED_SCA_PPM 1000U
 
 enum audio_iso_cadence_result {
 	AUDIO_ISO_CADENCE_RES_FIRST = 0, /* first timestamp — base set, no gap */
@@ -150,6 +172,38 @@ enum audio_iso_cadence_result {
 	AUDIO_ISO_CADENCE_RES_WRAP,   /* timestamp wrap/rebase — rebased, no synthesis, not a resync
 				       */
 	AUDIO_ISO_CADENCE_RES_RESYNC, /* unresolvable cadence — rebased, counted, no synthesis */
+};
+
+/*
+ * Exact reason a cadence update classified as RESYNC.  Only RESYNC
+ * carries a reason; every other result (FIRST / NO_TS / CONTIG / GAP /
+ * WRAP) leaves the observation reason at REASON_NONE.
+ */
+enum audio_iso_cadence_resync_reason {
+	AUDIO_ISO_CADENCE_REASON_NONE = 0,
+	AUDIO_ISO_CADENCE_REASON_ZERO_INTERVAL,       /* interval_us == 0: no grid */
+	AUDIO_ISO_CADENCE_REASON_ZERO_ADVANCE,        /* duplicate timestamp: zero event advance */
+	AUDIO_ISO_CADENCE_REASON_DELIVERED_GT_EVENTS, /* more delivered positions than grid events
+						       */
+	AUDIO_ISO_CADENCE_REASON_DELTA_OFF_GRID, /* non-integral delta beyond scaled tolerance */
+	AUDIO_ISO_CADENCE_REASON_OVER_BOUND,     /* omitted events beyond ISO_SEQ_MAX_CONCEAL */
+};
+
+/*
+ * Structured diagnostic evidence for one cadence update.  Zeroed (and
+ * reason = REASON_NONE) on every call; representable saturated
+ * uint32_t values are populated for the computed delta, event count,
+ * delivered positions, error, and tolerance; the reason is set exactly
+ * for RESYNC.  Purely diagnostic: no getter, no logging dependency in
+ * this module.
+ */
+struct audio_iso_cadence_observation {
+	uint32_t delta_us;            /* forward timestamp delta (saturated) */
+	uint32_t event_count;         /* nearest integer event count on the grid */
+	uint32_t delivered_positions; /* delivered callback positions since the prior ts */
+	uint32_t error_us;            /* |delta - event_count * interval| */
+	uint32_t tolerance_us;        /* scaled accepted tolerance (capped) */
+	enum audio_iso_cadence_resync_reason reason;
 };
 
 struct audio_iso_cadence {
@@ -176,6 +230,10 @@ void audio_iso_cadence_reset(struct audio_iso_cadence *st);
  *                    one-CIS modes; 0 forces a counted RESYNC).
  * @param omitted     Receives the number of omitted events to conceal
  *                    when the result is GAP (else 0).  May be NULL.
+ * @param observation Optional structured diagnostic evidence (delta,
+ *                    event count, delivered positions, error, accepted
+ *                    tolerance, and exact RESYNC reason).  Zeroed on
+ *                    every call; may be NULL.
  *
  * @return FIRST / NO_TS / CONTIG / GAP / WRAP / RESYNC per the contract
  *         above.  On GAP the tracker has re-based on @p ts and the
@@ -183,9 +241,10 @@ void audio_iso_cadence_reset(struct audio_iso_cadence *st);
  *         timestamp and @p ts not covered by delivered callbacks (at
  *         most ISO_SEQ_MAX_CONCEAL).
  */
-enum audio_iso_cadence_result audio_iso_cadence_update(struct audio_iso_cadence *st, bool has_ts,
-						       uint32_t ts, uint32_t interval_us,
-						       uint32_t *omitted);
+enum audio_iso_cadence_result
+audio_iso_cadence_update(struct audio_iso_cadence *st, bool has_ts, uint32_t ts,
+			 uint32_t interval_us, uint32_t *omitted,
+			 struct audio_iso_cadence_observation *observation);
 
 /** Cumulative omitted events concealed (diagnostics/tests). */
 uint32_t audio_iso_cadence_get_concealed(const struct audio_iso_cadence *st);

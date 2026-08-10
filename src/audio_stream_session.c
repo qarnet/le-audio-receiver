@@ -542,16 +542,23 @@ static void session_recv_path(size_t idx, struct audio_stream_slot *sl, bool val
 	 * event-position/sentinel design beyond this blocker.
 	 *
 	 * Cadence WRAP (controller timestamp wrap/rebase, expected) never
-	 * warns; cadence RESYNC is unexpected and logs one clear warning.
+	 * warns; cadence RESYNC is unexpected and logs one clear warning
+	 * carrying the structured observation evidence (exact reason
+	 * enum, current timestamp, delta, interval, estimated event
+	 * count, delivered positions, error, accepted scaled tolerance,
+	 * cumulative resync count) so any future RESYNC is classifiable
+	 * without another blind hardware run.  The observation is
+	 * diagnostics only: no state owner, no new stats fields.
 	 * No INFO per gap — FR4 observed thousands of omitted events and
 	 * per-gap UART logging could perturb real-time behavior; a LOG_DBG
 	 * line and the existing aggregate PLC/stream-reset evidence
 	 * suffice.
 	 */
 	if (mode != AUDIO_STREAM_MODE_MODEA) {
+		struct audio_iso_cadence_observation cad_obs = {0};
 		uint32_t cad_omitted = 0U;
 		enum audio_iso_cadence_result cres = audio_iso_cadence_update(
-			&sl->cadence, has_ts, ts, sl->shape.frame_dur_us, &cad_omitted);
+			&sl->cadence, has_ts, ts, sl->shape.frame_dur_us, &cad_omitted, &cad_obs);
 
 		switch (cres) {
 		case AUDIO_ISO_CADENCE_RES_GAP:
@@ -562,9 +569,13 @@ static void session_recv_path(size_t idx, struct audio_stream_slot *sl, bool val
 				idx, cad_omitted);
 			break;
 		case AUDIO_ISO_CADENCE_RES_RESYNC:
-			LOG_WRN("stream[%zu]: ISO ts cadence resync at %u (interval %u us, "
-				"resyncs=%u) — no synthesis",
-				idx, ts, sl->shape.frame_dur_us,
+			LOG_WRN("stream[%zu]: ISO ts cadence resync: reason %u, at %u, delta %u "
+				"us, "
+				"interval %u us, events %u, delivered %u, error %u us, "
+				"tolerance %u us, resyncs=%u — no synthesis",
+				idx, (unsigned int)cad_obs.reason, ts, cad_obs.delta_us,
+				sl->shape.frame_dur_us, cad_obs.event_count,
+				cad_obs.delivered_positions, cad_obs.error_us, cad_obs.tolerance_us,
 				audio_iso_cadence_get_resyncs(&sl->cadence));
 			break;
 		case AUDIO_ISO_CADENCE_RES_FIRST:

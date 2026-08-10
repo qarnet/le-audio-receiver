@@ -277,15 +277,34 @@ absent) is a delivered position and never synthesizes (timestamp absence
 is allowed by the public host contract); a backward timestamp is an
 expected controller wrap/rebase (`WRAP`, rebased, no synthesis, no
 resync count); a forward delta is resolved to the nearest integer event
-count on the SDU grid with a fixed `ISO_TS_DELTA_TOLERANCE_US` of 10 us
-(64-bit arithmetic, no floating point).  Duplicate timestamps,
-non-integral deltas beyond tolerance, event counts below delivered
-positions, and omissions beyond `ISO_SEQ_MAX_CONCEAL` are counted
-resyncs (`RESYNC`, rebased, no synthesis, one `LOG_WRN`); `WRAP` never
-warns.  Per-gap `LOG_INF` is suppressed for cadence-only gaps — FR4
-observed thousands of omitted events and per-gap UART logging could
-perturb real-time behavior; a `LOG_DBG` line and the existing aggregate
-PLC and stream-reset summary remain public evidence.
+count on the SDU grid with a clock/span-scaled tolerance
+(64-bit arithmetic, no floating point).  The tolerance is not a fixed
+value: `ISO_TS_BASE_TOLERANCE_US` (32 us) covers one 32768 Hz tick plus
+capture quantization and `ISO_TS_MAX_COMBINED_SCA_PPM` (1000 us/s)
+budgets the combined worst-case SCA drift of both endpoints over the
+spanned events, so the accepted error grows with the elapsed event span
+(SW Split peripheral ISO RX timestamps derive from a local
+RTC/radio-timer anchor measurement plus nominal ISO-interval
+corrections).  The raw sum is capped at a quarter interval
+(`interval_us / 4`), deliberately stricter than half-interval
+uniqueness; for tiny intervals where `interval_us / 4 == 0` the
+tolerance is exactly zero (no underflow).  A non-integral forward delta
+is accepted only when its absolute error is `<=` the scaled tolerance.
+Duplicate timestamps, non-integral deltas beyond tolerance, event
+counts below delivered positions, and omissions beyond
+`ISO_SEQ_MAX_CONCEAL` are counted resyncs (`RESYNC`, rebased, no
+synthesis, one `LOG_WRN`); `WRAP` never warns.  The RESYNC warning
+carries structured observation evidence so any future RESYNC is
+classifiable without another blind hardware run: the exact reason enum
+(`ZERO_INTERVAL` / `ZERO_ADVANCE` / `DELIVERED_GT_EVENTS` /
+`DELTA_OFF_GRID` / `OVER_BOUND`), the current timestamp, the forward
+delta, the interval, the estimated event count, the delivered
+positions, the off-grid error, the accepted scaled tolerance, and the
+cumulative resync count.  Per-gap `LOG_INF` is suppressed for
+cadence-only gaps — FR4 observed thousands of omitted events and
+per-gap UART logging could perturb real-time behavior; a `LOG_DBG` line
+and the existing aggregate PLC and stream-reset summary remain public
+evidence.
 
 Reset discipline: the cadence tracker is reset at every site that
 resets the sequence tracker (config, start-clear, release, reset-all),

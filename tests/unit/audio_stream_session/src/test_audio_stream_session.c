@@ -1110,6 +1110,35 @@ ZTEST(audio_stream_session, test_ts_cadence_resync_no_plc)
 	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
 }
 
+ZTEST(audio_stream_session, test_ts_cadence_scaled_tolerance_boundary)
+{
+	setup_mono();
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "first SDU");
+	zassert_equal(0U, audio_stats_get().plc_frames, "no PLC yet");
+
+	/* Off-grid two-event span within the scaled tolerance (32 us base
+	 * + 20 us two-event 10 ms SCA budget = 52 us; +20 us accepted):
+	 * one cadence PLC concealment, current SDU decodes once.  The
+	 * fixed 10 us contract resynced this delta; the scaled contract
+	 * conceals it. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 21020, 2, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(3U, fake_sink_push_count(), "1 PLC + 1 valid");
+	zassert_equal(1U, audio_stats_get().plc_frames,
+		      "one concealed frame within the scaled tolerance");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+
+	/* One-event span +43 us: beyond the scaled 42 us tolerance →
+	 * cadence RESYNC, no PLC synthesis, the current SDU still
+	 * decodes once. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 31063, 3, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(4U, fake_sink_push_count(), "current SDU only after resync");
+	zassert_equal(1U, audio_stats_get().plc_frames, "no concealment on resync");
+	zassert_equal(4U, audio_stats_get().total_frames, "1 PLC + 3 decoded");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+}
+
 ZTEST(audio_stream_session, test_ts_cadence_modea_no_synthesis)
 {
 	setup_modea();
