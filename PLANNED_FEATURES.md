@@ -185,8 +185,8 @@ currently only possible through the developer shell (`bt unpair`).
 
 **Priority:** High (blocking public use)
 **Status:** In progress; FR1-FR3 accepted, exact `v0.1.0` failed FR4 and
-remains unpublished, local replacement preflight passed, new exact
-candidate still required, nothing published yet
+remains unpublished, local replacement preflight passed, no replacement
+version selected, and nothing published
 
 #### Problem
 

@@ -169,8 +169,8 @@ No release or version state changed. Nothing was published.
 ## Next step
 
 A replacement candidate must be created through the accepted trusted-main
-lifecycle: choose a new version, write it into the root `VERSION` file, and
-let the accepted CI path build, package, and create a new immutable draft
-from trusted `main`. Then that new draft's exact assets must rerun the full
-FR4 procedure on both targets before FR5 can publish anything. No
-replacement version has been chosen. FR5 remains blocked.
+lifecycle: write the new version into the root `VERSION` file, and let the
+accepted CI path build, package, and create a new immutable draft from
+trusted `main`. Then that new draft's exact assets must rerun the full
+FR4 procedure on both targets before FR5 can publish anything.
+No replacement version has been selected. FR5 remains blocked.

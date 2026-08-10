@@ -25,7 +25,9 @@
 > **BLOCKED**: the exact draft `v0.1.0` FAILED mandatory nRF5340 mono
 > acceptance and remains private, unpublished, and untagged; the local
 > replacement preflight passed both targets but is not exact-artifact
-> acceptance; a replacement candidate must be created through the
+> acceptance; the root `VERSION` remains `0.1.0` and the firmware-build
+> workflow is version-driven; no replacement version or candidate has been
+> selected; a replacement candidate must be created through the
 > trusted-main lifecycle and its exact assets must pass FR4 before FR5
 > can publish anything; nothing published.
 > The R0–R10 refactor figures below (gate 55/0/55,
@@ -63,8 +65,11 @@ unchanged), BSim pins byte-identical.  Evidence:
 `fr4-v0.1.0-OEp9Kh`, cadence local `fr4-cadence-local-*`).  A replacement
 candidate must be created through the accepted trusted-main lifecycle and
 its exact immutable assets must rerun the full FR4 procedure on both
-targets before FR5 can publish anything.  FR4 and FR5 remain blocked; no
-replacement version has been chosen; nothing published.
+ targets before FR5 can publish anything.  No replacement version or
+ candidate has been selected; the next step requires choosing a version through
+ the accepted trusted-main lifecycle. Only after that draft exists may a newly
+ pinned FR4 exact-artifact procedure run on
+both targets.  FR4 and FR5 remain blocked; nothing published.
 
 ## Firmware release — FR3 ACCEPTED (2026-08-09)
 

@@ -118,7 +118,10 @@ FR3 automatic draft-release creation ACCEPTED (final merged hosted run
 exact-artifact hardware acceptance is **BLOCKED**: the exact draft
 `v0.1.0` FAILED mandatory nRF5340 mono acceptance and remains private,
 unpublished, and untagged; the local replacement preflight passed both
-targets at `5e7f502` but is not exact-artifact acceptance; a replacement
+targets at `5e7f502` but is not exact-artifact acceptance; the root
+`VERSION` remains `0.1.0` and the firmware-build workflow is now
+version-driven; no replacement version or candidate has been selected; a
+replacement
 candidate must be created through the trusted-main lifecycle and its
 exact assets must pass FR4 before FR5 can publish anything; nothing
 published.  Historical baselines: T0–T8 locked

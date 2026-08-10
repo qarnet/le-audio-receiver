@@ -8,7 +8,10 @@ Implementation phases FR1-FR5 are defined below.
 Phase status (2026-08-10): FR1-FR3 ACCEPTED; FR4 BLOCKED after the exact
 `v0.1.0` draft candidate failed mandatory nRF5340 mono hardware acceptance
 (the local replacement preflight passed both targets but is not
-exact-artifact acceptance); FR5 remains blocked pending a replacement
+exact-artifact acceptance); the root `VERSION` remains `0.1.0` and the
+firmware-build workflow is version-driven, but no replacement version or
+candidate has been selected; FR5 remains
+blocked pending a replacement
 candidate's exact-artifact FR4 pass.  Nothing published.
 
 ## Goal
@@ -208,13 +211,14 @@ release version is chosen.
 
 ### FR3: draft release publication
 
-Add trusted-main automatic release initiation: a `main` push that changes
-the root `VERSION` runs the accepted build/package path, then a protected
-`contents: write` release job creates a draft release with provenance and
-exact attachments whose `tagName`/`targetCommitish` reserve `v<version>` at
-the exact main commit. Drafts stay untagged: GitHub creates the lightweight
-version tag only when the draft is manually published after FR4. A main
-push without a `VERSION` change skips the release job. CI never
+Add trusted-main automatic release initiation: every `main` push runs the
+accepted build/package path, then a protected `contents: write` release job
+creates a draft release with provenance and exact attachments when no release
+or tag exists for the root `VERSION`. A `VERSION` change with an existing
+release or tag fails closed; an unchanged `VERSION` with an existing release
+or tag skips cleanly. This permits recovery of a deleted draft without an
+artificial version detour. Drafts stay untagged: GitHub creates the lightweight
+version tag only when the draft is manually published after FR4. CI never
 auto-publishes.
 
 **FR3 ACCEPTED (2026-08-09)** at implementation commit `8ef8a80`
@@ -244,12 +248,11 @@ matrix before nRF54L15.  The exact `v0.1.0` candidate is therefore
 **failed** and remains private, unpublished, and untagged.  The local fix
 preflight (pristine builds at `5e7f502`) **passed** all six rows on both
 targets but is replacement-candidate preflight only, not FR4 exact-artifact
-acceptance.  A **replacement exact-artifact run is pending**: a new
-versioned draft must be created through the accepted trusted-main lifecycle
-and its exact immutable assets must rerun the full FR4 procedure on both
-targets.  Full evidence:
-`docs/development/firmware-release-fr4-results.md`.  No replacement version
-has been chosen.
+  acceptance.  A **replacement exact-artifact run is pending**: no replacement
+  version has been selected.  A replacement candidate must be created through
+  the accepted trusted-main lifecycle, then its exact immutable assets must
+  rerun FR4 on both targets.  Full evidence:
+`docs/development/firmware-release-fr4-results.md`.
 
 ### FR5: first useful release and closeout
 

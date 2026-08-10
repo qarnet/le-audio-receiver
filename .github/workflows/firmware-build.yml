@@ -62,7 +62,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           version="$(python3 scripts/project-version.py)"
-          test "$version" = "0.1.0"
           release_requested=false
           if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
             [[ "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -95,15 +94,37 @@ jobs:
             --nrf54l15 build/nrf54l15
       - name: Verify application version headers
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        env:
+          PROJECT_VERSION: ${{ steps.project-version.outputs.version }}
         run: |
-          grep -E '#define[[:space:]]+APP_VERSION_STRING[[:space:]]+"0\.1\.0"' \
-            build/nrf5340/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h
-          grep -E '#define[[:space:]]+APP_VERSION_STRING[[:space:]]+"0\.1\.0"' \
-            build/nrf54l15/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h
+          test "$(python3 scripts/project-version.py)" = "$PROJECT_VERSION"
+          python3 - "$PROJECT_VERSION" \
+            build/nrf5340/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h \
+            build/nrf54l15/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h <<'PYEOF'
+          import re
+          import sys
+          version, *paths = sys.argv[1:]
+          pattern = re.compile(
+              r"^#define\s+APP_VERSION_STRING\s+\"" + re.escape(version) + r"\"\s*$",
+              re.MULTILINE,
+          )
+          for path in paths:
+              with open(path, "r", encoding="utf-8") as fh:
+                  text = fh.read()
+              if len(pattern.findall(text)) != 1:
+                  sys.stderr.write(
+                      "APP_VERSION_STRING %s must be defined exactly once in %s\n"
+                      % (version, path)
+                  )
+                  sys.exit(1)
+          PYEOF
       - name: Package firmware
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        env:
+          PROJECT_VERSION: ${{ steps.project-version.outputs.version }}
         run: |
           version="$(python3 scripts/project-version.py)"
+          test "$version" = "$PROJECT_VERSION"
           python3 scripts/package-firmware-release.py \
             --version "$version" \
             --git-commit "$GITHUB_SHA" \
@@ -112,26 +133,29 @@ jobs:
             --output-dir dist
       - name: Verify package
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        env:
+          PROJECT_VERSION: ${{ steps.project-version.outputs.version }}
         run: |
+          version="$(python3 scripts/project-version.py)"
+          test "$version" = "$PROJECT_VERSION"
+          zip5340="le-audio-receiver-v${version}-nrf5340-e83-factory.zip"
+          zip54l15="le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip"
           test -z "$(find dist -maxdepth 1 -type l)"
           test "$(find dist -mindepth 1 -maxdepth 1 | wc -l)" -eq 3
           test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 3
-          for f in \
-            le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip \
-            le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip \
-            SHA256SUMS ; do
+          for f in "$zip5340" "$zip54l15" SHA256SUMS ; do
             test -f "dist/$f"
           done
           (cd dist && sha256sum --strict -c SHA256SUMS)
-          python3 -m zipfile --test dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip
-          python3 -m zipfile --test dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip
+          python3 -m zipfile --test "dist/$zip5340"
+          python3 -m zipfile --test "dist/$zip54l15"
       - name: Upload firmware artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: firmware-v${{ steps.project-version.outputs.version }}-${{ github.sha }}
           path: |
-            workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip
-            workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip
+            workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf5340-e83-factory.zip
+            workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf54l15-xiao-factory.zip
             workspace/le-audio-receiver/dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
@@ -140,7 +164,7 @@ jobs:
 
   release:
     needs: firmware
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.firmware.outputs.release-requested == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     permissions:
@@ -163,7 +187,6 @@ jobs:
           version="$(python3 scripts/project-version.py)"
           tag="v$version"
           test "$version" = "$FW_VERSION"
-          test "$RELEASE_REQUESTED" = "true"
           test "$GITHUB_EVENT_NAME" = "push"
           test "$GITHUB_REF" = "refs/heads/main"
           test "$GITHUB_REF_NAME" = "main"
@@ -199,6 +222,7 @@ jobs:
             --artifact-dir dist \
             --output-dir release-metadata
       - name: Require no existing release or tag
+        id: release-collision
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -251,6 +275,11 @@ jobs:
           scan_status=$?
           set -e
           if [ "$scan_status" -eq 2 ]; then
+            if [ "$RELEASE_REQUESTED" != "true" ]; then
+              echo "release-needed=false" >> "$GITHUB_OUTPUT"
+              echo "release already exists for tag $tag; skipping automatic release"
+              exit 0
+            fi
             echo "::error::release already exists for tag $tag"
             exit 1
           fi
@@ -263,6 +292,11 @@ jobs:
           tag_status=$?
           set -e
           if [ "$tag_status" -eq 0 ]; then
+            if [ "$RELEASE_REQUESTED" != "true" ]; then
+              echo "release-needed=false" >> "$GITHUB_OUTPUT"
+              echo "git tag already exists for tag $tag; skipping automatic release"
+              exit 0
+            fi
             echo "::error::git tag already exists for tag $tag"
             exit 1
           fi
@@ -270,7 +304,9 @@ jobs:
             echo "::error::existing-tag probe failed for tag $tag (expected HTTP 404)"
             exit 1
           fi
+          echo "release-needed=true" >> "$GITHUB_OUTPUT"
       - name: Create draft release
+        if: steps.release-collision.outputs.release-needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -286,6 +322,7 @@ jobs:
             dist/SHA256SUMS \
             release-metadata/release-provenance.json
       - name: Verify draft release
+        if: steps.release-collision.outputs.release-needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

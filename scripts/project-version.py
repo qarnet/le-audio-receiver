@@ -22,8 +22,8 @@ Behavior:
   a literal ``0``) and fit Zephyr's 0..255 range;
 - requires ``VERSION_TWEAK = 0`` and empty ``EXTRAVERSION`` because public
   artifact versions use the FR1 canonical ``MAJOR.MINOR.PATCH`` contract;
-- prints exactly ``0.1.0\n`` for the repository ``VERSION`` and nothing to
-  stderr;
+- prints exactly one canonical ``MAJOR.MINOR.PATCH`` line plus newline and
+  nothing to stderr;
 - caller/file errors print one ``project-version: error: <reason>`` line,
   no traceback, and return nonzero;
 - no environment, Git, timestamps, host paths, or NCS state affect output.

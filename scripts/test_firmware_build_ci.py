@@ -381,7 +381,11 @@ class TestWorkflowCommands(unittest.TestCase):
             "build/nrf5340/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h",
             "build/nrf54l15/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h",
             "APP_VERSION_STRING",
-            "0\\.1\\.0",
+            "#define\\s+APP_VERSION_STRING",
+            "re.escape(version)",
+            "re.MULTILINE",
+            "PROJECT_VERSION: ${{ steps.project-version.outputs.version }}",
+            'test "$(python3 scripts/project-version.py)" = "$PROJECT_VERSION"',
         ):
             self.assertIn(command, text, "missing %r" % command)
 
@@ -391,7 +395,6 @@ class TestWorkflowCommands(unittest.TestCase):
             "scripts/project-version.py",
             '"$GITHUB_SHA"',
             '"$GITHUB_OUTPUT"',
-            'test "$version" = "0.1.0"',
             "version=$version",
             "scripts/package-firmware-release.py",
             "--git-commit",
@@ -401,6 +404,44 @@ class TestWorkflowCommands(unittest.TestCase):
             '"$version"',
         ):
             self.assertIn(needle, text, "missing %r" % needle)
+
+    def test_project_version_driven_steps(self):
+        """Header verification, packaging, and package verification must all
+        re-derive the root version and compare it with the validated step
+        output, so the pipeline is version-driven and single-use literals
+        cannot drift."""
+        text = workflow_text()
+        self.assertEqual(
+            text.count("PROJECT_VERSION: ${{ steps.project-version.outputs.version }}"),
+            3,
+            "PROJECT_VERSION env must come from the validated project-version "
+            "output on the header-verify, package, and verify-package steps",
+        )
+        self.assertEqual(
+            text.count(
+                'test "$(python3 scripts/project-version.py)" = "$PROJECT_VERSION"'
+            ),
+            1,
+            "header verification must re-read the root VERSION inline and "
+            "compare it with $PROJECT_VERSION",
+        )
+        self.assertEqual(
+            text.count('test "$version" = "$PROJECT_VERSION"'),
+            2,
+            "package and package verification must re-read the root VERSION "
+            "and require equality with $PROJECT_VERSION before use",
+        )
+
+    def test_no_hardcoded_project_version_or_package_paths(self):
+        """The workflow must carry no project release literal (0.1.0/0.1.1)
+        and no fixed ``le-audio-receiver-v<digits>`` package path; the NCS
+        version 3.3.0 is a separate constant and must remain."""
+        text = workflow_text()
+        self.assertNotRegex(text, r"0\.1\.[0-9]", "project release literal present")
+        self.assertNotRegex(
+            text, r"le-audio-receiver-v[0-9]", "fixed package path present"
+        )
+        self.assertIn('"3.3.0"', text, "NCS version constant must remain")
 
 
 class TestWorkflowArtifactContract(unittest.TestCase):
@@ -419,11 +460,15 @@ class TestWorkflowArtifactContract(unittest.TestCase):
             text,
             "exact regular-file top-level count check missing",
         )
-        for zip_name in (
-            "le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip",
-            "le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip",
+        for needle in (
+            'zip5340="le-audio-receiver-v${version}-nrf5340-e83-factory.zip"',
+            'zip54l15="le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip"',
+            'for f in "$zip5340" "$zip54l15" SHA256SUMS ; do',
+            'test -f "dist/$f"',
+            'python3 -m zipfile --test "dist/$zip5340"',
+            'python3 -m zipfile --test "dist/$zip54l15"',
         ):
-            self.assertIn("python3 -m zipfile --test dist/%s" % zip_name, text)
+            self.assertIn(needle, text, "missing %r" % needle)
 
     def test_upload_contract_exact_files_and_options(self):
         text = workflow_text()
@@ -446,12 +491,12 @@ class TestWorkflowArtifactContract(unittest.TestCase):
         self.assertEqual(
             listed,
             [
-                "workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip",
-                "workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip",
+                "workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf5340-e83-factory.zip",
+                "workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf54l15-xiao-factory.zip",
                 "workspace/le-audio-receiver/dist/SHA256SUMS",
             ],
             "upload path must list exactly the three workspace-root-relative "
-            "files individually",
+            "files individually, with both ZIP paths expression-derived",
         )
         for line in upload_lines[path_index + 1 :]:
             if not line.strip():
@@ -484,10 +529,9 @@ class TestReleaseJobContract(unittest.TestCase):
         block = self._release_block()
         self.assertIn("needs: firmware", block, "release must need firmware")
         self.assertIn(
-            "if: github.event_name == 'push' && github.ref == 'refs/heads/main' "
-            "&& needs.firmware.outputs.release-requested == 'true'",
+            "if: github.event_name == 'push' && github.ref == 'refs/heads/main'",
             block,
-            "release must run only on a trusted main push that changed VERSION",
+            "release must run on trusted main pushes so missing releases can be created",
         )
         self.assertIn("runs-on: ubuntu-22.04", block)
         self.assertIn("timeout-minutes: 15", block)
@@ -527,7 +571,6 @@ class TestReleaseJobContract(unittest.TestCase):
             "release_requested=true",
             'elif [ "$diff_status" -ne 0 ]; then',
             'echo "release-requested=$release_requested" >> "$GITHUB_OUTPUT"',
-            'test "$version" = "0.1.0"',
         ):
             self.assertIn(needle, text, "missing %r" % needle)
         self.assertNotIn("refs/tags/*", text, "old tag-push guard must be removed")
@@ -541,7 +584,6 @@ class TestReleaseJobContract(unittest.TestCase):
             'version="$(python3 scripts/project-version.py)"',
             'tag="v$version"',
             'test "$version" = "$FW_VERSION"',
-            'test "$RELEASE_REQUESTED" = "true"',
             'test "$GITHUB_EVENT_NAME" = "push"',
             'test "$GITHUB_REF" = "refs/heads/main"',
             'test "$GITHUB_REF_NAME" = "main"',
@@ -643,6 +685,13 @@ class TestReleaseJobContract(unittest.TestCase):
         self.assertIn("scan_status", text)
         self.assertIn("::error::existing-release list probe failed for tag", text)
         self.assertIn("::error::release already exists for tag", text)
+        self.assertIn("id: release-collision", text)
+        self.assertIn('echo "release-needed=false" >> "$GITHUB_OUTPUT"', text)
+        self.assertIn(
+            "if: steps.release-collision.outputs.release-needed == 'true'",
+            text,
+            "release creation and verification must run only when collision probe permits it",
+        )
         self.assertNotIn(
             "releases/tags/$tag",
             text,

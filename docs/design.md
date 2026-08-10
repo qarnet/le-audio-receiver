@@ -43,7 +43,9 @@ authoritative state is FR4 exact-artifact hardware acceptance, which is
 **BLOCKED** (2026-08-10): the exact draft `v0.1.0` failed mandatory
 nRF5340 mono acceptance and remains private, unpublished, and untagged;
 the local replacement preflight passed both targets at `5e7f502` but is
-not exact-artifact acceptance; a replacement candidate must be created
+not exact-artifact acceptance; the root `VERSION` remains `0.1.0` and the
+firmware-build workflow is version-driven, but no replacement version or
+candidate has been selected; a replacement candidate must be created
 through the trusted-main lifecycle and its exact assets must pass FR4
 before FR5 can publish anything.  Software gates at this code state:
 canonical gate **65 PASS / 0 FAIL / 65 TOTAL**, coverage population **36**

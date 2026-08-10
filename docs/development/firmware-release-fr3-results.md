@@ -10,13 +10,14 @@ corrections `a3eef05` (`fix: validate draft release metadata checks`),
 commit) `docs: record FR3 draft release acceptance`.
 
 FR3 adds trusted-main automatic release initiation to the accepted FR2
-build/package path: a `main` push that changes the root `VERSION` runs the
-accepted build/package pipeline, then a protected `contents: write` release
-job creates one draft GitHub Release with provenance and exact attachments
-whose `tagName`/`targetCommitish` reserve `v<version>` at the exact main
-commit.  Drafts stay untagged: GitHub creates the lightweight version tag
-only when the draft is manually published after FR4.  A main push without a
-`VERSION` change skips the release job.  CI never auto-publishes.
+build/package path. The current workflow runs the release job on every trusted
+`main` push; it creates one draft GitHub Release with provenance and exact
+attachments when no release or tag exists for the root `VERSION`. A `VERSION`
+change colliding with an existing release or tag fails closed; an unchanged
+`VERSION` colliding with an existing release or tag skips cleanly. This allows
+recreating a deleted draft without an artificial version detour. Drafts stay
+untagged: GitHub creates the lightweight version tag only when the draft is
+manually published after FR4. CI never auto-publishes.
 
 The commit subject `ci: create release tags from trusted main` (`4892a6a`)
 predates the final clarified lifecycle.  The implemented behavior creates an
