@@ -1043,10 +1043,11 @@ def run_nrf54_checks(
         "got %r" % config_int(app_cfg, "CONFIG_USER_PAIRING_SHELL_RESET_TIMEOUT_MS"),
     )
     result.add(
-        config_int(app_cfg, "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE") == 1024,
+        config_int(app_cfg, "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE") == 1536,
         "54l15-041",
-        "app USER_PAIRING_WORKQ_STACK_SIZE=1024 (build-minimum; runtime "
-        "validated by P8 hardware acceptance)",
+        "app USER_PAIRING_WORKQ_STACK_SIZE=1536 (pre-fix hardware high-water "
+        "1012/1024 = 98% with 12 B unused on the pairing queue; 1536 restores "
+        "an expected 524 B margin)",
         "got %r" % config_int(app_cfg, "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE"),
     )
     result.add(

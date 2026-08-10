@@ -25,14 +25,17 @@ touch GitHub release/tag state, VERSION, remote branches, or CI.
 
 ## Current resume software evidence
 
-- Expected start HEAD: `ec8c846` `fix: increase nRF5340 system workqueue stack`.
+- Expected start HEAD: `fix: increase nRF54L15 pairing workqueue stack`
+  (this handoff's fix commit; pairing work-queue stack 1024 → 1536).
 - Expected worktree: clean.
 - Focused suites: `audio.iso_seq` 39/39; `audio_stream_session` 47/47;
   build-contract checker tests 52/52.
 - Canonical gate: 65 PASS / 0 FAIL / 65 TOTAL.
 - Coverage population: 36; committed baseline enforcement passes.
 - Build contract: 96/96 (includes the FR4 nRF5340
-  `CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2048` assertion `5340-032`).
+  `CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2048` assertion `5340-032` and the
+  nRF54L15 pairing work-queue stack `CONFIG_USER_PAIRING_WORKQ_STACK_SIZE
+  == 1536` assertion `54l15-041`).
 - BSim hashes unchanged.
 
 ## Handoff commit state
@@ -238,7 +241,17 @@ After each target's rows complete successfully, run the receiver shell
 For nRF5340 require the `sysworkq` line to report stack size 2048 and retain
 the used/unused high-water evidence; a stack command failure or an unreadable
 `sysworkq` line blocks acceptance of that target. On nRF54L15 retain the same
-command output for evidence.
+command output for evidence, and additionally require the pairing work-queue
+line to report a real stack of 1536 bytes with at least 256 bytes unused and
+no more than 80 % high-water usage.  The pairing queue is the `g_pairing_wq`
+thread from `src/pairing_mode.c`; if the shell line remains unnamed, identify
+it by matching the runtime thread object address to the ELF `g_pairing_wq`
+symbol and retain that symbol-resolution evidence together with the full
+`kernel thread stacks` table.  A missing or unreadable pairing-queue line, a
+wrong size, or insufficient margin blocks nRF54L15 local acceptance.  The
+pre-fix hardware high-water was 1012/1024 (98 %, 12 B unused) on this queue
+during the earlier FR4 cadence validation; that 1024 evidence remains history
+and the 1536 gate supersedes it.
 
 ### Row 1: strict fresh mono, 120 s
 

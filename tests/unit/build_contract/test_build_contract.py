@@ -77,7 +77,7 @@ CONFIG_USER_PAIRING_INPUT=y
 CONFIG_INPUT=y
 CONFIG_USER_PAIRING_DEBOUNCE_MS=30
 CONFIG_USER_PAIRING_SHELL_RESET_TIMEOUT_MS=15000
-CONFIG_USER_PAIRING_WORKQ_STACK_SIZE=1024
+CONFIG_USER_PAIRING_WORKQ_STACK_SIZE=1536
 CONFIG_HEAP_MEM_POOL_SIZE=0
 """
 
@@ -1023,12 +1023,15 @@ class TestPairingControlAssertions(unittest.TestCase):
         self.assertIn("54l15-050", fails)
 
     def test_54l15_wrong_workq_stack(self):
+        # The hardware-validated 1536-byte pairing work-queue stack must not
+        # silently regress to the pre-fix 1024-byte size whose hardware
+        # high-water measured 1012/1024 (98%, 12 B unused).
         rc, fails = self._rc_and_fails(
             lambda fx: write(
                 fx.config("54l15", "le-audio-receiver"),
                 APP54_CONFIG.replace(
+                    "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE=1536",
                     "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE=1024",
-                    "CONFIG_USER_PAIRING_WORKQ_STACK_SIZE=2048",
                 ),
             )
         )

@@ -971,10 +971,14 @@ nRF54L15 full-stack enablement proven from the resolved app config
 (`CONFIG_USER_PAIRING_CONTROL=y` `54l15-037`,
 `CONFIG_USER_PAIRING_INPUT=y` `54l15-038`, its mandatory subsystem
 dependency `CONFIG_INPUT=y` `54l15-050`, debounce 30 `54l15-039`,
-shell reset timeout 15000 `54l15-040`, chosen work-queue stack 1024
-`54l15-041` (build-minimum; runtime validated by P8 hardware —
-pairing work-queue stack usage 640/1024 (62 %) at idle, sustained
-BONDING/RESET/stream transitions clean, no stack/heap/assert warning),
+shell reset timeout 15000 `54l15-040`, chosen work-queue stack 1536
+`54l15-041` (P8 hardware originally validated 1024 at 640/1024 (62 %)
+idle with sustained BONDING/RESET/stream transitions clean; FR4
+cadence hardware later measured a pre-fix high-water of 1012/1024
+(98 %, 12 B unused) on the pairing queue, so the budget grew to 1536,
+restoring an expected 524 B margin — the superseded 1024 evidence
+remains history and the current contract supersedes it for lack of
+stack margin),
 `CONFIG_HEAP_MEM_POOL_SIZE=0` system-heap-removal proof
 `54l15-042`) and from the resolved app DTS (the `user-button` alias
 resolves to `button0` `54l15-043`, whose gpio-keys parent carries
@@ -1009,7 +1013,11 @@ fresh strict-mono stream establishment on nRF5340 faulted with a
 `sysworkq` stack overflow at the 1024-byte resolved size during the
 Config/QoS transition, so the board config doubles it to 2048 with ample
 448 KB-region headroom; the nRF54L15 target already resolves 2048), with a
-mutation test proving a regression to 1024 fails `5340-032`.
+mutation test proving a regression to 1024 fails `5340-032`.  The same
+FR4 fix set moves `54l15-041` from 1024 to 1536 (pre-fix pairing-queue
+hardware high-water 1012/1024, 98 %, 12 B unused; expected 524 B margin
+at 1536) without changing the assertion or test count — the mutation
+test now proves a regression to the pre-fix 1024 fails `54l15-041`.
 
 ### BUILD-008 — 48 kHz capability proof split (T6)
 
