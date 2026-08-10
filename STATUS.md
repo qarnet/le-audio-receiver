@@ -90,7 +90,8 @@ match the committed baseline, and `firmware`/`release` were correctly
 skipped.  Hosted run `31424437357` passed Nix install, sdk-manager
 install, and environment verification but failed the BabbleSim build on
 the dangling `tools/bsim/Makefile` symlink; the west-population
-correction (`--group-filter +babblesim`) is pending hosted validation.
+correction (`--group-filter +babblesim`) was validated by hosted run
+`31426937629`.
 Hosted run `31426937629` passed the exact Nix/NCS environment, coverage
 baseline, matrix, and the 17-scenario/26-run BabbleSim Stage 1, then
 ended **64 PASS / 1 FAIL / 65 TOTAL** solely because
