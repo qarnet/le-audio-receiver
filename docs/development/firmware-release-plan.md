@@ -136,8 +136,10 @@ before `firmware` (topology `tests` → `firmware` → `release`, with
 `release` still trusted-main-only and write-capable only there).  The
 `tests` job reuses the firmware job's exact pinned runner, digest-pinned
 NCS v3.3.0 toolchain container, checkout pins, and verified west
-workspace sequence; provisions exact `gcovr==8.4` and verifies the
-committed baseline's tool first lines (`gcovr 8.4`, `gcov (GCC) 14.3.0`);
+workspace sequence; provisions exact `gcovr==8.4` in an isolated venv
+under the container home (exposed to later steps through `$GITHUB_PATH`)
+and verifies the committed baseline's tool first lines (`gcovr 8.4`,
+`gcov (GCC) 14.3.0`);
 builds the imported BabbleSim components with fail-fast behavior
 (`BSIM_BUILD_FAIL_ASAP=1 make -C .../tools/bsim everything` plus a
 `bs_2G4_phy_v1` existence check); invokes `scripts/test-all.sh` with
@@ -149,10 +151,12 @@ and uploads the retained output with the pinned `upload-artifact` action,
 
 Status: implementation pending hosted PR validation on PR 11.  Not
 accepted; no hosted pass is claimed.  Local focused checks pass
-(inventory 62, workflow contract 34/34, `test_coverage_runner` 34/34,
-`bsim_runner` 61/61).  Once PR checks exist, branch protection should
-require both `tests` and `firmware`; `release` stays unrequired because
-it skips on pull requests.
+(inventory 62, workflow contract 35/35, `test_coverage_runner` 34/34,
+`bsim_runner` 61/61), and the full local canonical gate on the clean
+implementation commit `ca55e9d` is **65 PASS / 0 FAIL / 65 TOTAL** with
+unchanged coverage baseline and byte-identical BSim pins.  Once PR checks
+exist, branch protection should require both `tests` and `firmware`;
+`release` stays unrequired because it skips on pull requests.
 
 ## Release lifecycle
 

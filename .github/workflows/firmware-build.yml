@@ -54,9 +54,13 @@ jobs:
       - name: Provision canonical test tools
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
         run: |
-          python3 -m pip install --no-cache-dir gcovr==8.4
-          test "$(gcovr --version | head -n1)" = "gcovr 8.4"
+          # gcovr 8.4 lives in an isolated venv under the container home;
+          # the container/system Python is never modified.
+          python3 -m venv "$HOME/gcovr-venv"
+          "$HOME/gcovr-venv/bin/python" -m pip install --no-cache-dir gcovr==8.4
+          test "$("$HOME/gcovr-venv/bin/gcovr" --version | head -n1)" = "gcovr 8.4"
           test "$(gcov --version | head -n1)" = "gcov (GCC) 14.3.0"
+          printf '%s\n' "$HOME/gcovr-venv/bin" >> "$GITHUB_PATH"
       - name: Build BabbleSim components
         working-directory: ${{ github.workspace }}/workspace
         run: |

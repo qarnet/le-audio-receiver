@@ -96,8 +96,13 @@ rather than sharing mutable build state with `firmware`:
 - verify sdk HEAD, NCS `3.3.0`, west topdir, and Zephyr directory before
   publishing `ZEPHYR_BASE` through `$GITHUB_ENV`.
 
-Install `gcovr==8.4` only in the unprivileged test-job Python environment. Do
-not alter the firmware job or repository dependencies. Verify:
+Provision `gcovr==8.4` in an isolated virtual environment under the container
+home (`python3 -m venv "$HOME/gcovr-venv"`, install with the venv python),
+never into the container/system Python. Verify the exact venv executable's
+first line and the toolchain `gcov` first line, then append the venv `bin`
+directory to `$GITHUB_PATH` so `scripts/test-all.sh` resolves the exact gcovr
+in the gate step. Do not alter the firmware job or repository dependencies.
+Verify:
 
 ```text
 gcovr 8.4
@@ -125,12 +130,17 @@ Add optional output-root support without changing gate discovery or results:
   directory. When set, it must use that directory instead of `mktemp`, refuse
   a nonempty destination, preserve logs, and never delete caller-owned output.
   Existing local behavior remains unchanged when unset.
-- CI invokes the gate with both variables under `${{ runner.temp }}` and tees
-  full console output to `test-all.log` while preserving the gate's real exit
-  status through `set -o pipefail`.
-- Upload `${{ runner.temp }}/le-audio-test-results/` with the already pinned
-  `actions/upload-artifact` action, `if: always()`, seven-day retention, and
-  `if-no-files-found: warn`.
+- CI invokes the gate with both variables pointing at `$HOME/le-audio-test-results`
+  (the container home): GitHub mounts the job home from the host runner temp
+  tree at `${{ runner.temp }}/_github_home`, so the retained root is
+  runner-temp-owned on the host while still satisfying the committed coverage
+  runner's `/tmp`-or-`$HOME` output containment. Full console output is teed
+  to `test-all.log` while preserving the gate's real exit status through
+  `set -o pipefail`.
+- Upload `${{ runner.temp }}/_github_home/le-audio-test-results/` (the
+  container's `$HOME` reached through the runner temp mount) with the already
+  pinned `actions/upload-artifact` action, `if: always()`, seven-day retention,
+  and `if-no-files-found: warn`.
 
 Expected retained evidence:
 
@@ -189,9 +199,12 @@ baseline and BSim pins. Hosted PR acceptance requires observable ordering:
 1. `tests` starts and passes.
 2. `firmware` starts only after `tests` passes.
 3. Pull request never runs `release`.
-4. A forced test failure in workflow contract fixtures proves firmware would
-   be skipped by the `needs` edge; no production source is weakened to create
-   this proof.
+4. The executable workflow contract in `scripts/test_firmware_build_ci.py`
+   pins `firmware: needs: tests`; normal hosted ordering observes `tests`
+   starting and passing before `firmware` starts. No forced hosted test
+   failure is required: the `needs` edge is proven by the static workflow
+   contract, not by a runtime experiment, and no production source is
+   weakened.
 
 After merge, protected-main acceptance requires the same
 `tests -> firmware -> release` dependency chain. Hardware acceptance remains a

@@ -26,8 +26,11 @@
 # directory outside the repository, coverage reports are retained at
 # $TEST_OUTPUT_DIR/coverage instead of the private mktemp root (which still
 # holds all build trees and is still removed on exit).  When unset, the
-# historical mktemp behavior is unchanged.  CI sets it under the runner's
-# temp tree so failures remain diagnosable from uploaded artifacts.
+# historical mktemp behavior is unchanged.  CI sets it to the container's
+# $HOME, which GitHub backs from the host runner temp tree at
+# <runner.temp>/_github_home rather than directly at the runner temp path,
+# so the retained output is runner-temp-owned while failures remain
+# diagnosable from uploaded artifacts.
 #
 # Required: NCS v3.3.0 dev shell (nix develop / direnv allow).
 #   ZEPHYR_BASE must be set. BabbleSim dependencies must be provisioned;

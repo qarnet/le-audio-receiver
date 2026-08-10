@@ -44,9 +44,10 @@ accepted.**  PR 11 (`feature/firmware-release-acceptance`) adds a distinct
 wait for: `tests` → `firmware` → `release` (trusted main only).  The
 `tests` job uses the same pinned ubuntu-22.04 runner, digest-pinned NCS
 v3.3.0 toolchain container, exact application/sdk-nrf checkouts, and
-verified west workspace sequence as the firmware job; installs exact
-`gcovr==8.4` and verifies the committed baseline tool first lines
-(`gcovr 8.4`, `gcov (GCC) 14.3.0`); builds the imported BabbleSim
+verified west workspace sequence as the firmware job; provisions exact
+`gcovr==8.4` in an isolated venv under the container home (exposed to later
+steps through `$GITHUB_PATH`) and verifies the committed baseline tool first
+lines (`gcovr 8.4`, `gcov (GCC) 14.3.0`); builds the imported BabbleSim
 components with `BSIM_BUILD_FAIL_ASAP=1 make -C .../tools/bsim everything`
 and verifies `bs_2G4_phy_v1`; runs `scripts/test-all.sh` exactly once
 with the gate's real exit status preserved through `set -o pipefail` and
@@ -65,8 +66,11 @@ tests in `scripts/test_firmware_build_ci.py` pin the topology, pins,
 provisioning, invocation, artifact retention, and release trust boundary;
 focused fixture tests cover the new output-root validation without real
 Zephyr or BabbleSim builds.  Local focused checks pass (inventory **62**,
-workflow contract 34/34, `test_coverage_runner` 34/34, `bsim_runner`
-61/61).  No hosted run exists yet; no hosted pass is claimed.  Plan of
+workflow contract 35/35, `test_coverage_runner` 34/34, `bsim_runner`
+61/61); the full local canonical gate on the clean implementation commit
+`ca55e9d` is **65 PASS / 0 FAIL / 65 TOTAL** with unchanged coverage
+baseline and byte-identical BSim pins.  No hosted run exists yet; no
+hosted pass is claimed.  Plan of
 record: `docs/development/firmware-ci-test-gate-plan.md`.
 
 ## Firmware release — FR4 BLOCKED (2026-08-10)
@@ -99,11 +103,9 @@ unchanged), BSim pins byte-identical.  Evidence:
 `fr4-v0.1.0-OEp9Kh`, cadence local `fr4-cadence-local-*`).  A replacement
 candidate must be created through the accepted trusted-main lifecycle and
 its exact immutable assets must rerun the full FR4 procedure on both
- targets before FR5 can publish anything.  No replacement version or
- candidate has been selected; the next step requires choosing a version through
- the accepted trusted-main lifecycle. Only after that draft exists may a newly
- pinned FR4 exact-artifact procedure run on
-both targets.  FR4 and FR5 remain blocked; nothing published.
+targets before FR5 can publish anything; no replacement version or
+candidate has been selected.  FR4 and FR5 remain blocked; nothing
+published.
 
 ## Firmware release — FR3 ACCEPTED (2026-08-09)
 

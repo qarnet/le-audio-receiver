@@ -572,11 +572,25 @@ class TestTestsJobContract(unittest.TestCase):
     def test_tests_job_tool_provisioning_exact(self):
         block = self._tests_block()
         for needle in (
-            "python3 -m pip install --no-cache-dir gcovr==8.4",
-            'test "$(gcovr --version | head -n1)" = "gcovr 8.4"',
+            'python3 -m venv "$HOME/gcovr-venv"',
+            '"$HOME/gcovr-venv/bin/python" -m pip install --no-cache-dir gcovr==8.4',
+            'test "$("$HOME/gcovr-venv/bin/gcovr" --version | head -n1)" = "gcovr 8.4"',
             'test "$(gcov --version | head -n1)" = "gcov (GCC) 14.3.0"',
+            'printf \'%s\\n\' "$HOME/gcovr-venv/bin" >> "$GITHUB_PATH"',
         ):
             self.assertIn(needle, block, "missing %r in tests job" % needle)
+
+    def test_tests_job_gcovr_isolated_in_venv(self):
+        # gcovr 8.4 must be provisioned inside an isolated venv under the
+        # container home, never into the container/system Python; the venv
+        # bin dir is exposed to later steps through $GITHUB_PATH so the
+        # canonical gate resolves the exact gcovr.
+        block = self._tests_block()
+        self.assertNotIn(
+            "python3 -m pip install", block, "system python must not install gcovr"
+        )
+        self.assertIn('"$HOME/gcovr-venv/bin/python" -m pip install', block)
+        self.assertIn("$GITHUB_PATH", block)
 
     def test_tests_job_bsim_build_fail_fast_exact(self):
         block = self._tests_block()
