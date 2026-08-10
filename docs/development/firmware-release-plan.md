@@ -165,22 +165,32 @@ with `TEST_OUTPUT_DIR` and `BSIM_LOG_ROOT` pointing at
 the pinned `upload-artifact` action, `if: always()`, 7-day retention, and
 `if-no-files-found: warn`.
 
-Status: implementation pending hosted PR validation on PR 11.  Not
-accepted; no hosted pass is claimed.  Hosted run `31422292550` failed
-pre-gate: the Nordic container's gcovr (8.6) and gcov first lines did not
-match the committed baseline, and `firmware`/`release` were correctly
-skipped.  Hosted run `31424437357` passed Nix install, sdk-manager
-install, and environment verification but failed the BabbleSim build on
-the dangling `tools/bsim/Makefile` symlink (bundle ships bsim_west; root
-group-filter excludes the `babblesim` components); the west-population
-correction is pending hosted validation.
-Local focused checks pass (inventory 62, workflow contract 37/37,
+Status: ACCEPTED on PR 11 at PR head `32bdc98` (hosted acceptance run
+`31432411543`, 2026-08-10).  The `tests` job `93598711857` SUCCESS
+(50m22s) with exact console summary `Gate complete: 65 PASS / 0 FAIL /
+65 TOTAL`; the `firmware` job `93611002998` SUCCESS (6m21s) started only
+after tests completed, with both production receiver builds, build
+contract, version headers, packaging, verification, and artifact upload;
+the `release` job `93612477731` SKIPPED as required on pull_request.
+Earlier hosted attempts remain diagnosis evidence: `31422292550` failed
+pre-gate on the container's gcov first-line mismatch, `31424437357`
+failed the BabbleSim build on the dangling `tools/bsim/Makefile` symlink
+(west-population correction `--group-filter +babblesim`), and
+`31426937629` passed the exact Nix/NCS environment, coverage baseline,
+matrix, and BSim Stage 1 but ended `64 PASS / 1 FAIL / 65 TOTAL` solely
+because `test_enable_pairing_agent` launched a real `bt-agent` through an
+unmocked `subprocess.Popen`.
+Local focused checks pass (inventory 62, workflow contract 40/40,
 `test_coverage_runner` 34/34, `bsim_runner` 61/61), and the full local
 canonical gate on the clean implementation commit `ca55e9d` is
 **65 PASS / 0 FAIL / 65 TOTAL** with unchanged coverage baseline and
-byte-identical BSim pins.  Once PR checks exist, branch protection should
-require both `tests` and `firmware`; `release` stays unrequired because
-it skips on pull requests.
+byte-identical BSim pins.  The active repository ruleset `20658259`
+(targets `~DEFAULT_BRANCH`, no bypass actors,
+`strict_required_status_checks_policy=false`) requires status contexts
+`tests` and `firmware`; `release` stays unrequired because it skips on
+pull requests.  PR #11 mergeStateStatus CLEAN.  Protected-main runs,
+draft-release creation, and hardware acceptance remain separate
+operations and are not claimed here.
 
 ## Release lifecycle
 

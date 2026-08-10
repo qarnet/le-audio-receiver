@@ -21,7 +21,11 @@
 > artifacts only — no tag, GitHub Release, published binary, hardware
 > acceptance, MCUboot, or DFU), FR3 automatic draft-release creation
 > ACCEPTED (final merged hosted run `b70b978` PASS with release SKIPPED
-> on unchanged `VERSION`), and FR4 exact-artifact hardware acceptance
+> on unchanged `VERSION`), PR 11 hosted canonical test-gate ACCEPTED
+> (hosted run 31432411543: `tests` 65 PASS / 0 FAIL / 65 TOTAL,
+> `firmware` SUCCESS after tests, `release` SKIPPED on pull_request;
+> ruleset 20658259 requires status contexts `tests` and `firmware`),
+> and FR4 exact-artifact hardware acceptance
 > **BLOCKED**: the exact draft `v0.1.0` FAILED mandatory nRF5340 mono
 > acceptance and remains private, unpublished, and untagged; the local
 > replacement preflight passed both targets but is not exact-artifact
@@ -37,8 +41,8 @@
 
 ## Firmware CI — canonical test gate (PR 11, 2026-08-10)
 
-**Hosted software gate implementation — PENDING PR VALIDATION, not
-accepted.**  PR 11 (`feature/firmware-release-acceptance`) adds a distinct
+**Hosted software gate — ACCEPTED for the PR implementation.**  PR 11
+(`feature/firmware-release-acceptance`) adds a distinct
 `tests` job to `.github/workflows/firmware-build.yml` as the canonical
 65-child software gate that `firmware` (and therefore `release`) must
 wait for: `tests` → `firmware` → `release` (trusted main only).  The
@@ -84,24 +88,39 @@ Zephyr or BabbleSim builds.  Local focused checks pass (inventory **62**,
 workflow contract 40/40, `test_coverage_runner` 34/34, `bsim_runner`
 61/61); the full local canonical gate on the clean implementation commit
 `ca55e9d` is **65 PASS / 0 FAIL / 65 TOTAL** with unchanged coverage
-baseline and byte-identical BSim pins.  Hosted run `31422292550` failed
-pre-gate: the Nordic container's gcovr (8.6) and gcov first lines did not
-match the committed baseline, and `firmware`/`release` were correctly
-skipped.  Hosted run `31424437357` passed Nix install, sdk-manager
-install, and environment verification but failed the BabbleSim build on
-the dangling `tools/bsim/Makefile` symlink; the west-population
-correction (`--group-filter +babblesim`) was validated by hosted run
-`31426937629`.
-Hosted run `31426937629` passed the exact Nix/NCS environment, coverage
-baseline, matrix, and the 17-scenario/26-run BabbleSim Stage 1, then
-ended **64 PASS / 1 FAIL / 65 TOTAL** solely because
+baseline and byte-identical BSim pins.  Hosted attempts `31422292550`
+(pre-gate gcov first-line mismatch), `31424437357` (dangling
+`tools/bsim/Makefile` symlink; west-population correction
+`--group-filter +babblesim` validated later), and `31426937629` (exact
+Nix/NCS environment, coverage baseline, matrix, and BSim Stage 1 passed,
+then **64 PASS / 1 FAIL / 65 TOTAL** solely because
 `test_enable_pairing_agent` launched a real `bt-agent` through an
-unmocked `subprocess.Popen` (the hosted locked Nix shell has no
-bluez-tools); `firmware`/`release` were correctly skipped.  The
-process-boundary mocking correction (mock `subprocess.Popen` + `time.sleep`
-in that test, mock-owned pid neutralized before tearDown) is pending hosted
-validation.
-No hosted pass is claimed.  Plan of
+unmocked `subprocess.Popen`) are diagnosis evidence; the process-boundary
+mocking correction landed at `647361c` and was validated on the
+acceptance run.  **Hosted acceptance run `31432411543`** (PR head
+`32bdc98`): `tests` job `93598711857` SUCCESS (50m22s) with exact
+console summary `Gate complete: 65 PASS / 0 FAIL / 65 TOTAL`; `firmware`
+job `93611002998` SUCCESS (6m21s) started only after tests completed,
+with both nRF5340 and nRF54L15 builds, build contract, version headers,
+packaging, verification, and artifact upload; `release` job `93612477731`
+SKIPPED as required on pull_request.  Test artifact
+`le-audio-test-results-6889a9f013f99085b21fc46c7068919ee7c834a3` (ID
+`9081041931`, digest
+`sha256:f119ba466e0c571e36723b45a238b3377a4599cda9611a6bdac5e92030f0bd23`,
+7-day retention); firmware artifact
+`firmware-v0.1.0-6889a9f013f99085b21fc46c7068919ee7c834a3` (ID
+`9081260473`, digest
+`sha256:bc1b50ce4bf2c0b6fef619e5987251dce9872c0f33d428e3334d58a1232933b2`,
+14-day retention); artifact names carry the GitHub pull-request merge
+SHA `6889a9f0...`, distinct from source head `32bdc98`.  PR #11
+mergeStateStatus CLEAN; the active ruleset `20658259` (targets
+`~DEFAULT_BRANCH`, requires pull request, blocks deletion and
+non-fast-forward, no bypass actors,
+`strict_required_status_checks_policy=false`) requires status contexts
+`tests` and `firmware`; latest-main/rebase is not required, but both
+checks must pass on PR head.  Hosted software gate ACCEPTED for the PR
+implementation; protected-main runs, draft-release creation, and FR4
+hardware acceptance remain separate and are not claimed.  Plan of
 record: `docs/development/firmware-ci-test-gate-plan.md`.
 
 ## Firmware release — FR4 BLOCKED (2026-08-10)

@@ -129,27 +129,30 @@ canonical software gate as a distinct `tests` job that must pass before
 the firmware builds run (`tests` → `firmware` → `release`); the job runs
 on the plain host runner inside the locked Nix dev shell with the exact
 NCS v3.3.0 SDK + `911f4c5c26` toolchain installed by pinned
-`nrfutil sdk-manager` 1.16.1 (hosted run `31422292550` failed pre-gate on
-the container's incompatible gcov first-line assertion; hosted run
-`31424437357` passed Nix/sdk-manager/environment verification but failed
-the BabbleSim build on the dangling `tools/bsim/Makefile` symlink;
-hosted run `31426937629` passed the exact Nix/NCS environment, coverage
-baseline, matrix, and the 17-scenario/26-run BabbleSim Stage 1, then
-ended `64 PASS / 1 FAIL / 65 TOTAL` solely because the mocked unit test
-`test_enable_pairing_agent` launched a real `bt-agent` through an
-unmocked `subprocess.Popen` (the hosted locked Nix shell has no
-bluez-tools); `firmware` and `release` were correctly skipped in all
-three, and the process-boundary mocking correction for that test is
-pending hosted validation); an early
+`nrfutil sdk-manager` 1.16.1.  Hosted attempts `31422292550` (pre-gate
+on the container's incompatible gcov first-line assertion) and
+`31424437357` (BabbleSim build on the dangling `tools/bsim/Makefile`
+symlink) failed; `31426937629` passed the exact Nix/NCS environment,
+coverage baseline, matrix, and the 17-scenario/26-run BabbleSim Stage 1
+but ended `64 PASS / 1 FAIL / 65 TOTAL` solely because the mocked unit
+test `test_enable_pairing_agent` launched a real `bt-agent` through an
+unmocked `subprocess.Popen`.  The process-boundary mocking correction
+landed at `647361c`, and the hosted canonical software gate is ACCEPTED
+on run `31432411543` (PR head `32bdc98`): `tests` job `93598711857`
+SUCCESS with exact console summary `Gate complete: 65 PASS / 0 FAIL /
+65 TOTAL`, `firmware` job `93611002998` SUCCESS started after tests,
+`release` job `93612477731` SKIPPED on pull_request; the active ruleset
+`20658259` requires status contexts `tests` and `firmware`.  An early
 disk-cleanup step frees only
 well-known preinstalled toolchain caches, the NCS install branches on
 the exact `cache-hit` output of the NCS cache step, never on directory
 presence, and a west population step runs `west update --narrow
 -o=--depth=1 --group-filter +babblesim` (the bundle ships bsim_west but
 the root group-filter excludes the `babblesim` components, leaving the
-Makefile symlink dangling).  Implementation is pending hosted PR
-validation (plan: `docs/development/firmware-ci-test-gate-plan.md`), no
-hosted pass is claimed.  Historical baselines: T0–T8 locked
+Makefile symlink dangling).  Plan of record:
+`docs/development/firmware-ci-test-gate-plan.md`.  Protected-main runs,
+draft-release creation, and FR4 hardware acceptance remain separate and
+are not claimed.  Historical baselines: T0–T8 locked
 behavior on production code `971e6a4` (T8 canonical gate **47 PASS /
 0 FAIL / 47 TOTAL**, coverage baseline `1a5842d` (26 files), build
 contract 76/76 — `docs/testing/pre-refactor-hardware-baseline.md`); the
