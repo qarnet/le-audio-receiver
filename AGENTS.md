@@ -133,7 +133,14 @@ NCS v3.3.0 SDK + `911f4c5c26` toolchain installed by pinned
 the container's incompatible gcov first-line assertion; hosted run
 `31424437357` passed Nix/sdk-manager/environment verification but failed
 the BabbleSim build on the dangling `tools/bsim/Makefile` symlink;
-`firmware` and `release` were correctly skipped in both); an early
+hosted run `31426937629` passed the exact Nix/NCS environment, coverage
+baseline, matrix, and the 17-scenario/26-run BabbleSim Stage 1, then
+ended `64 PASS / 1 FAIL / 65 TOTAL` solely because the mocked unit test
+`test_enable_pairing_agent` launched a real `bt-agent` through an
+unmocked `subprocess.Popen` (the hosted locked Nix shell has no
+bluez-tools); `firmware` and `release` were correctly skipped in all
+three, and the process-boundary mocking correction for that test is
+pending hosted validation); an early
 disk-cleanup step frees only
 well-known preinstalled toolchain caches, the NCS install branches on
 the exact `cache-hit` output of the NCS cache step, never on directory

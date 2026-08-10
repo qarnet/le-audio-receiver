@@ -12,7 +12,15 @@ Makefile because the sdk-manager bundle ships the bsim_west checkout with a
 dangling `Makefile` symlink to `components/common/Makefile` and the root
 group-filter excludes the `babblesim`-group components; the correction adds
 a west workspace population step with `--group-filter +babblesim`.
-Corrections pending hosted validation; no hosted pass is claimed.
+Hosted run `31426937629` passed the exact Nix/NCS environment checks, the
+coverage baseline, the matrix, and the 17-scenario/26-run BabbleSim Stage 1,
+then ended `64 PASS / 1 FAIL / 65 TOTAL`: the single failure was the
+host-dependent mocked unit test `test_enable_pairing_agent`, which mocked
+`subprocess.run` but still launched a real `bt-agent` through
+`subprocess.Popen`; the hosted locked Nix shell intentionally lacks
+bluez-tools. `firmware` and `release` were correctly skipped. The
+process-boundary mocking correction for that test is pending hosted
+validation; no hosted pass is claimed.
 
 ## Goal
 
@@ -239,9 +247,14 @@ Expected gate result is `65 PASS / 0 FAIL / 65 TOTAL` with unchanged coverage
 baseline and BSim pins. Hosted PR acceptance requires observable ordering:
 
 1. `tests` starts and passes (hosted attempt `31422292550` failed pre-gate
-   on the incompatible container gcov first-line assertion, and hosted
+   on the incompatible container gcov first-line assertion, hosted
    attempt `31424437357` failed the BabbleSim build on the dangling
-   `tools/bsim/Makefile` symlink; neither counts as a pass).
+   `tools/bsim/Makefile` symlink, and hosted attempt `31426937629` passed
+   the exact Nix/NCS environment, coverage baseline, matrix, and BSim
+   Stage 1 but ended `64 PASS / 1 FAIL / 65 TOTAL` solely because
+   `test_enable_pairing_agent` launched a real `bt-agent` through an
+   unmocked `subprocess.Popen` (the locked shell has no bluez-tools);
+   none of the three counts as a pass).
 2. `firmware` starts only after `tests` passes.
 3. Pull request never runs `release`.
 4. The executable workflow contract in `scripts/test_firmware_build_ci.py`

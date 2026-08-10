@@ -339,14 +339,50 @@ class TestPhase3GateMocked(unittest.TestCase):
         result = self.gate.is_device_connected("AA:BB:CC:DD:EE:FF")
         self.assertFalse(result)
 
+    @patch("time.sleep")
+    @patch("subprocess.Popen")
     @patch("subprocess.run")
-    def test_enable_pairing_agent(self, mock_run):
-        """enable_pairing_agent should succeed if all cmds return 0."""
+    def test_enable_pairing_agent(self, mock_run, mock_popen, mock_sleep):
+        """enable_pairing_agent should succeed if all cmds return 0.
+
+        Fully isolates the external process boundary: subprocess.Popen
+        is mocked so no real bt-agent is launched (the hosted locked Nix
+        shell has no bluez-tools), time.sleep is mocked so the test
+        stays fast, and the returned process reports alive with a
+        deterministic pid. The mock pid is neutralized to None after the
+        assertions so tearDown cleanup never signals a real process
+        group.
+        """
         mock_run.return_value = MagicMock(returncode=0)
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None  # alive
+        mock_proc.pid = 4242
+        mock_popen.return_value = mock_proc
+
         result = self.gate.enable_pairing_agent()
         self.assertTrue(result)
-        # Should have called agent on, default-agent, io-cap, pairable on, sc on
-        self.assertGreaterEqual(mock_run.call_count, 3)
+
+        # bt-agent launched with NoInputNoOutput capability only
+        mock_popen.assert_called_once_with(
+            ["bt-agent", "--capability=NoInputNoOutput"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            preexec_fn=os.setsid,
+        )
+
+        # Adapter configured: io-cap, pairable on, sc on
+        called_cmds = [c.args[0] for c in mock_run.call_args_list]
+        self.assertIn(["sudo", "btmgmt", "--index", "hci0", "io-cap", "3"], called_cmds)
+        self.assertIn(["bluetoothctl", "pairable", "on"], called_cmds)
+        self.assertIn(["sudo", "btmgmt", "--index", "hci0", "sc", "on"], called_cmds)
+
+        # Agent registration pause was mocked, keeping the test fast
+        mock_sleep.assert_any_call(0.5)
+
+        # The mock pid is mock-owned only: neutralize before tearDown so
+        # cleanup cannot target a real process group.
+        mock_proc.pid = None
 
     @patch("dbus.SystemBus")
     @patch("dbus.Interface")

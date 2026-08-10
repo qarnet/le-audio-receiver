@@ -81,7 +81,7 @@ tests in `scripts/test_firmware_build_ci.py` pin the topology, pins,
 provisioning, invocation, artifact retention, and release trust boundary;
 focused fixture tests cover the new output-root validation without real
 Zephyr or BabbleSim builds.  Local focused checks pass (inventory **62**,
-workflow contract 37/37, `test_coverage_runner` 34/34, `bsim_runner`
+workflow contract 40/40, `test_coverage_runner` 34/34, `bsim_runner`
 61/61); the full local canonical gate on the clean implementation commit
 `ca55e9d` is **65 PASS / 0 FAIL / 65 TOTAL** with unchanged coverage
 baseline and byte-identical BSim pins.  Hosted run `31422292550` failed
@@ -91,6 +91,15 @@ skipped.  Hosted run `31424437357` passed Nix install, sdk-manager
 install, and environment verification but failed the BabbleSim build on
 the dangling `tools/bsim/Makefile` symlink; the west-population
 correction (`--group-filter +babblesim`) is pending hosted validation.
+Hosted run `31426937629` passed the exact Nix/NCS environment, coverage
+baseline, matrix, and the 17-scenario/26-run BabbleSim Stage 1, then
+ended **64 PASS / 1 FAIL / 65 TOTAL** solely because
+`test_enable_pairing_agent` launched a real `bt-agent` through an
+unmocked `subprocess.Popen` (the hosted locked Nix shell has no
+bluez-tools); `firmware`/`release` were correctly skipped.  The
+process-boundary mocking correction (mock `subprocess.Popen` + `time.sleep`
+in that test, mock-owned pid neutralized before tearDown) is pending hosted
+validation.
 No hosted pass is claimed.  Plan of
 record: `docs/development/firmware-ci-test-gate-plan.md`.
 
