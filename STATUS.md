@@ -1,9 +1,9 @@
-# STATUS — le-audio-receiver — 2026-08-09
+# STATUS — le-audio-receiver — 2026-08-10
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-> **Current state (2026-08-09):** canonical gate **65 PASS / 0 FAIL /
+> **Current state (2026-08-10):** canonical gate **65 PASS / 0 FAIL /
 > 65 TOTAL** on the clean tree (35 twister + 5 exec-only + 22 Python +
 > coverage + matrix + BSim Stage 1; the FR2 clean-tree run at `75a8093`
 > and the FR1 clean run at `1671a9f` are historical, with earlier clean
@@ -12,21 +12,59 @@
 > `b8bd633` and the production-fix canonical run at `f2f9336`, after
 > the empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
 > (`f2f9336`) fixes — the committed coverage baseline is unchanged),
-> coverage population **36** (4674/5130 lines, 2030/2824
-> branches, 358/358 functions, committed baseline unchanged), build
-> contract **95/95**, BSim 17 scenarios / 26 runs pins byte-identical,
+> coverage population **36** (4777/5234 lines, 2091/2896
+> branches, 363/363 functions, committed baseline unchanged), build
+> contract **96/96**, BSim 17 scenarios / 26 runs pins byte-identical,
 > P1–P8 user pairing control ACCEPTED (nRF54L15 enabled, nRF5340
 > feature-off), FR1 deterministic firmware packager ACCEPTED, FR2
 > firmware-build CI ACCEPTED (hosted run 31326612845 PASS, workflow
 > artifacts only — no tag, GitHub Release, published binary, hardware
-> acceptance, MCUboot, or DFU), and FR3 automatic draft-release creation
+> acceptance, MCUboot, or DFU), FR3 automatic draft-release creation
 > ACCEPTED (final merged hosted run `b70b978` PASS with release SKIPPED
-> on unchanged `VERSION`; exact untagged draft `v0.1.0` private and
-> unpublished, awaiting FR4 hardware acceptance; nothing published).
+> on unchanged `VERSION`), and FR4 exact-artifact hardware acceptance
+> **BLOCKED**: the exact draft `v0.1.0` FAILED mandatory nRF5340 mono
+> acceptance and remains private, unpublished, and untagged; the local
+> replacement preflight passed both targets but is not exact-artifact
+> acceptance; a replacement candidate must be created through the
+> trusted-main lifecycle and its exact assets must pass FR4 before FR5
+> can publish anything; nothing published.
 > The R0–R10 refactor figures below (gate 55/0/55,
 > population 33, contract 79/79) are the **historical** R10 baseline
 > (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
 > for their own commits.
+
+## Firmware release — FR4 BLOCKED (2026-08-10)
+
+**FR4 — exact-artifact hardware acceptance — BLOCKED, not accepted**:
+the exact draft candidate `v0.1.0` (draft `367572702`, `tag_name=v0.1.0`,
+target `3d9a9186ec288484a637dac1dc7460319daf5e84`) passed every identity,
+checksum, ZIP, internal checksum, provenance, notes-body, and untagged-ref
+validation and its nRF5340 Mode A diagnostic passed, but after the central
+mono selection fix `9f456b1` the mandatory nRF5340 fresh mono row failed
+receiver criteria: central sent 12000 frames / 120 s / 100 fps over exactly
+one CIS, receiver reported `SDUs=8876 decoded=8876 plc=0 decode_err=0
+i2s_underrun=0 stream_reset=225 empty_sdu=0`, and the receiver emitted 225
+each of `i2s_nrfx: Next buffers not supplied on time`, `i2s_nrfx: Cannot
+write in state: 4`, and `audio_i2s: I2S underrun, restarting DMA`. The
+deterministic failure stopped the matrix before nRF54L15. The exact
+candidate therefore FAILED FR4 and remains private, unpublished, and
+intentionally untagged.  The local replacement preflight (pristine builds
+from committed HEAD `5e7f502`) PASSED all six rows on both targets with
+zero decode errors, underruns, stream resets, and cadence RESYNC warnings
+(see `docs/development/firmware-release-fr4-results.md` for row, stack, and
+image-identity tables); it is replacement-candidate preflight only, not FR4
+exact-artifact acceptance.  Software gates at `5e7f502`: canonical gate
+**65 PASS / 0 FAIL / 65 TOTAL**, build contract **96/96**, coverage
+population **36** (4777/5234 L, 2091/2896 B, 363/363 F, committed baseline
+unchanged), BSim pins byte-identical.  Evidence:
+`docs/development/firmware-release-fr4-results.md`; procedure
+`docs/development/firmware-release-fr4-procedure.md` (historical, executed
+2026-08-10); retained run dirs under `/tmp/opencode/` (exact draft
+`fr4-v0.1.0-OEp9Kh`, cadence local `fr4-cadence-local-*`).  A replacement
+candidate must be created through the accepted trusted-main lifecycle and
+its exact immutable assets must rerun the full FR4 procedure on both
+targets before FR5 can publish anything.  FR4 and FR5 remain blocked; no
+replacement version has been chosen; nothing published.
 
 ## Firmware release — FR3 ACCEPTED (2026-08-09)
 

@@ -1,8 +1,14 @@
 # FR4 procedure: exact-artifact hardware acceptance
 
-Status: **prepared, not executed**. FR4 remains unaccepted.
+Status: **historical procedure** — executed 2026-08-10 and failed at the
+mandatory nRF5340 mono row. FR4 remains unaccepted and BLOCKED. Exact
+`v0.1.0` candidate evidence and results:
+`docs/development/firmware-release-fr4-results.md`; retained run directory
+`/tmp/opencode/fr4-v0.1.0-OEp9Kh/`. Future candidate execution needs a
+newly pinned procedure or evidence set; do not reuse this document's IDs,
+hashes, or commands as current inputs.
 
-Date: 2026-08-09
+Date: 2026-08-09 (prepared)
 
 This document is the complete internal procedure for FR4 exact-artifact
 hardware acceptance of draft release `367572702` (`v0.1.0`, target
@@ -122,11 +128,28 @@ After download, in order:
    ```
 
 6. Save the draft body privately and require it byte-equal to the
-   regenerated release notes, without printing the body:
+   regenerated release notes, without printing the body. Extract `.body`
+   from the already-private saved `$RUN_DIR/metadata/release.json`
+   (written in step 2) with stdlib Python: require the field to be a JSON
+   string, UTF-8 encode it without adding bytes, and write the exact
+   result. Do not use `gh api --jq .body > file`: the gh CLI appends one
+   trailing newline to `--jq` string output, which is not byte-exact
+   (observed 822 bytes vs the 821-byte body during the 2026-08-10
+   execution; the JSON body was byte-equal to the regenerated notes).
 
    ```bash
-   gh api repos/qarnet/le-audio-receiver/releases/367572702 --jq .body \
-     > "$RUN_DIR/metadata/draft-body.txt"
+   python3 - "$RUN_DIR/metadata/release.json" \
+     "$RUN_DIR/metadata/draft-body.txt" <<'PY'
+   import json
+   import sys
+
+   with open(sys.argv[1], "r", encoding="utf-8") as fh:
+       body = json.load(fh)["body"]
+   if not isinstance(body, str):
+       raise SystemExit("draft body: expected a JSON string")
+   with open(sys.argv[2], "wb") as fh:
+       fh.write(body.encode("utf-8"))
+   PY
    cmp "$RUN_DIR/metadata/draft-body.txt" \
        "$RUN_DIR/metadata/regenerated/release-notes.md"
    ```

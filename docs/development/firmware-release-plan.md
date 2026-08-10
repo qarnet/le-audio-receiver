@@ -5,6 +5,12 @@ through GitHub Releases. This plan is documentation only; it does not add CI,
 packaging code, version files, tags, releases, MCUboot, or firmware behavior.
 Implementation phases FR1-FR5 are defined below.
 
+Phase status (2026-08-10): FR1-FR3 ACCEPTED; FR4 BLOCKED after the exact
+`v0.1.0` draft candidate failed mandatory nRF5340 mono hardware acceptance
+(the local replacement preflight passed both targets but is not
+exact-artifact acceptance); FR5 remains blocked pending a replacement
+candidate's exact-artifact FR4 pass.  Nothing published.
+
 ## Goal
 
 Publish factory-flash firmware binaries that public users can download, verify,
@@ -128,7 +134,11 @@ Do not install J-Link in build-only CI.
 - GitHub-hosted CI never publishes the draft automatically.
 - Maintainer downloads exact draft attachments, flashes those bytes, runs
   software and hardware acceptance, records results, then manually publishes.
-- Failed hardware acceptance leaves the release draft unpublished.
+- Failed hardware acceptance leaves the release draft unpublished. A failed
+  draft is never mutated and its accepted evidence is never rewritten; a
+  later versioned candidate must be created through the same trusted-main
+  lifecycle (new `VERSION`, new draft) rather than editing the failed draft
+  or its assets. The failed draft stays private and unpublished.
 - After manual publication, verify the created lightweight tag:
   `refs/tags/v<version>` must point at the release's target commit (FR5).
 
@@ -221,10 +231,32 @@ remain planned.
 Add a release-candidate acceptance procedure and evidence template. Validate
 exact draft assets on both targets. Do not rebuild between download and test.
 
+**FR4 EXECUTED 2026-08-10 AND BLOCKED.**  The procedure
+(`docs/development/firmware-release-fr4-procedure.md`, now historical) ran
+against exact draft `367572702` (`v0.1.0`, target
+`3d9a9186ec288484a637dac1dc7460319daf5e84`).  The candidate passed every
+download/provenance/identity check and the nRF5340 Mode A diagnostic, but
+failed the mandatory nRF5340 fresh mono row (receiver `stream_reset=225`
+with 225 each of `i2s_nrfx: Next buffers not supplied on time`, `Cannot
+write in state: 4`, and `I2S underrun, restarting DMA`), stopping the
+matrix before nRF54L15.  The exact `v0.1.0` candidate is therefore
+**failed** and remains private, unpublished, and untagged.  The local fix
+preflight (pristine builds at `5e7f502`) **passed** all six rows on both
+targets but is replacement-candidate preflight only, not FR4 exact-artifact
+acceptance.  A **replacement exact-artifact run is pending**: a new
+versioned draft must be created through the accepted trusted-main lifecycle
+and its exact immutable assets must rerun the full FR4 procedure on both
+targets.  Full evidence:
+`docs/development/firmware-release-fr4-results.md`.  No replacement version
+has been chosen.
+
 ### FR5: first useful release and closeout
 
 Update public flashing/user docs, record evidence, publish manually, and verify
 release download/checksum/flash instructions from a clean machine.
+
+**FR5 remains planned/blocked** until a replacement candidate's exact
+immutable assets pass FR4.  Nothing published.
 
 ## Future DFU track
 

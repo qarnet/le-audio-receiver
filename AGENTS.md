@@ -106,17 +106,22 @@ BSim; the FR2 clean-tree run at `75a8093`, the FR1 clean run at
 `b8bd633` and the production-fix canonical run at `f2f9336`, after the
 empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
 (`f2f9336`) fixes — the committed coverage baseline is unchanged),
-coverage population **36** (4674/5130 lines, 2030/2824
-branches, 358/358 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
-baseline unchanged), builds 3/3, build contract **95/95**, BSim Stage 1
+coverage population **36** (4777/5234 lines, 2091/2896
+branches, 363/363 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
+baseline unchanged), builds 3/3, build contract **96/96**, BSim Stage 1
 pins byte-identical, P1–P8 user pairing control ACCEPTED (nRF54L15
 enabled, nRF5340 feature-off), FR1 deterministic firmware packager
 ACCEPTED, FR2 firmware-build CI ACCEPTED (hosted run 31326612845
 PASS; workflow artifacts only, no tag/release/hardware acceptance), and
 FR3 automatic draft-release creation ACCEPTED (final merged hosted run
-`b70b978` PASS with release SKIPPED on unchanged `VERSION`; exact
-untagged draft `v0.1.0` awaits FR4 hardware acceptance; nothing
-published).  Historical baselines: T0–T8 locked
+`b70b978` PASS with release SKIPPED on unchanged `VERSION`).  FR4
+exact-artifact hardware acceptance is **BLOCKED**: the exact draft
+`v0.1.0` FAILED mandatory nRF5340 mono acceptance and remains private,
+unpublished, and untagged; the local replacement preflight passed both
+targets at `5e7f502` but is not exact-artifact acceptance; a replacement
+candidate must be created through the trusted-main lifecycle and its
+exact assets must pass FR4 before FR5 can publish anything; nothing
+published.  Historical baselines: T0–T8 locked
 behavior on production code `971e6a4` (T8 canonical gate **47 PASS /
 0 FAIL / 47 TOTAL**, coverage baseline `1a5842d` (26 files), build
 contract 76/76 — `docs/testing/pre-refactor-hardware-baseline.md`); the
