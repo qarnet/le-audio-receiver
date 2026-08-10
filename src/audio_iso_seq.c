@@ -241,6 +241,18 @@ audio_iso_cadence_update(struct audio_iso_cadence *st, bool has_ts, uint32_t ts,
 		observation->tolerance_us = u32_sat_u64(tolerance_us);
 	}
 
+	/* Computable off-grid error: absolute distance of the forward
+	 * delta from the nearest grid multiple.  Populated before the
+	 * RESYNC classification so every observation reports the error
+	 * that IS computable, including the zero-advance and
+	 * delivered-gt-events cases (a duplicate keeps error 0). */
+	const uint64_t nearest_us = event_count * (uint64_t)interval_us;
+	const uint64_t err = delta_us > nearest_us ? delta_us - nearest_us : nearest_us - delta_us;
+
+	if (observation != NULL) {
+		observation->error_us = u32_sat_u64(err);
+	}
+
 	/* Unresolvable cadence: counted resync, no synthesis. */
 	if (event_count == 0U) {
 		/* Duplicate timestamp (ts == last_ts): zero event advance. */
@@ -259,23 +271,14 @@ audio_iso_cadence_update(struct audio_iso_cadence *st, bool has_ts, uint32_t ts,
 		}
 		return AUDIO_ISO_CADENCE_RES_RESYNC;
 	}
-	{
-		const uint64_t nearest_us = event_count * (uint64_t)interval_us;
-		const uint64_t err =
-			delta_us > nearest_us ? delta_us - nearest_us : nearest_us - delta_us;
-
+	if (err > tolerance_us) {
+		/* Non-integral forward delta beyond the scaled
+		 * clock/span tolerance. */
+		st->resyncs++;
 		if (observation != NULL) {
-			observation->error_us = u32_sat_u64(err);
+			observation->reason = AUDIO_ISO_CADENCE_REASON_DELTA_OFF_GRID;
 		}
-		if (err > tolerance_us) {
-			/* Non-integral forward delta beyond the scaled
-			 * clock/span tolerance. */
-			st->resyncs++;
-			if (observation != NULL) {
-				observation->reason = AUDIO_ISO_CADENCE_REASON_DELTA_OFF_GRID;
-			}
-			return AUDIO_ISO_CADENCE_RES_RESYNC;
-		}
+		return AUDIO_ISO_CADENCE_RES_RESYNC;
 	}
 
 	/* Omitted events: grid events minus delivered callback positions.

@@ -12,10 +12,12 @@
  *     first, contiguous 10 ms and 7.5 ms grids, timestamp-only
  *     omissions, scaled clock/span tolerance boundaries (10 ms
  *     one-event 42/43 us, 10 ms nine-event 122/123 us, 7.5 ms
- *     nine-event 100/101 us, quarter-interval cap, tiny-interval zero
- *     tolerance), structured observation evidence (zeroed on
- *     non-RESYNC, exact reason + delta/event/error/tolerance for every
- *     RESYNC class), missing-TS callbacks without false concealment,
+ *     nine-event 100/101 us, quarter-interval cap on the long no-TS
+ *     delivered-position path, tiny-interval zero tolerance),
+ *     structured observation evidence (cleared at call entry; computed
+ *     delta/event/error/tolerance populated whenever cadence math runs,
+ *     reason stays NONE for non-RESYNC and carries the exact class for
+ *     every RESYNC), missing-TS callbacks without false concealment,
  *     missing-TS plus a real omitted event, LOST-style delivered
  *     callbacks, backward timestamp wrap, bounded resync classes,
  *     concealment bound, counters/reset;
@@ -887,20 +889,32 @@ ZTEST(iso_seq, test_cadence_observation_zeroed_non_resync)
 	zassert_equal(AUDIO_ISO_CADENCE_REASON_NONE, obs.reason);
 	zassert_equal(0U, obs.delta_us);
 
-	/* CONTIG. */
+	/* CONTIG: cadence math runs, so the computed fields are
+	 * populated; only the reason stays NONE. */
 	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG,
 		      cadfeed_obs(true, 20000, 10000, &omitted, &obs));
 	zassert_equal(AUDIO_ISO_CADENCE_REASON_NONE, obs.reason);
+	zassert_equal(10000U, obs.delta_us);
+	zassert_equal(1U, obs.event_count);
+	zassert_equal(1U, obs.delivered_positions);
+	zassert_equal(0U, obs.error_us);
+	zassert_equal(scaled_tolerance(1, 10000), obs.tolerance_us);
 
-	/* NO_TS: position counted, observation stays zeroed. */
+	/* NO_TS: no cadence math, so the observation stays at its
+	 * cleared state (reason NONE, computed fields zero). */
 	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed_obs(false, 0, 10000, &omitted, &obs));
 	zassert_equal(AUDIO_ISO_CADENCE_REASON_NONE, obs.reason);
 	zassert_equal(0U, obs.event_count);
 
-	/* GAP: concealment, reason stays NONE. */
+	/* GAP: the concealment path still runs cadence math; reason
+	 * stays NONE. */
 	zassert_equal(AUDIO_ISO_CADENCE_RES_GAP, cadfeed_obs(true, 50000, 10000, &omitted, &obs));
 	zassert_equal(AUDIO_ISO_CADENCE_REASON_NONE, obs.reason);
 	zassert_equal(1U, omitted);
+	zassert_equal(30000U, obs.delta_us);
+	zassert_equal(3U, obs.event_count);
+	zassert_equal(2U, obs.delivered_positions);
+	zassert_equal(0U, obs.error_us);
 
 	/* WRAP: rebase, observation zeroed, no resync increment. */
 	zassert_equal(AUDIO_ISO_CADENCE_RES_WRAP, cadfeed_obs(true, 3000, 10000, &omitted, &obs));
@@ -958,15 +972,17 @@ ZTEST(iso_seq, test_cadence_observation_delivered_gt_events)
 	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
 	zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
 	/* One-interval span with four delivered positions cannot be a
-	 * real omission. */
+	 * real omission: the delivered-gt-events reason still wins when
+	 * the timestamp is off-grid by a computable error inside the
+	 * scaled tolerance. */
 	zassert_equal(AUDIO_ISO_CADENCE_RES_RESYNC,
-		      cadfeed_obs(true, 20000, 10000, &omitted, &obs));
+		      cadfeed_obs(true, 20040, 10000, &omitted, &obs));
 	zassert_equal(0U, omitted);
 	zassert_equal(AUDIO_ISO_CADENCE_REASON_DELIVERED_GT_EVENTS, obs.reason);
-	zassert_equal(10000U, obs.delta_us);
+	zassert_equal(10040U, obs.delta_us);
 	zassert_equal(1U, obs.event_count);
 	zassert_equal(4U, obs.delivered_positions);
-	zassert_equal(0U, obs.error_us, "error is not reached before this check");
+	zassert_equal(40U, obs.error_us, "exact computed off-grid error");
 	zassert_equal(scaled_tolerance(1, 10000), obs.tolerance_us);
 	zassert_equal(1U, audio_iso_cadence_get_resyncs(&cad));
 
@@ -1080,17 +1096,47 @@ ZTEST(iso_seq, test_cadence_tolerance_cap_and_tiny_interval)
 	struct audio_iso_cadence_observation obs = {0};
 	uint32_t omitted = 99U;
 
-	/* Quarter-interval cap: a 400-event 10 ms span (raw tolerance
-	 * 32 + 4000 = 4032 us) is capped at 2500 us = 10000/4, still far
-	 * below half-interval ambiguity (5000 us). */
+	/* Quarter-interval cap on the long no-TS delivered-position path:
+	 * 399 no-TS callbacks plus the current timestamp deliver 400
+	 * positions covering a 400-event 10 ms span with exactly +2500 us
+	 * (the capped tolerance: raw 32 + 4000 = 4032 us is capped at
+	 * 2500 us = 10000/4, still far below half-interval ambiguity
+	 * 5000 us).  All 400 events are delivered: CONTIG, no omission. */
 	setup_cad();
 	zassert_equal(2500U, scaled_tolerance(400, 10000), "cap = interval/4");
 	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
-	zassert_equal(AUDIO_ISO_CADENCE_RES_RESYNC,
-		      cadfeed_obs(true, 4010000, 10000, &omitted, &obs));
-	zassert_equal(AUDIO_ISO_CADENCE_REASON_OVER_BOUND, obs.reason,
-		      "400-event span overflows the concealment bound");
+	for (uint32_t i = 0U; i < 399U; i++) {
+		zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
+	}
+	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG,
+		      cadfeed_obs(true, 4012500, 10000, &omitted, &obs));
+	zassert_equal(AUDIO_ISO_CADENCE_REASON_NONE, obs.reason);
+	zassert_equal(0U, omitted, "400 delivered positions cover 400 grid events");
+	zassert_equal(400U, obs.delivered_positions);
+	zassert_equal(400U, obs.event_count);
+	zassert_equal(2500U, obs.error_us, "exact off-grid error at the capped tolerance");
 	zassert_equal(2500U, obs.tolerance_us, "tolerance capped at a quarter interval");
+	zassert_equal(0U, audio_iso_cadence_get_resyncs(&cad));
+	zassert_equal(0U, audio_iso_cadence_get_concealed(&cad));
+
+	/* One microsecond beyond the cap: the same delivered-position
+	 * span resyncs with exact off-grid evidence and no synthesis. */
+	setup_cad();
+	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
+	for (uint32_t i = 0U; i < 399U; i++) {
+		zassert_equal(AUDIO_ISO_CADENCE_RES_NO_TS, cadfeed(false, 0, 10000, &omitted));
+	}
+	zassert_equal(AUDIO_ISO_CADENCE_RES_RESYNC,
+		      cadfeed_obs(true, 4012501, 10000, &omitted, &obs));
+	zassert_equal(AUDIO_ISO_CADENCE_REASON_DELTA_OFF_GRID, obs.reason);
+	zassert_equal(0U, omitted, "off-grid resync must not synthesize");
+	zassert_equal(4002501U, obs.delta_us);
+	zassert_equal(400U, obs.event_count);
+	zassert_equal(400U, obs.delivered_positions);
+	zassert_equal(2501U, obs.error_us, "exact error one us beyond the cap");
+	zassert_equal(2500U, obs.tolerance_us, "tolerance capped at a quarter interval");
+	zassert_equal(1U, audio_iso_cadence_get_resyncs(&cad));
+	zassert_equal(0U, audio_iso_cadence_get_concealed(&cad));
 
 	/* Tiny interval edge: interval_us / 4 == 0 makes the tolerance
 	 * exactly zero (no underflow) — an integer-gap delta is exactly
