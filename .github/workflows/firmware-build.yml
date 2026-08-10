@@ -80,6 +80,22 @@ jobs:
             nrfutil sdk-manager install v3.3.0
           fi
           EOF
+      - name: Populate NCS workspace projects
+        run: |
+          nix develop --accept-flake-config --command bash -s <<'EOF'
+          set -euo pipefail
+          cd "$HOME/ncs/v3.3.0"
+          test "$(west topdir)" = "$HOME/ncs/v3.3.0"
+          # The sdk-manager bundle carries the bsim_west checkout, but the
+          # root group-filter excludes the babblesim-group components,
+          # leaving tools/bsim/Makefile a dangling symlink to
+          # components/common/Makefile. Re-enable that group so west
+          # fetches every component at its pinned revision; the revisions
+          # come from the pinned imported bsim manifest, never floating
+          # clones or ad hoc BSim URLs.
+          west update --narrow -o=--depth=1 --group-filter +babblesim
+          test -f "$HOME/ncs/v3.3.0/tools/bsim/Makefile"
+          EOF
       - name: Verify canonical test environment
         run: |
           nix develop --accept-flake-config --command bash -s <<'EOF'

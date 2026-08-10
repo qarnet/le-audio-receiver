@@ -1,12 +1,18 @@
 # Firmware CI canonical test gate plan
 
-Status: implementation plan for PR 11. Date: 2026-08-10. Corrected after the
-first hosted run: hosted run `31422292550` failed pre-gate because the Nordic
-container's gcovr (8.6) and gcov first lines did not match the committed
-baseline (`gcovr 8.4`, `gcov (GCC) 14.3.0`); `firmware` and `release` were
-correctly skipped. The tests job now runs on the plain host runner inside the
-locked Nix shell, which provides the exact flake tools. Correction pending
-hosted validation; no hosted pass is claimed.
+Status: implementation plan for PR 11. Date: 2026-08-10. Corrected after
+the first hosted runs. Hosted run `31422292550` failed pre-gate because the
+Nordic container's gcovr (8.6) and gcov first lines did not match the
+committed baseline (`gcovr 8.4`, `gcov (GCC) 14.3.0`); `firmware` and
+`release` were correctly skipped. The tests job now runs on the plain host
+runner inside the locked Nix shell, which provides the exact flake tools.
+Hosted run `31424437357` passed Nix, sdk-manager install, and environment
+verification but failed the BabbleSim build: `tools/bsim` had no usable
+Makefile because the sdk-manager bundle ships the bsim_west checkout with a
+dangling `Makefile` symlink to `components/common/Makefile` and the root
+group-filter excludes the `babblesim`-group components; the correction adds
+a west workspace population step with `--group-filter +babblesim`.
+Corrections pending hosted validation; no hosted pass is claimed.
 
 ## Goal
 
@@ -122,6 +128,17 @@ with `firmware` and does not checkout sdk-nrf separately:
   (`CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}`), never on directory
   presence alone: on an exact hit, require `$HOME/ncs/v3.3.0/nrf` to exist
   and skip install; otherwise run `nrfutil sdk-manager install v3.3.0`;
+- populate the installed workspace through the locked shell, from
+  `$HOME/ncs/v3.3.0`, asserting `west topdir` equality first, then running
+  `west update --narrow -o=--depth=1 --group-filter +babblesim`, and
+  requiring `$HOME/ncs/v3.3.0/tools/bsim/Makefile` to resolve (`test -f`
+  follows the symlink). The `+babblesim` re-enable is required because the
+  sdk-manager bundle carries the bsim_west checkout but the root manifest
+  group-filter excludes the `babblesim` group, so the bundle's
+  `tools/bsim/Makefile` (a symlink to `components/common/Makefile`) is
+  dangling until west fetches the components. Every fetched revision stays
+  pinned by the imported bsim manifest; no floating clones or ad hoc BSim
+  URLs are used;
 - verify through the locked shell and fail closed: `gcovr` first line `gcovr 8.4`,
   `gcov` first line `gcov (GCC) 14.3.0`, `ZEPHYR_BASE` resolves to
   `$HOME/ncs/v3.3.0/zephyr` (the shell hook derives it from the sdk-manager
@@ -221,9 +238,10 @@ command remains:
 Expected gate result is `65 PASS / 0 FAIL / 65 TOTAL` with unchanged coverage
 baseline and BSim pins. Hosted PR acceptance requires observable ordering:
 
-1. `tests` starts and passes (the first hosted attempt, run `31422292550`,
-   failed pre-gate on the incompatible container gcov first-line assertion
-   and must not be counted as a pass).
+1. `tests` starts and passes (hosted attempt `31422292550` failed pre-gate
+   on the incompatible container gcov first-line assertion, and hosted
+   attempt `31424437357` failed the BabbleSim build on the dangling
+   `tools/bsim/Makefile` symlink; neither counts as a pass).
 2. `firmware` starts only after `tests` passes.
 3. Pull request never runs `release`.
 4. The executable workflow contract in `scripts/test_firmware_build_ci.py`

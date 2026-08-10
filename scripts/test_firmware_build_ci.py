@@ -619,9 +619,10 @@ class TestTestsJobContract(unittest.TestCase):
             self.assertIn(needle, block, "missing %r in tests job" % needle)
         self.assertNotIn("path: workspace/le-audio-receiver", block)
         self.assertNotIn("repository: nrfconnect/sdk-nrf", block)
+        # No separate sdk-nrf checkout: the SDK comes from sdk-manager, and
+        # the west workspace population step operates on that installed
+        # tree (pinned by the exact manifest), not on a second checkout.
         self.assertNotIn("west init", block)
-        self.assertNotIn("west update", block)
-        self.assertNotIn("west zephyr-export", block)
 
     def test_tests_job_nix_install_and_caches_pinned(self):
         block = self._tests_block()
@@ -687,6 +688,40 @@ class TestTestsJobContract(unittest.TestCase):
             "install must not infer cache hit from directory existence",
         )
         self.assertIn('if [ "$CACHE_HIT" = "true" ]; then', block)
+
+    def test_tests_job_west_population_exact(self):
+        # The sdk-manager bundle ships the bsim_west checkout but the root
+        # group-filter excludes the babblesim-group components, leaving
+        # tools/bsim/Makefile a dangling symlink to
+        # components/common/Makefile. The workspace population step must
+        # re-enable that group so west fetches every component at its
+        # pinned revision; revisions come from the pinned imported bsim
+        # manifest, never floating clones or ad hoc BSim URLs.
+        block = self._tests_block()
+        self.assertIn("Populate NCS workspace projects", block)
+        for needle in (
+            'cd "$HOME/ncs/v3.3.0"',
+            'test "$(west topdir)" = "$HOME/ncs/v3.3.0"',
+            "west update --narrow -o=--depth=1 --group-filter +babblesim",
+            'test -f "$HOME/ncs/v3.3.0/tools/bsim/Makefile"',
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+        # The exact command must carry the group re-enable: the plain
+        # command (without the flag) must not appear on its own.
+        self.assertNotIn(
+            "west update --narrow -o=--depth=1\n",
+            block,
+            "west update must always carry --group-filter +babblesim",
+        )
+        # Ordering: NCS install -> workspace population -> environment
+        # verify -> BSim build.
+        install_i = block.index("Install NCS SDK and toolchain")
+        populate_i = block.index("Populate NCS workspace projects")
+        verify_i = block.index("Verify canonical test environment")
+        bsim_i = block.index("Build BabbleSim components")
+        self.assertLess(install_i, populate_i, "population must follow install")
+        self.assertLess(populate_i, verify_i, "verify must follow population")
+        self.assertLess(verify_i, bsim_i, "BSim build must follow verify")
 
     def test_tests_job_environment_verification_exact(self):
         block = self._tests_block()

@@ -55,7 +55,13 @@ An early disk cleanup step frees only well-known preinstalled toolchain
 caches (Nix closure ~4.5 GiB + NCS/toolchain ~4.6 GiB + retained native
 build trees exceed the ephemeral runner disk); the NCS install step
 branches on the cache step's exact `cache-hit` output, never on directory
-presence alone.
+presence alone.  A west workspace population step then runs
+`west update --narrow -o=--depth=1 --group-filter +babblesim` in
+`$HOME/ncs/v3.3.0`: the sdk-manager bundle ships the bsim_west checkout
+but the root group-filter excludes the `babblesim`-group components,
+leaving `tools/bsim/Makefile` (a symlink to
+`components/common/Makefile`) dangling; re-enabling the group fetches
+every component at its pinned revision from the imported bsim manifest.
 The job verifies the committed baseline tool first lines, `ZEPHYR_BASE`
 (`$HOME/ncs/v3.3.0/zephyr`), sdk-nrf HEAD
 `ba167d9f3db4abbdc9b67887ca3ea66c64f2d956`, `nrf/VERSION` `3.3.0`, and
@@ -81,8 +87,11 @@ workflow contract 37/37, `test_coverage_runner` 34/34, `bsim_runner`
 baseline and byte-identical BSim pins.  Hosted run `31422292550` failed
 pre-gate: the Nordic container's gcovr (8.6) and gcov first lines did not
 match the committed baseline, and `firmware`/`release` were correctly
-skipped; the Nix-runner correction is pending hosted validation.  No
-hosted pass is claimed.  Plan of
+skipped.  Hosted run `31424437357` passed Nix install, sdk-manager
+install, and environment verification but failed the BabbleSim build on
+the dangling `tools/bsim/Makefile` symlink; the west-population
+correction (`--group-filter +babblesim`) is pending hosted validation.
+No hosted pass is claimed.  Plan of
 record: `docs/development/firmware-ci-test-gate-plan.md`.
 
 ## Firmware release — FR4 BLOCKED (2026-08-10)
