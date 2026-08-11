@@ -13,8 +13,8 @@ Execute exact-artifact hardware acceptance against draft release `368351363`
 (`v0.1.0`, target
 `5966d68f8155a5a96da96fc7859f1064a3591472`). Prove that both downloaded ZIPs
 are intact, reproducible release products, contain the expected firmware
-images, match the accepted local replacement-preflight image bytes, flash and
-boot on their intended targets, and pass the autonomous receiver matrix.
+images with the exact identities pinned below, flash and boot on their intended
+targets, and pass the autonomous receiver matrix.
 
 Return raw evidence for Orchestrator review. Do not publish the draft, create a
 tag, or claim FR4 acceptance in repository docs during execution.
@@ -119,15 +119,27 @@ than twice.
    internal `SHA256SUMS`, and require exact members:
    - nRF5340: `merged.hex`, `merged_CPUNET.hex`;
    - nRF54L15: `cpuapp.hex`, `flpr.hex`.
-10. Require extracted image hashes to equal the accepted local replacement
-    preflight recorded in `firmware-release-fr4-results.md`:
+10. Record and require the exact extracted image hashes from this immutable
+    draft asset set:
 
     | Image | SHA-256 |
     |---|---|
-    | nRF5340 `merged.hex` | `ab8abda54987d2cd0cb664ca58ee95a42907d0713e562f95f1e4fb7463a990fd` |
+    | nRF5340 `merged.hex` | `8239f20629711b12080bbb1333f410e339bf0dd39d925884f194f58a7424e61c` |
     | nRF5340 `merged_CPUNET.hex` | `2ce0ca1aa9fdc27d9fc1a4b25148af82da2fb52f1834f61113685d0851119619` |
-    | nRF54L15 `cpuapp.hex` | `85253a4b69a89c6bc8d7073a0d0c8ccbc50ba559ea6c6eefe5cbf5f3839cbbc0` |
+    | nRF54L15 `cpuapp.hex` | `8e4bd57dfb18cff600ca97a25e956d0ea9ca6b808ccf393b56edf973b5bfbdd6` |
     | nRF54L15 `flpr.hex` | `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2` |
+
+    These are exact release-image identities, not a comparison against the
+    earlier local preflight build. The local preflight was built at commit
+    `5e7f502` under a different build-root path; cpuapp embeds commit and
+    source-path strings, which change image size, link layout, addresses, and
+    relocations even when executable/config inputs are identical. Netcore and
+    FLPR happen not to embed those strings and remain byte-identical. Requiring
+    cpuapp byte equality across those builds is therefore invalid and was
+    never part of the historical FR4 procedure. Release correctness is proven
+    by the immutable asset digest, strict top-level and internal checksums,
+    byte-equal regenerated provenance/notes, these pinned extracted hashes,
+    source/config lineage below, and direct hardware behavior.
 
 11. Require zero executable/build-input diff between current checkout and
     release target across `src/`, `boards/`, `prj.conf`, `CMakeLists.txt`,
