@@ -22,11 +22,17 @@
 # A flock around the shared ${ZEPHYR_BASE}/bsim_out tree stops concurrent
 # gates from corrupting shared generated build files.  Logs go to one
 # private mktemp root: removed on success, preserved (with a printed
-# path) on failure or when BSIM_KEEP_LOGS=1.
+# path) on failure or when BSIM_KEEP_LOGS=1.  With BSIM_LOG_ROOT set to a
+# caller-owned external directory, logs are written there instead, are
+# always preserved, and that directory is never deleted.
 #
 # Usage: bash scripts/bsim-stage1-run.sh
 #        BSIM_BASELINE=1 bash scripts/bsim-stage1-run.sh   (print hashes, skip known asserts)
 #        BSIM_KEEP_LOGS=1 bash scripts/bsim-stage1-run.sh  (preserve logs on success)
+#        BSIM_LOG_ROOT=/abs/empty/dir bash scripts/bsim-stage1-run.sh
+#                                                          (write logs to the caller's
+#                                                          directory, always preserve,
+#                                                          never delete caller-owned output)
 #
 # Prerequisites:
 #   - ZEPHYR_BASE exported
@@ -40,13 +46,52 @@ SCRIPT_DIR="$(cd -- "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 DATA_FILE="$REPO_ROOT/tests/bsim/stage1-scenarios.json"
 
+BASELINE="${BSIM_BASELINE:-0}"
+KEEP_LOGS="${BSIM_KEEP_LOGS:-0}"
+
+# ── BSIM_LOG_ROOT (optional external output root) ──────────────────────
+# When set, every per-run log is written to the caller's directory instead
+# of a private mktemp root, is always preserved (even on success), and the
+# caller's directory is never deleted.  Refuse relative paths, root, the
+# home directory, the repository root or anything inside it, and any
+# existing nonempty destination.  Runs before bsim-env.sh so a bad root
+# fails fast without requiring ZEPHYR_BASE or toolchain presence.
+BSIM_LOG_ROOT="${BSIM_LOG_ROOT:-}"
+validate_bsim_log_root() {
+    [ -n "$BSIM_LOG_ROOT" ] || return 0
+    local canon repo_canon home_canon
+    case "$BSIM_LOG_ROOT" in
+        /*) : ;;
+        *) echo "ERROR: BSIM_LOG_ROOT must be an absolute path: $BSIM_LOG_ROOT" >&2; exit 1 ;;
+    esac
+    canon="$(realpath -m "$BSIM_LOG_ROOT")" || \
+        { echo "ERROR: cannot canonicalize BSIM_LOG_ROOT: $BSIM_LOG_ROOT" >&2; exit 1; }
+    repo_canon="$(realpath -m "$REPO_ROOT")" || \
+        { echo "ERROR: cannot canonicalize repository root: $REPO_ROOT" >&2; exit 1; }
+    home_canon="$(realpath -m "$HOME" 2>/dev/null)" || home_canon="$HOME"
+    [ "$canon" != "/" ] || { echo "ERROR: BSIM_LOG_ROOT must not be /" >&2; exit 1; }
+    [ "$canon" != "$home_canon" ] || \
+        { echo "ERROR: BSIM_LOG_ROOT must not be the home directory: $BSIM_LOG_ROOT" >&2; exit 1; }
+    [ "$canon" != "$repo_canon" ] || \
+        { echo "ERROR: BSIM_LOG_ROOT must not be the repository root: $BSIM_LOG_ROOT" >&2; exit 1; }
+    case "$canon" in
+        "$repo_canon"/*) \
+            echo "ERROR: BSIM_LOG_ROOT must not be inside the repository: $BSIM_LOG_ROOT" >&2; exit 1 ;;
+    esac
+    if [ -e "$BSIM_LOG_ROOT" ]; then
+        [ -d "$BSIM_LOG_ROOT" ] || \
+            { echo "ERROR: BSIM_LOG_ROOT is not a directory: $BSIM_LOG_ROOT" >&2; exit 1; }
+        [ -z "$(ls -A "$BSIM_LOG_ROOT" 2>/dev/null)" ] || \
+            { echo "ERROR: BSIM_LOG_ROOT must be an empty directory: $BSIM_LOG_ROOT" >&2; exit 1; }
+    fi
+    mkdir -p "$BSIM_LOG_ROOT"
+}
+validate_bsim_log_root
+
 # Source BSIM environment (derives BSIM_OUT_PATH, BOARD defaults)
 source "${SCRIPT_DIR}/bsim-env.sh"
 
 BOARD_TS="${BOARD//\//_}"
-
-BASELINE="${BSIM_BASELINE:-0}"
-KEEP_LOGS="${BSIM_KEEP_LOGS:-0}"
 
 # ── Versioned scenario data (single source: stage1-scenarios.json) ─────
 # Validate schema early and fail clearly; never proceed on a malformed,
@@ -180,16 +225,24 @@ fi
 echo "Client: $CLIENT_BIN"
 
 # ---- Private log root ----
-LOGROOT="$(mktemp -d "${TMPDIR:-/tmp}/bsim_t4_XXXXXX")"
+if [ -n "$BSIM_LOG_ROOT" ]; then
+    LOGROOT="$BSIM_LOG_ROOT"
+else
+    LOGROOT="$(mktemp -d "${TMPDIR:-/tmp}/bsim_t4_XXXXXX")"
+fi
 OVERALL_FAIL=0
 
 cleanup() {
-    if [ "$OVERALL_FAIL" -eq 0 ] && [ "$KEEP_LOGS" != "1" ]; then
+    # A caller-provided BSIM_LOG_ROOT is never deleted: it is caller-owned
+    # output and is always preserved, success or failure.
+    if [ -z "$BSIM_LOG_ROOT" ] && [ "$OVERALL_FAIL" -eq 0 ] && [ "$KEEP_LOGS" != "1" ]; then
         rm -rf "$LOGROOT"
     else
         echo ""
         echo "Logs preserved at: $LOGROOT"
-        echo "  (set BSIM_KEEP_LOGS=1 to keep logs on success too)"
+        if [ -z "$BSIM_LOG_ROOT" ]; then
+            echo "  (set BSIM_KEEP_LOGS=1 to keep logs on success too)"
+        fi
     fi
 }
 trap cleanup EXIT

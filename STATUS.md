@@ -1,28 +1,190 @@
-# STATUS — le-audio-receiver — 2026-08-09
+# STATUS — le-audio-receiver — 2026-08-10
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-> **Current state (2026-08-09):** canonical gate **64 PASS / 0 FAIL /
-> 64 TOTAL** on the clean tree (35 twister + 5 exec-only + 21 Python +
-> coverage + matrix + BSim Stage 1; clean-tree run at `75a8093`, the
-> FR2 Zephyr-environment correction commit; the FR1 clean run at
-> `1671a9f` and earlier clean runs recorded in
+> **Current state (2026-08-10):** canonical gate **65 PASS / 0 FAIL /
+> 65 TOTAL** on the clean tree (35 twister + 5 exec-only + 22 Python +
+> coverage + matrix + BSim Stage 1; the FR2 clean-tree run at `75a8093`
+> and the FR1 clean run at `1671a9f` are historical, with earlier clean
+> runs recorded in
 > `docs/development/documentation-hygiene-behavior-fix-results.md` at
 > `b8bd633` and the production-fix canonical run at `f2f9336`, after
 > the empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
 > (`f2f9336`) fixes — the committed coverage baseline is unchanged),
-> coverage population **36** (4674/5130 lines, 2030/2824
-> branches, 358/358 functions, committed baseline unchanged), build
-> contract **95/95**, BSim 17 scenarios / 26 runs pins byte-identical,
+> coverage population **36** (4777/5234 lines, 2091/2896
+> branches, 363/363 functions, committed baseline unchanged), build
+> contract **96/96**, BSim 17 scenarios / 26 runs pins byte-identical,
 > P1–P8 user pairing control ACCEPTED (nRF54L15 enabled, nRF5340
 > feature-off), FR1 deterministic firmware packager ACCEPTED, FR2
 > firmware-build CI ACCEPTED (hosted run 31326612845 PASS, workflow
 > artifacts only — no tag, GitHub Release, published binary, hardware
-> acceptance, MCUboot, or DFU).  The R0–R10 refactor figures below (gate 55/0/55,
+> acceptance, MCUboot, or DFU), FR3 automatic draft-release creation
+> ACCEPTED (final merged hosted run `b70b978` PASS with release SKIPPED
+> on unchanged `VERSION`), PR 11 hosted canonical test-gate ACCEPTED
+> (hosted run 31432411543: `tests` 65 PASS / 0 FAIL / 65 TOTAL,
+> `firmware` SUCCESS after tests, `release` SKIPPED on pull_request;
+> ruleset 20658259 requires status contexts `tests` and `firmware`),
+> and FR4 exact-artifact hardware acceptance
+> **BLOCKED**: the exact draft `v0.1.0` FAILED mandatory nRF5340 mono
+> acceptance and remains private, unpublished, and untagged; the local
+> replacement preflight passed both targets but is not exact-artifact
+> acceptance; the root `VERSION` remains `0.1.0` and the firmware-build
+> workflow is version-driven; no replacement version or candidate has been
+> selected; a replacement candidate must be created through the
+> trusted-main lifecycle and its exact assets must pass FR4 before FR5
+> can publish anything; nothing published.
+> The R0–R10 refactor figures below (gate 55/0/55,
 > population 33, contract 79/79) are the **historical** R10 baseline
 > (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
 > for their own commits.
+
+## Firmware CI — canonical test gate (PR 11, 2026-08-10)
+
+**Hosted software gate — ACCEPTED for the PR implementation.**  PR 11
+(`feature/firmware-release-acceptance`) adds a distinct
+`tests` job to `.github/workflows/firmware-build.yml` as the canonical
+65-child software gate that `firmware` (and therefore `release`) must
+wait for: `tests` → `firmware` → `release` (trusted main only).  The
+`tests` job runs on the plain ubuntu-22.04 host runner (no Nordic
+container) inside the repository's locked Nix dev shell: the flake
+provides the exact tools (`gcovr 8.4`, `gcov (GCC) 14.3.0`, nrfutil core,
+west), and the exact NCS v3.3.0 SDK plus `911f4c5c26` toolchain are
+installed into `$HOME/ncs` by the pinned `nrfutil sdk-manager` 1.16.1
+plugin (versioned URL, SHA-256 verified before extraction, nrfutil core
+never downloaded).  Nix is installed with the pinned Determinate
+installer and the Nix store is cached keyed from `flake.lock` with a
+bounded gc; `/home/runner/ncs` is cached keyed `ncs-v3.3.0-911f4c5c26`.
+An early disk cleanup step frees only well-known preinstalled toolchain
+caches (Nix closure ~4.5 GiB + NCS/toolchain ~4.6 GiB + retained native
+build trees exceed the ephemeral runner disk); the NCS install step
+branches on the cache step's exact `cache-hit` output, never on directory
+presence alone.  A west workspace population step then runs
+`west update --narrow -o=--depth=1 --group-filter +babblesim` in
+`$HOME/ncs/v3.3.0`: the sdk-manager bundle ships the bsim_west checkout
+but the root group-filter excludes the `babblesim`-group components,
+leaving `tools/bsim/Makefile` (a symlink to
+`components/common/Makefile`) dangling; re-enabling the group fetches
+every component at its pinned revision from the imported bsim manifest.
+The job verifies the committed baseline tool first lines, `ZEPHYR_BASE`
+(`$HOME/ncs/v3.3.0/zephyr`), sdk-nrf HEAD
+`ba167d9f3db4abbdc9b67887ca3ea66c64f2d956`, `nrf/VERSION` `3.3.0`, and
+toolchain ID `911f4c5c26`; builds BabbleSim components with
+`BSIM_BUILD_FAIL_ASAP=1 make -C "$HOME/ncs/v3.3.0/tools/bsim" everything`
+and verifies `bs_2G4_phy_v1`; runs `scripts/test-all.sh` exactly once
+through the locked shell with the gate's real exit status preserved
+through `set -o pipefail` and full console output teed to `test-all.log`;
+and uploads `/home/runner/le-audio-test-results` with the pinned
+`upload-artifact` action, `if: always()`, 7-day retention,
+`if-no-files-found: warn`.  `scripts/test-all.sh` gained optional
+`TEST_OUTPUT_DIR` (coverage → `$TEST_OUTPUT_DIR/coverage`) and
+`scripts/bsim-stage1-run.sh` gained optional `BSIM_LOG_ROOT` (caller-owned
+logs, always preserved, never deleted, nonempty destination refused);
+both keep historical mktemp behavior when unset.  Workflow contract
+tests in `scripts/test_firmware_build_ci.py` pin the topology, pins,
+provisioning, invocation, artifact retention, and release trust boundary;
+focused fixture tests cover the new output-root validation without real
+Zephyr or BabbleSim builds.  Local focused checks pass (inventory **62**,
+workflow contract 40/40, `test_coverage_runner` 34/34, `bsim_runner`
+61/61); the full local canonical gate on the clean implementation commit
+`ca55e9d` is **65 PASS / 0 FAIL / 65 TOTAL** with unchanged coverage
+baseline and byte-identical BSim pins.  Hosted attempts `31422292550`
+(pre-gate gcov first-line mismatch), `31424437357` (dangling
+`tools/bsim/Makefile` symlink; west-population correction
+`--group-filter +babblesim` validated later), and `31426937629` (exact
+Nix/NCS environment, coverage baseline, matrix, and BSim Stage 1 passed,
+then **64 PASS / 1 FAIL / 65 TOTAL** solely because
+`test_enable_pairing_agent` launched a real `bt-agent` through an
+unmocked `subprocess.Popen`) are diagnosis evidence; the process-boundary
+mocking correction landed at `647361c` and was validated on the
+acceptance run.  **Hosted acceptance run `31432411543`** (PR head
+`32bdc98`): `tests` job `93598711857` SUCCESS (50m22s) with exact
+console summary `Gate complete: 65 PASS / 0 FAIL / 65 TOTAL`; `firmware`
+job `93611002998` SUCCESS (6m21s) started only after tests completed,
+with both nRF5340 and nRF54L15 builds, build contract, version headers,
+packaging, verification, and artifact upload; `release` job `93612477731`
+SKIPPED as required on pull_request.  Test artifact
+`le-audio-test-results-6889a9f013f99085b21fc46c7068919ee7c834a3` (ID
+`9081041931`, digest
+`sha256:f119ba466e0c571e36723b45a238b3377a4599cda9611a6bdac5e92030f0bd23`,
+7-day retention); firmware artifact
+`firmware-v0.1.0-6889a9f013f99085b21fc46c7068919ee7c834a3` (ID
+`9081260473`, digest
+`sha256:bc1b50ce4bf2c0b6fef619e5987251dce9872c0f33d428e3334d58a1232933b2`,
+14-day retention); artifact names carry the GitHub pull-request merge
+SHA `6889a9f0...`, distinct from source head `32bdc98`.  PR #11
+mergeStateStatus CLEAN; the active ruleset `20658259` (targets
+`~DEFAULT_BRANCH`, requires pull request, blocks deletion and
+non-fast-forward, no bypass actors,
+`strict_required_status_checks_policy=false`) requires status contexts
+`tests` and `firmware`; latest-main/rebase is not required, but both
+checks must pass on PR head.  Hosted software gate ACCEPTED for the PR
+implementation; protected-main runs, draft-release creation, and FR4
+hardware acceptance remain separate and are not claimed.  Plan of
+record: `docs/development/firmware-ci-test-gate-plan.md`.
+
+## Firmware release — FR4 BLOCKED (2026-08-10)
+
+**FR4 — exact-artifact hardware acceptance — BLOCKED, not accepted**:
+the exact draft candidate `v0.1.0` (draft `367572702`, `tag_name=v0.1.0`,
+target `3d9a9186ec288484a637dac1dc7460319daf5e84`) passed every identity,
+checksum, ZIP, internal checksum, provenance, notes-body, and untagged-ref
+validation and its nRF5340 Mode A diagnostic passed, but after the central
+mono selection fix `9f456b1` the mandatory nRF5340 fresh mono row failed
+receiver criteria: central sent 12000 frames / 120 s / 100 fps over exactly
+one CIS, receiver reported `SDUs=8876 decoded=8876 plc=0 decode_err=0
+i2s_underrun=0 stream_reset=225 empty_sdu=0`, and the receiver emitted 225
+each of `i2s_nrfx: Next buffers not supplied on time`, `i2s_nrfx: Cannot
+write in state: 4`, and `audio_i2s: I2S underrun, restarting DMA`. The
+deterministic failure stopped the matrix before nRF54L15. The exact
+candidate therefore FAILED FR4 and remains private, unpublished, and
+intentionally untagged.  The local replacement preflight (pristine builds
+from committed HEAD `5e7f502`) PASSED all six rows on both targets with
+zero decode errors, underruns, stream resets, and cadence RESYNC warnings
+(see `docs/development/firmware-release-fr4-results.md` for row, stack, and
+image-identity tables); it is replacement-candidate preflight only, not FR4
+exact-artifact acceptance.  Software gates at `5e7f502`: canonical gate
+**65 PASS / 0 FAIL / 65 TOTAL**, build contract **96/96**, coverage
+population **36** (4777/5234 L, 2091/2896 B, 363/363 F, committed baseline
+unchanged), BSim pins byte-identical.  Evidence:
+`docs/development/firmware-release-fr4-results.md`; procedure
+`docs/development/firmware-release-fr4-procedure.md` (historical, executed
+2026-08-10); retained run dirs under `/tmp/opencode/` (exact draft
+`fr4-v0.1.0-OEp9Kh`, cadence local `fr4-cadence-local-*`).  A replacement
+candidate must be created through the accepted trusted-main lifecycle and
+its exact immutable assets must rerun the full FR4 procedure on both
+targets before FR5 can publish anything; no replacement version or
+candidate has been selected.  FR4 and FR5 remain blocked; nothing
+published.
+
+## Firmware release — FR3 ACCEPTED (2026-08-09)
+
+**FR3 — automatic draft-release creation from trusted main — ACCEPTED**:
+implementation `8ef8a80` (`ci: create draft releases from version tags`);
+review corrections `a3eef05` (`fix: validate draft release metadata
+checks`), `4892a6a` (`ci: create release tags from trusted main`),
+`4c837af` (`fix: verify untagged draft releases`), and `2532fea`
+(`fix: detect existing draft releases`).  One trusted-main run
+`31332962453` (main push `3d9a918...`, job `93294798104`) created the exact
+untagged draft release `367572702` (`tag_name=v0.1.0`, draft, prerelease
+false, target `3d9a918...`, created `2026-08-09T20:04:01Z`); its only
+failure was the obsolete post-create assumption that a draft already had a
+git tag.  Corrected read-only checks passed independently against that same
+draft; the later hosted correction runs passed firmware and PR topology,
+and the final merged main run `31334643418` (main push `b70b978...`, job
+`93298378307`) PASS with release correctly SKIPPED on unchanged `VERSION`.
+Draft `v0.1.0` is
+private, unpublished, and intentionally untagged (authenticated git-ref
+lookup returns HTTP 404 as expected); the corrected paginated collision
+check detects it without printing release bodies.  No git tag, published
+binary, hardware acceptance, MCUboot, or DFU exists yet.  Local evidence:
+canonical gate **65 PASS / 0 FAIL / 65 TOTAL** (35 twister + 5 exec-only +
+22 Python + coverage + matrix + BSim Stage 1), build contract **95/95**,
+coverage unchanged (population 36, 4674/5130 L, 2030/2824 B, 358/358 F),
+BSim pins byte-identical.  Evidence:
+`docs/development/firmware-release-fr3-results.md`; plan:
+`docs/development/firmware-release-plan.md`.  At FR3 closeout, FR4-FR5
+remained planned; see the current FR4 BLOCKED section above.
 
 ## User pairing control — P1 ACCEPTED (2026-08-07)
 

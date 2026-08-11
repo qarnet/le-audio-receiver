@@ -15,7 +15,135 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  tests:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Free disk space
+        # The locked Nix dev-shell closure (~4.5 GiB) plus the NCS
+        # SDK/toolchain (~4.6 GiB) plus retained native build trees exceed
+        # the ephemeral runner disk. Free only well-known preinstalled
+        # toolchain caches; never touch project or user data, the
+        # workspace, $HOME, /home/runner/ncs, or /nix.
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          sudo docker builder prune -a --force || true
+          df -h /
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ hashFiles('flake.lock') }}
+          gc-max-store-size: 6G
+      - name: Cache NCS SDK and toolchain
+        id: cache-ncs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: /home/runner/ncs
+          key: ncs-v3.3.0-911f4c5c26
+      - name: Provision nrfutil sdk-manager
+        run: |
+          set -euo pipefail
+          sdk_manager_url="https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/packages/nrfutil-sdk-manager/nrfutil-sdk-manager-x86_64-unknown-linux-gnu-1.16.1.tar.gz"
+          sdk_manager_sha256="d2fe97f143f888a679223d9c6e0b51d730eb60b4a5f4a5dafc970acd2020fe38"
+          archive="$RUNNER_TEMP/nrfutil-sdk-manager.tar.gz"
+          curl --fail-with-body --show-error --location --retry 3 --retry-delay 5 \
+            --connect-timeout 20 --max-time 600 -o "$archive" "$sdk_manager_url"
+          printf '%s  %s\n' "$sdk_manager_sha256" "$archive" | sha256sum --strict -c -
+          mkdir -p "$RUNNER_TEMP/nrfutil"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/nrfutil" --strip-components=2
+          test -x "$RUNNER_TEMP/nrfutil/bin/nrfutil-sdk-manager"
+          printf '%s\n' "$RUNNER_TEMP/nrfutil/bin" >> "$GITHUB_PATH"
+      - name: Install NCS SDK and toolchain
+        env:
+          CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}
+        run: |
+          nix develop --accept-flake-config --command bash -s <<'EOF'
+          set -euo pipefail
+          nrfutil sdk-manager config install-dir set "$HOME/ncs"
+          if [ "$CACHE_HIT" = "true" ]; then
+            test -d "$HOME/ncs/v3.3.0/nrf"
+            echo "NCS v3.3.0 restored from cache; skipping sdk-manager install"
+          else
+            nrfutil sdk-manager install v3.3.0
+          fi
+          EOF
+      - name: Populate NCS workspace projects
+        run: |
+          nix develop --accept-flake-config --command bash -s <<'EOF'
+          set -euo pipefail
+          cd "$HOME/ncs/v3.3.0"
+          test "$(west topdir)" = "$HOME/ncs/v3.3.0"
+          # The sdk-manager bundle carries the bsim_west checkout, but the
+          # root group-filter excludes the babblesim-group components,
+          # leaving tools/bsim/Makefile a dangling symlink to
+          # components/common/Makefile. Re-enable that group so west
+          # fetches every component at its pinned revision; the revisions
+          # come from the pinned imported bsim manifest, never floating
+          # clones or ad hoc BSim URLs.
+          west update --narrow -o=--depth=1 --group-filter +babblesim
+          test -f "$HOME/ncs/v3.3.0/tools/bsim/Makefile"
+          EOF
+      - name: Verify canonical test environment
+        run: |
+          nix develop --accept-flake-config --command bash -s <<'EOF'
+          set -euo pipefail
+          gcovr_line="$(gcovr --version | head -n1)"
+          gcov_line="$(gcov --version | head -n1)"
+          echo "gcovr: $gcovr_line"
+          echo "gcov: $gcov_line"
+          test "$gcovr_line" = "gcovr 8.4"
+          test "$gcov_line" = "gcov (GCC) 14.3.0"
+          test "$ZEPHYR_BASE" = "$HOME/ncs/v3.3.0/zephyr"
+          test -d "$ZEPHYR_BASE"
+          test "$(git -C "$HOME/ncs/v3.3.0/nrf" rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
+          test "$(tr -d '\r\n' < "$HOME/ncs/v3.3.0/nrf/VERSION")" = "3.3.0"
+          nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh | grep -q "911f4c5c26"
+          echo "canonical test environment verified"
+          EOF
+      - name: Build BabbleSim components
+        run: |
+          nix develop --accept-flake-config --command bash -s <<'EOF'
+          set -euo pipefail
+          BSIM_BUILD_FAIL_ASAP=1 make -C "$HOME/ncs/v3.3.0/tools/bsim" everything
+          test -x "$HOME/ncs/v3.3.0/tools/bsim/bin/bs_2G4_phy_v1"
+          EOF
+      - name: Prepare canonical test output root
+        run: |
+          results_dir="$HOME/le-audio-test-results"
+          mkdir -p "$results_dir/bsim"
+          printf 'TEST_OUTPUT_DIR=%s\n' "$results_dir" >> "$GITHUB_ENV"
+          printf 'BSIM_LOG_ROOT=%s/bsim\n' "$results_dir" >> "$GITHUB_ENV"
+      - name: Run canonical test gate
+        run: |
+          set -o pipefail
+          nix develop --accept-flake-config --command bash -s <<'EOF'
+          set -euo pipefail
+          ./scripts/test-all.sh 2>&1 | tee "$TEST_OUTPUT_DIR/test-all.log"
+          EOF
+      - name: Upload test results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: le-audio-test-results-${{ github.sha }}
+          path: /home/runner/le-audio-test-results
+          if-no-files-found: warn
+          retention-days: 7
+
   firmware:
+    needs: tests
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     container:
@@ -62,7 +190,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           version="$(python3 scripts/project-version.py)"
-          test "$version" = "0.1.0"
           release_requested=false
           if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
             [[ "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -95,15 +222,37 @@ jobs:
             --nrf54l15 build/nrf54l15
       - name: Verify application version headers
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        env:
+          PROJECT_VERSION: ${{ steps.project-version.outputs.version }}
         run: |
-          grep -E '#define[[:space:]]+APP_VERSION_STRING[[:space:]]+"0\.1\.0"' \
-            build/nrf5340/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h
-          grep -E '#define[[:space:]]+APP_VERSION_STRING[[:space:]]+"0\.1\.0"' \
-            build/nrf54l15/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h
+          test "$(python3 scripts/project-version.py)" = "$PROJECT_VERSION"
+          python3 - "$PROJECT_VERSION" \
+            build/nrf5340/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h \
+            build/nrf54l15/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h <<'PYEOF'
+          import re
+          import sys
+          version, *paths = sys.argv[1:]
+          pattern = re.compile(
+              r"^#define\s+APP_VERSION_STRING\s+\"" + re.escape(version) + r"\"\s*$",
+              re.MULTILINE,
+          )
+          for path in paths:
+              with open(path, "r", encoding="utf-8") as fh:
+                  text = fh.read()
+              if len(pattern.findall(text)) != 1:
+                  sys.stderr.write(
+                      "APP_VERSION_STRING %s must be defined exactly once in %s\n"
+                      % (version, path)
+                  )
+                  sys.exit(1)
+          PYEOF
       - name: Package firmware
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        env:
+          PROJECT_VERSION: ${{ steps.project-version.outputs.version }}
         run: |
           version="$(python3 scripts/project-version.py)"
+          test "$version" = "$PROJECT_VERSION"
           python3 scripts/package-firmware-release.py \
             --version "$version" \
             --git-commit "$GITHUB_SHA" \
@@ -112,26 +261,29 @@ jobs:
             --output-dir dist
       - name: Verify package
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
+        env:
+          PROJECT_VERSION: ${{ steps.project-version.outputs.version }}
         run: |
+          version="$(python3 scripts/project-version.py)"
+          test "$version" = "$PROJECT_VERSION"
+          zip5340="le-audio-receiver-v${version}-nrf5340-e83-factory.zip"
+          zip54l15="le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip"
           test -z "$(find dist -maxdepth 1 -type l)"
           test "$(find dist -mindepth 1 -maxdepth 1 | wc -l)" -eq 3
           test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 3
-          for f in \
-            le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip \
-            le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip \
-            SHA256SUMS ; do
+          for f in "$zip5340" "$zip54l15" SHA256SUMS ; do
             test -f "dist/$f"
           done
           (cd dist && sha256sum --strict -c SHA256SUMS)
-          python3 -m zipfile --test dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip
-          python3 -m zipfile --test dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip
+          python3 -m zipfile --test "dist/$zip5340"
+          python3 -m zipfile --test "dist/$zip54l15"
       - name: Upload firmware artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: firmware-v${{ steps.project-version.outputs.version }}-${{ github.sha }}
           path: |
-            workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip
-            workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip
+            workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf5340-e83-factory.zip
+            workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf54l15-xiao-factory.zip
             workspace/le-audio-receiver/dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
@@ -140,7 +292,7 @@ jobs:
 
   release:
     needs: firmware
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.firmware.outputs.release-requested == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     permissions:
@@ -163,7 +315,6 @@ jobs:
           version="$(python3 scripts/project-version.py)"
           tag="v$version"
           test "$version" = "$FW_VERSION"
-          test "$RELEASE_REQUESTED" = "true"
           test "$GITHUB_EVENT_NAME" = "push"
           test "$GITHUB_REF" = "refs/heads/main"
           test "$GITHUB_REF_NAME" = "main"
@@ -199,6 +350,7 @@ jobs:
             --artifact-dir dist \
             --output-dir release-metadata
       - name: Require no existing release or tag
+        id: release-collision
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -251,6 +403,11 @@ jobs:
           scan_status=$?
           set -e
           if [ "$scan_status" -eq 2 ]; then
+            if [ "$RELEASE_REQUESTED" != "true" ]; then
+              echo "release-needed=false" >> "$GITHUB_OUTPUT"
+              echo "release already exists for tag $tag; skipping automatic release"
+              exit 0
+            fi
             echo "::error::release already exists for tag $tag"
             exit 1
           fi
@@ -263,6 +420,11 @@ jobs:
           tag_status=$?
           set -e
           if [ "$tag_status" -eq 0 ]; then
+            if [ "$RELEASE_REQUESTED" != "true" ]; then
+              echo "release-needed=false" >> "$GITHUB_OUTPUT"
+              echo "git tag already exists for tag $tag; skipping automatic release"
+              exit 0
+            fi
             echo "::error::git tag already exists for tag $tag"
             exit 1
           fi
@@ -270,7 +432,9 @@ jobs:
             echo "::error::existing-tag probe failed for tag $tag (expected HTTP 404)"
             exit 1
           fi
+          echo "release-needed=true" >> "$GITHUB_OUTPUT"
       - name: Create draft release
+        if: steps.release-collision.outputs.release-needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -286,6 +450,7 @@ jobs:
             dist/SHA256SUMS \
             release-metadata/release-provenance.json
       - name: Verify draft release
+        if: steps.release-collision.outputs.release-needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

@@ -98,21 +98,61 @@ current refactoring track R0–R10. Read it before structural changes.
 `docs/design.md` remains the historical architecture and evidence document,
 not the active structural plan.
 
-Current status: **canonical gate 64 PASS / 0 FAIL / 64 TOTAL** on the
-clean tree (35 twister + 5 exec-only + 21 Python + coverage + matrix +
-BSim; clean-tree run at `75a8093`, the FR2 Zephyr-environment correction
-commit; the FR1 clean run at `1671a9f` and earlier clean runs recorded in
+Current status: **canonical gate 65 PASS / 0 FAIL / 65 TOTAL** on the
+clean tree (35 twister + 5 exec-only + 22 Python + coverage + matrix +
+BSim; the FR2 clean-tree run at `75a8093`, the FR1 clean run at
+`1671a9f`, and earlier clean runs recorded in
 `docs/development/documentation-hygiene-behavior-fix-results.md` at
 `b8bd633` and the production-fix canonical run at `f2f9336`, after the
 empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
 (`f2f9336`) fixes — the committed coverage baseline is unchanged),
-coverage population **36** (4674/5130 lines, 2030/2824
-branches, 358/358 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
-baseline unchanged), builds 3/3, build contract **95/95**, BSim Stage 1
+coverage population **36** (4777/5234 lines, 2091/2896
+branches, 363/363 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
+baseline unchanged), builds 3/3, build contract **96/96**, BSim Stage 1
 pins byte-identical, P1–P8 user pairing control ACCEPTED (nRF54L15
 enabled, nRF5340 feature-off), FR1 deterministic firmware packager
-ACCEPTED, and FR2 firmware-build CI ACCEPTED (hosted run 31326612845
-PASS; workflow artifacts only, no tag/release/hardware acceptance).  Historical baselines: T0–T8 locked
+ACCEPTED, FR2 firmware-build CI ACCEPTED (hosted run 31326612845
+PASS; workflow artifacts only, no tag/release/hardware acceptance), and
+FR3 automatic draft-release creation ACCEPTED (final merged hosted run
+`b70b978` PASS with release SKIPPED on unchanged `VERSION`).  FR4
+exact-artifact hardware acceptance is **BLOCKED**: the exact draft
+`v0.1.0` FAILED mandatory nRF5340 mono acceptance and remains private,
+unpublished, and untagged; the local replacement preflight passed both
+targets at `5e7f502` but is not exact-artifact acceptance; the root
+`VERSION` remains `0.1.0` and the firmware-build workflow is now
+version-driven; no replacement version or candidate has been selected; a
+replacement
+candidate must be created through the trusted-main lifecycle and its
+exact assets must pass FR4 before FR5 can publish anything; nothing
+published.  PR 11 (`feature/firmware-release-acceptance`) adds the hosted
+canonical software gate as a distinct `tests` job that must pass before
+the firmware builds run (`tests` → `firmware` → `release`); the job runs
+on the plain host runner inside the locked Nix dev shell with the exact
+NCS v3.3.0 SDK + `911f4c5c26` toolchain installed by pinned
+`nrfutil sdk-manager` 1.16.1.  Hosted attempts `31422292550` (pre-gate
+on the container's incompatible gcov first-line assertion) and
+`31424437357` (BabbleSim build on the dangling `tools/bsim/Makefile`
+symlink) failed; `31426937629` passed the exact Nix/NCS environment,
+coverage baseline, matrix, and the 17-scenario/26-run BabbleSim Stage 1
+but ended `64 PASS / 1 FAIL / 65 TOTAL` solely because the mocked unit
+test `test_enable_pairing_agent` launched a real `bt-agent` through an
+unmocked `subprocess.Popen`.  The process-boundary mocking correction
+landed at `647361c`, and the hosted canonical software gate is ACCEPTED
+on run `31432411543` (PR head `32bdc98`): `tests` job `93598711857`
+SUCCESS with exact console summary `Gate complete: 65 PASS / 0 FAIL /
+65 TOTAL`, `firmware` job `93611002998` SUCCESS started after tests,
+`release` job `93612477731` SKIPPED on pull_request; the active ruleset
+`20658259` requires status contexts `tests` and `firmware`.  An early
+disk-cleanup step frees only
+well-known preinstalled toolchain caches, the NCS install branches on
+the exact `cache-hit` output of the NCS cache step, never on directory
+presence, and a west population step runs `west update --narrow
+-o=--depth=1 --group-filter +babblesim` (the bundle ships bsim_west but
+the root group-filter excludes the `babblesim` components, leaving the
+Makefile symlink dangling).  Plan of record:
+`docs/development/firmware-ci-test-gate-plan.md`.  Protected-main runs,
+draft-release creation, and FR4 hardware acceptance remain separate and
+are not claimed.  Historical baselines: T0–T8 locked
 behavior on production code `971e6a4` (T8 canonical gate **47 PASS /
 0 FAIL / 47 TOTAL**, coverage baseline `1a5842d` (26 files), build
 contract 76/76 — `docs/testing/pre-refactor-hardware-baseline.md`); the

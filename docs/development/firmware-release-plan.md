@@ -5,6 +5,15 @@ through GitHub Releases. This plan is documentation only; it does not add CI,
 packaging code, version files, tags, releases, MCUboot, or firmware behavior.
 Implementation phases FR1-FR5 are defined below.
 
+Phase status (2026-08-10): FR1-FR3 ACCEPTED; FR4 BLOCKED after the exact
+`v0.1.0` draft candidate failed mandatory nRF5340 mono hardware acceptance
+(the local replacement preflight passed both targets but is not
+exact-artifact acceptance); the root `VERSION` remains `0.1.0` and the
+firmware-build workflow is version-driven, but no replacement version or
+candidate has been selected; FR5 remains
+blocked pending a replacement
+candidate's exact-artifact FR4 pass.  Nothing published.
+
 ## Goal
 
 Publish factory-flash firmware binaries that public users can download, verify,
@@ -111,6 +120,78 @@ floating tag. In the CI job:
 
 Do not install J-Link in build-only CI.
 
+## Canonical software test gate in CI (PR 11)
+
+Every pull request and every protected `main` merge must pass the
+repository's canonical software gate (currently 65 children: 62 unit
+suites plus coverage-baseline enforcement, test-matrix validation, and
+BabbleSim Stage 1) before either production receiver firmware build can
+start.  A failed test gate must prevent firmware packaging, artifact
+upload, and draft-release creation.
+
+Implementation (plan of record:
+`docs/development/firmware-ci-test-gate-plan.md`): a distinct `tests` job
+in `.github/workflows/firmware-build.yml` runs the gate exactly once
+before `firmware` (topology `tests` → `firmware` → `release`, with
+`release` still trusted-main-only and write-capable only there).  The
+`tests` job runs on the plain `ubuntu-22.04` host runner inside the
+repository's locked Nix dev shell, which provides the exact flake tools
+(`gcovr 8.4`, `gcov (GCC) 14.3.0`, nrfutil core, west); the exact NCS
+v3.3.0 SDK and `911f4c5c26` toolchain are installed into `$HOME/ncs` by
+the pinned `nrfutil sdk-manager` 1.16.1 plugin (versioned URL, SHA-256
+verified before extraction, no nrfutil-core replacement).  An early disk
+cleanup step frees only well-known preinstalled toolchain caches (the Nix
+closure ~4.5 GiB plus NCS/toolchain ~4.6 GiB plus retained native build
+trees exceed the ephemeral runner disk); the NCS cache is keyed
+`ncs-v3.3.0-911f4c5c26` and the install step branches on its exact
+`cache-hit` output, never on directory presence alone.  A west workspace
+population step then runs `west update --narrow -o=--depth=1
+--group-filter +babblesim` in `$HOME/ncs/v3.3.0`: the sdk-manager bundle
+ships the bsim_west checkout but the root group-filter excludes the
+`babblesim`-group components, leaving `tools/bsim/Makefile` (a symlink to
+`components/common/Makefile`) dangling; re-enabling the group fetches every
+component at its pinned revision from the imported bsim manifest (no
+floating clones or ad hoc BSim URLs).  The job
+verifies the committed baseline's tool first lines plus
+`ZEPHYR_BASE`, the exact sdk-nrf HEAD `ba167d9f3db4abbdc9b67887ca3ea66c64f2d956`,
+`nrf/VERSION` `3.3.0`, and toolchain ID `911f4c5c26`; builds the imported
+BabbleSim components with fail-fast behavior
+(`BSIM_BUILD_FAIL_ASAP=1 make -C "$HOME/ncs/v3.3.0/tools/bsim" everything`
+plus a `bs_2G4_phy_v1` existence check); invokes `scripts/test-all.sh`
+with `TEST_OUTPUT_DIR` and `BSIM_LOG_ROOT` pointing at
+`$HOME/le-audio-test-results` and tees the full console output to
+`test-all.log` while preserving the gate's real exit status through
+`set -o pipefail`; and uploads `/home/runner/le-audio-test-results` with
+the pinned `upload-artifact` action, `if: always()`, 7-day retention, and
+`if-no-files-found: warn`.
+
+Status: ACCEPTED on PR 11 at PR head `32bdc98` (hosted acceptance run
+`31432411543`, 2026-08-10).  The `tests` job `93598711857` SUCCESS
+(50m22s) with exact console summary `Gate complete: 65 PASS / 0 FAIL /
+65 TOTAL`; the `firmware` job `93611002998` SUCCESS (6m21s) started only
+after tests completed, with both production receiver builds, build
+contract, version headers, packaging, verification, and artifact upload;
+the `release` job `93612477731` SKIPPED as required on pull_request.
+Earlier hosted attempts remain diagnosis evidence: `31422292550` failed
+pre-gate on the container's gcov first-line mismatch, `31424437357`
+failed the BabbleSim build on the dangling `tools/bsim/Makefile` symlink
+(west-population correction `--group-filter +babblesim`), and
+`31426937629` passed the exact Nix/NCS environment, coverage baseline,
+matrix, and BSim Stage 1 but ended `64 PASS / 1 FAIL / 65 TOTAL` solely
+because `test_enable_pairing_agent` launched a real `bt-agent` through an
+unmocked `subprocess.Popen`.
+Local focused checks pass (inventory 62, workflow contract 40/40,
+`test_coverage_runner` 34/34, `bsim_runner` 61/61), and the full local
+canonical gate on the clean implementation commit `ca55e9d` is
+**65 PASS / 0 FAIL / 65 TOTAL** with unchanged coverage baseline and
+byte-identical BSim pins.  The active repository ruleset `20658259`
+(targets `~DEFAULT_BRANCH`, no bypass actors,
+`strict_required_status_checks_policy=false`) requires status contexts
+`tests` and `firmware`; `release` stays unrequired because it skips on
+pull requests.  PR #11 mergeStateStatus CLEAN.  Protected-main runs,
+draft-release creation, and hardware acceptance remain separate
+operations and are not claimed here.
+
 ## Release lifecycle
 
 - Pull requests and manual dispatch build and upload workflow artifacts.
@@ -128,7 +209,11 @@ Do not install J-Link in build-only CI.
 - GitHub-hosted CI never publishes the draft automatically.
 - Maintainer downloads exact draft attachments, flashes those bytes, runs
   software and hardware acceptance, records results, then manually publishes.
-- Failed hardware acceptance leaves the release draft unpublished.
+- Failed hardware acceptance leaves the release draft unpublished. A failed
+  draft is never mutated and its accepted evidence is never rewritten; a
+  later versioned candidate must be created through the same trusted-main
+  lifecycle (new `VERSION`, new draft) rather than editing the failed draft
+  or its assets. The failed draft stays private and unpublished.
 - After manual publication, verify the created lightweight tag:
   `refs/tags/v<version>` must point at the release's target commit (FR5).
 
@@ -173,7 +258,8 @@ own evidence.
 **FR1 ACCEPTED (2026-08-09)** at implementation commit `f3cd4c4`, with the
 review-fix correction commit `1671a9f` (`fix: handle firmware packaging I/O
 failures`); evidence in
-`docs/development/firmware-release-fr1-results.md`.  FR3-FR5 remain planned.
+`docs/development/firmware-release-fr1-results.md`.  At this phase
+closeout, FR4-FR5 remained planned.
 
 Add deterministic, stdlib-only packaging logic plus public-boundary tests. No
 CI and no version choice yet. Packager takes version, commit, NCS version,
@@ -187,8 +273,8 @@ byte-identical ZIP output.
 correction commits `117bc92` (`fix: upload packaged firmware from workspace`)
 and `75a8093` (`fix: export Zephyr workspace to firmware builds`); successful
 GitHub-hosted run `31326612845` (job `93277895593`) at PR head `75a8093`;
-evidence in `docs/development/firmware-release-fr2-results.md`.  FR3-FR5
-remain planned.
+evidence in `docs/development/firmware-release-fr2-results.md`.  At this
+phase closeout, FR4-FR5 remained planned.
 
 Add pinned-container GitHub Actions build, exact NCS workspace setup, both
 production receiver builds, build-contract verification, package generation,
@@ -197,24 +283,56 @@ release version is chosen.
 
 ### FR3: draft release publication
 
-Add trusted-main automatic release initiation: a `main` push that changes
-the root `VERSION` runs the accepted build/package path, then a protected
-`contents: write` release job creates a draft release with provenance and
-exact attachments whose `tagName`/`targetCommitish` reserve `v<version>` at
-the exact main commit. Drafts stay untagged: GitHub creates the lightweight
-version tag only when the draft is manually published after FR4. A main
-push without a `VERSION` change skips the release job. CI never
+Add trusted-main automatic release initiation: every `main` push runs the
+accepted build/package path, then a protected `contents: write` release job
+creates a draft release with provenance and exact attachments when no release
+or tag exists for the root `VERSION`. A `VERSION` change with an existing
+release or tag fails closed; an unchanged `VERSION` with an existing release
+or tag skips cleanly. This permits recovery of a deleted draft without an
+artificial version detour. Drafts stay untagged: GitHub creates the lightweight
+version tag only when the draft is manually published after FR4. CI never
 auto-publishes.
+
+**FR3 ACCEPTED (2026-08-09)** at implementation commit `8ef8a80`
+(`ci: create draft releases from version tags`), with review corrections
+`a3eef05` (`fix: validate draft release metadata checks`), `4892a6a`
+(`ci: create release tags from trusted main`), `4c837af`
+(`fix: verify untagged draft releases`), and `2532fea`
+(`fix: detect existing draft releases`); successful one-shot draft creation
+at trusted-main target `3d9a918...`; accepted merged state `b70b978...`;
+evidence in `docs/development/firmware-release-fr3-results.md`.  At this
+phase closeout, FR4-FR5 remained planned.
 
 ### FR4: exact-artifact hardware acceptance
 
 Add a release-candidate acceptance procedure and evidence template. Validate
 exact draft assets on both targets. Do not rebuild between download and test.
 
+**FR4 EXECUTED 2026-08-10 AND BLOCKED.**  The procedure
+(`docs/development/firmware-release-fr4-procedure.md`, now historical) ran
+against exact draft `367572702` (`v0.1.0`, target
+`3d9a9186ec288484a637dac1dc7460319daf5e84`).  The candidate passed every
+download/provenance/identity check and the nRF5340 Mode A diagnostic, but
+failed the mandatory nRF5340 fresh mono row (receiver `stream_reset=225`
+with 225 each of `i2s_nrfx: Next buffers not supplied on time`, `Cannot
+write in state: 4`, and `I2S underrun, restarting DMA`), stopping the
+matrix before nRF54L15.  The exact `v0.1.0` candidate is therefore
+**failed** and remains private, unpublished, and untagged.  The local fix
+preflight (pristine builds at `5e7f502`) **passed** all six rows on both
+targets but is replacement-candidate preflight only, not FR4 exact-artifact
+  acceptance.  A **replacement exact-artifact run is pending**: no replacement
+  version has been selected.  A replacement candidate must be created through
+  the accepted trusted-main lifecycle, then its exact immutable assets must
+  rerun FR4 on both targets.  Full evidence:
+`docs/development/firmware-release-fr4-results.md`.
+
 ### FR5: first useful release and closeout
 
 Update public flashing/user docs, record evidence, publish manually, and verify
 release download/checksum/flash instructions from a clean machine.
+
+**FR5 remains planned/blocked** until a replacement candidate's exact
+immutable assets pass FR4.  Nothing published.
 
 ## Future DFU track
 

@@ -8,6 +8,7 @@ No BabbleSim or hardware needed.
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -854,6 +855,112 @@ def test_cli_known_precedence():
     report("cli --known-total override fails on mismatch", code != 0)
 
 
+# ── BSIM_LOG_ROOT output-root behavior (shell runner) ────────────────────
+
+BSIM_RUNNER = os.path.join(REPO_ROOT, "scripts", "bsim-stage1-run.sh")
+
+
+def _run_bsim_runner(env_extra):
+    env = dict(os.environ)
+    env.pop("ZEPHYR_BASE", None)
+    env.update(env_extra)
+    proc = subprocess.run(
+        ["bash", BSIM_RUNNER],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def test_bsim_log_root_relative_rejected_early():
+    rc, out = _run_bsim_runner({"BSIM_LOG_ROOT": "relative-dir"})
+    report(
+        "bsim log root relative rejected early",
+        rc != 0
+        and "BSIM_LOG_ROOT must be an absolute path" in out
+        and "ZEPHYR_BASE" not in out,
+    )
+
+
+def test_bsim_log_root_root_and_home_rejected_early():
+    ok = True
+    for bad in ("/", os.path.expanduser("~")):
+        rc, out = _run_bsim_runner({"BSIM_LOG_ROOT": bad})
+        ok = ok and rc != 0 and "BSIM_LOG_ROOT" in out and "ZEPHYR_BASE" not in out
+    report("bsim log root root/home rejected early", ok)
+
+
+def test_bsim_log_root_repo_paths_rejected():
+    ok = True
+    for bad in (REPO_ROOT, os.path.join(REPO_ROOT, "docs")):
+        rc, out = _run_bsim_runner({"BSIM_LOG_ROOT": bad})
+        ok = ok and rc != 0 and "BSIM_LOG_ROOT" in out and "ZEPHYR_BASE" not in out
+    report("bsim log root repo paths rejected early", ok)
+
+
+def test_bsim_log_root_nonempty_and_file_rejected_preserving_output():
+    root = tempfile.mkdtemp()
+    nonempty = os.path.join(root, "nonempty")
+    os.makedirs(nonempty)
+    marker = os.path.join(nonempty, "keep.txt")
+    with open(marker, "w") as fh:
+        fh.write("keep")
+    rc, out = _run_bsim_runner({"BSIM_LOG_ROOT": nonempty})
+    ok = rc != 0 and "BSIM_LOG_ROOT must be an empty directory" in out
+    ok = ok and os.path.exists(marker)
+    report("bsim log root nonempty rejected, caller output preserved", ok)
+
+    as_file = os.path.join(root, "afile")
+    with open(as_file, "w") as fh:
+        fh.write("x")
+    rc, out = _run_bsim_runner({"BSIM_LOG_ROOT": as_file})
+    report(
+        "bsim log root existing file rejected",
+        rc != 0 and "BSIM_LOG_ROOT is not a directory" in out,
+    )
+
+
+def test_bsim_log_root_valid_accepted_then_stops_at_nrfutil():
+    # Deterministic stop after validation: ZEPHYR_BASE points at a fake
+    # tree carrying the PHY binary so bsim-env.sh passes, and nrfutil is
+    # stripped from PATH so the toolchain check is the next failure.
+    path = [
+        p
+        for p in os.environ.get("PATH", "").split(os.pathsep)
+        if not os.path.isfile(os.path.join(p, "nrfutil"))
+    ]
+    if any(os.path.isfile(os.path.join(p, "nrfutil")) for p in path):
+        report(
+            "bsim log root valid accepted then stops at nrfutil",
+            False,
+            "nrfutil still present on filtered PATH",
+        )
+        return
+    with tempfile.TemporaryDirectory() as root:
+        fake_zephyr = os.path.join(root, "fake-zephyr")
+        os.makedirs(fake_zephyr)
+        bsim_bin = os.path.join(root, "tools", "bsim", "bin")
+        os.makedirs(bsim_bin)
+        phy = os.path.join(bsim_bin, "bs_2G4_phy_v1")
+        with open(phy, "w") as fh:
+            fh.write("#!/usr/bin/env bash\nexit 0\n")
+        os.chmod(phy, 0o755)
+        log_root = os.path.join(root, "bsim-logs")
+        rc, out = _run_bsim_runner(
+            {
+                "PATH": os.pathsep.join(path),
+                "ZEPHYR_BASE": fake_zephyr,
+                "BSIM_LOG_ROOT": log_root,
+            }
+        )
+        ok = rc != 0 and "nrfutil not in PATH" in out
+        ok = ok and "BSIM_LOG_ROOT must" not in out
+        ok = ok and os.path.isdir(log_root) and os.listdir(log_root) == []
+        report("bsim log root valid accepted then stops at nrfutil", ok)
+
+
 def main():
     print("=== bsim_stage1_parse unit tests ===")
     test_tokens()
@@ -883,6 +990,11 @@ def main():
     test_schema_shape_errors()
     test_schema_entry_errors()
     test_cli_known_precedence()
+    test_bsim_log_root_relative_rejected_early()
+    test_bsim_log_root_root_and_home_rejected_early()
+    test_bsim_log_root_repo_paths_rejected()
+    test_bsim_log_root_nonempty_and_file_rejected_preserving_output()
+    test_bsim_log_root_valid_accepted_then_stops_at_nrfutil()
     print("=== %d PASS / %d FAIL ===" % (PASSES, FAILURES))
     return 0 if FAILURES == 0 else 1
 

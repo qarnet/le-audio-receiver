@@ -6,13 +6,18 @@ Prerequisite: nRF5340DK hci_uart central attached via btattach (see AGENTS.md
 "Central setup").  Run this script WITHOUT sudo; only the raw-HCI subprocess
 uses sudo internally.
 
-Usage: python3 scripts/bap_central.py [--stereo] [--duration N] [--freq FREQ]
+Usage: python3 scripts/bap_central.py [--mono|--stereo] [--duration N] [--freq FREQ]
 
 Registers a BAP source endpoint on hci0, pairs + connects to the LE Audio
-Receiver peripheral, acquires the MediaTransport, and streams a 1 kHz sine
-tone as LC3 (48 kHz / 10 ms / 96 kbps for mono, 192 kbps for stereo).
+Receiver peripheral, acquires the MediaTransport(s), and streams a 1 kHz sine
+tone as LC3 (48 kHz / 10 ms / 96 kbps per mono channel).
 
---stereo: use stereo Mode B (single ASE, 240-byte SDU)
+Explicit 10 ms modes:
+  --mono:   one ASE, 120-byte SDU (strict single-transport mono)
+  (no flag): Mode A, two mono ASEs, 120-byte SDU per transport
+  --stereo: Mode B, one two-channel ASE, 240-byte SDU
+
+--mono and --stereo are mutually exclusive.
 --duration N: stream for N seconds (default 30)
 --freq FREQ: sine frequency in Hz (default 1000)
 
@@ -84,8 +89,16 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="BAP central test driver for LE Audio Receiver."
     )
-    parser.add_argument(
-        "--stereo", action="store_true", help="Stereo Mode B (single ASE, 240-byte SDU)"
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--stereo",
+        action="store_true",
+        help="Stereo Mode B (single ASE, 240-byte SDU)",
+    )
+    mode_group.add_argument(
+        "--mono",
+        action="store_true",
+        help="Strict mono mode (single ASE, 120-byte SDU)",
     )
     parser.add_argument(
         "--duration",
@@ -190,7 +203,12 @@ def main():
             bus.get_object("org.bluez", hci_path), "org.bluez.Media1"
         )
         endpoint = bap_central_endpoint.register_endpoint(
-            media, bus, _dbus, BAPSourceEndpoint, stereo=args.stereo
+            media,
+            bus,
+            _dbus,
+            BAPSourceEndpoint,
+            stereo=args.stereo,
+            mono=args.mono,
         )
         cleanup.register(
             "endpoint", lambda: bap_central_endpoint.unregister_endpoint(media)

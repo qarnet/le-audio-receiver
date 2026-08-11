@@ -1016,4 +1016,217 @@ ZTEST(audio_stream_session, test_modea_first_slot_release_then_second_slot_clean
 	zassert_equal(1U, fake_sink_push_count(), "no further push");
 }
 
+/* ── timestamp-cadence concealment (mono / Mode B) ─────────────────
+ * The HCI packet sequence number can stay contiguous for a
+ * controller-side omission (SW Split advances its session sequence only
+ * on emitted SDUs), so one-CIS modes also merge the timestamp-cadence
+ * evidence: omitted = MAX(seq_omitted, cadence_omitted), never the sum.
+ * Mode A never runs cadence synthesis.
+ */
+
+ZTEST(audio_stream_session, test_ts_cadence_mono_gap_plc)
+{
+	setup_mono();
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "first SDU");
+
+	/* Contiguous sequence but a 20 ms timestamp jump: one controller-
+	 * side omitted event concealed as PLC BEFORE the current SDU. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 21000, 2, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(3U, fake_sink_push_count(), "1 PLC + 1 valid");
+	zassert_equal(1U, audio_stats_get().plc_frames, "one concealed frame");
+	zassert_equal(3U, audio_stats_get().total_frames, "first + PLC + current");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+	zassert_true(fake_observer_last_push_l_valid(), "current SDU valid after PLC");
+	zassert_true(fake_observer_last_push_r_valid(), "current SDU valid after PLC");
+}
+
+ZTEST(audio_stream_session, test_ts_cadence_modeb_gap_plc)
+{
+	setup_modeb();
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, modeb10_lc3, MODEB_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "first SDU");
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 21000, 2, modeb10_lc3, MODEB_LC3_LEN));
+	zassert_equal(3U, fake_sink_push_count(), "1 PLC + 1 valid");
+	zassert_equal(2U, audio_stats_get().plc_frames, "one PLC per channel");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+}
+
+ZTEST(audio_stream_session, test_ts_cadence_and_seq_merge_max)
+{
+	setup_mono();
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "first SDU");
+
+	/* Sequence jump 1->4 reports 2 omitted; timestamp jump 1000->31000
+	 * reports 2 omitted.  MAX merges to exactly TWO PLC pushes, never
+	 * four (the sum). */
+	zassert_ok(audio_stream_session_recv(0, true, true, 31000, 4, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(4U, fake_sink_push_count(), "2 PLC + 1 valid");
+	zassert_equal(2U, audio_stats_get().plc_frames, "two concealed frames");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+}
+
+ZTEST(audio_stream_session, test_ts_cadence_no_ts_callback_no_false_plc)
+{
+	setup_mono();
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "first SDU");
+
+	/* LOST callback (no TS) for the next grid event: consumed as a
+	 * delivered position, no cadence synthesis beyond its own PLC
+	 * render. */
+	zassert_ok(audio_stream_session_recv(0, false, false, 0, 2, NULL, 0U));
+	zassert_equal(2U, fake_sink_push_count(), "LOST renders its own PLC push");
+	zassert_equal(1U, audio_stats_get().plc_frames, "only the LOST's own PLC");
+
+	/* One true omitted event (timestamp span 1000 -> 31000 with the
+	 * LOST covering position 2): exactly one cadence PLC, then the
+	 * current SDU. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 31000, 3, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(4U, fake_sink_push_count(), "1 cadence PLC + 1 valid");
+	zassert_equal(2U, audio_stats_get().plc_frames, "LOST PLC + one cadence PLC");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+}
+
+ZTEST(audio_stream_session, test_ts_cadence_resync_no_plc)
+{
+	setup_mono();
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "first SDU");
+
+	/* Non-integral timestamp (half-interval offset): cadence RESYNC —
+	 * no PLC synthesis, the current SDU still decodes once. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 15000, 2, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(2U, fake_sink_push_count(), "current SDU only");
+	zassert_equal(0U, audio_stats_get().plc_frames, "no concealment");
+	zassert_equal(2U, audio_stats_get().total_frames, "both SDUs decoded");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+}
+
+ZTEST(audio_stream_session, test_ts_cadence_scaled_tolerance_boundary)
+{
+	setup_mono();
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "first SDU");
+	zassert_equal(0U, audio_stats_get().plc_frames, "no PLC yet");
+
+	/* Off-grid two-event span within the scaled tolerance (32 us base
+	 * + 20 us two-event 10 ms SCA budget = 52 us; +20 us accepted):
+	 * one cadence PLC concealment, current SDU decodes once.  The
+	 * fixed 10 us contract resynced this delta; the scaled contract
+	 * conceals it. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 21020, 2, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(3U, fake_sink_push_count(), "1 PLC + 1 valid");
+	zassert_equal(1U, audio_stats_get().plc_frames,
+		      "one concealed frame within the scaled tolerance");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+
+	/* One-event span +43 us: beyond the scaled 42 us tolerance →
+	 * cadence RESYNC, no PLC synthesis, the current SDU still
+	 * decodes once. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 31063, 3, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(4U, fake_sink_push_count(), "current SDU only after resync");
+	zassert_equal(1U, audio_stats_get().plc_frames, "no concealment on resync");
+	zassert_equal(4U, audio_stats_get().total_frames, "1 PLC + 3 decoded");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+}
+
+ZTEST(audio_stream_session, test_ts_cadence_modea_no_synthesis)
+{
+	setup_modea();
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 10000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_ok(audio_stream_session_recv(1, true, true, 10000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "event 1 pair");
+
+	/* Left's next timestamp spans a silent interval (10000 -> 30000)
+	 * but Mode A never runs cadence synthesis: no extra push, the
+	 * assembler just stores the pending half. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 30000, 2, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "no cadence synthesis in Mode A");
+	zassert_equal(0U, audio_stats_get().plc_frames, "no concealment");
+
+	zassert_ok(audio_stream_session_recv(1, true, true, 30000, 2, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(2U, fake_sink_push_count(), "event 2 pair after silent interval");
+	zassert_equal(0U, audio_stats_get().plc_frames, "still no concealment");
+	zassert_equal(4U, audio_stats_get().total_frames, "two events, two decoders each");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+}
+
+ZTEST(audio_stream_session, test_ts_cadence_reset_rebase_sessions)
+{
+	setup_mono();
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_ok(audio_stream_session_recv(0, true, true, 2000, 2, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(2U, fake_sink_push_count(), "two pushes");
+	zassert_equal(0U, audio_stats_get().plc_frames, "no concealment");
+
+	/* start_clear re-bases both trackers: a same-timestamp SDU in the
+	 * next stream is FIRST, not a cadence gap. */
+	audio_stream_session_start_clear();
+	zassert_ok(audio_stream_session_recv(0, true, true, 2000, 2, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(3U, fake_sink_push_count(), "no PLC after start_clear");
+	zassert_equal(0U, audio_stats_get().plc_frames, "no concealment");
+
+	/* Release + reconfigure also re-bases: the same ts/seq as the very
+	 * first session is a fresh FIRST. */
+	audio_stream_session_release(0);
+	zassert_ok(audio_stream_session_config(0, &mono_shape));
+	zassert_ok(audio_stream_session_enable(0));
+	audio_stream_session_rx_open();
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(4U, fake_sink_push_count(), "fresh session push");
+	zassert_equal(0U, audio_stats_get().plc_frames, "no cadence gap across release");
+
+	/* reset_all re-bases the cadence tracker as well. */
+	audio_stream_session_rx_close();
+	audio_stream_session_reset_all();
+	zassert_ok(audio_stream_session_config(0, &mono_shape));
+	zassert_ok(audio_stream_session_enable(0));
+	audio_stream_session_rx_open();
+	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(5U, fake_sink_push_count(), "fresh after reset_all");
+	zassert_equal(0U, audio_stats_get().plc_frames, "no cadence gap across reset_all");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+}
+
+ZTEST(audio_stream_session, test_lost_with_ts_consumes_cadence_position)
+{
+	setup_mono();
+
+	/* A delivered LOST callback that CARRIES a timestamp (SW Split emits
+	 * a timestamp on START/SINGLE HCI ISO packets, including emitted
+	 * LOST SDUs) must consume its own cadence grid position: timestamps
+	 * 10000/20000/30000 stay exactly contiguous, so the cadence tracker
+	 * synthesizes nothing and the only PLC is the LOST SDU's own
+	 * render.  Without position consumption the 10000 -> 30000 span
+	 * would read as one omitted event and add an extra PLC push. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 10000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(1U, fake_sink_push_count(), "first valid SDU");
+	zassert_equal(0U, audio_stats_get().plc_frames, "no PLC yet");
+
+	zassert_ok(audio_stream_session_recv(0, false, true, 20000, 2, NULL, 0U));
+	zassert_equal(2U, fake_sink_push_count(), "LOST renders its own PLC push");
+	zassert_equal(1U, audio_stats_get().plc_frames, "exactly one PLC frame from the LOST SDU");
+	zassert_equal(2U, audio_stats_get().total_frames, "one decoded + one PLC");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+
+	zassert_ok(audio_stream_session_recv(0, true, true, 30000, 3, mono10_lc3, MONO_LC3_LEN));
+	zassert_equal(3U, fake_sink_push_count(), "no extra cadence PLC before third callback");
+	zassert_equal(1U, audio_stats_get().plc_frames, "still exactly one PLC frame");
+	zassert_equal(3U, audio_stats_get().total_frames, "two decoded + one PLC");
+	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
+	zassert_true(fake_observer_last_push_l_valid(), "final push valid");
+	zassert_true(fake_observer_last_push_r_valid(), "final push valid");
+}
+
 ZTEST_SUITE(audio_stream_session, NULL, NULL, NULL, NULL, NULL);

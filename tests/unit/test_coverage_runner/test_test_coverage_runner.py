@@ -657,5 +657,75 @@ class RunnerInventoryDiscovery(unittest.TestCase):
         self.assertIn("test_inventory.py", out)
 
 
+class TestAllGateOutputRoot(unittest.TestCase):
+    """TEST_OUTPUT_DIR output-root contract for scripts/test-all.sh (PR 11
+    CI gate): an invalid root fails fast before any suite, a valid external
+    root is accepted and the gate then stops at the next pre-suite
+    prerequisite, and the historical mktemp behavior is untouched when
+    unset.  Runs the real script with a controlled environment; no Zephyr
+    or BabbleSim build ever happens."""
+
+    TEST_ALL = os.path.join(REPO_ROOT, "scripts", "test-all.sh")
+
+    def _run(self, env_extra):
+        env = dict(os.environ)
+        env.pop("ZEPHYR_BASE", None)
+        env.update(env_extra)
+        proc = subprocess.run(
+            ["bash", self.TEST_ALL],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+        return proc.returncode, proc.stdout + proc.stderr
+
+    def test_relative_root_rejected_before_env_resolution(self):
+        rc, out = self._run({"TEST_OUTPUT_DIR": "relative-dir"})
+        self.assertNotEqual(rc, 0)
+        self.assertIn("TEST_OUTPUT_DIR must be an absolute path", out)
+        self.assertNotIn("ZEPHYR_BASE", out, "must fail before resolve_ncs")
+
+    def test_repo_root_and_inside_repo_rejected(self):
+        rc, out = self._run({"TEST_OUTPUT_DIR": REPO_ROOT})
+        self.assertNotEqual(rc, 0)
+        self.assertIn("TEST_OUTPUT_DIR must not be the repository root", out)
+        rc, out = self._run({"TEST_OUTPUT_DIR": os.path.join(REPO_ROOT, "docs")})
+        self.assertNotEqual(rc, 0)
+        self.assertIn("TEST_OUTPUT_DIR must not be inside the repository", out)
+        self.assertNotIn("ZEPHYR_BASE", out, "must fail before resolve_ncs")
+
+    def test_root_and_home_rejected(self):
+        for bad in ("/", os.path.expanduser("~")):
+            with self.subTest(path=bad):
+                rc, out = self._run({"TEST_OUTPUT_DIR": bad})
+                self.assertNotEqual(rc, 0)
+                self.assertIn("TEST_OUTPUT_DIR", out)
+                self.assertNotIn("ZEPHYR_BASE", out, "must fail before resolve_ncs")
+
+    def test_valid_external_root_accepted_then_stops_at_environment(self):
+        # Deterministic pre-suite stop: strip nrfutil from PATH and unset
+        # ZEPHYR_BASE so resolve_ncs fails right after validation accepts
+        # the root and before any suite starts.
+        path = [
+            p
+            for p in os.environ.get("PATH", "").split(os.pathsep)
+            if not os.path.isfile(os.path.join(p, "nrfutil"))
+        ]
+        self.assertFalse(
+            any(os.path.isfile(os.path.join(p, "nrfutil")) for p in path),
+            "filtered test PATH must not contain nrfutil",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, out = self._run({"PATH": os.pathsep.join(path), "TEST_OUTPUT_DIR": tmp})
+            self.assertNotEqual(rc, 0)
+            self.assertIn("ZEPHYR_BASE must be set", out)
+            self.assertIn("TEST_OUTPUT_DIR=%s" % tmp, out)
+            self.assertNotIn("TEST_OUTPUT_DIR must", out)
+            # Caller-owned root stays present and untouched.
+            self.assertTrue(os.path.isdir(tmp))
+            self.assertEqual(os.listdir(tmp), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -2,25 +2,38 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * Per-CIS ISO packet sequence tracker — receiver-side gap detection for
- * callbacks the ISO stack omits entirely.
+ * Per-CIS ISO omission trackers — receiver-side gap detection for
+ * callbacks the ISO stack omits entirely, from two independent evidence
+ * sources:
+ *
+ *   - audio_iso_seq: HCI packet sequence numbers;
+ *   - audio_iso_cadence: delivered ISO timestamps (mono / Mode B).
  *
  * Production BAP audio on the nRF5340 SW Split controller usually
  * delivers either a VALID-flag callback or a LOST-flag callback for every
  * CIG event.  Observed on hardware (E83, Mode B and bonded rows): the
  * controller SOMETIMES delivers NO callback at all for a lost SDU — no
- * valid packet, no LOST event.  The next delivered callback's
- * Packet_Sequence_Number then jumps by more than one.  Without a
- * response the audio path starves: the I2S DMA queue drains
- * (`i2s_nrfx: Next buffers not supplied on time`) while the PLC counter
- * stays near zero, because a LOST callback never arrived to trigger
- * concealment.
+ * valid packet, no LOST event.  Without a response the audio path
+ * starves: the I2S DMA queue drains (`i2s_nrfx: Next buffers not
+ * supplied on time`) while the PLC counter stays near zero, because a
+ * LOST callback never arrived to trigger concealment.
  *
- * This module tracks one CIS's delivered sequence numbers and reports
- * how many SDUs were omitted between consecutive callbacks, so the
- * caller can conceal exactly those events as PLC BEFORE processing the
- * current SDU.  It is pure ordering/counting logic (no Zephyr
- * dependencies), unit-testable directly.
+ * The two trackers report how many events were omitted between
+ * consecutive callbacks, so the caller can conceal exactly those events
+ * as PLC BEFORE processing the current SDU.  They are pure
+ * ordering/counting logic (no Zephyr dependencies), unit-testable
+ * directly.
+ *
+ * Sequence gaps (audio_iso_seq) detect emitted HCI SDUs that were
+ * omitted after controller sequencing (controller-to-host or host-side
+ * loss): they appear as a jump in the delivered HCI packet sequence
+ * number.  Controller-side radio events with no emitted HCI SDU keep
+ * the sequence numbers contiguous (the SW Split controller advances its
+ * session sequence number only when an SDU is emitted to the host) and
+ * are detected by timestamp cadence (audio_iso_cadence) instead.  Mode
+ * A retains sequence-only synthetic LOST sentinels; mono / Mode B merge
+ * the two evidence sources with MAX so one physical omission is never
+ * concealed twice.
  *
  * Sequence semantics (documented contract):
  *
@@ -49,6 +62,18 @@
  * so its position is consumed and the next callback's delta stays
  * contiguous.  Only SDUs for which NO callback ever arrives are
  * reported as omitted.
+ *
+ * IMPORTANT: HCI packet sequence continuity does NOT prove delivery
+ * continuity.  The nRF5340 SW Split controller advances its per-session
+ * sequence number only when an SDU is emitted to the host (see
+ * isoal.c: isoal_rx_buffered_emit_sdu()/isoal_rx_try_emit_sdu()); a
+ * radio event with no received PDU emits no HCI SDU and consumes no
+ * sequence number.  Controller-side omissions therefore leave
+ * app-visible seq_num contiguous (FR4 mono evidence: 12000 SDUs
+ * transmitted, 8876 callbacks, zero sequence gaps, 225 I2S resets).
+ * The audio_iso_cadence tracker below detects exactly those omissions
+ * from delivered ISO timestamps, which jump by the integer multiple of
+ * the SDU interval that the omitted events span.
  */
 
 #ifndef AUDIO_ISO_SEQ_H
@@ -62,6 +87,170 @@
 #else
 #define ISO_SEQ_MAX_CONCEAL 8
 #endif
+
+/*
+ * ISO timestamp-cadence tracker (audio_iso_cadence) — receiver-side
+ * omission detection from delivered ISO timestamps for one-CIS modes
+ * (mono and Mode B), independent of the sequence tracker above.
+ *
+ * HCI ISO timestamps are only present with BT_ISO_FLAGS_TS; the host
+ * copies the controller timestamp verbatim and never synthesizes one
+ * when the TS flag is absent.  Delivered callbacks whose timestamps
+ * advance by more than the SDU interval imply ISO events for which no
+ * callback arrived (the same output events a sequence jump would
+ * report).  The caller conceals the omitted events as PLC before
+ * processing the current SDU, and takes the maximum of the sequence-
+ * and timestamp-derived omitted counts so one physical omission is
+ * never concealed twice.
+ *
+ * Cadence semantics (documented contract):
+ *
+ *   - st == NULL                 -> FIRST (no output mutation);
+ *   - has_ts == false            -> NO_TS: counts one delivered
+ *     callback position (saturated at UINT32_MAX), never synthesizes —
+ *     the TS flag is optional by the public host contract;
+ *   - interval_us == 0           -> RESYNC (counted), no synthesis,
+ *     initialization state untouched;
+ *   - first timestamp            -> FIRST (last_ts stored, base set);
+ *   - ts < last_ts               -> WRAP: controller timestamp wrap or
+ *     baseline rebase (nRF5340 SW Split wraps ~every 512 s, nRF54L15
+ *     SDC uses a 32-bit GRTC microsecond view).  Rebased, no synthesis,
+ *     no resync increment;
+ *   - forward delta -> the delivered callback positions since the last
+ *     valid timestamp (captured callbacks_since_ts + 1) are subtracted
+ *     from the nearest integer event count
+ *     (delta_us + interval/2) / interval.  Zero or negative remaining
+ *     positions -> CONTIG; 1..ISO_SEQ_MAX_CONCEAL -> GAP (counted);
+ *     beyond the bound, or any unresolvable arithmetic (duplicate
+ *     timestamp, non-integral delta beyond the scaled tolerance, event
+ *     count below delivered positions, zero interval) -> RESYNC
+ *     (counted, rebased, no synthesis, reason recorded in the
+ *     observation).
+ *
+ * The off-grid tolerance is clock/span-scaled, not a fixed value:
+ * ISO_TS_BASE_TOLERANCE_US (32 us) covers one 32768 Hz tick plus
+ * capture quantization, and ISO_TS_MAX_COMBINED_SCA_PPM (1000 us per
+ * second) budgets the combined worst-case SCA drift of both endpoints
+ * over the spanned events.  The raw sum is capped at a quarter
+ * interval (interval_us / 4), deliberately stricter than the
+ * mathematical half-interval uniqueness bound, so the nearest-integer
+ * event count can never approach ambiguity; for tiny intervals where
+ * interval_us / 4 == 0 the tolerance is exactly zero (no underflow).
+ * A non-integral forward delta is accepted only when its absolute
+ * error is <= the scaled tolerance.  Timestamp error grows with the
+ * elapsed event span (SW Split peripheral ISO RX timestamps derive
+ * from a local RTC/radio-timer anchor measurement plus nominal
+ * ISO-interval corrections), so the fixed 10 us single-event-style
+ * tolerance was not valid across gaps of multiple ISO intervals.
+ *
+ * All event-count arithmetic uses 64-bit intermediates (no floating
+ * point); for uint32_t timestamp deltas and interval the products fit
+ * in 64 bits, so the "cannot be represented safely" resync condition
+ * is inherently satisfied by the wide intermediates.
+ *
+ * Missing-TS callbacks must not become false omissions: they count as
+ * delivered positions, so timestamps at 10000 and 30000 with one
+ * no-TS callback between them represent two delivered positions and
+ * zero omissions, while the same timestamp pair without the no-TS
+ * callback represents one omitted event.
+ *
+ * The RESYNC reasons (duplicate/zero advance, delivered positions
+ * above the event count, off-grid delta, over-bound gap, zero
+ * interval) are recorded in struct audio_iso_cadence_observation so
+ * the caller can classify future RESYNCs from structured evidence
+ * instead of a bare timestamp.
+ */
+#define ISO_TS_BASE_TOLERANCE_US    32U
+#define ISO_TS_MAX_COMBINED_SCA_PPM 1000U
+
+enum audio_iso_cadence_result {
+	AUDIO_ISO_CADENCE_RES_FIRST = 0, /* first timestamp — base set, no gap */
+	AUDIO_ISO_CADENCE_RES_NO_TS,     /* callback without a timestamp — position counted, no
+					    synthesis */
+	AUDIO_ISO_CADENCE_RES_CONTIG,    /* contiguous — no gap */
+	AUDIO_ISO_CADENCE_RES_GAP,       /* 1..MAX omitted events detected (see *omitted) */
+	AUDIO_ISO_CADENCE_RES_WRAP,   /* timestamp wrap/rebase — rebased, no synthesis, not a resync
+				       */
+	AUDIO_ISO_CADENCE_RES_RESYNC, /* unresolvable cadence — rebased, counted, no synthesis */
+};
+
+/*
+ * Exact reason a cadence update classified as RESYNC.  Only RESYNC
+ * carries a reason; every other result (FIRST / NO_TS / CONTIG / GAP /
+ * WRAP) leaves the observation reason at REASON_NONE.
+ */
+enum audio_iso_cadence_resync_reason {
+	AUDIO_ISO_CADENCE_REASON_NONE = 0,
+	AUDIO_ISO_CADENCE_REASON_ZERO_INTERVAL,       /* interval_us == 0: no grid */
+	AUDIO_ISO_CADENCE_REASON_ZERO_ADVANCE,        /* duplicate timestamp: zero event advance */
+	AUDIO_ISO_CADENCE_REASON_DELIVERED_GT_EVENTS, /* more delivered positions than grid events
+						       */
+	AUDIO_ISO_CADENCE_REASON_DELTA_OFF_GRID, /* non-integral delta beyond scaled tolerance */
+	AUDIO_ISO_CADENCE_REASON_OVER_BOUND,     /* omitted events beyond ISO_SEQ_MAX_CONCEAL */
+};
+
+/*
+ * Structured diagnostic evidence for one cadence update.  Zeroed (and
+ * reason = REASON_NONE) on every call; representable saturated
+ * uint32_t values are populated for the computed delta, event count,
+ * delivered positions, error, and tolerance; the reason is set exactly
+ * for RESYNC.  Purely diagnostic: no getter, no logging dependency in
+ * this module.
+ */
+struct audio_iso_cadence_observation {
+	uint32_t delta_us;            /* forward timestamp delta (saturated) */
+	uint32_t event_count;         /* nearest integer event count on the grid */
+	uint32_t delivered_positions; /* delivered callback positions since the prior ts */
+	uint32_t error_us;            /* |delta - event_count * interval| */
+	uint32_t tolerance_us;        /* scaled accepted tolerance (capped) */
+	enum audio_iso_cadence_resync_reason reason;
+};
+
+struct audio_iso_cadence {
+	bool initialized;            /* false until the first delivered timestamp */
+	uint32_t last_ts;            /* most recently delivered ISO timestamp (us) */
+	uint32_t callbacks_since_ts; /* delivered no-TS callbacks since last_ts (saturated) */
+	uint32_t concealed;          /* cumulative omitted events concealed (lifetime) */
+	uint32_t resyncs;            /* cumulative non-concealable cadence outcomes (lifetime) */
+};
+
+/** Clear all state and counters (stream configure/start/stop/release/disconnect). */
+void audio_iso_cadence_reset(struct audio_iso_cadence *st);
+
+/**
+ * Feed one delivered callback's timestamp.
+ *
+ * @param st          Cadence tracker state.
+ * @param has_ts      True when the callback carried a valid ISO timestamp
+ *                    (BT_ISO_FLAGS_TS); false callbacks count one delivered
+ *                    position and are never synthesized.
+ * @param ts          Controller-reported ISO timestamp in microseconds
+ *                    (valid only when @p has_ts is true).
+ * @param interval_us SDU event interval (validated frame duration for
+ *                    one-CIS modes; 0 forces a counted RESYNC).
+ * @param omitted     Receives the number of omitted events to conceal
+ *                    when the result is GAP (else 0).  May be NULL.
+ * @param observation Optional structured diagnostic evidence (delta,
+ *                    event count, delivered positions, error, accepted
+ *                    tolerance, and exact RESYNC reason).  Zeroed on
+ *                    every call; may be NULL.
+ *
+ * @return FIRST / NO_TS / CONTIG / GAP / WRAP / RESYNC per the contract
+ *         above.  On GAP the tracker has re-based on @p ts and the
+ *         omitted events are the grid positions between the previous
+ *         timestamp and @p ts not covered by delivered callbacks (at
+ *         most ISO_SEQ_MAX_CONCEAL).
+ */
+enum audio_iso_cadence_result
+audio_iso_cadence_update(struct audio_iso_cadence *st, bool has_ts, uint32_t ts,
+			 uint32_t interval_us, uint32_t *omitted,
+			 struct audio_iso_cadence_observation *observation);
+
+/** Cumulative omitted events concealed (diagnostics/tests). */
+uint32_t audio_iso_cadence_get_concealed(const struct audio_iso_cadence *st);
+
+/** Cumulative non-concealable cadence outcomes (diagnostics/tests). */
+uint32_t audio_iso_cadence_get_resyncs(const struct audio_iso_cadence *st);
 
 enum audio_iso_seq_result {
 	AUDIO_ISO_SEQ_RES_FIRST = 0, /* first delivered SDU — tracker initialized, no gap */

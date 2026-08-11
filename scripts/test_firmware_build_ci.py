@@ -87,6 +87,25 @@ def run_scripts():
     return scripts
 
 
+def job_block(name):
+    """Text of one top-level job block (between its header and the next
+    job header or top-level key), or AssertionError when the job is
+    missing."""
+    text = workflow_text()
+    marker = re.search(r"(?ms)^  %s:\s*\n" % re.escape(name), text)
+    if marker is None:
+        raise AssertionError("%s job missing" % name)
+    start = marker.end()
+    tail = text[start:]
+    # Job headers sit at exactly two-space indent; any other top-level key
+    # starts at column 0.  Stop at whichever comes first.
+    m = re.search(r"(?m)^(?:[^\s]|  [A-Za-z_][A-Za-z0-9_]*:\s*$)", tail)
+    end = len(tail)
+    if m is not None:
+        end = m.start()
+    return text[start : start + end]
+
+
 class TestProjectVersionCli(unittest.TestCase):
     """Tests 1-4: version reader observable behavior."""
 
@@ -323,9 +342,10 @@ class TestWorkflowContract(unittest.TestCase):
         ]
         self.assertEqual(
             len(uses_lines),
-            5,
-            "expected two checkouts, one upload, one download, and one "
-            "release checkout",
+            10,
+            "expected three checkouts (firmware, tests, release), one Nix "
+            "installer, one Nix store cache, one NCS cache, two uploads "
+            "(firmware, tests), and one download (release)",
         )
 
 
@@ -352,7 +372,12 @@ class TestWorkflowCommands(unittest.TestCase):
             'printf \'ZEPHYR_BASE=%s\\n\' "$zephyr_base" >> "$GITHUB_ENV"',
         ):
             self.assertIn(line, text, "missing %r" % line)
-        env_index = text.index('"$GITHUB_ENV"')
+        # Scope the ordering check to the firmware job: the tests job also
+        # writes $GITHUB_ENV (its output-root step), so a whole-text first
+        # occurrence of "$GITHUB_ENV" is ambiguous.
+        fw = job_block("firmware")
+        env_line = 'printf \'ZEPHYR_BASE=%s\\n\' "$zephyr_base" >> "$GITHUB_ENV"'
+        env_index = fw.index(env_line)
         for command in (
             "west init -l nrf",
             "west update --narrow -o=--depth=1",
@@ -360,13 +385,13 @@ class TestWorkflowCommands(unittest.TestCase):
             "west topdir",
         ):
             self.assertLess(
-                text.index(command),
+                fw.index(command),
                 env_index,
                 "ZEPHYR_BASE export must appear after %r" % command,
             )
         self.assertNotIn(
             "ZEPHYR_BASE=",
-            text[: text.index("west init -l nrf")],
+            fw[: fw.index("west init -l nrf")],
             "ZEPHYR_BASE must not be set before west init",
         )
 
@@ -381,7 +406,11 @@ class TestWorkflowCommands(unittest.TestCase):
             "build/nrf5340/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h",
             "build/nrf54l15/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h",
             "APP_VERSION_STRING",
-            "0\\.1\\.0",
+            "#define\\s+APP_VERSION_STRING",
+            "re.escape(version)",
+            "re.MULTILINE",
+            "PROJECT_VERSION: ${{ steps.project-version.outputs.version }}",
+            'test "$(python3 scripts/project-version.py)" = "$PROJECT_VERSION"',
         ):
             self.assertIn(command, text, "missing %r" % command)
 
@@ -391,7 +420,6 @@ class TestWorkflowCommands(unittest.TestCase):
             "scripts/project-version.py",
             '"$GITHUB_SHA"',
             '"$GITHUB_OUTPUT"',
-            'test "$version" = "0.1.0"',
             "version=$version",
             "scripts/package-firmware-release.py",
             "--git-commit",
@@ -401,6 +429,44 @@ class TestWorkflowCommands(unittest.TestCase):
             '"$version"',
         ):
             self.assertIn(needle, text, "missing %r" % needle)
+
+    def test_project_version_driven_steps(self):
+        """Header verification, packaging, and package verification must all
+        re-derive the root version and compare it with the validated step
+        output, so the pipeline is version-driven and single-use literals
+        cannot drift."""
+        text = workflow_text()
+        self.assertEqual(
+            text.count("PROJECT_VERSION: ${{ steps.project-version.outputs.version }}"),
+            3,
+            "PROJECT_VERSION env must come from the validated project-version "
+            "output on the header-verify, package, and verify-package steps",
+        )
+        self.assertEqual(
+            text.count(
+                'test "$(python3 scripts/project-version.py)" = "$PROJECT_VERSION"'
+            ),
+            1,
+            "header verification must re-read the root VERSION inline and "
+            "compare it with $PROJECT_VERSION",
+        )
+        self.assertEqual(
+            text.count('test "$version" = "$PROJECT_VERSION"'),
+            2,
+            "package and package verification must re-read the root VERSION "
+            "and require equality with $PROJECT_VERSION before use",
+        )
+
+    def test_no_hardcoded_project_version_or_package_paths(self):
+        """The workflow must carry no project release literal (0.1.0/0.1.1)
+        and no fixed ``le-audio-receiver-v<digits>`` package path; the NCS
+        version 3.3.0 is a separate constant and must remain."""
+        text = workflow_text()
+        self.assertNotRegex(text, r"0\.1\.[0-9]", "project release literal present")
+        self.assertNotRegex(
+            text, r"le-audio-receiver-v[0-9]", "fixed package path present"
+        )
+        self.assertIn('"3.3.0"', text, "NCS version constant must remain")
 
 
 class TestWorkflowArtifactContract(unittest.TestCase):
@@ -419,11 +485,15 @@ class TestWorkflowArtifactContract(unittest.TestCase):
             text,
             "exact regular-file top-level count check missing",
         )
-        for zip_name in (
-            "le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip",
-            "le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip",
+        for needle in (
+            'zip5340="le-audio-receiver-v${version}-nrf5340-e83-factory.zip"',
+            'zip54l15="le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip"',
+            'for f in "$zip5340" "$zip54l15" SHA256SUMS ; do',
+            'test -f "dist/$f"',
+            'python3 -m zipfile --test "dist/$zip5340"',
+            'python3 -m zipfile --test "dist/$zip54l15"',
         ):
-            self.assertIn("python3 -m zipfile --test dist/%s" % zip_name, text)
+            self.assertIn(needle, text, "missing %r" % needle)
 
     def test_upload_contract_exact_files_and_options(self):
         text = workflow_text()
@@ -446,12 +516,12 @@ class TestWorkflowArtifactContract(unittest.TestCase):
         self.assertEqual(
             listed,
             [
-                "workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip",
-                "workspace/le-audio-receiver/dist/le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip",
+                "workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf5340-e83-factory.zip",
+                "workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf54l15-xiao-factory.zip",
                 "workspace/le-audio-receiver/dist/SHA256SUMS",
             ],
             "upload path must list exactly the three workspace-root-relative "
-            "files individually",
+            "files individually, with both ZIP paths expression-derived",
         )
         for line in upload_lines[path_index + 1 :]:
             if not line.strip():
@@ -463,31 +533,278 @@ class TestWorkflowArtifactContract(unittest.TestCase):
         self.assertNotIn("dist/*", text, "wildcard upload path forbidden")
 
 
+class TestTestsJobContract(unittest.TestCase):
+    """Canonical software test gate (PR 11): the `tests` job must be the
+    single mandatory pre-build gate running the exact Nix/NCS locked
+    environment on a plain host runner, invoked as scripts/test-all.sh,
+    and always uploading its retained output."""
+
+    SDK_MANAGER_URL = (
+        "https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/"
+        "packages/nrfutil-sdk-manager/"
+        "nrfutil-sdk-manager-x86_64-unknown-linux-gnu-1.16.1.tar.gz"
+    )
+    SDK_MANAGER_SHA256 = (
+        "d2fe97f143f888a679223d9c6e0b51d730eb60b4a5f4a5dafc970acd2020fe38"
+    )
+    NIX_INSTALLER_SHA = "ef8a148080ab6020fd15196c2084a2eea5ff2d25"
+    CACHE_NIX_SHA = "7df957e333c1e5da7721f60227dbba6d06080569"
+    ACTIONS_CACHE_SHA = "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+
+    def _tests_block(self):
+        text = workflow_text()
+        self.assertEqual(
+            len(re.findall(r"(?m)^  tests:\s*$", text)),
+            1,
+            "exactly one tests job must exist",
+        )
+        return job_block("tests")
+
+    def test_tests_job_host_runner_no_container(self):
+        block = self._tests_block()
+        self.assertIn("runs-on: ubuntu-22.04", block)
+        self.assertIn("timeout-minutes: 240", block)
+        self.assertIn("shell: bash", block)
+        self.assertNotIn("container:", block, "tests job must run on the host runner")
+        self.assertNotIn(CONTAINER_IMAGE, block)
+        self.assertNotIn("contents: write", block, "tests job must stay read-only")
+        self.assertNotIn("permissions:", block, "tests job must inherit top-level read")
+        self.assertNotIn("outputs:", block, "tests job must not expose outputs")
+
+    def test_tests_job_free_disk_space_before_nix(self):
+        # Early disk cleanup grounded in the accepted serial-mcp hosted
+        # native-sim pattern: only well-known preinstalled toolchain caches
+        # are removed, after the application checkout and before Nix
+        # installation, and no cleanup command targets project or user data.
+        block = self._tests_block()
+        self.assertIn("Free disk space", block)
+        self.assertIn("df -h /", block)
+        self.assertIn(
+            "sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc "
+            "/opt/hostedtoolcache/CodeQL",
+            block,
+        )
+        self.assertIn("sudo docker image prune --all --force || true", block)
+        self.assertIn("sudo docker builder prune -a --force || true", block)
+        self.assertLess(
+            block.index("Free disk space"),
+            block.index("Install Nix"),
+            "disk cleanup must precede Nix installation",
+        )
+        self.assertLess(
+            block.index("Checkout application"),
+            block.index("Free disk space"),
+            "disk cleanup must follow the application checkout",
+        )
+        # The rm -rf is one fixed well-known list; nothing in it may target
+        # the workspace, the home tree, the NCS cache, or /nix.
+        rm_lines = [line.strip() for line in block.splitlines() if "rm -rf" in line]
+        self.assertEqual(len(rm_lines), 1, "exactly one fixed rm -rf list must exist")
+        for forbidden in (
+            "$GITHUB_WORKSPACE",
+            "$HOME",
+            "/home/runner/ncs",
+            "/nix",
+            "~",
+        ):
+            self.assertNotIn(forbidden, rm_lines[0])
+
+    def test_tests_job_checkout_at_repo_root_only(self):
+        block = self._tests_block()
+        for needle in (
+            "actions/checkout@%s" % CHECKOUT_SHA,
+            "fetch-depth: 0",
+            "persist-credentials: false",
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+        self.assertNotIn("path: workspace/le-audio-receiver", block)
+        self.assertNotIn("repository: nrfconnect/sdk-nrf", block)
+        # No separate sdk-nrf checkout: the SDK comes from sdk-manager, and
+        # the west workspace population step operates on that installed
+        # tree (pinned by the exact manifest), not on a second checkout.
+        self.assertNotIn("west init", block)
+
+    def test_tests_job_nix_install_and_caches_pinned(self):
+        block = self._tests_block()
+        self.assertIn(
+            "DeterminateSystems/nix-installer-action@%s" % self.NIX_INSTALLER_SHA,
+            block,
+        )
+        self.assertIn("nix-community/cache-nix-action@%s" % self.CACHE_NIX_SHA, block)
+        self.assertIn("primary-key: nix-${{ hashFiles('flake.lock') }}", block)
+        self.assertIn("gc-max-store-size: 6G", block)
+        self.assertIn("actions/cache@%s" % self.ACTIONS_CACHE_SHA, block)
+        self.assertIn("path: /home/runner/ncs", block)
+        self.assertIn("key: ncs-v3.3.0-911f4c5c26", block)
+
+    def test_tests_job_sdk_manager_provisioning_exact(self):
+        block = self._tests_block()
+        for needle in (
+            self.SDK_MANAGER_URL,
+            self.SDK_MANAGER_SHA256,
+            "curl --fail-with-body --show-error --location --retry 3 --retry-delay 5",
+            "--connect-timeout 20 --max-time 600",
+            "sha256sum --strict -c -",
+            "--strip-components=2",
+            "$RUNNER_TEMP/nrfutil/bin",
+            'printf \'%s\\n\' "$RUNNER_TEMP/nrfutil/bin" >> "$GITHUB_PATH"',
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+        # The provisioning step itself must never use sudo or shell piping
+        # of the download; sudo is confined to the separate Free disk space
+        # step that precedes Nix installation.
+        provision = block.split("Install NCS SDK and toolchain", 1)[0].split(
+            "Provision nrfutil sdk-manager", 1
+        )[1]
+        for forbidden in ("sudo", "curl -sL", "| bash", "nrfutil core"):
+            self.assertNotIn(
+                forbidden,
+                provision,
+                "forbidden %r in sdk-manager provisioning" % forbidden,
+            )
+
+    def test_tests_job_ncs_install_locked_shell(self):
+        block = self._tests_block()
+        for needle in (
+            "nix develop --accept-flake-config --command bash -s <<'EOF'",
+            'nrfutil sdk-manager config install-dir set "$HOME/ncs"',
+            "nrfutil sdk-manager install v3.3.0",
+            'if [ "$CACHE_HIT" = "true" ]; then',
+            'test -d "$HOME/ncs/v3.3.0/nrf"',
+            'echo "NCS v3.3.0 restored from cache; skipping sdk-manager install"',
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+
+    def test_tests_job_ncs_cache_hit_contract(self):
+        # The NCS cache step must expose its cache-hit output and the install
+        # step must branch on that exact output, never on directory presence
+        # alone: a partial or stale tree must not masquerade as a cache hit.
+        block = self._tests_block()
+        self.assertIn("id: cache-ncs", block)
+        self.assertIn("CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}", block)
+        self.assertNotIn(
+            'if [ -d "$HOME/ncs/v3.3.0/nrf" ]; then',
+            block,
+            "install must not infer cache hit from directory existence",
+        )
+        self.assertIn('if [ "$CACHE_HIT" = "true" ]; then', block)
+
+    def test_tests_job_west_population_exact(self):
+        # The sdk-manager bundle ships the bsim_west checkout but the root
+        # group-filter excludes the babblesim-group components, leaving
+        # tools/bsim/Makefile a dangling symlink to
+        # components/common/Makefile. The workspace population step must
+        # re-enable that group so west fetches every component at its
+        # pinned revision; revisions come from the pinned imported bsim
+        # manifest, never floating clones or ad hoc BSim URLs.
+        block = self._tests_block()
+        self.assertIn("Populate NCS workspace projects", block)
+        for needle in (
+            'cd "$HOME/ncs/v3.3.0"',
+            'test "$(west topdir)" = "$HOME/ncs/v3.3.0"',
+            "west update --narrow -o=--depth=1 --group-filter +babblesim",
+            'test -f "$HOME/ncs/v3.3.0/tools/bsim/Makefile"',
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+        # The exact command must carry the group re-enable: the plain
+        # command (without the flag) must not appear on its own.
+        self.assertNotIn(
+            "west update --narrow -o=--depth=1\n",
+            block,
+            "west update must always carry --group-filter +babblesim",
+        )
+        # Ordering: NCS install -> workspace population -> environment
+        # verify -> BSim build.
+        install_i = block.index("Install NCS SDK and toolchain")
+        populate_i = block.index("Populate NCS workspace projects")
+        verify_i = block.index("Verify canonical test environment")
+        bsim_i = block.index("Build BabbleSim components")
+        self.assertLess(install_i, populate_i, "population must follow install")
+        self.assertLess(populate_i, verify_i, "verify must follow population")
+        self.assertLess(verify_i, bsim_i, "BSim build must follow verify")
+
+    def test_tests_job_environment_verification_exact(self):
+        block = self._tests_block()
+        for needle in (
+            'test "$gcovr_line" = "gcovr 8.4"',
+            'test "$gcov_line" = "gcov (GCC) 14.3.0"',
+            'test "$ZEPHYR_BASE" = "$HOME/ncs/v3.3.0/zephyr"',
+            'git -C "$HOME/ncs/v3.3.0/nrf" rev-parse HEAD',
+            NRF_COMMIT,
+            "nrf/VERSION",
+            "nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh",
+            "911f4c5c26",
+            "canonical test environment verified",
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+
+    def test_tests_job_bsim_build_fail_fast_exact(self):
+        block = self._tests_block()
+        for needle in (
+            "BSIM_BUILD_FAIL_ASAP=1",
+            'make -C "$HOME/ncs/v3.3.0/tools/bsim" everything',
+            'test -x "$HOME/ncs/v3.3.0/tools/bsim/bin/bs_2G4_phy_v1"',
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+        self.assertNotIn(
+            "make -C", block.split("BSIM_BUILD_FAIL_ASAP=1")[0], "fail-fast must be set"
+        )
+
+    def test_tests_job_gate_invocation_is_test_all_sh(self):
+        block = self._tests_block()
+        self.assertIn("Run canonical test gate", block)
+        self.assertIn("./scripts/test-all.sh", block)
+        self.assertIn("set -o pipefail", block)
+        self.assertIn('tee "$TEST_OUTPUT_DIR/test-all.log"', block)
+        # The gate is the shared suite-discovery script, never a copied
+        # suite list: the tests job must not build suites directly.
+        self.assertNotIn("west build", block, "suite lists must not be copied")
+        gate_marker = "Run canonical test gate"
+        gate_body = block.split(gate_marker, 1)[1]
+        self.assertIn("TEST_OUTPUT_DIR", gate_body)
+        self.assertNotIn("--twister", gate_body, "gate must not enumerate suites")
+
+    def test_tests_job_output_root_under_home(self):
+        block = self._tests_block()
+        for needle in (
+            'results_dir="$HOME/le-audio-test-results"',
+            'printf \'TEST_OUTPUT_DIR=%s\\n\' "$results_dir" >> "$GITHUB_ENV"',
+            'printf \'BSIM_LOG_ROOT=%s/bsim\\n\' "$results_dir" >> "$GITHUB_ENV"',
+        ):
+            self.assertIn(needle, block, "missing %r in tests job" % needle)
+        self.assertNotIn("_github_home", block, "no container path translation")
+
+    def test_tests_job_artifact_upload_always(self):
+        block = self._tests_block()
+        self.assertIn("actions/upload-artifact@%s" % UPLOAD_SHA, block)
+        self.assertIn("if: always()", block)
+        self.assertIn("name: le-audio-test-results-${{ github.sha }}", block)
+        self.assertIn("path: /home/runner/le-audio-test-results", block)
+        self.assertIn("if-no-files-found: warn", block)
+        self.assertIn("retention-days: 7", block)
+
+    def test_firmware_needs_tests(self):
+        block = job_block("firmware")
+        self.assertIn("needs: tests", block, "firmware must wait for tests")
+
+
 class TestReleaseJobContract(unittest.TestCase):
     """FR3 tests 9+: trusted-main automatic draft-release job static
     contract."""
 
+    def _job_block(self, name):
+        return job_block(name)
+
     def _release_block(self):
-        text = workflow_text()
-        marker = re.search(r"(?ms)^  release:\s*\n", text)
-        if marker is None:
-            raise AssertionError("release job missing")
-        start = marker.end()
-        tail = text[start:]
-        m = re.search(r"(?m)^\S", tail)
-        end = len(tail)
-        if m is not None:
-            end = m.start()
-        return text[start : start + end]
+        return self._job_block("release")
 
     def test_release_job_guard_and_topology(self):
         block = self._release_block()
         self.assertIn("needs: firmware", block, "release must need firmware")
         self.assertIn(
-            "if: github.event_name == 'push' && github.ref == 'refs/heads/main' "
-            "&& needs.firmware.outputs.release-requested == 'true'",
+            "if: github.event_name == 'push' && github.ref == 'refs/heads/main'",
             block,
-            "release must run only on a trusted main push that changed VERSION",
+            "release must run on trusted main pushes so missing releases can be created",
         )
         self.assertIn("runs-on: ubuntu-22.04", block)
         self.assertIn("timeout-minutes: 15", block)
@@ -527,7 +844,6 @@ class TestReleaseJobContract(unittest.TestCase):
             "release_requested=true",
             'elif [ "$diff_status" -ne 0 ]; then',
             'echo "release-requested=$release_requested" >> "$GITHUB_OUTPUT"',
-            'test "$version" = "0.1.0"',
         ):
             self.assertIn(needle, text, "missing %r" % needle)
         self.assertNotIn("refs/tags/*", text, "old tag-push guard must be removed")
@@ -541,7 +857,6 @@ class TestReleaseJobContract(unittest.TestCase):
             'version="$(python3 scripts/project-version.py)"',
             'tag="v$version"',
             'test "$version" = "$FW_VERSION"',
-            'test "$RELEASE_REQUESTED" = "true"',
             'test "$GITHUB_EVENT_NAME" = "push"',
             'test "$GITHUB_REF" = "refs/heads/main"',
             'test "$GITHUB_REF_NAME" = "main"',
@@ -643,6 +958,13 @@ class TestReleaseJobContract(unittest.TestCase):
         self.assertIn("scan_status", text)
         self.assertIn("::error::existing-release list probe failed for tag", text)
         self.assertIn("::error::release already exists for tag", text)
+        self.assertIn("id: release-collision", text)
+        self.assertIn('echo "release-needed=false" >> "$GITHUB_OUTPUT"', text)
+        self.assertIn(
+            "if: steps.release-collision.outputs.release-needed == 'true'",
+            text,
+            "release creation and verification must run only when collision probe permits it",
+        )
         self.assertNotIn(
             "releases/tags/$tag",
             text,

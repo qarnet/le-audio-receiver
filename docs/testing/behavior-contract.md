@@ -224,8 +224,9 @@ disconnect cleanup, `rel_ss_seq < disc_seq`).
 Some controllers send empty HCI ISO packets (`BT_ISO_FLAGS_VALID` set,
 zero SDU length) when the remote side produced no SDU for an event.
 The session receive path detects `valid && len == 0` after decoder
-readiness and per-CIS sequence-gap work but before exact payload-shape
-validation, counts the callback as exactly one `empty_sdus` event
+readiness and per-CIS sequence/cadence-gap work but before exact
+payload-shape validation, counts the callback as exactly one
+`empty_sdus` event
 (`audio_stats_empty_sdu()`), and normalizes the local validity to
 source-invalid for the remaining decode/conceal path — never mutating
 caller data or the public API.  Mono and Mode B render the callback
@@ -242,6 +243,72 @@ CODEC-011 malformed hard-evidence path; non-valid zero-length callbacks
 `empty_sdus`.  `audio_decode_sdu()` itself still rejects `valid=true`
 with zero length (CODEC-008) — the session normalization happens before
 it is called, so CODEC-008 is unchanged.
+
+### CODEC-015 — Timestamp-cadence concealment (mono / Mode B)
+
+HCI packet sequence continuity does not prove delivery continuity: the
+nRF5340 SW Split controller advances its per-session sequence number
+only when an SDU is emitted to the host (isoal.c), so a radio event
+with no received PDU emits no HCI SDU and consumes no sequence number.
+Controller-side omissions therefore leave app-visible `seq_num`
+contiguous (FR4 mono evidence: 12000 SDUs transmitted, 8876 callbacks,
+zero sequence gaps, 225 I2S restarts).  The delivered ISO timestamps
+of the callbacks around such an omission jump by the integer multiple
+of the SDU interval the omitted events span.
+
+For one-CIS modes (mono and Mode B) every delivered callback — VALID,
+LOST, empty, or malformed — feeds the per-CIS timestamp-cadence tracker
+(`audio_iso_cadence`, alongside the sequence tracker) before empty/
+malformed payload validation, preserving the no-double-conceal contract
+for delivered rejected packets.  The merged omission count is
+
+    omitted = MAX(seq_omitted, cadence_omitted)
+
+and never the sum: a host-side dropped HCI SDU produces both a sequence
+jump and a timestamp jump for the same missing output event (MAX
+conceals it once), while a controller-side radio omission produces only
+a timestamp jump.  The bounded PLC loop and the process-current-after-
+PLC order are unchanged.  Mode A does not run timestamp-cadence
+synthesis; it keeps the sequence-only synthetic-LOST sentinel path
+(CODEC-016 ordering applies there).
+
+Cadence classification: a callback without a timestamp (`BT_ISO_FLAGS_TS`
+absent) is a delivered position and never synthesizes (timestamp absence
+is allowed by the public host contract); a backward timestamp is an
+expected controller wrap/rebase (`WRAP`, rebased, no synthesis, no
+resync count); a forward delta is resolved to the nearest integer event
+count on the SDU grid with a clock/span-scaled tolerance
+(64-bit arithmetic, no floating point).  The tolerance is not a fixed
+value: `ISO_TS_BASE_TOLERANCE_US` (32 us) covers one 32768 Hz tick plus
+capture quantization and `ISO_TS_MAX_COMBINED_SCA_PPM` (1000 us/s)
+budgets the combined worst-case SCA drift of both endpoints over the
+spanned events, so the accepted error grows with the elapsed event span
+(SW Split peripheral ISO RX timestamps derive from a local
+RTC/radio-timer anchor measurement plus nominal ISO-interval
+corrections).  The raw sum is capped at a quarter interval
+(`interval_us / 4`), deliberately stricter than half-interval
+uniqueness; for tiny intervals where `interval_us / 4 == 0` the
+tolerance is exactly zero (no underflow).  A non-integral forward delta
+is accepted only when its absolute error is `<=` the scaled tolerance.
+Duplicate timestamps, non-integral deltas beyond tolerance, event
+counts below delivered positions, and omissions beyond
+`ISO_SEQ_MAX_CONCEAL` are counted resyncs (`RESYNC`, rebased, no
+synthesis, one `LOG_WRN`); `WRAP` never warns.  The RESYNC warning
+carries structured observation evidence so any future RESYNC is
+classifiable without another blind hardware run: the exact reason enum
+(`ZERO_INTERVAL` / `ZERO_ADVANCE` / `DELIVERED_GT_EVENTS` /
+`DELTA_OFF_GRID` / `OVER_BOUND`), the current timestamp, the forward
+delta, the interval, the estimated event count, the delivered
+positions, the off-grid error, the accepted scaled tolerance, and the
+cumulative resync count.  Per-gap `LOG_INF` is suppressed for
+cadence-only gaps — FR4 observed thousands of omitted events and
+per-gap UART logging could perturb real-time behavior; a `LOG_DBG` line
+and the existing aggregate PLC and stream-reset summary remain public
+evidence.
+
+Reset discipline: the cadence tracker is reset at every site that
+resets the sequence tracker (config, start-clear, release, reset-all),
+so no cadence gap can cross a session boundary.
 
 ## Statistics contract (`STAT-*`)
 
@@ -904,10 +971,14 @@ nRF54L15 full-stack enablement proven from the resolved app config
 (`CONFIG_USER_PAIRING_CONTROL=y` `54l15-037`,
 `CONFIG_USER_PAIRING_INPUT=y` `54l15-038`, its mandatory subsystem
 dependency `CONFIG_INPUT=y` `54l15-050`, debounce 30 `54l15-039`,
-shell reset timeout 15000 `54l15-040`, chosen work-queue stack 1024
-`54l15-041` (build-minimum; runtime validated by P8 hardware —
-pairing work-queue stack usage 640/1024 (62 %) at idle, sustained
-BONDING/RESET/stream transitions clean, no stack/heap/assert warning),
+shell reset timeout 15000 `54l15-040`, chosen work-queue stack 1536
+`54l15-041` (P8 hardware originally validated 1024 at 640/1024 (62 %)
+idle with sustained BONDING/RESET/stream transitions clean; FR4
+cadence hardware later measured a pre-fix high-water of 1012/1024
+(98 %, 12 B unused) on the pairing queue, so the budget grew to 1536,
+restoring an expected 524 B margin — the superseded 1024 evidence
+remains history and the current contract supersedes it for lack of
+stack margin),
 `CONFIG_HEAP_MEM_POOL_SIZE=0` system-heap-removal proof
 `54l15-042`) and from the resolved app DTS (the `user-button` alias
 resolves to `button0` `54l15-043`, whose gpio-keys parent carries
@@ -934,7 +1005,19 @@ work-queue stack / heap / debounce / shell timeout values, a missing
 `CONFIG_INPUT` dependency, wrong
 `user-button`/`user-led` alias targets, wrong button pin/polarity/code,
 re-enabled inherited buttons, wrong LED pin/polarity, and a reintroduced
-inherited LED node.
+inherited LED node.  **FR4:** the nRF5340 system-workqueue stack fix grows
+the checker to **96 assertions** and the suite to **52 tests** — a new
+resolved app-config assertion `5340-032` requires
+`CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE == 2048` (hardware-validated budget:
+fresh strict-mono stream establishment on nRF5340 faulted with a
+`sysworkq` stack overflow at the 1024-byte resolved size during the
+Config/QoS transition, so the board config doubles it to 2048 with ample
+448 KB-region headroom; the nRF54L15 target already resolves 2048), with a
+mutation test proving a regression to 1024 fails `5340-032`.  The same
+FR4 fix set moves `54l15-041` from 1024 to 1536 (pre-fix pairing-queue
+hardware high-water 1012/1024, 98 %, 12 B unused; expected 524 B margin
+at 1536) without changing the assertion or test count — the mutation
+test now proves a regression to the pre-fix 1024 fails `54l15-041`.
 
 ### BUILD-008 — 48 kHz capability proof split (T6)
 
