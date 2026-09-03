@@ -192,8 +192,19 @@ receiver summary now emits a healthy full-grammar line (extended RX fields
 present, values above every row's floor), and four existing retention-shape
 tests were updated to healthy values without weakening their assertions.
 Evidence: `docs/development/system-hil-rh3a-transport-limits-handoff.md`.
-RH3 matrix execution on hardware is the next phase; no acceptance claim
-exists yet.
+
+**First RH3a matrix attempt (hardware):** one runner-owned attempt,
+`rh3-matrix-20260903-rh3a`, returned status `1`; its aggregate result is
+`failed` with 14 scheduled children, 2 attempted/completed, 1 passed, 1 failed,
+0 cancelled, and 12 not attempted. Pass 1 fresh mono passed. Pass 1 fresh Mode
+A failed at `session end` with `missing receiver stream summary slot(s): [0,
+1]`. Retained raw Mode A summaries also violate frozen delivery limits
+(`rx_valid=135` and `133` versus 90% of 12,644 submitted) and the slot-0 PLC
+ceiling (`28458` of `28726`). This is classified evidence, not a cause
+diagnosis or acceptance. Aggregate and attempted-child SHA-256 verification
+passed; no child was retried. Full evidence and classification:
+`docs/development/system-hil-rh3-matrix-20260903-result.md`. RH3
+transport/runtime acceptance remains absent.
 
 ## System HIL — RH4 host integration (2026-08-13)
 

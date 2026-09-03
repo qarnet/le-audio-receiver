@@ -33,9 +33,20 @@ immutable IDs, results, hashes, or historical execution wording.
   release, shell, and documentation work. No commit was made in this session.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained physical-run count is now twenty-three: sixteen failed, one cancelled,
-  and six passed direct diagnostic/control executions. H40 and H42 are passed
-  bounded diagnostics, not acceptance evidence.
+- Retained top-level physical-run count is now twenty-four: seventeen failed,
+  one cancelled, and six passed direct diagnostic/control executions. Matrix
+  child rows remain counted in their matrix aggregate, not as additional
+  top-level direct runs. H40 and H42 are passed bounded diagnostics, not
+  acceptance evidence.
+- Latest matrix attempt: `rh3-matrix-20260903-rh3a` ran once under frozen
+  transport limits. The outer command returned `matrix_status=1`; aggregate
+  result was `failed` with 14 scheduled children, 2 attempted and completed,
+  1 passed, 1 failed, 0 cancelled, and 12 not attempted. Pass 1 fresh mono
+  passed. Pass 1 fresh Mode A failed at `session end` with exact detail
+  `missing receiver stream summary slot(s): [0, 1]`; retained raw summaries
+  also record the transport-limit violations documented in
+  `docs/development/system-hil-rh3-matrix-20260903-result.md`. This is not RH3
+  acceptance and must not be retried in this phase.
 - System HIL plan of record revised 2026-09-03
   (`docs/development/system-hil-milestones.md`): nRF54L15 is the only
   production receiver target (nRF5340 release track eliminated from the plan;
