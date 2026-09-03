@@ -567,8 +567,10 @@ class TestCaptureProcess(unittest.TestCase):
                 timeline.append("receiver-tail")
                 return {}
 
-            def _step_session_end(self, receiver_console, source_client, row, segment):
-                del receiver_console, source_client, row, segment
+            def _step_session_end(
+                self, receiver_console, source_client, row, segment, scan_offset
+            ):
+                del receiver_console, source_client, row, segment, scan_offset
                 timeline.append("receiver-summary")
                 return {}
 
@@ -590,12 +592,17 @@ class TestCaptureProcess(unittest.TestCase):
                 timeline.append("receiver-post-stop")
                 return {}
 
+        class ReceiverConsole:
+            @staticmethod
+            def bytes_received():
+                return 0
+
         session = TimelineCapture(
             timeline, os.path.join(tempfile.mkdtemp(), "capture.wav")
         )
         result = runner.Runner._step_run_row(
             ProbeRunner(),
-            receiver_console=object(),
+            receiver_console=ReceiverConsole(),
             source_client=Source(),
             identity={"address": "AA", "address_type": "random"},
             row=rows.RH2_ROW,

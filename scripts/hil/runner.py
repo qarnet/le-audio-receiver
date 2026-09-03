@@ -910,6 +910,7 @@ class Runner:
         tail_snapshots = []
         segment_summaries = []
         active_offload_by_segment = {}
+        segment_summary_bases = {}
         recovery = None
 
         def collect_streaming(segment):
@@ -944,12 +945,18 @@ class Runner:
                 capture_session.start()
 
         def collect_tail(segment):
+            segment_summary_base = receiver_console.bytes_received()
+            segment_summary_bases[segment] = segment_summary_base
             tail = self._collect_receiver_tail(receiver_console, row)
             tail_snapshots.append({"segment": segment, "receiver": tail})
 
         def collect_summary(segment):
             summary = self._step_session_end(
-                receiver_console, source_client, row, segment
+                receiver_console,
+                source_client,
+                row,
+                segment,
+                segment_summary_bases[segment],
             )
             summary["post_stop"] = self._collect_receiver_post_stop(
                 receiver_console,
@@ -1508,14 +1515,18 @@ class Runner:
             "handshake": handshake,
         }
 
-    def _step_session_end(self, receiver_console, source_client, row, segment):
+    def _step_session_end(
+        self, receiver_console, source_client, row, segment, scan_offset
+    ):
         del source_client
-        summary_scan_offset = receiver_console.bytes_received()
         deadline = self.deps.clock() + self.deps.summary_timeout
         summaries = []
         seen_slots = set()
+        raw_derived = False
 
-        def append_summaries(parsed, target_summaries, target_seen_slots):
+        def append_summaries(
+            parsed, target_summaries, target_seen_slots, keep_first=False
+        ):
             for summary in parsed:
                 slot = summary["slot"]
                 if slot not in range(row.stream_count):
@@ -1525,6 +1536,8 @@ class Runner:
                         % (slot, row.stream_count),
                     )
                 if slot in target_seen_slots:
+                    if keep_first:
+                        continue
                     raise HilRunnerError(
                         "session end",
                         "duplicate receiver stream summary slot %d" % slot,
@@ -1533,19 +1546,20 @@ class Runner:
                 target_summaries.append(summary)
 
         def raw_fallback_summaries():
-            text, _decode_failed = receiver_console.raw_text_since(summary_scan_offset)
+            text, _decode_failed = receiver_console.raw_text_since(scan_offset)
             raw_summaries = []
             raw_seen_slots = set()
             append_summaries(
-                receiver.parse_stream_summary(text), raw_summaries, raw_seen_slots
+                receiver.parse_stream_summary(text),
+                raw_summaries,
+                raw_seen_slots,
+                keep_first=True,
             )
             missing = [
                 slot for slot in range(row.stream_count) if slot not in raw_seen_slots
             ]
             if missing:
-                scanned_bytes = max(
-                    0, receiver_console.bytes_received() - summary_scan_offset
-                )
+                scanned_bytes = max(0, receiver_console.bytes_received() - scan_offset)
                 raise HilRunnerError(
                     "session end",
                     "missing receiver stream summary slot(s): %r; raw evidence scan also "
@@ -1557,6 +1571,7 @@ class Runner:
             remaining = deadline - self.deps.clock()
             if remaining <= 0:
                 summaries = raw_fallback_summaries()
+                raw_derived = True
                 break
             summary_line = self._wait_console_line(
                 receiver_console,
@@ -1566,6 +1581,7 @@ class Runner:
             )
             if summary_line is None:
                 summaries = raw_fallback_summaries()
+                raw_derived = True
                 break
             parsed = receiver.parse_stream_summary(summary_line)
             if not parsed:
@@ -1593,7 +1609,12 @@ class Runner:
                     "stream summary slot %d transport limits: %s"
                     % (summary["slot"], "; ".join(violations)),
                 )
-        return {"segment": segment, "streams": summaries, "last": last}
+        return {
+            "segment": segment,
+            "streams": summaries,
+            "last": last,
+            "raw_derived": raw_derived,
+        }
 
     def _step_scan_logs(
         self,

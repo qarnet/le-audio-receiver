@@ -7431,34 +7431,60 @@ class TestSessionEndRawEvidenceFallback(unittest.TestCase):
             RunnerDeps(clock=clock, sleep=lambda _seconds: None, summary_timeout=2.0)
         )
 
-    def test_session_end_raw_evidence_fallback_rescues_late_summary(self):
-        # FakeSerial publishes each complete line in the same reader
-        # transaction that appends it to raw evidence. A full harness wire
-        # cannot therefore retain a complete summary without also making it
-        # available to the live queue. This direct unit seam uses the real
-        # SerialConsole, releases bytes after the scan mark, then advances the
-        # injected runner clock through the deadline before live consumption.
+    @staticmethod
+    def _tail_transcript_with_summaries(summary_lines):
+        transcript = hil_fakes.iso_link_quality_transcript()
+        prompt = hil_fakes.receiver_prompt_line(terminated=True).encode("utf-8")
+        if not transcript.endswith(prompt):
+            raise AssertionError("fake ISO quality transcript lost trailing prompt")
+        summaries = b"".join(
+            b"<inf> bt_bap: " + summary_line for summary_line in summary_lines
+        )
+        return transcript[: -len(prompt)] + summaries + prompt
+
+    def _collect_tail_with_summaries(self, engine, console, wire, row, summary_lines):
+        scan_offset = console.bytes_received()
+        wire.write_responses.append(
+            (
+                "bt iso quality\r",
+                self._tail_transcript_with_summaries(summary_lines),
+            )
+        )
+        engine._collect_receiver_tail(console, row)
+        return scan_offset
+
+    def test_session_end_raw_evidence_fallback_rescues_tail_swallowed_summary(self):
         with tempfile.TemporaryDirectory() as td:
             wire, console = self._open_console(td)
             try:
                 summary_line = hil_fakes.receiver_stream_summary_line(
                     sdus=764, decoded=777, plc=13, rx_valid=764
                 ).encode("utf-8")
-                clock = _ReleaseAfterScanClock(
-                    console, wire, [summary_line], [0.0, 3.0]
+                engine = self._engine(ControlledClock())
+                engine._run_dir = td
+                scan_offset = self._collect_tail_with_summaries(
+                    engine, console, wire, rows.RH2_ROW, [summary_line]
                 )
+                with open(
+                    os.path.join(td, "receiver-status.txt"), encoding="utf-8"
+                ) as fh:
+                    tail_transcript = fh.read()
+                self.assertIn(summary_line.decode("utf-8").strip(), tail_transcript)
+                self.assertEqual(console.drain_lines(), [])
+                engine._wait_console_line = lambda *_args: None
 
-                summary = self._engine(clock)._step_session_end(
-                    console, object(), rows.RH2_ROW, 0
+                summary = engine._step_session_end(
+                    console, object(), rows.RH2_ROW, 0, scan_offset
                 )
 
                 self.assertEqual(summary["segment"], 0)
                 self.assertEqual(summary["last"]["rx_valid"], 764)
                 self.assertEqual(summary["last"]["plc"], 13)
+                self.assertTrue(summary["raw_derived"])
             finally:
                 console.close()
 
-    def test_session_end_raw_evidence_fallback_enforces_transport_limits(self):
+    def test_session_end_raw_evidence_fallback_enforces_tail_swallowed_limits(self):
         row = rows.RH3_7P5_DIAGNOSTIC_ROWS[0]
         with tempfile.TemporaryDirectory() as td:
             wire, console = self._open_console(td)
@@ -7469,16 +7495,15 @@ class TestSessionEndRawEvidenceFallback(unittest.TestCase):
                     plc=38924,
                     rx_valid=24,
                 ).encode("utf-8")
-                release = _ReleaseAfterScanClock(console, wire, [summary_line], [0.0])
                 engine = self._engine(ControlledClock())
+                engine._run_dir = td
+                scan_offset = self._collect_tail_with_summaries(
+                    engine, console, wire, row, [summary_line]
+                )
 
-                def timeout_live_wait(*_args):
-                    release()
-                    return None
-
-                engine._wait_console_line = timeout_live_wait
+                engine._wait_console_line = lambda *_args: None
                 with self.assertRaises(HilRunnerError) as ctx:
-                    engine._step_session_end(console, object(), row, 0)
+                    engine._step_session_end(console, object(), row, 0, scan_offset)
 
                 self.assertEqual(ctx.exception.boundary, "session end")
                 self.assertIn("rx_valid=24 below floor", ctx.exception.message)
@@ -7491,9 +7516,10 @@ class TestSessionEndRawEvidenceFallback(unittest.TestCase):
             wire, console = self._open_console(td)
             try:
                 clock = _ReleaseAfterScanClock(console, wire, [], [0.0, 3.0])
+                scan_offset = console.bytes_received()
                 with self.assertRaises(HilRunnerError) as ctx:
                     self._engine(clock)._step_session_end(
-                        console, object(), rows.RH2_ROW, 0
+                        console, object(), rows.RH2_ROW, 0, scan_offset
                     )
 
                 self.assertEqual(ctx.exception.boundary, "session end")
@@ -7512,38 +7538,70 @@ class TestSessionEndRawEvidenceFallback(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             wire, console = self._open_console(td)
             try:
-                first_clock = _ReleaseAfterScanClock(
+                engine = self._engine(ControlledClock())
+                engine._run_dir = td
+                first_offset = self._collect_tail_with_summaries(
+                    engine,
                     console,
                     wire,
+                    row,
                     [hil_fakes.receiver_stream_summary_line().encode("utf-8")],
-                    [0.0, 0.0, 0.0, 0.0],
                 )
-                engine = self._engine(first_clock)
+                engine._wait_console_line = lambda *_args: None
 
-                first = engine._step_session_end(console, object(), row, 0)
+                first = engine._step_session_end(
+                    console, object(), row, 0, first_offset
+                )
 
                 self.assertEqual(first["last"]["slot"], 0)
+                self.assertTrue(first["raw_derived"])
                 self.assertEqual(console.drain_lines(), [])
-                second_offset = console.bytes_received()
                 full_text, _decode_failed = console.raw_text_since(0)
                 self.assertEqual(len(receiver.parse_stream_summary(full_text)), 1)
-
-                engine.deps.clock = _ReleaseAfterScanClock(
-                    console,
-                    wire,
-                    [b"segment 1 teardown pending\r\n"],
-                    [0.0, 3.0],
+                second_offset = self._collect_tail_with_summaries(
+                    engine, console, wire, row, []
                 )
+
                 with self.assertRaises(HilRunnerError) as ctx:
-                    engine._step_session_end(console, object(), row, 1)
+                    engine._step_session_end(console, object(), row, 1, second_offset)
 
                 self.assertIn(
                     "missing receiver stream summary slot(s)", ctx.exception.message
                 )
                 self.assertIn("raw evidence scan also missing", ctx.exception.message)
                 segment_text, _decode_failed = console.raw_text_since(second_offset)
-                self.assertIn("segment 1 teardown pending", segment_text)
                 self.assertEqual(receiver.parse_stream_summary(segment_text), [])
+            finally:
+                console.close()
+
+    def test_session_end_raw_evidence_fallback_keeps_first_tail_summary_per_slot(self):
+        with tempfile.TemporaryDirectory() as td:
+            wire, console = self._open_console(td)
+            try:
+                first_summary = hil_fakes.receiver_stream_summary_line(
+                    sdus=764, decoded=777, plc=13, rx_valid=764
+                ).encode("utf-8")
+                duplicate_summary = hil_fakes.receiver_stream_summary_line(
+                    sdus=24, decoded=38972, plc=38924, rx_valid=24
+                ).encode("utf-8")
+                engine = self._engine(ControlledClock())
+                engine._run_dir = td
+                scan_offset = self._collect_tail_with_summaries(
+                    engine,
+                    console,
+                    wire,
+                    rows.RH2_ROW,
+                    [first_summary, duplicate_summary],
+                )
+                engine._wait_console_line = lambda *_args: None
+
+                summary = engine._step_session_end(
+                    console, object(), rows.RH2_ROW, 0, scan_offset
+                )
+
+                self.assertTrue(summary["raw_derived"])
+                self.assertEqual(summary["last"]["sdus"], 764)
+                self.assertEqual(summary["last"]["plc"], 13)
             finally:
                 console.close()
 

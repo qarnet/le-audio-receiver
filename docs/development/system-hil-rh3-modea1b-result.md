@@ -194,6 +194,7 @@ This execution does not establish either intended binary arm:
 Stop here. Do not rerun this ID or use raw telemetry as acceptance evidence.
 Next work needs a reviewed runner fix for receiver-summary collection ordering
 and host proof that the summaries are captured before a later authorized row.
+Root cause subsequently identified and fixed in RH3c; see `docs/development/system-hil-rh3c-full-raw-scan-handoff.md`.
 
 ## Integrity and raw identity
 
