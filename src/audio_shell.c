@@ -120,6 +120,16 @@ static int cmd_perf(const struct shell *sh, size_t argc, char **argv)
 	shell_print(sh, "    Push failures : %u", queue.push_failures);
 	shell_print(sh, "    Repeat fb     : %u", queue.repeat_fallback_count);
 	shell_print(sh, "    ASRC cap fail : %u", queue.asrc_capacity_failures);
+	shell_print(sh, "    I2S write fail : total=%u eio=%u enomsg=%u last=%d",
+		    queue.i2s_write_failures, queue.i2s_write_eio_failures,
+		    queue.i2s_write_enomsg_failures, queue.i2s_write_last_errno);
+	shell_print(sh, "    I2S DMA restart: %u", queue.i2s_dma_restarts);
+	shell_print(sh, "    RX callback gap: %u us (max)",
+		    k_cyc_to_us_ceil32(queue.rx_callback_gap_max_cycles));
+	shell_print(sh, "    I2S write gap  : %u us (max)",
+		    k_cyc_to_us_ceil32(queue.i2s_write_gap_max_cycles));
+	shell_print(sh, "    I2S write time : %u us (max)",
+		    k_cyc_to_us_ceil32(queue.i2s_write_duration_max_cycles));
 
 	return 0;
 }
@@ -132,9 +142,9 @@ static int cmd_perf_reset(const struct shell *sh, size_t argc, char **argv)
 
 SHELL_STATIC_SUBCMD_SET_CREATE(
 	audio_cmds, SHELL_CMD_ARG(status, NULL, "Print audio stats and state.", cmd_status, 1, 0),
-	SHELL_CMD_ARG(reset-stats, NULL, "Clear all counters.", cmd_reset_stats, 1, 0),
+	SHELL_CMD_ARG(reset\055stats, NULL, "Clear all counters.", cmd_reset_stats, 1, 0),
 	SHELL_CMD_ARG(perf, NULL, "Print performance instrumentation.", cmd_perf, 1, 0),
-	SHELL_CMD_ARG(perf-reset, NULL, "Clear performance counters.", cmd_perf_reset, 1, 0),
+	SHELL_CMD_ARG(perf\055reset, NULL, "Clear performance counters.", cmd_perf_reset, 1, 0),
 	SHELL_CMD_ARG(stop, NULL, "Stop I2S and reset drift.", cmd_stop, 1, 0),
 	SHELL_SUBCMD_SET_END);
 

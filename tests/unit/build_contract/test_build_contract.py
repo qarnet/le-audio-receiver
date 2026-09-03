@@ -188,6 +188,28 @@ APP54_DTS = """\
 /dts-v1/;
 
 / {
+	reserved-memory {
+		#address-cells = < 0x1 >;
+		#size-cells = < 0x1 >;
+		ranges;
+
+		sram_rx: memory@20028000 {
+			reg = < 0x20028000 0x2000 >;
+		};
+
+		sram_tx: memory@2002A000 {
+			reg = < 0x2002a000 0x2000 >;
+		};
+
+		pcm_ring: memory@2002C000 {
+			reg = < 0x2002c000 0x4000 >;
+		};
+
+		cpuflpr_code_partition: image@165000 {
+			reg = < 0x165000 0x18000 >;
+		};
+	};
+
 	chosen {
 		zephyr,bt-hci = &bt_hci_sdc;
 	};
@@ -256,24 +278,6 @@ APP54_DTS = """\
 			status = "okay";
 			clock-source = "PCLK32M";
 			pinctrl-0 = < &i2s20_default >;
-		};
-
-		reserved-memory {
-			sram_rx: memory@20028000 {
-				reg = < 0x20028000 0x2000 >;
-			};
-
-			sram_tx: memory@2002A000 {
-				reg = < 0x2002a000 0x2000 >;
-			};
-
-			pcm_ring: memory@2002C000 {
-				reg = < 0x2002c000 0x4000 >;
-			};
-
-			cpuflpr_code_partition: image@165000 {
-				reg = < 0x165000 0x18000 >;
-			};
 		};
 
 		cpuflpr_sram_code_data: memory@20030000 {
@@ -356,18 +360,36 @@ FLPR_DTS = """\
 /dts-v1/;
 
 / {
+	reserved-memory {
+		#address-cells = < 0x1 >;
+		#size-cells = < 0x1 >;
+		ranges;
+
+		sram_tx: memory@20028000 {
+			reg = < 0x20028000 0x2000 >;
+		};
+
+		sram_rx: memory@2002A000 {
+			reg = < 0x2002a000 0x2000 >;
+		};
+
+		pcm_ring: memory@2002C000 {
+			reg = < 0x2002c000 0x4000 >;
+		};
+	};
+
 	chosen {
 		zephyr,sram = &cpuflpr_sram;
 		zephyr,code-partition = &cpuflpr_code_partition;
 	};
 
-	soc {
-		cpuflpr_sram: memory@20030000 {
-			compatible = "mmio-sram";
-			status = "okay";
-			reg = < 0x20030000 0x10000 >;
-		};
+	cpuflpr_sram: memory@20030000 {
+		compatible = "mmio-sram";
+		status = "okay";
+		reg = < 0x20030000 0x10000 >;
+	};
 
+	soc {
 		rram-controller@5004b000 {
 			rram@165000 {
 				partitions {
@@ -825,9 +847,9 @@ class TestAssertionFailures(unittest.TestCase):
             write(
                 fx.dts("54l15", "le-audio-receiver"),
                 APP54_DTS.replace(
-                    "\t\t\tpcm_ring: memory@2002C000 {\n"
-                    "\t\t\t\treg = < 0x2002c000 0x4000 >;\n"
-                    "\t\t\t};\n",
+                    "\t\tpcm_ring: memory@2002C000 {\n"
+                    "\t\t\treg = < 0x2002c000 0x4000 >;\n"
+                    "\t\t};\n",
                     "",
                 ),
             )
@@ -835,6 +857,49 @@ class TestAssertionFailures(unittest.TestCase):
         rc, fails = self._rc_and_fails(mutate)
         self.assertEqual(rc, 1)
         self.assertIn("54l15-025", fails)
+
+    def test_shared_memory_unit_address_mismatch(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "le-audio-receiver"),
+                APP54_DTS.replace(
+                    "sram_rx: memory@20028000", "sram_rx: memory@20029000"
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-025", fails)
+
+    def test_nested_reserved_memory_fails_shared_and_partition_contracts(self):
+        def mutate(fx):
+            dts = APP54_DTS
+            start = dts.index("\treserved-memory {\n")
+            end = dts.index("\n\t};\n\n\tchosen", start) + len("\n\t};")
+            block = dts[start:end]
+            dts = dts[:start] + dts[end:]
+            nested = "\n".join("\t" + line for line in block.splitlines())
+            dts = dts.replace("\n\tsoc {\n", "\n\tsoc {\n" + nested + "\n", 1)
+            write(fx.dts("54l15", "le-audio-receiver"), dts)
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-025", fails)
+        self.assertIn("54l15-026", fails)
+
+    def test_flpr_memory_unit_address_mismatch(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "flpr"),
+                FLPR_DTS.replace(
+                    "cpuflpr_sram: memory@20030000",
+                    "cpuflpr_sram: memory@2002F000",
+                ),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-027", fails)
 
     def test_sw_split_kconfig_only_half(self):
         def mutate(fx):

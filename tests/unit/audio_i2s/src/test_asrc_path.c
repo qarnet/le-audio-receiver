@@ -69,7 +69,7 @@ ZTEST(audio_i2s, test_offload_success_frame_counts)
 			      "offload %u frames", frame_counts[i]);
 
 		zassert_equal(mock_asrc_process_calls, 0, "no CPU process on offload success");
-		zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "eleven writes");
+		zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "fifteen writes");
 		zassert_equal(fake_i2s_write_rec(STARTUP_DATA_WRITE_IDX)->size,
 			      (size_t)frame_counts[i] * 4, "exact output bytes queued");
 
@@ -289,12 +289,14 @@ ZTEST(audio_i2s, test_sequence_exactly_once_per_rendered_block)
 	zassert_equal(mock_offload_last_sequence, 1, "offload got seq 1");
 	zassert_equal(audio_i2s_test_offload_sequence(), 2, "seq 2");
 
+	fake_i2s_release(fake_i2s_queued_ptr(0));
 	mock_offload_ret = -ETIMEDOUT;
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0,
 		      "CPU fallback block");
 	zassert_equal(mock_offload_last_sequence, 2, "offload got seq 2");
 	zassert_equal(audio_i2s_test_offload_sequence(), 3, "seq 3 after fallback");
 
+	fake_i2s_release(fake_i2s_queued_ptr(0));
 	/* Failed block never advances the sequence. */
 	mock_offload_ret = -EAGAIN;
 	mock_asrc_process_ret = 1;
@@ -314,7 +316,7 @@ ZTEST(audio_i2s, test_repeat_uses_separate_slab_asrc)
 
 	zassert_equal(mock_perf_repeat_fallback_calls, 1, "repeat counted once");
 	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS + 2,
-		      "11 startup + data + repeat block");
+		      "15 startup + data + repeat block");
 	zassert_equal(fake_i2s_queued_count(), 2, "both queued");
 
 	const struct fake_i2s_write_rec *data = fake_i2s_write_rec(STARTUP_FIRST_STEADY_WRITE_IDX);

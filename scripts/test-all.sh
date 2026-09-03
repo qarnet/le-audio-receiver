@@ -18,9 +18,9 @@
 # All suite discovery comes from scripts/test_inventory.py (the single
 # filesystem classification source shared with test-coverage.sh and
 # check-test-matrix.py) — adding a suite cannot silently omit it from the
-# gate.  Current inventory (scripts/test_inventory.py): 35 twister + 5
-# exec-only + 22 Python = 62 unit children; the canonical gate is 65
-# children (62 + coverage + matrix + BSim).
+# gate.  Current inventory (scripts/test_inventory.py): 38 twister + 5
+# exec-only + 24 Python = 67 unit children; the canonical gate is 70
+# children (67 + coverage + matrix + BSim).
 #
 # Optional external output root: TEST_OUTPUT_DIR.  When set to an absolute
 # directory outside the repository, coverage reports are retained at

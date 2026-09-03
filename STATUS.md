@@ -1,9 +1,13 @@
-# STATUS — le-audio-receiver — 2026-08-10
+# STATUS — le-audio-receiver — 2026-09-03
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-> **Current state (2026-08-10):** canonical gate **65 PASS / 0 FAIL /
+> **Current state (2026-09-03):** System HIL plan of record revised
+> (`docs/development/system-hil-milestones.md`): nRF54L15 is the only
+> production receiver target, 7.5 ms is diagnostic-only until RH3-7p5
+> closes it, and receiver transport limits are frozen and enforced by the
+> runner (RH3a, 2026-09-03). Canonical software gate **65 PASS / 0 FAIL /
 > 65 TOTAL** on the clean tree (35 twister + 5 exec-only + 22 Python +
 > coverage + matrix + BSim Stage 1; the FR2 clean-tree run at `75a8093`
 > and the FR1 clean run at `1671a9f` are historical, with earlier clean
@@ -156,6 +160,53 @@ its exact immutable assets must rerun the full FR4 procedure on both
 targets before FR5 can publish anything; no replacement version or
 candidate has been selected.  FR4 and FR5 remain blocked; nothing
 published.
+
+## System HIL — plan revision + RH3a transport limits (2026-09-03)
+
+**Plan of record revised and RH3a ACCEPTED (software).**
+`docs/development/system-hil-milestones.md` is the plan of record with four
+standing decisions: (1) nRF54L15 is the only production receiver target, the
+nRF5340 release track is eliminated from this plan and the nRF5340DK keeps
+only the HIL source-fixture role; (2) 7.5 ms (`48_3_1`) must work or must not
+be supported, removed from the mandatory matrix until the named RH3-7p5 phase
+closes it; (3) receiver transport limits are frozen in the plan and enforced
+by the runner; (4) reruns are the fix-validation mechanism (classify, fix,
+same-row rerun, full-matrix rerun; only blind unclassified retries are
+prohibited). The mandatory RH3 matrix is now 4 healthy 10 ms rows plus
+reconnect/hang/stall follow-ons, two passes.
+
+**RH3a implementation (all host, no hardware):**
+`scripts/hil/receiver.py` gains frozen `RX_VALID_RATIO_FLOOR = 0.90` and
+`PLC_RATIO_CEILING = 0.05` plus pure `validate_stream_transport()`
+(fail-closed on missing extended fields; `rx_lost`/`rx_no_ts` are
+record-only); `scripts/hil/runner.py` `_step_session_end` enforces them with
+self-explaining failure detail; `scripts/hil/rows.py` moves the three
+`48_3_1` rows into `RH3_7P5_DIAGNOSTIC_ROWS` (still single-run selectable,
+out of `RH3_PASS_ROWS`). The H42-class hole is closed: with H42's real
+numbers (`rx_valid=24` of `16859` submitted, `plc=38924` of `decoded=38972`)
+the runner now fails with both the delivery-floor and the concealment-ceiling
+violations. Verification: `py_compile` pass, `scripts/test_hil_runner.py`
+83 passed, `tests/hil/` 290 passed + 1 pre-existing skip (15 new tests),
+`check-test-matrix` 0 errors, `git diff --check` clean. The fake-lab default
+receiver summary now emits a healthy full-grammar line (extended RX fields
+present, values above every row's floor), and four existing retention-shape
+tests were updated to healthy values without weakening their assertions.
+Evidence: `docs/development/system-hil-rh3a-transport-limits-handoff.md`.
+RH3 matrix execution on hardware is the next phase; no acceptance claim
+exists yet.
+
+## System HIL — RH4 host integration (2026-08-13)
+
+**RH4 host integration is implemented, not hardware accepted.** The HIL runner
+has immutable artifact mode only through `run-rh4-matrix`: an exact FR1
+`nrf54l15-xiao` factory ZIP plus deterministic HIL-source ZIP are strict
+validated before staging private image files outside repository. Archive/member
+metadata, canonical manifests, internal checksums, archive hashes, image hashes,
+roles, boards, flash order, no-symlink boundaries, and drift checks fail closed.
+Existing `run` and `run-rh3-matrix` retain local build behavior and accept no
+artifact inputs. Aggregate evidence copies and hashes exact original ZIP bytes;
+no transport/runtime or audio acceptance verdict is claimed. No RH4 hardware run
+has occurred.
 
 ## Firmware release — FR3 ACCEPTED (2026-08-09)
 

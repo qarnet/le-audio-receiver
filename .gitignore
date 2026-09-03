@@ -13,3 +13,10 @@ twister-out*/
 
 # BabbleSim root-generated logs
 /flpr_hang_gate_*.log
+
+# HIL local physical binding (user-owned, gitignored)
+/tests/hil/fixture.local.json
+/tests/hil/fixture-mono.local.json
+/tests/hil/fixture-stereo.local.json
+/tests/hil/qualification-mono.local.json
+/tests/hil/qualification-stereo.local.json

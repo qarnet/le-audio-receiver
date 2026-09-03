@@ -27,6 +27,11 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#if defined(CONFIG_HIL_HCI_REMOVE_ISO_PATH_TRACE)
+#include <zephyr/logging/log_core.h>
+#include <zephyr/logging/log_ctrl.h>
+#include <zephyr/sys/atomic.h>
+#endif
 #include <zephyr/net_buf.h>
 #include <zephyr/sys/__assert.h>
 #include <zephyr/sys/byteorder.h>
@@ -34,6 +39,7 @@
 #include <zephyr/sys/util_macro.h>
 #include <zephyr/types.h>
 
+#include "bt_bap.h"
 #include "audio_sink.h"
 #include "audio_timing.h"
 #include "audio_stats.h"
@@ -43,6 +49,12 @@
 #include "bt_bap_pairing_adapter.h"
 #include "bt_pairing_policy.h"
 #include "stream_lifecycle.h"
+#if defined(CONFIG_HIL_HCI_REMOVE_ISO_PATH_TRACE)
+#include "hci_remove_iso_path_trace.h"
+#endif
+#if defined(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE)
+#include <zephyr/sys/atomic.h>
+#endif
 
 #if defined(CONFIG_BSIM_OBSERVER)
 #include "bsim_observer.h"
@@ -142,6 +154,58 @@ BUILD_ASSERT(MAX_SINK_ASE == AUDIO_STREAM_SESSION_MAX_SLOTS,
 static const struct bt_bap_qos_cfg_pref qos_pref =
 	BT_BAP_QOS_CFG_PREF(true, BT_GAP_LE_PHY_2M, 0x02, 10, 10000, 80000, 40000, 40000);
 
+#if defined(CONFIG_HIL_HCI_REMOVE_ISO_PATH_TRACE)
+static atomic_t hci_remove_iso_path_trace_armed = ATOMIC_INIT(0);
+
+static int hci_remove_iso_path_trace_source_id_get(const char *name)
+{
+	return log_source_id_get(name);
+}
+
+static uint32_t hci_remove_iso_path_trace_filter_set(int source_id, uint32_t level)
+{
+	return log_filter_set(NULL, Z_LOG_LOCAL_DOMAIN_ID, (int16_t)source_id, level);
+}
+
+static void hci_remove_iso_path_trace_arm_once(void)
+{
+	static const struct hci_remove_iso_path_trace_ops ops = {
+		.source_id_get = hci_remove_iso_path_trace_source_id_get,
+		.filter_set = hci_remove_iso_path_trace_filter_set,
+	};
+	struct hci_remove_iso_path_trace_result result;
+	int err;
+
+	if (!atomic_cas(&hci_remove_iso_path_trace_armed, 0, 1)) {
+		return;
+	}
+
+	err = hci_remove_iso_path_trace_arm(&ops, LOG_LEVEL_DBG, &result);
+	if (err == 0) {
+		LOG_INF("HCI remove ISO path trace armed: core_id=%d driver_id=%d "
+			"core_level=%u driver_level=%u",
+			result.core_source_id, result.driver_source_id, result.core_level,
+			result.driver_level);
+	} else {
+		LOG_ERR("HCI remove ISO path trace arm failed: err=%d core_id=%d "
+			"driver_id=%d core_level=%u driver_level=%u",
+			err, result.core_source_id, result.driver_source_id, result.core_level,
+			result.driver_level);
+	}
+}
+#endif /* CONFIG_HIL_HCI_REMOVE_ISO_PATH_TRACE */
+
+#if defined(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE)
+static atomic_t sdc_hci_remove_iso_path_trace_armed = ATOMIC_INIT(0);
+
+#if defined(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME)
+void sdc_hci_remove_iso_path_trace_iso_rx_lifetime_session_open(void);
+void sdc_hci_remove_iso_path_trace_iso_rx_lifetime_callback_enter(struct net_buf *buf);
+void sdc_hci_remove_iso_path_trace_iso_rx_lifetime_callback_exit(void);
+void sdc_hci_remove_iso_path_trace_iso_rx_lifetime_disable_snapshot(void);
+#endif
+#endif
+
 static K_SEM_DEFINE(sem_disconnected, 0, 1);
 
 static struct bt_le_ext_adv *adv;
@@ -221,6 +285,139 @@ static size_t sink_idx(const struct bt_bap_stream *s)
 	}
 	__ASSERT(false, "Unknown sink stream %p", s);
 	return 0;
+}
+
+#if defined(CONFIG_SOC_NRF54L15)
+static int iso_link_quality_read(uint16_t handle, struct bt_bap_iso_link_quality *snapshot,
+				 size_t slot)
+{
+	struct net_buf *buf;
+	struct net_buf *rsp = NULL;
+	struct bt_hci_cp_le_read_iso_link_quality *cp;
+	struct bt_hci_rp_le_read_iso_link_quality *rp;
+	int ret;
+
+	buf = bt_hci_cmd_alloc(K_FOREVER);
+	if (buf == NULL) {
+		return -ENOMEM;
+	}
+
+	cp = net_buf_add(buf, sizeof(*cp));
+	cp->handle = sys_cpu_to_le16(handle);
+
+	ret = bt_hci_cmd_send_sync(BT_HCI_OP_LE_READ_ISO_LINK_QUALITY, buf, &rsp);
+	if (ret != 0) {
+		goto out;
+	}
+	if (rsp == NULL) {
+		ret = -ENOTSUP;
+		goto out;
+	}
+	if (rsp->len < sizeof(*rp)) {
+		ret = -EMSGSIZE;
+		goto out;
+	}
+
+	rp = (struct bt_hci_rp_le_read_iso_link_quality *)rsp->data;
+	if (rp->status != 0U || sys_le16_to_cpu(rp->handle) != handle) {
+		ret = -EBADMSG;
+		goto out;
+	}
+
+	snapshot->slot = slot;
+	snapshot->handle = handle;
+	snapshot->tx_unacked_packets = sys_le32_to_cpu(rp->tx_unacked_packets);
+	snapshot->tx_flushed_packets = sys_le32_to_cpu(rp->tx_flushed_packets);
+	snapshot->tx_last_subevent_packets = sys_le32_to_cpu(rp->tx_last_subevent_packets);
+	snapshot->retransmitted_packets = sys_le32_to_cpu(rp->retransmitted_packets);
+	snapshot->crc_error_packets = sys_le32_to_cpu(rp->crc_error_packets);
+	snapshot->rx_unreceived_packets = sys_le32_to_cpu(rp->rx_unreceived_packets);
+	snapshot->duplicate_packets = sys_le32_to_cpu(rp->duplicate_packets);
+	ret = 0;
+
+out:
+	if (rsp != NULL) {
+		net_buf_unref(rsp);
+	}
+	return ret;
+}
+#endif /* CONFIG_SOC_NRF54L15 */
+
+int bt_bap_iso_link_quality_get_active(struct bt_bap_iso_link_quality *snapshots, size_t capacity,
+				       size_t *count)
+{
+	if (snapshots == NULL || capacity == 0U || count == NULL) {
+		return -EINVAL;
+	}
+
+	*count = 0U;
+
+#if defined(CONFIG_SOC_NRF54L15)
+	for (size_t i = 0; i < MAX_SINK_ASE; i++) {
+		struct bt_bap_ep_info ep_info = {0};
+		struct bt_iso_info iso_info = {0};
+		uint16_t handle;
+		int ret;
+
+		if (sinks[i].ep == NULL) {
+			continue;
+		}
+
+		ret = bt_bap_ep_get_info(sinks[i].ep, &ep_info);
+		if (ret == -ENOTCONN) {
+			continue;
+		}
+		if (ret != 0) {
+			return ret;
+		}
+		/* NCS gates can_recv on CONFIG_BT_AUDIO_TX, so it cannot identify
+		 * active sink activity in this intentionally RX-only build. */
+		if (ep_info.dir != BT_AUDIO_DIR_SINK || ep_info.iso_chan == NULL ||
+		    ep_info.iso_chan->iso == NULL) {
+			continue;
+		}
+
+		ret = bt_iso_chan_get_info(ep_info.iso_chan, &iso_info);
+		if (ret != 0) {
+			return ret;
+		}
+
+		ret = bt_hci_get_conn_handle(ep_info.iso_chan->iso, &handle);
+		if (ret == -ENOTCONN) {
+			continue;
+		}
+		if (ret != 0) {
+			return ret;
+		}
+		if (*count >= capacity) {
+			return -ENOSPC;
+		}
+
+		ret = iso_link_quality_read(handle, &snapshots[*count], i);
+		if (ret == -ENOTCONN) {
+			continue;
+		}
+		if (ret != 0) {
+			return ret;
+		}
+		snapshots[*count].iso_interval_1250us = iso_info.iso_interval;
+		snapshots[*count].nse = iso_info.max_subevent;
+		snapshots[*count].cig_sync_us = iso_info.unicast.cig_sync_delay;
+		snapshots[*count].cis_sync_us = iso_info.unicast.cis_sync_delay;
+		snapshots[*count].c_max_pdu = iso_info.unicast.central.max_pdu;
+		snapshots[*count].c_phy = iso_info.unicast.central.phy;
+		snapshots[*count].c_bn = iso_info.unicast.central.bn;
+		snapshots[*count].c_flush_1250us = iso_info.unicast.central.flush_timeout;
+		(*count)++;
+	}
+
+	return *count == 0U ? -ENOTCONN : 0;
+#else
+	ARG_UNUSED(snapshots);
+	ARG_UNUSED(capacity);
+	ARG_UNUSED(count);
+	return -ENOTSUP;
+#endif /* CONFIG_SOC_NRF54L15 */
 }
 
 static size_t stream_alloc_idx(void)
@@ -626,12 +823,15 @@ static bool teardown_transition(enum teardown_event ev, size_t slot)
 		 * while `plc` carries stats.plc_frames; do not rename either
 		 * field because the gates parse this format. */
 		struct audio_stats stats = audio_stats_get();
+		struct audio_stream_rx_stats rx_stats = audio_stream_session_rx_stats_get(slot);
 
 		LOG_INF("Stream[%zu] summary: SDUs=%zu decoded=%u plc=%u "
-			"decode_err=%u i2s_underrun=%u stream_reset=%u empty_sdu=%u",
-			slot, audio_stream_session_recv_count(slot), stats.total_frames,
-			stats.plc_frames, stats.decode_errors, stats.i2s_underruns,
-			stats.stream_resets, stats.empty_sdus);
+			"decode_err=%u i2s_underrun=%u stream_reset=%u empty_sdu=%u "
+			"rx_valid=%zu rx_error=%zu rx_lost=%zu rx_unknown=%zu rx_no_ts=%zu",
+			slot, rx_stats.valid, stats.total_frames, stats.plc_frames,
+			stats.decode_errors, stats.i2s_underruns, stats.stream_resets,
+			stats.empty_sdus, rx_stats.valid, rx_stats.error, rx_stats.lost,
+			rx_stats.unknown, rx_stats.no_ts);
 
 		/* Stats reset once per disabled completion.  No second
 		 * unconditional audio_sink_stop on a duplicate disabled
@@ -714,6 +914,17 @@ static bool teardown_transition(enum teardown_event ev, size_t slot)
 
 static int lc3_disable(struct bt_bap_stream *stream, struct bt_bap_ascs_rsp *rsp)
 {
+#if defined(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME)
+	sdc_hci_remove_iso_path_trace_iso_rx_lifetime_disable_snapshot();
+#endif
+#if defined(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE)
+	if (atomic_cas(&sdc_hci_remove_iso_path_trace_armed, 0, 1)) {
+		LOG_INF("SDC LE Remove ISO Data Path trace armed");
+	}
+#endif
+#if defined(CONFIG_HIL_HCI_REMOVE_ISO_PATH_TRACE)
+	hci_remove_iso_path_trace_arm_once();
+#endif
 	LOG_INF("Disable: stream %p", stream);
 	teardown_transition(TEARDOWN_DISABLE, sink_idx(stream));
 	return 0;
@@ -755,15 +966,19 @@ static const struct bt_bap_unicast_server_cb unicast_server_cb = {
  *   - the lifecycle gate snapshot (one read under lifecycle_lock);
  *   - the timing-reference update for stream 0 (valid + TS + gate open,
  *     using the session's stored presentation delay);
- *   - gate-independent valid-receive counting via the session counter
- *     (valid packets count and the periodic SDU log fires regardless
- *     of gate state);
+ *   - gate-independent callback-status accounting via the session counters
+ *     (callbacks count and the periodic valid-SDU log fires regardless of
+ *     gate state);
  *   - the gate-closed throttle + bsim recv_gate_blocked observer event.
  */
 static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_info *info,
 			struct net_buf *buf)
 {
 	uint32_t t0 = audio_perf_cycle_start();
+
+#if defined(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME)
+	sdc_hci_remove_iso_path_trace_iso_rx_lifetime_callback_enter(buf);
+#endif
 
 	size_t idx = sink_idx(stream);
 	const bool valid = (info->flags & BT_ISO_FLAGS_VALID) != 0;
@@ -776,6 +991,18 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	k_mutex_lock(&lifecycle_lock, K_FOREVER);
 	gate_open = stream_lifecycle_audio_path_is_open();
 	k_mutex_unlock(&lifecycle_lock);
+
+	enum audio_stream_rx_status rx_status;
+	if (valid) {
+		rx_status = AUDIO_STREAM_RX_STATUS_VALID;
+	} else if ((info->flags & BT_ISO_FLAGS_ERROR) != 0) {
+		rx_status = AUDIO_STREAM_RX_STATUS_ERROR;
+	} else if ((info->flags & BT_ISO_FLAGS_LOST) != 0) {
+		rx_status = AUDIO_STREAM_RX_STATUS_LOST;
+	} else {
+		rx_status = AUDIO_STREAM_RX_STATUS_UNKNOWN;
+	}
+	const size_t valid_count = audio_stream_session_rx_status_record(idx, rx_status, has_ts);
 
 	/* Feed validated timestamp + presentation delay to
 	 * hardware timing measurement (nRF54L15 GRTC path).  Only stream 0
@@ -792,15 +1019,14 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	}
 
 	if (valid) {
-		/* Gate-independent counting/log: the session owns the
-		 * counter, the adapter logs it. */
-		size_t cnt = audio_stream_session_recv_valid_count(idx);
+		/* Gate-independent valid-SDU log: the session owns the
+		 * callback-status counters, the adapter logs the valid count. */
 #if defined(CONFIG_INFO_REPORTING_INTERVAL) && CONFIG_INFO_REPORTING_INTERVAL > 0
-		if ((cnt % CONFIG_INFO_REPORTING_INTERVAL) == 0U) {
-			LOG_INF("Audio stream[%zu]: %zu SDU", idx, cnt);
+		if ((valid_count % CONFIG_INFO_REPORTING_INTERVAL) == 0U) {
+			LOG_INF("Audio stream[%zu]: %zu SDU", idx, valid_count);
 		}
 #else
-		(void)cnt;
+		(void)valid_count;
 #endif
 	} else {
 		LOG_DBG("Bad packet stream[%zu]: 0x%02X", idx, info->flags);
@@ -823,9 +1049,17 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 			bsim_observer_recv_gate_blocked();
 		}
 #endif
+#if defined(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME)
+		sdc_hci_remove_iso_path_trace_iso_rx_lifetime_callback_exit();
+#endif
 		audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
 		return;
 	}
+
+	/* Record callback arrival only after the audio gate is confirmed open,
+	 * while the callback-entry timestamp still represents source delivery,
+	 * before session decode/conceal/volume/push work begins. */
+	audio_perf_rx_callback_start(t0);
 
 	/* Decomposed scalar receive: the session copies only valid/has_ts/
 	 * ts/seq_num/data/len and retains no ISO info or net_buf pointers.
@@ -833,6 +1067,9 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	 * the return value is informational. */
 	audio_stream_session_recv(idx, valid, has_ts, info->ts, info->seq_num, buf->data, buf->len);
 
+#if defined(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME)
+	sdc_hci_remove_iso_path_trace_iso_rx_lifetime_callback_exit();
+#endif
 	audio_perf_cycle_end(t0, AUDIO_PERF_PATH_ISO_RECV);
 }
 
@@ -903,6 +1140,9 @@ static void stream_started(struct bt_bap_stream *s)
 		 * point BEFORE data admission (recv callbacks flow only
 		 * after this callback returns on the shared BT RX WQ). */
 		audio_stream_session_start_clear();
+#if defined(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME)
+		sdc_hci_remove_iso_path_trace_iso_rx_lifetime_session_open();
+#endif
 		audio_stream_session_rx_open();
 
 		/* Reset perf counters at start of new audio session.
@@ -940,6 +1180,10 @@ static void stream_started(struct bt_bap_stream *s)
 static void stream_enabled_cb(struct bt_bap_stream *s)
 {
 	int err = bt_bap_stream_start(s);
+
+#if defined(CONFIG_HIL_BAP_ENABLE_TRACE)
+	LOG_INF("HIL BAP enable: stream[%zu] start=%d", sink_idx(s), err);
+#endif
 
 	if (err) {
 		LOG_ERR("Failed to start stream[%zu]: %d", sink_idx(s), err);

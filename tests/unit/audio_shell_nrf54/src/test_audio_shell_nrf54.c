@@ -22,6 +22,7 @@
 
 #include "audio_offload.h"
 #include "audio_shell_test.h"
+#include "fake_audio_shell_deps.h"
 #include "fake_flpr_deps.h"
 #include "flpr_handshake.h"
 #include "flpr_ring_mgr.h"
@@ -62,7 +63,7 @@ static void assert_output_contains(const char *out, const char *needle)
 
 static void assert_output_has_line(const char *out, const char *line)
 {
-	char buf[256];
+	char buf[384];
 	size_t len = strlen(line);
 
 	zassert_true(len < sizeof(buf) - 2, "line too long: %s", line);
@@ -73,6 +74,79 @@ static void assert_output_has_line(const char *out, const char *line)
 /* ── suite ───────────────────────────────────────────────────────── */
 
 ZTEST_SUITE(audio_shell_nrf54, NULL, NULL, NULL, NULL, NULL);
+
+ZTEST(audio_shell_nrf54, test_bt_iso_quality_exact_multi_stream_output)
+{
+	const struct bt_bap_iso_link_quality snapshots[] = {
+		{
+			.slot = 0,
+			.handle = 0x1234,
+			.tx_unacked_packets = 1,
+			.tx_flushed_packets = 2,
+			.tx_last_subevent_packets = 3,
+			.retransmitted_packets = 4,
+			.crc_error_packets = 5,
+			.rx_unreceived_packets = 6,
+			.duplicate_packets = 7,
+			.iso_interval_1250us = 8,
+			.nse = 1,
+			.cig_sync_us = 1000,
+			.cis_sync_us = 1100,
+			.c_max_pdu = 120,
+			.c_phy = 2,
+			.c_bn = 1,
+			.c_flush_1250us = 32,
+		},
+		{
+			.slot = 1,
+			.handle = 0xABCD,
+			.tx_unacked_packets = 8,
+			.tx_flushed_packets = 9,
+			.tx_last_subevent_packets = 10,
+			.retransmitted_packets = 11,
+			.crc_error_packets = 12,
+			.rx_unreceived_packets = 13,
+			.duplicate_packets = 14,
+			.iso_interval_1250us = 8,
+			.nse = 2,
+			.cig_sync_us = 1200,
+			.cis_sync_us = 1300,
+			.c_max_pdu = 240,
+			.c_phy = 2,
+			.c_bn = 2,
+			.c_flush_1250us = 40,
+		},
+	};
+
+	test_shell_set_iso_link_quality(snapshots, ARRAY_SIZE(snapshots), 0);
+	int rc = -1;
+	const char *out = run_cmd("bt iso quality", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_has_line(out, "--- ISO link quality ---");
+	assert_output_has_line(
+		out, "  Stream[0] handle=0x1234 tx_unacked=1 tx_flushed=2 tx_last_subevent=3 "
+		     "retransmitted=4 crc_error=5 rx_unreceived=6 duplicate=7 "
+		     "iso_interval_1250us=8 nse=1 cig_sync_us=1000 cis_sync_us=1100 "
+		     "c_max_pdu=120 c_phy=2 c_bn=1 c_flush_1250us=32");
+	assert_output_has_line(
+		out, "  Stream[1] handle=0xABCD tx_unacked=8 tx_flushed=9 tx_last_subevent=10 "
+		     "retransmitted=11 crc_error=12 rx_unreceived=13 duplicate=14 "
+		     "iso_interval_1250us=8 nse=2 cig_sync_us=1200 cis_sync_us=1300 "
+		     "c_max_pdu=240 c_phy=2 c_bn=2 c_flush_1250us=40");
+}
+
+ZTEST(audio_shell_nrf54, test_bt_iso_quality_error_output_and_errno)
+{
+	const struct bt_bap_iso_link_quality snapshot = {.slot = 0, .handle = 0x1234};
+
+	test_shell_set_iso_link_quality(&snapshot, 1, -EIO);
+	int rc = 0;
+	const char *out = run_cmd("bt iso quality", &rc);
+
+	zassert_equal(rc, -EIO);
+	assert_output_has_line(out, "ISO link quality unavailable: -5");
+}
 
 /* flpr status: ready/ACKed/healthy/epoch/errors/TX/RX/loss/order fields. */
 ZTEST(audio_shell_nrf54, test_flpr_status_exact_fields)
@@ -586,7 +660,8 @@ ZTEST(audio_shell_nrf54, test_flpr_stress_success_summary)
 
 	zassert_equal(rc, 0);
 	assert_output_contains(out, "Starting 5 ping/pong stress...");
-	assert_output_contains(out, "Sent=5 Recv=4 Timeout=1 Stale=0 Mismatch=0 ErrSend=0 (of 5 requested)");
+	assert_output_contains(
+		out, "Sent=5 Recv=4 Timeout=1 Stale=0 Mismatch=0 ErrSend=0 (of 5 requested)");
 }
 
 ZTEST(audio_shell_nrf54, test_flpr_ring_test_invalid_count)

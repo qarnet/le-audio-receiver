@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include <zephyr/autoconf.h>
+#include <zephyr/bluetooth/addr.h>
 #include <zephyr/kernel.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/shell/shell_dummy.h>
@@ -70,6 +71,19 @@ static void assert_output_has_line(const char *out, const char *line)
 /* ── suite ───────────────────────────────────────────────────────── */
 
 ZTEST_SUITE(audio_shell, NULL, NULL, NULL, NULL, NULL);
+
+/* Feature-off remains explicitly unavailable: RH2's receiver-only bond
+ * inventory is enabled by nRF54L15 pairing input, never silently exposed on
+ * nRF5340/legacy builds. */
+ZTEST(audio_shell, test_bt_bonds_feature_off_unavailable)
+{
+	test_shell_reset_counters();
+	int rc = 0;
+	const char *out = run_cmd("bt bonds", &rc);
+
+	zassert_equal(rc, -ENOTSUP);
+	assert_output_contains(out, "Bond inventory unavailable.");
+}
 
 /* audio status: exact field order/labels and values. */
 ZTEST(audio_shell, test_status_exact_fields)
@@ -168,6 +182,15 @@ ZTEST(audio_shell, test_perf_exact_values_and_labels)
 	audio_perf_push_failure();
 	audio_perf_repeat_fallback();
 	audio_perf_asrc_capacity_failure();
+	audio_perf_i2s_write_failure(-EIO);
+	audio_perf_i2s_write_failure(-ENOMSG);
+	audio_perf_i2s_write_failure(-EBUSY);
+	audio_perf_i2s_dma_restart();
+	audio_perf_i2s_dma_restart();
+	audio_perf_test_inject_rx_callback_start(100);
+	audio_perf_test_inject_rx_callback_start(125);
+	audio_perf_test_inject_i2s_dma_start(1000);
+	audio_perf_test_inject_i2s_write(1125, 12, true);
 
 	const char *out = run_cmd("audio perf", NULL);
 
@@ -190,6 +213,14 @@ ZTEST(audio_shell, test_perf_exact_values_and_labels)
 	assert_output_has_line(out, "    Push failures : 1");
 	assert_output_has_line(out, "    Repeat fb     : 1");
 	assert_output_has_line(out, "    ASRC cap fail : 1");
+	char i2s_line[128];
+	snprintf(i2s_line, sizeof(i2s_line), "    I2S write fail : total=3 eio=1 enomsg=1 last=%d",
+		 -EBUSY);
+	assert_output_has_line(out, i2s_line);
+	assert_output_has_line(out, "    I2S DMA restart: 2");
+	assert_output_has_line(out, "    RX callback gap: 25 us (max)");
+	assert_output_has_line(out, "    I2S write gap  : 137 us (max)");
+	assert_output_has_line(out, "    I2S write time : 12 us (max)");
 }
 
 /* audio perf: zero counts average to zero; no divide by zero. */
@@ -203,6 +234,11 @@ ZTEST(audio_shell, test_perf_zero_counts)
 	assert_output_contains(out, "iso_recv");
 	assert_output_contains(out, "0.0%");
 	assert_output_has_line(out, "    Output blocks : 0");
+	assert_output_has_line(out, "    I2S write fail : total=0 eio=0 enomsg=0 last=0");
+	assert_output_has_line(out, "    I2S DMA restart: 0");
+	assert_output_has_line(out, "    RX callback gap: 0 us (max)");
+	assert_output_has_line(out, "    I2S write gap  : 0 us (max)");
+	assert_output_has_line(out, "    I2S write time : 0 us (max)");
 }
 
 /* audio perf: avg over multiple injections uses integer truncation. */
@@ -227,6 +263,8 @@ ZTEST(audio_shell, test_perf_reset_observable_zeroing)
 	test_shell_reset_counters();
 	audio_perf_reset();
 	audio_perf_test_inject_cycles(AUDIO_PERF_PATH_SINK_PUSH, 10000);
+	audio_perf_i2s_write_failure(-EIO);
+	audio_perf_i2s_dma_restart();
 
 	int rc = -1;
 	const char *out = run_cmd("audio perf-reset", &rc);
@@ -238,6 +276,11 @@ ZTEST(audio_shell, test_perf_reset_observable_zeroing)
 	assert_output_contains(out, "sink_push");
 	/* After reset the path must be zeroed: count 0, max 0 -> 0.0%. */
 	assert_output_contains(out, "0.0%");
+	assert_output_has_line(out, "    I2S write fail : total=0 eio=0 enomsg=0 last=0");
+	assert_output_has_line(out, "    I2S DMA restart: 0");
+	assert_output_has_line(out, "    RX callback gap: 0 us (max)");
+	assert_output_has_line(out, "    I2S write gap  : 0 us (max)");
+	assert_output_has_line(out, "    I2S write time : 0 us (max)");
 }
 #else  /* !CONFIG_AUDIO_PERF_MEASUREMENT */
 /* Measurement disabled: production snapshot is a zeroed no-op and no
@@ -264,6 +307,11 @@ ZTEST(audio_shell, test_perf_disabled_truthful_unavailable)
 	assert_output_has_line(out, "    Push failures : 0");
 	assert_output_has_line(out, "    Repeat fb     : 0");
 	assert_output_has_line(out, "    ASRC cap fail : 0");
+	assert_output_has_line(out, "    I2S write fail : total=0 eio=0 enomsg=0 last=0");
+	assert_output_has_line(out, "    I2S DMA restart: 0");
+	assert_output_has_line(out, "    RX callback gap: 0 us (max)");
+	assert_output_has_line(out, "    I2S write gap  : 0 us (max)");
+	assert_output_has_line(out, "    I2S write time : 0 us (max)");
 }
 #endif /* CONFIG_AUDIO_PERF_MEASUREMENT */
 
@@ -377,4 +425,160 @@ ZTEST(audio_shell, test_flpr_acceptance_absent_config_off)
 	zassert_not_equal(rc, 0,
 			  "flpr status must not resolve without "
 			  "CONFIG_SOC_NRF54L15 FLPR TUs");
+}
+
+/* ── bt identity (feature-off build) ─────────────────────────────── */
+
+/* Canonical identity bytes that render as "DB:A6:0C:05:A2:AA": the shell
+ * prints val[5]..val[0], so the array holds the reversed byte order. */
+static void set_identity(bt_addr_le_t *id, uint8_t type, uint8_t b0, uint8_t b1, uint8_t b2,
+			 uint8_t b3, uint8_t b4, uint8_t b5)
+{
+	id->type = type;
+	id->a.val[0] = b0;
+	id->a.val[1] = b1;
+	id->a.val[2] = b2;
+	id->a.val[3] = b3;
+	id->a.val[4] = b4;
+	id->a.val[5] = b5;
+}
+
+/* Success, public type: exact "Identity: DB:A6:0C:05:A2:AA (public)" line,
+ * zero result. */
+ZTEST(audio_shell, test_bt_identity_success_public)
+{
+	test_shell_reset_counters();
+	bt_addr_le_t ids[1];
+
+	set_identity(&ids[0], BT_ADDR_LE_PUBLIC, 0xAA, 0xA2, 0x05, 0x0C, 0xA6, 0xDB);
+	test_shell_set_identities(ids, 1);
+
+	int rc = -1;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_has_line(out, "Identity: DB:A6:0C:05:A2:AA (public)");
+}
+
+/* Success, random type: exact "(random)" suffix. */
+ZTEST(audio_shell, test_bt_identity_success_random)
+{
+	test_shell_reset_counters();
+	bt_addr_le_t ids[1];
+
+	set_identity(&ids[0], BT_ADDR_LE_RANDOM, 0xAA, 0xA2, 0x05, 0x0C, 0xA6, 0xDB);
+	test_shell_set_identities(ids, 1);
+
+	int rc = -1;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_has_line(out, "Identity: DB:A6:0C:05:A2:AA (random)");
+}
+
+/* Identity aliases still expose only public/random on runner shell wire. */
+ZTEST(audio_shell, test_bt_identity_public_id_normalizes_to_public)
+{
+	test_shell_reset_counters();
+	bt_addr_le_t ids[1];
+
+	set_identity(&ids[0], BT_ADDR_LE_PUBLIC_ID, 0xAA, 0xA2, 0x05, 0x0C, 0xA6, 0xDB);
+	test_shell_set_identities(ids, 1);
+
+	int rc = -1;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_has_line(out, "Identity: DB:A6:0C:05:A2:AA (public)");
+}
+
+/* No usable identity (empty table): shell error text and -ENOENT, never a
+ * fabricated address. */
+ZTEST(audio_shell, test_bt_identity_no_identity_fails)
+{
+	test_shell_reset_counters();
+	test_shell_set_identities(NULL, 0);
+
+	int rc = 0;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, -ENOENT);
+	assert_output_contains(out, "Identity unavailable.");
+}
+
+/* All identities are BT_ADDR_LE_ANY (deleted identities): same failure as
+ * an empty table. */
+ZTEST(audio_shell, test_bt_identity_all_any_fails)
+{
+	test_shell_reset_counters();
+	bt_addr_le_t ids[2];
+
+	memset(&ids[0], 0, sizeof(ids[0]));
+	memset(&ids[1], 0, sizeof(ids[1]));
+	test_shell_set_identities(ids, 2);
+
+	int rc = 0;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, -ENOENT);
+	assert_output_contains(out, "Identity unavailable.");
+}
+
+/* A non-public zero address is not BT_ADDR_LE_ANY and must remain a valid
+ * random identity for the shell protocol. */
+ZTEST(audio_shell, test_bt_identity_zero_random_is_usable)
+{
+	test_shell_reset_counters();
+	bt_addr_le_t ids[1];
+
+	memset(&ids[0], 0, sizeof(ids[0]));
+	ids[0].type = BT_ADDR_LE_RANDOM;
+	test_shell_set_identities(ids, 1);
+
+	int rc = -1;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_has_line(out, "Identity: 00:00:00:00:00:00 (random)");
+}
+
+/* Deleted identity 0 is skipped; the first usable identity is printed. */
+ZTEST(audio_shell, test_bt_identity_skips_any_and_prints_next)
+{
+	test_shell_reset_counters();
+	bt_addr_le_t ids[2];
+
+	memset(&ids[0], 0, sizeof(ids[0]));
+	set_identity(&ids[1], BT_ADDR_LE_PUBLIC, 0xAA, 0xA2, 0x05, 0x0C, 0xA6, 0xDB);
+	test_shell_set_identities(ids, 2);
+
+	int rc = -1;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_has_line(out, "Identity: DB:A6:0C:05:A2:AA (public)");
+}
+
+/* The AUDIO_SHELL_TEST wrapper seam dispatches identically to the
+ * registered command. */
+ZTEST(audio_shell, test_bt_identity_wrapper_seam_matches_dispatch)
+{
+	test_shell_reset_counters();
+	bt_addr_le_t ids[1];
+
+	set_identity(&ids[0], BT_ADDR_LE_RANDOM, 0xAA, 0xA2, 0x05, 0x0C, 0xA6, 0xDB);
+	test_shell_set_identities(ids, 1);
+
+	const struct shell *sh = active_shell();
+
+	shell_backend_dummy_clear_output(sh);
+	int rc = audio_shell_test_cmd_bt_identity(sh, 1, NULL);
+
+	zassert_equal(rc, 0);
+	const char *out = shell_backend_dummy_get_output(sh, &(size_t){0});
+
+	/* Direct handler invocation does not add the command-dispatch framing
+	 * (leading CRLF), unlike run_cmd(). The registered-command tests above
+	 * pin that full public line; this seam test pins the handler payload. */
+	assert_output_contains(out, "Identity: DB:A6:0C:05:A2:AA (random)");
 }

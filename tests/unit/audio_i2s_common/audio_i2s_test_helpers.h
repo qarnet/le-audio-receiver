@@ -27,16 +27,16 @@
 #define TEST_BYTES_360   (TEST_FRAMES_360 * 2 * 2) /* 1440 */
 #define TEST_SLAB_BLOCKS 16
 
-/* Startup contract shared with production src/audio_i2s.c: ten distinct
- * silence blocks plus the first data block (11 total) are queued before
+/* Startup contract shared with production src/audio_i2s.c: fourteen distinct
+ * silence blocks plus the first data block (15 total) are queued before
  * START.  STARTUP_DATA_WRITE_IDX is the record index of the data block;
  * STARTUP_FIRST_STEADY_WRITE_IDX is the first write record of a steady
  * (already-started) push.
  */
-#define STARTUP_SILENCE_BLOCKS         10
+#define STARTUP_SILENCE_BLOCKS         14
 #define STARTUP_TOTAL_BLOCKS           (STARTUP_SILENCE_BLOCKS + 1)
-#define STARTUP_DATA_WRITE_IDX         (STARTUP_TOTAL_BLOCKS - 1) /* 10 */
-#define STARTUP_FIRST_STEADY_WRITE_IDX STARTUP_TOTAL_BLOCKS       /* 11 */
+#define STARTUP_DATA_WRITE_IDX         (STARTUP_TOTAL_BLOCKS - 1) /* 14 */
+#define STARTUP_FIRST_STEADY_WRITE_IDX STARTUP_TOTAL_BLOCKS       /* 15 */
 
 /* ── input buffers ───────────────────────────────────────────────── */
 
@@ -109,13 +109,13 @@ static inline void test_init_ok(void)
 	zassert_true(audio_i2s_test_is_accepting(), "admission open");
 }
 
-/** Full startup: init + first push (ten silence + data + START). */
+/** Full startup: init + first push (fourteen silence + data + START). */
 static inline void test_start_stream(void)
 {
 	test_init_ok();
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0, "startup push");
 	zassert_true(audio_i2s_test_is_started(), "started after startup push");
-	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "eleven startup writes");
+	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "fifteen startup writes");
 	zassert_equal(fake_i2s_trigger_calls(), 1, "one startup trigger");
 	zassert_equal(fake_i2s_trigger_rec(0)->cmd, I2S_TRIGGER_START, "START trigger");
 }

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "fixture_id": "local-nrf54l15-receiver",
+  "capture_capability": "none",
+  "roles": {
+    "receiver": {
+      "kind": "zephyr_dut",
+      "board": "nrf54l15dk/nrf54l15/cpuapp",
+      "images": ["cpuapp", "flpr"]
+    },
+    "source": {
+      "kind": "zephyr_dut",
+      "board": "nrf5340dk/nrf5340/cpuapp",
+      "images": ["cpuapp", "cpunet"]
+    }
+  }
+}

@@ -106,6 +106,17 @@ static void setup_modea(void)
 	audio_stream_session_rx_open();
 }
 
+static void assert_rx_stats_zero(size_t idx)
+{
+	struct audio_stream_rx_stats stats = audio_stream_session_rx_stats_get(idx);
+
+	zassert_equal(0U, stats.valid, "valid status counter not zero");
+	zassert_equal(0U, stats.error, "error status counter not zero");
+	zassert_equal(0U, stats.lost, "lost status counter not zero");
+	zassert_equal(0U, stats.unknown, "unknown status counter not zero");
+	zassert_equal(0U, stats.no_ts, "missing timestamp counter not zero");
+}
+
 /* FNV-1a over one int16 value (host byte order, matches the fake sink). */
 static uint32_t fnv_u16(uint32_t hash, int16_t v)
 {
@@ -151,6 +162,7 @@ ZTEST(audio_stream_session, test_init_and_invalid_slots)
 	zassert_is_null(audio_stream_session_shape(0), "no shape");
 	zassert_equal(AUDIO_STREAM_MODE_MONO, audio_stream_session_mode(0), "inert mode");
 	zassert_equal(0U, audio_stream_session_pd(0), "inert pd");
+	assert_rx_stats_zero(0);
 	zassert_equal(0U, audio_stream_session_recv_count(0), "inert recv count");
 	zassert_equal(0U, audio_stream_session_configured_count(), "no slots");
 	zassert_equal(0U, fake_sink_push_count(), "no pushes");
@@ -615,13 +627,16 @@ ZTEST(audio_stream_session, test_release_slot_reuse)
 {
 	setup_mono();
 	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
-	zassert_equal(1U, audio_stream_session_recv_valid_count(0), "adapter-style counting");
+	zassert_equal(1U,
+		      audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_VALID, true),
+		      "adapter-style counting");
 	zassert_equal(1U, audio_stream_session_recv_count(0), "counted");
 
 	audio_stream_session_release(0);
 	zassert_false(audio_stream_session_configured(0), "released");
 	zassert_equal(0U, audio_stream_session_configured_count(), "no slots");
 	zassert_is_null(audio_stream_session_shape(0), "shape cleared");
+	assert_rx_stats_zero(0);
 	zassert_equal(0U, audio_stream_session_recv_count(0), "count cleared");
 	zassert_equal(0U, audio_stream_session_pd(0), "pd cleared");
 	zassert_equal(-EINVAL,
@@ -645,7 +660,9 @@ ZTEST(audio_stream_session, test_reset_all_clears_session)
 	zassert_ok(audio_stream_session_enable(1));
 	audio_stream_session_rx_open();
 	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
-	zassert_equal(1U, audio_stream_session_recv_valid_count(0), "adapter-style counting");
+	zassert_equal(1U,
+		      audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_VALID, true),
+		      "adapter-style counting");
 	zassert_equal(1U, audio_stream_session_recv_count(0), "counted");
 
 	audio_stream_session_reset_all();
@@ -653,6 +670,7 @@ ZTEST(audio_stream_session, test_reset_all_clears_session)
 	zassert_false(audio_stream_session_configured(0), "slot 0 cleared");
 	zassert_false(audio_stream_session_configured(1), "slot 1 cleared");
 	zassert_is_null(audio_stream_session_shape(0), "shape cleared");
+	assert_rx_stats_zero(0);
 	zassert_equal(0U, audio_stream_session_recv_count(0), "count cleared");
 	zassert_equal(-EINVAL,
 		      audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN),
@@ -663,13 +681,16 @@ ZTEST(audio_stream_session, test_reconnect_fresh_session)
 {
 	setup_mono();
 	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
-	zassert_equal(1U, audio_stream_session_recv_valid_count(0), "adapter-style counting");
+	zassert_equal(1U,
+		      audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_VALID, true),
+		      "adapter-style counting");
 	zassert_equal(1U, audio_stream_session_recv_count(0), "first session counted");
 
 	/* Disconnect-style teardown: close admission, drain, reset all. */
 	audio_stream_session_rx_close();
 	audio_stream_session_reset_all();
 	zassert_false(audio_stream_session_test_admission_open(), "admission stays closed");
+	assert_rx_stats_zero(0);
 	zassert_equal(0U, audio_stream_session_recv_count(0), "count reset at reconnect");
 
 	/* Reconnect: fresh config/enable + gate-open edge rx_open. */
@@ -678,7 +699,9 @@ ZTEST(audio_stream_session, test_reconnect_fresh_session)
 	audio_stream_session_rx_open();
 	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
 	zassert_equal(2U, fake_sink_push_count(), "fresh session pushes (1 + 1)");
-	zassert_equal(1U, audio_stream_session_recv_valid_count(0), "fresh counting");
+	zassert_equal(1U,
+		      audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_VALID, true),
+		      "fresh counting");
 	zassert_equal(1U, audio_stream_session_recv_count(0), "count from fresh session only");
 	zassert_true(audio_stream_session_test_admission_open(), "admission open after reconnect");
 }
@@ -730,24 +753,56 @@ ZTEST(audio_stream_session, test_disable_keeps_shape_decoder_inert)
 	zassert_equal(0U, audio_stats_get().plc_frames, "no concealment on the resumed SDU");
 }
 
-ZTEST(audio_stream_session, test_recv_valid_count_gate_independent)
+ZTEST(audio_stream_session, test_rx_status_record_gate_independent)
 {
 	full_reset();
 	zassert_ok(audio_stream_session_config(0, &mono_shape));
 
-	/* Counting happens in the adapter before any gate/admission check;
-	 * it must work with admission closed and without an enabled
-	 * decoder. */
-	zassert_equal(1U, audio_stream_session_recv_valid_count(0), "first count");
-	zassert_equal(2U, audio_stream_session_recv_valid_count(0), "second count");
-	zassert_equal(3U, audio_stream_session_recv_valid_count(0), "third count");
+	/* Status recording happens in the adapter before any gate/admission
+	 * check; it must work without an enabled decoder. */
+	zassert_equal(1U,
+		      audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_VALID, true),
+		      "first valid count");
+	zassert_equal(2U,
+		      audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_VALID, true),
+		      "second valid count");
+	zassert_equal(3U,
+		      audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_VALID, true),
+		      "third valid count");
+	zassert_equal(3U,
+		      audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_ERROR, false),
+		      "error leaves valid count");
+	zassert_equal(3U,
+		      audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_LOST, false),
+		      "lost leaves valid count");
+	zassert_equal(
+		3U, audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_UNKNOWN, false),
+		"unknown leaves valid count");
+
+	struct audio_stream_rx_stats stats = audio_stream_session_rx_stats_get(0);
+	zassert_equal(3U, stats.valid, "valid callbacks");
+	zassert_equal(1U, stats.error, "error callbacks");
+	zassert_equal(1U, stats.lost, "lost callbacks");
+	zassert_equal(1U, stats.unknown, "unknown callbacks");
+	zassert_equal(3U, stats.no_ts, "callbacks without timestamps");
 	zassert_equal(3U, audio_stream_session_recv_count(0), "accessor matches");
 
 	audio_stream_session_recv_reset(0);
+	assert_rx_stats_zero(0);
 	zassert_equal(0U, audio_stream_session_recv_count(0), "reset zeroes");
-	zassert_equal(1U, audio_stream_session_recv_valid_count(1),
-		      "in-range slot counts regardless of configured state");
-	zassert_equal(0U, audio_stream_session_recv_valid_count(99), "out-of-range slot inert");
+	zassert_equal(
+		0U, audio_stream_session_rx_status_record(1, (enum audio_stream_rx_status)99, true),
+		"in-range slot records invalid status regardless of configured state");
+	stats = audio_stream_session_rx_stats_get(1);
+	zassert_equal(0U, stats.valid, "unconfigured slot valid count");
+	zassert_equal(0U, stats.error, "unconfigured slot error count");
+	zassert_equal(0U, stats.lost, "unconfigured slot lost count");
+	zassert_equal(1U, stats.unknown, "unconfigured slot unknown count");
+	zassert_equal(0U, stats.no_ts, "unconfigured slot timestamp count");
+	zassert_equal(
+		0U, audio_stream_session_rx_status_record(99, AUDIO_STREAM_RX_STATUS_VALID, false),
+		"out-of-range slot inert");
+	assert_rx_stats_zero(99);
 }
 
 ZTEST(audio_stream_session, test_start_clear_resets_seq_and_assembler)
@@ -756,10 +811,19 @@ ZTEST(audio_stream_session, test_start_clear_resets_seq_and_assembler)
 
 	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 5, mono10_lc3, MONO_LC3_LEN));
 	zassert_equal(1U, fake_sink_push_count(), "first SDU");
+	zassert_equal(1U,
+		      audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_VALID, true),
+		      "status before start_clear");
 
 	/* start_clear re-bases the per-CIS tracker: a same-sequence SDU in
 	 * the next stream must not be read as a gap. */
 	audio_stream_session_start_clear();
+	struct audio_stream_rx_stats stats = audio_stream_session_rx_stats_get(0);
+	zassert_equal(1U, stats.valid, "start_clear retains valid status");
+	zassert_equal(0U, stats.error, "start_clear retains error status");
+	zassert_equal(0U, stats.lost, "start_clear retains lost status");
+	zassert_equal(0U, stats.unknown, "start_clear retains unknown status");
+	zassert_equal(0U, stats.no_ts, "start_clear retains timestamp status");
 	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 5, mono10_lc3, MONO_LC3_LEN));
 	zassert_equal(2U, fake_sink_push_count(), "no PLC after start_clear");
 	zassert_equal(0U, audio_stats_get().plc_frames, "no concealment");
@@ -902,6 +966,7 @@ ZTEST(audio_stream_session, test_release_twice_no_configured_change)
 		      "configured count never goes negative");
 	zassert_false(audio_stream_session_configured(0), "slot released");
 	zassert_is_null(audio_stream_session_shape(0), "shape cleared");
+	assert_rx_stats_zero(0);
 	zassert_equal(0U, audio_stream_session_recv_count(0), "recv count cleared");
 	zassert_equal(0U, audio_stream_session_pd(0), "pd cleared");
 	zassert_equal(-EINVAL,
@@ -956,12 +1021,15 @@ ZTEST(audio_stream_session, test_release_then_reset_then_reconfigure_fresh)
 	setup_mono();
 	zassert_ok(audio_stream_session_recv(0, true, true, 1000, 1, mono10_lc3, MONO_LC3_LEN));
 	zassert_equal(1U, fake_sink_push_count(), "first session push");
-	zassert_equal(1U, audio_stream_session_recv_valid_count(0), "counted");
+	zassert_equal(1U,
+		      audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_VALID, true),
+		      "counted");
 
 	/* Full teardown: close/drain, release, reset all. */
 	audio_stream_session_rx_close();
 	audio_stream_session_release(0);
 	audio_stream_session_reset_all();
+	assert_rx_stats_zero(0);
 
 	/* Reconnect: fresh config/enable + gate-open edge. */
 	zassert_ok(audio_stream_session_config(0, &mono_shape));
@@ -969,7 +1037,9 @@ ZTEST(audio_stream_session, test_release_then_reset_then_reconfigure_fresh)
 	audio_stream_session_rx_open();
 	zassert_ok(audio_stream_session_recv(0, true, true, 2000, 1, mono10_lc3, MONO_LC3_LEN));
 	zassert_equal(2U, fake_sink_push_count(), "fresh session push (1 + 1)");
-	zassert_equal(1U, audio_stream_session_recv_valid_count(0), "fresh counting");
+	zassert_equal(1U,
+		      audio_stream_session_rx_status_record(0, AUDIO_STREAM_RX_STATUS_VALID, true),
+		      "fresh counting");
 	zassert_equal(1U, audio_stream_session_recv_count(0), "fresh count only");
 	zassert_equal(2U, audio_stats_get().total_frames, "no state leakage");
 }

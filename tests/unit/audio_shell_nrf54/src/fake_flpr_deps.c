@@ -186,8 +186,9 @@ int flpr_ring_mgr_init(void)
 	return test_init_result;
 }
 
-int flpr_ring_mgr_produce_block(const uint8_t *pcm_data, uint16_t valid_frames, uint32_t sequence,
-				int32_t correction_ppm, bool compute_crc)
+enum flpr_produce_result flpr_ring_mgr_produce_block(const uint8_t *pcm_data, uint16_t valid_frames,
+						     uint32_t sequence, int32_t correction_ppm,
+						     bool compute_crc)
 {
 	(void)pcm_data;
 	(void)valid_frames;

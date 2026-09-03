@@ -39,6 +39,61 @@ target_sources(app PRIVATE
 
 zephyr_sources_ifdef(CONFIG_AUDIO_PERF_MEASUREMENT src/audio_perf.c)
 
+zephyr_sources_ifdef(CONFIG_HIL_HCI_REMOVE_ISO_PATH_TRACE src/hci_remove_iso_path_trace.c)
+
+if(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE)
+  target_sources(app PRIVATE src/sdc_hci_remove_iso_path_trace.c)
+  target_link_options(app INTERFACE
+    -Wl,--wrap=sdc_hci_cmd_le_remove_iso_data_path
+    -Wl,--wrap=hci_internal_msg_get
+    -Wl,--wrap=hci_internal_cmd_put
+    -Wl,--wrap=multithreading_lock_release
+    -Wl,--wrap=k_work_submit_to_queue
+  )
+  if(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_SCHEDULER_UNLOCK)
+    target_link_options(app INTERFACE
+      -Wl,--wrap=k_sched_unlock
+      -Wl,--wrap=z_impl_k_yield
+    )
+  endif()
+  if(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_RECEIVE_DISPOSITION)
+    target_link_options(app INTERFACE
+      -Wl,--wrap=bt_buf_get_evt
+      -Wl,--wrap=bt_buf_get_rx
+    )
+  endif()
+  if(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME)
+    target_link_options(app INTERFACE
+      -Wl,--wrap=net_buf_unref
+    )
+    if(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_DISPOSITION)
+      target_link_options(app INTERFACE
+        -Wl,--wrap=bt_conn_recv
+      )
+      if(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH)
+        target_link_options(app INTERFACE
+          -Wl,--wrap=k_work_flush
+        )
+        if(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE)
+          target_link_options(app INTERFACE
+            -Wl,--wrap=z_impl_k_sem_take
+          )
+          if(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE_PEND)
+            target_link_options(app INTERFACE
+              -Wl,--wrap=z_pend_curr
+            )
+            if(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE_PEND_SCHED_GIVE)
+              target_link_options(app INTERFACE
+                -Wl,--wrap=z_impl_k_sem_give
+              )
+            endif()
+          endif()
+        endif()
+      endif()
+    endif()
+  endif()
+endif()
+
 zephyr_sources_ifdef(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR src/audio_asrc.c)
 zephyr_sources_ifdef(CONFIG_AUDIO_CLOCK_ACTUATOR_APLL src/audio_clock_actuator_apll.c)
 zephyr_sources_ifdef(CONFIG_AUDIO_CLOCK_ACTUATOR_NONE src/audio_clock_actuator_none.c)

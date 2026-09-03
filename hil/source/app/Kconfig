@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Dedicated LE Audio source fixture application Kconfig.
+#
+# All run-time options are standard Zephyr/Bluetooth symbols set in
+# prj.conf and the board conf.  The RH1A core modules compile without any
+# application-specific Kconfig, so this file only imports the Zephyr tree.
+
+source "Kconfig.zephyr"

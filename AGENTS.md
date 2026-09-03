@@ -93,10 +93,14 @@ requested.
 
 ## Plan of record
 
-`docs/development/refactor-plan.md` is the accepted plan of record for the
-current refactoring track R0–R10. Read it before structural changes.
-`docs/design.md` remains the historical architecture and evidence document,
-not the active structural plan.
+`docs/development/system-hil-milestones.md` is the accepted plan of record
+for the System HIL track (revised 2026-09-03): nRF54L15 is the only production
+receiver target, 7.5 ms is diagnostic-only until RH3-7p5 closes it, receiver
+transport limits are frozen and runner-enforced, and reruns are the
+fix-validation mechanism. `docs/development/refactor-plan.md` remains the
+accepted plan of record for the refactoring track R0–R10. Read the applicable
+one before structural changes. `docs/design.md` remains the historical
+architecture and evidence document, not an active structural plan.
 
 Current status: **canonical gate 65 PASS / 0 FAIL / 65 TOTAL** on the
 clean tree (35 twister + 5 exec-only + 22 Python + coverage + matrix +
@@ -184,7 +188,42 @@ offload.
 
 Consequences for work in this repo today:
 
-- Every change must keep the nRF5340 target building, flashing, streaming.
+- Every change must keep the nRF5340 target building (nRF54L15 is the only
+  production receiver target for the HIL/release line per
+  `docs/development/system-hil-milestones.md`, but nRF5340 receiver code and
+  builds stay in-tree until a separate cleanup decision).
+
+## Standing lab nRF hardware authority
+
+The user grants standing permission for agents working in this repository to use
+any attached Nordic nRF development board. Permitted actions include read/debug
+access, serial interaction, reset, flash, full erase/recovery, DTR/RTS control,
+RF/Bluetooth testing, and firmware replacement. No fresh per-action or per-run
+confirmation is needed for these attached nRF boards. Full erase/recovery
+remains subject to target and tooling support, and existing recovery limitations
+still apply.
+
+Before any target-changing action, run `nrf-probes` or the appropriate project
+identity resolver and retain raw identity evidence. Never rely on a static
+probe-to-board mapping. Do not operate on unknown or non-Nordic hardware. This
+broad permission applies to attached nRF lab boards, not unrelated host
+peripherals or arbitrary USB devices.
+
+Use `scripts/hil-runner.py` when its owned end-to-end evidence lifecycle is
+useful, but it is not the only permitted hardware owner. Direct debugger,
+serial, and board testing are allowed when they provide clearer diagnosis or
+validation.
+
+Preserve immutable run directories. Board erasure or reflashing does not
+authorize alteration of prior evidence.
+
+A simulator or host-test failure is evidence, not automatic proof of a
+production firmware defect. Before making a potentially behavior-changing
+source fix, evaluate the suspected failure on a physical nRF board when
+practical, then retain both simulator and board evidence.
+
+Keep all existing central-only pairing/streaming requirements unless a later
+plan deliberately changes those requirements.
 
 ## Central-only test rule
 

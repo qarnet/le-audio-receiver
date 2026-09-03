@@ -31,12 +31,19 @@
           # via D-Bus). These land on the shell's nixpkgs python — the NCS
           # toolchain python stays scoped inside the west wrapper, so there is
           # no collision with the firmware build toolchain.
+          # Host-only system HIL dependencies. ALSA tools and NumPy support
+          # capture schema/oracle tests; they do not start a capture by
+          # themselves.
           packages = [
             pkgs.gcovr
+            pkgs.alsa-utils
           ]
           ++ (with pkgs.python3Packages; [
             dbus-python
+            numpy
             pygobject3
+            pytest
+            pyserial
           ]);
         };
       }
