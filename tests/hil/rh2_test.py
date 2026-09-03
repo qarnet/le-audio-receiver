@@ -95,6 +95,54 @@ class ControlledClock:
         self.now += seconds
 
 
+class _ReleaseWire(hil_fakes.Wire):
+    """Wire that lets a test release reader bytes after a runner scan mark."""
+
+    def __init__(self, name):
+        super().__init__(name)
+        self._chunks_lock = threading.Lock()
+
+    def release(self, chunks):
+        with self._chunks_lock:
+            self.chunks.extend(chunks)
+
+    def next_chunk(self):
+        with self._chunks_lock:
+            return super().next_chunk()
+
+
+class _ReleaseAfterScanClock:
+    """Release raw RX bytes on first clock read, then return scripted time."""
+
+    def __init__(self, console, wire, chunks, values):
+        if not values:
+            raise ValueError("clock needs at least one value")
+        self._console = console
+        self._wire = wire
+        self._chunks = list(chunks)
+        self._values = list(values)
+        self._last = self._values[-1]
+        self._released = False
+
+    def __call__(self):
+        if not self._released:
+            self._released = True
+            before = self._console.bytes_received()
+            self._wire.release(self._chunks)
+            expected = before + sum(len(chunk) for chunk in self._chunks)
+            deadline = time.monotonic() + 2.0
+            while (
+                self._console.bytes_received() < expected
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
+            if self._console.bytes_received() < expected:
+                raise AssertionError("reader did not retain released raw evidence")
+        if self._values:
+            self._last = self._values.pop(0)
+        return self._last
+
+
 class _GateProbe:
     """Lock wrapper proving close waits for the real reader gate."""
 
@@ -7303,6 +7351,146 @@ class TestRunnerPassingRow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             result, _out, _rid, _j, _f, _b, _e = _run_harness(td)
             self.assertEqual(result[0], "passed")
+
+
+class TestSessionEndRawEvidenceFallback(unittest.TestCase):
+    @staticmethod
+    def _open_console(td):
+        wire = _ReleaseWire("receiver")
+        console = SerialConsole(
+            "receiver",
+            "/dev/ttyACM0",
+            115200,
+            os.path.join(td, "receiver-console.bin"),
+            serial_class=lambda: hil_fakes.FakeSerial(wire),
+        )
+        console.open()
+        if not console.wait_reader_ready(2.0):
+            console.close()
+            raise AssertionError("receiver reader did not become ready")
+        return wire, console
+
+    @staticmethod
+    def _engine(clock):
+        return Runner(
+            RunnerDeps(clock=clock, sleep=lambda _seconds: None, summary_timeout=2.0)
+        )
+
+    def test_session_end_raw_evidence_fallback_rescues_late_summary(self):
+        # FakeSerial publishes each complete line in the same reader
+        # transaction that appends it to raw evidence. A full harness wire
+        # cannot therefore retain a complete summary without also making it
+        # available to the live queue. This direct unit seam uses the real
+        # SerialConsole, releases bytes after the scan mark, then advances the
+        # injected runner clock through the deadline before live consumption.
+        with tempfile.TemporaryDirectory() as td:
+            wire, console = self._open_console(td)
+            try:
+                summary_line = hil_fakes.receiver_stream_summary_line(
+                    sdus=764, decoded=777, plc=13, rx_valid=764
+                ).encode("utf-8")
+                clock = _ReleaseAfterScanClock(
+                    console, wire, [summary_line], [0.0, 3.0]
+                )
+
+                summary = self._engine(clock)._step_session_end(
+                    console, object(), rows.RH2_ROW, 0
+                )
+
+                self.assertEqual(summary["segment"], 0)
+                self.assertEqual(summary["last"]["rx_valid"], 764)
+                self.assertEqual(summary["last"]["plc"], 13)
+            finally:
+                console.close()
+
+    def test_session_end_raw_evidence_fallback_enforces_transport_limits(self):
+        row = rows.RH3_7P5_DIAGNOSTIC_ROWS[0]
+        with tempfile.TemporaryDirectory() as td:
+            wire, console = self._open_console(td)
+            try:
+                summary_line = hil_fakes.receiver_stream_summary_line(
+                    sdus=24,
+                    decoded=38972,
+                    plc=38924,
+                    rx_valid=24,
+                ).encode("utf-8")
+                release = _ReleaseAfterScanClock(console, wire, [summary_line], [0.0])
+                engine = self._engine(ControlledClock())
+
+                def timeout_live_wait(*_args):
+                    release()
+                    return None
+
+                engine._wait_console_line = timeout_live_wait
+                with self.assertRaises(HilRunnerError) as ctx:
+                    engine._step_session_end(console, object(), row, 0)
+
+                self.assertEqual(ctx.exception.boundary, "session end")
+                self.assertIn("rx_valid=24 below floor", ctx.exception.message)
+                self.assertIn("plc=38924 above ceiling", ctx.exception.message)
+            finally:
+                console.close()
+
+    def test_session_end_raw_evidence_fallback_proves_missing_summary(self):
+        with tempfile.TemporaryDirectory() as td:
+            wire, console = self._open_console(td)
+            try:
+                clock = _ReleaseAfterScanClock(console, wire, [], [0.0, 3.0])
+                with self.assertRaises(HilRunnerError) as ctx:
+                    self._engine(clock)._step_session_end(
+                        console, object(), rows.RH2_ROW, 0
+                    )
+
+                self.assertEqual(ctx.exception.boundary, "session end")
+                self.assertIn(
+                    "missing receiver stream summary slot(s)", ctx.exception.message
+                )
+                self.assertIn(
+                    "raw evidence scan also missing them after 0 bytes",
+                    ctx.exception.message,
+                )
+            finally:
+                console.close()
+
+    def test_session_end_raw_evidence_fallback_scopes_reconnect_segments(self):
+        row = rows.RH3_RECONNECT_ROW
+        with tempfile.TemporaryDirectory() as td:
+            wire, console = self._open_console(td)
+            try:
+                first_clock = _ReleaseAfterScanClock(
+                    console,
+                    wire,
+                    [hil_fakes.receiver_stream_summary_line().encode("utf-8")],
+                    [0.0, 0.0, 0.0, 0.0],
+                )
+                engine = self._engine(first_clock)
+
+                first = engine._step_session_end(console, object(), row, 0)
+
+                self.assertEqual(first["last"]["slot"], 0)
+                self.assertEqual(console.drain_lines(), [])
+                second_offset = console.bytes_received()
+                full_text, _decode_failed = console.raw_text_since(0)
+                self.assertEqual(len(receiver.parse_stream_summary(full_text)), 1)
+
+                engine.deps.clock = _ReleaseAfterScanClock(
+                    console,
+                    wire,
+                    [b"segment 1 teardown pending\r\n"],
+                    [0.0, 3.0],
+                )
+                with self.assertRaises(HilRunnerError) as ctx:
+                    engine._step_session_end(console, object(), row, 1)
+
+                self.assertIn(
+                    "missing receiver stream summary slot(s)", ctx.exception.message
+                )
+                self.assertIn("raw evidence scan also missing", ctx.exception.message)
+                segment_text, _decode_failed = console.raw_text_since(second_offset)
+                self.assertIn("segment 1 teardown pending", segment_text)
+                self.assertEqual(receiver.parse_stream_summary(segment_text), [])
+            finally:
+                console.close()
 
 
 class TestRh3Rows(unittest.TestCase):

@@ -1488,36 +1488,12 @@ class Runner:
 
     def _step_session_end(self, receiver_console, source_client, row, segment):
         del source_client
+        summary_scan_offset = receiver_console.bytes_received()
         deadline = self.deps.clock() + self.deps.summary_timeout
         summaries = []
         seen_slots = set()
-        while len(summaries) < row.stream_count:
-            remaining = deadline - self.deps.clock()
-            if remaining <= 0:
-                missing = [
-                    slot for slot in range(row.stream_count) if slot not in seen_slots
-                ]
-                raise HilRunnerError(
-                    "session end",
-                    "missing receiver stream summary slot(s): %r" % missing,
-                )
-            summary_line = self._wait_console_line(
-                receiver_console,
-                lambda l: bool(receiver.parse_stream_summary(l)),
-                remaining,
-                "cancelled during session end",
-            )
-            if summary_line is None:
-                missing = [
-                    slot for slot in range(row.stream_count) if slot not in seen_slots
-                ]
-                raise HilRunnerError(
-                    "session end",
-                    "missing receiver stream summary slot(s): %r" % missing,
-                )
-            parsed = receiver.parse_stream_summary(summary_line)
-            if not parsed:
-                raise HilRunnerError("session end", "no parseable stream summary")
+
+        def append_summaries(parsed, target_summaries, target_seen_slots):
             for summary in parsed:
                 slot = summary["slot"]
                 if slot not in range(row.stream_count):
@@ -1526,13 +1502,53 @@ class Runner:
                         "receiver stream summary slot %d out of range [0, %d)"
                         % (slot, row.stream_count),
                     )
-                if slot in seen_slots:
+                if slot in target_seen_slots:
                     raise HilRunnerError(
                         "session end",
                         "duplicate receiver stream summary slot %d" % slot,
                     )
-                seen_slots.add(slot)
-                summaries.append(summary)
+                target_seen_slots.add(slot)
+                target_summaries.append(summary)
+
+        def raw_fallback_summaries():
+            text, _decode_failed = receiver_console.raw_text_since(summary_scan_offset)
+            raw_summaries = []
+            raw_seen_slots = set()
+            append_summaries(
+                receiver.parse_stream_summary(text), raw_summaries, raw_seen_slots
+            )
+            missing = [
+                slot for slot in range(row.stream_count) if slot not in raw_seen_slots
+            ]
+            if missing:
+                scanned_bytes = max(
+                    0, receiver_console.bytes_received() - summary_scan_offset
+                )
+                raise HilRunnerError(
+                    "session end",
+                    "missing receiver stream summary slot(s): %r; raw evidence scan also "
+                    "missing them after %d bytes" % (missing, scanned_bytes),
+                )
+            return raw_summaries
+
+        while len(summaries) < row.stream_count:
+            remaining = deadline - self.deps.clock()
+            if remaining <= 0:
+                summaries = raw_fallback_summaries()
+                break
+            summary_line = self._wait_console_line(
+                receiver_console,
+                lambda l: bool(receiver.parse_stream_summary(l)),
+                remaining,
+                "cancelled during session end",
+            )
+            if summary_line is None:
+                summaries = raw_fallback_summaries()
+                break
+            parsed = receiver.parse_stream_summary(summary_line)
+            if not parsed:
+                raise HilRunnerError("session end", "no parseable stream summary")
+            append_summaries(parsed, summaries, seen_slots)
         last = summaries[-1]
         for summary in summaries:
             for field in ("decode_err", "i2s_underrun", "stream_reset"):

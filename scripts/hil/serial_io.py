@@ -374,6 +374,37 @@ class SerialConsole:
         with self._cond:
             return self._bytes_received
 
+    def bytes_received(self):
+        """Absolute count of RX bytes retained so far (mark-safe offset source)."""
+        with self._cond:
+            return self._bytes_received
+
+    def raw_text_since(self, offset):
+        """Decode retained raw RX evidence from byte offset to current end.
+
+        Returns (text, decode_failed) where decode_failed is True if any byte
+        in the range could not be decoded as UTF-8; undecodable bytes are
+        replaced. The evidence file is append-only under the reader thread;
+        reading it is safe while the writer runs. A trailing partial line simply
+        will not match the summary grammar.
+        """
+        try:
+            with open(self.evidence_path, "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                offset = max(0, min(offset, size))
+                fh.seek(offset)
+                raw = fh.read()
+        except FileNotFoundError:
+            return "", False
+
+        text = raw.decode("utf-8", errors="replace")
+        try:
+            raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return text, True
+        return text, False
+
     # ── line consumption ────────────────────────────────────────────
 
     def next_line(self, timeout):
