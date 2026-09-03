@@ -27,12 +27,12 @@ immutable IDs, results, hashes, or historical execution wording.
 
 ## Repository state
 
-- Branch at RH3-ModeA1b diagnostic execution:
+- Branch at RH3-ModeA2 diagnostic execution:
   `feature/firmware-release-acceptance`.
 - Diagnostic build and runner HEAD:
-  `eac880d516d4828ac2169f9589c3808dc1810d4c`.
-- At execution, `git status --porcelain` contained only the two requested,
-  initially untracked RH3-ModeA1b handoffs. `git diff --check` passed; no
+  `d8a7ed28d8172852306b6c7d173467ccecfe11e1`.
+- At execution, `git status --porcelain` contained only the requested,
+  initially untracked RH3-ModeA2 handoff. `git diff --check` passed; no
   production or unrelated tracked change was present.
 - CPUAPP image hashes are HEAD-dependent because `cmake/version.cmake` embeds
   `APP_COMMIT`. Future handoffs must derive CPUAPP identities at execution time;
@@ -40,7 +40,7 @@ immutable IDs, results, hashes, or historical execution wording.
   pin a CPUAPP hash from an earlier commit as a future expected value.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now twenty-six: nineteen failed,
+- Retained top-level physical-run count is now twenty-seven: twenty failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
@@ -55,17 +55,21 @@ immutable IDs, results, hashes, or historical execution wording.
   `docs/development/system-hil-rh3-matrix-20260903-result.md`. This is not RH3
   acceptance and must not be retried in this phase.
 - Latest direct RH3 Mode A diagnostic:
-  `rh3-modea1b-20260903-offload-disabled` ran once with offload compiled out
-  and the repaired `--allow-offload-disabled` runner mode. The outer command
-  returned `status=1`; `result.json` records `outcome=failed` at `session end`
-  with `missing receiver stream summary slot(s): [0, 1]; raw evidence scan also
-  missing them after 333 bytes`. No runner-accepted summaries, transport-limits
-  verdict, post-stop FLPR snapshot, or handshake snapshot was collected. Raw
-  console telemetry retained summaries and severe loss, but cannot replace the
-  fail-closed result. This is a fixture/runner evidence-order stop point, not a
-  FLPR-versus-transport or product classification. Preserve
-  `/tmp/opencode/hil-runs/rh3-modea1b-20260903-offload-disabled/`; do not rerun
+  `rh3-modea2-20260904-offload-disabled` ran once with offload compiled out and
+  repaired runner support (`--allow-offload-disabled` plus full-segment raw
+  summary scan). The outer command returned `status=1`; `result.json` records
+  `outcome=failed` at `session end` with runner-validated frozen transport-limit
+  failures: slot 0 `rx_valid=130` below `11379` and `plc=28594` above `1436`.
+  Active FLPR correctly retained `submit=success=0`; post-stop FLPR was not
+  collected because limits validation failed first. This selects the
+  FAIL-on-limits isolation arm: transport/controller path implicated and FLPR
+  cleared as primary suspect for this Mode A starvation. Preserve
+  `/tmp/opencode/hil-runs/rh3-modea2-20260904-offload-disabled/`; do not rerun
   it. Canonical record:
+  `docs/development/system-hil-rh3-modea2-result.md`.
+- The prior `rh3-modea1b-20260903-offload-disabled` direct diagnostic remains
+  immutable fixture-defect baseline evidence. It stopped at `session end`
+  before a runner-validated limits verdict and is documented in
   `docs/development/system-hil-rh3-modea1b-result.md`.
 - The earlier `rh3-modea1-20260903-offload-disabled` run remains immutable
   fixture-defect baseline evidence. It stopped at `receiver active` before the
@@ -90,16 +94,16 @@ immutable IDs, results, hashes, or historical execution wording.
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
 - The latest runner-owned flash is
-  `rh3-modea1b-20260903-offload-disabled`. Its authoritative `images.json`
+  `rh3-modea2-20260904-offload-disabled`. Its authoritative `images.json`
   hashes are receiver CPUAPP
-  `4f2c5e5a37f59ed1faa562ec89e0a77bef6ced10ad6d661f2b93160e45900204`, FLPR
+  `544df700815a4c9fa9ae931a8b1ccd201c7995021e534aad99f99a0d5c55ca0f`, FLPR
   `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`, source
   CPUAPP `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333`,
   and source CPUNET
   `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`.
   The subsequent local normal build did not flash; it proved
   `CONFIG_AUDIO_OFFLOAD_ASRC=y` and recorded CPUAPP
-  `dc983843332d5438a015a716a802fc6b7e7f37edd2634ce430bce2488f03337e` under the
+  `c11336dae509bf9458c16518a2c59bbbf7bdceb357e9ebb47b8dc118633e951b` under the
   diagnostic HEAD. Current hardware therefore cannot be claimed to run the
   normal image.
 - Source image hashes remain as before: CPUAPP
