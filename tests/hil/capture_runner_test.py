@@ -552,8 +552,10 @@ class TestCaptureProcess(unittest.TestCase):
                 del receiver_console, row
                 raise AssertionError("unexpected fault window")
 
-            def _collect_receiver_active_offload(self, receiver_console, row):
-                del receiver_console, row
+            def _collect_receiver_active_offload(
+                self, receiver_console, row, allow_offload_disabled=False
+            ):
+                del receiver_console, row, allow_offload_disabled
                 timeline.append("receiver-active")
                 return {
                     "offload": {"state": "ACTIVE", "success": 1},
@@ -571,9 +573,20 @@ class TestCaptureProcess(unittest.TestCase):
                 return {}
 
             def _collect_receiver_post_stop(
-                self, receiver_console, row, active_offload, recovery
+                self,
+                receiver_console,
+                row,
+                active_offload,
+                recovery,
+                allow_offload_disabled=False,
             ):
-                del receiver_console, row, active_offload, recovery
+                del (
+                    receiver_console,
+                    row,
+                    active_offload,
+                    recovery,
+                    allow_offload_disabled,
+                )
                 timeline.append("receiver-post-stop")
                 return {}
 

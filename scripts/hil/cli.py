@@ -173,6 +173,7 @@ def cmd_run(args):
             sdc_hci_remove_iso_path_trace=getattr(
                 args, "sdc_hci_remove_iso_path_trace", False
             ),
+            allow_offload_disabled=getattr(args, "allow_offload_disabled", False),
         )
     finally:
         signal.signal(signal.SIGINT, old_int)
@@ -342,6 +343,11 @@ def build_parser():
         "--row",
         choices=rows.row_names(),
         help="checked-in row name (default: rh2.short_mono_48_4_1)",
+    )
+    run.add_argument(
+        "--allow-offload-disabled",
+        action="store_true",
+        help="accept an offload-disabled receiver image (diagnostic rows only)",
     )
     trace_group = run.add_mutually_exclusive_group()
     trace_group.add_argument(

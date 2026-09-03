@@ -680,6 +680,7 @@ def _run_harness(
     sleep=None,
     hci_remove_iso_path_trace=False,
     sdc_hci_remove_iso_path_trace=False,
+    allow_offload_disabled=False,
 ):
     """Full runner harness in a temp dir; returns the outcome tuple and
     key paths."""
@@ -737,6 +738,7 @@ def _run_harness(
         row=row,
         hci_remove_iso_path_trace=hci_remove_iso_path_trace,
         sdc_hci_remove_iso_path_trace=sdc_hci_remove_iso_path_trace,
+        allow_offload_disabled=allow_offload_disabled,
     )
     return result, out_root, run_id, junit, fixture_path, binding_path, engine
 
@@ -6013,6 +6015,59 @@ class TestRunnerPassingRow(unittest.TestCase):
             ) as fh:
                 summary = json.load(fh)
             self.assertNotIn("hci_remove_iso_path_trace", summary)
+            with open(
+                os.path.join(out_root, run_id, "row.json"), encoding="utf-8"
+            ) as fh:
+                row_json = json.load(fh)
+            self.assertNotIn("allow_offload_disabled", row_json)
+
+    def test_offload_disabled_mode_a_10ms_full_row_passes_and_records_flag(self):
+        row = rows.RH3_HEALTHY_ROWS[1]
+        receiver_wire = _receiver_passing_wire(
+            RUN_ID,
+            offload_snapshots=[hil_fakes.flpr_offload_transcript(submit=0, success=0)],
+            summary_lines=[
+                hil_fakes.receiver_stream_summary_line(slot=0),
+                hil_fakes.receiver_stream_summary_line(slot=1),
+            ],
+            iso_link_quality_records=[{"slot": 0}, {"slot": 1}],
+            post_stop_offload=hil_fakes.flpr_offload_transcript(
+                state="STOPPED", submit=0, success=0, epoch=0, gen=2
+            ),
+        )
+        source_wire = _source_wire_for_row(RUN_ID, row)
+
+        with tempfile.TemporaryDirectory() as td:
+            result, out_root, run_id, _junit, _f, _b, _engine = _run_harness(
+                td,
+                receiver_wire=receiver_wire,
+                source_wire=source_wire,
+                row=row,
+                allow_offload_disabled=True,
+            )
+
+            self.assertEqual(result[0], "passed", result)
+            run_dir = os.path.join(out_root, run_id)
+            with open(os.path.join(run_dir, "row.json"), encoding="utf-8") as fh:
+                row_json = json.load(fh)
+            self.assertTrue(row_json["allow_offload_disabled"])
+            with open(os.path.join(run_dir, "summary.json"), encoding="utf-8") as fh:
+                summary = json.load(fh)
+            self.assertEqual(
+                summary["source_active"][0]["receiver_offload"]["offload"]["submit"],
+                0,
+            )
+            self.assertEqual(
+                summary["receiver_streams"][0]["post_stop"]["offload"]["success"],
+                0,
+            )
+            self.assertEqual(
+                [
+                    stream["slot"]
+                    for stream in summary["receiver_streams"][0]["streams"]
+                ],
+                [0, 1],
+            )
 
     def test_opt_in_hci_trace_uses_raw_callback_evidence_after_source_teardown(self):
         receiver_wire = _receiver_passing_wire(RUN_ID, hci_trace=True)
@@ -7893,6 +7948,53 @@ class TestRh3ReceiverRecoveryValidation(unittest.TestCase):
             [],
         )
 
+    def test_offload_disabled_lifecycle_requires_zero_counters(self):
+        active = receiver.parse_offload_status(
+            hil_fakes.flpr_offload_transcript(submit=0, success=0).decode("utf-8")
+        )
+        post_stop = receiver.parse_offload_status(
+            hil_fakes.flpr_offload_transcript(
+                state="STOPPED", submit=0, success=0, epoch=0, gen=2
+            ).decode("utf-8")
+        )
+        self.assertEqual(
+            receiver.validate_receiver_lifecycle_blocks(
+                self._audio(),
+                active,
+                post_stop,
+                self._handshake(),
+                allow_offload_disabled=True,
+            ),
+            [],
+        )
+
+        default_errors = receiver.validate_receiver_lifecycle_blocks(
+            self._audio(), active, post_stop, self._handshake()
+        )
+        self.assertIn("offload submit missing or zero", default_errors)
+        self.assertIn("post-stop offload submit missing or zero", default_errors)
+
+        nonzero_post_stop = receiver.parse_offload_status(
+            hil_fakes.flpr_offload_transcript(
+                state="STOPPED", submit=1, success=1, epoch=0, gen=2
+            ).decode("utf-8")
+        )
+        disabled_errors = receiver.validate_receiver_lifecycle_blocks(
+            self._audio(),
+            active,
+            nonzero_post_stop,
+            self._handshake(),
+            allow_offload_disabled=True,
+        )
+        self.assertIn(
+            "post-stop offload submit=1 but offload-disabled run expects 0",
+            disabled_errors,
+        )
+        self.assertIn(
+            "post-stop offload success=1 but offload-disabled run expects 0",
+            disabled_errors,
+        )
+
     def test_receiver_lifecycle_validator_rejects_final_active_state(self):
         errors = receiver.validate_receiver_lifecycle_blocks(
             self._audio(),
@@ -8171,6 +8273,45 @@ class TestRh3ReceiverRecoveryValidation(unittest.TestCase):
 
 
 class TestRunnerFailures(unittest.TestCase):
+    def test_offload_disabled_nonzero_active_submit_fails_explicitly(self):
+        row = rows.RH3_HEALTHY_ROWS[1]
+        receiver_wire = _receiver_passing_wire(
+            RUN_ID,
+            offload_snapshots=[hil_fakes.flpr_offload_transcript(submit=1, success=1)],
+        )
+        source_wire = _source_wire_for_row(RUN_ID, row)
+
+        with tempfile.TemporaryDirectory() as td:
+            result, out_root, run_id, _junit, _f, _b, _engine = _run_harness(
+                td,
+                receiver_wire=receiver_wire,
+                source_wire=source_wire,
+                row=row,
+                allow_offload_disabled=True,
+            )
+
+            self.assertEqual(result[0], "failed", result)
+            self.assertEqual(result[1], "receiver active")
+            with open(
+                os.path.join(out_root, run_id, "result.json"), encoding="utf-8"
+            ) as fh:
+                result_json = json.load(fh)
+            self.assertIn(
+                "offload submit=1 but offload-disabled run expects 0",
+                result_json["failure_detail"],
+            )
+
+    def test_allow_offload_disabled_requires_bool(self):
+        with self.assertRaisesRegex(TypeError, "allow_offload_disabled must be a bool"):
+            Runner(RunnerDeps()).run(
+                "fixture",
+                "binding",
+                "output",
+                "run",
+                "junit",
+                allow_offload_disabled=1,
+            )
+
     def _fail_harness(self, mutate):
         """Run the harness with a mutated scripted runner and return the
         result tuple plus run_dir."""

@@ -896,7 +896,13 @@ class Runner:
         return identity
 
     def _step_run_row(
-        self, receiver_console, source_client, identity, row, capture_session=None
+        self,
+        receiver_console,
+        source_client,
+        identity,
+        row,
+        capture_session=None,
+        allow_offload_disabled=False,
     ):
         from hil import capture
 
@@ -926,7 +932,9 @@ class Runner:
                 }
             else:
                 active_offload = self._collect_receiver_active_offload(
-                    receiver_console, row
+                    receiver_console,
+                    row,
+                    allow_offload_disabled=allow_offload_disabled,
                 )
             active_snapshot["receiver_offload"] = active_offload
             active_offload_by_segment[segment] = active_offload
@@ -948,6 +956,7 @@ class Runner:
                 row,
                 active_offload_by_segment[segment],
                 recovery,
+                allow_offload_disabled=allow_offload_disabled,
             )
             segment_summaries.append(summary)
 
@@ -1327,7 +1336,9 @@ class Runner:
             self._check_cancel("cancelled settling receiver offload")
         return final, settle_evidence("unproven", retry, final)
 
-    def _collect_receiver_active_offload(self, receiver_console, row):
+    def _collect_receiver_active_offload(
+        self, receiver_console, row, allow_offload_disabled=False
+    ):
         """Capture one active FLPR snapshot before the source tail begins.
 
         FLPR preparation is asynchronous and may include coordinated reset and
@@ -1351,10 +1362,14 @@ class Runner:
                 )
                 last_offload = receiver.parse_offload_status(transcript)
                 submit = last_offload.get("submit")
-                work_ready = row.profile != "48_4_1" or (
-                    isinstance(submit, int)
-                    and not isinstance(submit, bool)
-                    and submit >= 1
+                work_ready = (
+                    allow_offload_disabled
+                    or row.profile != "48_4_1"
+                    or (
+                        isinstance(submit, int)
+                        and not isinstance(submit, bool)
+                        and submit >= 1
+                    )
                 )
                 if last_offload.get("state") == "ACTIVE" and work_ready:
                     final_offload, settle_evidence = self._settle_receiver_offload(
@@ -1371,6 +1386,7 @@ class Runner:
                         allow_moving_single_pending=(
                             settle_evidence["outcome"] == "moving_single_pending"
                         ),
+                        allow_offload_disabled=allow_offload_disabled,
                     )
                     if active_errors:
                         raise HilRunnerError(
@@ -1431,7 +1447,12 @@ class Runner:
         return {"iso_link_quality": iso_link_quality}
 
     def _collect_receiver_post_stop(
-        self, receiver_console, row, active_offload, recovery
+        self,
+        receiver_console,
+        row,
+        active_offload,
+        recovery,
+        allow_offload_disabled=False,
     ):
         """Capture terminal receiver diagnostics after stream summaries."""
         blocks = []
@@ -1474,6 +1495,7 @@ class Runner:
                 isinstance(settle, dict)
                 and settle.get("outcome") == "moving_single_pending"
             ),
+            allow_offload_disabled=allow_offload_disabled,
         )
         if errors:
             raise HilRunnerError(
@@ -1974,6 +1996,7 @@ class Runner:
         qualification_path=None,
         hci_remove_iso_path_trace=False,
         sdc_hci_remove_iso_path_trace=False,
+        allow_offload_disabled=False,
     ):
         """Run one row and return ``(outcome, first_boundary,
         cleanup_failures)``.  The caller maps the outcome to the process
@@ -1987,6 +2010,8 @@ class Runner:
             raise TypeError("hci_remove_iso_path_trace must be a bool")
         if not isinstance(sdc_hci_remove_iso_path_trace, bool):
             raise TypeError("sdc_hci_remove_iso_path_trace must be a bool")
+        if not isinstance(allow_offload_disabled, bool):
+            raise TypeError("allow_offload_disabled must be a bool")
         if hci_remove_iso_path_trace and sdc_hci_remove_iso_path_trace:
             raise ValueError(
                 "hci_remove_iso_path_trace and sdc_hci_remove_iso_path_trace "
@@ -2044,7 +2069,10 @@ class Runner:
             self._run_dir = self._step_run_dir(
                 canon, run_id, fixture_bytes, binding_bytes
             )
-            write_json_evidence(self._run_dir, "row.json", self._row_dict(row))
+            row_evidence = self._row_dict(row)
+            if allow_offload_disabled:
+                row_evidence["allow_offload_disabled"] = True
+            write_json_evidence(self._run_dir, "row.json", row_evidence)
             if artifact_evidence is not None:
                 write_json_evidence(self._run_dir, "artifacts.json", artifact_evidence)
             resolution = self._step_identities(binding, self._run_dir, argv, status)
@@ -2132,6 +2160,7 @@ class Runner:
                 identity,
                 row,
                 capture_session=capture_session,
+                allow_offload_disabled=allow_offload_disabled,
             )
             fault_recovery = row_result["recovery"]
             # SourceClient.start() has observed source terminal/final status and

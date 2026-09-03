@@ -3459,6 +3459,7 @@ def _validate_active_offload(
     profile="48_4_1",
     recovery=None,
     allow_moving_single_pending=False,
+    allow_offload_disabled=False,
 ):
     """Validate active offload fields without requiring other diagnostics."""
     if not isinstance(offload, dict):
@@ -3469,7 +3470,20 @@ def _validate_active_offload(
     if profile == "48_4_1":
         submit = offload.get("submit")
         success = offload.get("success")
-        if not isinstance(submit, int) or isinstance(submit, bool) or submit < 1:
+        if allow_offload_disabled:
+            if not isinstance(submit, int) or isinstance(submit, bool):
+                errors.append("offload submit missing or malformed")
+            elif submit != 0:
+                errors.append(
+                    "offload submit=%d but offload-disabled run expects 0" % submit
+                )
+            if not isinstance(success, int) or isinstance(success, bool):
+                errors.append("offload success missing or malformed")
+            elif success != 0:
+                errors.append(
+                    "offload success=%d but offload-disabled run expects 0" % success
+                )
+        elif not isinstance(submit, int) or isinstance(submit, bool) or submit < 1:
             errors.append("offload submit missing or zero")
         elif recovery is None:
             moving_single_pending = (
@@ -3592,7 +3606,11 @@ def _is_nonnegative_int(value):
 
 
 def _validate_post_stop_offload(
-    active_offload, post_stop_offload, profile, recovery=None
+    active_offload,
+    post_stop_offload,
+    profile,
+    recovery=None,
+    allow_offload_disabled=False,
 ):
     errors = []
     if not isinstance(post_stop_offload, dict):
@@ -3612,7 +3630,18 @@ def _validate_post_stop_offload(
         if submit != success:
             errors.append("post-stop offload submit/success mismatch")
         if profile == "48_4_1":
-            if (
+            if allow_offload_disabled:
+                if submit != 0:
+                    errors.append(
+                        "post-stop offload submit=%d but offload-disabled run expects 0"
+                        % submit
+                    )
+                if success != 0:
+                    errors.append(
+                        "post-stop offload success=%d but offload-disabled run expects 0"
+                        % success
+                    )
+            elif (
                 recovery is None
                 and isinstance(submit, int)
                 and not isinstance(submit, bool)
@@ -3653,7 +3682,8 @@ def _validate_post_stop_offload(
             success_valid and isinstance(success, int) and not isinstance(success, bool)
         ):
             if (
-                recovery is None
+                not allow_offload_disabled
+                and recovery is None
                 and isinstance(active_success, int)
                 and not isinstance(active_success, bool)
                 and success <= active_success
@@ -3737,6 +3767,7 @@ def validate_receiver_lifecycle_blocks(
     profile="48_4_1",
     recovery=None,
     allow_moving_single_pending=False,
+    allow_offload_disabled=False,
 ):
     """Validate active receiver evidence and its terminal stopped snapshot."""
     if profile not in ("48_4_1", "48_3_1"):
@@ -3749,12 +3780,17 @@ def validate_receiver_lifecycle_blocks(
             profile=profile,
             recovery=recovery,
             allow_moving_single_pending=allow_moving_single_pending,
+            allow_offload_disabled=allow_offload_disabled,
         )
     )
     errors.extend(_validate_handshake(handshake))
     errors.extend(
         _validate_post_stop_offload(
-            active_offload, post_stop_offload, profile, recovery=recovery
+            active_offload,
+            post_stop_offload,
+            profile,
+            recovery=recovery,
+            allow_offload_disabled=allow_offload_disabled,
         )
     )
     return errors

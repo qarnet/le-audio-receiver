@@ -1679,6 +1679,73 @@ class TestEvidence(unittest.TestCase):
 
 
 class TestCli(unittest.TestCase):
+    def test_run_allow_offload_disabled_forwards_and_matrix_rejects(self):
+        parser = cli.build_parser()
+        direct = parser.parse_args(
+            [
+                "run",
+                "--fixture",
+                "f",
+                "--binding",
+                "b",
+                "--output-root",
+                "o",
+                "--run-id",
+                "r",
+                "--junit",
+                "j",
+                "--allow-offload-disabled",
+            ]
+        )
+        self.assertTrue(direct.allow_offload_disabled)
+
+        for command, extra in (
+            ("run-rh3-matrix", []),
+            (
+                "run-rh4-matrix",
+                [
+                    "--receiver-artifact",
+                    "receiver.zip",
+                    "--source-artifact",
+                    "source.zip",
+                ],
+            ),
+            ("run-ma1-matrix", ["--qualification", "qualification.json"]),
+            ("run-sa1-matrix", ["--qualification", "qualification.json"]),
+        ):
+            with self.subTest(command=command):
+                with self.assertRaises(cli.HilCliError):
+                    parser.parse_args(
+                        [
+                            command,
+                            "--fixture",
+                            "f",
+                            "--binding",
+                            "b",
+                            "--output-root",
+                            "o",
+                            "--run-id",
+                            "r",
+                            "--junit",
+                            "j",
+                            *extra,
+                            "--allow-offload-disabled",
+                        ]
+                    )
+
+        calls = []
+
+        class FakeEngine:
+            def run(self, *args, **kwargs):
+                calls.append((args, kwargs))
+                return ("failed", "boundary", [])
+
+        with mock.patch.object(cli.runner, "RunnerDeps", return_value=object()):
+            with mock.patch.object(cli.runner, "Runner", return_value=FakeEngine()):
+                with mock.patch.object(cli.signal, "signal"):
+                    self.assertEqual(cli.cmd_run(direct), 1)
+        self.assertTrue(calls[0][1]["allow_offload_disabled"])
+
     def test_validate_success_shape(self):
         rc, out, err = _run_cli(
             ["validate", "--fixture", FIXTURE_JSON, "--binding", BINDING_EXAMPLE]
