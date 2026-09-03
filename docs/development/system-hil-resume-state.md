@@ -33,7 +33,7 @@ immutable IDs, results, hashes, or historical execution wording.
   release, shell, and documentation work. No commit was made in this session.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now twenty-four: seventeen failed,
+- Retained top-level physical-run count is now twenty-five: eighteen failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
@@ -47,6 +47,17 @@ immutable IDs, results, hashes, or historical execution wording.
   also record the transport-limit violations documented in
   `docs/development/system-hil-rh3-matrix-20260903-result.md`. This is not RH3
   acceptance and must not be retried in this phase.
+- Latest direct RH3 Mode A diagnostic:
+  `rh3-modea1-20260903-offload-disabled` ran once with offload compiled out.
+  The outer command returned `status=1`; `result.json` records `outcome=failed`
+  at `receiver active` because the runner waited for a nonzero FLPR submit count
+  even though the diagnostic's active zero plane retained `submit=0 success=0`.
+  No receiver summaries or transport-limits verdict were collected, so the
+  FLPR-versus-transport binary split is not reached. This is a fixture-defect
+  stop point, not a product or acceptance classification. Preserve
+  `/tmp/opencode/hil-runs/rh3-modea1-20260903-offload-disabled/`; do not rerun
+  it or start another physical row before review. Canonical record:
+  `docs/development/system-hil-rh3-modea1-result.md`.
 - System HIL plan of record revised 2026-09-03
   (`docs/development/system-hil-milestones.md`): nRF54L15 is the only
   production receiver target (nRF5340 release track eliminated from the plan;
@@ -65,11 +76,14 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- H42 was the last runner-owned flash recorded here. Its receiver image hashes
-  were CPUAPP
-  `533f2f82f48e2e5d073eb419ddbb682acd24de838fa10d9f0e2627067dcd0e8a` and FLPR
-  `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`. Local
-  normal output restoration does not prove current hardware image.
+- The latest runner-owned flash is
+  `rh3-modea1-20260903-offload-disabled`. Its receiver image hashes were CPUAPP
+  `91223b359b49f92eb1e5b7b2a03b025939d74ec40d8dda4598053f6d45347a84` and FLPR
+  `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`. The one
+  later local normal build did not flash and its CPUAPP hash was
+  `7dabfdb2571e1d6f1d9e1fe417d096d12485e32ec9dbe154b9d0f7384e2f20a9`, not the
+  expected `e67265c14faa7a9e860178f65f6b50d6d96c56d6956a490300c620a112b2267f`.
+  Current hardware therefore cannot be claimed to run the normal image.
 - Source image hashes remain as before: CPUAPP
   `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333` and
   CPUNET
@@ -1705,3 +1719,22 @@ the receiver enabled callback returned from `bt_bap_stream_start()` with a zero
 result in this execution; it does not prove workqueue causation, an H41 root
 cause, audio health, or a repair. Any further hardware or production work
 requires a new reviewed plan.
+
+## RH3-ModeA1 offload-isolation stop point
+
+`rh3-modea1-20260903-offload-disabled` is immutable runner-owned evidence, not
+an acceptance run. It used the diagnostic CPUAPP hash
+`91223b359b49f92eb1e5b7b2a03b025939d74ec40d8dda4598053f6d45347a84` with FLPR
+`45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2` and stopped
+at `receiver active` after 149 polls because its active FLPR snapshot remained
+`ACTIVE` with `submit=0 success=0`. The active zero plane matches the intended
+offload-disabled data path, but the current runner requires `submit >= 1` for a
+`48_4_1` active snapshot. No per-slot receiver summaries or frozen transport
+limits verdict were retained. The binary FLPR-offload versus transport/controller
+classification is therefore inconclusive; triage class is fixture defect.
+
+Evidence integrity passed 23/23 entries. FLPR boot reached handshake init,
+READY, and READY_ACK, but the active-boundary stop prevented post-stop
+Ready/ACKed/Healthy and STOPPED observations. No retry, manual target operation,
+or reflash is authorized from this stop point. Review the runner predicate and
+the normal CPUAPP hash mismatch before any future physical execution.
