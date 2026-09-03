@@ -27,12 +27,12 @@ immutable IDs, results, hashes, or historical execution wording.
 
 ## Repository state
 
-- Branch at RH3-ModeA2 diagnostic execution:
+- Branch at RH3-ModeB control execution:
   `feature/firmware-release-acceptance`.
-- Diagnostic build and runner HEAD:
-  `d8a7ed28d8172852306b6c7d173467ccecfe11e1`.
+- Normal build and runner HEAD:
+  `f1c13f0273f653068efe4205a97a15f72d06915b`.
 - At execution, `git status --porcelain` contained only the requested,
-  initially untracked RH3-ModeA2 handoff. `git diff --check` passed; no
+  initially untracked RH3-ModeB control handoff. `git diff --check` passed; no
   production or unrelated tracked change was present.
 - CPUAPP image hashes are HEAD-dependent because `cmake/version.cmake` embeds
   `APP_COMMIT`. Future handoffs must derive CPUAPP identities at execution time;
@@ -40,7 +40,7 @@ immutable IDs, results, hashes, or historical execution wording.
   pin a CPUAPP hash from an earlier commit as a future expected value.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now twenty-seven: twenty failed,
+- Retained top-level physical-run count is now twenty-eight: twenty-one failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
@@ -67,6 +67,19 @@ immutable IDs, results, hashes, or historical execution wording.
   `/tmp/opencode/hil-runs/rh3-modea2-20260904-offload-disabled/`; do not rerun
   it. Canonical record:
   `docs/development/system-hil-rh3-modea2-result.md`.
+- Latest direct RH3 Mode B control:
+  `rh3-modeb-control-20260904` ran exactly once with the normal production
+  image. The outer command returned `status=1`; `result.json` records
+  `outcome=failed` at `session end` with runner-validated frozen transport-limit
+  failures: slot 0 `rx_valid=113` below `11379` and `plc=27196` above `1371`.
+  Active FLPR settled at `ACTIVE`, `submit=96 success=96`; post-stop FLPR was
+  not collected because limits validation failed first. This selects the
+  FAIL-on-limits control arm: collapse is broader than dual CIS, mono is the
+  only healthy shape, and next work refocuses on the `240`-byte SDU versus
+  `120`-byte mono transport difference. Preserve
+  `/tmp/opencode/hil-runs/rh3-modeb-control-20260904/`; do not rerun it.
+  Canonical record:
+  `docs/development/system-hil-rh3-modeb-control-result.md`.
 - The prior `rh3-modea1b-20260903-offload-disabled` direct diagnostic remains
   immutable fixture-defect baseline evidence. It stopped at `session end`
   before a runner-validated limits verdict and is documented in
@@ -93,19 +106,16 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- The latest runner-owned flash is
-  `rh3-modea2-20260904-offload-disabled`. Its authoritative `images.json`
-  hashes are receiver CPUAPP
-  `544df700815a4c9fa9ae931a8b1ccd201c7995021e534aad99f99a0d5c55ca0f`, FLPR
+- The latest runner-owned flash is `rh3-modeb-control-20260904`. Its
+  authoritative `images.json` hashes are normal receiver CPUAPP
+  `7b8109a464d4d4dbde2761bf45683a6b1169e058e8e25b18859ea0d35b8e329a`, FLPR
   `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`, source
   CPUAPP `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333`,
   and source CPUNET
   `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`.
-  The subsequent local normal build did not flash; it proved
-  `CONFIG_AUDIO_OFFLOAD_ASRC=y` and recorded CPUAPP
-  `c11336dae509bf9458c16518a2c59bbbf7bdceb357e9ebb47b8dc118633e951b` under the
-  diagnostic HEAD. Current hardware therefore cannot be claimed to run the
-  normal image.
+  The normal build proved `CONFIG_AUDIO_OFFLOAD_ASRC=y`,
+  `CONFIG_WARN_EXPERIMENTAL=y`, traces unset, and
+  `CONFIG_BT_ISO_RX_BUF_COUNT=3` before this runner-owned flash.
 - Source image hashes remain as before: CPUAPP
   `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333` and
   CPUNET
