@@ -142,6 +142,18 @@ config HIL_BAP_ENABLE_TRACE
 	  normal builds. It does not establish peer delivery, a root cause, or a
 	  production repair.
 
+config HIL_RX_TIMING_TRACE
+	bool "HIL receiver RX delivery timing trace"
+	default n
+	depends on SOC_NRF54L15 && BT && BT_ISO && LOG
+	help
+	  Temporary nRF54L15 HIL-only diagnostic. Logs each ISO RX callback's
+	  disposition and timing for the first N callbacks and then one
+	  summary line per second of wall time: counts of valid/lost/error
+	  callbacks and the receiver-clock timestamp of the last valid SDU.
+	  Keep disabled in normal builds. It does not establish a root cause
+	  or a repair.
+
 config HIL_HCI_REMOVE_ISO_PATH_TRACE
 	bool "HIL callback-timed HCI Remove ISO Path trace"
 	default n

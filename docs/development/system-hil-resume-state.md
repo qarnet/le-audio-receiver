@@ -40,7 +40,7 @@ immutable IDs, results, hashes, or historical execution wording.
   pin a CPUAPP hash from an earlier commit as a future expected value.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now twenty-eight: twenty-one failed,
+- Retained top-level physical-run count is now twenty-nine: twenty-two failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
@@ -80,6 +80,20 @@ immutable IDs, results, hashes, or historical execution wording.
   `/tmp/opencode/hil-runs/rh3-modeb-control-20260904/`; do not rerun it.
   Canonical record:
   `docs/development/system-hil-rh3-modeb-control-result.md`.
+- Latest direct RH3 Mode B RX-timing diagnostic:
+  `rh3-modeb-rxtiming-20260904` ran exactly once with the default-off
+  `HIL_RX_TIMING_TRACE` instrument enabled. The outer command returned
+  `status=1`; `result.json` records `outcome=failed` at `session end` with the
+  same runner-validated frozen transport-limit failure, `rx_valid=113` below
+  `11379` and `plc=27196` above `1371`. The 200 bounded callback records show
+  113 valid callbacks in preamble sequences 0 through 143, last valid sequence
+  140, then consecutive LOST callbacks from sequence 141; source sequence 144
+  is scored onset. All 135 retained per-second summaries from `t=12s` through
+  `t=146s` have zero valid and 99 to 101 LOST callbacks. This supports the
+  scored-onset-correlation branch with a bounded 30 ms lead, not a root-cause
+  claim. Preserve `/tmp/opencode/hil-runs/rh3-modeb-rxtiming-20260904/`; do not
+  rerun it. Canonical record:
+  `docs/development/system-hil-rh3-modea4-rxtiming-result.md`.
 - The prior `rh3-modea1b-20260903-offload-disabled` direct diagnostic remains
   immutable fixture-defect baseline evidence. It stopped at `session end`
   before a runner-validated limits verdict and is documented in
@@ -106,16 +120,18 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- The latest runner-owned flash is `rh3-modeb-control-20260904`. Its
-  authoritative `images.json` hashes are normal receiver CPUAPP
-  `7b8109a464d4d4dbde2761bf45683a6b1169e058e8e25b18859ea0d35b8e329a`, FLPR
+- The latest runner-owned flash is `rh3-modeb-rxtiming-20260904`. Its
+  authoritative `images.json` hashes are diagnostic receiver CPUAPP
+  `8442e97190bc24a9d090270ba2375bf81f5326f69038c23f49b01f4d1b991153`, FLPR
   `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`, source
   CPUAPP `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333`,
   and source CPUNET
   `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`.
-  The normal build proved `CONFIG_AUDIO_OFFLOAD_ASRC=y`,
-  `CONFIG_WARN_EXPERIMENTAL=y`, traces unset, and
-  `CONFIG_BT_ISO_RX_BUF_COUNT=3` before this runner-owned flash.
+  The diagnostic build proved `CONFIG_HIL_RX_TIMING_TRACE=y`,
+  `CONFIG_AUDIO_OFFLOAD_ASRC=y`, `CONFIG_TRACING` and
+  `CONFIG_HIL_BAP_ENABLE_TRACE` unset, and `CONFIG_BT_ISO_RX_BUF_COUNT=3`.
+  A later local normal build proved `CONFIG_HIL_RX_TIMING_TRACE` unset and
+  `CONFIG_AUDIO_OFFLOAD_ASRC=y`; it did not flash either target.
 - Source image hashes remain as before: CPUAPP
   `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333` and
   CPUNET

@@ -984,6 +984,51 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 	const bool valid = (info->flags & BT_ISO_FLAGS_VALID) != 0;
 	const bool has_ts = (info->flags & BT_ISO_FLAGS_TS) != 0;
 
+#if defined(CONFIG_HIL_RX_TIMING_TRACE)
+	static uint32_t callback_count;
+	static uint32_t summary_second = UINT32_MAX;
+	static uint32_t valid_callbacks;
+	static uint32_t lost_callbacks;
+	static uint32_t error_callbacks;
+	static uint32_t no_timestamp_callbacks;
+	static uint32_t last_valid_ts;
+	const uint32_t now_second = k_uptime_get_32() / 1000U;
+
+	if (callback_count < 200U) {
+		callback_count++;
+		LOG_INF("HILRX cb=%u slot=%zu flags=0x%02X ts=%u seq=%u",
+			(unsigned int)callback_count, idx, (unsigned int)info->flags,
+			(unsigned int)info->ts, (unsigned int)info->seq_num);
+	}
+
+	if (valid) {
+		valid_callbacks++;
+		if (has_ts) {
+			last_valid_ts = info->ts;
+		}
+	} else if ((info->flags & BT_ISO_FLAGS_ERROR) != 0) {
+		error_callbacks++;
+	} else if ((info->flags & BT_ISO_FLAGS_LOST) != 0) {
+		lost_callbacks++;
+	}
+
+	if (!has_ts) {
+		no_timestamp_callbacks++;
+	}
+
+	if (summary_second != now_second) {
+		LOG_INF("HILRX t=%us valid=%u lost=%u err=%u nots=%u last_valid_ts=%u",
+			(unsigned int)now_second, (unsigned int)valid_callbacks,
+			(unsigned int)lost_callbacks, (unsigned int)error_callbacks,
+			(unsigned int)no_timestamp_callbacks, (unsigned int)last_valid_ts);
+		summary_second = now_second;
+		valid_callbacks = 0U;
+		lost_callbacks = 0U;
+		error_callbacks = 0U;
+		no_timestamp_callbacks = 0U;
+	}
+#endif
+
 	/* One gate snapshot under the lifecycle lock for the whole
 	 * callback; the shell thread can force-close concurrently. */
 	bool gate_open;
