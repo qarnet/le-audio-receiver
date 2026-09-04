@@ -27,20 +27,21 @@ immutable IDs, results, hashes, or historical execution wording.
 
 ## Repository state
 
-- Branch at RH3-ModeB control execution:
+- Branch at RH3-ModeA5 RX6 execution:
   `feature/firmware-release-acceptance`.
 - Normal build and runner HEAD:
-  `f1c13f0273f653068efe4205a97a15f72d06915b`.
-- At execution, `git status --porcelain` contained only the requested,
-  initially untracked RH3-ModeB control handoff. `git diff --check` passed; no
-  production or unrelated tracked change was present.
+  `0c3c9f77a3473a7987a4ace7b8e14d3760d8e264`.
+- At RX6 preflight, `git status --porcelain` contained only the pre-existing
+  untracked RH3-ModeA3 handoff and the requested RX6 handoff. The requested
+  RX6 fragment was added after preflight; no production or unrelated tracked
+  change was present.
 - CPUAPP image hashes are HEAD-dependent because `cmake/version.cmake` embeds
   `APP_COMMIT`. Future handoffs must derive CPUAPP identities at execution time;
   diagnostic images require a same-HEAD double-build byte-identity proof. Do not
   pin a CPUAPP hash from an earlier commit as a future expected value.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now twenty-nine: twenty-two failed,
+- Retained top-level physical-run count is now thirty: twenty-three failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
@@ -54,7 +55,20 @@ immutable IDs, results, hashes, or historical execution wording.
   also record the transport-limit violations documented in
   `docs/development/system-hil-rh3-matrix-20260903-result.md`. This is not RH3
   acceptance and must not be retried in this phase.
-- Latest direct RH3 Mode A diagnostic:
+- Latest direct RH3 RX6 buffer-depth isolation diagnostic:
+  `rh3-modeb-rx6-20260904` ran exactly once with
+  `CONFIG_BT_ISO_RX_BUF_COUNT=6`. The outer command returned `status=1`;
+  `result.json` records `outcome=failed` at `session end` with
+  runner-validated frozen transport-limit failures: slot 0 `rx_valid=109`
+  below `11379` and `plc=27204` above `1371`. Active FLPR retained `ACTIVE`,
+  `submit=82 success=82`; post-stop FLPR was not collected because limits
+  validation failed first. This selects the handoff's FAIL-same-signature arm:
+  ISO RX pool depth is exonerated at six buffers, and the locus moves to
+  controller/window timing between the SW Split central and SDC peripheral.
+  Preserve `/tmp/opencode/hil-runs/rh3-modeb-rx6-20260904/`; do not rerun it.
+  Canonical record:
+  `docs/development/system-hil-rh3-modea5-rx6-result.md`.
+- Prior direct RH3 Mode A diagnostic:
   `rh3-modea2-20260904-offload-disabled` ran once with offload compiled out and
   repaired runner support (`--allow-offload-disabled` plus full-segment raw
   summary scan). The outer command returned `status=1`; `result.json` records
@@ -67,7 +81,7 @@ immutable IDs, results, hashes, or historical execution wording.
   `/tmp/opencode/hil-runs/rh3-modea2-20260904-offload-disabled/`; do not rerun
   it. Canonical record:
   `docs/development/system-hil-rh3-modea2-result.md`.
-- Latest direct RH3 Mode B control:
+- Prior direct RH3 Mode B control:
   `rh3-modeb-control-20260904` ran exactly once with the normal production
   image. The outer command returned `status=1`; `result.json` records
   `outcome=failed` at `session end` with runner-validated frozen transport-limit
@@ -80,7 +94,7 @@ immutable IDs, results, hashes, or historical execution wording.
   `/tmp/opencode/hil-runs/rh3-modeb-control-20260904/`; do not rerun it.
   Canonical record:
   `docs/development/system-hil-rh3-modeb-control-result.md`.
-- Latest direct RH3 Mode B RX-timing diagnostic:
+- Prior direct RH3 Mode B RX-timing diagnostic:
   `rh3-modeb-rxtiming-20260904` ran exactly once with the default-off
   `HIL_RX_TIMING_TRACE` instrument enabled. The outer command returned
   `status=1`; `result.json` records `outcome=failed` at `session end` with the
@@ -120,17 +134,17 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- The latest runner-owned flash is `rh3-modeb-rxtiming-20260904`. Its
+- The latest runner-owned flash is `rh3-modeb-rx6-20260904`. Its
   authoritative `images.json` hashes are diagnostic receiver CPUAPP
-  `8442e97190bc24a9d090270ba2375bf81f5326f69038c23f49b01f4d1b991153`, FLPR
+  `cc1cc0a8dbd9a0f6a7e6e3bc78c535884d879a0aac2b0f731a990aeebe9ed0aa`, FLPR
   `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`, source
   CPUAPP `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333`,
   and source CPUNET
   `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`.
-  The diagnostic build proved `CONFIG_HIL_RX_TIMING_TRACE=y`,
-  `CONFIG_AUDIO_OFFLOAD_ASRC=y`, `CONFIG_TRACING` and
-  `CONFIG_HIL_BAP_ENABLE_TRACE` unset, and `CONFIG_BT_ISO_RX_BUF_COUNT=3`.
-  A later local normal build proved `CONFIG_HIL_RX_TIMING_TRACE` unset and
+  The diagnostic build proved `CONFIG_BT_ISO_RX_BUF_COUNT=6`,
+  `CONFIG_AUDIO_OFFLOAD_ASRC=y`, `CONFIG_TRACING`,
+  `CONFIG_HIL_RX_TIMING_TRACE`, and `CONFIG_HIL_BAP_ENABLE_TRACE` unset.
+  A later local normal build proved `CONFIG_BT_ISO_RX_BUF_COUNT=3` and
   `CONFIG_AUDIO_OFFLOAD_ASRC=y`; it did not flash either target.
 - Source image hashes remain as before: CPUAPP
   `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333` and
