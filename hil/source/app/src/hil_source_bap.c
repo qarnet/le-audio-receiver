@@ -115,14 +115,16 @@ static struct bt_bap_lc3_preset preset_modeb_10ms = {
 		BT_AUDIO_CODEC_CFG_FREQ_48KHZ, BT_AUDIO_CODEC_CFG_DURATION_10,
 		(BT_AUDIO_LOCATION_FRONT_LEFT | BT_AUDIO_LOCATION_FRONT_RIGHT), 120u, 1,
 		BT_AUDIO_CONTEXT_TYPE_UNSPECIFIED),
-	.qos = BT_BAP_QOS_CFG_UNFRAMED(10000u, 240u, 5u, 20u, 40000u),
+	.qos = BT_BAP_QOS_CFG_UNFRAMED(10000u, 240u, (uint8_t)CONFIG_HIL_SOURCE_QOS_RTN, 20u,
+				       40000u),
 };
 static struct bt_bap_lc3_preset preset_modeb_7p5ms = {
 	.codec_cfg = BT_AUDIO_CODEC_LC3_CONFIG(
 		BT_AUDIO_CODEC_CFG_FREQ_48KHZ, BT_AUDIO_CODEC_CFG_DURATION_7_5,
 		(BT_AUDIO_LOCATION_FRONT_LEFT | BT_AUDIO_LOCATION_FRONT_RIGHT), 90u, 1,
 		BT_AUDIO_CONTEXT_TYPE_UNSPECIFIED),
-	.qos = BT_BAP_QOS_CFG_UNFRAMED(7500u, 180u, 5u, 15u, 40000u),
+	.qos = BT_BAP_QOS_CFG_UNFRAMED(7500u, 180u, (uint8_t)CONFIG_HIL_SOURCE_QOS_RTN, 15u,
+				       40000u),
 };
 
 static void bap_build_presets(enum hil_source_mode mode, enum hil_source_profile profile)

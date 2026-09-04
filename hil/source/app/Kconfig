@@ -3,7 +3,17 @@
 # Dedicated LE Audio source fixture application Kconfig.
 #
 # All run-time options are standard Zephyr/Bluetooth symbols set in
-# prj.conf and the board conf.  The RH1A core modules compile without any
-# application-specific Kconfig, so this file only imports the Zephyr tree.
+# prj.conf and the board conf. The RH1A core modules compile without any
+# application-specific Kconfig; diagnostic fixture options live below.
 
 source "Kconfig.zephyr"
+
+config HIL_SOURCE_QOS_RTN
+	int "HIL source CIS retransmission number (RTN)"
+	default 5
+	range 0 5
+	help
+	  RTN used in the source BAP QoS presets. Default 5 matches the
+	  original frozen presets (nse=6). Diagnostic-only knob: the
+	  receiver transport investigation varies it in fragments; normal
+	  builds must not set it.

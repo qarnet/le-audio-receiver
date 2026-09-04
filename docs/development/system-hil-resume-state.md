@@ -27,21 +27,21 @@ immutable IDs, results, hashes, or historical execution wording.
 
 ## Repository state
 
-- Branch at RH3-ModeA5 RX6 execution:
+- Branch at RH3-ModeA6 RTN/duty execution:
   `feature/firmware-release-acceptance`.
 - Normal build and runner HEAD:
-  `0c3c9f77a3473a7987a4ace7b8e14d3760d8e264`.
-- At RX6 preflight, `git status --porcelain` contained only the pre-existing
-  untracked RH3-ModeA3 handoff and the requested RX6 handoff. The requested
-  RX6 fragment was added after preflight; no production or unrelated tracked
-  change was present.
+  `c02f74efcac61bd6ed5d40e6db4cb49c9df5d0bf`.
+- At RTN/duty preflight, `git status --porcelain` contained the two scoped
+  source edits, the RTN fragment, the requested RTN handoff, and the
+  pre-existing untracked RH3-ModeA3 handoff. No receiver firmware or unrelated
+  tracked source changed.
 - CPUAPP image hashes are HEAD-dependent because `cmake/version.cmake` embeds
   `APP_COMMIT`. Future handoffs must derive CPUAPP identities at execution time;
   diagnostic images require a same-HEAD double-build byte-identity proof. Do not
   pin a CPUAPP hash from an earlier commit as a future expected value.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now thirty: twenty-three failed,
+- Retained top-level physical-run count is now thirty-one: twenty-four failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
@@ -55,7 +55,7 @@ immutable IDs, results, hashes, or historical execution wording.
   also record the transport-limit violations documented in
   `docs/development/system-hil-rh3-matrix-20260903-result.md`. This is not RH3
   acceptance and must not be retried in this phase.
-- Latest direct RH3 RX6 buffer-depth isolation diagnostic:
+- Prior direct RH3 RX6 buffer-depth isolation diagnostic:
   `rh3-modeb-rx6-20260904` ran exactly once with
   `CONFIG_BT_ISO_RX_BUF_COUNT=6`. The outer command returned `status=1`;
   `result.json` records `outcome=failed` at `session end` with
@@ -68,6 +68,19 @@ immutable IDs, results, hashes, or historical execution wording.
   Preserve `/tmp/opencode/hil-runs/rh3-modeb-rx6-20260904/`; do not rerun it.
   Canonical record:
   `docs/development/system-hil-rh3-modea5-rx6-result.md`.
+- Latest direct RH3 RTN/duty isolation diagnostic:
+  `rh3-modeb-rtn1-20260904` ran exactly once with source
+  `CONFIG_HIL_SOURCE_QOS_RTN=1`. The outer command returned `status=1`;
+  `result.json` records `outcome=failed` at `session end` with runner-validated
+  frozen transport-limit failures: slot 0 `rx_valid=130` below `11379` and
+  `plc=27236` above `1374`. The active FLPR snapshot retained `ACTIVE`,
+  `submit=75 success=75`. Receiver QoS logged `rtn 1`, and the ISO tail retained
+  `nse=2`, so the mandatory on-air sanity check passed. This selects the
+  FAIL-same-signature arm: RTN/duty is exonerated at this Mode B shape; the next
+  reviewed physical phase is a PDU-size or PHY ladder. Preserve
+  `/tmp/opencode/hil-runs/rh3-modeb-rtn1-20260904/`; do not rerun it.
+  Canonical record:
+  `docs/development/system-hil-rh3-modea6-rtn1-result.md`.
 - Prior direct RH3 Mode A diagnostic:
   `rh3-modea2-20260904-offload-disabled` ran once with offload compiled out and
   repaired runner support (`--allow-offload-disabled` plus full-segment raw
@@ -134,7 +147,17 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- The latest runner-owned flash is `rh3-modeb-rx6-20260904`. Its
+- The latest runner-owned flash is `rh3-modeb-rtn1-20260904`. Its authoritative
+  `images.json` hashes are source diagnostic CPUAPP
+  `c9eccc4e8074525d5d0d178b183c738f8563e60168a22e4fcf6fa6ab49ced72a`, source
+  CPUNET `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`,
+  receiver CPUAPP `46ad03840b1aa9724c3ce32fe3da9370a55a29f69f1e25ce4fc340be9b5fdd40`,
+  and FLPR `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+  The diagnostic source build proved `CONFIG_HIL_SOURCE_QOS_RTN=1`; the normal
+  receiver build proved `CONFIG_AUDIO_OFFLOAD_ASRC=y` and
+  `CONFIG_BT_ISO_RX_BUF_COUNT=3`. A later local normal source build proved
+  `CONFIG_HIL_SOURCE_QOS_RTN=5`; it did not flash either target.
+- The prior runner-owned flash was `rh3-modeb-rx6-20260904`. Its
   authoritative `images.json` hashes are diagnostic receiver CPUAPP
   `cc1cc0a8dbd9a0f6a7e6e3bc78c535884d879a0aac2b0f731a990aeebe9ed0aa`, FLPR
   `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`, source
@@ -557,6 +580,10 @@ Current source fixes are software-verified only. This does not claim RH3, RH4,
 release, analog, full hardware acceptance, audibility, or repeatability.
 
 ## Next resume steps
+
+Current next physical work is a new reviewed PDU-size or PHY ladder handoff.
+The completed RTN/duty diagnostic `rh3-modeb-rtn1-20260904` is immutable
+FAIL-same-signature evidence and must not be rerun.
 
 1. RH2 witness is no longer blocked.
 2. Direct diagnostics `rh3-20260822-03-modea-critical-tail-snapshot` and
