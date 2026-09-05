@@ -94,6 +94,9 @@ static K_SEM_DEFINE(sem_disconnected, 0, 1);
 
 /* ── presets ─────────────────────────────────────────────────────── */
 
+#define HIL_SOURCE_QOS_PHY_SELECTOR                                                                \
+	((CONFIG_HIL_SOURCE_QOS_PHY == 1) ? BT_BAP_QOS_CFG_1M : BT_BAP_QOS_CFG_2M)
+
 static struct bt_bap_lc3_preset preset_48_4_1_mono = BT_BAP_LC3_UNICAST_PRESET_48_4_1(
 	BT_AUDIO_LOCATION_MONO_AUDIO, BT_AUDIO_CONTEXT_TYPE_UNSPECIFIED);
 static struct bt_bap_lc3_preset preset_48_3_1_mono = BT_BAP_LC3_UNICAST_PRESET_48_3_1(
@@ -115,16 +118,16 @@ static struct bt_bap_lc3_preset preset_modeb_10ms = {
 		BT_AUDIO_CODEC_CFG_FREQ_48KHZ, BT_AUDIO_CODEC_CFG_DURATION_10,
 		(BT_AUDIO_LOCATION_FRONT_LEFT | BT_AUDIO_LOCATION_FRONT_RIGHT), 120u, 1,
 		BT_AUDIO_CONTEXT_TYPE_UNSPECIFIED),
-	.qos = BT_BAP_QOS_CFG_UNFRAMED(10000u, 240u, (uint8_t)CONFIG_HIL_SOURCE_QOS_RTN, 20u,
-				       40000u),
+	.qos = BT_BAP_QOS_CFG(10000u, BT_BAP_QOS_CFG_FRAMING_UNFRAMED, HIL_SOURCE_QOS_PHY_SELECTOR,
+			      240u, (uint8_t)CONFIG_HIL_SOURCE_QOS_RTN, 20u, 40000u),
 };
 static struct bt_bap_lc3_preset preset_modeb_7p5ms = {
 	.codec_cfg = BT_AUDIO_CODEC_LC3_CONFIG(
 		BT_AUDIO_CODEC_CFG_FREQ_48KHZ, BT_AUDIO_CODEC_CFG_DURATION_7_5,
 		(BT_AUDIO_LOCATION_FRONT_LEFT | BT_AUDIO_LOCATION_FRONT_RIGHT), 90u, 1,
 		BT_AUDIO_CONTEXT_TYPE_UNSPECIFIED),
-	.qos = BT_BAP_QOS_CFG_UNFRAMED(7500u, 180u, (uint8_t)CONFIG_HIL_SOURCE_QOS_RTN, 15u,
-				       40000u),
+	.qos = BT_BAP_QOS_CFG(7500u, BT_BAP_QOS_CFG_FRAMING_UNFRAMED, HIL_SOURCE_QOS_PHY_SELECTOR,
+			      180u, (uint8_t)CONFIG_HIL_SOURCE_QOS_RTN, 15u, 40000u),
 };
 
 static void bap_build_presets(enum hil_source_mode mode, enum hil_source_profile profile)

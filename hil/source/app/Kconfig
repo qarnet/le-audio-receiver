@@ -17,3 +17,12 @@ config HIL_SOURCE_QOS_RTN
 	  original frozen presets (nse=6). Diagnostic-only knob: the
 	  receiver transport investigation varies it in fragments; normal
 	  builds must not set it.
+
+config HIL_SOURCE_QOS_PHY
+	int "HIL source CIS PHY (1 or 2)"
+	default 2
+	range 1 2
+	help
+	  PHY used in the source BAP QoS presets. Default 2 (2M) matches the
+	  original frozen presets. Diagnostic-only knob for the receiver
+	  transport investigation; normal builds must not set it.

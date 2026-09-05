@@ -27,12 +27,12 @@ immutable IDs, results, hashes, or historical execution wording.
 
 ## Repository state
 
-- Branch at RH3-ModeA6 RTN/duty execution:
+- Branch at RH3-ModeA7 PHY isolation execution:
   `feature/firmware-release-acceptance`.
 - Normal build and runner HEAD:
-  `c02f74efcac61bd6ed5d40e6db4cb49c9df5d0bf`.
-- At RTN/duty preflight, `git status --porcelain` contained the two scoped
-  source edits, the RTN fragment, the requested RTN handoff, and the
+  `b71230f957426afe27aca4f1839b1036fbe77baa`.
+- At PHY-isolation preflight, `git status --porcelain` contained the two scoped
+  source edits, the PHY fragment, the requested PHY handoff, and the
   pre-existing untracked RH3-ModeA3 handoff. No receiver firmware or unrelated
   tracked source changed.
 - CPUAPP image hashes are HEAD-dependent because `cmake/version.cmake` embeds
@@ -41,7 +41,7 @@ immutable IDs, results, hashes, or historical execution wording.
   pin a CPUAPP hash from an earlier commit as a future expected value.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now thirty-one: twenty-four failed,
+- Retained top-level physical-run count is now thirty-two: twenty-five failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
@@ -68,7 +68,21 @@ immutable IDs, results, hashes, or historical execution wording.
   Preserve `/tmp/opencode/hil-runs/rh3-modeb-rx6-20260904/`; do not rerun it.
   Canonical record:
   `docs/development/system-hil-rh3-modea5-rx6-result.md`.
-- Latest direct RH3 RTN/duty isolation diagnostic:
+- Latest direct RH3 PHY isolation diagnostic:
+  `rh3-modeb-phy1m-20260904` ran exactly once with source
+  `CONFIG_HIL_SOURCE_QOS_PHY=1` and default `CONFIG_HIL_SOURCE_QOS_RTN=5`.
+  `environment.json` records runner command `status=0`; `result.json` records
+  `outcome=failed` at `session end` with runner-validated frozen transport-limit
+  failures: slot 0 `rx_valid=144` below `11379` and `plc=27220` above `1375`.
+  Active FLPR retained `ACTIVE`, `submit=75 success=75`. Receiver QoS logged
+  `phy 0x01`; the ISO tail retained `c_phy=1`, `c_max_pdu=240`, and `nse=3`, so
+  mandatory on-air sanity passed. This selects the FAIL-same-signature arm:
+  modulation rate is exonerated at this 240-byte fresh Mode B shape, and the
+  locus narrows to 240-byte PDU handling independent of modulation rate.
+  Preserve `/tmp/opencode/hil-runs/rh3-modeb-phy1m-20260904/`; do not rerun it.
+  Canonical record:
+  `docs/development/system-hil-rh3-modea7-phy1m-result.md`.
+- Prior direct RH3 RTN/duty isolation diagnostic:
   `rh3-modeb-rtn1-20260904` ran exactly once with source
   `CONFIG_HIL_SOURCE_QOS_RTN=1`. The outer command returned `status=1`;
   `result.json` records `outcome=failed` at `session end` with runner-validated
@@ -147,7 +161,18 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- The latest runner-owned flash is `rh3-modeb-rtn1-20260904`. Its authoritative
+- The latest runner-owned flash is `rh3-modeb-phy1m-20260904`. Its authoritative
+  `images.json` hashes are source diagnostic CPUAPP
+  `f484d97fc89d826ccf9e71955e84532a80d28d8d44a0b3d2b0710780ff67bdb0`, source
+  CPUNET `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`,
+  receiver CPUAPP `5aa54b14166e4e685319e0e77b3cf0175d8e86715df3251baec088c54e831706`,
+  and FLPR `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+  The diagnostic source build proved `CONFIG_HIL_SOURCE_QOS_PHY=1` and
+  `CONFIG_HIL_SOURCE_QOS_RTN=5`; the normal receiver build proved
+  `CONFIG_AUDIO_OFFLOAD_ASRC=y` and `CONFIG_BT_ISO_RX_BUF_COUNT=3`. A later
+  local normal source build proved `CONFIG_HIL_SOURCE_QOS_PHY=2` and
+  `CONFIG_HIL_SOURCE_QOS_RTN=5`; it did not flash either target.
+- The prior runner-owned flash was `rh3-modeb-rtn1-20260904`. Its authoritative
   `images.json` hashes are source diagnostic CPUAPP
   `c9eccc4e8074525d5d0d178b183c738f8563e60168a22e4fcf6fa6ab49ced72a`, source
   CPUNET `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`,
@@ -157,7 +182,7 @@ immutable IDs, results, hashes, or historical execution wording.
   receiver build proved `CONFIG_AUDIO_OFFLOAD_ASRC=y` and
   `CONFIG_BT_ISO_RX_BUF_COUNT=3`. A later local normal source build proved
   `CONFIG_HIL_SOURCE_QOS_RTN=5`; it did not flash either target.
-- The prior runner-owned flash was `rh3-modeb-rx6-20260904`. Its
+- An earlier runner-owned flash was `rh3-modeb-rx6-20260904`. Its
   authoritative `images.json` hashes are diagnostic receiver CPUAPP
   `cc1cc0a8dbd9a0f6a7e6e3bc78c535884d879a0aac2b0f731a990aeebe9ed0aa`, FLPR
   `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`, source
@@ -581,9 +606,9 @@ release, analog, full hardware acceptance, audibility, or repeatability.
 
 ## Next resume steps
 
-Current next physical work is a new reviewed PDU-size or PHY ladder handoff.
-The completed RTN/duty diagnostic `rh3-modeb-rtn1-20260904` is immutable
-FAIL-same-signature evidence and must not be rerun.
+Current next physical work is a new reviewed PDU-size or GATT/unicast-variant
+handoff. The completed PHY isolation diagnostic `rh3-modeb-phy1m-20260904` is
+immutable FAIL-same-signature evidence and must not be rerun.
 
 1. RH2 witness is no longer blocked.
 2. Direct diagnostics `rh3-20260822-03-modea-critical-tail-snapshot` and
@@ -612,6 +637,7 @@ FAIL-same-signature evidence and must not be rerun.
  5. Matrix runner solely owns hardware. Do not use manual serial, flashing,
     reset, or FLPR work, and do not rebuild source during execution.
 6. Preserve these evidence roots:
+   - `/tmp/opencode/hil-runs/rh3-modeb-phy1m-20260904/`
    - `/tmp/opencode/hil-runs/rh2-20260815-12/`
    - `/tmp/opencode/hil-runs/rh2-20260815-13/`
    - `/tmp/opencode/hil-runs/rh2-20260815-14/`
