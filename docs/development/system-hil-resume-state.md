@@ -27,21 +27,21 @@ immutable IDs, results, hashes, or historical execution wording.
 
 ## Repository state
 
-- Branch at RH3-ModeA7 PHY isolation execution:
+- Branch at RH3-ModeA8 TX pacing-regime isolation execution:
   `feature/firmware-release-acceptance`.
 - Normal build and runner HEAD:
-  `b71230f957426afe27aca4f1839b1036fbe77baa`.
-- At PHY-isolation preflight, `git status --porcelain` contained the two scoped
-  source edits, the PHY fragment, the requested PHY handoff, and the
-  pre-existing untracked RH3-ModeA3 handoff. No receiver firmware or unrelated
-  tracked source changed.
+  `000a96065d95aca4a113b7039ccc55004bcea852`.
+- At TX-pacing-isolation preflight, `git status --porcelain` contained the two
+  scoped source edits, the target-six fragment, the requested target-six
+  handoff, and the pre-existing untracked RH3-ModeA3 handoff. No receiver
+  firmware or unrelated tracked source changed.
 - CPUAPP image hashes are HEAD-dependent because `cmake/version.cmake` embeds
   `APP_COMMIT`. Future handoffs must derive CPUAPP identities at execution time;
   diagnostic images require a same-HEAD double-build byte-identity proof. Do not
   pin a CPUAPP hash from an earlier commit as a future expected value.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now thirty-two: twenty-five failed,
+- Retained top-level physical-run count is now thirty-three: twenty-six failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
@@ -55,6 +55,24 @@ immutable IDs, results, hashes, or historical execution wording.
   also record the transport-limit violations documented in
   `docs/development/system-hil-rh3-matrix-20260903-result.md`. This is not RH3
   acceptance and must not be retried in this phase.
+- Latest direct RH3 TX-pacing isolation diagnostic:
+  `rh3-modeb-txout6-20260904` ran exactly once with source
+  `CONFIG_HIL_SOURCE_TX_OUTSTANDING_TARGET=6`, while PHY and RTN stayed at the
+  normal `2M` and `5` values. `environment.json` records runner command
+  `status=0`; `result.json` records `outcome=failed` at `session end` with
+  runner-validated frozen transport-limit failures: slot 0 `rx_valid=137`
+  below `11379` and `plc=27134` above `1370`. The active source record was
+  `seq=29 sub=29 sc=0 sf=0 cb=24 out=5`, near the target-six cap; the sole
+  active snapshot occurs after `streaming` before scored counting begins. The
+  source later emitted `scored_complete` and terminal `pass`. Receiver QoS
+  retained `phy 0x02`, `sdu 240`, and `rtn 5`; the ISO tail retained `nse=6`,
+  `c_max_pdu=240`, and `c_phy=2`. Active FLPR retained `ACTIVE`,
+  `submit=83 success=83`. This selects the handoff's FAIL-same-signature arm:
+  scored-source TX submission pacing is exonerated at this shape, and scored
+  LC3-encoded payload content remains the trigger candidate. Preserve
+  `/tmp/opencode/hil-runs/rh3-modeb-txout6-20260904/`; do not rerun it.
+  Canonical record:
+  `docs/development/system-hil-rh3-modea8-txout6-result.md`.
 - Prior direct RH3 RX6 buffer-depth isolation diagnostic:
   `rh3-modeb-rx6-20260904` ran exactly once with
   `CONFIG_BT_ISO_RX_BUF_COUNT=6`. The outer command returned `status=1`;
@@ -68,7 +86,7 @@ immutable IDs, results, hashes, or historical execution wording.
   Preserve `/tmp/opencode/hil-runs/rh3-modeb-rx6-20260904/`; do not rerun it.
   Canonical record:
   `docs/development/system-hil-rh3-modea5-rx6-result.md`.
-- Latest direct RH3 PHY isolation diagnostic:
+- Prior direct RH3 PHY isolation diagnostic:
   `rh3-modeb-phy1m-20260904` ran exactly once with source
   `CONFIG_HIL_SOURCE_QOS_PHY=1` and default `CONFIG_HIL_SOURCE_QOS_RTN=5`.
   `environment.json` records runner command `status=0`; `result.json` records
@@ -161,7 +179,20 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- The latest runner-owned flash is `rh3-modeb-phy1m-20260904`. Its authoritative
+- The latest runner-owned flash is `rh3-modeb-txout6-20260904`. Its authoritative
+  `images.json` hashes are source diagnostic CPUAPP
+  `056614d14ecd4e3c6f78c57915b035e80ef2ceb37aeccbb9154936b6e6157552`, source
+  CPUNET `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`,
+  receiver CPUAPP `1a39c8eac3c1c058ef835e40360c3a7c9bb1f6995949f1bf2cb234a5e1cf16e3`,
+  and FLPR `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+  The diagnostic source build proved `CONFIG_HIL_SOURCE_TX_OUTSTANDING_TARGET=6`,
+  `CONFIG_HIL_SOURCE_QOS_PHY=2`, and `CONFIG_HIL_SOURCE_QOS_RTN=5`; the normal
+  receiver build proved
+  `CONFIG_AUDIO_OFFLOAD_ASRC=y` and `CONFIG_BT_ISO_RX_BUF_COUNT=3`. A later
+  local normal source build proved `CONFIG_HIL_SOURCE_TX_OUTSTANDING_TARGET=3`,
+  `CONFIG_HIL_SOURCE_QOS_PHY=2`, and `CONFIG_HIL_SOURCE_QOS_RTN=5`; it did not
+  flash either target.
+- The prior runner-owned flash was `rh3-modeb-phy1m-20260904`. Its authoritative
   `images.json` hashes are source diagnostic CPUAPP
   `f484d97fc89d826ccf9e71955e84532a80d28d8d44a0b3d2b0710780ff67bdb0`, source
   CPUNET `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`,
@@ -172,7 +203,7 @@ immutable IDs, results, hashes, or historical execution wording.
   `CONFIG_AUDIO_OFFLOAD_ASRC=y` and `CONFIG_BT_ISO_RX_BUF_COUNT=3`. A later
   local normal source build proved `CONFIG_HIL_SOURCE_QOS_PHY=2` and
   `CONFIG_HIL_SOURCE_QOS_RTN=5`; it did not flash either target.
-- The prior runner-owned flash was `rh3-modeb-rtn1-20260904`. Its authoritative
+- The earlier runner-owned flash was `rh3-modeb-rtn1-20260904`. Its authoritative
   `images.json` hashes are source diagnostic CPUAPP
   `c9eccc4e8074525d5d0d178b183c738f8563e60168a22e4fcf6fa6ab49ced72a`, source
   CPUNET `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`,
@@ -194,7 +225,7 @@ immutable IDs, results, hashes, or historical execution wording.
   `CONFIG_HIL_RX_TIMING_TRACE`, and `CONFIG_HIL_BAP_ENABLE_TRACE` unset.
   A later local normal build proved `CONFIG_BT_ISO_RX_BUF_COUNT=3` and
   `CONFIG_AUDIO_OFFLOAD_ASRC=y`; it did not flash either target.
-- Source image hashes remain as before: CPUAPP
+- Local normal default-target-three source image hashes remain: CPUAPP
   `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333` and
   CPUNET
   `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`.
@@ -298,9 +329,12 @@ HIL evidence root: `/tmp/opencode/hil-runs`.
 
 - Receiver remains at `0 dBm`.
 - Source remains at `+3 dBm`.
-- Source software outstanding target is now `3` per active Mode A stream,
-  changed from `2`; the target-three source image has received ten direct
-  physical diagnostics, recorded below, with no acceptance execution.
+- Source fixture remains flashed with the target-six diagnostic image from
+  `rh3-modeb-txout6-20260904`. A later local, non-flashing build restored the
+  repository default target `3`; do not treat that local artifact as the image
+  currently on the source fixture. The target-three source image has received
+  ten direct physical diagnostics, recorded below, with no acceptance
+  execution.
 - Source host and controller ISO TX buffers remain `6`.
 
 ## Fixes after `rh2-20260815-12`
@@ -606,9 +640,10 @@ release, analog, full hardware acceptance, audibility, or repeatability.
 
 ## Next resume steps
 
-Current next physical work is a new reviewed PDU-size or GATT/unicast-variant
-handoff. The completed PHY isolation diagnostic `rh3-modeb-phy1m-20260904` is
-immutable FAIL-same-signature evidence and must not be rerun.
+Current next physical work requires a new reviewed content-analysis handoff for
+LC3-encoded scored frames. The completed TX-pacing isolation diagnostic
+`rh3-modeb-txout6-20260904` is immutable FAIL-same-signature evidence and must
+not be rerun.
 
 1. RH2 witness is no longer blocked.
 2. Direct diagnostics `rh3-20260822-03-modea-critical-tail-snapshot` and
@@ -632,11 +667,15 @@ immutable FAIL-same-signature evidence and must not be rerun.
     `rh3-20260822-10-modeb-7p5-selected-layout` are immutable failed
     evidence, not acceptance. Do not retry any child or launch another matrix
     from this phase.
+   `rh3-modeb-txout6-20260904` is also immutable failed evidence, not
+   acceptance. Do not retry it.
    Bullet 5 is historical execution control for the recorded diagnostics;
    the current standing policy supersedes it for future work.
  5. Matrix runner solely owns hardware. Do not use manual serial, flashing,
     reset, or FLPR work, and do not rebuild source during execution.
 6. Preserve these evidence roots:
+   - `/tmp/opencode/hil-runs/rh3-modeb-txout6-20260904/`
+   - `/tmp/opencode/hil-runs/rh3-modeb-txout6-20260904.junit.xml`
    - `/tmp/opencode/hil-runs/rh3-modeb-phy1m-20260904/`
    - `/tmp/opencode/hil-runs/rh2-20260815-12/`
    - `/tmp/opencode/hil-runs/rh2-20260815-13/`
