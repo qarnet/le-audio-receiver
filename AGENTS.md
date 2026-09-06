@@ -321,6 +321,40 @@ overlay (`boards/nrf54l15dk_nrf54l15_cpuapp.overlay`) that remaps UART20
 to the Xiao SAMD11 USB CDC bridge (P1.9 TX / P1.8 RX) and I2S20 to Xiao
 D0/D1/D2 (P1.4/P1.5/P1.6). Console works over `/dev/ttyACM0` @ 115200.
 
+## LSP (clangd) setup
+
+clangd parses each tree through per-image `compile_commands.json` symlinks
+(clangd closest-ancestor discovery) plus `--query-driver` in the launch
+command. Full background: `~/.config/opencode/rules/clangd-zephyr.md`.
+
+- Links are created two ways: (a) `file(CREATE_LINK)` in each app
+  CMakeLists at every configure (root receiver link guarded on
+  `CONFIG_SOC_NRF54L15` so only nRF54L15 owns the root; `src/flpr`,
+  `hil/source/app` emits `hil/source/`, `dongle/hci_ipc`,
+  `tests/bsim`, `tests/bsim/client`), and (b)
+  `scripts/gen-lsp-links.sh` for the links CMake cannot own
+  (`tests/unit` and the BSim out-of-tree builds; also repairs dangling
+  links). Run `bash scripts/gen-lsp-links.sh --check` to inspect.
+- clangd must be launched with `--query-driver` covering the Zephyr SDK
+  compilers and the Nix host gcc wrapper; the repo `opencode.json` ships
+  this for opencode sessions. Without it, cross-target parses pick up
+  host glibc (`'gnu/stubs-32.h' file not found`) and native_sim/BSim
+  files get no builtin headers.
+- The root `.clangd` deliberately has NO `CompilationDatabase` pin and
+  NO `Add: --target`: a root pin would override per-tree discovery, and
+  a repo-wide ARM target breaks BSim/native_sim host parses. Do not
+  re-add either.
+- After `--pristine` rebuilds the link files are re-created at configure
+  time (seconds); BSim links refresh via `scripts/gen-lsp-links.sh` or
+  the next `bsim-stage1-run.sh` configure.
+- Verify a file parses clean (0 real diagnostics expected; `tweak:`
+  lines in `--check` output are artifacts, not diagnostics):
+
+```bash
+clangd --query-driver='/nix/store/**,/home/thomas-workstation/ncs/toolchains/*/opt/zephyr-sdk/**' \
+  --check=src/main.c 2>&1 | grep -E '^[WE]\[' | grep -cvE 'SwapBinary|tweak:'
+```
+
 ## Flash
 
 Both app core and hci_ipc network core must be flashed:

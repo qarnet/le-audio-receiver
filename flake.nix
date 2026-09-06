@@ -40,6 +40,7 @@
           ]
           ++ (with pkgs.python3Packages; [
             dbus-python
+            intelhex
             numpy
             pygobject3
             pytest

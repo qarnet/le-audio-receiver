@@ -124,4 +124,20 @@ zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_cache.c)
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_ring_mgr.c)
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_runtime.c)
 
+# LSP compile-database link (R8/R9 clangd work): expose this image's
+# compile_commands.json at the repo root for clangd's closest-ancestor
+# discovery.  Guarded on CONFIG_SOC_NRF54L15 so only the production
+# receiver target (nRF54L15) owns the root link — building nRF5340
+# must not flip the root flavor.  file(CREATE_LINK) is idempotent; a
+# reconfigure (--pristine included) re-creates it.  Other images create
+# their own links in their app CMakeLists; BSim and tests/unit links
+# are maintained by scripts/gen-lsp-links.sh (builds live outside the
+# repo or in ephemeral dirs).
+if(CONFIG_SOC_NRF54L15)
+  file(CREATE_LINK
+       "${CMAKE_BINARY_DIR}/compile_commands.json"
+       "${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json"
+       SYMBOLIC)
+endif()
+
 zephyr_library_include_directories(${ZEPHYR_BASE}/samples/bluetooth)

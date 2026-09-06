@@ -29,3 +29,12 @@ target_include_directories(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/../core
 )
+
+# LSP compile-database link: expose this app's compile_commands.json one
+# directory up (hil/source/) so clangd's closest-ancestor discovery serves
+# both this app tree and the ../core RH1A modules compiled into it.
+# Idempotent; re-created on every reconfigure.
+file(CREATE_LINK
+     "${CMAKE_BINARY_DIR}/compile_commands.json"
+     "${CMAKE_CURRENT_SOURCE_DIR}/../compile_commands.json"
+     SYMBOLIC)
