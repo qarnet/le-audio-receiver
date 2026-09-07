@@ -41,7 +41,7 @@ immutable IDs, results, hashes, or historical execution wording.
   pin a CPUAPP hash from an earlier commit as a future expected value.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now thirty-seven: thirty failed,
+- Retained top-level physical-run count is now thirty-eight: thirty-one failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
@@ -67,7 +67,29 @@ immutable IDs, results, hashes, or historical execution wording.
   `/tmp/opencode/hil-runs/rh3-modeb-sdc-txout6-20260907/`; do not rerun it.
   Canonical record:
   `docs/development/system-hil-rh3-modea11-sdc-txout6-result.md`.
-- Latest direct RH3 SDC timestamp-mode fix-validation diagnostic:
+- Latest direct RH3 SDC completion-driven readback fix-validation
+  diagnostic: `rh3-modeb-sdc-compreadback-20260907` ran exactly once with
+  the ModeA14 source build (completion-driven readback chain, no
+  host-side gate) and the normal current-HEAD receiver image. The outer
+  command returned `status=0`; `result.json` records `outcome=failed`
+  with BOTH frozen floors violated: slot 0 `rx_valid=167` below `11379`
+  and `plc=28812` above `1457` (5% of `decoded=29146`), `rx_lost=14406`,
+  `plc = 2 x rx_lost` preserved, HCI-level completions for every
+  submitted SDU (`out=0` at the active snapshot). The collapse signature
+  is byte-identical to ModeA13's no-gate run (`rx_valid=167` in both),
+  falsifying the ModeA13 pre-air-readback classification and reaching
+  the plan's two-consecutive-same-signature STOP POINT for the
+  timestamp-mode line: the next hardware action is a user-reviewed
+  decision. The three-run chain (ModeA12 gate delivered 12643/12644;
+  both no-gate runs collapse at SDU 167 regardless of readback chain)
+  leaves the on-hardware semantics of the SDC VS ISO Read TX Timestamp
+  values and pinned-timestamp flush evaluation unresolved from
+  documentation. Options recorded in the ModeA14 result doc (bounded
+  raw-value diagnostic recommended). Preserve
+  `/tmp/opencode/hil-runs/rh3-modeb-sdc-compreadback-20260907/`; do not
+  rerun it. Canonical record:
+  `docs/development/system-hil-rh3-modea14-compreadback-result.md`.
+- Prior direct RH3 SDC timestamp-mode fix-validation diagnostic:
   `rh3-modeb-sdc-tsmode-20260907` ran exactly once with the ModeA12
   timestamp-mode source build (send-driven readback chain, pinned sends,
   host-side time gate) and the normal current-HEAD receiver image. The
@@ -264,8 +286,26 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- The latest runner-owned flash is `rh3-modeb-sdc-tsmode-20260907`. Its
-  authoritative `images.json` hashes are source CPUAPP (timestamp-mode
+- The latest runner-owned flash is `rh3-modeb-sdc-compreadback-20260907`.
+  Its authoritative `images.json` hashes are source CPUAPP
+  (completion-driven timestamp-mode app, uncommitted ModeA14 change)
+  `4f2334f8e6a204be8b5c3a70ea0d867b27c7067fb12b80c1b67bc9f5daf3fe6e`,
+  source CPUNET (SDC, uncommitted ModeA10 rework)
+  `19ffe5d4cfa7f7071f9b5f5211f88ff9a9505c75ce410eb67c0c3baa771f4656`,
+  receiver CPUAPP (normal current-HEAD `6467e84`)
+  `3e12402d90cff3a66d278edde2df6c5e083e76820f7825750979d437426baec5`, and
+  FLPR `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+  The diagnostic source build proved
+  `CONFIG_HIL_SOURCE_TX_OUTSTANDING_TARGET=3` with the SDC block intact;
+  the normal receiver build proved `CONFIG_AUDIO_OFFLOAD_ASRC=y` and
+  `CONFIG_BT_ISO_RX_BUF_COUNT=3`.
+- The prior runner-owned flash was `rh3-modeb-sdc-tsnogate-20260907`
+  (gate-free build, CPUAPP
+  `7f9de7fc367f13be694b3353bde06b75c163e3d2b35354a6e31ee00c39ae0c18`,
+  receiver CPUAPP
+  `3e12402d90cff3a66d278edde2df6c5e083e76820f7825750979d437426baec5`).
+  Before it, `rh3-modeb-sdc-tsmode-20260907`. Its authoritative
+  `images.json` hashes are source CPUAPP (timestamp-mode
   app, uncommitted ModeA12 change)
   `80d621db941f3a5df2fad99c54ddf201d116792fff22e51ccaf1a027f6867422`,
   source CPUNET (SDC, uncommitted ModeA10 rework)
