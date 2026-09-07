@@ -41,7 +41,7 @@ immutable IDs, results, hashes, or historical execution wording.
   pin a CPUAPP hash from an earlier commit as a future expected value.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now thirty-eight: thirty-one failed,
+- Retained top-level physical-run count is now thirty-nine: thirty-two failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
@@ -67,7 +67,29 @@ immutable IDs, results, hashes, or historical execution wording.
   `/tmp/opencode/hil-runs/rh3-modeb-sdc-txout6-20260907/`; do not rerun it.
   Canonical record:
   `docs/development/system-hil-rh3-modea11-sdc-txout6-result.md`.
-- Latest direct RH3 SDC completion-driven readback fix-validation
+- Latest direct RH3 raw readback diagnostic:
+  `rh3-modeb-sdc-rbdiag-20260907` ran exactly once with the ModeA15
+  instrumented build (six additive status fields: rb envelope + pin_last).
+  Outcome as predicted: collapse reproduced (`rx_valid=167` of 12644,
+  `plc=28812`), but the raw values were decisive: `rb_cnt=12642` readbacks
+  spanning exactly `rb_max - rb_first = 126410000 us` (9999.05 us mean
+  advance per readback - the readback IS the controller CIG event grid,
+  no wrap, no domain anomaly), and `pin_last - rb_last = +20000 us`
+  (two intervals) at the final record - the pins were ON the grid for the
+  whole stream. The collapse mechanism is now classified: HCI-level
+  completions fire instantly (out=0 at the active snapshot, 29 submissions
+  with 29 completions in the first second), the outstanding target never
+  throttles, the host free-runs and pins the whole 126 s event grid into
+  the controller within seconds, and the controller flushes
+  far-future-pinned SDUs to free buffers without airing them (sub=12644,
+  sf=0, only 167 aired). Classified fix: ModeA16 grid bound - allow the
+  next pinned send only while its pin stays within 4 events of the last
+  readback event (controller-grid-anchored; no host clock, no offset, no
+  stale-pin guard; reproduces the ModeA12 delivery regime). Canonical
+  record: `docs/development/system-hil-rh3-modea15-rbdiag-result.md`.
+  Preserve `/tmp/opencode/hil-runs/rh3-modeb-sdc-rbdiag-20260907/`; do not
+  rerun it.
+- Prior direct RH3 SDC completion-driven readback fix-validation
   diagnostic: `rh3-modeb-sdc-compreadback-20260907` ran exactly once with
   the ModeA14 source build (completion-driven readback chain, no
   host-side gate) and the normal current-HEAD receiver image. The outer
@@ -286,7 +308,16 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- The latest runner-owned flash is `rh3-modeb-sdc-compreadback-20260907`.
+- The latest runner-owned flash is `rh3-modeb-sdc-rbdiag-20260907`. Its
+  authoritative `images.json` hashes are source CPUAPP (ModeA15
+  instrumented build)
+  `32165c7543b86143510068cd027e4992ad0c318051ffe8840211faa9632f86a3`,
+  source CPUNET (SDC, uncommitted ModeA10 rework)
+  `19ffe5d4cfa7f7071f9b5f5211f88ff9a9505c75ce410eb67c0c3baa771f4656`,
+  receiver CPUAPP (normal current-HEAD `6467e84`)
+  `3e12402d90cff3a66d278edde2df6c5e083e76820f7825750979d437426baec5`,
+  and FLPR `45ab8d15...`.
+- The prior runner-owned flash was `rh3-modeb-sdc-compreadback-20260907`.
   Its authoritative `images.json` hashes are source CPUAPP
   (completion-driven timestamp-mode app, uncommitted ModeA14 change)
   `4f2334f8e6a204be8b5c3a70ea0d867b27c7067fb12b80c1b67bc9f5daf3fe6e`,
