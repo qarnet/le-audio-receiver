@@ -41,7 +41,7 @@ immutable IDs, results, hashes, or historical execution wording.
   pin a CPUAPP hash from an earlier commit as a future expected value.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now forty: thirty-three failed,
+- Retained top-level physical-run count is now forty-two: thirty-five failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
@@ -67,7 +67,30 @@ immutable IDs, results, hashes, or historical execution wording.
   `/tmp/opencode/hil-runs/rh3-modeb-sdc-txout6-20260907/`; do not rerun it.
   Canonical record:
   `docs/development/system-hil-rh3-modea11-sdc-txout6-result.md`.
-- Latest direct RH3 SDC grid-bound fix-validation diagnostic:
+- Latest direct RH3 SDC lead-window + air-side diagnostics:
+  `rh3-modeb-sdc-leadwin-20260908` (ModeA17) and
+  `rh3-modeb-sdc-airdiag-20260908` (ModeA18) each ran exactly once.
+  ModeA17 implemented the documented Nordic lead-window pattern
+  (per-readback offset resync, 3 ms lead-target submission): the window
+  discipline held perfectly by its own instrumentation (`pin_adv=1`,
+  `pin_last - rb_last = 10000 us` exactly one interval in every record)
+  and delivery collapsed further (`rx_valid=3` of 12644, `plc=38616`).
+  ModeA18 added HCI LE_Read_ISO_TX_Sync (air-side ground truth): the
+  controller reports `air_cnt=1` for the whole stream - it AIRED ONLY
+  THE FIRST EVENT while the assigned-schedule readback advanced across
+  all 12643 scheduled SDUs. The seven-run chain (ModeA12-18) is
+  complete with per-SDU controller-confirmed evidence: under every
+  pins-based host submission pattern except ModeA12's degenerate
+  host-clock pacing, the SDC central accepts, schedules, and
+  HCI-completes every pinned SDU but transmits only the first event.
+  The mechanism is inside the SDC central ISO TX pipeline; the host-side
+  design space is exhausted. Next escalation (user-directed): DevZone
+  question with the complete chain (crisp controller-confirmed
+  statement available) and/or HCI wire capture (btmon monitor UART /
+  J-Link). Canonical record:
+  `docs/development/system-hil-rh3-modea17-leadwin-result.md`.
+  Preserve both evidence roots; do not rerun these IDs.
+- Prior direct RH3 SDC grid-bound fix-validation diagnostic:
   `rh3-modeb-sdc-rbbound-20260907` ran exactly once with the ModeA16
   build (completion-driven readback chain plus a 4-event grid bound on
   the next pin) and the normal current-HEAD receiver image. The outer
@@ -332,10 +355,20 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- The latest runner-owned flash is `rh3-modeb-sdc-rbbound-20260907`. Its
-  authoritative `images.json` hashes are source CPUAPP (ModeA16
-  grid-bound build)
-  `f9a5144a9e53a40c6e3c15ee8e55a93432145847f8327c101f8d8d53bad09c8c`,
+- The latest runner-owned flash is `rh3-modeb-sdc-airdiag-20260908`. Its
+  authoritative `images.json` hashes are source CPUAPP (ModeA18
+  air-poll build)
+  `d5e986181f2c079e15753430effec3d7e73ce872d71df009ea5a34bb72354733`,
+  source CPUNET (SDC, uncommitted ModeA10 rework)
+  `19ffe5d4cfa7f7071f9b5f5211f88ff9a9505c75ce410eb67c0c3baa771f4656`,
+  receiver CPUAPP (normal current-HEAD `998a404`)
+  `58301eee9fc6ead8fd281e64b633dd7a6823a0c81ebc5b17539e0f93dd95d588`,
+  and FLPR `45ab8d15...`. Before it,
+  `rh3-modeb-sdc-leadwin-20260908` (ModeA17 build
+  `3faeee5e17735e299be19e3adb7ac2765f6174d5b9613518cde87522a308d85f`),
+  and before that `rh3-modeb-sdc-rbbound-20260907` (ModeA16
+  grid-bound build
+  `f9a5144a9e53a40c6e3c15ee8e55a93432145847f8327c101f8d8d53bad09c8c`),
   source CPUNET (SDC, uncommitted ModeA10 rework)
   `19ffe5d4cfa7f7071f9b5f5211f88ff9a9505c75ce410eb67c0c3baa771f4656`,
   receiver CPUAPP (normal current-HEAD `2a944fe`)
