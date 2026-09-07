@@ -41,11 +41,34 @@ immutable IDs, results, hashes, or historical execution wording.
   pin a CPUAPP hash from an earlier commit as a future expected value.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now thirty-three: twenty-six failed,
+- Retained top-level physical-run count is now thirty-four: twenty-seven failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
-  acceptance evidence.
+  acceptance evidence. The newest direct run is the ModeA9 SN_STRICT
+  validation below; it failed frozen limits and is not acceptance.
+- Latest direct RH3 SN_STRICT validation diagnostic:
+  `rh3-modeb-snstrict-20260904` ran exactly once with the staged source CPUNET
+  overlay `CONFIG_BT_CTLR_ISOAL_SN_STRICT=n` (the only uncommitted source-tree
+  change at preflight) and the normal current-HEAD receiver image. The outer
+  command returned `status=0`; `result.json` records `outcome=failed` at
+  `session end` with runner-validated frozen transport-limit failures: slot 0
+  `rx_valid=10141` below `11379` and `plc=14800` above `1754` (5% of
+  `decoded=35082`). The source completed its full lifecycle with terminal
+  `pass` (`sub=12644`, `sc=12000`, `sf=0`), the active FLPR snapshot was
+  `ACTIVE` with `submit=55 success=55`, receiver QoS retained `phy 0x02`,
+  `sdu 240`, `rtn 5`, and the ISO tail retained `nse=6`, `c_max_pdu=240`,
+  `c_phy=2`, `crc_error=2`, `rx_unreceived=7231`. Delivery recovered from the
+  `113`-valid collapse to `10141` valid (80.2%): strict-sequence payload
+  expiry is confirmed as the dominant loss mechanism, but ~20% residual SDU
+  loss and a ~34% stream stretch remain, so the row still fails frozen limits
+  and the outcome selects the handoff's "other boundary" arm (record,
+  classify, stop). The staged overlay line stays uncommitted; the next lever
+  (`CONFIG_BT_CTLR_ISOAL_PSN_IGNORE=y`) or the larger fixture SDC switch is a
+  user decision. The full RH3 matrix stays blocked behind a passing Mode B
+  row. Preserve `/tmp/opencode/hil-runs/rh3-modeb-snstrict-20260904/`; do not
+  rerun it. Canonical record:
+  `docs/development/system-hil-rh3-modea9-snstrict-result.md`.
 - Latest matrix attempt: `rh3-matrix-20260903-rh3a` ran once under frozen
   transport limits. The outer command returned `matrix_status=1`; aggregate
   result was `failed` with 14 scheduled children, 2 attempted and completed,
@@ -179,7 +202,20 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- The latest runner-owned flash is `rh3-modeb-txout6-20260904`. Its authoritative
+- The latest runner-owned flash is `rh3-modeb-snstrict-20260904`. Its
+  authoritative `images.json` hashes are source CPUAPP
+  `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333`, source
+  diagnostic CPUNET (SN_STRICT=n)
+  `696d4c4f320c56e9ddde1d040f9a8cf3251e8c673432f043e0866448a8aec`, receiver
+  CPUAPP (normal current-HEAD `87b1413`)
+  `b1ed65df7ade58e2c7b79b463ab1fa57bf9a22e2c3f7332987cdc620ed4285c9`, and FLPR
+  `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`. The
+  diagnostic source build proved `CONFIG_BT_CTLR_ISOAL_SN_STRICT` unset with
+  `CONFIG_BT_LL_SW_SPLIT=y` retained; the normal receiver build proved
+  `CONFIG_AUDIO_OFFLOAD_ASRC=y` and `CONFIG_BT_ISO_RX_BUF_COUNT=3`. No normal
+  source restoration build ran after it; the source fixture keeps the
+  SN_STRICT=n CPUNET image until the user decision.
+- The prior runner-owned flash was `rh3-modeb-txout6-20260904`. Its authoritative
   `images.json` hashes are source diagnostic CPUAPP
   `056614d14ecd4e3c6f78c57915b035e80ef2ceb37aeccbb9154936b6e6157552`, source
   CPUNET `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`,
