@@ -250,3 +250,21 @@ Post-restoration free space was `163680931840` bytes (`152.4 GiB`), above the
 
 Do not reuse or rerun this ID. Any next physical diagnostic needs a new
 reviewed handoff and must preserve this evidence unchanged.
+
+## Correction note (appended 2026-09-07, after the ModeA9 SN_STRICT validation)
+
+The "scored-onset correlation" conclusion above is WRONG and is superseded by
+the corrected analysis recorded in
+`docs/development/system-hil-session-state-20260904.md` and validated by
+`docs/development/system-hil-rh3-modea9-snstrict-result.md`. The per-second
+HILRX lines log `t=<k_uptime/1000>` (uptime since boot), not time since
+streaming start; streaming began at uptime ~9 s. Corrected profile: delivery
+was never healthy (first nine events LOST, 23% LOST in the best second),
+degrades monotonically to zero over ~2.5 s of streaming, and stays zero. The
+"last valid seq 140 vs scored onset seq 144" was a coincidence artifact (the
+7.5 ms runs die at seq 24, far before scored onset; scored onset is fixed in
+samples = 1.44 s wall in all profiles, so it cannot align with a fixed wall
+time across profiles). The supported mechanism is progressive ISO-AL
+strict-sequencing payload expiry under a completion-paced host, not scored
+content. All original observations, counters, hashes, and tables above are
+retained unchanged; only this conclusion is corrected.

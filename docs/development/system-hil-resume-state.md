@@ -41,12 +41,34 @@ immutable IDs, results, hashes, or historical execution wording.
   pin a CPUAPP hash from an earlier commit as a future expected value.
 - `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
   must not be committed.
-- Retained top-level physical-run count is now thirty-four: twenty-seven failed,
+- Retained top-level physical-run count is now thirty-five: twenty-eight failed,
   one cancelled, and six passed direct diagnostic/control executions. Matrix
   child rows remain counted in their matrix aggregate, not as additional
   top-level direct runs. H40 and H42 are passed bounded diagnostics, not
-  acceptance evidence. The newest direct run is the ModeA9 SN_STRICT
-  validation below; it failed frozen limits and is not acceptance.
+  acceptance evidence. The newest direct runs are the ModeA9 SN_STRICT
+  validation and the ModeA10 SDC switch validation below; both failed frozen
+  limits and are not acceptance.
+- Latest direct RH3 SDC fixture validation diagnostic:
+  `rh3-modeb-sdc-20260907` ran exactly once with the uncommitted ModeA10 SDC
+  net-core rework (repo overlay
+  `hil/source/app/overlay-nrf5340_cpunet_sdc.conf`, sysbuild.cmake SDC branch,
+  comment updates) and the normal current-HEAD receiver image. The outer
+  command returned `status=0`; `result.json` records `outcome=failed` at
+  `session end` with a single runner-validated frozen-limit failure: slot 0
+  `plc=2378` above `1383` (5% of `decoded=27664`). Delivery recovered to
+  near-perfect: `rx_valid=12643` of `12644` (no rx_valid violation),
+  controller `rx_unreceived=8`, `crc_error=6`, and `plc=2378` equals exactly
+  `2 x rx_lost=1189` (empty-event concealment only). SDC scheduled a much
+  tighter CIG (`cig_sync_us=4146`, `nse=3`, ~41% duty versus SW-split's
+  ~82%). Classified: fixture defect, completion-paced host refill versus SDC
+  event preparation at outstanding target 3 (active snapshot `out=2`, zero
+  margin). Fix follows from the mechanism: deepen the committed TX
+  outstanding target to 6 via `tests/hil/source-txout6.conf` (ModeA11
+  fix-validation handoff
+  `docs/development/system-hil-rh3-modea11-sdc-txout6-handoff.md`). The SDC
+  rework stays uncommitted pending a passing row. Preserve
+  `/tmp/opencode/hil-runs/rh3-modeb-sdc-20260907/`; do not rerun it. Canonical
+  record: `docs/development/system-hil-rh3-modea10-sdc-result.md`.
 - Latest direct RH3 SN_STRICT validation diagnostic:
   `rh3-modeb-snstrict-20260904` ran exactly once with the staged source CPUNET
   overlay `CONFIG_BT_CTLR_ISOAL_SN_STRICT=n` (the only uncommitted source-tree
@@ -202,7 +224,22 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- The latest runner-owned flash is `rh3-modeb-snstrict-20260904`. Its
+- The latest runner-owned flash is `rh3-modeb-sdc-20260907`. Its authoritative
+  `images.json` hashes are source CPUAPP
+  `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333`, source
+  CPUNET (SDC, uncommitted ModeA10 rework)
+  `19ffe5d4cfa7f7071f9b5f5211f88ff9a9505c75ce410eb67c0c3baa771f4656`, receiver
+  CPUAPP (normal current-HEAD `3bb585f`)
+  `49d22c3a3cd089221b1963150db3dd8a602e19eeeab85434794b75da0944c66e`, and FLPR
+  `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`. The
+  diagnostic source build proved the SDC block
+  (`CONFIG_BT_LL_SOFTDEVICE=y`, `CONFIG_BT_CTLR_CENTRAL_ISO=y`,
+  `CONFIG_BT_CTLR_SDC_PERIPHERAL_COUNT=0`, both SDC ISO TX buffer counts 6,
+  `CONFIG_BT_CTLR_TX_PWR_PLUS_3=y`) with the app core unchanged
+  (`CONFIG_HIL_SOURCE_QOS_RTN=5`, `CONFIG_HIL_SOURCE_QOS_PHY=2`,
+  `CONFIG_HIL_SOURCE_TX_OUTSTANDING_TARGET=3`); the normal receiver build
+  proved `CONFIG_AUDIO_OFFLOAD_ASRC=y` and `CONFIG_BT_ISO_RX_BUF_COUNT=3`.
+- The prior runner-owned flash was `rh3-modeb-snstrict-20260904`. Its
   authoritative `images.json` hashes are source CPUAPP
   `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333`, source
   diagnostic CPUNET (SN_STRICT=n)
@@ -215,19 +252,6 @@ immutable IDs, results, hashes, or historical execution wording.
   `CONFIG_AUDIO_OFFLOAD_ASRC=y` and `CONFIG_BT_ISO_RX_BUF_COUNT=3`. No normal
   source restoration build ran after it; the source fixture keeps the
   SN_STRICT=n CPUNET image until the user decision.
-- The prior runner-owned flash was `rh3-modeb-txout6-20260904`. Its authoritative
-  `images.json` hashes are source diagnostic CPUAPP
-  `056614d14ecd4e3c6f78c57915b035e80ef2ceb37aeccbb9154936b6e6157552`, source
-  CPUNET `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`,
-  receiver CPUAPP `1a39c8eac3c1c058ef835e40360c3a7c9bb1f6995949f1bf2cb234a5e1cf16e3`,
-  and FLPR `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
-  The diagnostic source build proved `CONFIG_HIL_SOURCE_TX_OUTSTANDING_TARGET=6`,
-  `CONFIG_HIL_SOURCE_QOS_PHY=2`, and `CONFIG_HIL_SOURCE_QOS_RTN=5`; the normal
-  receiver build proved
-  `CONFIG_AUDIO_OFFLOAD_ASRC=y` and `CONFIG_BT_ISO_RX_BUF_COUNT=3`. A later
-  local normal source build proved `CONFIG_HIL_SOURCE_TX_OUTSTANDING_TARGET=3`,
-  `CONFIG_HIL_SOURCE_QOS_PHY=2`, and `CONFIG_HIL_SOURCE_QOS_RTN=5`; it did not
-  flash either target.
 - The prior runner-owned flash was `rh3-modeb-phy1m-20260904`. Its authoritative
   `images.json` hashes are source diagnostic CPUAPP
   `f484d97fc89d826ccf9e71955e84532a80d28d8d44a0b3d2b0710780ff67bdb0`, source
