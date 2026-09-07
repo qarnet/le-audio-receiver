@@ -1,23 +1,31 @@
 # RH3 ModeA17/18 lead-window and air-side diagnostic results
 
 Status: two completed one-run diagnostics that close the host-side
-investigation with per-SDU ground truth. ModeA17
-(`rh3-modeb-sdc-leadwin-20260908`) implemented the documented Nordic
-lead-window pattern (per-readback offset resync, 3000 us lead-target
-submission, genuinely-past-pin guard): the window discipline held
-perfectly by its own instrumentation (`pin_adv=1`,
+investigation. ModeA17 (`rh3-modeb-sdc-leadwin-20260908`) implemented
+the documented Nordic lead-window pattern (per-readback offset resync,
+3000 us lead-target submission, genuinely-past-pin guard): the window
+discipline held perfectly by its own instrumentation (`pin_adv=1`,
 `pin_last - rb_last = 10000 us` = exactly one interval in every status
 record) and delivery collapsed FURTHER (`rx_valid=3` of 12644,
-`plc=38616`). ModeA18 (`rh3-modeb-sdc-airdiag-20260908`) added the
-air-side ground truth through HCI LE_Read_ISO_TX_Sync
-(`bt_bap_stream_get_tx_sync`): the controller reports the LAST AIRED
-SDU as the FIRST event of the stream (`air_last` froze at the first
-event's timestamp, `air_cnt=1`) while the assigned-schedule readback
-advanced across all 12643 scheduled SDUs. The controller itself
-confirms: after the first ISO event, NOTHING went on air, while every
-pinned SDU was accepted, scheduled, and HCI-completed. Not acceptance;
-the host-side design space is exhausted with direct evidence at every
-step.
+`plc=38616`). ModeA18 (`rh3-modeb-sdc-airdiag-20260908`) added an
+HCI LE_Read_ISO_TX_Sync poll to the status record.
+
+MEASUREMENT SEMANTICS CORRECTION (2026-09-08, validation research):
+per DRGN-21293 the LE Read ISO TX Sync `TX_Time_Stamp` is "the SDU
+synchronization reference of the SDU previously SCHEDULED for
+transmission" - schedule semantics, not proof of airing. The `air_*`
+fields therefore confirm the controller's schedule position (frozen at
+the first event in the final record), NOT an on-air count, and this
+result doc's earlier wording overstated them. The authoritative on-air
+evidence remains the RECEIVER's ISO counters, unchanged across all
+runs: `rx_valid=3` of 12644 submitted with `rx_lost=19308` and
+controller-side `rx_unreceived` near-total, with `crc_error=0` - the
+link delivers essentially nothing while the central accepts
+(HCI-completes every SDU) and schedules (readback grid advances 10 ms
+per SDU across the whole stream) everything. The conclusion stands on
+the receiver-side counters; the ModeA18 `air_*` fields corroborate the
+schedule side only. Not acceptance; the host-side design space is
+exhausted with direct evidence at every step.
 
 ## The seven-run chain (ModeA12-18)
 
@@ -29,7 +37,7 @@ step.
 | ModeA15 | free-run (diagnostic) | yes (GAP=2 int) | n/a | 167 |
 | ModeA16 | free-run, 4-event grid bound | yes (GAP<=2 int) | n/a | 168 |
 | ModeA17 | 3 ms lead-window, per-readback resync | yes (GAP=1 int, pin_adv=1) | n/a | 3 |
-| ModeA18 | same + air-side poll | yes (GAP=1 int, pin_adv=1) | **first event only, air_cnt=1** | 3 |
+| ModeA18 | same + TX_Sync poll | yes (GAP=1 int, pin_adv=1) | schedule ref frozen at first event (schedule semantics per DRGN-21293) | 3 |
 
 Established facts, all from runner-retained evidence:
 
@@ -40,12 +48,17 @@ Established facts, all from runner-retained evidence:
 3. The controller assigned every pinned SDU to the event we pinned
    (`pin_last - rb_last` = the expected 1-2 intervals in every
    configuration).
-4. The controller AIRED only the first event under every pins-based
-   submission pattern except ModeA12's degenerate host-clock pacing
-   (which delivered 12643 with a 2040-times-advanced pin schedule).
-5. The LE_Read_ISO_TX_Sync air-side truth (ModeA18): after the first
-   event nothing transmitted, for the entire 2-minute stream, while
-   scheduling continued.
+4. The receiver received only the first ~1.7 s of audio under every
+   pins-based submission pattern except ModeA12's degenerate
+   host-clock pacing (which delivered 12643 with a
+   2040-times-advanced pin schedule); the receiver's ISO counters
+   (rx_valid, rx_lost, rx_unreceived, zero CRC errors) are the
+   authoritative on-air evidence.
+5. The ModeA18 LE_Read_ISO_TX_Sync fields show the controller's
+   schedule reference frozen at the first event while its assigned
+   readback advanced across all 12643 scheduled SDUs (schedule
+   semantics per DRGN-21293; corroborates, does not replace, the
+   receiver-side evidence).
 
 The remaining mechanism lives inside the SoftDevice Controller's
 central ISO TX pipeline for timestamp-provisioned SDUs on this
@@ -78,11 +91,14 @@ Source CPUAPP `d5e986181f2c079e15753430effec3d7e73ce872d71df009ea5a34bb72354733`
 (air-poll build; same behavior as ModeA17 plus the diagnostic), CPUNET
 unchanged, receiver CPUAPP `58301eee...`, FLPR `45ab8d15...`. Terminal
 pass with sub=12644; receiver `rx_valid=3`, `plc=38616`,
-`rx_lost=19308`. Status fields: active snapshot
-`air_last=19658572, air_cnt=1`; final record identical
-(`air_last` frozen at the first event, `air_cnt=1`): the controller
-aired exactly one SDU. Native Twister 70/70 x3, byte-identical double
-builds, host regression 257 passed, only the documented notices.
+`rx_lost=19308` (the authoritative on-air evidence). Status fields:
+active snapshot and final record both show the TX_Sync schedule
+reference frozen at the first event's timestamp while `rb_cnt`
+advanced across the whole stream (per DRGN-21293 the TX_Sync value is
+the schedule reference of the last scheduled SDU; its freeze at the
+first event corroborates the receiver's near-zero delivery). Native
+Twister 70/70 x3, byte-identical double builds, host regression 257
+passed, only the documented notices.
 
 ## Stop point and escalation
 
@@ -101,10 +117,24 @@ followed to the boundary of what the host can observe:
    J-Link RTT/monitor on the app core), and/or the DevZone question
    with this complete seven-run chain.
 
-The recommended next action: post the chain to DevZone (the question
-now has a crisp, controller-confirmed statement: "SDC central on
-nRF5340 hci_ipc accepts and schedules timestamp-pinned ISO SDUs for
-the whole stream but airs only the first event, per its own
-LE_Read_ISO_TX_Sync"), while preparing the btmon capture as the
-parallel confirmation. Everything stays uncommitted pending the user's
+The recommended next action: post the chain to DevZone. The
+validation checklist (user-directed, 2026-09-08) is complete:
+nRF5340 Isochronous Channels is "Supported" in the official software
+maturity table (no caveat, no experimental flag; the ISO-encryption
+footnote is nRF52-only); the timestamp-mode chain we implement is the
+documented preferred flow and the proven iso_time_sync/nrf5340_audio
+pattern; the SDC limitations list, the known-issue lists (DRGN-23776
+encrypted-CIS-central MIC is FIXED in our exact v3.3.0 changelog
+block), and the nRF5340 silicon errata (Rev 1/Eng A/Eng D) contain no
+matching entry; and the v3.3.1/v3.3.3/v3.4.0/main SDC changelogs
+contain no fix matching this signature. Sources are recorded in the
+DevZone draft document. The crisp statement for the post: "SDC central
+on nRF5340 hci_ipc (NCS v3.3.0) accepts (HCI-completes) and schedules
+(VS readback grid) every timestamp-pinned ISO SDU for a 2-minute
+BAP 48_4_1 10 ms Mode B stream, but the SDC-peripheral receiver
+receives only the first ~1.7 s of payloads with zero CRC errors -
+under five different host submission disciplines; the same receiver
+delivers 12643/12644 from the same central under a host-clock-paced
+(non-grid-disciplined) submission pattern, and passes the same shape
+from Linux SDC centrals." Everything stays uncommitted pending the user's
 decision. Preserve both evidence roots; do not rerun these IDs.
