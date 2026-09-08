@@ -1,17 +1,20 @@
 # RH3 ModeA16 handoff: readback-anchored grid bound
 
-Status: approved one-run fix-validation diagnostic. Implements the
-classification from the ModeA15 raw readback diagnostic
-(`docs/development/system-hil-rh3-modea15-rbdiag-result.md`): the
-readback values ARE the controller's CIG event grid (9999.05 us mean
-advance across 12642 samples), the pins were ON that grid for the whole
-stream (`pin_last - rb_last = 2 intervals`), and the collapse came from
-the host free-running - HCI-level completions fire the instant the
-controller ACCEPTS an SDU, the outstanding target never throttles, and
-the controller flushes far-future-pinned SDUs to free buffers without
-airing them.
+> [!WARNING]
+> Historical, completed diagnostic plan. Do not execute it against the current
+> source. Its controller-flush classification and next actions are superseded
+> by
+> [system-hil-rh3-controller-clock-result.md](system-hil-rh3-controller-clock-result.md).
 
-## What changed (already implemented and software-verified)
+Status: historical completed plan. It originally approved one fix-validation
+diagnostic implementing the ModeA15 classification. ModeA15 recorded a
+9999.05 us mean readback advance across 12642 samples, a two-interval
+`pin_last - rb_last` relation, HCI completions that kept `out=0`, and only 167
+valid SDUs at the receiver. The plan attributed this combination to
+future-pinned buffer saturation. Later evidence showed that attribution was not
+unique.
+
+## Historical implementation
 
 In `hil/source/app/src/hil_source_app.c`, the base-wait block became a
 two-condition gate, both keyed to the controller grid (never the host

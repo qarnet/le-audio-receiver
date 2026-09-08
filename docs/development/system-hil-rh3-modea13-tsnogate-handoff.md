@@ -1,6 +1,12 @@
 # RH3 ModeA13 handoff: timestamp-mode without the host-side time gate
 
-Status: approved one-run fix-validation diagnostic. Removes the
+> [!WARNING]
+> Historical, completed diagnostic plan. Do not execute it against the current
+> source. Its classification arms are superseded by
+> [system-hil-rh3-controller-clock-result.md](system-hil-rh3-controller-clock-result.md).
+
+Status: historical completed plan. It originally approved one fix-validation
+diagnostic that removed the
 host-side time gate that the ModeA12 hardware run
 (`docs/development/system-hil-rh3-modea12-tsmode-result.md`) convicted
 with its own counter (`pin_adv=2040` guard fires correlating with

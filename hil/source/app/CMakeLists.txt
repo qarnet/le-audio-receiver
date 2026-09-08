@@ -16,6 +16,7 @@ project(hil_source_app)
 target_sources(app PRIVATE
   src/main.c
   src/hil_source_app.c
+  src/hil_source_controller_time.c
   src/hil_source_output.c
   src/hil_source_tx.c
   src/hil_source_bap.c

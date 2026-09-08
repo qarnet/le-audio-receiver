@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * Scripted fake backend implementation (RH1B native suite).
+ * Scripted fake backend implementation for the native suite.
  */
 
 #include <errno.h>
@@ -15,9 +15,12 @@
 #include <zephyr/kernel.h>
 
 #include "fake_hil_source_backend.h"
+#include "hil_source_signal.h"
 #include "hil_source_types.h"
 
-#define FAKE_LEDGER_MAX 4096
+/* Maximum-shape Mode A reconnect coverage records both streams across two
+ * 20000-SDU scored segments before inspecting the final public status. */
+#define FAKE_LEDGER_MAX 100000
 
 static struct fake_record ledger[FAKE_LEDGER_MAX];
 static uint32_t ledger_count;
@@ -352,7 +355,8 @@ static int fake_tx_send(uint8_t stream_idx, uint16_t seq, const uint8_t *sdu, si
 	if (stream_idx < 2U) {
 		send_count[stream_idx]++;
 		if (depth_target_signal != NULL && stream_idx == depth_target_stream &&
-		    send_count[stream_idx] == HIL_SOURCE_TX_OUTSTANDING_TARGET) {
+		    send_count[stream_idx] - sent_count[stream_idx] ==
+			    HIL_SOURCE_TX_OUTSTANDING_TARGET) {
 			struct k_sem *sem = depth_target_signal;
 
 			depth_target_signal = NULL;
@@ -367,6 +371,121 @@ static int fake_tx_send(uint8_t stream_idx, uint16_t seq, const uint8_t *sdu, si
 		}
 	}
 	return kick_results[FAKE_OP_TX_SEND];
+}
+
+/* Fake timestamp state records the last pinned timestamp per stream and
+ * scripts the readback sequence. The default readback advances
+ * one SDU interval (10000 us) per call from a fixed base so tests observe
+ * monotonically advancing pins without real HCI. */
+static uint32_t fake_ts_last_[2];
+static uint32_t fake_ts_send_count_[2];
+static uint32_t fake_ts_readback_calls[2];
+static uint32_t fake_ts_readback_base;
+static int fake_ts_readback_result;
+static uint32_t fake_controller_time_base;
+static int32_t fake_controller_initial_offset_us;
+static int32_t fake_controller_peer_submit_offset_us;
+static bool fake_controller_time_frozen;
+static int fake_controller_time_result;
+static uint32_t fake_controller_time_calls;
+
+static void fake_controller_time_set(uint32_t time_us)
+{
+	fake_controller_time_base = time_us;
+}
+
+static int fake_tx_time_get(uint32_t *time_us)
+{
+	fake_controller_time_calls++;
+	if (fake_controller_time_result != 0) {
+		return fake_controller_time_result;
+	}
+	if (time_us == NULL) {
+		return -EINVAL;
+	}
+	/* Virtual controller time advances after each completed semantic batch.
+	 * Keeping reads stable makes native behavior independent of host load. */
+	*time_us = fake_controller_time_base;
+	return 0;
+}
+
+static int fake_tx_send_ts(uint8_t stream_idx, uint16_t seq, const uint8_t *sdu, size_t len,
+			   uint32_t ts)
+{
+	record(FAKE_OP_TX_SEND_TS, stream_idx, seq, (uint16_t)len, 0, sdu, 0);
+	if (ledger_count > 0U) {
+		ledger[ledger_count - 1U].ts = ts;
+	}
+	if (stream_idx < 2U) {
+		int result = kick_results[FAKE_OP_TX_SEND_TS];
+
+		send_count[stream_idx]++;
+		fake_ts_send_count_[stream_idx]++;
+		fake_ts_last_[stream_idx] = ts;
+		if (depth_target_signal != NULL && stream_idx == depth_target_stream &&
+		    send_count[stream_idx] - sent_count[stream_idx] ==
+			    HIL_SOURCE_TX_OUTSTANDING_TARGET) {
+			struct k_sem *sem = depth_target_signal;
+
+			depth_target_signal = NULL;
+			k_sem_give(sem);
+		}
+		if (send_signal != NULL && stream_idx == send_signal_stream &&
+		    send_count[stream_idx] == send_signal_target) {
+			struct k_sem *sem = send_signal;
+
+			send_signal = NULL;
+			k_sem_give(sem);
+		}
+		if (result == 0 && !fake_controller_time_frozen && run_mode == HIL_SOURCE_MODE_A &&
+		    stream_idx == 0U && fake_controller_peer_submit_offset_us != 0) {
+			fake_controller_time_base +=
+				(uint32_t)fake_controller_peer_submit_offset_us;
+			fake_controller_peer_submit_offset_us = 0;
+		}
+		if (result == 0 && !fake_controller_time_frozen &&
+		    (run_mode != HIL_SOURCE_MODE_A || stream_idx == 1U)) {
+			uint32_t interval_us = hil_source_profile_frame_duration_us(run_profile);
+
+			fake_controller_time_set(ts + interval_us -
+						 HIL_SOURCE_TX_TS_LEAD_TARGET_US);
+		}
+	}
+	return kick_results[FAKE_OP_TX_SEND_TS];
+}
+
+static int fake_tx_read_sync(uint8_t stream_idx, uint32_t *ts, uint32_t *seq)
+{
+	record(FAKE_OP_TX_READ_SYNC, stream_idx, 0, 0, 0, NULL, 0);
+	if (ts == NULL || seq == NULL || stream_idx >= 2U) {
+		return -EINVAL;
+	}
+	if (fake_ts_last_[stream_idx] == 0U) {
+		return -ENOTCONN;
+	}
+	*ts = fake_ts_last_[stream_idx];
+	*seq = fake_ts_send_count_[stream_idx];
+	return 0;
+}
+
+static int fake_tx_read_tx_ts(uint8_t stream_idx, uint32_t *ts)
+{
+	record(FAKE_OP_TX_READ_TX_TS, stream_idx, 0, 0, 0, NULL, 0);
+	if (fake_ts_readback_result != 0) {
+		return fake_ts_readback_result;
+	}
+	if (ts == NULL || stream_idx >= 2U) {
+		return -EINVAL;
+	}
+	fake_ts_readback_calls[stream_idx]++;
+	*ts = fake_ts_readback_base + (fake_ts_readback_calls[stream_idx] - 1U) *
+					      hil_source_profile_frame_duration_us(run_profile);
+	/* Position default controller-now exactly at gate opening. Tests can
+	 * add one initial offset to exercise stale-pin catch-up and wrap. */
+	fake_controller_time_set(*ts + hil_source_profile_frame_duration_us(run_profile) -
+				 HIL_SOURCE_TX_TS_LEAD_TARGET_US +
+				 (uint32_t)fake_controller_initial_offset_us);
+	return 0;
 }
 
 static void fake_tx_stop(void)
@@ -507,6 +626,10 @@ static const struct hil_source_backend_ops fake_ops = {
 	.sem_started = fake_sem_started,
 	.op_error = fake_op_error,
 	.tx_send = fake_tx_send,
+	.tx_send_ts = fake_tx_send_ts,
+	.tx_read_tx_ts = fake_tx_read_tx_ts,
+	.tx_time_get = fake_tx_time_get,
+	.tx_read_sync = fake_tx_read_sync,
 	.tx_stop = fake_tx_stop,
 	.kick_disable = fake_kick_disable,
 	.sem_disabled = fake_sem_disabled,
@@ -553,6 +676,20 @@ void fake_backend_reset(void)
 	stream_connect_completion_idx = UINT8_MAX;
 	stream_connect_completion_outcome = HIL_SOURCE_STREAM_CONNECT_OUTCOME_ERROR;
 	memset(kick_results, 0, sizeof(kick_results));
+	fake_ts_last_[0] = 0U;
+	fake_ts_last_[1] = 0U;
+	fake_ts_send_count_[0] = 0U;
+	fake_ts_send_count_[1] = 0U;
+	fake_ts_readback_calls[0] = 0U;
+	fake_ts_readback_calls[1] = 0U;
+	fake_ts_readback_base = 100000U;
+	fake_ts_readback_result = 0;
+	fake_controller_time_base = 0U;
+	fake_controller_initial_offset_us = 0;
+	fake_controller_peer_submit_offset_us = 0;
+	fake_controller_time_frozen = false;
+	fake_controller_time_result = 0;
+	fake_controller_time_calls = 0U;
 	scripted_op_error = 0;
 	scripted_conn_present = false;
 	scripted_attached[0] = scripted_attached[1] = false;
@@ -905,6 +1042,62 @@ uint32_t fake_stream_connect_failure_count(void)
 	count = stream_connect_failure_count;
 	k_spin_unlock(&stream_connect_lock, key);
 	return count;
+}
+
+uint32_t fake_ts_last(uint8_t stream_idx)
+{
+	if (stream_idx >= 2U) {
+		return 0U;
+	}
+	return fake_ts_last_[stream_idx];
+}
+
+uint32_t fake_ts_send_count(uint8_t stream_idx)
+{
+	if (stream_idx >= 2U) {
+		return 0U;
+	}
+	return fake_ts_send_count_[stream_idx];
+}
+
+void fake_ts_set_readback_result(int result)
+{
+	fake_ts_readback_result = result;
+}
+
+void fake_ts_set_readback_base(uint32_t timestamp)
+{
+	fake_ts_readback_base = timestamp;
+}
+
+void fake_ts_set_initial_time_offset(int32_t offset_us)
+{
+	fake_controller_initial_offset_us = offset_us;
+}
+
+void fake_ts_set_peer_submit_offset(int32_t offset_us)
+{
+	fake_controller_peer_submit_offset_us = offset_us;
+}
+
+void fake_ts_set_time_frozen(bool frozen)
+{
+	if (fake_controller_time_frozen && !frozen && fake_ts_last_[0] != 0U) {
+		fake_controller_time_set(fake_ts_last_[0] +
+					 hil_source_profile_frame_duration_us(run_profile) -
+					 HIL_SOURCE_TX_TS_LEAD_TARGET_US);
+	}
+	fake_controller_time_frozen = frozen;
+}
+
+void fake_ts_set_time_result(int result)
+{
+	fake_controller_time_result = result;
+}
+
+uint32_t fake_ts_time_get_count(void)
+{
+	return fake_controller_time_calls;
 }
 
 enum hil_source_mode fake_run_mode(void)

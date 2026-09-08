@@ -3,3 +3,7 @@ tests:
     platform_allow: native_sim/native/64
     integration_platforms:
       - native_sim/native/64
+    # The controller-clock bootstrap waits, the stall/timeout tests, and the
+    # stop-cleanup expiry paths legitimately take tens of seconds of native
+    # wall time; the 60 s default cut the suite short.
+    timeout: 300

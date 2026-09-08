@@ -1,12 +1,48 @@
-# DevZone question draft: SDC central ISO TX collapse under timestamp-mode provisioning (nRF5340)
+# Withdrawn DevZone draft: nRF5340 SDC central ISO TX collapse
 
-Status: DRAFT for user review before posting. Prepared 2026-09-08 after
-the validation checklist (supported feature, documented API usage, known
-issues, errata, newer-SDK fixes) was completed with sources. This
-document contains the question text, the evidence table, and the source
-list. Nothing is posted yet.
+> [!CAUTION]
+> **Do not post this question.** Passing controller-clock source
+> fix-validation invalidated the proposed SDC-defect report. Preserve the text
+> below only as a record of the superseded escalation draft.
 
-## Validation checklist (all verified, sources below)
+Status: **WITHDRAWN on 2026-09-08; nothing was posted.** The old source
+scheduler produced the recorded collapse, but HCI LE Read ISO TX Sync was
+mistakenly described as an aired-SDU counter and the source fixture had not yet
+been validated with its final mirrored controller-clock scheduler at sufficient
+CPU throughput.
+
+## Resolution
+
+The corrected source fixture now:
+
+- mirrors the CPUNET controller clock into application-core RTC0;
+- encodes before waiting for a pinned event;
+- schedules one semantic frame per event with a 3000 us target lead and 2000 us
+  minimum;
+- runs the nRF5340 application core at 128 MHz, matching Nordic Bluetooth ISO
+  and audio examples.
+
+The exact 10 ms Mode B row passed as
+`rh3-modeb-sdc-controller-clock-128mhz-20260908`: all 12644 SDUs submitted,
+12000 scored, zero send failures, zero skipped events, and receiver
+`rx_valid=12644`. The exact 10 ms Mode A row then passed as
+`rh3-modea-sdc-controller-clock-128mhz-20260908`: both streams submitted 12644
+SDUs and scored 12000, zero send failures or skipped events, with receiver
+`rx_valid=12645/12644`. Both rows used the same SDC CPUNET and receiver images.
+
+The immediate 64 MHz baseline of the final scheduler failed its run deadline
+with `sub=10907`, `sc=10763`, and `skip=10185`. Raising only the source CPUAPP
+clock for that scheduler removed the throughput failure. This A/B comparison
+does not assign every older ModeA12-18 failure to one sub-cause, but the passing
+current source proves that the proposed SDC defect is not established.
+
+Canonical result:
+[system-hil-rh3-controller-clock-result.md](system-hil-rh3-controller-clock-result.md).
+
+## Historical validation checklist
+
+The following checks were completed before the draft was withdrawn. They remain
+source-research history, not support for posting the defect claim.
 
 1. Supported feature: nRF5340 Isochronous Channels = "Supported" in the
    official software maturity table (nRF53 tab, no caveat; the
@@ -29,9 +65,9 @@ list. Nothing is posted yet.
    contain no fix matching this signature (CIS-central TX airing under
    timestamp provisioning).
 
-## Proposed question text
+## Withdrawn question text (do not post)
 
-Subject: nRF5340 SDC central CIS TX stops airing after first event under
+Subject: [WITHDRAWN] nRF5340 SDC central CIS TX stops airing after first event under
 timestamp-mode ISO provisioning (NCS v3.3.0) - supported-feature defect
 report
 
@@ -98,7 +134,7 @@ carrying the assigned-timestamp envelope, pin values, and skip counts;
 receiver ISO link-quality counters; full console logs; the exact
 source/receiver image hashes.
 
-## Sources for every claim
+## Historical sources reviewed
 
 1. Software maturity, nRF5340 ISO "Supported": nRF Connect SDK
    documentation, Software maturity levels, Bluetooth features
@@ -132,12 +168,9 @@ source/receiver image hashes.
     docs.nordicsemi.com nRF5340 errata pages (retrieved via Nordic
     documentation MCP, 2026-09-08).
 
-## Before posting (user checklist)
+## Disposition
 
-- [ ] Review the question text (tone, length, DevZone conventions).
-- [ ] Confirm the identity/branding to post under.
-- [ ] Decide whether to attach raw evidence files (per-run status
-      records, console logs) or offer them on request (current text:
-      offer on request).
-- [ ] Post to https://devzone.nordicsemi.com (Bluetooth LE category);
-      record the thread URL in the resume-state afterwards.
+- [x] Cancel posting.
+- [x] Retain historical evidence roots without mutation.
+- [x] Replace defect escalation with the fixed 14-child RH3 matrix validation
+  of the corrected source fixture.

@@ -2,8 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * Real Bluetooth/BAP backend for the dedicated LE Audio source fixture
- * (RH1B).
+ * Real Bluetooth/BAP backend for the dedicated LE Audio source fixture.
  *
  * Static storage: two bt_bap_stream, two sink endpoint pointers, one
  * unicast group, one app-owned connection.  Stream ops are registered
@@ -50,6 +49,7 @@
 
 #include "hil_source_app.h"
 #include "hil_source_bap.h"
+#include "hil_source_controller_time.h"
 #include "hil_source_tx.h"
 
 /* ── static storage ──────────────────────────────────────────────── */
@@ -1306,6 +1306,10 @@ static const struct hil_source_backend_ops production_ops = {
 	.sem_started = bap_sem_started,
 	.op_error = bap_op_error,
 	.tx_send = hil_source_tx_send,
+	.tx_send_ts = hil_source_tx_send_ts,
+	.tx_read_tx_ts = hil_source_tx_read_tx_ts,
+	.tx_time_get = hil_source_controller_time_get,
+	.tx_read_sync = hil_source_tx_read_sync,
 	.tx_stop = hil_source_tx_stop,
 	.kick_disable = bap_kick_disable,
 	.sem_disabled = bap_sem_disabled,

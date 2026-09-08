@@ -651,16 +651,16 @@ Mandatory rows for nRF54L15, 10 ms only:
 | fresh pair | Mode B | `48_4_1` | 12,000 | 120 s |
 | preserved bond | Mode B | `48_4_1` | 12,000 | 120 s |
 
-Every mandatory row is additionally subject to the frozen receiver transport
-limits. The matrix is eight child runs (four rows, two passes).
-
-Add explicit disconnect/reconnect and nRF54L15 FLPR hang/stall recovery rows
-after healthy matrix passes. Fault-injection rows use named windows and cannot
+Every mandatory row is subject to the frozen receiver transport limits. Each
+pass runs these four rows first, then explicit disconnect/reconnect and
+nRF54L15 FLPR hang/stall recovery rows. The fixed matrix is 14 child runs, seven
+rows per pass for two passes. Fault-injection rows use named windows and cannot
 weaken healthy-row warning rules.
 
-Exit: full matrix passes twice from independently established clean state with
-same locked counter rules and no manual intervention. Record verdict
-`TRANSPORT_RUNTIME_ACCEPTED`, never `SYSTEM_AUDIO_ACCEPTED`.
+Exit: all 14 child runs pass in the fixed two-pass schedule from independently
+established clean state with the same locked counter rules and no manual
+intervention. Record verdict `TRANSPORT_RUNTIME_ACCEPTED`, never
+`SYSTEM_AUDIO_ACCEPTED`.
 
 ### RH3-7p5: 7.5 ms delivery loss (named open question, not release-blocking)
 

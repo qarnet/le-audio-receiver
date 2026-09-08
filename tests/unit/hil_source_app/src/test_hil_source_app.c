@@ -2,11 +2,10 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * RH1B native public-boundary suite for the dedicated source app
- * coordinator.
+ * Native public-boundary suite for the dedicated source app coordinator.
  *
  * Compiles the real coordinator + output formatter against the scripted
- * fake backend and the exact RH1A core modules.  Tests prove public
+ * fake backend and the production core modules. Tests prove public
  * behavior: exact ordered HIL1 records, state/counters, the backend
  * operation ledger, cleanup outcomes, output queue validation, and
  * formatter truncation fail-closed behavior.
@@ -601,7 +600,10 @@ static void run_full_lifecycle(enum hil_source_mode mode, enum hil_source_profil
 		zassert_true(state_pairs_match(expect, ARRAY_SIZE(expect), 0U), "state order");
 	}
 	for (i = 0U; i < streams; i++) {
-		zassert_equal(fake_send_count(i), total, "stream send count");
+		/* Stream 0 carries one additional untimestamped CIG-anchor SDU.
+		 * It is outside source `sub` and scored-signal accounting. */
+		zassert_equal(fake_send_count(i), total + ((i == 0U) ? 1U : 0U),
+			      "stream send count");
 	}
 	zassert_equal(fake_kick_count(FAKE_OP_RESET_SEGMENT), 1U, "reset count");
 	zassert_equal(fake_run_mode(), mode, "run shape mode");
@@ -1017,7 +1019,8 @@ ZTEST(hil_source_app, test_modea_stream_connect_transient_failure_retry)
 
 	zassert_true(pump_until_terminal(), "transient retry terminal");
 	zassert_true(cap_terminal("pass"), "transient retry pass");
-	zassert_equal(fake_send_count(0), total, "stream 0 transmitted expected data");
+	zassert_equal(fake_send_count(0), total + 1U,
+		      "stream 0 transmitted expected data plus anchor");
 	zassert_equal(fake_send_count(1), total, "stream 1 transmitted expected data");
 	zassert_equal(fake_stream_connect_accepted_count(), 3U, "three accepted connections");
 	zassert_equal(fake_stream_connect_completion_count(), 2U, "two successful completions");
@@ -1139,7 +1142,8 @@ ZTEST(hil_source_app, test_reconnect_segment)
 
 	zassert_equal(fake_kick_count(FAKE_OP_CONNECT), 2U, "two connects");
 	zassert_equal(fake_kick_count(FAKE_OP_RESET_SEGMENT), 2U, "two resets");
-	zassert_equal(fake_send_count(0), 2U * total, "two segments of sends");
+	zassert_equal(fake_send_count(0), 2U * (total + 1U),
+		      "two segments of sends plus one anchor each");
 
 	/* Explicit TX activation: exactly one activation per segment, and the
 	 * TX stop that separates the two segments cleared the driver so the
@@ -1410,6 +1414,249 @@ ZTEST(hil_source_app, test_error_tx_send)
 	dispatch_idle();
 }
 
+/* ── SDC timestamp-mode provisioning ─────────────────────────────── */
+
+ZTEST(hil_source_app, test_tsmode_first_send_plain_then_pinned)
+{
+	uint32_t total = profile_preamble(HIL_SOURCE_PROFILE_48_4_1) + 10U +
+			 profile_tail(HIL_SOURCE_PROFILE_48_4_1);
+	const struct fake_record *first_plain = NULL;
+	const struct fake_record *first_pinned = NULL;
+	char needle[160];
+
+	scenario_setup(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_configure(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until_terminal(), "terminal");
+	zassert_true(cap_terminal("pass"), "pass");
+
+	{
+		const struct fake_record *ledger = fake_ledger();
+		uint32_t n = fake_ledger_count();
+		uint32_t plain = 0U;
+		uint32_t pinned_sends = 0U;
+		uint32_t i;
+
+		for (i = 0U; i < n; i++) {
+			if (ledger[i].op == FAKE_OP_TX_SEND) {
+				if (first_plain == NULL) {
+					first_plain = &ledger[i];
+				}
+				plain++;
+			} else if (ledger[i].op == FAKE_OP_TX_SEND_TS) {
+				if (first_pinned == NULL) {
+					first_pinned = &ledger[i];
+				}
+				pinned_sends++;
+			}
+		}
+		/* Exactly one untimestamped SDU (the base-learning probe);
+		 * every later SDU is pinned. */
+		zassert_equal(plain, 1U, "exactly one plain first send");
+		zassert_true(pinned_sends + 1U == fake_send_count(0), "all later sends pinned");
+		/* CIS central shares controller timing. One completion-anchored
+		 * readback establishes the full segment grid. */
+		zassert_equal(fake_kick_count(FAKE_OP_TX_READ_TX_TS), 1U,
+			      "one CIG anchor readback");
+		zassert_true(fake_ts_time_get_count() > pinned_sends,
+			     "controller time checked at gate and submission");
+		zassert_not_null(first_plain, "anchor record");
+		zassert_equal(first_plain->stream_idx, 0U, "anchor stream");
+		zassert_equal(first_plain->seq, 0U, "anchor sequence");
+		zassert_not_null(first_pinned, "first regular record");
+		zassert_equal(first_pinned->seq, 1U, "stream 0 sequence follows anchor");
+	}
+	dispatch_status();
+	snprintf(needle, sizeof(needle),
+		 "\"seq\":%u,\"sub\":%u,\"sc\":10,\"sf\":0,\"cb\":%u,\"out\":0",
+		 (unsigned int)(total + 1U), (unsigned int)total, (unsigned int)total);
+	zassert_true(cap_find(needle), "anchor excluded from scored counters");
+	zassert_true(cap_find("\"tx\":{\"anchor\":100000,\"pin\":"), "compact TX diagnostics");
+	zassert_true(cap_find("\"lead\":{\"min\":[3000],\"max\":[3000],\"under\":[0]}"),
+		     "controller-relative lead envelope");
+	dispatch_idle();
+}
+
+ZTEST(hil_source_app, test_tsmode_pins_advance_one_interval)
+{
+	scenario_setup(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_configure(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until_terminal(), "terminal");
+	zassert_true(cap_terminal("pass"), "pass");
+
+	{
+		const struct fake_record *ledger = fake_ledger();
+		uint32_t n = fake_ledger_count();
+		uint32_t prev_ts = 0U;
+		bool have_prev = false;
+		uint32_t i;
+
+		uint32_t first_pin = 0U;
+		bool have_first = false;
+
+		for (i = 0U; i < n; i++) {
+			if (ledger[i].op == FAKE_OP_TX_SEND_TS) {
+				if (!have_first) {
+					first_pin = ledger[i].ts;
+					have_first = true;
+				}
+				if (have_prev) {
+					/* Consecutive pins differ by exactly
+					 * one SDU interval (10000 us for
+					 * 48_4_1): one pinned SDU per ISO
+					 * event. */
+					zassert_equal(ledger[i].ts - prev_ts, 10000U,
+						      "pin advance");
+				}
+				prev_ts = ledger[i].ts;
+				have_prev = true;
+			}
+		}
+		zassert_true(have_prev, "pinned sends exist");
+		zassert_equal(first_pin, 110000U, "first pin follows assigned event");
+	}
+	dispatch_idle();
+}
+
+ZTEST(hil_source_app, test_tsmode_stale_pin_catches_up_one_event)
+{
+	const struct fake_record *ledger;
+	uint32_t i;
+	bool found = false;
+
+	scenario_setup(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	/* Controller-now is one interval later than the normal gate-open time.
+	 * Catch-up must skip one event and submit with 3000 us lead. */
+	fake_ts_set_initial_time_offset(10000);
+	dispatch_configure(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until_terminal(), "terminal");
+	zassert_true(cap_terminal("pass"), "pass");
+
+	ledger = fake_ledger();
+	for (i = 0U; i < fake_ledger_count(); i++) {
+		if (ledger[i].op == FAKE_OP_TX_SEND_TS) {
+			zassert_equal(ledger[i].ts, 120000U, "stale first pin advanced once");
+			found = true;
+			break;
+		}
+	}
+	zassert_true(found, "timestamped send");
+	dispatch_status();
+	zassert_true(cap_find("\"skip\":1"), "one skipped event reported");
+	zassert_true(cap_find("\"lead\":{\"min\":[3000],\"max\":[3000],\"under\":[0]}"),
+		     "catch-up restored target lead");
+	dispatch_idle();
+}
+
+ZTEST(hil_source_app, test_tsmode_wrap_uses_modulo_controller_time)
+{
+	const uint32_t assigned = UINT32_MAX - 5000U;
+	const uint32_t first_expected = assigned + 10000U;
+	const struct fake_record *ledger;
+	uint32_t previous = 0U;
+	uint32_t i;
+	bool have_previous = false;
+
+	scenario_setup(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	fake_ts_set_readback_base(assigned);
+	dispatch_configure(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until_terminal(), "terminal");
+	zassert_true(cap_terminal("pass"), "pass");
+
+	ledger = fake_ledger();
+	for (i = 0U; i < fake_ledger_count(); i++) {
+		if (ledger[i].op != FAKE_OP_TX_SEND_TS) {
+			continue;
+		}
+		if (!have_previous) {
+			zassert_equal(ledger[i].ts, first_expected, "first pin wraps");
+			have_previous = true;
+		} else {
+			zassert_equal(ledger[i].ts - previous, 10000U,
+				      "wrapped pins retain interval");
+		}
+		previous = ledger[i].ts;
+	}
+	zassert_true(have_previous, "timestamped sends");
+	dispatch_idle();
+}
+
+ZTEST(hil_source_app, test_tsmode_readback_error_fails_closed)
+{
+	scenario_setup(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	fake_ts_set_readback_result(-EIO);
+	dispatch_configure(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until_terminal(), "terminal");
+	zassert_true(cap_terminal("fail"), "fail");
+	zassert_equal(fake_send_count(0), 1U, "only anchor submitted");
+	zassert_equal(fake_ts_send_count(0), 0U, "no unanchored regular send");
+	dispatch_status();
+	zassert_true(cap_find("\"first_errno\":-5"), "readback errno preserved");
+	dispatch_idle();
+}
+
+ZTEST(hil_source_app, test_tsmode_controller_time_error_fails_closed)
+{
+	scenario_setup(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	fake_ts_set_time_result(-EIO);
+	dispatch_configure(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until_terminal(), "terminal");
+	zassert_true(cap_terminal("fail"), "fail");
+	zassert_equal(fake_send_count(0), 1U, "only anchor submitted");
+	zassert_equal(fake_ts_send_count(0), 0U, "no send without controller time");
+	dispatch_status();
+	zassert_true(cap_find("\"first_errno\":-5"), "clock errno preserved");
+	dispatch_idle();
+}
+
+ZTEST(hil_source_app, test_tsmode_frozen_controller_time_times_out)
+{
+	bool terminal;
+
+	scenario_setup(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	fake_ts_set_time_frozen(true);
+	dispatch_configure(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	terminal = pump_until(terminal_seen, HIL_SOURCE_TX_PROGRESS_TIMEOUT_MS + 1000U);
+	if (!terminal) {
+		/* Leave the fixture recoverable when running this regression against
+		 * the pre-fix scheduler, which otherwise waits forever. */
+		fake_ts_set_time_frozen(false);
+		zassert_true(pump_until_terminal(), "pre-fix cleanup");
+	}
+	zassert_true(terminal, "frozen controller clock terminates within progress budget");
+	zassert_true(cap_terminal("fail"), "frozen controller clock fails closed");
+	zassert_equal(fake_send_count(0), 2U, "anchor and one regular SDU submitted");
+	zassert_equal(fake_ts_send_count(0), 1U, "no further sends while controller is frozen");
+	dispatch_status();
+	zassert_true(cap_find("\"first_errno\":-110"), "progress timeout preserved");
+	dispatch_idle();
+}
+
+ZTEST(hil_source_app, test_tsmode_modea_late_peer_fails_closed)
+{
+	char needle[48];
+
+	scenario_setup(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	fake_ts_set_peer_submit_offset(1500);
+	dispatch_configure(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until_terminal(), "terminal");
+	zassert_true(cap_terminal("fail"), "fail");
+	zassert_equal(fake_ts_send_count(0), 1U, "stream 0 committed shared pin");
+	zassert_equal(fake_ts_send_count(1), 0U, "late peer not submitted");
+	dispatch_status();
+	snprintf(needle, sizeof(needle), "\"first_errno\":%d", -ETIME);
+	zassert_true(cap_find(needle), "late-peer errno preserved");
+	zassert_true(cap_find("\"under\":[0,1]"), "late peer counted");
+	dispatch_idle();
+}
+
 ZTEST(hil_source_app, test_error_cleanup_continues)
 {
 	uint32_t i;
@@ -1504,6 +1751,38 @@ ZTEST(hil_source_app, test_status_no_mutate)
 	/* The run continues normally after the status query. */
 	zassert_true(pump_until_terminal(), "terminal");
 	zassert_true(cap_terminal("pass"), "pass");
+	dispatch_idle();
+}
+
+static bool modea_outstanding_target_reached(void);
+static bool send_count_one_reached(void);
+
+ZTEST(hil_source_app, test_status_during_streaming_uses_cached_tx_sync)
+{
+	scenario_setup(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	pump_sents_enabled = false;
+	dispatch_configure(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+
+	/* Release only the bootstrap. Regular sends then fill both outstanding
+	 * windows and leave worker blocked in a stable streaming state. */
+	zassert_true(pump_until(send_count_one_reached, 10000U), "anchor send");
+	fake_signal_sent(0);
+	zassert_true(pump_until(modea_outstanding_target_reached, 10000U), "outstanding windows");
+	zassert_equal(fake_kick_count(FAKE_OP_TX_READ_SYNC), 0U, "no TX-sync capture before drain");
+
+	cap_reset();
+	dispatch_status();
+	zassert_true(cap_find("\"command\":\"status\",\"ok\":true"), "status during streaming");
+	zassert_true(cap_find("\"state\":\"streaming\""), "streaming snapshot");
+	zassert_equal(fake_kick_count(FAKE_OP_TX_READ_SYNC), 0U,
+		      "status uses cached telemetry only");
+
+	pump_sents_enabled = true;
+	zassert_true(pump_until_terminal(), "terminal");
+	zassert_true(cap_terminal("pass"), "run survives active status");
+	zassert_equal(fake_kick_count(FAKE_OP_TX_READ_SYNC), 2U,
+		      "worker captures one final sync sample per stream");
 	dispatch_idle();
 }
 
@@ -1656,18 +1935,22 @@ ZTEST(hil_source_app, test_modea_lockstep_and_caps)
 	zassert_true(pump_until_terminal(), "terminal");
 	zassert_true(cap_terminal("pass"), "pass");
 
-	/* Sends strictly alternate L, R, L, R ... (never one stream alone). */
+	/* One plain stream-0 anchor precedes timestamped semantic pairs. */
 	ledger = fake_ledger();
 	n = fake_ledger_count();
 	for (i = 0U; i < n; i++) {
-		if (ledger[i].op != FAKE_OP_TX_SEND) {
+		if (ledger[i].op == FAKE_OP_TX_SEND) {
+			zassert_equal(ledger[i].stream_idx, 0U, "anchor stream");
+			continue;
+		}
+		if (ledger[i].op != FAKE_OP_TX_SEND_TS) {
 			continue;
 		}
 		zassert_equal(ledger[i].stream_idx, sends_seen % 2U, "lockstep stream");
 		sends_seen++;
 	}
-	zassert_equal(sends_seen, 2U * total, "exact total sends");
-	zassert_equal(fake_send_count(0), total, "stream 0 cap");
+	zassert_equal(sends_seen, 2U * total, "exact timestamped pair sends");
+	zassert_equal(fake_send_count(0), total + 1U, "stream 0 cap plus anchor");
 	zassert_equal(fake_send_count(1), total, "stream 1 cap");
 
 	/* SDU lengths match the mono preset per stream. */
@@ -1682,8 +1965,19 @@ ZTEST(hil_source_app, test_modea_lockstep_and_caps)
 
 static bool modea_outstanding_target_reached(void)
 {
-	return fake_send_count(0) >= HIL_SOURCE_TX_OUTSTANDING_TARGET &&
-	       fake_send_count(1) >= HIL_SOURCE_TX_OUTSTANDING_TARGET;
+	return fake_send_count(0) - fake_sent_count(0) >= HIL_SOURCE_TX_OUTSTANDING_TARGET &&
+	       fake_send_count(1) - fake_sent_count(1) >= HIL_SOURCE_TX_OUTSTANDING_TARGET;
+}
+
+/* True once stream 0 has submitted its first (plain) SDU. */
+static bool send_count_one_reached(void)
+{
+	return fake_send_count(0) >= 1U;
+}
+
+static bool mono_outstanding_target_reached(void)
+{
+	return fake_send_count(0) - fake_sent_count(0) >= HIL_SOURCE_TX_OUTSTANDING_TARGET;
 }
 
 ZTEST(hil_source_app, test_modea_three_outstanding_lockstep_backpressure)
@@ -1696,31 +1990,34 @@ ZTEST(hil_source_app, test_modea_three_outstanding_lockstep_backpressure)
 	scenario_setup(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
 	dispatch_configure(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
 
-	/* Hold all sent callbacks until both streams fill the source target. */
+	/* Hold callbacks after stream 0's one CIG-anchor completion. */
 	pump_sents_enabled = false;
 	dispatch_start();
 	zassert_equal(HIL_SOURCE_TX_OUTSTANDING_TARGET, 3U, "Mode A target");
+	zassert_true(pump_until(send_count_one_reached, 10000U), "anchor send");
+	fake_signal_sent(0);
 	zassert_true(pump_until(modea_outstanding_target_reached, 10000U),
 		     "three outstanding sends per stream");
 
-	/* The coordinator must block at the pair target, with no fourth send on
-	 * either stream before a completion callback arrives. */
+	/* The coordinator must block at the pair target, with no further send
+	 * on either stream before another completion callback arrives: after
+	 * settling, each stream sits at exactly three outstanding sends and
+	 * exactly the one base completion. */
 	for (i = 0U; i < 8U; i++) {
 		pump_once();
 	}
-	zassert_equal(fake_send_count(0), 3U, "stream 0 target");
-	zassert_equal(fake_send_count(1), 3U, "stream 1 target");
-	zassert_equal(fake_sent_count(0), 0U, "stream 0 callbacks suppressed");
-	zassert_equal(fake_sent_count(1), 0U, "stream 1 callbacks suppressed");
+	zassert_equal(fake_send_count(0), fake_sent_count(0) + 3U,
+		      "stream 0 exactly three outstanding");
+	zassert_equal(fake_send_count(1), fake_sent_count(1) + 3U,
+		      "stream 1 exactly three outstanding");
 
+	/* Timestamped semantic sends strictly alternate streams. */
 	ledger = fake_ledger();
 	for (i = 0U; i < fake_ledger_count(); i++) {
-		if (ledger[i].op != FAKE_OP_TX_SEND) {
+		if (ledger[i].op != FAKE_OP_TX_SEND_TS) {
 			continue;
 		}
-		zassert_true(sends_seen < ARRAY_SIZE(expected_streams),
-			     "fourth send before callback");
-		zassert_equal(ledger[i].stream_idx, expected_streams[sends_seen],
+		zassert_equal(ledger[i].stream_idx, (uint8_t)(sends_seen % 2U),
 			      "Mode A send lockstep");
 		sends_seen++;
 	}
@@ -1789,11 +2086,12 @@ ZTEST(hil_source_app, test_zero_outstanding_callback_error)
 
 	/* Suppress sent callbacks until TX reaches its outstanding target, then
 	 * deliver one callback more than that depth: the surplus hits zero
-	 * outstanding while streaming and aborts the run with cause error. */
+	 * outstanding while streaming and aborts the run with cause error. First
+	 * deliver the one bootstrap completion so anchor readback can finish. */
 	pump_sents_enabled = false;
-	while (fake_send_count(0) < HIL_SOURCE_TX_OUTSTANDING_TARGET) {
-		pump_once();
-	}
+	zassert_true(pump_until(send_count_one_reached, 10000U), "anchor send");
+	fake_signal_sent(0);
+	zassert_true(pump_until(mono_outstanding_target_reached, 10000U), "outstanding target");
 	for (i = 0U; i <= HIL_SOURCE_TX_OUTSTANDING_TARGET; i++) {
 		fake_signal_sent(0);
 	}
@@ -1815,17 +2113,25 @@ ZTEST(hil_source_app, test_sent_completion_wakes_tx_backpressure)
 	 * backpressure is established. */
 	pump_sents_enabled = false;
 	start_tx_completion();
-	fake_set_send_signal(0, HIL_SOURCE_TX_OUTSTANDING_TARGET + 1U, &sem_tx_next_send);
+	fake_set_send_signal(0, HIL_SOURCE_TX_OUTSTANDING_TARGET + 2U, &sem_tx_next_send);
 	dispatch_configure(HIL_SOURCE_MODE_MONO, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
 	dispatch_start();
+
+	/* Deliver bootstrap completion, then completion thread owns callback at
+	 * exact regular outstanding target. */
+	zassert_true(pump_until(send_count_one_reached, 10000U), "anchor send");
+	fake_signal_sent(0);
 
 	zassert_true(pump_until(tx_completion_done, 10000U), "completion choreography");
 	zassert_true(fake_send_count(0) >= HIL_SOURCE_TX_OUTSTANDING_TARGET,
 		     "completion at outstanding target");
-	/* Five milliseconds leaves deterministic margin below the old 10 ms
-	 * polling sleep.  The wait starts after the fake completion thread has
-	 * delivered the callback, not from an unsynchronized test observation. */
-	zassert_equal(k_sem_take(&sem_tx_next_send, K_MSEC(5)), 0,
+	/* Under SDC timestamp-mode provisioning, the next submission
+	 * is additionally paced by its ISO-event pin gate: at most one pin
+	 * interval plus the lead window can separate the completion from the
+	 * next send even when the outstanding slot freed instantly.  The
+	 * bound below covers one 10 ms interval + 4 ms lead + slack; the old
+	 * 5 ms completion-only bound applied to the pre-pin polling regime. */
+	zassert_equal(k_sem_take(&sem_tx_next_send, K_MSEC(20)), 0,
 		      "sent completion did not promptly permit next TX submission");
 
 	pump_sents_enabled = true;
@@ -1846,9 +2152,7 @@ ZTEST(hil_source_app, test_stop_breaks_tx_backpressure_wait)
 		pump_once();
 	}
 	pump_sents_enabled = false;
-	while (fake_send_count(0) < HIL_SOURCE_TX_OUTSTANDING_TARGET) {
-		pump_once();
-	}
+	zassert_true(pump_until(mono_outstanding_target_reached, 10000U), "outstanding target");
 
 	t0 = k_uptime_get_32();
 	dispatch_stop();
@@ -1871,9 +2175,7 @@ ZTEST(hil_source_app, test_idle_breaks_tx_backpressure_wait)
 		pump_once();
 	}
 	pump_sents_enabled = false;
-	while (fake_send_count(0) < HIL_SOURCE_TX_OUTSTANDING_TARGET) {
-		pump_once();
-	}
+	zassert_true(pump_until(mono_outstanding_target_reached, 10000U), "outstanding target");
 
 	/* Run active idle in a peer thread while this test pumps lifecycle
 	 * completions.  This proves idle's own stop request wakes TX instead of
@@ -1921,7 +2223,7 @@ ZTEST(hil_source_app, test_tx_start_activation_once_before_send)
 	}
 	zassert_true(saw_tx_start, "tx_start recorded");
 	zassert_false(saw_send_before_start, "no send before activation");
-	zassert_equal(fake_send_count(0), total, "full mono run sent");
+	zassert_equal(fake_send_count(0), total + 1U, "full mono run plus anchor sent");
 	dispatch_idle();
 }
 
@@ -1965,8 +2267,9 @@ ZTEST(hil_source_app, test_modea_asymmetric_stall_timeout)
 	zassert_true(cap_terminal("fail"), "fail");
 	zassert_true(cap_find("\"state\":\"teardown\",\"cause\":\"timeout\""),
 		     "per-stream timeout, other CIS progress must not mask it");
-	zassert_equal(fake_send_count(0), fake_send_count(1), "lockstep pairs preserved");
-	zassert_true(fake_send_count(0) < total, "no unbounded sends");
+	zassert_equal(fake_send_count(0), fake_send_count(1) + 1U,
+		      "one anchor plus lockstep pairs preserved");
+	zassert_true(fake_send_count(0) < total + 1U, "no unbounded sends");
 	zassert_true(fake_sent_count(0) < fake_send_count(0), "stream 0 callbacks suppressed");
 	dispatch_status();
 	zassert_true(cap_find("\"cause\":\"timeout\""), "timeout cause in snapshot");
@@ -2137,27 +2440,35 @@ ZTEST(hil_source_app, test_idle_timeout_ownership)
 	zassert_true(cap_find("\"command\":\"idle\",\"ok\":true"), "idle after worker done");
 }
 
-/* ── 22. maximum legal IDs produce a complete two-stream status ──── */
+/* ── 22. maximum IDs/state produce bounded two-stream statuses ───── */
 
 ZTEST(hil_source_app, test_max_ids_two_stream_status)
 {
 	char cmd_id[64];
 	char run_id[65];
+	char wrong_run_id[65];
 	char json[512];
 
 	memset(cmd_id, 'C', sizeof(cmd_id) - 1U);
 	cmd_id[sizeof(cmd_id) - 1U] = '\0';
 	memset(run_id, 'R', sizeof(run_id) - 1U);
 	run_id[sizeof(run_id) - 1U] = '\0';
+	memset(wrong_run_id, 'W', sizeof(wrong_run_id) - 1U);
+	wrong_run_id[sizeof(wrong_run_id) - 1U] = '\0';
 
-	scenario_setup(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	scenario_setup(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, HIL_SOURCE_MAX_SCORED_SDUS,
+		       "once");
+	/* Keep every controller-clock diagnostic at its widest realistic shape:
+	 * ten-digit timestamps and a two-digit stale-event skip count. */
+	fake_ts_set_readback_base(4000000000U);
+	fake_ts_set_initial_time_offset(100000);
 
 	snprintf(json, sizeof(json),
 		 "{\"protocol_version\":1,\"command\":\"configure\",\"command_id\":\"%s\","
 		 "\"run_id\":\"%s\",\"peer_address\":\"%s\",\"peer_address_type\":\"random\","
-		 "\"mode\":\"mode_a\",\"profile\":\"48_4_1\",\"scored_sdu_count\":10,"
-		 "\"signal_seed\":123456789,\"reconnect_policy\":\"none\"}",
-		 cmd_id, run_id, PEER_ADDR);
+		 "\"mode\":\"mode_a\",\"profile\":\"48_4_1\",\"scored_sdu_count\":%u,"
+		 "\"signal_seed\":4294967295,\"reconnect_policy\":\"once\"}",
+		 cmd_id, run_id, PEER_ADDR, (unsigned int)HIL_SOURCE_MAX_SCORED_SDUS);
 	dispatch_json(json);
 	zassert_true(cap_find("\"command\":\"configure\",\"ok\":true"), "max-id configure");
 
@@ -2199,6 +2510,46 @@ ZTEST(hil_source_app, test_max_ids_two_stream_status)
 			break;
 		}
 		zassert_true(found_full, "complete max-id status line captured");
+	}
+
+	/* Rejected commands use a compact status snapshot. With maximum legal
+	 * IDs, rendering the full successful TX diagnostics plus the longer
+	 * false/invalid_request fields would exceed the fixed 1024-byte line. */
+	cap_reset();
+	snprintf(json, sizeof(json),
+		 "{\"protocol_version\":1,\"command\":\"status\",\"command_id\":\"%s\","
+		 "\"run_id\":\"%s\"}",
+		 cmd_id, wrong_run_id);
+	zassert_equal(hil_source_app_dispatch(json, strlen(json)), -EINVAL,
+		      "mismatched maximum run id rejected");
+	drain();
+	{
+		char command_needle[80];
+		char run_needle[82];
+		bool found_rejection = false;
+		uint32_t c;
+
+		snprintf(command_needle, sizeof(command_needle), "\"command_id\":\"%s\"", cmd_id);
+		snprintf(run_needle, sizeof(run_needle), "\"run_id\":\"%s\"", wrong_run_id);
+		for (c = 0U; c < cap_count; c++) {
+			if (strstr(captured[c], command_needle) == NULL ||
+			    strstr(captured[c], run_needle) == NULL) {
+				continue;
+			}
+			zassert_true(strlen(captured[c]) < HIL_SOURCE_OUTPUT_LINE_SIZE,
+				     "rejection within fixed line capacity");
+			zassert_not_null(strstr(captured[c], "\"ok\":false"),
+					 "rejection result intact");
+			zassert_not_null(strstr(captured[c], "\"error\":\"invalid_request\""),
+					 "rejection error intact");
+			zassert_not_null(strstr(captured[c], "\"tx\":null"),
+					 "rejection omits optional TX diagnostics");
+			zassert_not_null(strstr(captured[c], "\"bond_count\":"),
+					 "rejection tail intact");
+			found_rejection = true;
+			break;
+		}
+		zassert_true(found_rejection, "complete max-id rejection captured");
 	}
 	dispatch_idle();
 }
@@ -2568,9 +2919,10 @@ ZTEST(hil_source_app, test_idle_timeout_response_emission_failure)
 	drain();
 	zassert_false(cap_find("\"command\":\"idle\""), "no idle record emitted");
 
-	/* The run is still active and the worker owns its cleanup; let the
-	 * blocked disable/release waits expire and the run finish. */
-	k_sleep(K_MSEC(6500));
+	/* The run is still active and the worker owns its cleanup. Let blocked
+	 * disable/release waits expire. The stop path may first expire TX progress
+	 * and drain waits before cleanup, so allow the full bounded path. */
+	k_sleep(K_MSEC(15000));
 	drain();
 	dispatch_status();
 	zassert_true(cap_find("\"verdict\":\"fail\""), "worker terminalized fail");

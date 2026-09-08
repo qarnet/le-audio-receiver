@@ -1,17 +1,24 @@
 # RH3 ModeA16 grid-bound result
 
+> [!WARNING]
+> Historical run record. Preserve the measured grid bound and receiver
+> counters, but do not infer an exhausted host design space or an SDC defect.
+> HCI completions do not count aired SDUs. The current interpretation and next
+> gate are in
+> [system-hil-rh3-controller-clock-result.md](system-hil-rh3-controller-clock-result.md).
+
 Status: completed one-run fix-validation with the pre-committed
-decisive outcome: the grid bound HELD in every status record
+outcome: the grid bound HELD in every status record
 (`pin_last - rb_last <= 20000 us`, within the 40000 us bound; the active
-snapshot shows GAP=0), yet the controller aired only 168 of 12644 SDUs
+snapshot shows GAP=0), yet the receiver recorded only 168 valid SDUs of 12644
 (`rx_valid=168`, `plc=28810` above `1457`, `rx_lost=14405`, `rb_cnt=12642`
 readbacks with HCI-level completions for every submission, `sf=0`).
 Per the ModeA16 handoff this is the "bound held, delivery still
 collapsed" arm, pre-classified as: the flush mechanism is not (only)
-buffer pressure, and the next candidates are controller-side. The
-timestamp-mode line's host-side design space is now exhausted with
-direct evidence at every step; the stop point stands and the decision
-moves to the user with the complete chain recorded.
+buffer pressure, and the next candidates were controller-side. That
+historical classification is superseded: the corrected 128 MHz
+controller-clock source now passes Mode A and Mode B. The stop point remains
+part of the immutable run history, not the current next action.
 
 ## The five-run evidence chain (ModeA12-16)
 
@@ -23,23 +30,23 @@ moves to the user with the complete chain recorded.
 | ModeA15 | none (diagnostic) | yes (GAP=2, rb grid proven) | none (free-run proven) | 167 |
 | ModeA16 | completion-driven rb + 4-event grid bound | yes (GAP<=2 everywhere) | HELD (<=20000 us) | 168 |
 
-Established facts (all from runner-retained raw evidence):
+Recorded facts (all from runner-retained raw evidence):
 
-1. The readback IS the controller CIG event grid (9999.05 us mean
-   advance, 12642 samples, no wrap).
-2. The pins were on that grid in every configuration.
-3. Bounding the future-pin distance to 4 events changed nothing.
-4. The controller ACCEPTED every HCI ISO send (completions instant,
-   sf=0) and aired only the first ~168 events (~1.7 s), then flushed
-   everything for the remaining 2 minutes of the stream.
+1. The readback advanced by a 9999.05 us mean across 12642 samples, with no
+   wrap observed.
+2. The ModeA15/16 pin values retained the expected small interval relation to
+   those readbacks.
+3. The four-event future-pin bound held, while the receiver-delivery signature
+   remained near ModeA13-15.
+4. The host received an HCI completion for every ISO send (`sf=0`), while the
+   receiver recorded only the first ~168 valid SDUs (~1.7 s). These counters do
+   not establish which later SDUs aired or the controller's buffer-return cause.
 
-Conclusion: after ~1.7 s of streaming the controller-side ISO TX
-pipeline stops airing future-pinned SDUs while continuing to accept
-and complete them at HCI level. No host-side provisioning chain within
-the documented SDC semantics (timestamp mode, one pin per event,
-bounded ahead-distance, monotonic resync) prevents it. The mechanism
-lives in the controller configuration or its pinned-SDU handling:
-candidates are the FT/nse/bn retransmission structure (FT=16
+Historical conclusion at the time: after ~1.7 s of streaming the receiver
+stopped recording valid SDUs while the host continued to receive HCI
+completions. The result then treated controller configuration or pinned-SDU
+handling as the next candidates, including the FT/nse/bn retransmission
+structure (FT=16
 subevents = 20 ms window; nse=3; bn=1), the CIG reserved time
 (`BT_CTLR_SDC_CIG_RESERVED_TIME_US`, default 1300), the SDC ISO TX HCI
 buffer counts, or a pinned-SDU flush path in SDC itself.
@@ -107,10 +114,15 @@ FLPR `45ab8d15...`, `CONFIG_AUDIO_OFFLOAD_ASRC=y`,
 `CONFIG_BT_ISO_RX_BUF_COUNT=3`). `images.json` is authoritative for the
 flashed tuple. No warnings on either console; integrity checks passed.
 
-## Stop point and options for user review
+## Historical stop point and options
 
-The host-side timestamp-mode line is exhausted; the remaining levers
-are controller-side or fixture-level:
+> [!NOTE]
+> This option list records the decision context at the time. It is not current
+> execution guidance. The DevZone path is withdrawn, and the next action is the
+> full twice-run RH3 matrix with the corrected source.
+
+At the time, the host-side timestamp-mode line was treated as exhausted and the
+remaining levers were classified as controller-side or fixture-level:
 
 1. Controller-config diagnostic: one run varying the SDC ISO
    retransmission/buffer structure on the netcore overlay

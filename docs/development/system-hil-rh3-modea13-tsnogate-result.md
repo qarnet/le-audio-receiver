@@ -1,17 +1,19 @@
 # RH3 ModeA13 timestamp-mode no-gate result
 
-Status: completed one-run fix-validation with a negative outcome that
-re-anchors the root cause: the send-driven timestamp readback is
-semantically undefined on hardware before any SDU has aired. Removing
-the host-side time gate (the ModeA12 conviction) collapsed delivery from
+> [!WARNING]
+> Historical run record. Preserve its measurements and immutable evidence, but
+> treat its causal classification and proposed next fix as superseded by
+> [system-hil-rh3-controller-clock-result.md](system-hil-rh3-controller-clock-result.md).
+
+Status: completed one-run fix-validation with a negative outcome. At the time,
+the result attributed the collapse to a send-driven timestamp readback before
+the first SDU completion; ModeA14 later falsified that causal classification.
+Removing the host-side time gate collapsed delivery from
 `12643` to `167` valid SDUs (`rx_lost=14420`, `plc=28840`, both frozen
 floors violated), with completions firing near-instantly
-(`cb=24 sub=24 out=0` at the active snapshot): the controller freed HCI
-buffers immediately because the pinned timestamps evaluated as already
-past and the SDUs were flushed, never transmitted. The ModeA12 run's
-delivery stayed near-total only because its host-clock offset re-anchored
-the raw readback values; the raw values themselves (learned from a
-readback before any air time) were garbage. The classified fix follows
+(`cb=24 sub=24 out=0` at the active snapshot). HCI completions proved buffer
+return, not the proposed past-timestamp flush mechanism. The classified fix
+followed
 the canonical Nordic pattern this implementation deviated from: read the
 assigned timestamp only after the first SDU's sent completion
 (`nrf/samples/bluetooth/iso_time_sync/src/iso_tx.c`: first SDU plain,

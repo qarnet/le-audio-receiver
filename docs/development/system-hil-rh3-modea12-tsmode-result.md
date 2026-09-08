@@ -1,5 +1,10 @@
 # RH3 ModeA12 SDC timestamp-mode result
 
+> [!WARNING]
+> Historical run record. Preserve its measurements and immutable evidence, but
+> treat its causal classification and proposed next fix as superseded by
+> [system-hil-rh3-controller-clock-result.md](system-hil-rh3-controller-clock-result.md).
+
 Status: completed one-run fix-validation with a negative outcome that
 isolates the failure to the removed host-side time gate. The first
 ModeA12 hardware run (`rh3-modeb-sdc-tsmode-20260907`) kept delivery

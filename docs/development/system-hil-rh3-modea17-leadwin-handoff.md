@@ -1,6 +1,12 @@
 # RH3 ModeA17 handoff: documented lead-window submission (timer-paced)
 
-Status: approved one-run fix-validation diagnostic, grounded in Nordic
+> [!WARNING]
+> Historical, completed diagnostic plan. Do not execute it or reuse its run ID.
+> Its controller-defect interpretation is superseded by the passing mirrored
+> controller-clock and 128 MHz source result in
+> [system-hil-rh3-controller-clock-result.md](system-hil-rh3-controller-clock-result.md).
+
+Status: completed one-run historical diagnostic, grounded in Nordic
 documentation research performed at the user's direction after the
 ModeA16 stop point.
 
@@ -18,12 +24,11 @@ ModeA16 stop point.
      data to the controller before it sends the next SDU on air. This
      means data is sent too early/fast, and will flush one SDU."
    A submission too far ahead of its pinned timestamp is flushed, exactly
-   like a late one. This closes the ModeA13-16 evidence chain: those runs
-   submitted SDUs 2+ intervals ahead of their pins (pins proven on the
-   controller grid by the ModeA15 raw fields) and the controller
-   accepted them at HCI level but flushed them from the air schedule.
-   ModeA12's host gate submitted roughly one interval ahead - inside the
-   window - which is why it delivered 12643/12644.
+   like a late one. At the time, this was used to classify ModeA13-16 as
+   submitting too far ahead. Their HCI completions and receiver counters did
+   not directly prove the corresponding controller flushes. ModeA12's host
+   gate submitted roughly one interval ahead and the receiver recorded
+   12643/12644 valid SDUs.
 2. **DRGN-21293**: the LE Read ISO TX Sync (and the VS variant) returns
    "the SDU synchronization reference of the SDU previously scheduled for
    transmission" - the last assigned event, not the last aired one
@@ -40,7 +45,7 @@ ModeA16 stop point.
    (OCT-3754: submitting AT the target limit already causes warnings and
    possible audible artefacts).
 
-## The fix (already implemented)
+## Historical implementation
 
 `hil/source/app/src/hil_source_app.c`, ModeA17:
 
@@ -76,7 +81,7 @@ Constants (`hil_source_app.h`): `HIL_SOURCE_TX_TS_LEAD_TARGET_US 3000`
 minimum future distance, kept as reference documentation for the
 window semantics).
 
-## Software verification
+## Historical software verification
 
 Native source-app Twister: full suite must pass (the gate paces sends
 ~7 ms apart again, so lifecycle tests take seconds each; the
@@ -85,7 +90,7 @@ source builds byte-identical; resolved config
 `CONFIG_HIL_SOURCE_TX_OUTSTANDING_TARGET=3`; only the documented
 notices. Host runner regression green.
 
-## Fixed identity
+## Historical fixed identity
 
 ```text
 run ID: rh3-modeb-sdc-leadwin-20260908 (validate unused before invoking)
@@ -95,7 +100,7 @@ row:    rh3.fresh_mode_b_48_4_1
 Receiver: normal current-HEAD build. Source: current tree (SDC rework +
 timestamp-mode line + this gate), no fragment.
 
-## Prediction (falsifiable)
+## Historical prediction
 
 If the documented lead window is the true mechanism, submissions at
 ~3 ms before each pin sit inside the acceptance window: empty events
@@ -104,7 +109,7 @@ collapse to startup transients (`rx_lost` single digits), `rx_valid`
 ~126.4 s, and the status fields prove the discipline (`pin_adv` 0-2,
 `pin_last - rb_last` <= 1 interval in every record).
 
-## Classification arms
+## Historical classification arms
 
 - PASS: fixture validated; commit everything (SDC rework + timestamp
   mode + lead-window gate + tests + docs) as:

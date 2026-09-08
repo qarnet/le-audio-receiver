@@ -1,9 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Sysbuild: mirror the upstream BAP unicast client sample, add hci_ipc on
-# the nRF5340 net core, apply the central ISO SW Split base configuration
-# plus the repository overlay (which may only tighten), and apply the
-# bt-ll-sw-split snippet.
+# the nRF5340 net core, and configure the net core for the SoftDevice
+# Controller (SDC) as central ISO controller: the sample base prj.conf
+# (controller-agnostic) plus the repository SDC overlay. No snippet is
+# applied; the nrf5340_cpunet DT default selects the SDC node
+# (bt_hci_sdc okay, zephyr,bt-hci chosen). The SW-split wiring this
+# replaces is recorded in docs/development/
+# system-hil-rh3-modea10-sdc-handoff.md.
 
 if(SB_CONFIG_NET_CORE_IMAGE_HCI_IPC)
   set(NET_APP hci_ipc)
@@ -15,21 +19,17 @@ if(SB_CONFIG_NET_CORE_IMAGE_HCI_IPC)
     BOARD       ${SB_CONFIG_NET_CORE_BOARD}
   )
 
-  # Exact central-only ISO SW Split base configuration from the hci_ipc
-  # sample; the repository overlay below may only tighten values.
-  set(${NET_APP}_CONF_FILE
-   ${NET_APP_SRC_DIR}/nrf5340_cpunet_iso_central-bt_ll_sw_split.conf
-   CACHE INTERNAL ""
-  )
+  # Base configuration is the sample's own prj.conf (BT_HCI_RAW over IPC
+  # with generic buffer defaults); the repository SDC overlay below adds
+  # the central ISO roles, SDC symbols, and fixture tightening.
 
-  # Repository overlay: tighten the base central conf for one exact peer.
+  # Repository overlay: SDC central ISO configuration for one exact peer.
   add_overlay_config(
     hci_ipc
-    ${CMAKE_CURRENT_LIST_DIR}/overlay-nrf5340_cpunet_iso-bt_ll_sw_split.conf
+    ${CMAKE_CURRENT_LIST_DIR}/overlay-nrf5340_cpunet_sdc.conf
   )
 
   list(APPEND ${NET_APP}_SNIPPET ${SNIPPET})
-  list(APPEND ${NET_APP}_SNIPPET bt-ll-sw-split)
   set(${NET_APP}_SNIPPET ${${NET_APP}_SNIPPET} CACHE STRING "" FORCE)
 
   native_simulator_set_child_images(${DEFAULT_IMAGE} ${NET_APP})

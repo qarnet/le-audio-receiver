@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * Dedicated LE Audio source fixture coordinator (RH1B).
+ * Dedicated LE Audio source fixture coordinator.
  *
  * The coordinator owns dispatch, the run worker, the TX stage
  * orchestration (pacing, lockstep, stage caps, outstanding, progress
@@ -45,6 +45,17 @@ extern "C" {
 #define HIL_SOURCE_TX_PROGRESS_TIMEOUT_MS 2000U
 #define HIL_SOURCE_TX_DRAIN_TIMEOUT_MS    5000U
 #define HIL_SOURCE_MAX_STREAMS            2U
+
+/* ── SDC timestamp-mode timing ─────────────────────────────────────── */
+
+/* Encode first, then submit each pinned SDU when its ISO event is this close
+ * on the mirrored controller clock. SDC requires 1000 us processing margin;
+ * the nRF53 reference scheduler adds 1000 us for cross-core IPC. One further
+ * millisecond covers worker and HCI submission jitter. */
+#define HIL_SOURCE_TX_TS_LEAD_TARGET_US 3000U
+/* Pins closer than this to controller-now advance by whole intervals and
+ * count as "pin_adv" evidence. */
+#define HIL_SOURCE_TX_TS_MIN_AHEAD_US   2000U
 
 /* Maximum encoded TX SDU byte size.  The ISO TX path is bounded by
  * CONFIG_BT_ISO_TX_MTU (255); the coordinator never uses the 1024-byte
@@ -113,6 +124,23 @@ struct hil_source_backend_ops {
 
 	/* TX send driver */
 	int (*tx_send)(uint8_t stream_idx, uint16_t seq, const uint8_t *sdu, size_t len);
+	/* Timestamp-pinned send (SDC timestamps mode): provide the SDU for the ISO
+	 * event starting at `ts` (controller clock, us). A successful call does not
+	 * prove peer receipt. A single untimestamped bootstrap SDU on stream 0
+	 * establishes the CIG base; all regular segment SDUs use this API. */
+	int (*tx_send_ts)(uint8_t stream_idx, uint16_t seq, const uint8_t *sdu, size_t len,
+			  uint32_t ts);
+	/* Read the controller-assigned event timestamp (us) for the previously
+	 * provided SDU on a stream. Thread context only (synchronous HCI in
+	 * production; scripted in the fake). */
+	int (*tx_read_tx_ts)(uint8_t stream_idx, uint32_t *ts);
+	/* Read controller time modulo 2^32 us. This must share the SDC clock
+	 * domain; host uptime is not interchangeable with controller time. */
+	int (*tx_time_get)(uint32_t *time_us);
+	/* Read HCI LE_Read_ISO_TX_Sync. Success requires a previously scheduled SDU,
+	 * but repeated polls may return that same SDU. Historical "air" status
+	 * counts therefore count successful polls, not aired SDUs. */
+	int (*tx_read_sync)(uint8_t stream_idx, uint32_t *ts, uint32_t *seq);
 	void (*tx_stop)(void);
 
 	/* teardown */
@@ -157,10 +185,10 @@ void hil_source_app_fatal_status(const char *phase, int err);
  * for handling or a negative errno for a rejected request. */
 int hil_source_app_dispatch(const char *json, size_t len);
 
-/* Sent-callback entry point, called by the real BAP stream ops in
- * production and by the fake backend in native tests.  Decrements the
- * logical outstanding count and records the sent-callback counter;
- * stale callbacks after a generation change are counted, not applied. */
+/* Sent-callback entry point, called by the real BAP stream ops in production
+ * and by the fake backend in native tests. Decrements current-generation
+ * outstanding and records callbacks while a run remains active. Callbacks
+ * after teardown do not change logical outstanding. */
 void hil_source_app_tx_sent(uint8_t stream_idx);
 
 /* Format the full current status HIL1 line (envelope included) into buf.

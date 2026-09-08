@@ -1,6 +1,12 @@
 # RH3 ModeA12 handoff: SDC timestamp-mode ISO TX provisioning
 
-Status: approved source-fixture rework + one fix-validation hardware run.
+> [!WARNING]
+> Historical, completed diagnostic plan. Do not execute it against the current
+> source. Its fix sequence is superseded by
+> [system-hil-rh3-controller-clock-result.md](system-hil-rh3-controller-clock-result.md).
+
+Status: historical completed plan. It originally approved source-fixture
+rework plus one fix-validation hardware run.
 Implements the SDC-documented preferred data-provisioning mode (timestamps)
 in the HIL source host, eliminating the NULL-event mechanism that both
 ModeA10 (`plc=2378 = 2 x rx_lost=1189`, `rx_valid=12643/12644`) and ModeA11

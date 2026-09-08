@@ -1,5 +1,12 @@
 # RH3 ModeA14 completion-driven readback result
 
+> [!WARNING]
+> Historical run record. HCI send completions prove host/controller buffer
+> return, not SDU airing or a specific flush mechanism. Preserve the run facts,
+> but use
+> [system-hil-rh3-controller-clock-result.md](system-hil-rh3-controller-clock-result.md)
+> for the current scheduler conclusion and next gate.
+
 Status: completed one-run fix-validation with the SAME collapse signature
 as ModeA13, falsifying the ModeA13 classification and reaching the plan's
 two-consecutive-same-signature stop point for the timestamp-mode line.
@@ -10,13 +17,12 @@ every submitted SDU (`sub` and `cb` tracking, `out=0` at the active
 snapshot), and the stream window stretched 11% (`streaming` 20104 ->
 `scored_complete` 161536). The completion-driven base learning (the
 iso_time_sync chain: read the assigned timestamp only after the first
-SDU's completion) changed nothing: after roughly SDU 167 the controller
-flushed every subsequent pinned SDU while still completing it at HCI
-level, so the source "submitted" the whole stream into a flushing
-pipeline. The deterministic 167 in both no-gate runs, against ModeA12's
-12643 delivered under the gated design, leaves the readback/timestamp
-semantics on this Zephyr-host-over-IPC configuration unresolved from
-documentation and two falsified classifications. Per the plan of record
+SDU's completion) changed nothing in the receiver signature: after roughly SDU
+167 the receiver stopped recording valid SDUs while the source continued to
+receive HCI completions. That does not directly prove a controller flush. The
+deterministic 167 in both no-gate runs, against ModeA12's 12643 valid SDUs under
+the gated design, falsified the ModeA13 wrong-base explanation and left the
+source timing mechanism unresolved at this stop point. Per the plan of record
 (`docs/development/system-hil-milestones.md`, "Failure triage and rerun
 discipline": a second consecutive same-signature failure is a stop point
 for redesign review, not another identical attempt), hardware iteration
@@ -70,11 +76,10 @@ What the chain establishes:
 2. Without the gate, both readback chains (send-driven and
    completion-driven) collapse at exactly the same stream position
    (`rx_valid=167` in both runs), with HCI-level completions continuing
-   for every flushed SDU: the pinned timestamps systematically evaluate
-   as past and are flushed after a deterministic trigger point roughly
-   1.7 s into streaming.
+   for every submitted SDU. This does not establish that the timestamps
+   evaluated as past or identify a controller flush mechanism.
 3. The ModeA13 classification (pre-air readback returns a wrong base)
-   is falsified: ModeA14 read the base only after the first SDU aired,
+   is falsified: ModeA14 read the base only after the first SDU completion,
    and the collapse signature is byte-identical. The ModeA12
    classification (host-clock offset bias) explains only ModeA12's
    `pin_adv` regression, not the no-gate collapse.
@@ -128,7 +133,12 @@ ISO tail retained `nse=3`, `cig_sync_us=4146`, `c_max_pdu=240`,
 `c_phy=2`, `retransmitted=0`, `crc_error=0`. No warnings or errors on
 either console; integrity and raw identity checks passed.
 
-## Stop point and options for review
+## Historical stop point and options
+
+> [!NOTE]
+> This list records the next options considered at the time. Those diagnostics
+> completed. The current next step is the full twice-run RH3 matrix with the
+> corrected source.
 
 Per the plan's rerun discipline this is the stop point: the next
 hardware action must be a user-reviewed decision, not another classified

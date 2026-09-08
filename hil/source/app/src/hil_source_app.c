@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * Dedicated LE Audio source fixture coordinator (RH1B).
+ * Dedicated LE Audio source fixture coordinator.
  *
  * Owns shell dispatch, the run worker thread (all blocking BAP operations
  * and resource teardown), the TX stage orchestration (pacing, lockstep,
@@ -80,6 +80,32 @@ static struct hil_source_signal_encoder tx_encoders[HIL_SOURCE_MAX_STREAMS];
 static enum hil_source_signal_stage tx_enc_stage[HIL_SOURCE_MAX_STREAMS];
 static int64_t tx_last_activity[HIL_SOURCE_MAX_STREAMS];
 static bool tx_active;
+
+/* ── TX timestamp-mode state (per segment) ─────────────────────────── */
+
+/* One untimestamped bootstrap SDU on stream 0 establishes the CIG event
+ * grid. Its completion enables one HCI VS readback. All regular segment
+ * streams then use the same timestamp, as required for multi-CIS synchronization.
+ * CIS-central timing shares the central/controller clock, so no later
+ * readback or host/controller offset estimate is needed. */
+static bool tx_ts_anchor_pending;
+static bool tx_ts_readback_due[HIL_SOURCE_MAX_STREAMS];
+static uint32_t tx_ts_next[HIL_SOURCE_MAX_STREAMS];
+static uint32_t tx_ts_pin_advances[HIL_SOURCE_MAX_STREAMS];
+/* Raw schedule-readback diagnostic plus last pinned timestamp. */
+static uint32_t tx_rb_last[HIL_SOURCE_MAX_STREAMS];
+static uint32_t tx_pin_last[HIL_SOURCE_MAX_STREAMS];
+/* Controller-relative lead measured immediately before each timestamped
+ * backend send. A run that reaches a second Mode A send below the minimum
+ * fails closed because stream 0 has already committed the shared pin. */
+static int32_t tx_lead_min[HIL_SOURCE_MAX_STREAMS];
+static int32_t tx_lead_max[HIL_SOURCE_MAX_STREAMS];
+static uint32_t tx_lead_cnt[HIL_SOURCE_MAX_STREAMS];
+static uint32_t tx_lead_under[HIL_SOURCE_MAX_STREAMS];
+/* Cached HCI LE_Read_ISO_TX_Sync diagnostics. The worker captures one sample
+ * after the final TX drain. Success confirms a scheduled SDU, not peer receipt. */
+static uint32_t tx_sync_last[HIL_SOURCE_MAX_STREAMS];
+static uint32_t tx_sync_cnt[HIL_SOURCE_MAX_STREAMS];
 
 /* ── helpers ─────────────────────────────────────────────────────── */
 
@@ -395,33 +421,265 @@ static int hil_app_tx_ensure_stage(enum hil_source_signal_stage stage, uint8_t s
 	return 0;
 }
 
-/* Returns 0 on complete, -ECANCELED (stop), -ETIMEDOUT (progress or
- * drain timeout), or a negative errno (send/encode/internal error). */
-static int hil_app_tx_run(void)
+static int hil_app_tx_check_stop(void)
 {
+	bool stop_requested;
+	bool fatal;
+
+	k_mutex_lock(&app_mutex, K_FOREVER);
+	stop_requested = run_state.stop_requested;
+	fatal = runtime_error;
+	k_mutex_unlock(&app_mutex);
+
+	if (stop_requested) {
+		return -ECANCELED;
+	}
+	return fatal ? -EIO : 0;
+}
+
+/* Controller and ISO timestamps wrap modulo 2^32. Signed subtraction is
+ * valid because scheduled pins remain less than half a wrap from now. */
+static int32_t hil_app_tx_pin_ahead(uint32_t pin_ts, uint32_t controller_now)
+{
+	return (int32_t)(pin_ts - controller_now);
+}
+
+static uint32_t hil_app_tx_catch_up_pin(uint32_t pin_ts, uint32_t controller_now,
+					uint32_t interval_us, uint32_t *skipped)
+{
+	int32_t ahead = hil_app_tx_pin_ahead(pin_ts, controller_now);
+	uint32_t count = 0U;
+
+	if (ahead < (int32_t)HIL_SOURCE_TX_TS_MIN_AHEAD_US) {
+		int64_t shortfall = (int64_t)HIL_SOURCE_TX_TS_MIN_AHEAD_US - ahead;
+
+		count = (uint32_t)((shortfall + interval_us - 1U) / interval_us);
+		pin_ts += count * interval_us;
+	}
+	*skipped = count;
+	return pin_ts;
+}
+
+static void hil_app_tx_apply_pin_advance(uint32_t pin_ts, uint32_t skipped, uint8_t streams)
+{
+	uint8_t i;
+
+	k_mutex_lock(&app_mutex, K_FOREVER);
+	for (i = 0U; i < streams; i++) {
+		tx_ts_next[i] = pin_ts;
+		tx_ts_pin_advances[i] += skipped;
+	}
+	k_mutex_unlock(&app_mutex);
+}
+
+/* Wait with encoded data ready. Callback wakes are condition hints only;
+ * controller time is reread after every wake or timeout. */
+static int hil_app_tx_wait_for_pin(uint32_t *pin_ts, uint32_t interval_us, uint8_t streams)
+{
+	int64_t deadline = k_uptime_get() + HIL_SOURCE_TX_PROGRESS_TIMEOUT_MS;
+
+	for (;;) {
+		int64_t now;
+		int64_t remaining_us;
+		uint32_t controller_now;
+		uint32_t wait_us;
+		uint32_t skipped;
+		int32_t ahead;
+		int err;
+
+		if (k_uptime_get() >= deadline) {
+			return -ETIMEDOUT;
+		}
+		err = hil_app_tx_check_stop();
+		if (err != 0) {
+			return err;
+		}
+		err = g_backend_ops->tx_time_get(&controller_now);
+		if (err != 0) {
+			return err;
+		}
+		if (k_uptime_get() >= deadline) {
+			return -ETIMEDOUT;
+		}
+
+		*pin_ts = hil_app_tx_catch_up_pin(*pin_ts, controller_now, interval_us, &skipped);
+		if (skipped != 0U) {
+			hil_app_tx_apply_pin_advance(*pin_ts, skipped, streams);
+			continue;
+		}
+
+		ahead = hil_app_tx_pin_ahead(*pin_ts, controller_now);
+		if (ahead <= (int32_t)HIL_SOURCE_TX_TS_LEAD_TARGET_US) {
+			return 0;
+		}
+
+		now = k_uptime_get();
+		if (now >= deadline) {
+			return -ETIMEDOUT;
+		}
+		remaining_us = (deadline - now) * 1000LL;
+		wait_us = (uint32_t)(ahead - HIL_SOURCE_TX_TS_LEAD_TARGET_US);
+		if ((int64_t)wait_us > remaining_us) {
+			wait_us = (uint32_t)remaining_us;
+		}
+		(void)k_sem_take(&sem_tx_wake, K_USEC(wait_us));
+	}
+}
+
+/* App mutex held. */
+static void hil_app_tx_record_lead(uint8_t stream_idx, int32_t lead_us)
+{
+	if (tx_lead_cnt[stream_idx] == 0U) {
+		tx_lead_min[stream_idx] = lead_us;
+		tx_lead_max[stream_idx] = lead_us;
+	} else {
+		tx_lead_min[stream_idx] = MIN(tx_lead_min[stream_idx], lead_us);
+		tx_lead_max[stream_idx] = MAX(tx_lead_max[stream_idx], lead_us);
+	}
+	tx_lead_cnt[stream_idx]++;
+}
+
+/* Capture TX-sync telemetry only after regular SDUs drain. Live status and
+ * stop commands must never issue synchronous HCI work while holding app_mutex
+ * or competing with the controller-relative submission gate. */
+static void hil_app_tx_capture_sync(uint8_t streams)
+{
+	uint8_t i;
+
+	for (i = 0U; i < streams; i++) {
+		uint32_t sync_ts;
+		uint32_t sync_seq;
+
+		if (g_backend_ops->tx_read_sync(i, &sync_ts, &sync_seq) != 0) {
+			continue;
+		}
+		ARG_UNUSED(sync_seq);
+		k_mutex_lock(&app_mutex, K_FOREVER);
+		tx_sync_last[i] = sync_ts;
+		tx_sync_cnt[i]++;
+		k_mutex_unlock(&app_mutex);
+	}
+}
+
+/* Send one valid untimestamped SDU on stream 0, wait for its completion, then
+ * read its assigned CIG event exactly once. This bootstrap SDU sits outside
+ * the scored signal contract; encoders are reinitialized before regular data. */
+static int hil_app_tx_learn_anchor(uint32_t interval_us, uint8_t streams)
+{
+	uint8_t sdu[HIL_SOURCE_TX_SDU_MAX];
+	int64_t deadline;
+	uint32_t assigned;
+	uint8_t i;
+	int n;
+	int err;
+
+	n = hil_source_signal_encode_next(&tx_encoders[0], sdu, sizeof(sdu));
+	if (n < 0) {
+		return n;
+	}
+	err = hil_app_tx_check_stop();
+	if (err != 0) {
+		return err;
+	}
+
+	k_mutex_lock(&app_mutex, K_FOREVER);
+	tx_ts_anchor_pending = true;
+	tx_outstanding[0]++;
+	tx_last_activity[0] = k_uptime_get();
+	k_mutex_unlock(&app_mutex);
+	err = g_backend_ops->tx_send(0U, 0U, sdu, (size_t)n);
+	if (err != 0) {
+		k_mutex_lock(&app_mutex, K_FOREVER);
+		tx_ts_anchor_pending = false;
+		if (tx_outstanding[0] != 0U) {
+			tx_outstanding[0]--;
+		}
+		(void)hil_source_state_counter_send_failure(&run_state, 0U);
+		k_mutex_unlock(&app_mutex);
+		return err;
+	}
+	k_mutex_lock(&app_mutex, K_FOREVER);
+	/* Bootstrap consumed stream 0 sequence zero even though it remains
+	 * outside scored-run submission and callback counters. */
+	tx_seq[0] = 1U;
+	k_mutex_unlock(&app_mutex);
+
+	deadline = k_uptime_get() + HIL_SOURCE_TX_PROGRESS_TIMEOUT_MS;
+	for (;;) {
+		bool due;
+
+		err = hil_app_tx_check_stop();
+		if (err != 0) {
+			return err;
+		}
+		k_mutex_lock(&app_mutex, K_FOREVER);
+		due = tx_ts_readback_due[0];
+		if (due) {
+			tx_ts_readback_due[0] = false;
+		}
+		k_mutex_unlock(&app_mutex);
+		if (due) {
+			break;
+		}
+		if (k_uptime_get() >= deadline) {
+			return -ETIMEDOUT;
+		}
+		(void)hil_app_tx_wait_until(deadline);
+	}
+
+	err = g_backend_ops->tx_read_tx_ts(0U, &assigned);
+	if (err != 0) {
+		return err;
+	}
+	k_mutex_lock(&app_mutex, K_FOREVER);
+	tx_rb_last[0] = assigned;
+	for (i = 0U; i < streams; i++) {
+		tx_ts_next[i] = assigned + interval_us;
+	}
+	tx_ts_anchor_pending = false;
+	k_mutex_unlock(&app_mutex);
+	return 0;
+}
+
+/* Returns 0 on complete, -ECANCELED (stop), -ETIMEDOUT (progress or
+ * drain timeout), or a negative errno (clock/send/encode/internal error). */
+static int hil_app_tx_run_controller_clock(void)
+{
+	uint8_t batch_sdu[HIL_SOURCE_MAX_STREAMS][HIL_SOURCE_TX_SDU_MAX];
+	size_t batch_len[HIL_SOURCE_MAX_STREAMS];
 	uint32_t preamble = hil_app_preamble_frames();
 	uint32_t scored = run_state.config.scored_sdu_count;
 	uint32_t tail = hil_app_tail_frames();
 	uint32_t per_stream_total = preamble + scored + tail;
+	uint32_t interval_us = hil_source_profile_frame_duration_us(run_state.config.profile);
 	uint8_t streams = hil_source_mode_stream_count(run_state.config.mode);
 	bool scored_complete_emitted = false;
 	uint32_t i;
 	int err;
 
-	if (preamble == 0U || tail == 0U) {
+	if (preamble == 0U || tail == 0U || interval_us == 0U || streams == 0U) {
 		return -EINVAL;
 	}
 
 	k_mutex_lock(&app_mutex, K_FOREVER);
-	/* Start each TX generation with no completion event from a prior
-	 * segment/run.  Reset while locked so a stale callback cannot add a token
-	 * between reset and activation. */
 	hil_app_tx_wake_reset_locked();
+	tx_ts_anchor_pending = false;
 	for (i = 0U; i < HIL_SOURCE_MAX_STREAMS; i++) {
 		tx_outstanding[i] = 0U;
 		tx_seq[i] = 0U;
 		tx_submitted[i] = 0U;
 		tx_last_activity[i] = k_uptime_get();
+		tx_ts_readback_due[i] = false;
+		tx_ts_next[i] = 0U;
+		tx_ts_pin_advances[i] = 0U;
+		tx_rb_last[i] = 0U;
+		tx_pin_last[i] = 0U;
+		tx_lead_min[i] = INT32_MAX;
+		tx_lead_max[i] = INT32_MIN;
+		tx_lead_cnt[i] = 0U;
+		tx_lead_under[i] = 0U;
+		tx_sync_last[i] = 0U;
+		tx_sync_cnt[i] = 0U;
 	}
 	tx_active = true;
 	k_mutex_unlock(&app_mutex);
@@ -430,9 +688,20 @@ static int hil_app_tx_run(void)
 	if (err != 0) {
 		return err;
 	}
+	err = hil_app_tx_learn_anchor(interval_us, streams);
+	if (err != 0) {
+		return err;
+	}
+	/* Bootstrap encoding must not consume one scored-contract frame. */
+	err = hil_app_tx_init_encoders();
+	if (err != 0) {
+		return err;
+	}
 
 	for (;;) {
 		uint32_t work = 0U;
+		uint32_t pin_ts;
+		uint32_t submit_now;
 		bool can_send;
 		enum hil_source_signal_stage stage;
 
@@ -452,20 +721,12 @@ static int hil_app_tx_run(void)
 			k_mutex_unlock(&app_mutex);
 			break;
 		}
-		if (streams == 1U) {
-			can_send = tx_outstanding[0] < HIL_SOURCE_TX_OUTSTANDING_TARGET;
-		} else {
-			can_send = tx_outstanding[0] < HIL_SOURCE_TX_OUTSTANDING_TARGET &&
-				   tx_outstanding[1] < HIL_SOURCE_TX_OUTSTANDING_TARGET;
-		}
+		can_send = tx_outstanding[0] < HIL_SOURCE_TX_OUTSTANDING_TARGET &&
+			   (streams == 1U || tx_outstanding[1] < HIL_SOURCE_TX_OUTSTANDING_TARGET);
 		if (!can_send) {
 			int64_t now = k_uptime_get();
 			int64_t deadline = INT64_MAX;
 
-			/* Per-stream progress timeout: when a blocking stream
-			 * (at outstanding depth) has had no own progress for
-			 * 2 s, abort.  Activity on another stream must not
-			 * mask a stuck stream. */
 			for (i = 0U; i < streams; i++) {
 				if (tx_submitted[i] < per_stream_total &&
 				    tx_outstanding[i] >= HIL_SOURCE_TX_OUTSTANDING_TARGET &&
@@ -479,21 +740,14 @@ static int hil_app_tx_run(void)
 					int64_t stream_deadline = tx_last_activity[i] +
 								  HIL_SOURCE_TX_PROGRESS_TIMEOUT_MS;
 
-					if (stream_deadline < deadline) {
-						deadline = stream_deadline;
-					}
+					deadline = MIN(deadline, stream_deadline);
 				}
 			}
 			k_mutex_unlock(&app_mutex);
-			/* Valid sent callbacks, stop requests, and runtime errors wake
-			 * this wait.  The deadline is absolute, not restarted after a
-			 * wake. */
 			(void)hil_app_tx_wait_until(deadline);
 			continue;
 		}
 
-		/* Stage alignment: all streams must be on the same stage
-		 * (Mode A sends each semantic frame as a pair). */
 		stage = hil_app_frame_stage(tx_submitted[0], preamble, scored);
 		for (i = 1U; i < streams; i++) {
 			if (hil_app_frame_stage(tx_submitted[i], preamble, scored) != stage) {
@@ -506,41 +760,88 @@ static int hil_app_tx_run(void)
 			k_mutex_unlock(&app_mutex);
 			return err;
 		}
+		pin_ts = tx_ts_next[0];
 		k_mutex_unlock(&app_mutex);
 
-		/* Encode and send one semantic frame per stream. */
+		/* LC3 work completes before controller-relative wait begins. */
 		for (i = 0U; i < streams; i++) {
-			uint8_t sdu[HIL_SOURCE_TX_SDU_MAX];
+			int n = hil_source_signal_encode_next(&tx_encoders[i], batch_sdu[i],
+							      sizeof(batch_sdu[i]));
+
+			if (n < 0) {
+				return n;
+			}
+			batch_len[i] = (size_t)n;
+		}
+
+		/* Reuse encoded data if wake jitter makes the chosen event stale. */
+		for (;;) {
+			uint32_t skipped;
+
+			err = hil_app_tx_wait_for_pin(&pin_ts, interval_us, streams);
+			if (err != 0) {
+				return err;
+			}
+			err = g_backend_ops->tx_time_get(&submit_now);
+			if (err != 0) {
+				return err;
+			}
+			pin_ts = hil_app_tx_catch_up_pin(pin_ts, submit_now, interval_us, &skipped);
+			if (skipped == 0U) {
+				break;
+			}
+			hil_app_tx_apply_pin_advance(pin_ts, skipped, streams);
+		}
+
+		for (i = 0U; i < streams; i++) {
 			enum hil_source_signal_stage sent_stage;
 			uint32_t sent_index;
 			uint16_t seq;
-			int n;
+			int32_t lead_us;
 			int ret;
 
-			n = hil_source_signal_encode_next(&tx_encoders[i], sdu, sizeof(sdu));
-			if (n < 0) {
-				return n;
+			if (i != 0U) {
+				ret = g_backend_ops->tx_time_get(&submit_now);
+				if (ret != 0) {
+					return ret;
+				}
+			}
+			lead_us = hil_app_tx_pin_ahead(pin_ts, submit_now);
+			if (lead_us < (int32_t)HIL_SOURCE_TX_TS_MIN_AHEAD_US) {
+				/* Stream 0 already committed this shared event. Sending a
+				 * late peer would invalidate Mode A synchronization. */
+				k_mutex_lock(&app_mutex, K_FOREVER);
+				tx_lead_under[i]++;
+				k_mutex_unlock(&app_mutex);
+				return -ETIME;
 			}
 
 			k_mutex_lock(&app_mutex, K_FOREVER);
 			sent_index = tx_submitted[i];
 			sent_stage = hil_app_frame_stage(sent_index, preamble, scored);
 			seq = tx_seq[i];
+			/* A callback can race backend return, so account outstanding
+			 * before handing the SDU to Bluetooth. */
+			tx_outstanding[i]++;
+			tx_last_activity[i] = k_uptime_get();
 			k_mutex_unlock(&app_mutex);
 
-			ret = g_backend_ops->tx_send(i, seq, sdu, (size_t)n);
+			ret = g_backend_ops->tx_send_ts(i, seq, batch_sdu[i], batch_len[i], pin_ts);
 			if (ret != 0) {
 				k_mutex_lock(&app_mutex, K_FOREVER);
-				hil_source_state_counter_send_failure(&run_state, i);
+				(void)hil_source_state_counter_send_failure(&run_state, i);
+				if (tx_outstanding[i] != 0U) {
+					tx_outstanding[i]--;
+				}
 				k_mutex_unlock(&app_mutex);
 				return ret;
 			}
 
 			k_mutex_lock(&app_mutex, K_FOREVER);
 			tx_seq[i] = (uint16_t)(tx_seq[i] + 1U);
-			tx_outstanding[i]++;
 			tx_submitted[i]++;
-			tx_last_activity[i] = k_uptime_get();
+			tx_pin_last[i] = pin_ts;
+			hil_app_tx_record_lead(i, lead_us);
 			if (sent_stage == HIL_SOURCE_SIGNAL_SCORED) {
 				err = hil_source_state_counter_submit_scored(&run_state, i);
 			} else {
@@ -551,9 +852,14 @@ static int hil_app_tx_run(void)
 				return err;
 			}
 		}
+
+		k_mutex_lock(&app_mutex, K_FOREVER);
+		for (i = 0U; i < streams; i++) {
+			tx_ts_next[i] = pin_ts + interval_us;
+		}
+		k_mutex_unlock(&app_mutex);
 	}
 
-	/* All stage caps reached: wait up to 5 s for outstanding to drain. */
 	{
 		int64_t deadline = k_uptime_get() + HIL_SOURCE_TX_DRAIN_TIMEOUT_MS;
 
@@ -578,11 +884,10 @@ static int hil_app_tx_run(void)
 			if (now >= deadline) {
 				return -ETIMEDOUT;
 			}
-			/* Valid sent callbacks and active cancellation requests share
-			 * this wake.  Recheck state after timeout or reset. */
 			(void)hil_app_tx_wait_until(deadline);
 		}
 	}
+	hil_app_tx_capture_sync(streams);
 	return 0;
 }
 
@@ -1116,7 +1421,7 @@ static void hil_app_run(void)
 		}
 
 		/* TX stage: preamble, scored, tail with stage caps. */
-		err = hil_app_tx_run();
+		err = hil_app_tx_run_controller_clock();
 		if (err != 0) {
 			goto abort;
 		}
@@ -1220,8 +1525,22 @@ abort: {
 		 * abort edge was actually accepted (an already-teardown state
 		 * keeps its ordinary teardown record). */
 		if (transitioned) {
+			/* The teardown record is mandatory evidence (the host
+			 * parser requires it before the terminal verdict), so a
+			 * saturated output queue must not silently drop it:
+			 * retry with a bounded wait, letting the writer thread
+			 * (production) or the test pump drain slots.  A
+			 * genuinely broken output still fails closed after the
+			 * bounded attempts. */
+			uint32_t attempts = 0U;
+
 			k_mutex_lock(&app_mutex, K_FOREVER);
-			(void)hil_app_emit_abort(abort_cause);
+			while (hil_app_emit_abort(abort_cause) != 0 && attempts < 5U) {
+				attempts++;
+				k_mutex_unlock(&app_mutex);
+				k_sleep(K_MSEC(20));
+				k_mutex_lock(&app_mutex, K_FOREVER);
+			}
 			k_mutex_unlock(&app_mutex);
 		}
 	}
@@ -1262,6 +1581,7 @@ static void hil_app_worker_fn(void *a, void *b, void *c)
 /* ── sent callback ───────────────────────────────────────────────── */
 void hil_source_app_tx_sent(uint8_t stream_idx)
 {
+	bool anchor;
 	bool stale;
 	bool zero_error = false;
 
@@ -1274,7 +1594,8 @@ void hil_source_app_tx_sent(uint8_t stream_idx)
 	 * to outstanding. */
 	stale = !run_state.active || run_state.current_state == HIL_SOURCE_RUN_STATE_TEARDOWN ||
 		!tx_active;
-	if (run_state.active) {
+	anchor = !stale && stream_idx == 0U && tx_ts_anchor_pending;
+	if (run_state.active && !anchor) {
 		(void)hil_source_state_counter_sent_callback(&run_state, stream_idx);
 	}
 	if (stale) {
@@ -1288,6 +1609,14 @@ void hil_source_app_tx_sent(uint8_t stream_idx)
 	} else {
 		tx_outstanding[stream_idx]--;
 		tx_last_activity[stream_idx] = k_uptime_get();
+		/* Completion timing is controller-dependent: enqueue, air, and
+		 * flush can all complete an SDU. Only the bootstrap completion
+		 * enables the one CIS-central schedule readback, and the worker
+		 * performs that synchronous HCI command in thread context. */
+		if (anchor) {
+			tx_ts_anchor_pending = false;
+			tx_ts_readback_due[0] = true;
+		}
 	}
 	if (zero_error) {
 		hil_app_set_runtime_error_locked();
@@ -1310,7 +1639,8 @@ static const char *hil_app_nullable_name(const char *name)
 static int hil_app_build_status_data(char *buf, size_t cap, enum hil_source_command cmd, bool ok,
 				     const char *error_name)
 {
-	char streams_json[512];
+	char streams_json[384];
+	char tx_json[320];
 	uint8_t streams = hil_source_mode_stream_count(run_state.config.mode);
 	uint8_t i;
 	int p = 0;
@@ -1344,13 +1674,53 @@ static int hil_app_build_status_data(char *buf, size_t cap, enum hil_source_comm
 		p += n;
 	}
 
+	/* Failed command responses omit optional TX diagnostics. The longer
+	 * false/error fields otherwise push a maximum-ID, two-stream status past
+	 * the fixed 1024-byte HIL1 line. Successful snapshots retain the complete
+	 * controller-clock evidence. */
+	if (!ok) {
+		n = snprintf(tx_json, sizeof(tx_json), "null");
+	} else if (streams == 2U) {
+		n = snprintf(tx_json, sizeof(tx_json),
+			     "{\"anchor\":%u,\"pin\":%u,\"skip\":%u,"
+			     "\"lead\":{\"min\":[%d,%d],\"max\":[%d,%d],"
+			     "\"under\":[%u,%u]},\"sync\":[[%u,%u],[%u,%u]]}",
+			     (unsigned int)tx_rb_last[0], (unsigned int)tx_pin_last[0],
+			     (unsigned int)tx_ts_pin_advances[0],
+			     (int)((tx_lead_cnt[0] == 0U) ? 0 : tx_lead_min[0]),
+			     (int)((tx_lead_cnt[1] == 0U) ? 0 : tx_lead_min[1]),
+			     (int)((tx_lead_cnt[0] == 0U) ? 0 : tx_lead_max[0]),
+			     (int)((tx_lead_cnt[1] == 0U) ? 0 : tx_lead_max[1]),
+			     (unsigned int)tx_lead_under[0], (unsigned int)tx_lead_under[1],
+			     (unsigned int)tx_sync_last[0], (unsigned int)tx_sync_cnt[0],
+			     (unsigned int)tx_sync_last[1], (unsigned int)tx_sync_cnt[1]);
+	} else if (streams == 1U) {
+		n = snprintf(tx_json, sizeof(tx_json),
+			     "{\"anchor\":%u,\"pin\":%u,\"skip\":%u,"
+			     "\"lead\":{\"min\":[%d],\"max\":[%d],\"under\":[%u]},"
+			     "\"sync\":[[%u,%u]]}",
+			     (unsigned int)tx_rb_last[0], (unsigned int)tx_pin_last[0],
+			     (unsigned int)tx_ts_pin_advances[0],
+			     (int)((tx_lead_cnt[0] == 0U) ? 0 : tx_lead_min[0]),
+			     (int)((tx_lead_cnt[0] == 0U) ? 0 : tx_lead_max[0]),
+			     (unsigned int)tx_lead_under[0], (unsigned int)tx_sync_last[0],
+			     (unsigned int)tx_sync_cnt[0]);
+	} else {
+		n = snprintf(tx_json, sizeof(tx_json),
+			     "{\"anchor\":0,\"pin\":0,\"skip\":0,"
+			     "\"lead\":{\"min\":[],\"max\":[],\"under\":[]},\"sync\":[]}");
+	}
+	if (n < 0 || (size_t)n >= sizeof(tx_json)) {
+		return -ENOBUFS;
+	}
+
 	n = snprintf(buf, cap,
 		     "{\"command\":\"%s\",\"ok\":%s,\"error\":\"%s\","
 		     "\"active\":%s,\"state\":\"%s\",\"segment\":%u,"
 		     "\"aborted\":%s,\"cause\":\"%s\",\"stop_requested\":%s,"
 		     "\"verdict\":\"%s\",\"first_errno\":%d,"
 		     "\"mode\":\"%s\",\"profile\":\"%s\",\"reconnect\":\"%s\",\"scored_target\":%u,"
-		     "\"stream_count\":%u,\"streams\":[%s],"
+		     "\"stream_count\":%u,\"streams\":[%s],\"tx\":%s,"
 		     "\"connected\":%s,\"security_level\":%u,\"security_error\":%d,"
 		     "\"sink_ase_count\":%u,\"group\":%s,"
 		     "\"disconnect_reason\":%u,\"first_ascs_code\":%u,\"first_ascs_reason\":%u,"
@@ -1363,7 +1733,7 @@ static int hil_app_build_status_data(char *buf, size_t cap, enum hil_source_comm
 		     hil_app_nullable_name(verdict_name), run_state.first_error,
 		     hil_app_nullable_name(mode_name), hil_app_nullable_name(profile_name),
 		     hil_app_nullable_name(policy_name), run_state.config.scored_sdu_count, streams,
-		     streams_json, g_backend_ops->conn_present() ? "true" : "false",
+		     streams_json, tx_json, g_backend_ops->conn_present() ? "true" : "false",
 		     g_backend_ops->security_level(), g_backend_ops->security_error(),
 		     g_backend_ops->discovered_sink_count(),
 		     g_backend_ops->group_present() ? "true" : "false",

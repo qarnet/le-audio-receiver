@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * Scripted fake backend for the hil_source_app native suite (RH1B).
+ * Scripted fake backend for the hil_source_app native suite.
  *
  * Implements the same backend ops table the production BAP/TX modules
  * provide, but records every call in a ledger and completes operations
@@ -38,6 +38,9 @@ enum fake_op {
 	FAKE_OP_START,
 	FAKE_OP_TX_START,
 	FAKE_OP_TX_SEND,
+	FAKE_OP_TX_SEND_TS,
+	FAKE_OP_TX_READ_TX_TS,
+	FAKE_OP_TX_READ_SYNC,
 	FAKE_OP_TX_STOP,
 	FAKE_OP_DISABLE,
 	FAKE_OP_RELEASE,
@@ -57,6 +60,7 @@ struct fake_record {
 	uint8_t count; /* stream count for bulk kicks; enable uses stream_idx */
 	uint8_t addr[6];
 	uint8_t addr_type;
+	uint32_t ts; /* Pinned ISO-event timestamp (TX_SEND_TS only). */
 };
 
 /* The fake ops table. */
@@ -141,6 +145,23 @@ uint32_t fake_stream_connect_busy_rejection_count(void);
 uint32_t fake_stream_connect_accepted_count(void);
 uint32_t fake_stream_connect_completion_count(void);
 uint32_t fake_stream_connect_failure_count(void);
+/* Timestamp-mode evidence: the last pinned timestamp recorded by
+ * fake_tx_send_ts per stream, the count of timestamped sends, and the
+ * scripted readback result selector (default 0 = success). */
+uint32_t fake_ts_last(uint8_t stream_idx);
+uint32_t fake_ts_send_count(uint8_t stream_idx);
+void fake_ts_set_readback_result(int result);
+void fake_ts_set_readback_base(uint32_t timestamp);
+/* Add a signed offset to controller-now only when the bootstrap readback
+ * seeds the first gate. Later successful batches resume ideal pacing. */
+void fake_ts_set_initial_time_offset(int32_t offset_us);
+/* Advance controller-now once after Mode A stream 0 submits, before stream 1
+ * gets its final lead check. */
+void fake_ts_set_peer_submit_offset(int32_t offset_us);
+/* Hold controller-now constant after bootstrap seeds the mirrored clock. */
+void fake_ts_set_time_frozen(bool frozen);
+void fake_ts_set_time_result(int result);
+uint32_t fake_ts_time_get_count(void);
 /* The configured run shape from the last FAKE_OP_SET_RUN_SHAPE call. */
 enum hil_source_mode fake_run_mode(void);
 enum hil_source_profile fake_run_profile(void);

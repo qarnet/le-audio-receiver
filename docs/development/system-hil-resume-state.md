@@ -25,71 +25,67 @@ immutable IDs, results, hashes, or historical execution wording.
   before accepting a behavior-changing source fix, then retain both simulator
   and board evidence.
 
-## Repository state
+## Current restart point (2026-09-08)
 
-- Branch at RH3-ModeA8 TX pacing-regime isolation execution:
-  `feature/firmware-release-acceptance`.
-- Normal build and runner HEAD:
-  `000a96065d95aca4a113b7039ccc55004bcea852`.
-- At TX-pacing-isolation preflight, `git status --porcelain` contained the two
-  scoped source edits, the target-six fragment, the requested target-six
-  handoff, and the pre-existing untracked RH3-ModeA3 handoff. No receiver
-  firmware or unrelated tracked source changed.
+- Branch: `feature/firmware-release-acceptance`. Controller-clock work started
+  from `e249edd88d3a2605d2408c7255295b62b7455894`, then 29 commits ahead of its
+  tracked remote. Before commit, the worktree contained the source scheduler,
+  tests, overlays, result documents, and pre-existing cache and handoff files.
+  Inspect `git status --short` and `git rev-parse HEAD` before work. Do not
+  reset, clean, or discard unrelated paths.
 - CPUAPP image hashes are HEAD-dependent because `cmake/version.cmake` embeds
-  `APP_COMMIT`. Future handoffs must derive CPUAPP identities at execution time;
-  diagnostic images require a same-HEAD double-build byte-identity proof. Do not
-  pin a CPUAPP hash from an earlier commit as a future expected value.
-- `tests/hil/fixture.local.json` is gitignored. It is local fixture state and
-  must not be committed.
-- Retained top-level physical-run count is now forty-two: thirty-five failed,
-  one cancelled, and six passed direct diagnostic/control executions. Matrix
-  child rows remain counted in their matrix aggregate, not as additional
-  top-level direct runs. H40 and H42 are passed bounded diagnostics, not
-  acceptance evidence. The newest direct runs are ModeA9, ModeA10, and
-  ModeA11 below; all failed frozen limits and are not acceptance.
-- Latest direct RH3 SDC queue-depth fix-validation diagnostic:
-  `rh3-modeb-sdc-txout6-20260907` ran exactly once with the uncommitted
-  ModeA10 SDC rework plus the committed target-six fragment
-  (`tests/hil/source-txout6.conf`) and the normal current-HEAD receiver
-  image. The outer command returned `status=0`; `result.json` records
-  `outcome=failed` at `session end` with a single frozen-limit failure: slot
-  0 `plc=2374` above `1382` (5% of `decoded=27650`). Delivery stayed
-  near-total (`rx_valid=12638` of `12644`, floor met) and the identity
-  `plc = 2 x rx_lost (1187)` held, with the live queue at `out=4`. Queue
-  depth is exonerated: the empty-event count is invariant (1189 at target 3,
-  1187 at target 6). Root cause is settled as the SDC data-provisioning mode
-  (sequence-number/time-of-arrival event pinning with a 1000 us arrival
-  margin; NULL events for missed pins per nrfxlib SDC isochronous_channels
-  documentation). The proper fix is the documented preferred mode:
-  timestamps with host-side event pinning (ModeA12 handoff
-  `docs/development/system-hil-rh3-modea12-tsmode-handoff.md`). The SDC
-  rework stays uncommitted pending a passing row. Preserve
-  `/tmp/opencode/hil-runs/rh3-modeb-sdc-txout6-20260907/`; do not rerun it.
-  Canonical record:
-  `docs/development/system-hil-rh3-modea11-sdc-txout6-result.md`.
-- Latest direct RH3 SDC lead-window + air-side diagnostics:
-  `rh3-modeb-sdc-leadwin-20260908` (ModeA17) and
-  `rh3-modeb-sdc-airdiag-20260908` (ModeA18) each ran exactly once.
-  ModeA17 implemented the documented Nordic lead-window pattern
-  (per-readback offset resync, 3 ms lead-target submission): the window
-  discipline held perfectly by its own instrumentation (`pin_adv=1`,
-  `pin_last - rb_last = 10000 us` exactly one interval in every record)
-  and delivery collapsed further (`rx_valid=3` of 12644, `plc=38616`).
-  ModeA18 added HCI LE_Read_ISO_TX_Sync (air-side ground truth): the
-  controller reports `air_cnt=1` for the whole stream - it AIRED ONLY
-  THE FIRST EVENT while the assigned-schedule readback advanced across
-  all 12643 scheduled SDUs. The seven-run chain (ModeA12-18) is
-  complete with per-SDU controller-confirmed evidence: under every
-  pins-based host submission pattern except ModeA12's degenerate
-  host-clock pacing, the SDC central accepts, schedules, and
-  HCI-completes every pinned SDU but transmits only the first event.
-  The mechanism is inside the SDC central ISO TX pipeline; the host-side
-  design space is exhausted. Next escalation (user-directed): DevZone
-  question with the complete chain (crisp controller-confirmed
-  statement available) and/or HCI wire capture (btmon monitor UART /
-  J-Link). Canonical record:
-  `docs/development/system-hil-rh3-modea17-leadwin-result.md`.
-  Preserve both evidence roots; do not rerun these IDs.
+  `APP_COMMIT`. Derive image identities at execution time and require a
+  same-HEAD byte-identical double build before formal physical execution.
+- `tests/hil/fixture.local.json` is gitignored local fixture state and must not
+  be committed.
+- The current source fixture uses a CPUNET MPSL RTC-start event to clear an
+  application-core RTC0 mirror through IPC channel 4 and GPPI. It bootstraps
+  the CIG grid with one untimestamped stream-0 SDU, encodes before waiting,
+  targets 3000 us lead with a 2000 us minimum, skips stale whole intervals, and
+  uses one shared timestamp for both Mode A streams.
+- The source CPUAPP runs at 128 MHz via
+  `nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_1)`
+  before Bluetooth initialization. Two pristine builds were byte-identical:
+  source CPUAPP `466fd7284574ee531c081ad857e0b5b9c70f662cf1d9795fa8cf6d0844723563`
+  and source CPUNET
+  `2c3af526538cacf56312a1b5649c7e036c92196ef0ced0efbfb2e6f583ec635b`.
+- Immediate 64 MHz baseline
+  `rh3-modeb-sdc-controller-clock-20260908` failed at `run row` because the
+  source missed its scored target before the runner deadline. At stop it had
+  `sub=10907`, `sc=10763`, `sf=0`, and `skip=10185`. This is source-throughput
+  evidence, not an accepted receiver-delivery result. Preserve the evidence
+  root and do not reuse the ID.
+- Direct Mode B fix-validation
+  `rh3-modeb-sdc-controller-clock-128mhz-20260908` passed
+  `rh3.fresh_mode_b_48_4_1`: source `sub=12644`, `sc=12000`, `sf=0`,
+  `skip=0`; receiver `rx_valid=12644`, `rx_lost=11`, `plc=22`; no decoder,
+  I2S, FLPR, lifecycle, or cleanup failure.
+- Direct Mode A fix-validation
+  `rh3-modea-sdc-controller-clock-128mhz-20260908` passed
+  `rh3.fresh_mode_a_48_4_1`: both streams `sub=12644`, `sc=12000`, `sf=0`,
+  shared-grid `skip=0`; receiver `rx_valid=12645/12644`; no decoder, I2S,
+  FLPR, lifecycle, or cleanup failure. One startup half-drop record
+  (`overflow=1`, `rejects=0`) stayed informational and inside frozen limits.
+- HCI LE Read ISO TX Sync is schedule telemetry. Its count is the number of
+  successful final polls, not an aired-SDU count. The earlier ModeA17/18 runs
+  remain immutable evidence of the old scheduler, but they do not establish an
+  SDC defect. The DevZone draft is withdrawn and was not posted.
+- Canonical current record:
+  `docs/development/system-hil-rh3-controller-clock-result.md`.
+- These were two direct rows with `capture_capability=none`, not the full
+  twice-run matrix. Do not claim `TRANSPORT_RUNTIME_ACCEPTED`, analog output,
+  audibility, stereo output, RH3, or hardware acceptance. Next formal action is
+  the fixed 14-child `run-rh3-matrix`: two passes, each with four healthy 10 ms
+  rows followed by reconnect, FLPR hang, and FLPR stall. The 7.5 ms row remains
+  diagnostic-only.
+
+## Historical repository and diagnostic state
+
+> [!NOTE]
+> The entries below preserve the chronological classifications made after each
+> older run. They are not current root-cause conclusions or execution guidance;
+> the current restart point above supersedes them.
+
 - Prior direct RH3 SDC grid-bound fix-validation diagnostic:
   `rh3-modeb-sdc-rbbound-20260907` ran exactly once with the ModeA16
   build (completion-driven readback chain plus a 4-event grid bound on
@@ -355,7 +351,8 @@ immutable IDs, results, hashes, or historical execution wording.
   `bt iso quality` appends strict selected C-to-P CIS fields:
   `iso_interval_1250us`, `nse`, `cig_sync_us`, `cis_sync_us`, `c_max_pdu`,
   `c_phy`, `c_bn`, `c_flush_1250us`.
-- The latest runner-owned flash is `rh3-modeb-sdc-airdiag-20260908`. Its
+- The historical ModeA18 runner-owned flash was
+  `rh3-modeb-sdc-airdiag-20260908`. Its
   authoritative `images.json` hashes are source CPUAPP (ModeA18
   air-poll build)
   `d5e986181f2c079e15753430effec3d7e73ce872d71df009ea5a34bb72354733`,
@@ -586,12 +583,17 @@ HIL evidence root: `/tmp/opencode/hil-runs`.
 
 - Receiver remains at `0 dBm`.
 - Source remains at `+3 dBm`.
-- Source fixture remains flashed with the target-six diagnostic image from
-  `rh3-modeb-txout6-20260904`. A later local, non-flashing build restored the
-  repository default target `3`; do not treat that local artifact as the image
-  currently on the source fixture. The target-three source image has received
-  ten direct physical diagnostics, recorded below, with no acceptance
-  execution.
+- The last recorded runner-owned flash is
+  `rh3-modea-sdc-controller-clock-128mhz-20260908`. It left the source on
+  CPUAPP `466fd7284574ee531c081ad857e0b5b9c70f662cf1d9795fa8cf6d0844723563`
+  and CPUNET
+  `2c3af526538cacf56312a1b5649c7e036c92196ef0ced0efbfb2e6f583ec635b`.
+  It left the receiver on CPUAPP
+  `e8f1bd19b7c8821504e1e7fc88cef5293d1adaeba84e56c759f469afc552b07d`
+  and FLPR
+  `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+  Treat these only as the last retained evidence, not as a substitute for
+  fresh probe identity and image verification before the next action.
 - Source host and controller ISO TX buffers remain `6`.
 
 ## Fixes after `rh2-20260815-12`
@@ -871,7 +873,7 @@ receiver CPUAPP
 receiver FLPR
 `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
 
-## Narrow conclusion
+## Historical narrow conclusion
 
 RH2 short-mono runner witness passed. RH3 runs `01` through `09` are immutable
 evidence: `01` through `04`, `06`, `07`, `08`, and `09` failed, while `05` was
@@ -892,13 +894,39 @@ fields. The new Mode A diagnostic retained two selected CIS records and failed
 log scan on one receiver warning. The Mode B diagnostic retained materially
 severe loss counters; the mono diagnostic retained low loss counters. Neither
 infers cause.
-Current source fixes are software-verified only. This does not claim RH3, RH4,
-release, analog, full hardware acceptance, audibility, or repeatability.
+At that historical stop point, source fixes were software-verified only. This
+did not claim RH3, RH4, release, analog, full hardware acceptance, audibility,
+or repeatability.
 
-## Next resume steps
+## Current next resume steps
 
-Current next physical work requires a new reviewed content-analysis handoff for
-LC3-encoded scored frames. The completed TX-pacing isolation diagnostic
+1. Do not rerun or overwrite the 64 MHz baseline or either passing direct-row
+   ID. Preserve each run directory and external JUnit file.
+2. Before target-changing work, resolve both identities again and retain raw
+   probe evidence. Do not operate on the unrelated CMSIS-DAP target.
+3. Reconfirm the intended source and receiver image hashes. Formal execution
+   requires a same-HEAD byte-identical source build and the runner-owned image
+   lifecycle.
+4. Run the fixed `run-rh3-matrix` schedule from independently established clean
+   state with a new matrix ID. It contains two passes; each pass runs the four
+   healthy 10 ms rows first, then reconnect, FLPR hang, and FLPR stall. Do not
+   treat the two direct fixes as matrix children or acceptance substitutes.
+5. Only all 14 passing children can establish `TRANSPORT_RUNTIME_ACCEPTED`.
+6. Keep `48_3_1` diagnostic-only. Keep analog capture and audibility unclaimed
+   while `capture_capability=none`.
+7. Do not run the HIL source build and `tests/hil` concurrently. Both use
+   `build/hil-source`.
+
+## Superseded 2026-09-04 resume steps
+
+> [!WARNING]
+> Historical execution control only. The current steps above supersede this
+> section for future work. Preserve its run IDs and facts, but do not follow its
+> prohibition on new classified fix-validation or its old content-analysis
+> direction.
+
+At that time, the next physical work was a reviewed content-analysis handoff
+for LC3-encoded scored frames. The completed TX-pacing isolation diagnostic
 `rh3-modeb-txout6-20260904` is immutable FAIL-same-signature evidence and must
 not be rerun.
 

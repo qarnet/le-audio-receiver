@@ -1,27 +1,25 @@
 # RH3 ModeA15 raw readback diagnostic result
 
-Status: completed one-run bounded diagnostic with a decisive outcome.
-The raw SDC HCI VS ISO Read TX Timestamp values prove the readback IS
-the controller's CIG event grid (mean advance 9999.05 us per readback
-across 12642 samples, no wrap, no domain anomaly) and the pinned
-timestamps WERE on that grid for the whole stream (`pin_last` stayed
-2 intervals ahead of `rb_last`, exactly the spec-advance design), yet
-the controller aired only 167 of 12644 SDUs. The collapse is therefore
-NOT a wrong base, NOT a clock-domain error, and NOT a host chain bug:
-the host free-runs (HCI-level completions fire instantly, the
-outstanding target never engages, pins advance 10 ms per submission
-while the radio airs one event per 10 ms), the controller's ISO TX
-buffer pool fills with far-future-pinned SDUs, and the controller
-flushes them to free buffers without airing (HCI completion for every
-submitted SDU, `sf=0`, only 167 aired). This is interpretation row 1
-of the pre-committed table, refined by the buffer-pressure mechanism:
-the flush evaluation is not timestamp-pastness of individual SDUs; it
-is future-pinned buffer saturation. The ModeA12 gated run corroborates:
-its host-side gate throttled submissions to ~real time, at most a few
-future pins sat in the controller, and 12643/12644 delivered. The
-classified fix (ModeA16) bounds the pin-ahead distance against the
-CONTROLLER grid itself (readback-anchored gate; no host clock, no
-drift failure mode). Not acceptance; everything stays uncommitted.
+> [!WARNING]
+> Historical run record. The readback and pin measurements remain valid, but
+> HCI completions and receiver loss do not by themselves prove which SDUs the
+> controller aired or why it returned buffers. The buffer-saturation
+> classification and proposed next fix are superseded by
+> [system-hil-rh3-controller-clock-result.md](system-hil-rh3-controller-clock-result.md).
+
+Status: completed one-run bounded diagnostic. The raw SDC HCI VS ISO Read TX
+Timestamp values establish a 9999.05 us mean readback advance across 12642
+samples, with no wrap or observed domain anomaly. The pinned timestamps stayed
+two intervals ahead of `rb_last` while the receiver recorded only 167 valid
+SDUs of 12644 submitted. HCI completions returned for every submitted SDU and
+`sf=0`.
+
+At the time, the pre-committed interpretation attributed the result to
+future-pinned controller-buffer saturation and selected a controller-grid bound
+as ModeA16. That hypothesis is part of the historical decision trail, but these
+measurements did not rule out a host scheduling or throughput cause. The later
+controller-clock scheduler and 128 MHz A/B evidence supersede that causal
+classification. This run is not acceptance evidence.
 
 ## Scope and immutable evidence
 
@@ -71,30 +69,22 @@ Derived facts:
    At the active snapshot `pin_last == rb_last` (29 readbacks, 29
    submissions, no divergence). Every pinned timestamp was a valid
    future event on the controller grid.
-3. **Host free-run proven.** The active snapshot shows 29 submissions
-   with completions already equal (HCI-level instant), `out=0`: the
-   outstanding target never throttles, so pins advance at host encode
-   speed (~30 submissions in the first ~0.9 s, pin span ~280 ms pinned
-   in 90 ms of wall time) while the radio airs one event per 10 ms.
-   Over the run the host pinned the entire 126.44 s event grid into the
-   controller within seconds.
-4. **Controller flushed future-pinned SDUs without airing them.**
-   Receiver summary: `SDUs=167 decoded=29146 plc=28812 ... rx_valid=167
-   rx_lost=14406` (identical collapse to ModeA13/14, as predicted for
-   this diagnostic). Source: `sub=12644, sf=0` — every HCI ISO send was
-   accepted and completed; only the first ~167 events (the first ~1.7 s
-   before the buffer pool saturated) carried data on air. Per the SDC
-   documentation, far-future-pinned SDUs hold their HCI buffers ("it
-   may take some time before the corresponding HCI buffers are freed");
-   under the resulting pressure the controller freed buffers by
-   flushing the pinned SDUs.
+3. **Host submission outran event cadence in the retained snapshot.** The
+   active snapshot shows 29 submissions with completions already equal and
+   `out=0`. Pins advanced at host encode speed: about 30 submissions in the
+   first ~0.9 s, with about 280 ms of pin span created in 90 ms of wall time.
+4. **Receiver delivery collapsed while HCI sends completed.** Receiver summary:
+   `SDUs=167 decoded=29146 plc=28812 ... rx_valid=167 rx_lost=14406`.
+   Source summary: `sub=12644, sf=0`. This establishes the endpoint behavior,
+   but not whether each absent SDU was never aired, aired but not received, or
+   returned by a particular controller flush mechanism.
 
 ## Prediction versus outcome
 
 The handoff predicted the collapse reproduction (met: `rx_valid=167`,
-`plc=28812` within noise of ModeA13/14) and that the raw fields would
-discriminate the interpretation rows (met: row 1, refined to the
-buffer-saturation mechanism by the `rb_cnt`/completion evidence).
+`plc=28812` within noise of ModeA13/14). It classified the raw fields as its
+row 1 at the time. Later evidence shows that the fields did not uniquely
+discriminate controller buffer saturation from source scheduling and throughput.
 
 ## Build proof and software verification
 
@@ -108,11 +98,11 @@ normal current-HEAD build (`3e12402d...` CPUAPP, `45ab8d15...` FLPR,
 `CONFIG_AUDIO_OFFLOAD_ASRC=y`, `CONFIG_BT_ISO_RX_BUF_COUNT=3`).
 `images.json` is authoritative for the flashed tuple.
 
-## Classification and next step
+## Historical classification and next step
 
-Fixture defect: unbounded future-pinned submission depth saturating
-the controller's ISO TX buffers (HCI-instant completions disable the
-outstanding backpressure). The classified fix (ModeA16): a
+The run was classified as a fixture defect caused by unbounded future-pinned
+submission depth saturating the controller's ISO TX buffers. That mechanism was
+a hypothesis, not a direct measurement. The selected fix (ModeA16) was a
 readback-anchored send gate — allow the next pinned send only when
 `tx_ts_next <= rb_last + K x interval_us` with a small K (the
 outstanding target plus margin, ~4), bounding how far ahead of the
@@ -120,6 +110,6 @@ controller's own schedule the host may queue. This reproduces the
 ModeA12 delivery regime (few future pins in the controller) keyed to
 the controller grid instead of the host clock (no offset learning, no
 drift, no stale-pin guard). One fix-validation run under its own
-handoff (`docs/development/system-hil-rh3-modea16-rbbound-handoff.md`).
-Everything stays uncommitted pending a passing row. Preserve this
-evidence root; do not rerun this ID.
+handoff (`docs/development/system-hil-rh3-modea16-rbbound-handoff.md`). Preserve
+this evidence root and do not rerun this ID. Use the controller-clock result for
+the current implementation and next gate.
