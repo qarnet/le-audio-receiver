@@ -95,20 +95,36 @@ WARNING_PATTERNS = (
 )
 
 # The hang row may retain only these recovery diagnostics, and only inside the
-# runner-recorded raw-byte recovery window. The envelope accepts normal Zephyr
-# text-log prefixes while keeping both module name and payload exact.
+# runner-recorded raw-byte recovery window. The envelope accepts one live shell
+# prompt plus normal Zephyr text-log prefixes while keeping both module name and
+# payload exact.
 RE_HANG_RECOVERY_WARNING_ENVELOPE = re.compile(
-    r"^(?:\[[^\]\r\n]*\]\s+)?(?:<wrn>|LOG_WRN):?\s+"
-    r"(?:audio_offload:\s+)?(?P<payload>.*)$"
+    r"^(?:" + re.escape(RECEIVER_PROMPT) + r")?"
+    r"(?:\[[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3},[0-9]{3}\][ ]+)?"
+    r"(?:<wrn>|LOG_WRN):?[ ]+"
+    r"(?P<module>audio_offload|flpr_ring):[ ]+(?P<payload>.*)$"
 )
 HANG_RECOVERY_WARNING_PAYLOADS = (
-    re.compile(r"^offload: heartbeat supervisor → RECOVERING$"),
-    re.compile(
-        r"^offload recovery: handshake unhealthy, escalating to runtime restart$"
+    (
+        "audio_offload",
+        re.compile(r"^offload: heartbeat supervisor → RECOVERING$"),
     ),
-    re.compile(
-        r"^offload recovery: short ring reset failed \([+-]?\d+\), "
-        r"escalating to runtime restart$"
+    (
+        "audio_offload",
+        re.compile(
+            r"^offload recovery: handshake unhealthy, escalating to runtime restart$"
+        ),
+    ),
+    (
+        "audio_offload",
+        re.compile(
+            r"^offload recovery: short ring reset failed \(-116\), "
+            r"escalating to runtime restart$"
+        ),
+    ),
+    (
+        "flpr_ring",
+        re.compile(r"^RING_RESET_ACK timeout \(100 ms\)$"),
     ),
 )
 
@@ -3960,8 +3976,12 @@ def _is_documented_hang_recovery_warning(line):
     envelope = RE_HANG_RECOVERY_WARNING_ENVELOPE.fullmatch(plain_line)
     if envelope is None:
         return False
+    module = envelope.group("module")
     payload = envelope.group("payload")
-    return any(pattern.fullmatch(payload) for pattern in HANG_RECOVERY_WARNING_PAYLOADS)
+    return any(
+        module == expected_module and pattern.fullmatch(payload)
+        for expected_module, pattern in HANG_RECOVERY_WARNING_PAYLOADS
+    )
 
 
 def scan_raw_warnings(raw, fault=None, recovery=None):
@@ -3970,7 +3990,7 @@ def scan_raw_warnings(raw, fault=None, recovery=None):
     The existing ``scan_warnings()`` matcher remains authority for what counts
     as a warning. A warning is removed only when the row is ``hang``, recovery
     evidence carries a valid raw-byte window, the complete raw line is inside
-    that window, and its stripped payload is one of the three documented
+    that window, and its stripped module/payload pair is one of the four documented
     hang-recovery diagnostics. Fault rows without valid window evidence fail
     closed before any warning can be exempted.
     """

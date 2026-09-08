@@ -8359,14 +8359,21 @@ class TestRh3ReceiverRecoveryValidation(unittest.TestCase):
         )
 
     def test_hang_raw_log_scanner_accepts_only_documented_payloads_inside_window(self):
-        payloads = (
-            "offload: heartbeat supervisor → RECOVERING",
-            "offload recovery: handshake unhealthy, escalating to runtime restart",
-            "offload recovery: short ring reset failed (-116), escalating to runtime restart",
+        warnings = (
+            ("audio_offload", "offload: heartbeat supervisor → RECOVERING"),
+            (
+                "audio_offload",
+                "offload recovery: handshake unhealthy, escalating to runtime restart",
+            ),
+            (
+                "audio_offload",
+                "offload recovery: short ring reset failed (-116), escalating to runtime restart",
+            ),
+            ("flpr_ring", "RING_RESET_ACK timeout (100 ms)"),
         )
-        for payload in payloads:
-            with self.subTest(payload=payload):
-                line = "<wrn> audio_offload: %s\r\n" % payload
+        for module, payload in warnings:
+            with self.subTest(module=module, payload=payload):
+                line = "<wrn> %s: %s\r\n" % (module, payload)
                 raw = b"prelude\r\n" + line.encode("utf-8") + b"tail\r\n"
                 start_offset = len(b"prelude\r\n")
                 end_offset = start_offset + len(line.encode("utf-8"))
@@ -8398,6 +8405,57 @@ class TestRh3ReceiverRecoveryValidation(unittest.TestCase):
                 },
             ),
             [error_line.rstrip("\r\n")],
+        )
+
+    def test_hang_raw_log_scanner_accepts_hardware_prompted_recovery_warnings(self):
+        lines = (
+            "\x1b[1;32muart:~$ \x1b[m\x1b[8D\x1b[J"
+            "[00:02:53.080,263] \x1b[0m<wrn> flpr_ring: "
+            "RING_RESET_ACK timeout (100 ms)\x1b[0m\r\n",
+            "\x1b[1;32muart:~$ \x1b[m\x1b[8D\x1b[J"
+            "[00:02:53.080,270] \x1b[0m<wrn> audio_offload: "
+            "offload recovery: short ring reset failed (-116), "
+            "escalating to runtime restart\x1b[0m\r\n",
+        )
+        raw = b"prelude\r\n" + "".join(lines).encode("utf-8") + b"tail\r\n"
+        start_offset = len(b"prelude\r\n")
+        end_offset = start_offset + len("".join(lines).encode("utf-8"))
+
+        self.assertEqual(
+            receiver.scan_raw_warnings(
+                raw,
+                fault="hang",
+                recovery={
+                    "raw_window": {
+                        "start_offset": start_offset,
+                        "end_offset": end_offset,
+                    }
+                },
+            ),
+            [],
+        )
+
+    def test_hang_raw_log_scanner_rejects_inexact_module_payload_or_envelope(self):
+        lines = (
+            "<wrn> audio_offload: RING_RESET_ACK timeout (100 ms)\r\n",
+            "<wrn> flpr_ring: RING_RESET_ACK timeout (99 ms)\r\n",
+            "<wrn> audio_offload: offload recovery: short ring reset failed (-5), "
+            "escalating to runtime restart\r\n",
+            "[LOG_ERR] <wrn> flpr_ring: RING_RESET_ACK timeout (100 ms)\r\n",
+            "uart:~$ uart:~$ <wrn> flpr_ring: RING_RESET_ACK timeout (100 ms)\r\n",
+            "<wrn> RING_RESET_ACK timeout (100 ms)\r\n",
+            "[٠٠:٠٢:٥٣.٠٨٠,٢٦٣] <wrn> flpr_ring: RING_RESET_ACK timeout (100 ms)\r\n",
+            "<wrn>\u00a0flpr_ring: RING_RESET_ACK timeout (100 ms)\r\n",
+        )
+        raw = "".join(lines).encode("utf-8")
+
+        self.assertEqual(
+            receiver.scan_raw_warnings(
+                raw,
+                fault="hang",
+                recovery={"raw_window": {"start_offset": 0, "end_offset": len(raw)}},
+            ),
+            [line.rstrip("\r\n") for line in lines],
         )
 
     def test_hang_raw_log_scanner_rejects_malformed_utf8_despite_valid_window(self):
