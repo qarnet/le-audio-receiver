@@ -825,6 +825,94 @@ class TestSerialConsole(unittest.TestCase):
                 raw = fh.read()
             self.assertIn(b"\xff\xfe", raw, "undecodable bytes remain retained")
 
+    def test_command_receiver_waits_for_split_utf8_code_point(self):
+        class SplitUtf8Wire(hil_fakes.Wire):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.first_chunk_delivered = threading.Event()
+                self.release_tail = threading.Event()
+
+            def next_chunk(self):
+                if (
+                    self.first_chunk_delivered.is_set()
+                    and not self.release_tail.is_set()
+                ):
+                    return b""
+                chunk = super().next_chunk()
+                if chunk:
+                    self.first_chunk_delivered.set()
+                return chunk
+
+        prompt = "uart:~$ "
+        first = b"uart:~$ flpr hang\r\nFAULT_HANG_ACK received \xe2\x80"
+        tail = b"\x94 FLPR hang imminent.\r\nuart:~$ "
+        wire = SplitUtf8Wire(
+            "receiver",
+            assert_writes=["flpr hang\r"],
+            write_responses=[("flpr hang\r", [first, tail])],
+        )
+
+        def release_split_tail():
+            if wire.first_chunk_delivered.wait(2.0):
+                # Keep the incomplete suffix observable longer than one
+                # command-reader poll before supplying its final byte.
+                time.sleep(0.5)
+                wire.release_tail.set()
+
+        with tempfile.TemporaryDirectory() as td:
+            evidence_path = os.path.join(td, "receiver-console.bin")
+            console = SerialConsole(
+                "receiver",
+                "/dev/ttyACM0",
+                115200,
+                evidence_path,
+                serial_class=lambda: hil_fakes.FakeSerial(wire),
+            )
+            console.open()
+            release_thread = threading.Thread(
+                target=release_split_tail,
+                name="hil-split-utf8-release",
+                daemon=True,
+            )
+            release_thread.start()
+            try:
+                transcript = console.command_receiver("flpr hang", prompt, timeout=2.0)
+                self.assertIsNone(console.decode_error())
+            finally:
+                wire.release_tail.set()
+                release_thread.join(2.0)
+                console.close()
+
+            self.assertIn("FAULT_HANG_ACK received — FLPR hang imminent.", transcript)
+            with open(evidence_path, "rb") as fh:
+                self.assertEqual(fh.read(), first + tail)
+
+    def test_command_receiver_rejects_malformed_partial_utf8(self):
+        prompt = "uart:~$ "
+        payload = b"uart:~$ flpr hang\r\nFAULT_HANG_ACK received \xff"
+        wire = hil_fakes.Wire(
+            "receiver",
+            assert_writes=["flpr hang\r"],
+            write_responses=[("flpr hang\r", payload)],
+        )
+        with tempfile.TemporaryDirectory() as td:
+            evidence_path = os.path.join(td, "receiver-console.bin")
+            console = SerialConsole(
+                "receiver",
+                "/dev/ttyACM0",
+                115200,
+                evidence_path,
+                serial_class=lambda: hil_fakes.FakeSerial(wire),
+            )
+            console.open()
+            try:
+                with self.assertRaisesRegex(SerialConsoleError, "invalid UTF-8"):
+                    console.command_receiver("flpr hang", prompt, timeout=1.0)
+            finally:
+                console.close()
+            with open(evidence_path, "rb") as fh:
+                self.assertEqual(fh.read(), payload)
+
     def test_write_retains_exact_encoded_tx_bytes(self):
         wire = hil_fakes.Wire("receiver")
         fake_ser = hil_fakes.FakeSerial(wire)

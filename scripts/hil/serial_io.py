@@ -508,8 +508,10 @@ class SerialConsole:
                     raise SerialConsoleError(
                         "console %s reader failed: %s" % (self.role, self._read_error)
                     )
-                if echo_seen and self._partial_prompt_ready(prompt):
-                    return "\n".join(lines + [strip_vt100(self._partial_text())])
+                if echo_seen:
+                    partial_prompt = self._partial_prompt_text(prompt)
+                    if partial_prompt is not None:
+                        return "\n".join(lines + [partial_prompt])
                 if self._clock() >= deadline or self._stop.is_set():
                     raise SerialConsoleError(
                         "receiver command %r timed out without prompt return" % text
@@ -523,38 +525,39 @@ class SerialConsole:
             # must be preserved, so compare without rstrip().
             if echo_seen and plain_line.endswith(prompt):
                 return "\n".join(lines)
-            if echo_seen and self._partial_prompt_ready(prompt):
-                return "\n".join(lines + [strip_vt100(self._partial_text())])
+            if echo_seen:
+                partial_prompt = self._partial_prompt_text(prompt)
+                if partial_prompt is not None:
+                    return "\n".join(lines + [partial_prompt])
 
-    def _partial_prompt_ready(self, prompt):
-        """True only when no complete line remains before returned prompt."""
-        with self._cond:
-            if self._lines:
-                return False
-            partial = bytes(self._partial)
-        try:
-            text = partial.rstrip(b"\r").decode("utf-8")
-            return strip_vt100(text).endswith(prompt)
-        except UnicodeDecodeError as exc:
-            if self._decode_error is None:
-                self._decode_error = exc
-            return False
+    def _partial_prompt_text(self, prompt):
+        """Return a decoded returned prompt, or None while it is incomplete.
 
-    def _partial_text(self):
-        """Return current partial receive line without consuming it.
-
-        Zephyr prints its returned shell prompt without a newline. Bytes were
-        retained before this observation. Malformed partial UTF-8 marks the
-        console invalid and remains in raw evidence.
+        Serial reads may split a valid UTF-8 code point. An incomplete suffix
+        therefore remains pending until another chunk arrives; malformed
+        bytes elsewhere still poison the console. The line-queue check and
+        partial snapshot share one lock so the caller receives the exact text
+        whose returned prompt was observed.
         """
         with self._cond:
+            if self._lines:
+                return None
             partial = bytes(self._partial)
+        raw = partial.rstrip(b"\r")
         try:
-            return partial.rstrip(b"\r").decode("utf-8")
+            text = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
-            if self._decode_error is None:
-                self._decode_error = exc
-            return ""
+            if exc.reason == "unexpected end of data" and exc.end == len(raw):
+                return None
+            with self._cond:
+                if self._decode_error is None:
+                    self._decode_error = exc
+                self._cond.notify_all()
+            return None
+        plain_text = strip_vt100(text)
+        if plain_text.endswith(prompt):
+            return plain_text
+        return None
 
     def write(self, data):
         if self._ser is None:
