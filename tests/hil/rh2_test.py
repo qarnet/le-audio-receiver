@@ -508,7 +508,7 @@ def _receiver_recovery_wire(
             state="ACTIVE",
             submit=baseline_success + 250,
             success=baseline_success + 200,
-            fallback=1,
+            fallback=50,
             epoch=11,
             gen=11,
             recovery_attempts=1,
@@ -524,7 +524,7 @@ def _receiver_recovery_wire(
             state="ACTIVE",
             submit=baseline_success + 250,
             success=baseline_success + 200,
-            fallback=1,
+            fallback=50,
             epoch=11,
             gen=11,
             recovery_attempts=1,
@@ -572,7 +572,6 @@ def _receiver_recovery_wire(
     post_stop.update(
         state="STOPPED",
         submit=recovered["submit"],
-        success=recovered["submit"],
         epoch=0,
         gen=12,
     )
@@ -7818,7 +7817,9 @@ class TestRh3Rows(unittest.TestCase):
             active = summary["source_active"][0]["receiver_offload"]["offload"]
             post_stop = summary["receiver_streams"][0]["post_stop"]["offload"]
             self.assertEqual(post_stop["state"], "STOPPED")
-            self.assertEqual(post_stop["submit"], post_stop["success"])
+            self.assertEqual(
+                post_stop["submit"], post_stop["success"] + post_stop["fallback"]
+            )
             self.assertGreaterEqual(post_stop["success"], active["success"])
             for field in (
                 "fallback",
@@ -7977,7 +7978,9 @@ class TestRh3Rows(unittest.TestCase):
             active = summary["source_active"][0]["receiver_offload"]["offload"]
             post_stop = summary["receiver_streams"][0]["post_stop"]["offload"]
             self.assertEqual(post_stop["state"], "STOPPED")
-            self.assertEqual(post_stop["submit"], post_stop["success"])
+            self.assertEqual(
+                post_stop["submit"], post_stop["success"] + post_stop["fallback"]
+            )
             self.assertGreaterEqual(post_stop["success"], active["success"])
             for field in (
                 "fallback",
@@ -8015,7 +8018,7 @@ class TestRh3ReceiverRecoveryValidation(unittest.TestCase):
             "epoch": 11,
             "submit": 1200,
             "success": 1150,
-            "fallback": 1,
+            "fallback": 50,
             "busy": 0,
             "recovery_attempts": 1,
             "recovery_fail": 0,
@@ -8178,7 +8181,6 @@ class TestRh3ReceiverRecoveryValidation(unittest.TestCase):
         post = dict(active)
         post.update(
             state="STOPPED",
-            success=active["submit"],
             epoch=0,
             gen=12,
             probation_success=0,
@@ -8208,7 +8210,7 @@ class TestRh3ReceiverRecoveryValidation(unittest.TestCase):
             hil_fakes.flpr_offload_transcript(
                 state="STOPPED",
                 submit=active["submit"],
-                success=active["submit"],
+                success=active["success"],
                 fallback=active["fallback"],
                 busy=active["busy"],
                 epoch=0,
@@ -8243,7 +8245,7 @@ class TestRh3ReceiverRecoveryValidation(unittest.TestCase):
         )
 
         post["submit"] = active["submit"] - 1
-        post["success"] = post["submit"]
+        post["success"] = post["submit"] - post["fallback"]
         errors = receiver.validate_receiver_lifecycle_blocks(
             self._audio(),
             active,
@@ -8254,7 +8256,7 @@ class TestRh3ReceiverRecoveryValidation(unittest.TestCase):
         self.assertIn("post-stop offload submit regressed", errors)
 
         post["submit"] = active["submit"]
-        post["success"] = active["submit"]
+        post["success"] = active["success"]
         post["busy"] = active["busy"] + 1
         errors = receiver.validate_receiver_lifecycle_blocks(
             self._audio(),
@@ -8264,6 +8266,22 @@ class TestRh3ReceiverRecoveryValidation(unittest.TestCase):
             recovery=recovery,
         )
         self.assertIn("post-stop offload busy changed", errors)
+
+    def test_recovery_terminal_accounting_mismatch_fails(self):
+        recovery = {
+            "fault": "hang",
+            "ack": "FAULT_HANG_ACK",
+            "baseline": self._baseline(),
+        }
+        active = self._offload(probation_success=100)
+        post = dict(active)
+        post.update(state="STOPPED", success=active["success"] + 1, epoch=0, gen=12)
+
+        errors = receiver.validate_receiver_lifecycle_blocks(
+            self._audio(), active, post, self._handshake(), recovery=recovery
+        )
+
+        self.assertIn("post-stop offload submit/success/fallback mismatch", errors)
 
     def test_hang_named_transport_fault_allowed_but_integrity_fault_rejected(self):
         recovery = {

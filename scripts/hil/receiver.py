@@ -3612,6 +3612,12 @@ def _validate_post_stop_offload(
     recovery=None,
     allow_offload_disabled=False,
 ):
+    """Validate terminal offload lifecycle and accepted-submit accounting.
+
+    Healthy streams terminate every accepted submit as an offload success.
+    Named fault rows retain CPUAPP fallback evidence, so their terminal
+    partition is ``submit == success + fallback``.
+    """
     errors = []
     if not isinstance(post_stop_offload, dict):
         return ["post-stop offload missing"]
@@ -3620,15 +3626,25 @@ def _validate_post_stop_offload(
 
     submit = post_stop_offload.get("submit")
     success = post_stop_offload.get("success")
+    fallback = post_stop_offload.get("fallback")
     submit_valid = _is_nonnegative_int(submit)
     success_valid = _is_nonnegative_int(success)
+    fallback_valid = _is_nonnegative_int(fallback)
     if not submit_valid:
         errors.append("post-stop offload submit missing or malformed")
     if not success_valid:
         errors.append("post-stop offload success missing or malformed")
-    if submit_valid and success_valid:
-        if submit != success:
+    if (
+        submit_valid
+        and success_valid
+        and isinstance(submit, int)
+        and isinstance(success, int)
+    ):
+        if recovery is None and submit != success:
             errors.append("post-stop offload submit/success mismatch")
+        elif recovery is not None and fallback_valid and isinstance(fallback, int):
+            if submit != success + fallback:
+                errors.append("post-stop offload submit/success/fallback mismatch")
         if profile == "48_4_1":
             if allow_offload_disabled:
                 if submit != 0:
