@@ -14,7 +14,9 @@
  * Emit helpers assume the app mutex is held by the caller (dispatch holds
  * it; the worker takes it around every emit).  The TX stage takes the
  * mutex around shared TX bookkeeping (outstanding/seq/submitted) because
- * the sent-callback handler runs on another thread.
+ * the sent-callback handler runs on another thread.  Status dispatch also
+ * takes the TX batch mutex before the app mutex so formatting cannot split
+ * one timestamp-pinned batch after its timing gate.
  */
 
 #include <errno.h>
@@ -62,6 +64,7 @@ static bool runtime_error;
 static bool worker_started;
 
 static K_MUTEX_DEFINE(app_mutex);
+static K_MUTEX_DEFINE(tx_batch_mutex);
 static K_SEM_DEFINE(sem_worker, 0, 1);
 static K_SEM_DEFINE(sem_run_done, 0, 1);
 /* Binary condition wake for TX backpressure and drain waits.  The logical
@@ -641,6 +644,118 @@ static int hil_app_tx_learn_anchor(uint32_t interval_us, uint8_t streams)
 	return 0;
 }
 
+/* Submit one semantic batch under one status-exclusion window.  This lock
+ * starts before the final controller-time gate: a status command that waited
+ * for a previous batch may consume part of an interval, so every next batch
+ * must reread controller time and catch up before committing stream 0.  For
+ * Mode A the lock remains held until both streams have accepted the same pin;
+ * status formatting can therefore never strand stream 1 below the minimum
+ * lead after stream 0 already committed the event. */
+static int hil_app_tx_submit_batch(uint8_t streams, uint32_t pin_ts, uint32_t interval_us,
+				   uint32_t preamble, uint32_t scored,
+				   uint8_t batch_sdu[HIL_SOURCE_MAX_STREAMS][HIL_SOURCE_TX_SDU_MAX],
+				   const size_t batch_len[HIL_SOURCE_MAX_STREAMS])
+{
+	uint32_t submit_now = 0U;
+	uint32_t i;
+	int err = 0;
+
+	k_mutex_lock(&tx_batch_mutex, K_FOREVER);
+
+	/* Reuse encoded data if wake jitter or status work makes the chosen event
+	 * stale before this batch owns the submission window. */
+	for (;;) {
+		uint32_t skipped;
+
+		err = hil_app_tx_wait_for_pin(&pin_ts, interval_us, streams);
+		if (err != 0) {
+			goto out;
+		}
+		err = g_backend_ops->tx_time_get(&submit_now);
+		if (err != 0) {
+			goto out;
+		}
+		pin_ts = hil_app_tx_catch_up_pin(pin_ts, submit_now, interval_us, &skipped);
+		if (skipped == 0U) {
+			break;
+		}
+		hil_app_tx_apply_pin_advance(pin_ts, skipped, streams);
+	}
+
+	for (i = 0U; i < streams; i++) {
+		enum hil_source_signal_stage sent_stage;
+		uint32_t sent_index;
+		uint16_t seq;
+		int32_t lead_us;
+		int ret;
+
+		if (i != 0U) {
+			ret = g_backend_ops->tx_time_get(&submit_now);
+			if (ret != 0) {
+				err = ret;
+				goto out;
+			}
+		}
+		lead_us = hil_app_tx_pin_ahead(pin_ts, submit_now);
+		if (lead_us < (int32_t)HIL_SOURCE_TX_TS_MIN_AHEAD_US) {
+			/* Stream 0 already committed this shared event. Sending a
+			 * late peer would invalidate Mode A synchronization. */
+			k_mutex_lock(&app_mutex, K_FOREVER);
+			tx_lead_under[i]++;
+			k_mutex_unlock(&app_mutex);
+			err = -ETIME;
+			goto out;
+		}
+
+		k_mutex_lock(&app_mutex, K_FOREVER);
+		sent_index = tx_submitted[i];
+		sent_stage = hil_app_frame_stage(sent_index, preamble, scored);
+		seq = tx_seq[i];
+		/* A callback can race backend return, so account outstanding
+		 * before handing the SDU to Bluetooth. */
+		tx_outstanding[i]++;
+		tx_last_activity[i] = k_uptime_get();
+		k_mutex_unlock(&app_mutex);
+
+		ret = g_backend_ops->tx_send_ts(i, seq, batch_sdu[i], batch_len[i], pin_ts);
+		if (ret != 0) {
+			k_mutex_lock(&app_mutex, K_FOREVER);
+			(void)hil_source_state_counter_send_failure(&run_state, i);
+			if (tx_outstanding[i] != 0U) {
+				tx_outstanding[i]--;
+			}
+			k_mutex_unlock(&app_mutex);
+			err = ret;
+			goto out;
+		}
+
+		k_mutex_lock(&app_mutex, K_FOREVER);
+		tx_seq[i] = (uint16_t)(tx_seq[i] + 1U);
+		tx_submitted[i]++;
+		tx_pin_last[i] = pin_ts;
+		hil_app_tx_record_lead(i, lead_us);
+		if (sent_stage == HIL_SOURCE_SIGNAL_SCORED) {
+			err = hil_source_state_counter_submit_scored(&run_state, i);
+		} else {
+			err = hil_source_state_counter_submit(&run_state, i);
+		}
+		k_mutex_unlock(&app_mutex);
+		if (err != 0) {
+			goto out;
+		}
+	}
+
+	k_mutex_lock(&app_mutex, K_FOREVER);
+	for (i = 0U; i < streams; i++) {
+		tx_ts_next[i] = pin_ts + interval_us;
+	}
+	k_mutex_unlock(&app_mutex);
+
+out:
+	k_mutex_unlock(&tx_batch_mutex);
+	return err;
+}
+
 /* Returns 0 on complete, -ECANCELED (stop), -ETIMEDOUT (progress or
  * drain timeout), or a negative errno (clock/send/encode/internal error). */
 static int hil_app_tx_run_controller_clock(void)
@@ -701,7 +816,6 @@ static int hil_app_tx_run_controller_clock(void)
 	for (;;) {
 		uint32_t work = 0U;
 		uint32_t pin_ts;
-		uint32_t submit_now;
 		bool can_send;
 		enum hil_source_signal_stage stage;
 
@@ -774,90 +888,11 @@ static int hil_app_tx_run_controller_clock(void)
 			batch_len[i] = (size_t)n;
 		}
 
-		/* Reuse encoded data if wake jitter makes the chosen event stale. */
-		for (;;) {
-			uint32_t skipped;
-
-			err = hil_app_tx_wait_for_pin(&pin_ts, interval_us, streams);
-			if (err != 0) {
-				return err;
-			}
-			err = g_backend_ops->tx_time_get(&submit_now);
-			if (err != 0) {
-				return err;
-			}
-			pin_ts = hil_app_tx_catch_up_pin(pin_ts, submit_now, interval_us, &skipped);
-			if (skipped == 0U) {
-				break;
-			}
-			hil_app_tx_apply_pin_advance(pin_ts, skipped, streams);
+		err = hil_app_tx_submit_batch(streams, pin_ts, interval_us, preamble, scored,
+					      batch_sdu, batch_len);
+		if (err != 0) {
+			return err;
 		}
-
-		for (i = 0U; i < streams; i++) {
-			enum hil_source_signal_stage sent_stage;
-			uint32_t sent_index;
-			uint16_t seq;
-			int32_t lead_us;
-			int ret;
-
-			if (i != 0U) {
-				ret = g_backend_ops->tx_time_get(&submit_now);
-				if (ret != 0) {
-					return ret;
-				}
-			}
-			lead_us = hil_app_tx_pin_ahead(pin_ts, submit_now);
-			if (lead_us < (int32_t)HIL_SOURCE_TX_TS_MIN_AHEAD_US) {
-				/* Stream 0 already committed this shared event. Sending a
-				 * late peer would invalidate Mode A synchronization. */
-				k_mutex_lock(&app_mutex, K_FOREVER);
-				tx_lead_under[i]++;
-				k_mutex_unlock(&app_mutex);
-				return -ETIME;
-			}
-
-			k_mutex_lock(&app_mutex, K_FOREVER);
-			sent_index = tx_submitted[i];
-			sent_stage = hil_app_frame_stage(sent_index, preamble, scored);
-			seq = tx_seq[i];
-			/* A callback can race backend return, so account outstanding
-			 * before handing the SDU to Bluetooth. */
-			tx_outstanding[i]++;
-			tx_last_activity[i] = k_uptime_get();
-			k_mutex_unlock(&app_mutex);
-
-			ret = g_backend_ops->tx_send_ts(i, seq, batch_sdu[i], batch_len[i], pin_ts);
-			if (ret != 0) {
-				k_mutex_lock(&app_mutex, K_FOREVER);
-				(void)hil_source_state_counter_send_failure(&run_state, i);
-				if (tx_outstanding[i] != 0U) {
-					tx_outstanding[i]--;
-				}
-				k_mutex_unlock(&app_mutex);
-				return ret;
-			}
-
-			k_mutex_lock(&app_mutex, K_FOREVER);
-			tx_seq[i] = (uint16_t)(tx_seq[i] + 1U);
-			tx_submitted[i]++;
-			tx_pin_last[i] = pin_ts;
-			hil_app_tx_record_lead(i, lead_us);
-			if (sent_stage == HIL_SOURCE_SIGNAL_SCORED) {
-				err = hil_source_state_counter_submit_scored(&run_state, i);
-			} else {
-				err = hil_source_state_counter_submit(&run_state, i);
-			}
-			k_mutex_unlock(&app_mutex);
-			if (err != 0) {
-				return err;
-			}
-		}
-
-		k_mutex_lock(&app_mutex, K_FOREVER);
-		for (i = 0U; i < streams; i++) {
-			tx_ts_next[i] = pin_ts + interval_us;
-		}
-		k_mutex_unlock(&app_mutex);
 	}
 
 	{
@@ -2020,21 +2055,33 @@ static int hil_app_handle_start(const struct hil_source_command_in *cmd)
 static int hil_app_handle_status(const struct hil_source_command_in *cmd)
 {
 	int emit;
+	int ret = 0;
 
+	/* Lock order matches the TX batch path.  Waiting happens before app_mutex,
+	 * so an in-flight Mode A batch can finish both peers; status then captures
+	 * and emits one coherent between-batch snapshot. */
+	k_mutex_lock(&tx_batch_mutex, K_FOREVER);
+	k_mutex_lock(&app_mutex, K_FOREVER);
 	if (!have_config_ids) {
 		emit = hil_app_emit_status_data(cmd->command_id, cmd->run_id, 0U,
 						HIL_SOURCE_CMD_STATUS, false,
 						HIL_SOURCE_ERROR_INVALID_REQUEST);
-		return (emit != 0) ? emit : -EINVAL;
+		ret = (emit != 0) ? emit : -EINVAL;
+		goto out;
 	}
 	if (strcmp(config_run_id, cmd->run_id) != 0) {
 		emit = hil_app_emit_status_data(cmd->command_id, cmd->run_id, 0U,
 						HIL_SOURCE_CMD_STATUS, false,
 						HIL_SOURCE_ERROR_INVALID_REQUEST);
-		return (emit != 0) ? emit : -EINVAL;
+		ret = (emit != 0) ? emit : -EINVAL;
+		goto out;
 	}
-	return hil_app_emit_status_data(cmd->command_id, cmd->run_id, run_state.segment,
-					HIL_SOURCE_CMD_STATUS, true, HIL_SOURCE_ERROR_OK);
+	ret = hil_app_emit_status_data(cmd->command_id, cmd->run_id, run_state.segment,
+				       HIL_SOURCE_CMD_STATUS, true, HIL_SOURCE_ERROR_OK);
+out:
+	k_mutex_unlock(&app_mutex);
+	k_mutex_unlock(&tx_batch_mutex);
+	return ret;
 }
 
 static int hil_app_handle_stop(const struct hil_source_command_in *cmd)
@@ -2172,6 +2219,11 @@ int hil_source_app_dispatch(const char *json, size_t len)
 		}
 		return -EINVAL;
 	}
+	/* STATUS owns the TX-batch -> app-mutex order.  Taking app_mutex here first
+	 * would invert that order against timestamp submission. */
+	if (cmd.command == HIL_SOURCE_CMD_STATUS) {
+		return hil_app_handle_status(&cmd);
+	}
 
 	k_mutex_lock(&app_mutex, K_FOREVER);
 	switch (cmd.command) {
@@ -2183,9 +2235,6 @@ int hil_source_app_dispatch(const char *json, size_t len)
 		break;
 	case HIL_SOURCE_CMD_START:
 		ret = hil_app_handle_start(&cmd);
-		break;
-	case HIL_SOURCE_CMD_STATUS:
-		ret = hil_app_handle_status(&cmd);
 		break;
 	case HIL_SOURCE_CMD_STOP:
 		ret = hil_app_handle_stop(&cmd);

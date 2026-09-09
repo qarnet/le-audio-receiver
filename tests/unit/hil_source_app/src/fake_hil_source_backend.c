@@ -61,6 +61,19 @@ static uint8_t depth_target_stream;
 static struct k_sem *send_signal;
 static uint8_t send_signal_stream;
 static uint32_t send_signal_target;
+/* One-shot concurrency hooks for proving that STATUS observes timestamped
+ * sends only between complete semantic batches. */
+static struct k_sem *ts_send_block_entered;
+static struct k_sem *ts_send_block_release;
+static uint8_t ts_send_block_stream;
+static uint32_t ts_send_block_target;
+static bool ts_send_block_in_progress;
+static struct k_sem *status_block_entered;
+static struct k_sem *status_block_release;
+static bool status_block_armed;
+static int32_t status_controller_advance_us;
+static int32_t status_controller_advance_pending_us;
+static uint32_t status_observed_send_count[2];
 
 static char scripted_identity[20];
 static uint8_t scripted_identity_type;
@@ -307,6 +320,25 @@ static int fake_kick_disconnect(void)
 
 static bool fake_conn_present(void)
 {
+	if (status_block_armed) {
+		struct k_sem *entered = status_block_entered;
+		struct k_sem *release = status_block_release;
+
+		status_block_armed = false;
+		status_observed_send_count[0] = send_count[0];
+		status_observed_send_count[1] = send_count[1];
+		/* Apply the scripted elapsed time only when STATUS entered while one
+		 * peer's backend send was in progress. At a complete batch boundary
+		 * no current event has an accepted peer that can become stranded. */
+		status_controller_advance_pending_us =
+			ts_send_block_in_progress ? status_controller_advance_us : 0;
+		if (entered != NULL) {
+			k_sem_give(entered);
+		}
+		if (release != NULL) {
+			(void)k_sem_take(release, K_SECONDS(2));
+		}
+	}
 	return scripted_conn_present;
 }
 
@@ -403,6 +435,10 @@ static int fake_tx_time_get(uint32_t *time_us)
 	if (time_us == NULL) {
 		return -EINVAL;
 	}
+	if (status_controller_advance_pending_us != 0) {
+		fake_controller_time_base += (uint32_t)status_controller_advance_pending_us;
+		status_controller_advance_pending_us = 0;
+	}
 	/* Virtual controller time advances after each completed semantic batch.
 	 * Keeping reads stable makes native behavior independent of host load. */
 	*time_us = fake_controller_time_base;
@@ -418,6 +454,24 @@ static int fake_tx_send_ts(uint8_t stream_idx, uint16_t seq, const uint8_t *sdu,
 	}
 	if (stream_idx < 2U) {
 		int result = kick_results[FAKE_OP_TX_SEND_TS];
+		bool block = ts_send_block_entered != NULL && ts_send_block_release != NULL &&
+			     stream_idx == ts_send_block_stream &&
+			     fake_ts_send_count_[stream_idx] + 1U == ts_send_block_target;
+
+		if (block) {
+			struct k_sem *entered = ts_send_block_entered;
+			struct k_sem *release = ts_send_block_release;
+
+			ts_send_block_entered = NULL;
+			ts_send_block_release = NULL;
+			ts_send_block_in_progress = true;
+			k_sem_give(entered);
+			if (k_sem_take(release, K_SECONDS(2)) != 0) {
+				ts_send_block_in_progress = false;
+				return -ETIMEDOUT;
+			}
+			ts_send_block_in_progress = false;
+		}
 
 		send_count[stream_idx]++;
 		fake_ts_send_count_[stream_idx]++;
@@ -710,6 +764,18 @@ void fake_backend_reset(void)
 	send_signal = NULL;
 	send_signal_stream = 0U;
 	send_signal_target = 0U;
+	ts_send_block_entered = NULL;
+	ts_send_block_release = NULL;
+	ts_send_block_stream = 0U;
+	ts_send_block_target = 0U;
+	ts_send_block_in_progress = false;
+	status_block_entered = NULL;
+	status_block_release = NULL;
+	status_block_armed = false;
+	status_controller_advance_us = 0;
+	status_controller_advance_pending_us = 0;
+	status_observed_send_count[0] = 0U;
+	status_observed_send_count[1] = 0U;
 	strcpy(scripted_identity, "AA:BB:CC:DD:EE:FF");
 	scripted_identity_type = 1U;
 	scripted_identity_result = 0;
@@ -956,6 +1022,29 @@ void fake_set_send_signal(uint8_t stream_idx, uint32_t send_count_target, struct
 	send_signal_stream = stream_idx;
 	send_signal_target = send_count_target;
 	send_signal = sem;
+}
+
+void fake_set_ts_send_block(uint8_t stream_idx, uint32_t send_count_target, struct k_sem *entered,
+			    struct k_sem *release)
+{
+	ts_send_block_stream = stream_idx;
+	ts_send_block_target = send_count_target;
+	ts_send_block_entered = entered;
+	ts_send_block_release = release;
+}
+
+void fake_set_status_block(struct k_sem *entered, struct k_sem *release,
+			   int32_t mid_batch_controller_advance_us)
+{
+	status_block_entered = entered;
+	status_block_release = release;
+	status_controller_advance_us = mid_batch_controller_advance_us;
+	status_block_armed = true;
+}
+
+uint32_t fake_status_observed_send_count(uint8_t stream_idx)
+{
+	return (stream_idx < 2U) ? status_observed_send_count[stream_idx] : 0U;
 }
 
 /* ── observability ───────────────────────────────────────────────── */

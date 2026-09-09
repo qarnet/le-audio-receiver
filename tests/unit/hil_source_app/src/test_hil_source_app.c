@@ -88,6 +88,42 @@ static bool cap_terminal(const char *verdict)
 	return cap_find(needle);
 }
 
+static bool cap_modea_status_counters(uint32_t *seq0, uint32_t *sub0, uint32_t *seq1,
+				      uint32_t *sub1)
+{
+	uint32_t i;
+
+	for (i = 0U; i < cap_count; i++) {
+		const char *streams;
+		unsigned int parsed_seq0;
+		unsigned int parsed_sub0;
+		unsigned int parsed_seq1;
+		unsigned int parsed_sub1;
+		int parsed;
+
+		if (strstr(captured[i], "\"command\":\"status\",\"ok\":true") == NULL) {
+			continue;
+		}
+		streams = strstr(captured[i], "\"streams\":[");
+		if (streams == NULL) {
+			continue;
+		}
+		parsed = sscanf(streams,
+				"\"streams\":[{\"seq\":%u,\"sub\":%u,\"sc\":%*u,"
+				"\"sf\":%*u,\"cb\":%*u,\"out\":%*u},{\"seq\":%u,"
+				"\"sub\":%u",
+				&parsed_seq0, &parsed_sub0, &parsed_seq1, &parsed_sub1);
+		if (parsed == 4) {
+			*seq0 = parsed_seq0;
+			*sub0 = parsed_sub0;
+			*seq1 = parsed_seq1;
+			*sub1 = parsed_sub1;
+			return true;
+		}
+	}
+	return false;
+}
+
 /* Collect (segment, state) pairs from state records in capture order. */
 #define STATE_PAIRS_MAX 64
 static struct state_pair {
@@ -433,6 +469,62 @@ static void start_idle_dispatch(void)
 static bool idle_dispatch_done(void)
 {
 	return k_sem_take(&sem_idle_dispatch_done, K_NO_WAIT) == 0;
+}
+
+/* STATUS-vs-Mode-A choreography. The TX backend blocks stream 0 after the
+ * coordinator has reserved its outstanding slot. This helper releases that
+ * send, then releases the one blocked status getter once STATUS reaches a safe
+ * batch boundary. */
+static K_THREAD_STACK_DEFINE(status_race_release_stack, 2048);
+static struct k_thread status_race_release_thread;
+static K_SEM_DEFINE(sem_status_race_request, 0, 1);
+static K_SEM_DEFINE(sem_status_race_done, 0, 1);
+static K_SEM_DEFINE(sem_status_race_tx_entered, 0, 1);
+static K_SEM_DEFINE(sem_status_race_tx_release, 0, 1);
+static K_SEM_DEFINE(sem_status_race_getter_entered, 0, 1);
+static K_SEM_DEFINE(sem_status_race_getter_release, 0, 1);
+static bool status_race_release_thread_started;
+static bool status_race_getter_seen;
+
+static void status_race_release_thread_fn(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a);
+	ARG_UNUSED(b);
+	ARG_UNUSED(c);
+
+	for (;;) {
+		k_sem_take(&sem_status_race_request, K_FOREVER);
+		/* Give dispatch enough time to contend with the blocked stream-0
+		 * backend call. */
+		k_sleep(K_MSEC(10));
+		k_sem_give(&sem_status_race_tx_release);
+		status_race_getter_seen =
+			k_sem_take(&sem_status_race_getter_entered, K_SECONDS(1)) == 0;
+		/* Give even after timeout so a late getter cannot strand the test. */
+		k_sem_give(&sem_status_race_getter_release);
+		k_sem_give(&sem_status_race_done);
+	}
+}
+
+static void start_status_race_release(void)
+{
+	if (!status_race_release_thread_started) {
+		k_thread_create(&status_race_release_thread, status_race_release_stack,
+				K_THREAD_STACK_SIZEOF(status_race_release_stack),
+				status_race_release_thread_fn, NULL, NULL, NULL, K_PRIO_PREEMPT(5),
+				0, K_NO_WAIT);
+		status_race_release_thread_started = true;
+	}
+	status_race_getter_seen = false;
+	k_sem_reset(&sem_status_race_done);
+	k_sem_reset(&sem_status_race_getter_entered);
+	k_sem_reset(&sem_status_race_getter_release);
+	k_sem_give(&sem_status_race_request);
+}
+
+static bool status_race_tx_entered(void)
+{
+	return k_sem_take(&sem_status_race_tx_entered, K_NO_WAIT) == 0;
 }
 
 /* Completion choreography for TX pacing regression.  Priority 5 is lower
@@ -1784,6 +1876,74 @@ ZTEST(hil_source_app, test_status_during_streaming_uses_cached_tx_sync)
 	zassert_equal(fake_kick_count(FAKE_OP_TX_READ_SYNC), 2U,
 		      "worker captures one final sync sample per stream");
 	dispatch_idle();
+}
+
+ZTEST(hil_source_app, test_status_during_modea_send_waits_for_complete_batch)
+{
+	bool active_response;
+	bool active_streaming;
+	bool counters_parsed;
+	bool helper_completed;
+	bool terminal_reached;
+	bool terminal_pass;
+	bool terminal_status;
+	bool no_late_peer;
+	uint32_t observed_stream0;
+	uint32_t observed_stream1;
+	uint32_t status_seq0 = 0U;
+	uint32_t status_seq1 = 0U;
+	uint32_t status_sub0 = 0U;
+	uint32_t status_sub1 = 0U;
+
+	scenario_setup(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	k_sem_reset(&sem_status_race_tx_entered);
+	k_sem_reset(&sem_status_race_tx_release);
+	fake_set_ts_send_block(0U, 1U, &sem_status_race_tx_entered, &sem_status_race_tx_release);
+	dispatch_configure(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until(status_race_tx_entered, 10000U), "stream 0 send blocked");
+
+	/* Model the hardware failure: STATUS starts while stream 0 owns the shared
+	 * event, and its getter consumes 1500 us of controller time. A mid-batch
+	 * snapshot would leave only 1500 us for stream 1 and trigger -ETIME. */
+	fake_set_status_block(&sem_status_race_getter_entered, &sem_status_race_getter_release,
+			      1500);
+	start_status_race_release();
+	cap_reset();
+	dispatch_status();
+	helper_completed = k_sem_take(&sem_status_race_done, K_SECONDS(2)) == 0;
+	active_response = cap_find("\"command\":\"status\",\"ok\":true");
+	active_streaming = cap_find("\"state\":\"streaming\"");
+	counters_parsed =
+		cap_modea_status_counters(&status_seq0, &status_sub0, &status_seq1, &status_sub1);
+	terminal_reached = pump_until_terminal();
+	terminal_pass = cap_terminal("pass");
+	observed_stream0 = fake_status_observed_send_count(0U);
+	observed_stream1 = fake_status_observed_send_count(1U);
+	cap_reset();
+	dispatch_status();
+	terminal_status = cap_find("\"command\":\"status\"");
+	no_late_peer = cap_find("\"under\":[0,0]");
+	dispatch_idle();
+
+	/* Assert after IDLE so failed choreography cannot poison the next test. */
+	zassert_true(helper_completed, "race helper completed");
+	zassert_true(status_race_getter_seen, "status getter observed");
+	zassert_true(active_response, "active status response");
+	zassert_true(active_streaming, "active streaming status");
+	zassert_true(counters_parsed, "active Mode A counters");
+	zassert_true(status_sub1 > 0U, "status includes accepted peer submission");
+	zassert_equal(status_sub0, status_sub1, "status exposes complete Mode A batches");
+	zassert_equal(status_seq0, status_seq1 + 1U, "status exposes bootstrap sequence offset");
+	zassert_true(terminal_reached, "terminal");
+	zassert_true(terminal_pass, "run survives contended active status");
+	zassert_true(observed_stream1 > 0U, "status waited until stream 1 submitted");
+	zassert_equal(observed_stream0, observed_stream1 + 1U,
+		      "one bootstrap plus complete Mode A batches");
+	zassert_equal(status_seq0, observed_stream0, "public stream 0 sequence");
+	zassert_equal(status_seq1, observed_stream1, "public stream 1 sequence");
+	zassert_true(terminal_status, "terminal status response");
+	zassert_true(no_late_peer, "no split-batch late peer");
 }
 
 /* ── 13. output queue validation/overflow, formatter truncation ──── */

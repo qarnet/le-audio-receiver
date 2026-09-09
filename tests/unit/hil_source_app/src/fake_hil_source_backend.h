@@ -124,6 +124,15 @@ void fake_signal_sent(uint8_t stream_idx);
 void fake_set_depth_target_signal(uint8_t stream_idx, struct k_sem *sem);
 /* Notify a test semaphore when exact send count is reached for one stream. */
 void fake_set_send_signal(uint8_t stream_idx, uint32_t send_count_target, struct k_sem *sem);
+/* Block one timestamped send before its accepted-send count changes. */
+void fake_set_ts_send_block(uint8_t stream_idx, uint32_t send_count_target, struct k_sem *entered,
+			    struct k_sem *release);
+/* Block one conn_present status getter. If it enters during the blocked
+ * timestamped send, advance virtual controller time on the next read. The
+ * observed send counts expose whether STATUS entered mid-batch. */
+void fake_set_status_block(struct k_sem *entered, struct k_sem *release,
+			   int32_t mid_batch_controller_advance_us);
+uint32_t fake_status_observed_send_count(uint8_t stream_idx);
 
 /* ── observability ───────────────────────────────────────────────── */
 
