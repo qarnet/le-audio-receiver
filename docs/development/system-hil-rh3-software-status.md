@@ -1,11 +1,17 @@
-# RH3 matrix software status
+# Historical RH3 matrix software status
 
-Status: evidence-review and planning phase after direct Mode A and current-image
-mono, Mode B, selected-layout Mode B, selected-layout mono, selected-layout
-Mode A, and selected-layout Mode B 7.5 ms physical diagnostic completion, with
-twenty live RH3 runs recorded: fifteen failed evidence, one cancelled evidence,
-and four passed direct controls. No RH3, RH4,
-release, or analog acceptance verdict occurred.
+> [!WARNING]
+> Historical snapshot from 2026-08-22. Do not use it as current execution
+> guidance. Terms such as "current" below refer to that checkpoint. Current RH3
+> status and evidence are in
+> [system-hil-rh3-controller-clock-result.md](system-hil-rh3-controller-clock-result.md).
+
+Status at that checkpoint: evidence-review and planning phase after direct Mode
+A and current-image mono, Mode B, selected-layout Mode B, selected-layout mono,
+selected-layout Mode A, and selected-layout Mode B 7.5 ms physical diagnostic
+completion, with twenty live RH3 runs recorded: fifteen failed evidence, one
+cancelled evidence, and four passed direct controls. No RH3, RH4, release, or
+analog acceptance verdict had occurred at that checkpoint.
 
 Selected CIS-layout telemetry was build-verified before physical diagnostics,
 then flashed in receiver CPUAPP image

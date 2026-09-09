@@ -1,7 +1,12 @@
-# Session state — RH3 transport investigation, SN_STRICT validation pending
+# Historical session state: RH3 transport investigation, SN_STRICT validation pending
 
-Written 2026-09-04 (thinker session). Read this fully before continuing. It
-replaces nothing; it is the working restart state for the RH3 track.
+> [!WARNING]
+> Historical snapshot from 2026-09-04. Do not execute its pending action. Current
+> RH3 status and evidence are in
+> [system-hil-rh3-controller-clock-result.md](system-hil-rh3-controller-clock-result.md).
+
+Written 2026-09-04 during the investigation. It was the working restart state
+for that session and replaces no later record.
 
 ## Where the repo stands
 

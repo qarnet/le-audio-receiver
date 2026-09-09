@@ -1,13 +1,20 @@
-# STATUS — le-audio-receiver — 2026-09-03
+# STATUS: le-audio-receiver, 2026-09-09
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-> **Current state (2026-09-03):** System HIL plan of record revised
+> **Current state (2026-09-09):** System HIL plan of record revised
 > (`docs/development/system-hil-milestones.md`): nRF54L15 is the only
 > production receiver target, 7.5 ms is diagnostic-only until RH3-7p5
 > closes it, and receiver transport limits are frozen and enforced by the
-> runner (RH3a, 2026-09-03). Canonical software gate **65 PASS / 0 FAIL /
+> runner (RH3a, 2026-09-03). RH3 transport/runtime is
+> **`TRANSPORT_RUNTIME_ACCEPTED`**: clean commit `8123b94` passed a direct
+> Mode A fix-validation row and the fixed two-pass hardware matrix passed
+> **14/14 children**. No child failed, was cancelled, or was skipped, and no
+> cleanup failed.
+> This covers 10 ms real-device transport through I2S submission, not 7.5 ms,
+> exact release artifacts, DAC activity, analog output, audibility, or stereo
+> channel mapping. Canonical software gate **65 PASS / 0 FAIL /
 > 65 TOTAL** on the clean tree (35 twister + 5 exec-only + 22 Python +
 > coverage + matrix + BSim Stage 1; the FR2 clean-tree run at `75a8093`
 > and the FR1 clean run at `1671a9f` are historical, with earlier clean
@@ -161,7 +168,29 @@ targets before FR5 can publish anything; no replacement version or
 candidate has been selected.  FR4 and FR5 remain blocked; nothing
 published.
 
-## System HIL — plan revision + RH3a transport limits (2026-09-03)
+## System HIL: TRANSPORT_RUNTIME_ACCEPTED (2026-09-09)
+
+**RH3 transport/runtime hardware matrix accepted.** Commit `8123b94` serializes
+source STATUS reads with complete TX batches, preventing a STATUS request from
+splitting paired Mode A submissions. Two pristine source builds were
+byte-identical. Direct Mode A fix-validation
+`rh3-modea-status-batch-fix-20260909` passed, then fixed matrix
+`rh3-matrix-status-batch-fix-20260909` passed 14/14 children. No child failed,
+was cancelled, or was skipped, and no cleanup failed. Both passes completed
+fresh mono, fresh Mode A, fresh Mode B, preserved Mode B, reconnect Mode B,
+FLPR hang, and FLPR stall under frozen limits. Every child used clean HEAD
+`8123b94`, exact source and receiver image hashes, and freshly resolved
+nRF54L15/nRF5340 identities. All child and aggregate SHA-256 manifests
+verified. Evidence and scope:
+`docs/development/system-hil-rh3-controller-clock-result.md`.
+
+Verdict `TRANSPORT_RUNTIME_ACCEPTED` proves 10 ms two-device radio and firmware
+operation through I2S submission. It does not prove RH3-7p5, exact release
+artifacts, DAC output, analog audio, audibility, or stereo mapping. RH3-7p5
+remains open. RH4 exact-artifact transport/runtime integration is next when
+candidate archives exist.
+
+### Plan revision and RH3a transport limits (2026-09-03)
 
 **Plan of record revised and RH3a ACCEPTED (software).**
 `docs/development/system-hil-milestones.md` is the plan of record with four
@@ -203,8 +232,9 @@ A failed at `session end` with `missing receiver stream summary slot(s): [0,
 ceiling (`28458` of `28726`). This is classified evidence, not a cause
 diagnosis or acceptance. Aggregate and attempted-child SHA-256 verification
 passed; no child was retried. Full evidence and classification:
-`docs/development/system-hil-rh3-matrix-20260903-result.md`. RH3
-transport/runtime acceptance remains absent.
+`docs/development/system-hil-rh3-matrix-20260903-result.md`. At that checkpoint,
+RH3 transport/runtime acceptance remained absent. The 2026-09-09 matrix above
+supersedes that stop point without altering its immutable evidence.
 
 ## System HIL — RH4 host integration (2026-08-13)
 

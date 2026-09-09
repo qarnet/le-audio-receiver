@@ -94,13 +94,15 @@ requested.
 ## Plan of record
 
 `docs/development/system-hil-milestones.md` is the accepted plan of record
-for the System HIL track (revised 2026-09-03): nRF54L15 is the only production
-receiver target, 7.5 ms is diagnostic-only until RH3-7p5 closes it, receiver
+for the System HIL track (revised 2026-09-09): nRF54L15 is the only production
+receiver target, the 10 ms RH3 transport/runtime matrix is accepted at clean
+commit `8123b94`, 7.5 ms is diagnostic-only until RH3-7p5 closes it, receiver
 transport limits are frozen and runner-enforced, and reruns are the
-fix-validation mechanism. `docs/development/refactor-plan.md` remains the
-accepted plan of record for the refactoring track R0–R10. Read the applicable
-one before structural changes. `docs/design.md` remains the historical
-architecture and evidence document, not an active structural plan.
+fix-validation mechanism. RH4 waits for exact candidate archives.
+`docs/development/refactor-plan.md` remains the accepted plan of record for the
+refactoring track R0–R10. Read the applicable one before structural changes.
+`docs/design.md` remains the historical architecture and evidence document, not
+an active structural plan.
 
 Current status: **canonical gate 65 PASS / 0 FAIL / 65 TOTAL** on the
 clean tree (35 twister + 5 exec-only + 22 Python + coverage + matrix +

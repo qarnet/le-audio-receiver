@@ -1,16 +1,16 @@
 # System HIL milestones
 
-Status: **plan of record for the System HIL track, revised 2026-09-03**. RH0,
-RH1, and RH2 are accepted with retained evidence; RH3 is in progress with
-frozen receiver transport limits; RH4 and the analog extensions stay gated on
-RH3 acceptance. Scope decisions recorded 2026-09-03: nRF54L15 is the only
-production receiver target and the nRF5340 release track is eliminated from
-this plan (see final section); 7.5 ms (`48_3_1`) is not a supported release
+Status: **plan of record for the System HIL track, revised 2026-09-09**. RH0,
+RH1, RH2, and the 10 ms RH3 transport/runtime matrix are accepted with retained
+evidence. RH4 is next and waits for exact candidate archives. Analog extensions
+remain separate. Scope decisions recorded 2026-09-03 still apply: nRF54L15 is
+the only production receiver target and the nRF5340 release track is eliminated
+from this plan (see final section); 7.5 ms (`48_3_1`) is not a supported release
 shape until RH3-7p5 closes it (see that phase). First milestone uses hardware
 already present and proves receiver transport/runtime behavior without stereo
-analog feedback. Mono aggregate feedback may be added with existing USB
-adapter after safe electrical qualification. Stereo analog acceptance remains a
-later extension.
+analog feedback. Mono aggregate feedback may be added with existing USB adapter
+after safe electrical qualification. Stereo analog acceptance remains a later
+extension.
 
 ## Standing decisions (2026-09-03)
 
@@ -662,6 +662,11 @@ established clean state with the same locked counter rules and no manual
 intervention. Record verdict `TRANSPORT_RUNTIME_ACCEPTED`, never
 `SYSTEM_AUDIO_ACCEPTED`.
 
+Result: accepted on 2026-09-09 at clean commit `8123b94`. The direct Mode A
+fix-validation row and all 14 fixed-matrix children passed. Canonical evidence
+and scope are recorded in
+`docs/development/system-hil-rh3-controller-clock-result.md`.
+
 ### RH3-7p5: 7.5 ms delivery loss (named open question, not release-blocking)
 
 `48_3_1` rows are removed from the mandatory matrix and remain selectable as
@@ -915,11 +920,12 @@ rerun on the changed build.
 
 ## Recommendation
 
-Current phase in sequence: RH3a. Freeze the receiver transport limits in the
-runner, scope the mandatory matrix to 10 ms, then execute the matrix and close
-RH3. Do not install NCS v3.4.0. Do not start RH4 hardware, MA, or SA work
-before RH3 acceptance. Keep verdict names distinct so transport/runtime or
-mono smoke can never be mistaken for stereo output acceptance.
+Current phase in sequence: RH4 preparation. RH3 has current 10 ms acceptance.
+Do not install NCS v3.4.0. Do not start RH4 hardware until exact candidate
+receiver and HIL-source archives exist and pass artifact validation. MA and SA
+remain separate analog extensions. Keep verdict names distinct so
+transport/runtime or mono smoke cannot be mistaken for stereo output
+acceptance.
 
 ## nRF5340 elimination (2026-09-03 decision)
 

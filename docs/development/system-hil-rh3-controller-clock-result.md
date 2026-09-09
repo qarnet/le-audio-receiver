@@ -1,10 +1,11 @@
-# RH3 controller-clock source fix-validation result
+# RH3 controller-clock fix-validation and transport acceptance result
 
-Status: **two direct fix-validation rows passed on 2026-09-08**. The current
-nRF5340 SDC source fixture now passes the same 10 ms Mode B shape that failed
-with the application core at 64 MHz, and it also passes the mandatory 10 ms
-Mode A shape. These are direct rows, not the twice-run RH3 matrix, so
-`TRANSPORT_RUNTIME_ACCEPTED` is not claimed.
+Status: **`TRANSPORT_RUNTIME_ACCEPTED` on 2026-09-09**. A direct post-fix Mode A
+row passed, then the fixed RH3 matrix passed all 14 children. No child failed,
+was cancelled, or was skipped, and no cleanup failed. This verdict covers the
+required 10 ms transport and runtime boundary only. It does not cover 7.5 ms,
+exact release artifacts, DAC output, analog audio, audibility, or stereo channel
+mapping.
 
 This result supersedes the SDC-defect and host-exhaustion conclusions in the
 ModeA17/18 result and withdraws the proposed DevZone defect question. It does
@@ -44,40 +45,49 @@ implementation updates `SystemCoreClock` after changing the divider
 
 ## Software verification
 
-Two pristine `fw-build-hil-source` builds were byte-identical:
+Commit `8123b948fc82b33217a955c40021eda57d315f12` prevents a STATUS request from
+splitting one source transmit batch. The batch mutex covers both Mode A sends,
+and STATUS takes that mutex before reading application state. Two pristine
+`fw-build-hil-source` builds at that clean commit were byte-identical:
 
 | Image | SHA-256 |
 | --- | --- |
-| Source CPUAPP | `466fd7284574ee531c081ad857e0b5b9c70f662cf1d9795fa8cf6d0844723563` |
+| Source CPUAPP | `43bdef15f6cbca0ab4df9bbeda2594b0d1ccf0e5d9a534d0507998e712b4cb3d` |
 | Source CPUNET | `2c3af526538cacf56312a1b5649c7e036c92196ef0ced0efbfb2e6f583ec635b` |
-| Source merged | `f33f28aa62308e8da861b7cefa445906f59b1489d187a0e03e0c1215699ab263` |
+| Source merged | `4132883138cb199cca1c1f74a6bfc5a511470bb6a56a9ff704f0696cc7147b2f` |
 | Source merged CPUNET | `85fcb7674956e654f299e322d0417a572d27cddcf7787b8278d8ec9244bdd53b` |
 
 Both builds completed without compiler, linker, Kconfig, or devicetree
-warnings. Retained console notices were the dirty Git tree and Zephyr's
-documented global `__ASSERT()` message.
+warnings. The only matched diagnostic was Zephyr's documented global
+`__ASSERT()` message.
 
-Focused verification after the clock change:
+Focused verification after the STATUS serialization fix:
 
-- `tests/unit/hil_source_app`: 77/77 passed, no warnings.
+- The detached pre-fix proof at `a1941bc6536d705c62096ec6cb7451e615f74bf7`
+  passed 77 existing tests and failed only the new STATUS-interleave regression.
+- `tests/unit/hil_source_app`: 78/78 passed, no warnings.
 - `tests/unit/hil_source_control`: 45/45 passed, no warnings.
-- `scripts/test_hil_runner.py` plus `tests/hil`: 383 passed, 1 skipped.
-- `scripts/check-test-matrix.py --repo-root .`: 0 errors, 0 notes.
+- `tests/unit/hil_source_signal`: 22/22 passed, no warnings.
+- `tests/hil/rh2_test.py`, `scripts/test_hil_runner.py`,
+  `tests/hil/rh2_hardware_test.py`, and Python byte-compilation passed.
 - `git diff --check`: passed.
 - Resolved source CPUAPP config contains `CONFIG_NRFX_CLOCK=y` and
   `CONFIG_CLOCK_CONTROL_NRF=y`.
 
 ## Physical identity and images
 
-Both runs resolved identities before flashing:
+Retained hardware-run identity evidence:
 
 | Role | Probe evidence | Console |
 | --- | --- | --- |
 | Receiver | `8EE9B3FF`, nRF54L15, DPIDR `0x6ba02477`, PART `0x00054b15`, variant `AAC0` | `/dev/ttyACM2`, USB interface 02 |
 | Source | J-Link `001050023938`, nRF5340, DPIDR `0x6ba02477`, PART `0x00005340`, variant `0x514b4141` | `/dev/ttyACM1`, USB interface 02 |
 
-Both passing rows used the source hashes above and these unchanged receiver
-images:
+The two 2026-09-08 direct rows used source CPUAPP
+`466fd7284574ee531c081ad857e0b5b9c70f662cf1d9795fa8cf6d0844723563` and
+the same CPUNET hash shown above. The 2026-09-09 direct row and matrix used the
+post-fix source hashes in the software-verification table. Every run used these
+unchanged receiver images:
 
 | Image | SHA-256 |
 | --- | --- |
@@ -189,7 +199,7 @@ I2S underrun, stream reset, push failure, or offload fault. FLPR offload ended a
 
 All 26 entries listed by this run's `SHA256SUMS` verify.
 
-## Warning classification
+## 2026-09-08 warning classification
 
 Each source flash retained only two OpenOCD page-tail erase messages:
 
@@ -205,6 +215,140 @@ page-granularity behavior already classified in `STATUS.md`, not an unexplained
 runtime or programming failure. No other warning, error, assertion, or fatal
 line was retained for either passing row.
 
+## STATUS-interleave failure and repair
+
+The first RF-controlled matrix attempt,
+`rh3-matrix-controller-clock-rf-controlled-20260908`, stopped at pass 1 Mode A.
+Its source STATUS record observed stream 0 at `seq=17 sub=16 cb=16 out=1` and
+stream 1 at `seq=16 sub=16 cb=16 out=0`. STATUS had run between the two sends
+that form one Mode A event. The runner then expired its active FLPR progress
+deadline even though the receiver's last active FLPR sample was `submit=28
+success=28` with no fault. This was a source-fixture consistency defect, not a
+receiver offload failure.
+
+Commit `8123b94` serializes STATUS with complete transmit batches. It preserves
+the frozen timestamp lead, common Mode A timestamp, outstanding target, ISO TX
+buffer count, and receiver limits.
+
+## Direct post-fix Mode A validation
+
+Run ID: `rh3-modea-status-batch-fix-20260909`
+
+Evidence root:
+
+```text
+/tmp/opencode/hil-runs/rh3-modea-status-batch-fix-20260909/
+```
+
+External JUnit:
+
+```text
+/tmp/opencode/hil-runs/rh3-modea-status-batch-fix-20260909.junit.xml
+```
+
+The command returned `0`. `result.json` records `outcome=passed`, no failed
+boundary, no failure detail, and `cleanup_failures=[]`. Source final status
+recorded `sub=12644`, `sc=12000`, `cb=12644`, `sf=0`, and `out=0` on both
+streams. Shared-grid `skip=0`; both lead-under counters were zero; both final TX
+Sync polls returned timestamp `146454515`.
+
+Receiver slot 0 recorded `rx_valid=12645`, `rx_lost=45`, `plc=23`, and
+`decoded=25312`. Slot 1 recorded `rx_valid=12644`, `rx_lost=25`, and zero PLC,
+as expected for the second half of Mode A assembly. Decode errors, RX errors,
+I2S underruns, stream resets, empty SDUs, and push failures were zero. Post-stop
+FLPR recorded `submit=12656`, `success=12656`, zero fallback, and zero faults.
+Handshake health and protocol counters passed. All 26 entries in `SHA256SUMS`
+verified.
+
+## Fixed RH3 matrix acceptance
+
+Run ID: `rh3-matrix-status-batch-fix-20260909`
+
+Aggregate evidence:
+
+```text
+/tmp/opencode/hil-runs/rh3-matrix-status-batch-fix-20260909/
+```
+
+Child evidence:
+
+```text
+/tmp/opencode/hil-runs/rh3-matrix-status-batch-fix-20260909.children.82ccd373be50/
+```
+
+External JUnit:
+
+```text
+/tmp/opencode/hil-runs/rh3-matrix-status-batch-fix-20260909.junit.xml
+```
+
+The command returned `0`. Aggregate `result.json` records 14 scheduled, 14
+attempted, 14 passed, zero failed, zero cancelled, and no cleanup failures.
+JUnit records 14 tests with zero failures, errors, or skips. Child execution ran
+from `2026-09-09T20:51:59Z` through `2026-09-09T21:42:11Z`; summed child
+duration was 3011.358 seconds.
+
+Host adapters `hci0` (`A0:AD:9F:7B:C7:95`) and `hci1`
+(`B0:82:E2:1F:A2:80`) were powered off before the direct row and matrix. An exit
+and signal trap restored both adapters afterward, and the operator confirmed
+both powered on. This host-state observation was not written into the run
+manifests, so treat it as session context rather than manifest-backed evidence.
+
+| Pass | Row | Source submitted/scored | Receiver `rx_valid` | `rx_lost` | PLC |
+| ---: | --- | --- | --- | --- | --- |
+| 1 | fresh mono | 12644/12000 | 12645 | 10 | 10 |
+| 1 | fresh Mode A | 12644/12000 each | 12645 / 12644 | 52 / 25 | 23 / 0 |
+| 1 | fresh Mode B | 12644/12000 | 12643 | 12 | 24 |
+| 1 | preserved Mode B | 12644/12000 | 12645 | 10 | 20 |
+| 1 | reconnect Mode B | 25288/24000 | 12645 / 12645 | 10 / 10 | 20 / 20 |
+| 1 | FLPR hang Mode B | 12644/12000 | 12645 | 10 | 20 |
+| 1 | FLPR stall Mode B | 12644/12000 | 12645 | 10 | 20 |
+| 2 | fresh mono | 12644/12000 | 12645 | 10 | 10 |
+| 2 | fresh Mode A | 12644/12000 each | 12645 / 12644 | 45 / 25 | 23 / 0 |
+| 2 | fresh Mode B | 12644/12000 | 12644 | 11 | 22 |
+| 2 | preserved Mode B | 12644/12000 | 12645 | 10 | 20 |
+| 2 | reconnect Mode B | 25288/24000 | 12645 / 12645 | 10 / 10 | 20 / 20 |
+| 2 | FLPR hang Mode B | 12644/12000 | 12645 | 10 | 20 |
+| 2 | FLPR stall Mode B | 12644/12000 | 12645 | 10 | 20 |
+
+Every source segment ended with zero send failure, zero outstanding SDU, zero
+skipped event, zero lead underrun, and zero lifecycle or security error. Every
+receiver segment stayed within the frozen delivery and PLC limits. Decode
+errors, RX errors, unknown RX status, empty SDUs, I2S underruns, stream resets,
+and push failures were zero.
+
+Both hang rows received `FAULT_HANG_ACK`, recorded one timeout and one recovery
+attempt, used 45 CPUAPP fallback blocks, restarted FLPR runtime once, and ended
+with zero recovery failure. Both stall rows received `TIMED_STALL_ACK`, recorded
+one timeout and one recovery attempt, used 12 fallback blocks, required no
+runtime restart, and ended with zero recovery failure.
+
+All children resolved receiver `8EE9B3FF` as nRF54L15 with DPIDR `0x6ba02477`,
+PART `0x00054b15`, variant `AAC0`, and source J-Link `001050023938` as nRF5340
+with DPIDR `0x6ba02477`, PART `0x00005340`, variant `0x514b4141`. Every child
+recorded clean Git HEAD `8123b948fc82b33217a955c40021eda57d315f12` and the
+two source and two receiver image hashes listed above. The unrelated CMSIS-DAP
+target `E6635C08CB1F502B` was never selected.
+
+Aggregate `SHA256SUMS` verified all seven files. Healthy and reconnect children
+verified 26 files each; hang and stall children verified 28 files each. Source
+flash logs contained only these page-tail extensions, followed by successful
+verification:
+
+```text
+Warn : Adding extra erase range, 0x01025708 .. 0x010257ff
+Warn : Adding extra erase range, 0x00058984 .. 0x00058fff
+```
+
+The application-core start address changed with the post-fix image size. Its
+end address remains the same 4 KiB flash-page boundary. All programming steps
+ended with `** Verified OK **`.
+
+Only hang rows emitted runtime warnings. Each retained the expected
+`RING_RESET_ACK timeout (100 ms)` and escalation-to-runtime-restart warning
+inside its named fault window. No other warning, error, assertion, fatal line,
+or cleanup failure occurred.
+
 ## Conclusion and next gate
 
 The 64/128 MHz A/B comparison proves that the corrected encode-before-wait
@@ -219,10 +363,13 @@ a SoftDevice Controller defect report. The old near-zero-delivery chain used a
 different source scheduler, and the new A/B comparison does not assign each
 historical failure to one sub-cause.
 
+The fixed two-pass matrix satisfies RH3's source, receiver, recovery, lifecycle,
+identity, and evidence-integrity requirements. Verdict:
+`TRANSPORT_RUNTIME_ACCEPTED`.
+
 No analog capture or audibility observation occurred because
-`capture_capability=none`. The runs prove neither physical stereo output nor
-full RH3 acceptance. Per the plan of record, the next acceptance action is one
-fixed `run-rh3-matrix` execution from independently established clean state:
-two passes, each with the four healthy 10 ms rows followed by reconnect, FLPR
-hang, and FLPR stall, for 14 child runs total. The 7.5 ms profile remains
-outside the mandatory matrix.
+`capture_capability=none`. This verdict reaches the I2S submission boundary; it
+does not prove DAC pin activity, analog output, audibility, or stereo channel
+mapping. It also does not cover 7.5 ms or immutable release assets. RH3-7p5
+remains open. Next transport gate is RH4 against exact candidate archives when
+such assets exist.

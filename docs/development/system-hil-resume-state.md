@@ -1,9 +1,9 @@
 # System HIL resume state
 
 > [!WARNING]
-> Working restart handoff, not an acceptance record. Read this before resuming
-> physical HIL work. Do not claim RH2, RH3, or hardware acceptance from this
-> file.
+> Working restart handoff, not the canonical acceptance record. Read this before
+> resuming physical HIL work. Use the result document cited below for the RH3
+> verdict, and do not infer broader hardware or audio acceptance from this file.
 
 ## Current standing lab hardware authority (2026-08-23)
 
@@ -25,59 +25,53 @@ immutable IDs, results, hashes, or historical execution wording.
   before accepting a behavior-changing source fix, then retain both simulator
   and board evidence.
 
-## Current restart point (2026-09-08)
+## Current restart point (2026-09-09)
 
-- Branch: `feature/firmware-release-acceptance`. Controller-clock work started
-  from `e249edd88d3a2605d2408c7255295b62b7455894`, then 29 commits ahead of its
-  tracked remote. Before commit, the worktree contained the source scheduler,
-  tests, overlays, result documents, and pre-existing cache and handoff files.
-  Inspect `git status --short` and `git rev-parse HEAD` before work. Do not
-  reset, clean, or discard unrelated paths.
-- CPUAPP image hashes are HEAD-dependent because `cmake/version.cmake` embeds
-  `APP_COMMIT`. Derive image identities at execution time and require a
-  same-HEAD byte-identical double build before formal physical execution.
-- `tests/hil/fixture.local.json` is gitignored local fixture state and must not
-  be committed.
-- The current source fixture uses a CPUNET MPSL RTC-start event to clear an
-  application-core RTC0 mirror through IPC channel 4 and GPPI. It bootstraps
-  the CIG grid with one untimestamped stream-0 SDU, encodes before waiting,
-  targets 3000 us lead with a 2000 us minimum, skips stale whole intervals, and
-  uses one shared timestamp for both Mode A streams.
-- The source CPUAPP runs at 128 MHz via
-  `nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_1)`
-  before Bluetooth initialization. Two pristine builds were byte-identical:
-  source CPUAPP `466fd7284574ee531c081ad857e0b5b9c70f662cf1d9795fa8cf6d0844723563`
-  and source CPUNET
-  `2c3af526538cacf56312a1b5649c7e036c92196ef0ced0efbfb2e6f583ec635b`.
-- Immediate 64 MHz baseline
-  `rh3-modeb-sdc-controller-clock-20260908` failed at `run row` because the
-  source missed its scored target before the runner deadline. At stop it had
-  `sub=10907`, `sc=10763`, `sf=0`, and `skip=10185`. This is source-throughput
-  evidence, not an accepted receiver-delivery result. Preserve the evidence
-  root and do not reuse the ID.
-- Direct Mode B fix-validation
-  `rh3-modeb-sdc-controller-clock-128mhz-20260908` passed
-  `rh3.fresh_mode_b_48_4_1`: source `sub=12644`, `sc=12000`, `sf=0`,
-  `skip=0`; receiver `rx_valid=12644`, `rx_lost=11`, `plc=22`; no decoder,
-  I2S, FLPR, lifecycle, or cleanup failure.
-- Direct Mode A fix-validation
-  `rh3-modea-sdc-controller-clock-128mhz-20260908` passed
-  `rh3.fresh_mode_a_48_4_1`: both streams `sub=12644`, `sc=12000`, `sf=0`,
-  shared-grid `skip=0`; receiver `rx_valid=12645/12644`; no decoder, I2S,
-  FLPR, lifecycle, or cleanup failure. One startup half-drop record
-  (`overflow=1`, `rejects=0`) stayed informational and inside frozen limits.
-- HCI LE Read ISO TX Sync is schedule telemetry. Its count is the number of
-  successful final polls, not an aired-SDU count. The earlier ModeA17/18 runs
-  remain immutable evidence of the old scheduler, but they do not establish an
-  SDC defect. The DevZone draft is withdrawn and was not posted.
-- Canonical current record:
-  `docs/development/system-hil-rh3-controller-clock-result.md`.
-- These were two direct rows with `capture_capability=none`, not the full
-  twice-run matrix. Do not claim `TRANSPORT_RUNTIME_ACCEPTED`, analog output,
-  audibility, stereo output, RH3, or hardware acceptance. Next formal action is
-  the fixed 14-child `run-rh3-matrix`: two passes, each with four healthy 10 ms
-  rows followed by reconnect, FLPR hang, and FLPR stall. The 7.5 ms row remains
-  diagnostic-only.
+- Branch: `feature/firmware-release-acceptance`. Acceptance evidence used clean
+  commit `8123b948fc82b33217a955c40021eda57d315f12`. Inspect
+  `git status --short` and `git rev-parse HEAD` before more work. Do not reset,
+  clean, or discard unrelated paths.
+- Commit `8123b94` fixes the first RF-controlled matrix failure by preventing a
+  STATUS request from splitting one source transmit batch. It preserves the
+  3000 us lead target, 2000 us minimum, shared Mode A timestamp, outstanding
+  target 3, six ISO TX buffers, and all frozen receiver limits.
+- The detached pre-fix proof passed 77 existing source-app tests and failed only
+  the new STATUS-interleave regression. Fixed-tree source tests passed 78/78;
+  source-control passed 45/45; source-signal passed 22/22. HIL Python tests and
+  byte-compilation passed.
+- Two pristine source builds at the acceptance commit were byte-identical:
+  CPUAPP `43bdef15f6cbca0ab4df9bbeda2594b0d1ccf0e5d9a534d0507998e712b4cb3d`,
+  CPUNET `2c3af526538cacf56312a1b5649c7e036c92196ef0ced0efbfb2e6f583ec635b`,
+  merged `4132883138cb199cca1c1f74a6bfc5a511470bb6a56a9ff704f0696cc7147b2f`,
+  and merged CPUNET
+  `85fcb7674956e654f299e322d0417a572d27cddcf7787b8278d8ec9244bdd53b`.
+  Both builds had only Zephyr's documented global `__ASSERT()` diagnostic.
+- Direct fix-validation `rh3-modea-status-batch-fix-20260909` passed Mode A
+  with both source streams at `sub=12644`, `sc=12000`, `sf=0`, and `out=0`.
+  Receiver slots recorded `rx_valid=12645/12644`; no decode, I2S, FLPR,
+  lifecycle, warning-policy, evidence, or cleanup failure occurred. Preserve
+  `/tmp/opencode/hil-runs/rh3-modea-status-batch-fix-20260909/` and its external
+  JUnit.
+- Fixed matrix `rh3-matrix-status-batch-fix-20260909` passed all 14 children:
+  14 scheduled, 14 attempted, 14 passed, zero failed, zero cancelled, zero
+  skipped, and no cleanup failures. Both passes completed fresh mono, fresh
+  Mode A, fresh Mode B, preserved Mode B, reconnect Mode B, FLPR hang, and FLPR
+  stall. All source counts, receiver limits, healthy offload checks, fault
+  recovery checks, identities, image hashes, warning scans, and evidence hashes
+  passed.
+- Verdict: `TRANSPORT_RUNTIME_ACCEPTED`. This proves real two-device 10 ms
+  radio and firmware behavior through the I2S submission boundary. It does not
+  prove exact release artifacts, 7.5 ms, DAC activity, analog output,
+  audibility, or stereo channel mapping.
+- Canonical record:
+  `docs/development/system-hil-rh3-controller-clock-result.md`. Aggregate matrix
+  evidence is
+  `/tmp/opencode/hil-runs/rh3-matrix-status-batch-fix-20260909/`; child evidence
+  is under the sibling `.children.82ccd373be50` directory.
+- RH3-7p5 remains open and `48_3_1` remains diagnostic-only. Next transport
+  gate is RH4 against exact candidate archives. No candidate is selected, so do
+  not substitute local builds or relabel this RH3 result as exact-artifact,
+  analog, release, or full-system acceptance.
 
 ## Historical repository and diagnostic state
 
@@ -144,8 +138,8 @@ immutable IDs, results, hashes, or historical execution wording.
   is byte-identical to ModeA13's no-gate run (`rx_valid=167` in both),
   falsifying the ModeA13 pre-air-readback classification and reaching
   the plan's two-consecutive-same-signature STOP POINT for the
-  timestamp-mode line: the next hardware action is a user-reviewed
-  decision. The three-run chain (ModeA12 gate delivered 12643/12644;
+  timestamp-mode line: at that point, the next hardware action required a
+  user-reviewed decision. The three-run chain (ModeA12 gate delivered 12643/12644;
   both no-gate runs collapse at SDU 167 regardless of readback chain)
   leaves the on-hardware semantics of the SDC VS ISO Read TX Timestamp
   values and pinned-timestamp flush evaluation unresolved from
@@ -214,8 +208,9 @@ immutable IDs, results, hashes, or historical execution wording.
   and the outcome selects the handoff's "other boundary" arm (record,
   classify, stop). The staged overlay line stays uncommitted; the next lever
   (`CONFIG_BT_CTLR_ISOAL_PSN_IGNORE=y`) or the larger fixture SDC switch is a
-  user decision. The full RH3 matrix stays blocked behind a passing Mode B
-  row. Preserve `/tmp/opencode/hil-runs/rh3-modeb-snstrict-20260904/`; do not
+  user decision. At that point, the full RH3 matrix was blocked behind a
+  passing Mode B row. Preserve
+  `/tmp/opencode/hil-runs/rh3-modeb-snstrict-20260904/`; do not
   rerun it. Canonical record:
   `docs/development/system-hil-rh3-modea9-snstrict-result.md`.
 - Latest matrix attempt: `rh3-matrix-20260903-rh3a` ran once under frozen
@@ -583,17 +578,18 @@ HIL evidence root: `/tmp/opencode/hil-runs`.
 
 - Receiver remains at `0 dBm`.
 - Source remains at `+3 dBm`.
-- The last recorded runner-owned flash is
-  `rh3-modea-sdc-controller-clock-128mhz-20260908`. It left the source on
-  CPUAPP `466fd7284574ee531c081ad857e0b5b9c70f662cf1d9795fa8cf6d0844723563`
-  and CPUNET
+- The last recorded runner-owned flash is the pass-2 FLPR stall child in
+  `rh3-matrix-status-batch-fix-20260909`. It left the source on CPUAPP
+  `43bdef15f6cbca0ab4df9bbeda2594b0d1ccf0e5d9a534d0507998e712b4cb3d` and
+  CPUNET
   `2c3af526538cacf56312a1b5649c7e036c92196ef0ced0efbfb2e6f583ec635b`.
   It left the receiver on CPUAPP
   `e8f1bd19b7c8821504e1e7fc88cef5293d1adaeba84e56c759f469afc552b07d`
   and FLPR
   `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
-  Treat these only as the last retained evidence, not as a substitute for
-  fresh probe identity and image verification before the next action.
+  Treat these as the last retained flash evidence, not as a substitute for
+  fresh probe identity and image verification before the next target-changing
+  action.
 - Source host and controller ISO TX buffers remain `6`.
 
 ## Fixes after `rh2-20260815-12`
@@ -655,23 +651,21 @@ HIL evidence root: `/tmp/opencode/hil-runs`.
     below, retained active-to-stopped lifecycle boundaries, and failed at
     `log scan` on one receiver warning. It is not acceptance evidence.
 
-The current source artifacts after the failed-CIS retry and Mode A source-depth
-corrections are
-software-verified only. They are not RH3 acceptance or hardware proof. Current
-source artifact identities prepared for a future reviewed RH3 preflight are:
+### Historical pre-acceptance source artifacts
+
+After the failed-CIS retry and Mode A source-depth corrections, these source
+artifacts had software verification only:
 
 - CPUAPP (`build/hil-source/app/zephyr/zephyr.hex`): `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333`;
 - CPUNET (`build/hil-source/hci_ipc/zephyr/zephyr.hex`): `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`;
 - merged app (`build/hil-source/merged.hex`): `97d095130a1196085d09263e10000aabe64852ec4d335e89eb1729343bcf8472`;
 - merged CPUNET (`build/hil-source/merged_CPUNET.hex`): `b4ee66969efd97a150589af3d91ba7e7df2582e938687c87470e7eb6208096e0`.
 
-Receiver CPUAPP and FLPR stay at their separately recorded RH2 identities
-below unless changed and reviewed. Do not rebuild during physical matrix
- execution. Preflight must verify the current source artifact identity. Any
-later source rebuild or configuration change needs review and updated identity
-before execution.
+These hashes predate the controller-clock scheduler and STATUS serialization
+fixes. They are not the accepted RH3 source hashes. The current restart point
+records the later accepted source and receiver identities.
 
-## Verification completed
+### Historical verification at that point
 
 - `tests/hil/rh2_test.py`: `143/143` passed.
 - `tests/hil/rh3_matrix_test.py`: `14/14` passed.
@@ -680,10 +674,10 @@ before execution.
 - Compileall: passed.
 - `git diff --check`: passed.
 
-The failed-CIS correction was software-only. The target-three source image
-later received eleven direct physical diagnostics, recorded below. Existing RH3
-evidence remains immutable and is not acceptance evidence; no acceptance claim
-follows from this verification.
+This verification covered the failed-CIS correction only. The target-three
+source image later received eleven direct physical diagnostics, recorded below.
+No acceptance claim follows from this historical verification. The 2026-09-09
+matrix in the current restart point supersedes it as the RH3 verdict.
 
 Source build and host regression ran sequentially, not concurrently, because
 the source build and `tests/hil` both touch `build/hil-source`. Never run them
@@ -898,7 +892,12 @@ At that historical stop point, source fixes were software-verified only. This
 did not claim RH3, RH4, release, analog, full hardware acceptance, audibility,
 or repeatability.
 
-## Current next resume steps
+## Superseded pre-acceptance resume steps
+
+> [!NOTE]
+> Historical execution plan only. The 2026-09-09 direct row and fixed matrix
+> completed these steps. Use the current restart point at the top of this file
+> for future work.
 
 1. Do not rerun or overwrite the 64 MHz baseline or either passing direct-row
    ID. Preserve each run directory and external JUnit file.
@@ -2118,7 +2117,7 @@ direct controls. The target-three source image has received eleven direct
 physical diagnostics. The unexpected receiver fatal, missing summary, and
 missing post-stop FLPR snapshot are blockers for any acceptance interpretation.
 
-## RH3-40 current stop point
+## RH3-40 historical stop point
 
 H40 is documented in the [canonical result](system-hil-rh3-40-tx-notify-workqueue-result.md).
 Preserve its immutable evidence root:
@@ -2128,9 +2127,9 @@ Preserve its immutable evidence root:
 ```
 
 H40 must not be retried. Do not adopt its trace configuration in production.
-Any further hardware work requires a new reviewed plan.
+At that point, further hardware work required a new reviewed plan.
 
-## RH3-41 current stop point
+## RH3-41 historical stop point
 
 H41 is documented in the [canonical result](system-hil-rh3-41-tx-notify-workqueue-untraced-result.md).
 Preserve its immutable evidence root:
@@ -2139,11 +2138,11 @@ Preserve its immutable evidence root:
 /tmp/opencode/hil-runs/rh3-20260830-41-tx-notify-wq-untraced/
 ```
 
-H41 must not be retried or adopted in production. Any further hardware work
-requires a new reviewed plan that distinguishes receiver enable callback and
-start behavior from source enabled-completion observation.
+H41 must not be retried or adopted in production. At that point, further
+hardware work required a new reviewed plan that distinguished receiver enable
+callback and start behavior from source enabled-completion observation.
 
-## RH3-42 current stop point
+## RH3-42 historical stop point
 
 H42 is documented in the [canonical result](system-hil-rh3-42-bap-enable-trace-result.md).
 Preserve its immutable evidence root:
@@ -2157,7 +2156,7 @@ marker must not be adopted in production. The single passed row proves only that
 the receiver enabled callback returned from `bt_bap_stream_start()` with a zero
 result in this execution; it does not prove workqueue causation, an H41 root
 cause, audio health, or a repair. Any further hardware or production work
-requires a new reviewed plan.
+required a new reviewed plan at that point.
 
 ## RH3-ModeA1b offload-disabled rerun stop point
 
