@@ -190,6 +190,19 @@ artifacts, DAC output, analog audio, audibility, or stereo mapping. RH3-7p5
 remains open. RH4 exact-artifact transport/runtime integration is next when
 candidate archives exist.
 
+**Pinned lessons entry (2026-09-11):** the root cause of the ModeA9-ModeA18
+collapse chain was the HIL source fixture itself, not the SoftDevice
+Controller: the source app core ran at 64 MHz (missing
+`NRF_CLOCK_HFCLK_DIV_1`) and its two LC3 encodes per 10 ms interval did not
+fit, so the fixture starved its own controller-clock scheduler. The
+withdrawn SDC-defect escalation and its corrected DRGN-23776 citation
+(v2.9.0 fix entry, still open in the online known-issues list) are recorded
+in `docs/development/devzone-sdc-central-iso-tx-question-draft.md` and the
+review response there. The durable lessons (128 MHz throughput budget,
+mirrored controller-clock scheduling, telemetry semantics, investigation
+discipline) are pinned in `AGENTS.md` under "HIL source fixture timing".
+
+
 ### Plan revision and RH3a transport limits (2026-09-03)
 
 **Plan of record revised and RH3a ACCEPTED (software).**

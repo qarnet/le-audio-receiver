@@ -714,6 +714,72 @@ PCM5102A's spec lead (112 dB / 32-bit / 384 kHz vs 100 dB / 16-bit) is
 inaudible at the 48 kHz/16-bit LC3 floor. PCM5102A cheap breakouts need the
 SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 
+## HIL source fixture timing — the pinned lessons (2026-09-09/11)
+
+The RH3 "Mode B delivery collapse" investigation (ModeA9–ModeA18, 2026-09,
+evidence immutable under `/tmp/opencode/hil-runs/`, canonical record
+`docs/development/system-hil-rh3-controller-clock-result.md`) burned ~10
+hardware runs and a week on a fixture defect that was ours, while
+repeatedly concluding — with confidence — that the SoftDevice Controller
+was broken. Pin these before touching the fixture again:
+
+1. **The nRF5340 source app core must run at 128 MHz for this workload.**
+   `hil/source/app/src/main.c` calls
+   `nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_1)`
+   before Bluetooth init. Without it the core runs at 64 MHz, two LC3
+   encodes do not fit one 10 ms SDU interval, and the fixture starves the
+   controller-clock scheduler (the 2026-09-08 baseline: `sub=10907`,
+   `skip=10185`, roughly alternate events missed with zero send errors —
+   looks exactly like a controller-side flush). Nordic's own real-time
+   audio code sets DIV_1 for the same reason:
+   `nrf/applications/nrf5340_audio/src/modules/audio_clock.c`,
+   `nrf/tests/bluetooth/iso/src/main.c`,
+   `zephyr/subsys/bluetooth/audio/shell/bap_usb.c`. Any new HIL source
+   feature that adds per-SDU CPU work re-checks the throughput budget at
+   128 MHz first, before inventing controller theories.
+
+2. **Schedule against the controller clock, never a host-derived offset.**
+   The working scheduler mirrors the CPUNET MPSL RTC into app-core RTC0
+   via IPC channel 4 + PPI before Bluetooth starts
+   (`hil/source/app/src/hil_source_controller_time.c`, the pattern from
+   `nrf/samples/bluetooth/iso_time_sync/src/controller_time_nrf53_app.c`),
+   encodes BEFORE the send window, and submits at 3000 us lead / 2000 us
+   minimum against that clock. The failed designs derived a
+   host-vs-controller offset from `HCI VS ISO Read TX Timestamp` +
+   callback time — self-referential bookkeeping that "proved" whatever
+   the fixture was already doing.
+
+3. **Know what each telemetry source actually measures.**
+   - ISO `sent` callback = controller ACCEPTED the SDU (completion may
+     follow enqueue, transmit, or flush — `iso.h`,
+     `struct bt_iso_chan_ops.sent`). Instant completions do NOT mean
+     on-air success.
+   - `HCI VS ISO Read TX Timestamp` = the SCHEDULED event of the last
+     provided SDU (re-documented in v2.9.0, DRGN-23708). NOT current
+     controller time, NOT air proof.
+   - `HCI LE Read ISO TX Sync` = per-SDU sync reference of the last
+     SCHEDULED SDU (DRGN-21293); the command SUCCEEDING requires a
+     transmitted SDU but the poll is not an aired-SDU counter.
+   - Receiver ISO counters = the only peer-delivery truth. They show the
+     collapse was real, but not which side caused it.
+
+4. **Investigation discipline (the part that failed hardest).**
+   - Validate the fixture against the FULL Nordic reference pattern
+     (including the RTC mirror and clock setup) before assigning
+     controller causation. The ModeA17 draft claimed "exactly the
+     iso_time_sync pattern" while omitting its central mechanism.
+   - A variation table is only an isolation if every run used the same
+     source/CPUNET/receiver image tuple; dirty-worktree runs with
+     different hashes are diagnostics, not isolation evidence.
+   - Cite changelog entries by the header that actually governs the
+     line, not by adjacency — the ModeA17 draft confidently placed the
+     DRGN-23776 fix in the "v3.3.0 block" when it sits in v2.9.0
+     (corrected 2026-09-11, `3dc12af`).
+   - Do not reopen the withdrawn SDC-defect escalation
+     (`docs/development/devzone-sdc-central-iso-tx-question-draft.md`)
+     without a clean-commit regression that satisfies the conditions in
+     its "Guidance for the next agent" section.
+
 ## Stack
 
 - App: BAP Unicast Server sink-only, 2 sink ASEs, LC3 decode → I2S
