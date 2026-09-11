@@ -8,6 +8,9 @@ CLAUDE.md
 __pycache__/
 *.py[cod]
 
+# clangd index caches (scripts/gen-lsp-links.sh / per-tree CMake CREATE_LINK)
+.cache/
+
 # Twister output
 twister-out*/
 
