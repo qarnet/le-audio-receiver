@@ -81,12 +81,22 @@ immutable IDs, results, hashes, or historical execution wording.
   stamp); receiver CPUAPP `767715b6...` (APP_COMMIT-derived at `d4c77bc`),
   FLPR unchanged. This re-baselines 7.5 ms on the fixed fixture and supports
   the H40/H42-was-the-fixture explanation; it does NOT reinstate `48_3_1`
-  rows. Staged sequence per
-  `docs/development/system-hil-rh3-7p5-mono-handoff.md`: Stage 2 (Mode B
-  48_3_1, two-encode budget at 7.5 ms) next under its own handoff; Stage 3
-  (Mode A shared grid) after; reinstatement remains a plan revision.
-  Canonical record: `docs/development/system-hil-rh3-7p5-mono-result.md`.
-  Preserve `/tmp/opencode/hil-runs/rh3-7p5-mono-20260911/`; do not rerun it.
+  rows. Stage 2 (2026-09-11): diagnostic `rh3-7p5-modeb-20260911` (row
+  `rh3.fresh_mode_b_48_3_1`) PASSED - receiver `rx_valid=16858` of
+  `16859` (99.994%), `plc=32` of `decoded=33748` (0.095%), source fully
+  healthy (`sub=16859, sc=16000, sf=0, skip=0`, lead `2851..2939 us`,
+  `under=0`), FLPR `ACTIVE` with `submit=0 success=0 fallback=0` (the
+  documented ASRC fallback), CIG at Mode B 7.5 ms: `nse=3`,
+  `cig_sync_us=3426` (~46% duty), `c_max_pdu=180`. The two-encode budget
+  fits at 128 MHz in the tighter interval - the pinned throughput
+  lesson's discriminating workload is closed affirmatively. Same proven
+  image tuple as Stage 1 (hashes re-verified). Canonical record:
+  `docs/development/system-hil-rh3-7p5-modeb-result.md`. Preserve
+  `/tmp/opencode/hil-runs/rh3-7p5-modeb-20260911/`; do not rerun it.
+  Stage 3 (Mode A shared-grid 48_3_1) is next under its own handoff;
+  reinstatement stays a plan revision. Stage 1 canonical record:
+  `docs/development/system-hil-rh3-7p5-mono-result.md`; preserve
+  `/tmp/opencode/hil-runs/rh3-7p5-mono-20260911/`; do not rerun it.
 - RH3-7p5 remains open and `48_3_1` remains diagnostic-only. Next transport
   gate is RH4 against exact candidate archives. No candidate is selected, so do
   not substitute local builds or relabel this RH3 result as exact-artifact,
