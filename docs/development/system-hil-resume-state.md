@@ -68,6 +68,25 @@ immutable IDs, results, hashes, or historical execution wording.
   evidence is
   `/tmp/opencode/hil-runs/rh3-matrix-status-batch-fix-20260909/`; child evidence
   is under the sibling `.children.82ccd373be50` directory.
+- RH3-7p5 progress (2026-09-11): Stage 1 diagnostic
+  `rh3-7p5-mono-20260911` PASSED with near-perfect delivery - receiver
+  `rx_valid=16860` of `16859` submitted, `plc=14` of `decoded=16874` (0.083%),
+  zero CRC errors, source fully healthy (`sub=16859`, `sc=16000`, `sf=0`,
+  `skip=0`, lead 2878..2939 us, `under=0`), and the pre-declared 7.5 ms
+  receiver expectation held exactly (FLPR `ACTIVE` with
+  `submit=0 success=0 fallback=0` - the documented 360-frame cpuapp ASRC
+  fallback path). Controller CIG at 7.5 ms: `iso_interval_1250us=6`, `nse=3`,
+  `cig_sync_us=2346` (~31% duty). The source images were byte-identical to the
+  RH3-accepted tuple (HEAD delta is docs-only; HIL source embeds no commit
+  stamp); receiver CPUAPP `767715b6...` (APP_COMMIT-derived at `d4c77bc`),
+  FLPR unchanged. This re-baselines 7.5 ms on the fixed fixture and supports
+  the H40/H42-was-the-fixture explanation; it does NOT reinstate `48_3_1`
+  rows. Staged sequence per
+  `docs/development/system-hil-rh3-7p5-mono-handoff.md`: Stage 2 (Mode B
+  48_3_1, two-encode budget at 7.5 ms) next under its own handoff; Stage 3
+  (Mode A shared grid) after; reinstatement remains a plan revision.
+  Canonical record: `docs/development/system-hil-rh3-7p5-mono-result.md`.
+  Preserve `/tmp/opencode/hil-runs/rh3-7p5-mono-20260911/`; do not rerun it.
 - RH3-7p5 remains open and `48_3_1` remains diagnostic-only. Next transport
   gate is RH4 against exact candidate archives. No candidate is selected, so do
   not substitute local builds or relabel this RH3 result as exact-artifact,
