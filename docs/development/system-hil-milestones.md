@@ -1,12 +1,16 @@
 # System HIL milestones
 
-Status: **plan of record for the System HIL track, revised 2026-09-09**. RH0,
+Status: **plan of record for the System HIL track, revised 2026-09-11**. RH0,
 RH1, RH2, and the 10 ms RH3 transport/runtime matrix are accepted with retained
-evidence. RH4 is next and waits for exact candidate archives. Analog extensions
-remain separate. Scope decisions recorded 2026-09-03 still apply: nRF54L15 is
-the only production receiver target and the nRF5340 release track is eliminated
-from this plan (see final section); 7.5 ms (`48_3_1`) is not a supported release
-shape until RH3-7p5 closes it (see that phase). First milestone uses hardware
+evidence. RH3-7p5 is CLOSED by its three-stage re-baseline (2026-09-11: mono,
+Mode B, and Mode A `48_3_1` rows all passed on the fixed 128 MHz
+controller-clock fixture), and by user decision 2026-09-11 the three 7.5 ms rows
+are REINSTATED in the mandatory matrix (see that phase). The reinstated matrix
+requires one fresh two-pass acceptance run under this revision. RH4 is next
+and waits for exact candidate archives. Analog extensions remain separate.
+Scope decisions recorded 2026-09-03 still apply: nRF54L15 is the only production
+receiver target and the nRF5340 release track is eliminated from this plan
+(see final section). First milestone uses hardware
 already present and proves receiver transport/runtime behavior without stereo
 analog feedback. Mono aggregate feedback may be added with existing USB adapter
 after safe electrical qualification. Stereo analog acceptance remains a later
@@ -17,9 +21,11 @@ extension.
 1. nRF54L15 is the only production receiver target for this plan. All nRF5340
    receiver testing and its factory release ZIP are eliminated here; the
    nRF5340DK keeps exactly one role, the dedicated HIL source fixture.
-2. 7.5 ms (`48_3_1`) must work or it must not be supported. It is removed from
-   the mandatory matrix and from release claims until RH3-7p5 either fixes and
-   reinstates it or removes it from the product advertisement.
+2. 7.5 ms (`48_3_1`) must work or it must not be supported. CLOSED
+   2026-09-11: the RH3-7p5 three-stage re-baseline proved it works (all three
+   rows passed with near-total delivery and fully healthy source telemetry),
+   and the user decision reinstated the rows in the mandatory matrix. The
+   2026-09-03 exclusion is superseded by the 2026-09-11 revision.
 3. Receiver transport limits are frozen (see "Receiver transport limits") and
    enforced by the runner. A row that delivers a small fraction of submitted
    audio is a failed row, not a pass.
@@ -642,7 +648,8 @@ nonzero exit on any failed boundary.
 
 ### RH3: receiver transport/runtime matrix
 
-Mandatory rows for nRF54L15, 10 ms only:
+Mandatory rows for nRF54L15 (10 ms core set plus the reinstated 7.5 ms
+rows per the 2026-09-11 revision):
 
 | State | Mode | Profile | Scored SDUs per stream | Minimum scored interval |
 |---|---|---|---:|---:|
@@ -650,27 +657,50 @@ Mandatory rows for nRF54L15, 10 ms only:
 | fresh pair | Mode A | `48_4_1` | 12,000 | 120 s |
 | fresh pair | Mode B | `48_4_1` | 12,000 | 120 s |
 | preserved bond | Mode B | `48_4_1` | 12,000 | 120 s |
+| fresh pair | mono | `48_3_1` | 16,000 | 120 s |
+| fresh pair | Mode A | `48_3_1` | 16,000 | 120 s |
+| fresh pair | Mode B | `48_3_1` | 16,000 | 120 s |
 
-Every mandatory row is subject to the frozen receiver transport limits. Each
-pass runs these four rows first, then explicit disconnect/reconnect and
-nRF54L15 FLPR hang/stall recovery rows. The fixed matrix is 14 child runs, seven
-rows per pass for two passes. Fault-injection rows use named windows and cannot
-weaken healthy-row warning rules.
+Every mandatory row is subject to the frozen receiver transport limits. At
+7.5 ms the receiver's cpuapp ASRC fallback (FLPR ACTIVE with zero
+submit/success) is the documented expected path, not an offload failure.
+Each pass runs these seven rows first, then explicit disconnect/reconnect
+and nRF54L15 FLPR hang/stall recovery rows. The fixed matrix is 20 child
+runs, ten rows per pass for two passes. Fault-injection rows use named
+windows and cannot weaken healthy-row warning rules.
 
-Exit: all 14 child runs pass in the fixed two-pass schedule from independently
-established clean state with the same locked counter rules and no manual
-intervention. Record verdict `TRANSPORT_RUNTIME_ACCEPTED`, never
-`SYSTEM_AUDIO_ACCEPTED`.
+Exit: all 20 child runs pass in the fixed two-pass schedule from
+independently established clean state with the same locked counter rules
+and no manual intervention. Record verdict `TRANSPORT_RUNTIME_ACCEPTED`,
+never `SYSTEM_AUDIO_ACCEPTED`.
 
 Result: accepted on 2026-09-09 at clean commit `8123b94`. The direct Mode A
 fix-validation row and all 14 fixed-matrix children passed. Canonical evidence
 and scope are recorded in
 `docs/development/system-hil-rh3-controller-clock-result.md`.
 
-### RH3-7p5: 7.5 ms delivery loss (named open question, not release-blocking)
+### RH3-7p5: 7.5 ms delivery loss (CLOSED 2026-09-11)
 
-`48_3_1` rows are removed from the mandatory matrix and remain selectable as
-single diagnostic rows. Evidence so far:
+CLOSED by the three-stage re-baseline on the fixed fixture (128 MHz app
+core, mirrored controller-clock scheduling, SDC netcore). All three rows
+passed with near-total delivery and fully healthy source telemetry
+(`skip=0`, `sf=0`, lead `under=0` in every stage):
+
+| Stage | Row | rx_valid | PLC |
+| --- | --- | ---: | ---: |
+| mono | `rh3.fresh_mono_48_3_1` | 16860/16859 (100.006%) | 14 (0.083%) |
+| Mode B | `rh3.fresh_mode_b_48_3_1` | 16858/16859 (99.994%) | 32 (0.095%) |
+| Mode A | `rh3.fresh_mode_a_48_3_1` | 16860+16859 both CISes | 27 (0.08%) |
+
+Canonical records:
+`docs/development/system-hil-rh3-7p5-mono-result.md`,
+`system-hil-rh3-7p5-modeb-result.md`, `system-hil-rh3-7p5-modea-result.md`.
+The historical H40/H42 collapse is attributed to the two settled fixture
+defects (64 MHz app core; host-offset scheduling) and the since-replaced
+SW-split central. User decision 2026-09-11 reinstated the three rows in
+the mandatory matrix; the 2026-09-03 removal is superseded.
+
+Historical record of the open question (2026-09-03 to 2026-09-11):
 
 - HIL source at 7.5 ms: H40 (traced) and H42 (untraced) both completed their
   rows while delivering almost nothing, with zero CRC errors. H42 receiver
@@ -684,10 +714,9 @@ single diagnostic rows. Evidence so far:
   SW-split central to SDC peripheral combination at 7.5 ms, not automatically
   at the receiver product.
 
-Exit is binary per the standing decision: root-cause and fix, then reinstate
+Exit (historical wording, superseded): root-cause and fix, then reinstate
 the three `48_3_1` rows in the mandatory matrix, or remove 7.5 ms advertisement
-from the production PACS. Until one happens, no release claims 7.5 ms. If it is
-removed from the product, the BZ desktop gate re-runs at 10 ms.
+from the production PACS. The reinstatement branch was taken 2026-09-11.
 
 ### RH4: exact-artifact transport/runtime integration
 

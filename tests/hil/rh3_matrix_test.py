@@ -115,25 +115,32 @@ class TestRh3Schedule(unittest.TestCase):
             self.assertEqual(group[-2][2], rows.RH3_HANG_ROW)
             self.assertEqual(group[-1][2], rows.RH3_STALL_ROW)
 
-    def test_mandatory_matrix_is_10ms_only(self):
-        # Standing decision 2026-09-03: 7.5 ms is diagnostic-only until
-        # RH3-7p5 closes it. The mandatory pass must contain no 48_3_1 rows.
-        for row in rows.RH3_PASS_ROWS:
-            self.assertEqual(
-                row.profile,
-                "48_4_1",
-                "mandatory matrix row %s must be 48_4_1" % row.name,
-            )
-        self.assertEqual(len(rows.RH3_PASS_ROWS), 7)
+    def test_mandatory_matrix_contains_both_frame_durations(self):
+        # Plan revision 2026-09-11 (user decision): the three 7.5 ms rows
+        # are reinstated in the mandatory matrix after the RH3-7p5
+        # three-stage re-baseline passed every row on the fixed fixture.
+        # The 10 ms healthy rows stay first so fresh 10 ms shapes prove
+        # the base matrix before 7.5 ms adds its rows.
+        profiles = [row.profile for row in rows.RH3_PASS_ROWS]
+        self.assertEqual(profiles[:4], ["48_4_1"] * 4)
+        self.assertEqual(profiles[4:7], ["48_3_1"] * 3)
+        self.assertEqual(
+            [row.profile for row in rows.RH3_PASS_ROWS[7:]],
+            ["48_4_1"] * 3,
+            "follow-on rows stay 10 ms",
+        )
+        self.assertEqual(len(rows.RH3_PASS_ROWS), 10)
 
-    def test_7p5_rows_remain_selectable_diagnostics(self):
+    def test_7p5_rows_are_mandatory_and_selectable(self):
+        # The historical diagnostic alias must reference the same RowSpec
+        # objects now in the mandatory matrix (evidence docs cite it).
         self.assertEqual(len(rows.RH3_7P5_DIAGNOSTIC_ROWS), 3)
         for row in rows.RH3_7P5_DIAGNOSTIC_ROWS:
             self.assertEqual(row.profile, "48_3_1")
             self.assertIn(row.name, rows.row_names())
             self.assertIs(rows.get_row(row.name), row)
-            self.assertNotIn(
-                row, rows.RH3_PASS_ROWS, "diagnostic row leaked into matrix"
+            self.assertIn(
+                row, rows.RH3_PASS_ROWS, "7.5 ms row missing from matrix"
             )
 
     def test_child_ids_are_deterministic_safe_and_unique(self):

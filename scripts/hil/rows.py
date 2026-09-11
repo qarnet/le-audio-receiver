@@ -154,8 +154,15 @@ RH2_ROW = RowSpec(
 
 
 # Mandatory RH3 healthy matrix, frozen directly from
-# docs/development/system-hil-milestones.md (standing decision 2026-09-03:
-# 10 ms rows only; 7.5 ms is diagnostic-only until RH3-7p5 closes it).
+# docs/development/system-hil-milestones.md. Plan revision 2026-09-11
+# (user decision): the three 7.5 ms rows are REINSTATED in the mandatory
+# matrix after the RH3-7p5 three-stage re-baseline passed every row on
+# the fixed 128 MHz controller-clock fixture (mono rx_valid=16860/16859,
+# Mode B 16858/16859, Mode A both CISes; source fully healthy with
+# skip=0 in every stage; receiver inside all frozen limits). The 7.5 ms
+# receiver expectation stays explicit: cpuapp ASRC fallback (FLPR ACTIVE
+# with zero submit/success) is correct behavior at 360 input frames,
+# validated by the runner's 48_3_1 branch.
 # Fault rows are separate because named recovery windows must never weaken
 # healthy-row warning rules.
 RH3_HEALTHY_ROWS = (
@@ -163,17 +170,18 @@ RH3_HEALTHY_ROWS = (
     RowSpec("rh3.fresh_mode_a_48_4_1", "fresh", "mode_a", "48_4_1", 12000),
     RowSpec("rh3.fresh_mode_b_48_4_1", "fresh", "mode_b", "48_4_1", 12000),
     RowSpec("rh3.preserved_mode_b_48_4_1", "preserved", "mode_b", "48_4_1", 12000),
-)
-
-# 7.5 ms diagnostic rows (RH3-7p5 named open question).  Selectable for
-# single diagnostic runs but NOT part of the mandatory matrix: hardware
-# evidence (H40/H42) shows near-total non-valid delivery at 48_3_1, and the
-# standing decision is that 7.5 ms must work or must not be supported.
-RH3_7P5_DIAGNOSTIC_ROWS = (
     RowSpec("rh3.fresh_mono_48_3_1", "fresh", "mono", "48_3_1", 16000),
     RowSpec("rh3.fresh_mode_a_48_3_1", "fresh", "mode_a", "48_3_1", 16000),
     RowSpec("rh3.fresh_mode_b_48_3_1", "fresh", "mode_b", "48_3_1", 16000),
 )
+
+# Historical note: these three rows were diagnostic-only between the
+# 2026-09-03 standing decision and the 2026-09-11 plan revision, under
+# the name RH3_7P5_DIAGNOSTIC_ROWS. They are now part of the mandatory
+# matrix above; the old name is kept as an alias for compatibility with
+# retained evidence documentation, and it must reference the same
+# RowSpec objects so `rows.get_row()` stays unique.
+RH3_7P5_DIAGNOSTIC_ROWS = RH3_HEALTHY_ROWS[4:7]
 
 
 # Explicit follow-on rows.  They are intentionally not included in the
@@ -230,7 +238,6 @@ def rh3_schedule():
 ALL_ROWS = (
     RH2_ROW,
     *RH3_HEALTHY_ROWS,
-    *RH3_7P5_DIAGNOSTIC_ROWS,
     RH3_RECONNECT_ROW,
     RH3_HANG_ROW,
     RH3_STALL_ROW,
