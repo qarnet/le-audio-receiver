@@ -25,12 +25,31 @@ immutable IDs, results, hashes, or historical execution wording.
   before accepting a behavior-changing source fix, then retain both simulator
   and board evidence.
 
-## Current restart point (2026-09-09)
+## Current restart point (2026-09-11)
 
 - Branch: `feature/firmware-release-acceptance`. Acceptance evidence used clean
-  commit `8123b948fc82b33217a955c40021eda57d315f12`. Inspect
-  `git status --short` and `git rev-parse HEAD` before more work. Do not reset,
-  clean, or discard unrelated paths.
+  commit `6ab8e3b77bab66e5de2cf0a1a5ae237be84afccc` (the 7.5 ms
+  reinstatement plan revision). Inspect `git status --short` and
+  `git rev-parse HEAD` before more work. Do not reset, clean, or discard
+  unrelated paths.
+- REINSTATED-MATRIX ACCEPTANCE (2026-09-11): `rh3-matrix-48-3-1-reinstated-20260911`
+  passed all 20 children (10 rows x 2 passes: the four 10 ms healthy rows, the
+  three reinstated 7.5 ms rows, preserved Mode B, reconnect, hang, stall).
+  Every 7.5 ms child matched its three-stage re-baseline values exactly
+  (mono plc=14, Mode A plc=27, Mode B plc=32), FLPR at 7.5 ms in the
+  documented ASRC-fallback shape (ACTIVE, submit=0 success=0), 10 ms children
+  with FLPR offload ACTIVE and nonzero submit/success. Receiver CPUAPP rebuilt
+  at the plan-revision HEAD: `f779c0d226d772570fa413d042f2aff210ba7e8a26264f3ae95d4353f57b8007`;
+  source images byte-identical to the accepted tuple
+  (`43bdef15...`/`2c3af526...`); FLPR unchanged `45ab8d15...`. Verdict:
+  `TRANSPORT_RUNTIME_ACCEPTED` for BOTH 10 ms and 7.5 ms under the 2026-09-11
+  plan revision, superseding the 2026-09-09 10 ms-only acceptance (whose
+  evidence stays immutable). Canonical record:
+  `docs/development/system-hil-rh3-matrix-48-3-1-reinstated-result.md`.
+  Aggregate evidence:
+  `/tmp/opencode/hil-runs/rh3-matrix-48-3-1-reinstated-20260911/`; child
+  evidence under the sibling `.children.34b8eeedd7fc` directory. Do not rerun
+  this ID.
 - Commit `8123b94` fixes the first RF-controlled matrix failure by preventing a
   STATUS request from splitting one source transmit batch. It preserves the
   3000 us lead target, 2000 us minimum, shared Mode A timestamp, outstanding
@@ -118,10 +137,12 @@ immutable IDs, results, hashes, or historical execution wording.
   it. Earlier stage records: `system-hil-rh3-7p5-mono-result.md`,
   `system-hil-rh3-7p5-modeb-result.md`; evidence roots preserved for
   all three.
-- RH3-7p5 remains open and `48_3_1` remains diagnostic-only. Next transport
-  gate is RH4 against exact candidate archives. No candidate is selected, so do
-  not substitute local builds or relabel this RH3 result as exact-artifact,
-  analog, release, or full-system acceptance.
+- RH3-7p5 is CLOSED (2026-09-11): the three-stage re-baseline passed and the
+  user decision reinstated the `48_3_1` rows; the reinstated matrix acceptance
+  above is the current RH3 verdict. Next transport gate is RH4 against exact
+  candidate archives. No candidate is selected, so do not substitute local
+  builds or relabel this RH3 result as exact-artifact, analog, release, or
+  full-system acceptance.
 
 ## Historical repository and diagnostic state
 

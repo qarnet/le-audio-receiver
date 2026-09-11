@@ -1,21 +1,26 @@
-# STATUS: le-audio-receiver, 2026-09-09
+# STATUS: le-audio-receiver, 2026-09-11
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-> **Current state (2026-09-09):** System HIL plan of record revised
+> **Current state (2026-09-11):** System HIL plan of record revised
 > (`docs/development/system-hil-milestones.md`): nRF54L15 is the only
-> production receiver target, 7.5 ms is diagnostic-only until RH3-7p5
-> closes it, and receiver transport limits are frozen and enforced by the
-> runner (RH3a, 2026-09-03). RH3 transport/runtime is
-> **`TRANSPORT_RUNTIME_ACCEPTED`**: clean commit `8123b94` passed a direct
-> Mode A fix-validation row and the fixed two-pass hardware matrix passed
-> **14/14 children**. No child failed, was cancelled, or was skipped, and no
-> cleanup failed.
-> This covers 10 ms real-device transport through I2S submission, not 7.5 ms,
-> exact release artifacts, DAC activity, analog output, audibility, or stereo
-> channel mapping. Canonical software gate **65 PASS / 0 FAIL /
-> 65 TOTAL** on the clean tree (35 twister + 5 exec-only + 22 Python +
+> production receiver target, and receiver transport limits are frozen and
+> enforced by the runner (RH3a, 2026-09-03). RH3-7p5 is CLOSED by its
+> three-stage re-baseline (all three `48_3_1` rows passed on the fixed
+> 128 MHz controller-clock fixture), and the user decision reinstated the
+> 7.5 ms rows in the mandatory matrix. RH3 transport/runtime is
+> **`TRANSPORT_RUNTIME_ACCEPTED` for BOTH 10 ms and 7.5 ms** under the
+> 2026-09-11 revision: clean commit `6ab8e3b` passed the reinstated
+> two-pass hardware matrix with **20/20 children** (four 10 ms healthy
+> rows, three 7.5 ms rows, preserved Mode B, reconnect, FLPR hang, FLPR
+> stall per pass). No child failed, was cancelled, or was skipped, and no
+> cleanup failed. The 2026-09-09 10 ms-only acceptance (14/14 at
+> `8123b94`) is superseded by this verdict; its evidence stays immutable.
+> This covers 10 ms and 7.5 ms real-device transport through I2S
+> submission, not exact release artifacts, DAC activity, analog output,
+> audibility, or stereo channel mapping. Canonical software gate **65
+> PASS / 0 FAIL / 65 TOTAL** on the clean tree (35 twister + 5 exec-only + 22 Python +
 > coverage + matrix + BSim Stage 1; the FR2 clean-tree run at `75a8093`
 > and the FR1 clean run at `1671a9f` are historical, with earlier clean
 > runs recorded in
@@ -189,6 +194,26 @@ operation through I2S submission. It does not prove RH3-7p5, exact release
 artifacts, DAC output, analog audio, audibility, or stereo mapping. RH3-7p5
 remains open. RH4 exact-artifact transport/runtime integration is next when
 candidate archives exist.
+
+### Reinstated-matrix acceptance (2026-09-11, supersedes the above verdict's scope)
+
+**`TRANSPORT_RUNTIME_ACCEPTED` for BOTH 10 ms and 7.5 ms.** The RH3-7p5
+three-stage re-baseline passed every 7.5 ms row on the fixed 128 MHz
+controller-clock fixture (mono `rx_valid=16860/16859`, Mode B `16858/16859`,
+Mode A both CISes; source `skip=0` and healthy lead telemetry in every
+stage; records `system-hil-rh3-7p5-{mono,modeb,modea}-result.md`), and the
+user decision reinstated the three `48_3_1` rows in the mandatory matrix
+(commit `6ab8e3b`, plan revision). The reinstated two-pass matrix at that
+clean commit passed **20/20 children**: the four 10 ms healthy rows, the
+three 7.5 ms rows, preserved Mode B, reconnect, FLPR hang, and FLPR stall
+per pass, under the frozen limits, with every 7.5 ms child matching its
+re-baseline values exactly and FLPR at 7.5 ms in the documented
+ASRC-fallback shape (ACTIVE, zero submit/success). Receiver CPUAPP
+`f779c0d2...` at the revision HEAD; source images byte-identical to the
+accepted tuple. Canonical record:
+`docs/development/system-hil-rh3-matrix-48-3-1-reinstated-result.md`.
+RH4 exact-artifact transport/runtime integration is next when candidate
+archives exist; the analog extensions remain separate.
 
 **Pinned lessons entry (2026-09-11):** the root cause of the ModeA9-ModeA18
 collapse chain was the HIL source fixture itself, not the SoftDevice
