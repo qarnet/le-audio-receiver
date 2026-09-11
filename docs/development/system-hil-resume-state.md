@@ -93,10 +93,31 @@ immutable IDs, results, hashes, or historical execution wording.
   image tuple as Stage 1 (hashes re-verified). Canonical record:
   `docs/development/system-hil-rh3-7p5-modeb-result.md`. Preserve
   `/tmp/opencode/hil-runs/rh3-7p5-modeb-20260911/`; do not rerun it.
-  Stage 3 (Mode A shared-grid 48_3_1) is next under its own handoff;
-  reinstatement stays a plan revision. Stage 1 canonical record:
-  `docs/development/system-hil-rh3-7p5-mono-result.md`; preserve
-  `/tmp/opencode/hil-runs/rh3-7p5-mono-20260911/`; do not rerun it.
+  Stage 3 (2026-09-11): diagnostic `rh3-7p5-modea-20260911` (row
+  `rh3.fresh_mode_a_48_3_1`) PASSED - both CISes delivered
+  (`rx_valid=16860` and `16859` of `16859` each, `plc=27` of
+  `decoded=33746`, slot-1 zero-decoded pair attribution as in the 10 ms
+  matrix), source fully healthy on both streams (`sub=16859, sc=16000,
+  sf=0, out=0`, shared-grid `skip=0`, lead arrays `2879..2948` /
+  `2664..2847` with `under=[0,0]`), both final sync polls returning the
+  identical shared reference `146627584`, CIG holding both CISes
+  (`nse=3`, `cis_sync 2346/4692`, `cig_sync 4692`, ~62% duty), FLPR
+  `ACTIVE` with `submit=0 success=0 fallback=0` (documented ASRC
+  fallback). THE THREE-STAGE RH3-7p5 EVIDENCE IS COMPLETE: 7.5 ms works
+  across mono, Mode B, and Mode A on the current fixture with wide
+  margins; the H40/H42 collapse is fully attributed to the settled
+  fixture defects and the replaced SW-split central. USER DECISION
+  REQUIRED (plan revision): reinstate the three `48_3_1` rows in the
+  mandatory matrix (rows/limits change in `scripts/hil/rows.py`, plus
+  known-limitation wording for the expected 360-frame ASRC fallback,
+  plus a mandatory-matrix re-run) or keep 7.5 ms diagnostic-only. Until
+  that decision, 7.5 ms stays diagnostic-only; nothing in the three
+  stages changed rows, limits, code, or the product PACS. Canonical
+  record: `docs/development/system-hil-rh3-7p5-modea-result.md`.
+  Preserve `/tmp/opencode/hil-runs/rh3-7p5-modea-20260911/`; do not rerun
+  it. Earlier stage records: `system-hil-rh3-7p5-mono-result.md`,
+  `system-hil-rh3-7p5-modeb-result.md`; evidence roots preserved for
+  all three.
 - RH3-7p5 remains open and `48_3_1` remains diagnostic-only. Next transport
   gate is RH4 against exact candidate archives. No candidate is selected, so do
   not substitute local builds or relabel this RH3 result as exact-artifact,
