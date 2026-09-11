@@ -56,9 +56,13 @@ source-research history, not support for posting the defect claim.
    nrf5340_audio production host.
 3. Known issues: SDC limitations.rst (v3.3.0) has no matching entry
    (SDU > 1255 B, framed CIG params, nRF54H RAM only). DRGN-23776
-   (CIS central, nRF53, encrypted ISO, invalid MIC) is fixed in the
-   v3.3.0 changelog block we run. DRGN-21293/21605 document readback
-   semantics; our measurements match them.
+   (CIS central, nRF53, encrypted ISO, invalid MIC): the fix entry
+   sits in the v2.9.0 changelog block (so it predates the v3.3.0
+   firmware we ran), but the current online known-issues list still
+   shows the issue as open; the discrepancy was never resolved because
+   the question was withdrawn after the controller-clock fix passed.
+   DRGN-21293/21605 document readback semantics; our measurements
+   match them.
 4. Errata: nRF5340 silicon errata (Rev 1 / Eng A / Eng D, via
    docs.nordicsemi.com) contain no ISO/CIS transmission anomaly.
 5. Newer SDK: SDC changelogs for v3.3.1, v3.3.3, v3.4.0, and main
@@ -78,8 +82,9 @@ Setup:
 - Hardware: nRF5340-DK (central/source, app core Zephyr host + network
   core hci_ipc with SoftDevice Controller, multirole) -> nRF54L15-DK
   (peripheral/sink, SDC, LE Audio BAP unicast server sink).
-- NCS v3.3.0; SDC changelog block "nRF Connect SDK v3.3.0" (the one that
-  includes the DRGN-23776 fix).
+- NCS v3.3.0 (SDC changelog section "nRF Connect SDK v3.3.0"). Citation
+  correction 2026-09-11: the DRGN-23776 fix entry is in the v2.9.0
+  block, not the v3.3.0 block as this draft originally stated.
 - Stream: BAP unicast, 48_4_1 preset - 48 kHz, 10 ms frame, Mode B
   (single ASE, 2 channels, SDU 240 bytes), unframed, 2M PHY, RTN 5,
   Max_Transport_Latency 20 ms. Controller-selected CIG: ISO interval
@@ -157,8 +162,12 @@ source/receiver image hashes.
    nrfxlib/softdevice_controller/include/sdc_hci.h.
 6. DRGN-21293 (LE Read ISO TX Sync returns the schedule reference of
    the previously scheduled SDU): SDC known issues (nrfxlib docs).
-7. DRGN-23776 fixed in the v3.3.0 changelog block: nrfxlib
-   softdevice_controller/CHANGELOG.rst (installed v3.3.0 tree).
+7. DRGN-23776: fix entry in the v2.9.0 changelog block (nrfxlib
+   softdevice_controller/CHANGELOG.rst, installed v3.3.0 tree; the
+   entry sits between the v2.9.0 and v2.8.0 headers). The current
+   online NCS known-issues list still shows the issue as open
+   (retrieved via Nordic docs, 2026-09-08). The original draft wrongly
+   cited this as "fixed in the v3.3.0 changelog block".
 8. SDC limitations (no matching entry): nrfxlib
    softdevice_controller/limitations.rst (installed v3.3.0 tree).
 9. No matching newer-SDK fix: SDC CHANGELOG.rst v3.3.1, v3.3.3,
