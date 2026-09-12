@@ -14,6 +14,18 @@ candidate has been selected; FR5 remains
 blocked pending a replacement
 candidate's exact-artifact FR4 pass.  Nothing published.
 
+## Current release-line scope update (2026-09-12)
+
+Active GitHub CI, package output, uploaded workflow artifact, draft-release
+attachments, and release asset verification are nRF54L15-only. The active
+factory artifact is one nRF54L15 ZIP plus its top-level `SHA256SUMS`.
+
+nRF5340 receiver release artifacts and FR1-FR4 evidence remain historical,
+including failed exact `v0.1.0` FR4 evidence. Local nRF5340 receiver code,
+build and flash helpers, and optional legacy nRF5340 build-contract checks
+remain in tree until the dedicated cleanup branch. This scope update does not
+delete or reinterpret those historical records.
+
 ## Goal
 
 Publish factory-flash firmware binaries that public users can download, verify,
@@ -44,16 +56,17 @@ rather than implied by the release package.
 - Official GitHub Actions container guidance is
   `/home/thomas-workstation/ncs/v3.3.0/nrf/scripts/docker/README.rst`; Bash must
   be the job shell so toolchain environment variables load.
-- Current release inputs:
-  - nRF5340: `build/nrf5340/merged.hex` and
-    `build/nrf5340/merged_CPUNET.hex`.
-  - nRF54L15: `build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex` and
-    `build/nrf54l15/flpr/zephyr/zephyr.hex`.
-- Current image measurements from the accepted build:
-  - nRF5340 cpuapp: 375,528 bytes; cpunet: 146,780 bytes.
-  - nRF54L15 cpuapp: 531,784 bytes; FLPR: 32,668 bytes.
-- `scripts/bin/fw-flash-5340` requires both nRF5340 core images through the
-  OpenOCD dual-core chain.
+- Active release inputs: nRF54L15
+  `build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex` and
+  `build/nrf54l15/flpr/zephyr/zephyr.hex`.
+- Historical nRF5340 release inputs: `build/nrf5340/merged.hex` and
+  `build/nrf5340/merged_CPUNET.hex`.
+- Active nRF54L15 image measurements from the accepted build: cpuapp 531,784
+  bytes; FLPR 32,668 bytes.
+- Historical nRF5340 image measurements from the accepted build: cpuapp
+  375,528 bytes; cpunet 146,780 bytes.
+- `scripts/bin/fw-flash-5340` remains a local legacy helper and requires both
+  nRF5340 core images through the OpenOCD dual-core chain.
 - `scripts/bin/fw-flash-54l15` requires separate cpuapp and FLPR images.
 - NCS 3.3.0 supports nRF54L15 MCUboot for cpuapp only; stock FOTA does not
   update this repository's FLPR image.
@@ -65,24 +78,17 @@ rather than implied by the release package.
 
 ## Artifact contract
 
-One ZIP per receiver target. The ZIP is the public release artifact and is
-indivisible: companion images form one release tuple, and users must not mix
-files from different versions.
+The active public release artifact is one nRF54L15 ZIP. It is indivisible:
+its companion images form one release tuple, and users must not mix files from
+different versions.
 
 ```text
-le-audio-receiver-vX.Y.Z-nrf5340-e83-factory.zip
-  merged.hex
-  merged_CPUNET.hex
-  release-manifest.json
-  SHA256SUMS
-  FLASHING.md
-
 le-audio-receiver-vX.Y.Z-nrf54l15-xiao-factory.zip
+  FLASHING.md
   cpuapp.hex
   flpr.hex
   release-manifest.json
   SHA256SUMS
-  FLASHING.md
 ```
 
 Target-local `release-manifest.json` must identify, for every image:
@@ -99,9 +105,9 @@ Target-local `release-manifest.json` must identify, for every image:
 - board target;
 - schema version.
 
-The manifest plus `SHA256SUMS` inside each ZIP protect extraction-time
+The manifest plus `SHA256SUMS` inside the ZIP protect extraction-time
 integrity. A top-level `SHA256SUMS` attached to the GitHub release must hash
-the downloadable ZIP files so users can validate downloads before extraction.
+the downloadable ZIP so users can validate downloads before extraction.
 
 Debug bundles (ELF, map, resolved `.config`, and `zephyr.dts`) are separate
 maintainer artifacts, never mixed into the public factory ZIP.
@@ -123,9 +129,9 @@ Do not install J-Link in build-only CI.
 ## Canonical software test gate in CI (PR 11)
 
 Every pull request and every protected `main` merge must pass the
-repository's canonical software gate (currently 65 children: 62 unit
+repository's canonical software gate (currently 72 children: 69 unit
 suites plus coverage-baseline enforcement, test-matrix validation, and
-BabbleSim Stage 1) before either production receiver firmware build can
+BabbleSim Stage 1) before the active nRF54L15 release firmware build can
 start.  A failed test gate must prevent firmware packaging, artifact
 upload, and draft-release creation.
 
@@ -221,20 +227,12 @@ operations and are not claimed here.
 
 Require the canonical software gate first (the repository test gate: twister
 unit tests, build contract, and BSim Stage 1 where applicable). Then flash
-packaged files from an extracted release ZIP, not files from a local build
-tree. Flashing the packaged images preserves settings and bonds; acceptance
-verifies settings load from preserved storage, and does not imply or require
-a clean-state erase.
+packaged files from the extracted active nRF54L15 release ZIP, not files from
+a local build tree. Flashing the packaged images preserves settings and bonds;
+acceptance verifies settings load from preserved storage, and does not imply or
+require a clean-state erase.
 
-nRF5340 acceptance:
-
-- both app and net core images flash;
-- clean boot, settings load, advertising;
-- mono, Mode A, and Mode B at 10 ms plus supported 7.5 ms paths;
-- disconnect and reconnect;
-- zero unexplained warnings, decode errors, I2S underruns, and stream resets.
-
-nRF54L15 acceptance:
+Active nRF54L15 acceptance:
 
 - cpuapp and FLPR images flash;
 - clean boot, FLPR ACTIVE, settings load, advertising;
@@ -244,9 +242,17 @@ nRF54L15 acceptance:
 - disconnect and reconnect;
 - zero unexplained warnings, decode errors, I2S underruns, and stream resets.
 
-Both targets use the autonomous repository central (`scripts/bap_central.py`
-attached via the nRF5340DK `hci_uart`). Audible confirmation is the only
-permitted human observation.
+Historical nRF5340 acceptance contract, not an active release gate:
+
+- both app and net core images flash;
+- clean boot, settings load, advertising;
+- mono, Mode A, and Mode B at 10 ms plus supported 7.5 ms paths;
+- disconnect and reconnect;
+- zero unexplained warnings, decode errors, I2S underruns, and stream resets.
+
+Active nRF54L15 acceptance uses the autonomous repository central
+(`scripts/bap_central.py` attached via the nRF5340DK `hci_uart`). Audible
+confirmation is the only permitted human observation.
 
 ## Phase structure
 

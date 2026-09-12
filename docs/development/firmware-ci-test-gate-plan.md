@@ -38,10 +38,18 @@ non-fast-forward, no bypass actors,
 complete; protected-main runs and release creation remain separate
 operations.
 
+## Release-line narrowing update (2026-09-12)
+
+The PR 11 hosted two-target firmware run is historical evidence. The current
+firmware workflow builds, contract-checks, packages, uploads, and prepares
+draft releases for nRF54L15 only. Local `scripts/check-build-contract.py`
+keeps optional `--nrf5340` validation for legacy local use pending separate
+cleanup; it is not part of current GitHub workflow execution.
+
 ## Goal
 
 Make every pull request and every protected `main` merge pass the repository's
-canonical software gate before either production receiver firmware build can
+canonical software gate before the active nRF54L15 release firmware build can
 start. A failed test gate must prevent firmware packaging, artifact upload, and
 draft-release creation.
 
@@ -50,12 +58,12 @@ draft-release creation.
 - `.github/workflows/firmware-build.yml` has one `firmware` job followed by a
   trusted-`main` `release` job. The firmware job initializes an exact NCS v3.3.0
   west workspace in Nordic's digest-pinned toolchain container, then builds
-  nRF5340 and nRF54L15.
+  nRF54L15 only.
 - `scripts/test-all.sh` is the canonical software gate and discovers suites
   only through `scripts/test_inventory.py`.
-- Current inventory is 35 Twister C suites, 5 exec-only C suites, and 22 Python
+- Current inventory is 40 Twister C suites, 5 exec-only C suites, and 24 Python
   suites. Coverage baseline enforcement, matrix validation, and BabbleSim
-  Stage 1 make the public gate total 65 children.
+  Stage 1 make the public gate total 72 children.
 - `scripts/test-coverage.sh` requires a clean exact commit in baseline mode,
   `gcovr 8.4`, gcov 14.3.0, west, Python, and `ZEPHYR_BASE`.
 - `scripts/bsim-stage1-run.sh` builds the repository receiver/client and runs
@@ -64,9 +72,10 @@ draft-release creation.
 - NCS v3.3.0's west manifest imports pinned BabbleSim projects through
   `tools/bsim`; `make -C tools/bsim everything` builds the required simulator
   components.
-- `scripts/check-build-contract.py` against real nRF5340/nRF54L15 build trees is
-  a post-build contract, not a pre-build test. Its own 52-test Python suite is
-  already one of the 22 canonical Python children.
+- `scripts/check-build-contract.py` against the real nRF54L15 build tree is a
+  post-build contract, not a pre-build test. Its optional `--nrf5340` local
+  legacy validation remains pending cleanup. Its own 56-test Python suite is
+  already one of the 24 canonical Python children.
 
 ## Scope
 
