@@ -48,7 +48,8 @@ ZTEST(audio_i2s, test_exact_i2s_config)
 	zassert_equal(cfg->cfg.frame_clk_freq, 48000, "nominal 48 kHz");
 	zassert_equal(cfg->cfg.mem_slab, audio_i2s_test_get_slab(), "internal slab");
 	zassert_equal(cfg->cfg.block_size, 1924, "block size 481*4");
-	zassert_equal(cfg->cfg.timeout, 0, "non-blocking timeout");
+	zassert_equal(cfg->cfg.timeout, CONFIG_AUDIO_I2S_WRITE_TIMEOUT_MS,
+		      "variant-configured write timeout");
 }
 
 ZTEST(audio_i2s, test_configure_error_propagates)
@@ -148,8 +149,8 @@ ZTEST(audio_i2s, test_reinit_active_stream_preserves_queue_state)
 {
 	test_start_stream();
 
-	zassert_equal(fake_i2s_queued_count(), STARTUP_TOTAL_BLOCKS, "eleven queued");
-	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - STARTUP_TOTAL_BLOCKS, "five free");
+	zassert_equal(fake_i2s_queued_count(), STARTUP_TOTAL_BLOCKS, "fifteen queued");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - STARTUP_TOTAL_BLOCKS, "one free");
 
 	void *ptr_before[STARTUP_TOTAL_BLOCKS];
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Deterministic factory-firmware release packager (stdlib only).
 
-Packages the existing production build outputs for both receiver targets
-into one release set of two deterministic ZIPs plus a top-level
-SHA256SUMS, exactly per ``docs/development/firmware-release-plan.md`` FR1.
+Packages existing nRF54L15 production build outputs into one deterministic
+factory ZIP plus a top-level SHA256SUMS, exactly per
+``docs/development/firmware-release-plan.md`` FR1.
 
 Public CLI (all five arguments required):
 
@@ -23,12 +23,14 @@ Guarantees:
 - build root and output parent are resolved, but no absolute host paths
   ever enter archives or manifests;
 - an existing output directory is rejected;
-- every input for both targets is validated before any output creation;
-- all four image inputs are regular, non-symlink, nonempty Intel HEX
+- both nRF54L15 image inputs and its flashing note are validated before any
+  output creation;
+- both image inputs are regular, non-symlink, nonempty Intel HEX
   files that pass full record validation (byte count, checksum, exactly
   one final EOF record);
-- both flashing notes are regular, non-symlink, nonempty UTF-8 files;
-- the release set is built in a private ``.firmware-release-*`` staging
+- the nRF54L15 flashing note is a regular, non-symlink, nonempty UTF-8 file;
+- one deterministic ZIP plus its top-level SHA256SUMS are built in a private
+  ``.firmware-release-*`` staging
   sibling and atomically renamed into place only when complete;
 - ZIP bytes are deterministic for identical inputs and metadata;
 - success prints stable, concise, output-relative lines;
@@ -59,28 +61,10 @@ _GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _HEX_RE = re.compile(r"[0-9A-Fa-f]*")
 
 # Canonical input mapping (paths relative to --build-root), per the FR1
-# contract.  Flash order 0 = first.  One invocation always packages both
-# receiver targets as one release set.
+# contract.  Flash order 0 = first. One invocation packages the nRF54L15
+# release target. The nRF5340 receiver target is eliminated from the release
+# line (2026-09-03 decision); its local receiver files remain out of scope.
 TARGETS = (
-    {
-        "id": "nrf5340-e83",
-        "board": "ebyte_e83_nrf5340/nrf5340/cpuapp",
-        "note": "release/flashing/nrf5340-e83.md",
-        "images": (
-            {
-                "role": "cpuapp",
-                "path": "nrf5340/merged.hex",
-                "filename": "merged.hex",
-                "flash_order": 0,
-            },
-            {
-                "role": "cpunet",
-                "path": "nrf5340/merged_CPUNET.hex",
-                "filename": "merged_CPUNET.hex",
-                "flash_order": 1,
-            },
-        ),
-    },
     {
         "id": "nrf54l15-xiao",
         "board": "nrf54l15dk/nrf54l15/cpuapp",
@@ -344,7 +328,7 @@ def _run(args):
     output_dir = os.path.abspath(args.output_dir)
     repo_root = _repo_root()
 
-    # 1. Validate metadata and every input for both targets before any
+    # 1. Validate metadata and both inputs for the nRF54L15 target before any
     #    output-directory creation.
     prepared = [_prepare_target(target, build_root, repo_root) for target in TARGETS]
 
@@ -356,9 +340,9 @@ def _run(args):
     parent = os.path.dirname(output_dir)
     os.makedirs(parent, exist_ok=True)
 
-    # 4. Build the whole release set in one private staging sibling, then
-    #    atomically rename it into place.  On failure, clean only staging
-    #    and leave the final output directory absent.
+    # 4. Build the nRF54L15 ZIP and top-level SHA256SUMS in one private staging
+    #    sibling, then atomically rename it into place. On failure, clean only
+    #    staging and leave the final output directory absent.
     staging = tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=parent)
     try:
         zip_results = [

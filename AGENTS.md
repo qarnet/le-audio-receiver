@@ -93,10 +93,16 @@ requested.
 
 ## Plan of record
 
-`docs/development/refactor-plan.md` is the accepted plan of record for the
-current refactoring track R0–R10. Read it before structural changes.
-`docs/design.md` remains the historical architecture and evidence document,
-not the active structural plan.
+`docs/development/system-hil-milestones.md` is the accepted plan of record
+for the System HIL track (revised 2026-09-09): nRF54L15 is the only production
+receiver target, the 10 ms RH3 transport/runtime matrix is accepted at clean
+commit `8123b94`, 7.5 ms is diagnostic-only until RH3-7p5 closes it, receiver
+transport limits are frozen and runner-enforced, and reruns are the
+fix-validation mechanism. RH4 waits for exact candidate archives.
+`docs/development/refactor-plan.md` remains the accepted plan of record for the
+refactoring track R0–R10. Read the applicable one before structural changes.
+`docs/design.md` remains the historical architecture and evidence document, not
+an active structural plan.
 
 Current status: **canonical gate 65 PASS / 0 FAIL / 65 TOTAL** on the
 clean tree (35 twister + 5 exec-only + 22 Python + coverage + matrix +
@@ -184,7 +190,42 @@ offload.
 
 Consequences for work in this repo today:
 
-- Every change must keep the nRF5340 target building, flashing, streaming.
+- Every change must keep the nRF5340 target building (nRF54L15 is the only
+  production receiver target for the HIL/release line per
+  `docs/development/system-hil-milestones.md`, but nRF5340 receiver code and
+  builds stay in-tree until a separate cleanup decision).
+
+## Standing lab nRF hardware authority
+
+The user grants standing permission for agents working in this repository to use
+any attached Nordic nRF development board. Permitted actions include read/debug
+access, serial interaction, reset, flash, full erase/recovery, DTR/RTS control,
+RF/Bluetooth testing, and firmware replacement. No fresh per-action or per-run
+confirmation is needed for these attached nRF boards. Full erase/recovery
+remains subject to target and tooling support, and existing recovery limitations
+still apply.
+
+Before any target-changing action, run `nrf-probes` or the appropriate project
+identity resolver and retain raw identity evidence. Never rely on a static
+probe-to-board mapping. Do not operate on unknown or non-Nordic hardware. This
+broad permission applies to attached nRF lab boards, not unrelated host
+peripherals or arbitrary USB devices.
+
+Use `scripts/hil-runner.py` when its owned end-to-end evidence lifecycle is
+useful, but it is not the only permitted hardware owner. Direct debugger,
+serial, and board testing are allowed when they provide clearer diagnosis or
+validation.
+
+Preserve immutable run directories. Board erasure or reflashing does not
+authorize alteration of prior evidence.
+
+A simulator or host-test failure is evidence, not automatic proof of a
+production firmware defect. Before making a potentially behavior-changing
+source fix, evaluate the suspected failure on a physical nRF board when
+practical, then retain both simulator and board evidence.
+
+Keep all existing central-only pairing/streaming requirements unless a later
+plan deliberately changes those requirements.
 
 ## Central-only test rule
 
@@ -281,6 +322,40 @@ FLPR offload. The build targets the stock `nrf54l15dk` board + a small
 overlay (`boards/nrf54l15dk_nrf54l15_cpuapp.overlay`) that remaps UART20
 to the Xiao SAMD11 USB CDC bridge (P1.9 TX / P1.8 RX) and I2S20 to Xiao
 D0/D1/D2 (P1.4/P1.5/P1.6). Console works over `/dev/ttyACM0` @ 115200.
+
+## LSP (clangd) setup
+
+clangd parses each tree through per-image `compile_commands.json` symlinks
+(clangd closest-ancestor discovery) plus `--query-driver` in the launch
+command. Full background: `~/.config/opencode/rules/clangd-zephyr.md`.
+
+- Links are created two ways: (a) `file(CREATE_LINK)` in each app
+  CMakeLists at every configure (root receiver link guarded on
+  `CONFIG_SOC_NRF54L15` so only nRF54L15 owns the root; `src/flpr`,
+  `hil/source/app` emits `hil/source/`, `dongle/hci_ipc`,
+  `tests/bsim`, `tests/bsim/client`), and (b)
+  `scripts/gen-lsp-links.sh` for the links CMake cannot own
+  (`tests/unit` and the BSim out-of-tree builds; also repairs dangling
+  links). Run `bash scripts/gen-lsp-links.sh --check` to inspect.
+- clangd must be launched with `--query-driver` covering the Zephyr SDK
+  compilers and the Nix host gcc wrapper; the repo `opencode.json` ships
+  this for opencode sessions. Without it, cross-target parses pick up
+  host glibc (`'gnu/stubs-32.h' file not found`) and native_sim/BSim
+  files get no builtin headers.
+- The root `.clangd` deliberately has NO `CompilationDatabase` pin and
+  NO `Add: --target`: a root pin would override per-tree discovery, and
+  a repo-wide ARM target breaks BSim/native_sim host parses. Do not
+  re-add either.
+- After `--pristine` rebuilds the link files are re-created at configure
+  time (seconds); BSim links refresh via `scripts/gen-lsp-links.sh` or
+  the next `bsim-stage1-run.sh` configure.
+- Verify a file parses clean (0 real diagnostics expected; `tweak:`
+  lines in `--check` output are artifacts, not diagnostics):
+
+```bash
+clangd --query-driver='/nix/store/**,/home/thomas-workstation/ncs/toolchains/*/opt/zephyr-sdk/**' \
+  --check=src/main.c 2>&1 | grep -E '^[WE]\[' | grep -cvE 'SwapBinary|tweak:'
+```
 
 ## Flash
 
@@ -638,6 +713,72 @@ Either UDA1334A (CJMCU-1334) or PCM5102A works — same 3-wire no-MCK topology.
 PCM5102A's spec lead (112 dB / 32-bit / 384 kHz vs 100 dB / 16-bit) is
 inaudible at the 48 kHz/16-bit LC3 floor. PCM5102A cheap breakouts need the
 SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
+
+## HIL source fixture timing — the pinned lessons (2026-09-09/11)
+
+The RH3 "Mode B delivery collapse" investigation (ModeA9–ModeA18, 2026-09,
+evidence immutable under `/tmp/opencode/hil-runs/`, canonical record
+`docs/development/system-hil-rh3-controller-clock-result.md`) burned ~10
+hardware runs and a week on a fixture defect that was ours, while
+repeatedly concluding — with confidence — that the SoftDevice Controller
+was broken. Pin these before touching the fixture again:
+
+1. **The nRF5340 source app core must run at 128 MHz for this workload.**
+   `hil/source/app/src/main.c` calls
+   `nrfx_clock_divider_set(NRF_CLOCK_DOMAIN_HFCLK, NRF_CLOCK_HFCLK_DIV_1)`
+   before Bluetooth init. Without it the core runs at 64 MHz, two LC3
+   encodes do not fit one 10 ms SDU interval, and the fixture starves the
+   controller-clock scheduler (the 2026-09-08 baseline: `sub=10907`,
+   `skip=10185`, roughly alternate events missed with zero send errors —
+   looks exactly like a controller-side flush). Nordic's own real-time
+   audio code sets DIV_1 for the same reason:
+   `nrf/applications/nrf5340_audio/src/modules/audio_clock.c`,
+   `nrf/tests/bluetooth/iso/src/main.c`,
+   `zephyr/subsys/bluetooth/audio/shell/bap_usb.c`. Any new HIL source
+   feature that adds per-SDU CPU work re-checks the throughput budget at
+   128 MHz first, before inventing controller theories.
+
+2. **Schedule against the controller clock, never a host-derived offset.**
+   The working scheduler mirrors the CPUNET MPSL RTC into app-core RTC0
+   via IPC channel 4 + PPI before Bluetooth starts
+   (`hil/source/app/src/hil_source_controller_time.c`, the pattern from
+   `nrf/samples/bluetooth/iso_time_sync/src/controller_time_nrf53_app.c`),
+   encodes BEFORE the send window, and submits at 3000 us lead / 2000 us
+   minimum against that clock. The failed designs derived a
+   host-vs-controller offset from `HCI VS ISO Read TX Timestamp` +
+   callback time — self-referential bookkeeping that "proved" whatever
+   the fixture was already doing.
+
+3. **Know what each telemetry source actually measures.**
+   - ISO `sent` callback = controller ACCEPTED the SDU (completion may
+     follow enqueue, transmit, or flush — `iso.h`,
+     `struct bt_iso_chan_ops.sent`). Instant completions do NOT mean
+     on-air success.
+   - `HCI VS ISO Read TX Timestamp` = the SCHEDULED event of the last
+     provided SDU (re-documented in v2.9.0, DRGN-23708). NOT current
+     controller time, NOT air proof.
+   - `HCI LE Read ISO TX Sync` = per-SDU sync reference of the last
+     SCHEDULED SDU (DRGN-21293); the command SUCCEEDING requires a
+     transmitted SDU but the poll is not an aired-SDU counter.
+   - Receiver ISO counters = the only peer-delivery truth. They show the
+     collapse was real, but not which side caused it.
+
+4. **Investigation discipline (the part that failed hardest).**
+   - Validate the fixture against the FULL Nordic reference pattern
+     (including the RTC mirror and clock setup) before assigning
+     controller causation. The ModeA17 draft claimed "exactly the
+     iso_time_sync pattern" while omitting its central mechanism.
+   - A variation table is only an isolation if every run used the same
+     source/CPUNET/receiver image tuple; dirty-worktree runs with
+     different hashes are diagnostics, not isolation evidence.
+   - Cite changelog entries by the header that actually governs the
+     line, not by adjacency — the ModeA17 draft confidently placed the
+     DRGN-23776 fix in the "v3.3.0 block" when it sits in v2.9.0
+     (corrected 2026-09-11, `3dc12af`).
+   - Do not reopen the withdrawn SDC-defect escalation
+     (`docs/development/devzone-sdc-central-iso-tx-question-draft.md`)
+     without a clean-commit regression that satisfies the conditions in
+     its "Guidance for the next agent" section.
 
 ## Stack
 

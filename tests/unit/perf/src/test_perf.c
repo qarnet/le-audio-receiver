@@ -14,6 +14,8 @@
  * values (0xFFFFFFFF) always overrun.
  */
 
+#include <errno.h>
+
 #include <zephyr/ztest.h>
 #include <zephyr/kernel.h>
 #include "audio_perf.h"
@@ -23,6 +25,7 @@
 static void reset_before_each(void *unused)
 {
 	ARG_UNUSED(unused);
+	audio_perf_test_clear_cycle_now();
 	audio_perf_reset();
 }
 
@@ -183,6 +186,113 @@ ZTEST(perf, test_push_failure_increments)
 	zassert_equal(queue.push_failures, 3, "push_failures = 3");
 }
 
+ZTEST(perf, test_i2s_write_failure_categories_and_restart)
+{
+	struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS];
+	struct audio_perf_queue_snapshot queue;
+
+	audio_perf_i2s_write_failure(-EIO);
+	audio_perf_i2s_write_failure(-ENOMSG);
+	audio_perf_i2s_write_failure(-EBUSY);
+	audio_perf_i2s_dma_restart();
+	audio_perf_i2s_dma_restart();
+
+	audio_perf_snapshot(paths, &queue);
+	zassert_equal(queue.i2s_write_failures, 3, "I2S write failures = 3");
+	zassert_equal(queue.i2s_write_eio_failures, 1, "I2S -EIO failures = 1");
+	zassert_equal(queue.i2s_write_enomsg_failures, 1, "I2S -ENOMSG failures = 1");
+	zassert_equal(queue.i2s_write_last_errno, -EBUSY, "last I2S write errno = -EBUSY");
+	zassert_equal(queue.i2s_dma_restarts, 2, "I2S DMA restarts = 2");
+}
+
+ZTEST(perf, test_public_timing_wrappers_with_injected_cycle_clock)
+{
+	struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS];
+	struct audio_perf_queue_snapshot queue;
+
+	audio_perf_test_set_cycle_now(100);
+	audio_perf_i2s_dma_started();
+	zassert_equal(audio_perf_i2s_write_start(), 100, "write start = 100");
+
+	audio_perf_test_set_cycle_now(130);
+	audio_perf_i2s_write_end(100, true);
+
+	audio_perf_rx_callback_start(200);
+	audio_perf_rx_callback_start(260);
+
+	audio_perf_snapshot(paths, &queue);
+	zassert_equal(queue.i2s_write_duration_max_cycles, 30, "I2S write duration = 30");
+	zassert_equal(queue.i2s_write_gap_max_cycles, 30, "I2S write completion gap = 30");
+	zassert_equal(queue.rx_callback_gap_max_cycles, 60, "RX callback gap = 60");
+
+	audio_perf_test_clear_cycle_now();
+}
+
+ZTEST(perf, test_timing_telemetry_first_event_rebase_and_max)
+{
+	struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS];
+	struct audio_perf_queue_snapshot queue;
+
+	/* First RX callback establishes its baseline; only later starts
+	 * contribute a gap. */
+	audio_perf_test_inject_rx_callback_start(100);
+	audio_perf_test_inject_rx_callback_start(140);
+	audio_perf_test_inject_rx_callback_start(210);
+
+	/* DMA START establishes the I2S baseline.  The first successful write
+	 * measures completion from START, not from an arbitrary pre-fill or boot
+	 * time. */
+	audio_perf_test_inject_i2s_dma_start(1000);
+	audio_perf_test_inject_i2s_write(1200, 20, true);
+	audio_perf_test_inject_i2s_write(1600, 80, true);
+
+	audio_perf_snapshot(paths, &queue);
+	zassert_equal(queue.rx_callback_gap_max_cycles, 70, "RX callback max gap = 70");
+	zassert_equal(queue.i2s_write_gap_max_cycles, 460, "I2S write max completion gap = 460");
+	zassert_equal(queue.i2s_write_duration_max_cycles, 80, "I2S write max duration = 80");
+}
+
+ZTEST(perf, test_timing_telemetry_success_only_gap_and_failure_duration)
+{
+	struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS];
+	struct audio_perf_queue_snapshot queue;
+
+	audio_perf_test_inject_i2s_dma_start(100);
+	/* Failed write is timed but cannot move successful-write baseline. */
+	audio_perf_test_inject_i2s_write(200, 10, false);
+	audio_perf_test_inject_i2s_write(350, 20, true);
+	/* Another failure must not create a gap from the prior success. */
+	audio_perf_test_inject_i2s_write(1000, 500, false);
+	audio_perf_test_inject_i2s_write(1600, 30, true);
+
+	audio_perf_snapshot(paths, &queue);
+	zassert_equal(queue.i2s_write_gap_max_cycles, 1260,
+		      "failed writes do not rebase successful-write gap");
+	zassert_equal(queue.i2s_write_duration_max_cycles, 500,
+		      "failed write contributes duration maximum");
+}
+
+ZTEST(perf, test_timing_telemetry_wrap_safe_subtraction)
+{
+	struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS];
+	struct audio_perf_queue_snapshot queue;
+
+	audio_perf_test_inject_rx_callback_start(0xFFFFFFF0U);
+	audio_perf_test_inject_rx_callback_start(0x00000020U);
+
+	audio_perf_test_inject_i2s_dma_start(0xFFFFFFE0U);
+	audio_perf_test_inject_i2s_write(0xFFFFFFF0U, 0x05U, true);
+	audio_perf_test_inject_i2s_write(0xFFFFFFF8U, 0x30U, false);
+	audio_perf_test_inject_i2s_write(0x00000030U, 0x20U, true);
+
+	audio_perf_snapshot(paths, &queue);
+	zassert_equal(queue.rx_callback_gap_max_cycles, 0x30U, "RX callback gap wraps safely");
+	zassert_equal(queue.i2s_write_gap_max_cycles, 0x5BU,
+		      "I2S write completion gap wraps safely");
+	zassert_equal(queue.i2s_write_duration_max_cycles, 0x30U,
+		      "I2S write duration wraps safely");
+}
+
 ZTEST(perf, test_repeat_fallback_increments)
 {
 	struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS];
@@ -233,6 +343,41 @@ ZTEST(perf, test_reset_clears_queue_metrics)
 	zassert_equal(queue.push_failures, 0, "push_failures = 0 after reset");
 	zassert_equal(queue.repeat_fallback_count, 0, "repeat_fallback = 0 after reset");
 	zassert_equal(queue.output_blocks, 0, "output_blocks = 0 after reset");
+}
+
+ZTEST(perf, test_reset_clears_i2s_write_diagnostics)
+{
+	struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS];
+	struct audio_perf_queue_snapshot queue;
+
+	audio_perf_i2s_write_failure(-EIO);
+	audio_perf_i2s_write_failure(-ENOMSG);
+	audio_perf_i2s_dma_restart();
+	audio_perf_reset();
+	audio_perf_snapshot(paths, &queue);
+
+	zassert_equal(queue.i2s_write_failures, 0, "I2S write failures = 0 after reset");
+	zassert_equal(queue.i2s_write_eio_failures, 0, "I2S -EIO failures = 0 after reset");
+	zassert_equal(queue.i2s_write_enomsg_failures, 0, "I2S -ENOMSG failures = 0 after reset");
+	zassert_equal(queue.i2s_write_last_errno, 0, "last I2S write errno = 0 after reset");
+	zassert_equal(queue.i2s_dma_restarts, 0, "I2S DMA restarts = 0 after reset");
+}
+
+ZTEST(perf, test_reset_clears_timing_telemetry)
+{
+	struct audio_perf_path_snapshot paths[AUDIO_PERF_NUM_PATHS];
+	struct audio_perf_queue_snapshot queue;
+
+	audio_perf_test_inject_rx_callback_start(100);
+	audio_perf_test_inject_rx_callback_start(200);
+	audio_perf_test_inject_i2s_dma_start(300);
+	audio_perf_test_inject_i2s_write(400, 50, true);
+	audio_perf_reset();
+	audio_perf_snapshot(paths, &queue);
+
+	zassert_equal(queue.rx_callback_gap_max_cycles, 0, "RX callback gap = 0 after reset");
+	zassert_equal(queue.i2s_write_gap_max_cycles, 0, "I2S write gap = 0 after reset");
+	zassert_equal(queue.i2s_write_duration_max_cycles, 0, "I2S write duration = 0 after reset");
 }
 
 ZTEST(perf, test_reset_clears_slab_first_flag)

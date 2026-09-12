@@ -35,6 +35,7 @@ static int trigger_count;
 static int queued_count;
 static int configure_calls;
 static int duplicates;
+static bool simulate_queue_full;
 
 static int configure_ret;
 static int write_fail_at = -1;
@@ -49,6 +50,14 @@ static int trigger_ret[4]; /* indexed by i2s_trigger_cmd value */
 static int block_write_at = -1;
 static struct k_sem *block_entered;
 static struct k_sem *block_release;
+
+/* Full-TX-queue wait coordination.  The fake uses the captured
+ * i2s_config.timeout, matching nrfx's k_msgq_put() behavior: zero returns
+ * -ENOMSG immediately, while a positive timeout waits for queue space and
+ * returns the kernel timeout error if space never arrives. */
+static K_SEM_DEFINE(queue_full_writer_entered, 0, 1);
+static K_SEM_DEFINE(queue_full_writer_release, 0, 1);
+static bool queue_full_writer_waiting;
 
 static void purge_queue(void)
 {
@@ -113,6 +122,25 @@ static int fake_i2s_write(const struct device *dev, void *mem_block, size_t size
 		duplicates++;
 		write_count++;
 		return -EBUSY;
+	}
+
+	if (simulate_queue_full && queued_count >= FAKE_I2S_QUEUE_CAPACITY) {
+		if (cfg_rec.cfg.timeout <= 0) {
+			write_count++;
+			return -ENOMSG;
+		}
+
+		queue_full_writer_waiting = true;
+		k_sem_give(&queue_full_writer_entered);
+		int ret = k_sem_take(&queue_full_writer_release, K_MSEC(cfg_rec.cfg.timeout));
+		queue_full_writer_waiting = false;
+		if (ret < 0) {
+			write_count++;
+			return ret;
+		}
+
+		__ASSERT(queued_count < FAKE_I2S_QUEUE_CAPACITY,
+			 "queue wait released without TX queue space");
 	}
 
 	if (queued_count >= FAKE_I2S_MAX_QUEUED) {
@@ -199,6 +227,7 @@ void fake_i2s_reset(void)
 	queued_count = 0;
 	configure_calls = 0;
 	duplicates = 0;
+	simulate_queue_full = false;
 	configure_ret = 0;
 	write_fail_at = -1;
 	write_fail_errno = -EIO;
@@ -206,6 +235,9 @@ void fake_i2s_reset(void)
 	block_write_at = -1;
 	block_entered = NULL;
 	block_release = NULL;
+	k_sem_reset(&queue_full_writer_entered);
+	k_sem_reset(&queue_full_writer_release);
+	queue_full_writer_waiting = false;
 	/* The captured slab is deliberately RETAINED across reset: a real
 	 * driver keeps its configured mem_slab even when the stream stops
 	 * and restarts without re-configuration (audio_sink_stop keeps
@@ -238,6 +270,51 @@ void fake_i2s_set_write_fail_errno(int err)
 void fake_i2s_set_trigger_ret(enum i2s_trigger_cmd cmd, int ret)
 {
 	trigger_ret[cmd] = ret;
+}
+
+int fake_i2s_force_queue_full(void)
+{
+	if (fake_slab == NULL || !cfg_rec.captured) {
+		return -ENODEV;
+	}
+
+	int added = 0;
+
+	while (queued_count < FAKE_I2S_QUEUE_CAPACITY) {
+		void *block;
+		int ret = k_mem_slab_alloc(fake_slab, &block, K_NO_WAIT);
+
+		if (ret < 0) {
+			while (added-- > 0) {
+				k_mem_slab_free(fake_slab, queue[--queued_count]);
+			}
+			return ret;
+		}
+
+		queue[queued_count++] = block;
+		added++;
+	}
+
+	k_sem_reset(&queue_full_writer_entered);
+	k_sem_reset(&queue_full_writer_release);
+	queue_full_writer_waiting = false;
+	simulate_queue_full = true;
+	return 0;
+}
+
+int fake_i2s_wait_until_queue_full_write(k_timeout_t timeout)
+{
+	return k_sem_take(&queue_full_writer_entered, timeout);
+}
+
+void fake_i2s_release_one_for_queue_wait(void)
+{
+	__ASSERT(queue_full_writer_waiting, "no full-queue writer is waiting");
+	__ASSERT(queued_count > 0, "full queue has no block to release");
+
+	void *block = queue[0];
+	fake_i2s_release(block);
+	k_sem_give(&queue_full_writer_release);
 }
 
 int fake_i2s_configure_calls(void)

@@ -30,16 +30,17 @@ ZTEST(audio_i2s, test_one_drift_update_per_started_block)
 {
 	test_start_stream();
 
-	/* Eleven startup blocks queued → free = 16 - 11 = 5 before alloc. */
+	/* Fifteen startup blocks queued → free = 16 - 15 = 1 before alloc. */
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0, "steady push 1");
 	zassert_equal(mock_drift_update_calls, 1, "one update");
-	zassert_equal(mock_drift_last_slab_free, 5, "pre-allocation free count");
-	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 12, "one more block queued");
+	zassert_equal(mock_drift_last_slab_free, 1, "pre-allocation free count");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 16, "one more block queued");
 
+	fake_i2s_release(fake_i2s_queued_ptr(0));
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0, "steady push 2");
 	zassert_equal(mock_drift_update_calls, 2, "second update");
-	zassert_equal(mock_drift_last_slab_free, 4, "pre-allocation free count 2");
-	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 13, "two more blocks queued");
+	zassert_equal(mock_drift_last_slab_free, 1, "pre-allocation free count 2");
+	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 16, "two more blocks queued");
 }
 
 ZTEST(audio_i2s, test_zero_ppm_no_actuator_apply)
@@ -60,6 +61,7 @@ ZTEST(audio_i2s, test_ppm_passed_exactly_once_to_actuator)
 	zassert_equal(mock_actuator_apply_calls, 1, "applied once");
 	zassert_equal(mock_actuator_last_ppm, 500, "positive ppm exact");
 
+	fake_i2s_release(fake_i2s_queued_ptr(0));
 	mock_drift_update_ret = -300;
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0, "negative ppm");
 	zassert_equal(mock_actuator_apply_calls, 2, "applied once more");
@@ -96,6 +98,10 @@ ZTEST(audio_i2s, test_write_error_non_eio_keeps_started)
 	zassert_true(audio_i2s_test_is_started(), "started kept for non -EIO");
 	zassert_equal(fake_i2s_trigger_calls(), 1, "no recovery triggers");
 	zassert_equal(mock_stats_stream_reset_calls, 0, "no stream reset");
+	zassert_equal(mock_stats_underrun_calls, 0, "no actual underrun");
+	zassert_equal(mock_perf_i2s_write_failure_calls, 1, "write failure observed");
+	zassert_equal(mock_perf_i2s_last_write_errno, -EBUSY, "write errno observed");
+	zassert_equal(mock_perf_i2s_dma_restart_calls, 0, "no DMA restart");
 
 	/* Stream still usable. */
 	fake_i2s_fail_write_at(-1);
@@ -113,17 +119,21 @@ ZTEST(audio_i2s, test_eio_write_prepare_recovery)
 
 	zassert_equal(fake_i2s_trigger_calls(), 2, "START then PREPARE");
 	zassert_equal(fake_i2s_trigger_rec(1)->cmd, I2S_TRIGGER_PREPARE, "PREPARE recovery");
+	zassert_equal(mock_perf_i2s_write_failure_calls, 1, "write failure observed");
+	zassert_equal(mock_perf_i2s_last_write_errno, -EIO, "write errno observed");
+	zassert_equal(mock_perf_i2s_dma_restart_calls, 1, "DMA restart recorded");
+	zassert_equal(mock_stats_underrun_calls, 1, "actual underrun counted");
 	zassert_equal(mock_stats_stream_reset_calls, 1, "stream reset counted");
 	zassert_false(audio_i2s_test_is_started(), "started cleared");
 	zassert_true(audio_i2s_test_is_configured(), "configured retained");
 	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS, "slab fully reclaimable");
 	zassert_equal(fake_i2s_queued_count(), 0, "PREPARE purged queued blocks");
 
-	/* Next valid push: fresh ten-silence prefill + data + START. */
+	/* Next valid push: fresh fourteen-silence prefill + data + START. */
 	fake_i2s_reset();
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0, "fresh start");
 
-	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "fresh eleven-block prefill");
+	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "fresh fifteen-block prefill");
 	zassert_equal(fake_i2s_trigger_calls(), 1, "fresh START");
 	zassert_equal(fake_i2s_trigger_rec(0)->cmd, I2S_TRIGGER_START, "START");
 	zassert_true(audio_i2s_test_is_started(), "started again");
@@ -140,7 +150,7 @@ ZTEST(audio_i2s, test_repeat_fallback_at_threshold)
 
 	zassert_equal(mock_perf_repeat_fallback_calls, 1, "repeat counted once");
 	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS + 2,
-		      "11 startup + data + repeat block");
+		      "15 startup + data + repeat block");
 	zassert_equal(fake_i2s_queued_count(), 2, "both queued");
 
 	const struct fake_i2s_write_rec *data = fake_i2s_write_rec(STARTUP_FIRST_STEADY_WRITE_IDX);
@@ -158,11 +168,11 @@ ZTEST(audio_i2s, test_repeat_fallback_at_threshold)
 ZTEST(audio_i2s, test_repeat_not_triggered_below_threshold)
 {
 	test_start_stream();
-	/* After the 11-block startup pre-fill, free = 16 − 11 = 5.  Two
-	 * releases bring free to 7, still below DRIFT_THRESHOLD (12): no
+	/* After the 15-block startup pre-fill, free = 16 − 15 = 1.  Two
+	 * releases bring free to 3, still below DRIFT_THRESHOLD (12): no
 	 * repeat attempt. */
 	fake_i2s_release(fake_i2s_queued_ptr(0));
-	fake_i2s_release(fake_i2s_queued_ptr(0)); /* free = 7 */
+	fake_i2s_release(fake_i2s_queued_ptr(0)); /* free = 3 */
 
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0, "steady push");
 	zassert_equal(mock_perf_repeat_fallback_calls, 0, "no repeat below threshold");
@@ -199,6 +209,9 @@ ZTEST(audio_i2s, test_repeat_write_fail_ownership)
 	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS + 2, "data + failed dup write");
 	zassert_equal(fake_i2s_queued_count(), 1, "dup never owned by driver");
 	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - 1, "dup block caller-freed");
+	zassert_equal(mock_perf_i2s_write_failure_calls, 1, "repeat write failure observed");
+	zassert_equal(mock_perf_i2s_last_write_errno, -EBUSY, "repeat write errno observed");
+	zassert_equal(mock_perf_i2s_dma_restart_calls, 0, "repeat failure does not restart DMA");
 	test_assert_no_duplicate_writes();
 }
 
@@ -215,6 +228,7 @@ ZTEST(audio_i2s, test_perf_push_timing_started_pushes)
 	zassert_equal(mock_perf_cycle_start_calls, 1, "started push measured");
 	zassert_equal(mock_perf_cycle_end_calls, 1, "ended exactly once");
 
+	fake_i2s_release(fake_i2s_queued_ptr(0));
 	fake_i2s_set_write_fail_errno(-EBUSY);
 	fake_i2s_fail_write_at(STARTUP_FIRST_STEADY_WRITE_IDX + 1);
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), -EBUSY,
@@ -236,7 +250,7 @@ ZTEST(audio_i2s, test_queue_metrics_prealloc_count_and_frames)
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0, "steady push");
 
 	zassert_equal(mock_perf_queue_sample_calls, 1, "one queue sample");
-	zassert_equal(mock_perf_last_slab_free, 5, "pre-allocation slab count");
+	zassert_equal(mock_perf_last_slab_free, 1, "pre-allocation slab count");
 	zassert_equal(mock_perf_last_output_frames, TEST_FRAMES_480, "output frame count");
 }
 
@@ -245,7 +259,7 @@ ZTEST(audio_i2s, test_queue_metrics_prealloc_count_and_frames)
 ZTEST(audio_i2s, test_slab_full_underrun)
 {
 	test_start_stream();
-	test_prealloc_blocks(5); /* exhaust all remaining blocks */
+	test_prealloc_blocks(1); /* exhaust all remaining blocks */
 
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), -ENOMEM, "slab full");
 

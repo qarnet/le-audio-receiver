@@ -49,10 +49,10 @@ extern uint32_t mock_rate_convert_last_out_rate;
 extern size_t mock_rate_convert_next_ret;
 extern int mock_rate_convert_next_calls;
 extern size_t mock_rate_convert_last_input_frames;
-/* Optional per-call return sequence (startup pre-fill uses exactly 10
+/* Optional per-call return sequence (startup pre-fill uses exactly 14
  * calls).  When seq_len > 0, call i returns seq[i] for i < seq_len, then
  * falls back to mock_rate_convert_next_ret. */
-#define MOCK_RATE_CONVERT_SEQ_MAX 10
+#define MOCK_RATE_CONVERT_SEQ_MAX 16
 extern size_t mock_rate_convert_next_seq[MOCK_RATE_CONVERT_SEQ_MAX];
 extern int mock_rate_convert_next_seq_len;
 extern int mock_rate_convert_next_seq_pos;
@@ -124,6 +124,16 @@ extern size_t mock_perf_last_output_frames;
 extern int mock_perf_push_failure_calls;
 extern int mock_perf_repeat_fallback_calls;
 extern int mock_perf_asrc_capacity_failure_calls;
+extern int mock_perf_i2s_write_failure_calls;
+extern int mock_perf_i2s_last_write_errno;
+extern int mock_perf_i2s_dma_restart_calls;
+extern int mock_perf_rx_callback_start_calls;
+extern uint32_t mock_perf_i2s_write_start_ret;
+extern int mock_perf_i2s_write_start_calls;
+extern int mock_perf_i2s_write_end_calls;
+extern uint32_t mock_perf_i2s_last_write_start;
+extern bool mock_perf_i2s_last_write_success;
+extern int mock_perf_i2s_dma_started_calls;
 
 /** Reset every mock to defaults (zero call counts, zero rets, sentinels). */
 void mock_audio_reset_all(void);

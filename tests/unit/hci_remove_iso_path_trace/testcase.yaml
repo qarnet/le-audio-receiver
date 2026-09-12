@@ -1,0 +1,4 @@
+tests:
+  unit.hci_remove_iso_path_trace:
+    platform_allow: native_sim/native/64
+    tags: hci trace

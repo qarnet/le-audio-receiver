@@ -38,10 +38,18 @@ non-fast-forward, no bypass actors,
 complete; protected-main runs and release creation remain separate
 operations.
 
+## Release-line narrowing update (2026-09-12)
+
+The PR 11 hosted two-target firmware run is historical evidence. The current
+firmware workflow builds, contract-checks, packages, uploads, and prepares
+draft releases for nRF54L15 only. Local `scripts/check-build-contract.py`
+keeps optional `--nrf5340` validation for legacy local use pending separate
+cleanup; it is not part of current GitHub workflow execution.
+
 ## Goal
 
 Make every pull request and every protected `main` merge pass the repository's
-canonical software gate before either production receiver firmware build can
+canonical software gate before the active nRF54L15 release firmware build can
 start. A failed test gate must prevent firmware packaging, artifact upload, and
 draft-release creation.
 
@@ -50,12 +58,12 @@ draft-release creation.
 - `.github/workflows/firmware-build.yml` has one `firmware` job followed by a
   trusted-`main` `release` job. The firmware job initializes an exact NCS v3.3.0
   west workspace in Nordic's digest-pinned toolchain container, then builds
-  nRF5340 and nRF54L15.
+  nRF54L15 only.
 - `scripts/test-all.sh` is the canonical software gate and discovers suites
   only through `scripts/test_inventory.py`.
-- Current inventory is 35 Twister C suites, 5 exec-only C suites, and 22 Python
+- Current inventory is 40 Twister C suites, 5 exec-only C suites, and 24 Python
   suites. Coverage baseline enforcement, matrix validation, and BabbleSim
-  Stage 1 make the public gate total 65 children.
+  Stage 1 make the public gate total 72 children.
 - `scripts/test-coverage.sh` requires a clean exact commit in baseline mode,
   `gcovr 8.4`, gcov 14.3.0, west, Python, and `ZEPHYR_BASE`.
 - `scripts/bsim-stage1-run.sh` builds the repository receiver/client and runs
@@ -64,9 +72,10 @@ draft-release creation.
 - NCS v3.3.0's west manifest imports pinned BabbleSim projects through
   `tools/bsim`; `make -C tools/bsim everything` builds the required simulator
   components.
-- `scripts/check-build-contract.py` against real nRF5340/nRF54L15 build trees is
-  a post-build contract, not a pre-build test. Its own 52-test Python suite is
-  already one of the 22 canonical Python children.
+- `scripts/check-build-contract.py` against the real nRF54L15 build tree is a
+  post-build contract, not a pre-build test. Its optional `--nrf5340` local
+  legacy validation remains pending cleanup. Its own 56-test Python suite is
+  already one of the 24 canonical Python children.
 
 ## Scope
 
@@ -123,8 +132,8 @@ tests -> firmware -> release (trusted main only)
 
 The `tests` job runs on the plain `ubuntu-22.04` host runner (no Nordic
 container): the repository's locked Nix dev shell provides the exact toolchain
-tools (gcovr 8.4, gcov 14.3.0, nrfutil core, west), and `nrfutil sdk-manager`
-owns the exact NCS v3.3.0 installation. It does not share mutable build state
+tools (gcovr 8.4, gcov 14.3.0, nrfutil, west), and `nrfutil sdk-manager` owns
+the exact NCS v3.3.0 installation. It does not share mutable build state
 with `firmware` and does not checkout sdk-nrf separately:
 
 - checkout application at the repository root, `fetch-depth: 0`, credentials
@@ -141,12 +150,11 @@ with `firmware` and does not checkout sdk-nrf separately:
   `flake.lock` with a bounded `gc-max-store-size` (6G, grounded in the measured
   dev-shell closure), and cache `/home/runner/ncs` with the pinned
   `actions/cache` keyed `ncs-v3.3.0-911f4c5c26` and `id: cache-ncs`;
-- provision `nrfutil sdk-manager` 1.16.1 only: download the exact versioned
-  URL with `curl --fail-with-body --show-error --location` and bounded
-  retries/timeouts, verify the exact SHA-256 before extraction, extract with
-  `--strip-components=2` to `$RUNNER_TEMP/nrfutil/bin`, verify the executable,
-  and append that bin to `$GITHUB_PATH`. nrfutil core is never downloaded or
-  replaced; the locked Nix shell provides it;
+- consume `nix-nrf-dev`'s default `nrfutil` supply: Nixpkgs core plus exact
+  `nrfutil sdk-manager` 1.16.1 from a versioned Nordic archive fixed by its
+  Nix SHA-256. The receiver does not override `mkNrfShell`'s package; before
+  any NCS installation, CI checks `nrfutil sdk-manager --version` for 1.16.1
+  and never downloads or PATH-injects nrfutil;
 - install the SDK through the locked shell, setting the install directory on
   every run and branching on the NCS cache step's exact `cache-hit` output
   (`CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}`), never on directory
@@ -217,8 +225,8 @@ Extend `scripts/test_firmware_build_ci.py` to prove public workflow behavior:
   pinned runner/shell and read-only permissions;
 - checkout at the repository root only, with the exact Nix installer, Nix
   store cache, and NCS cache pins;
-- exact sdk-manager 1.16.1 provisioning (versioned URL, SHA-256 before
-  extraction, no sudo, no pipe-to-shell) and locked-shell NCS install;
+- Nix-managed sdk-manager 1.16.1 supply (versioned URL, fixed SHA-256, no CI
+  PATH injection) and locked-shell NCS install;
 - exact gcovr/gcov/ZEPHYR_BASE/sdk-HEAD/VERSION/toolchain-ID verification and
   fail-fast BabbleSim build exist;
 - canonical invocation is `scripts/test-all.sh`, not copied suite lists;

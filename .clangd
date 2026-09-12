@@ -1,5 +1,18 @@
+# clangd configuration for the whole repo.
+#
+# No CompilationDatabase pin and no --target Add, by design:
+#   - A root pin overrides clangd's closest-ancestor CDB discovery for every
+#     tree below and would break the per-app compile_commands.json symlinks
+#     (see scripts/gen-lsp-links.sh and each app's CMakeLists.txt
+#     file(CREATE_LINK) block).
+#   - The target triple comes from the queried compiler (clangd is launched
+#     with --query-driver by opencode.json / nvim); a repo-wide
+#     --target=arm-none-eabi would corrupt native_sim/BSim (host x86) parses.
+#   - --param=* strips GCC's min-pagesize spelling clangd does not know.
+#
+# Requires: clangd launched with --query-driver covering the Zephyr SDK
+# compilers and the Nix host gcc wrapper (see opencode.json "lsp.clangd").
 CompileFlags:
-  CompilationDatabase: build/nrf5340/le-audio-receiver
   Remove:
     - -fno-printf-return-value
     - -fno-reorder-functions
@@ -7,5 +20,4 @@ CompileFlags:
     - --specs=*
     - -fno-defer-pop
     - -fno-freestanding
-  Add:
-    - --target=arm-none-eabi
+    - --param=*

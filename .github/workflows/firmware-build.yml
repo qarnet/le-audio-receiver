@@ -53,25 +53,13 @@ jobs:
         with:
           path: /home/runner/ncs
           key: ncs-v3.3.0-911f4c5c26
-      - name: Provision nrfutil sdk-manager
-        run: |
-          set -euo pipefail
-          sdk_manager_url="https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/packages/nrfutil-sdk-manager/nrfutil-sdk-manager-x86_64-unknown-linux-gnu-1.16.1.tar.gz"
-          sdk_manager_sha256="d2fe97f143f888a679223d9c6e0b51d730eb60b4a5f4a5dafc970acd2020fe38"
-          archive="$RUNNER_TEMP/nrfutil-sdk-manager.tar.gz"
-          curl --fail-with-body --show-error --location --retry 3 --retry-delay 5 \
-            --connect-timeout 20 --max-time 600 -o "$archive" "$sdk_manager_url"
-          printf '%s  %s\n' "$sdk_manager_sha256" "$archive" | sha256sum --strict -c -
-          mkdir -p "$RUNNER_TEMP/nrfutil"
-          tar -xzf "$archive" -C "$RUNNER_TEMP/nrfutil" --strip-components=2
-          test -x "$RUNNER_TEMP/nrfutil/bin/nrfutil-sdk-manager"
-          printf '%s\n' "$RUNNER_TEMP/nrfutil/bin" >> "$GITHUB_PATH"
       - name: Install NCS SDK and toolchain
         env:
           CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}
         run: |
           nix develop --accept-flake-config --command bash -s <<'EOF'
           set -euo pipefail
+          nrfutil sdk-manager --version | grep -F "1.16.1"
           nrfutil sdk-manager config install-dir set "$HOME/ncs"
           if [ "$CACHE_HIT" = "true" ]; then
             test -d "$HOME/ncs/v3.3.0/nrf"
@@ -208,9 +196,6 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "release-requested=$release_requested" >> "$GITHUB_OUTPUT"
-      - name: Build nRF5340
-        working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
-        run: ./scripts/bin/fw-build-5340
       - name: Build nRF54L15
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
         run: ./scripts/bin/fw-build-54l15
@@ -218,7 +203,6 @@ jobs:
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
         run: |
           python3 scripts/check-build-contract.py \
-            --nrf5340 build/nrf5340 \
             --nrf54l15 build/nrf54l15
       - name: Verify application version headers
         working-directory: ${{ github.workspace }}/workspace/le-audio-receiver
@@ -227,7 +211,6 @@ jobs:
         run: |
           test "$(python3 scripts/project-version.py)" = "$PROJECT_VERSION"
           python3 - "$PROJECT_VERSION" \
-            build/nrf5340/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h \
             build/nrf54l15/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h <<'PYEOF'
           import re
           import sys
@@ -266,23 +249,20 @@ jobs:
         run: |
           version="$(python3 scripts/project-version.py)"
           test "$version" = "$PROJECT_VERSION"
-          zip5340="le-audio-receiver-v${version}-nrf5340-e83-factory.zip"
           zip54l15="le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip"
           test -z "$(find dist -maxdepth 1 -type l)"
-          test "$(find dist -mindepth 1 -maxdepth 1 | wc -l)" -eq 3
-          test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 3
-          for f in "$zip5340" "$zip54l15" SHA256SUMS ; do
+          test "$(find dist -mindepth 1 -maxdepth 1 | wc -l)" -eq 2
+          test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 2
+          for f in "$zip54l15" SHA256SUMS ; do
             test -f "dist/$f"
           done
           (cd dist && sha256sum --strict -c SHA256SUMS)
-          python3 -m zipfile --test "dist/$zip5340"
           python3 -m zipfile --test "dist/$zip54l15"
       - name: Upload firmware artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: firmware-v${{ steps.project-version.outputs.version }}-${{ github.sha }}
           path: |
-            workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf5340-e83-factory.zip
             workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf54l15-xiao-factory.zip
             workspace/le-audio-receiver/dist/SHA256SUMS
           if-no-files-found: error
@@ -445,7 +425,6 @@ jobs:
             --draft \
             --title "LE Audio Receiver $tag" \
             --notes-file release-metadata/release-notes.md \
-            "dist/le-audio-receiver-v${version}-nrf5340-e83-factory.zip" \
             "dist/le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip" \
             dist/SHA256SUMS \
             release-metadata/release-provenance.json
@@ -469,7 +448,6 @@ jobs:
           assert release["targetCommitish"] == sha, release["targetCommitish"]
           expected = [
               "SHA256SUMS",
-              "le-audio-receiver-v%s-nrf5340-e83-factory.zip" % version,
               "le-audio-receiver-v%s-nrf54l15-xiao-factory.zip" % version,
               "release-provenance.json",
           ]

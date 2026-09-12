@@ -103,17 +103,19 @@ void audio_sink_set_input_frames(uint16_t frames)
 
 #define DRIFT_THRESHOLD (BLOCK_COUNT - 4)
 
-/* Startup pre-fill depth: ten distinct silence blocks plus the first data
- * block (11 total).  Eleven 7.5 ms blocks provide an 82.5 ms reservoir
- * (11 × 7.5 ms), so short controller callback gaps at PipeWire suspend
- * cannot drain nrfx I2S into ERROR before ASCS Disable arrives.  Slab
- * capacity and the nrfx TX queue depth both support 11 startup blocks
+/* Startup pre-fill depth: fourteen distinct silence blocks plus the first
+ * data block (15 total).  Fifteen 7.5 ms blocks provide a 112.5 ms reservoir
+ * (about 150 ms at 10 ms), so short controller callback gaps at PipeWire
+ * suspend cannot drain nrfx I2S into ERROR before ASCS Disable arrives.  Slab
+ * capacity and the nrfx TX queue depth both support 15 startup blocks
  * (compile-time proven below).
  */
-#define STARTUP_SILENCE_BLOCKS 10
+#define STARTUP_SILENCE_BLOCKS 14
 #define STARTUP_TOTAL_BLOCKS   (STARTUP_SILENCE_BLOCKS + 1)
 
 BUILD_ASSERT(STARTUP_TOTAL_BLOCKS <= BLOCK_COUNT, "startup pre-fill exceeds slab block capacity");
+BUILD_ASSERT(STARTUP_TOTAL_BLOCKS < BLOCK_COUNT,
+	     "startup pre-fill reserves one slab block for first post-START push");
 #if !defined(AUDIO_I2S_NATIVE_TEST)
 BUILD_ASSERT(STARTUP_TOTAL_BLOCKS <= CONFIG_I2S_NRFX_TX_BLOCK_COUNT,
 	     "startup pre-fill exceeds nrfx I2S TX queue depth");
@@ -164,7 +166,9 @@ static int i2s_do_configure(void)
 		.frame_clk_freq = SAMPLE_RATE,
 		.mem_slab = &i2s_slab,
 		.block_size = BLOCK_SIZE,
-		.timeout = 0,
+		/* Board-selected bounded wait for a full TX queue.  The default
+		 * stays nonblocking for nRF5340; nRF54L15 uses a finite wait. */
+		.timeout = CONFIG_AUDIO_I2S_WRITE_TIMEOUT_MS,
 	};
 
 	return i2s_configure(i2s_dev, I2S_DIR_TX, &cfg);
@@ -266,16 +270,37 @@ static void perf_finalize_push(bool measuring, uint32_t t0)
 
 /* ── resampler-specific block fill ───────────────────────────────── */
 
-#if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
-
-static int fill_block_asrc(uint16_t input_frames_snapshot, const int16_t *stereo_data, int32_t ppm,
-			   void **block, size_t *output_frames)
+static int alloc_main_block(bool stream_started, void **block)
 {
-	int ret = k_mem_slab_alloc(&i2s_slab, block, K_NO_WAIT);
+	k_timeout_t timeout = K_NO_WAIT;
+	bool waits = stream_started && CONFIG_AUDIO_I2S_WRITE_TIMEOUT_MS > 0;
+
+	if (waits) {
+		timeout = K_MSEC(CONFIG_AUDIO_I2S_WRITE_TIMEOUT_MS);
+	}
+
+#if defined(AUDIO_I2S_NATIVE_TEST)
+	audio_i2s_test_note_main_slab_alloc(waits);
+#endif
+
+	int ret = k_mem_slab_alloc(&i2s_slab, block, timeout);
 
 	if (ret < 0) {
 		LOG_WRN("I2S slab full — dropping frame");
 		audio_stats_i2s_underrun();
+	}
+
+	return ret;
+}
+
+#if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
+
+static int fill_block_asrc(uint16_t input_frames_snapshot, const int16_t *stereo_data, int32_t ppm,
+			   bool stream_started, void **block, size_t *output_frames)
+{
+	int ret = alloc_main_block(stream_started, block);
+
+	if (ret < 0) {
 		return ret;
 	}
 
@@ -374,15 +399,14 @@ static int fill_block_asrc(uint16_t input_frames_snapshot, const int16_t *stereo
 #else /* AUDIO_RESAMPLER_IDENTITY */
 
 static int fill_block_identity(uint16_t input_frames_snapshot, const int16_t *stereo_data,
-			       int32_t ppm_unused, void **block, size_t *output_frames)
+			       int32_t ppm_unused, bool stream_started, void **block,
+			       size_t *output_frames)
 {
 	(void)ppm_unused;
 
-	int ret = k_mem_slab_alloc(&i2s_slab, block, K_NO_WAIT);
+	int ret = alloc_main_block(stream_started, block);
 
 	if (ret < 0) {
-		LOG_WRN("I2S slab full — dropping frame");
-		audio_stats_i2s_underrun();
 		return ret;
 	}
 
@@ -408,13 +432,14 @@ static int do_push(uint16_t input_frames_snapshot, const int16_t *stereo_data, s
 {
 	int ret;
 
-	bool measuring = started;
+	bool stream_started = started;
+	bool measuring = stream_started;
 	uint32_t t0 = measuring ? audio_perf_cycle_start() : 0;
 
 	int32_t ppm = 0;
 	int slab_free = 0;
 
-	if (started) {
+	if (stream_started) {
 		slab_free = k_mem_slab_num_free_get(&i2s_slab);
 		ppm = audio_drift_controller_update(slab_free);
 
@@ -428,9 +453,11 @@ static int do_push(uint16_t input_frames_snapshot, const int16_t *stereo_data, s
 	size_t output_frames = 0;
 
 #if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
-	ret = fill_block_asrc(input_frames_snapshot, stereo_data, ppm, &block, &output_frames);
+	ret = fill_block_asrc(input_frames_snapshot, stereo_data, ppm, stream_started, &block,
+			      &output_frames);
 #else
-	ret = fill_block_identity(input_frames_snapshot, stereo_data, ppm, &block, &output_frames);
+	ret = fill_block_identity(input_frames_snapshot, stereo_data, ppm, stream_started, &block,
+				  &output_frames);
 #endif
 	if (ret < 0) {
 		perf_finalize_push(measuring, t0);
@@ -449,12 +476,12 @@ static int do_push(uint16_t input_frames_snapshot, const int16_t *stereo_data, s
 
 	size_t out_bytes = output_frames * CHANNELS * (BIT_WIDTH / 8);
 
-	if (started) {
+	if (stream_started) {
 		audio_perf_queue_sample(slab_free, output_frames);
 	}
 
-	if (!started) {
-		/* Transactional startup: queue ten distinct silence blocks,
+	if (!stream_started) {
+		/* Transactional startup: queue fourteen distinct silence blocks,
 		 * then the data block, then START.  On any allocation/write/
 		 * START failure: return the exact primary failure, free every
 		 * caller-owned block (failed write or never submitted), and
@@ -488,6 +515,7 @@ static int do_push(uint16_t input_frames_snapshot, const int16_t *stereo_data, s
 			memset(sil, 0, pre_bytes);
 			ret = i2s_write(i2s_dev, sil, pre_bytes);
 			if (ret < 0) {
+				audio_perf_i2s_write_failure(ret);
 				/* Failed write never took ownership. */
 				k_mem_slab_free(&i2s_slab, sil);
 				k_mem_slab_free(&i2s_slab, block);
@@ -499,6 +527,7 @@ static int do_push(uint16_t input_frames_snapshot, const int16_t *stereo_data, s
 
 		ret = i2s_write(i2s_dev, block, out_bytes);
 		if (ret < 0) {
+			audio_perf_i2s_write_failure(ret);
 			k_mem_slab_free(&i2s_slab, block);
 			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
 			perf_finalize_push(measuring, t0);
@@ -507,7 +536,7 @@ static int do_push(uint16_t input_frames_snapshot, const int16_t *stereo_data, s
 
 		ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
 		if (ret < 0) {
-			/* All 11 blocks are driver-owned now; purge via DROP,
+			/* All 15 blocks are driver-owned now; purge via DROP,
 			 * never free them directly.
 			 */
 			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_DROP);
@@ -515,6 +544,7 @@ static int do_push(uint16_t input_frames_snapshot, const int16_t *stereo_data, s
 			return ret;
 		}
 
+		audio_perf_i2s_dma_started();
 		LOG_INF("I2S DMA started");
 		started = true;
 		return 0;
@@ -523,13 +553,18 @@ static int do_push(uint16_t input_frames_snapshot, const int16_t *stereo_data, s
 	memcpy(saved_frame, block, out_bytes);
 	saved_frame_len = out_bytes;
 
+	uint32_t write_start = audio_perf_i2s_write_start();
 	ret = i2s_write(i2s_dev, block, out_bytes);
+	audio_perf_i2s_write_end(write_start, ret == 0);
 	if (ret < 0) {
+		audio_perf_i2s_write_failure(ret);
 		k_mem_slab_free(&i2s_slab, block);
 		if (ret == -EIO) {
 			LOG_WRN("I2S underrun, restarting DMA");
+			audio_stats_i2s_underrun();
 			i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_PREPARE);
 			audio_stats_stream_reset();
+			audio_perf_i2s_dma_restart();
 			started = false;
 		}
 		perf_finalize_push(measuring, t0);
@@ -546,7 +581,11 @@ static int do_push(uint16_t input_frames_snapshot, const int16_t *stereo_data, s
 		if (k_mem_slab_alloc(&i2s_slab, &dup, K_NO_WAIT) == 0) {
 #endif
 			memcpy(dup, saved_frame, saved_frame_len);
-			if (i2s_write(i2s_dev, dup, saved_frame_len) < 0) {
+			uint32_t repeat_start = audio_perf_i2s_write_start();
+			int repeat_ret = i2s_write(i2s_dev, dup, saved_frame_len);
+			audio_perf_i2s_write_end(repeat_start, repeat_ret == 0);
+			if (repeat_ret < 0) {
+				audio_perf_i2s_write_failure(repeat_ret);
 				k_mem_slab_free(&i2s_slab, dup);
 			}
 		}
@@ -724,6 +763,8 @@ void audio_sink_stream_close(void)
 /* GCOVR_EXCL_START — test-only helpers, absent from production builds */
 static bool test_device_ready = true;
 static bool test_inject_slab_alloc_fail;
+static struct k_sem *test_main_slab_alloc_entered;
+static bool test_last_main_slab_alloc_waited;
 
 bool audio_i2s_test_device_is_ready(const struct device *dev)
 {
@@ -746,6 +787,28 @@ void audio_i2s_test_set_slab_alloc_failure(bool fail)
 	test_inject_slab_alloc_fail = fail;
 }
 
+void audio_i2s_test_arm_main_slab_alloc(struct k_sem *entered)
+{
+	test_main_slab_alloc_entered = entered;
+	test_last_main_slab_alloc_waited = false;
+}
+
+bool audio_i2s_test_last_main_slab_alloc_waited(void)
+{
+	return test_last_main_slab_alloc_waited;
+}
+
+void audio_i2s_test_note_main_slab_alloc(bool waits)
+{
+	test_last_main_slab_alloc_waited = waits;
+
+	struct k_sem *entered = test_main_slab_alloc_entered;
+	test_main_slab_alloc_entered = NULL;
+	if (entered != NULL) {
+		k_sem_give(entered);
+	}
+}
+
 void audio_i2s_test_reset_module_state(void)
 {
 	k_mutex_lock(&stream_mutex, K_FOREVER);
@@ -758,6 +821,8 @@ void audio_i2s_test_reset_module_state(void)
 	stop_callers = 0;
 	stop_finalizing = false;
 	stop_waiters = 0;
+	test_main_slab_alloc_entered = NULL;
+	test_last_main_slab_alloc_waited = false;
 	k_mutex_unlock(&stream_mutex);
 	memset(&rate_ctx, 0, sizeof(rate_ctx));
 #if defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)

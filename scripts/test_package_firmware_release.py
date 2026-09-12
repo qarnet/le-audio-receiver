@@ -29,16 +29,8 @@ VERSION = "0.1.0"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 NCS = "v3.3.0"
 
-ZIP5340 = "le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip"
 ZIP54L15 = "le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip"
 
-MEMBERS_5340 = [
-    "FLASHING.md",
-    "merged.hex",
-    "merged_CPUNET.hex",
-    "release-manifest.json",
-    "SHA256SUMS",
-]
 MEMBERS_54L15 = [
     "FLASHING.md",
     "cpuapp.hex",
@@ -48,7 +40,6 @@ MEMBERS_54L15 = [
 ]
 
 SUCCESS_STDOUT = (
-    "package-firmware-release: wrote " + ZIP5340 + "\n"
     "package-firmware-release: wrote " + ZIP54L15 + "\n"
     "package-firmware-release: wrote SHA256SUMS\n"
 )
@@ -81,18 +72,8 @@ def make_hex(records=None):
 
 
 def default_images():
-    """Four valid, mutually distinct image inputs for both targets."""
+    """Two valid, mutually distinct nRF54L15 image inputs."""
     return {
-        "nrf5340/merged.hex": make_hex(
-            [
-                hex_record(0, 0, b"\xaa\xbb"),
-                hex_record(0, 0x100, b"\x01\x02\x03\x04"),
-                eof_record(),
-            ]
-        ),
-        "nrf5340/merged_CPUNET.hex": make_hex(
-            [hex_record(0, 0, b"\xcc"), eof_record()]
-        ),
         "nrf54l15/le-audio-receiver/zephyr/zephyr.hex": make_hex(
             [hex_record(0, 0, b"\x10\x20\x30"), eof_record()]
         ),
@@ -109,7 +90,6 @@ def default_images():
 
 def default_notes():
     return {
-        "nrf5340-e83.md": b"# nRF5340 E83 flashing note\n",
         "nrf54l15-xiao.md": b"# nRF54L15 Xiao flashing note\n",
     }
 
@@ -121,7 +101,6 @@ def make_fixture(base, images=None, notes=None):
     dirs = [
         os.path.join(repo, "scripts"),
         os.path.join(repo, "release", "flashing"),
-        os.path.join(repo, "build", "nrf5340"),
         os.path.join(repo, "build", "nrf54l15", "le-audio-receiver", "zephyr"),
         os.path.join(repo, "build", "nrf54l15", "flpr", "zephyr"),
     ]
@@ -175,16 +154,14 @@ def limit_file_size_100():
 class TestHappyPath(unittest.TestCase):
     """Tests 1-7: successful packaging produces the exact artifact set."""
 
-    def test_happy_path_creates_two_zips_and_top_checksum(self):
+    def test_happy_path_creates_one_zip_and_top_checksum(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = make_fixture(tmp)
             dist = os.path.join(tmp, "dist")
             res = run_cli(repo, dist)
             self.assertEqual(res.returncode, 0, res.stderr)
-            self.assertEqual(
-                sorted(os.listdir(dist)), sorted([ZIP5340, ZIP54L15, "SHA256SUMS"])
-            )
-            for name in (ZIP5340, ZIP54L15):
+            self.assertEqual(sorted(os.listdir(dist)), sorted([ZIP54L15, "SHA256SUMS"]))
+            for name in (ZIP54L15,):
                 self.assertGreater(os.path.getsize(os.path.join(dist, name)), 0)
             self.assertGreater(os.path.getsize(os.path.join(dist, "SHA256SUMS")), 0)
 
@@ -194,8 +171,6 @@ class TestHappyPath(unittest.TestCase):
             dist = os.path.join(tmp, "dist")
             res = run_cli(repo, dist)
             self.assertEqual(res.returncode, 0, res.stderr)
-            with zipfile.ZipFile(os.path.join(dist, ZIP5340)) as zf:
-                self.assertEqual(zf.namelist(), MEMBERS_5340)
             with zipfile.ZipFile(os.path.join(dist, ZIP54L15)) as zf:
                 self.assertEqual(zf.namelist(), MEMBERS_54L15)
 
@@ -206,26 +181,6 @@ class TestHappyPath(unittest.TestCase):
             dist = os.path.join(tmp, "dist")
             res = run_cli(repo, dist)
             self.assertEqual(res.returncode, 0, res.stderr)
-            expected_5340 = self._expected_manifest(
-                "nrf5340-e83",
-                "ebyte_e83_nrf5340/nrf5340/cpuapp",
-                [
-                    (
-                        "merged.hex",
-                        0,
-                        "nrf5340/merged.hex",
-                        "cpuapp",
-                        images["nrf5340/merged.hex"],
-                    ),
-                    (
-                        "merged_CPUNET.hex",
-                        1,
-                        "nrf5340/merged_CPUNET.hex",
-                        "cpunet",
-                        images["nrf5340/merged_CPUNET.hex"],
-                    ),
-                ],
-            )
             expected_54l15 = self._expected_manifest(
                 "nrf54l15-xiao",
                 "nrf54l15dk/nrf54l15/cpuapp",
@@ -246,8 +201,6 @@ class TestHappyPath(unittest.TestCase):
                     ),
                 ],
             )
-            with zipfile.ZipFile(os.path.join(dist, ZIP5340)) as zf:
-                self._assert_manifest(zf.read("release-manifest.json"), expected_5340)
             with zipfile.ZipFile(os.path.join(dist, ZIP54L15)) as zf:
                 self._assert_manifest(zf.read("release-manifest.json"), expected_54l15)
 
@@ -298,11 +251,8 @@ class TestHappyPath(unittest.TestCase):
                 digest, name = line.split("  ", 1)
                 self.assertNotIn(name, top, "duplicate top-level checksum line")
                 top[name] = digest
-            self.assertEqual(sorted(top), sorted([ZIP5340, ZIP54L15]))
-            for zip_name, members in (
-                (ZIP5340, MEMBERS_5340),
-                (ZIP54L15, MEMBERS_54L15),
-            ):
+            self.assertEqual(sorted(top), [ZIP54L15])
+            for zip_name, members in ((ZIP54L15, MEMBERS_54L15),):
                 zip_path = os.path.join(dist, zip_name)
                 with open(zip_path, "rb") as fh:
                     top_digest = hashlib.sha256(fh.read()).hexdigest()
@@ -336,7 +286,7 @@ class TestHappyPath(unittest.TestCase):
             res_b = run_cli(repo, dist_b)
             self.assertEqual(res_a.returncode, 0, res_a.stderr)
             self.assertEqual(res_b.returncode, 0, res_b.stderr)
-            for name in (ZIP5340, ZIP54L15, "SHA256SUMS"):
+            for name in (ZIP54L15, "SHA256SUMS"):
                 with open(os.path.join(dist_a, name), "rb") as fh:
                     a = fh.read()
                 with open(os.path.join(dist_b, name), "rb") as fh:
@@ -349,7 +299,7 @@ class TestHappyPath(unittest.TestCase):
             dist = os.path.join(tmp, "dist")
             res = run_cli(repo, dist)
             self.assertEqual(res.returncode, 0, res.stderr)
-            for zip_name in (ZIP5340, ZIP54L15):
+            for zip_name in (ZIP54L15,):
                 with zipfile.ZipFile(os.path.join(dist, zip_name)) as zf:
                     infos = zf.infolist()
                     self.assertGreater(len(infos), 0)
@@ -370,7 +320,7 @@ class TestHappyPath(unittest.TestCase):
             res = run_cli(repo, dist)
             self.assertEqual(res.returncode, 0, res.stderr)
             base = os.path.abspath(tmp)
-            for zip_name in (ZIP5340, ZIP54L15):
+            for zip_name in (ZIP54L15,):
                 for info, data in read_zip(os.path.join(dist, zip_name)):
                     self.assertNotIn("/", info.filename, "member name not a basename")
                     self.assertNotIn("..", info.filename)
@@ -390,8 +340,6 @@ class TestFailureAtomicity(unittest.TestCase):
 
     def test_missing_each_hex_input_fails_output_absent(self):
         for rel in (
-            "nrf5340/merged.hex",
-            "nrf5340/merged_CPUNET.hex",
             "nrf54l15/le-audio-receiver/zephyr/zephyr.hex",
             "nrf54l15/flpr/zephyr/zephyr.hex",
         ):
@@ -424,7 +372,15 @@ class TestFailureAtomicity(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as tmp:
                     repo = make_fixture(tmp)
                     with open(
-                        os.path.join(repo, "build", "nrf5340", "merged.hex"), "wb"
+                        os.path.join(
+                            repo,
+                            "build",
+                            "nrf54l15",
+                            "le-audio-receiver",
+                            "zephyr",
+                            "zephyr.hex",
+                        ),
+                        "wb",
                     ) as fh:
                         fh.write(content)
                     dist = os.path.join(tmp, "dist")
@@ -435,8 +391,17 @@ class TestFailureAtomicity(unittest.TestCase):
     def test_symlinked_hex_input_fails_output_absent(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = make_fixture(tmp)
-            target = os.path.join(repo, "build", "nrf5340", "merged_CPUNET.hex")
-            link = os.path.join(repo, "build", "nrf5340", "merged.hex")
+            target = os.path.join(
+                repo, "build", "nrf54l15", "flpr", "zephyr", "zephyr.hex"
+            )
+            link = os.path.join(
+                repo,
+                "build",
+                "nrf54l15",
+                "le-audio-receiver",
+                "zephyr",
+                "zephyr.hex",
+            )
             os.unlink(link)
             os.symlink(target, link)
             dist = os.path.join(tmp, "dist")
@@ -451,7 +416,7 @@ class TestFailureAtomicity(unittest.TestCase):
             "empty": b"",
             "invalid_utf8": b"\xff\xfe\x00 not text\n",
         }
-        for note_name in ("nrf5340-e83.md", "nrf54l15-xiao.md"):
+        for note_name in ("nrf54l15-xiao.md",):
             for variant, content in variants.items():
                 with self.subTest(note=note_name, variant=variant):
                     with tempfile.TemporaryDirectory() as tmp:
@@ -470,8 +435,10 @@ class TestFailureAtomicity(unittest.TestCase):
     def test_symlinked_flashing_note_fails_output_absent(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = make_fixture(tmp)
-            other = os.path.join(repo, "release", "flashing", "nrf54l15-xiao.md")
-            link = os.path.join(repo, "release", "flashing", "nrf5340-e83.md")
+            other = os.path.join(repo, "other-note.md")
+            with open(other, "wb") as fh:
+                fh.write(b"# Other flashing note\n")
+            link = os.path.join(repo, "release", "flashing", "nrf54l15-xiao.md")
             os.unlink(link)
             os.symlink(other, link)
             dist = os.path.join(tmp, "dist")
@@ -526,7 +493,17 @@ class TestFailureAtomicity(unittest.TestCase):
     def test_handled_failure_leaves_no_staging_sibling(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = make_fixture(tmp)
-            with open(os.path.join(repo, "build", "nrf5340", "merged.hex"), "wb") as fh:
+            with open(
+                os.path.join(
+                    repo,
+                    "build",
+                    "nrf54l15",
+                    "le-audio-receiver",
+                    "zephyr",
+                    "zephyr.hex",
+                ),
+                "wb",
+            ) as fh:
                 fh.write(b"garbage-not-hex")
             dist = os.path.join(tmp, "dist")
             res = run_cli(repo, dist)
@@ -539,35 +516,39 @@ class TestFailureAtomicity(unittest.TestCase):
 
 
 class TestTargetIsolation(unittest.TestCase):
-    """Test 14: changing one image affects only its own target ZIP."""
+    """Test 14: changing an nRF54L15 image changes its ZIP and checksum."""
 
-    def test_image_change_affects_only_its_target_zip(self):
+    def test_nrf54l15_image_change_affects_its_zip_and_checksum(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = make_fixture(tmp)
             dist_a = os.path.join(tmp, "dist_a")
             res_a = run_cli(repo, dist_a)
             self.assertEqual(res_a.returncode, 0, res_a.stderr)
-            # Change the nRF5340 cpuapp image only.
-            with open(os.path.join(repo, "build", "nrf5340", "merged.hex"), "wb") as fh:
+            # Change the nRF54L15 cpuapp image only.
+            with open(
+                os.path.join(
+                    repo,
+                    "build",
+                    "nrf54l15",
+                    "le-audio-receiver",
+                    "zephyr",
+                    "zephyr.hex",
+                ),
+                "wb",
+            ) as fh:
                 fh.write(make_hex([hex_record(0, 0, b"\x99\x88\x77"), eof_record()]))
             dist_b = os.path.join(tmp, "dist_b")
             res_b = run_cli(repo, dist_b)
             self.assertEqual(res_b.returncode, 0, res_b.stderr)
-            for name in (ZIP5340, ZIP54L15, "SHA256SUMS"):
+            for name in (ZIP54L15, "SHA256SUMS"):
                 with open(os.path.join(dist_a, name), "rb") as fh:
                     a = fh.read()
                 with open(os.path.join(dist_b, name), "rb") as fh:
                     b = fh.read()
-                if name == ZIP54L15:
-                    self.assertEqual(a, b, "unchanged target must be byte-identical")
-                else:
-                    # The changed image alters its own target ZIP, so the
-                    # top-level SHA256SUMS (which hashes both ZIPs) also
-                    # changes.
-                    self.assertNotEqual(a, b, "%s must change" % name)
-            with zipfile.ZipFile(os.path.join(dist_a, ZIP5340)) as zf:
+                self.assertNotEqual(a, b, "%s must change" % name)
+            with zipfile.ZipFile(os.path.join(dist_a, ZIP54L15)) as zf:
                 manifest_a = json.loads(zf.read("release-manifest.json"))
-            with zipfile.ZipFile(os.path.join(dist_b, ZIP5340)) as zf:
+            with zipfile.ZipFile(os.path.join(dist_b, ZIP54L15)) as zf:
                 manifest_b = json.loads(zf.read("release-manifest.json"))
             self.assertNotEqual(
                 manifest_a["images"][0]["sha256"], manifest_b["images"][0]["sha256"]
@@ -601,7 +582,16 @@ class TestProcessContract(unittest.TestCase):
             self.assertTrue(res.stderr.startswith(ERROR_PREFIX), res.stderr)
             self.assertNotIn("Traceback", res.stderr)
             # Missing image.
-            os.unlink(os.path.join(repo, "build", "nrf5340", "merged.hex"))
+            os.unlink(
+                os.path.join(
+                    repo,
+                    "build",
+                    "nrf54l15",
+                    "le-audio-receiver",
+                    "zephyr",
+                    "zephyr.hex",
+                )
+            )
             res = run_cli(repo, dist)
             self.assertNotEqual(res.returncode, 0)
             self.assertTrue(res.stderr.startswith(ERROR_PREFIX), res.stderr)
@@ -614,7 +604,17 @@ class TestProcessContract(unittest.TestCase):
             self.assertNotIn("Traceback", res.stderr)
             # Invalid hex content.
             shutil.rmtree(dist)
-            with open(os.path.join(repo, "build", "nrf5340", "merged.hex"), "wb") as fh:
+            with open(
+                os.path.join(
+                    repo,
+                    "build",
+                    "nrf54l15",
+                    "le-audio-receiver",
+                    "zephyr",
+                    "zephyr.hex",
+                ),
+                "wb",
+            ) as fh:
                 fh.write(b":02000000AABB00\n")
             res = run_cli(repo, dist)
             self.assertNotEqual(res.returncode, 0)

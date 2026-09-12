@@ -317,6 +317,16 @@ size_t mock_perf_last_output_frames;
 int mock_perf_push_failure_calls;
 int mock_perf_repeat_fallback_calls;
 int mock_perf_asrc_capacity_failure_calls;
+int mock_perf_i2s_write_failure_calls;
+int mock_perf_i2s_last_write_errno;
+int mock_perf_i2s_dma_restart_calls;
+int mock_perf_rx_callback_start_calls;
+uint32_t mock_perf_i2s_write_start_ret;
+int mock_perf_i2s_write_start_calls;
+int mock_perf_i2s_write_end_calls;
+uint32_t mock_perf_i2s_last_write_start;
+bool mock_perf_i2s_last_write_success;
+int mock_perf_i2s_dma_started_calls;
 
 uint32_t audio_perf_cycle_start(void)
 {
@@ -351,6 +361,41 @@ void audio_perf_repeat_fallback(void)
 void audio_perf_asrc_capacity_failure(void)
 {
 	mock_perf_asrc_capacity_failure_calls++;
+}
+
+void audio_perf_i2s_write_failure(int err)
+{
+	mock_perf_i2s_write_failure_calls++;
+	mock_perf_i2s_last_write_errno = err;
+}
+
+void audio_perf_i2s_dma_restart(void)
+{
+	mock_perf_i2s_dma_restart_calls++;
+}
+
+void audio_perf_rx_callback_start(uint32_t start)
+{
+	(void)start;
+	mock_perf_rx_callback_start_calls++;
+}
+
+void audio_perf_i2s_dma_started(void)
+{
+	mock_perf_i2s_dma_started_calls++;
+}
+
+uint32_t audio_perf_i2s_write_start(void)
+{
+	mock_perf_i2s_write_start_calls++;
+	return mock_perf_i2s_write_start_ret;
+}
+
+void audio_perf_i2s_write_end(uint32_t start, bool success)
+{
+	mock_perf_i2s_write_end_calls++;
+	mock_perf_i2s_last_write_start = start;
+	mock_perf_i2s_last_write_success = success;
 }
 
 /* ── reset ────────────────────────────────────────────────────────── */
@@ -445,4 +490,14 @@ void mock_audio_reset_all(void)
 	mock_perf_push_failure_calls = 0;
 	mock_perf_repeat_fallback_calls = 0;
 	mock_perf_asrc_capacity_failure_calls = 0;
+	mock_perf_i2s_write_failure_calls = 0;
+	mock_perf_i2s_last_write_errno = 0;
+	mock_perf_i2s_dma_restart_calls = 0;
+	mock_perf_rx_callback_start_calls = 0;
+	mock_perf_i2s_write_start_ret = 0;
+	mock_perf_i2s_write_start_calls = 0;
+	mock_perf_i2s_write_end_calls = 0;
+	mock_perf_i2s_last_write_start = 0;
+	mock_perf_i2s_last_write_success = false;
+	mock_perf_i2s_dma_started_calls = 0;
 }

@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Dedicated LE Audio source fixture application Kconfig.
+#
+# All run-time options are standard Zephyr/Bluetooth symbols set in
+# prj.conf and the board conf. The RH1A core modules compile without any
+# application-specific Kconfig; diagnostic fixture options live below.
+
+source "Kconfig.zephyr"
+
+config HIL_SOURCE_QOS_RTN
+	int "HIL source CIS retransmission number (RTN)"
+	default 5
+	range 0 5
+	help
+	  RTN used in the source BAP QoS presets. Default 5 matches the
+	  original frozen presets (nse=6). Diagnostic-only knob: the
+	  receiver transport investigation varies it in fragments; normal
+	  builds must not set it.
+
+config HIL_SOURCE_QOS_PHY
+	int "HIL source CIS PHY (1 or 2)"
+	default 2
+	range 1 2
+	help
+	  PHY used in the source BAP QoS presets. Default 2 (2M) matches the
+	  original frozen presets. Diagnostic-only knob for the receiver
+	  transport investigation; normal builds must not set it.
+
+config HIL_SOURCE_TX_OUTSTANDING_TARGET
+	int "HIL source TX outstanding target per stream"
+	default 3
+	range 1 6
+	help
+	  Per-stream in-flight SDU cap for the completion-paced TX loop.
+	  Default 3 matches the original source-fixture backpressure design.
+	  Diagnostic-only knob for the receiver transport investigation;
+	  normal builds must not set it.

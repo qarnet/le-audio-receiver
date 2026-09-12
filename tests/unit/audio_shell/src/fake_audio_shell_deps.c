@@ -8,7 +8,13 @@
  */
 
 #include <stdbool.h>
+#include <errno.h>
 #include <stdint.h>
+#include <string.h>
+
+#include <zephyr/bluetooth/addr.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/sys/util.h>
 
 #include "audio_drift.h"
 #include "audio_sink.h"
@@ -21,6 +27,46 @@ static int sink_stop_calls;
 static int unpair_result;
 static int unpair_calls;
 static int bap_path_stop_calls;
+static struct bt_bap_iso_link_quality test_iso_link_quality[TEST_SHELL_MAX_ISO_LINK_QUALITY];
+static size_t test_iso_link_quality_count;
+static int test_iso_link_quality_result;
+
+/* ---- bt identity (fake bt_id_get) ---- */
+
+static bt_addr_le_t test_identities[TEST_SHELL_MAX_IDENTITIES];
+static size_t test_identity_count;
+
+/* The production bt_shell identity command calls this; the test suites
+ * script the identity table.  bt_addr_le_to_str() itself is the real
+ * inline formatter from the public addr.h header, never mocked. */
+void bt_id_get(bt_addr_le_t *addrs, size_t *count)
+{
+	size_t n = MIN(*count, test_identity_count);
+
+	memcpy(addrs, test_identities, n * sizeof(bt_addr_le_t));
+	*count = test_identity_count;
+}
+
+void test_shell_set_identities(const bt_addr_le_t *ids, size_t count)
+{
+	size_t n = MIN(count, TEST_SHELL_MAX_IDENTITIES);
+
+	test_identity_count = n;
+	memcpy(test_identities, ids, n * sizeof(bt_addr_le_t));
+}
+
+const bt_addr_le_t *test_shell_identity_at(size_t index)
+{
+	if (index >= test_identity_count) {
+		return NULL;
+	}
+	return &test_identities[index];
+}
+
+size_t test_shell_identity_count(void)
+{
+	return test_identity_count;
+}
 
 /* ---- stats ---- */
 
@@ -56,6 +102,15 @@ void test_shell_reset_counters(void)
 	unpair_calls = 0;
 	unpair_result = 0;
 	bap_path_stop_calls = 0;
+	test_iso_link_quality_count = 0U;
+	test_iso_link_quality_result = 0;
+	/* Default identity table: exactly one usable public identity so the
+	 * identity command never fails by accident in unrelated tests. */
+	test_identities[0].type = BT_ADDR_LE_PUBLIC;
+	memset(test_identities[0].a.val, 0, sizeof(test_identities[0].a.val));
+	test_identities[0].a.val[0] = 0xAA;
+	test_identities[0].a.val[5] = 0x01;
+	test_identity_count = 1;
 }
 
 /* ---- drift ---- */
@@ -140,6 +195,33 @@ void test_shell_set_unpair_result(int result)
 int test_shell_unpair_calls(void)
 {
 	return unpair_calls;
+}
+
+/* ---- bt ISO link quality (fake public API for shell boundary tests) ---- */
+
+int bt_bap_iso_link_quality_get_active(struct bt_bap_iso_link_quality *snapshots, size_t capacity,
+				       size_t *count)
+{
+	if (test_iso_link_quality_result != 0) {
+		return test_iso_link_quality_result;
+	}
+	if (capacity < test_iso_link_quality_count) {
+		return -ENOSPC;
+	}
+
+	memcpy(snapshots, test_iso_link_quality, test_iso_link_quality_count * sizeof(*snapshots));
+	*count = test_iso_link_quality_count;
+	return 0;
+}
+
+void test_shell_set_iso_link_quality(const struct bt_bap_iso_link_quality *snapshots, size_t count,
+				     int result)
+{
+	size_t n = MIN(count, TEST_SHELL_MAX_ISO_LINK_QUALITY);
+
+	test_iso_link_quality_count = n;
+	test_iso_link_quality_result = result;
+	memcpy(test_iso_link_quality, snapshots, n * sizeof(*snapshots));
 }
 
 /* ---- perf ---- */

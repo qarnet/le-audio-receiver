@@ -1,10 +1,26 @@
-# STATUS — le-audio-receiver — 2026-08-10
+# STATUS: le-audio-receiver, 2026-09-11
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-> **Current state (2026-08-10):** canonical gate **65 PASS / 0 FAIL /
-> 65 TOTAL** on the clean tree (35 twister + 5 exec-only + 22 Python +
+> **Current state (2026-09-11):** System HIL plan of record revised
+> (`docs/development/system-hil-milestones.md`): nRF54L15 is the only
+> production receiver target, and receiver transport limits are frozen and
+> enforced by the runner (RH3a, 2026-09-03). RH3-7p5 is CLOSED by its
+> three-stage re-baseline (all three `48_3_1` rows passed on the fixed
+> 128 MHz controller-clock fixture), and the user decision reinstated the
+> 7.5 ms rows in the mandatory matrix. RH3 transport/runtime is
+> **`TRANSPORT_RUNTIME_ACCEPTED` for BOTH 10 ms and 7.5 ms** under the
+> 2026-09-11 revision: clean commit `6ab8e3b` passed the reinstated
+> two-pass hardware matrix with **20/20 children** (four 10 ms healthy
+> rows, three 7.5 ms rows, preserved Mode B, reconnect, FLPR hang, FLPR
+> stall per pass). No child failed, was cancelled, or was skipped, and no
+> cleanup failed. The 2026-09-09 10 ms-only acceptance (14/14 at
+> `8123b94`) is superseded by this verdict; its evidence stays immutable.
+> This covers 10 ms and 7.5 ms real-device transport through I2S
+> submission, not exact release artifacts, DAC activity, analog output,
+> audibility, or stereo channel mapping. Canonical software gate **65
+> PASS / 0 FAIL / 65 TOTAL** on the clean tree (35 twister + 5 exec-only + 22 Python +
 > coverage + matrix + BSim Stage 1; the FR2 clean-tree run at `75a8093`
 > and the FR1 clean run at `1671a9f` are historical, with earlier clean
 > runs recorded in
@@ -48,12 +64,13 @@
 wait for: `tests` → `firmware` → `release` (trusted main only).  The
 `tests` job runs on the plain ubuntu-22.04 host runner (no Nordic
 container) inside the repository's locked Nix dev shell: the flake
-provides the exact tools (`gcovr 8.4`, `gcov (GCC) 14.3.0`, nrfutil core,
-west), and the exact NCS v3.3.0 SDK plus `911f4c5c26` toolchain are
-installed into `$HOME/ncs` by the pinned `nrfutil sdk-manager` 1.16.1
-plugin (versioned URL, SHA-256 verified before extraction, nrfutil core
-never downloaded).  Nix is installed with the pinned Determinate
-installer and the Nix store is cached keyed from `flake.lock` with a
+provides the exact tools (`gcovr 8.4`, `gcov (GCC) 14.3.0`, nrfutil,
+west), including `nrfutil sdk-manager` 1.16.1 supplied by locked
+`nix-nrf-dev` from a versioned Nordic package archive with a fixed Nix
+SHA-256. The exact NCS v3.3.0 SDK
+plus `911f4c5c26` toolchain are installed into `$HOME/ncs`; CI neither
+downloads nor PATH-injects nrfutil. Nix is installed with the pinned
+Determinate installer and the Nix store is cached keyed from `flake.lock` with a
 bounded gc; `/home/runner/ncs` is cached keyed `ncs-v3.3.0-911f4c5c26`.
 An early disk cleanup step frees only well-known preinstalled toolchain
 caches (Nix closure ~4.5 GiB + NCS/toolchain ~4.6 GiB + retained native
@@ -156,6 +173,120 @@ its exact immutable assets must rerun the full FR4 procedure on both
 targets before FR5 can publish anything; no replacement version or
 candidate has been selected.  FR4 and FR5 remain blocked; nothing
 published.
+
+## System HIL: TRANSPORT_RUNTIME_ACCEPTED (2026-09-09)
+
+**RH3 transport/runtime hardware matrix accepted.** Commit `8123b94` serializes
+source STATUS reads with complete TX batches, preventing a STATUS request from
+splitting paired Mode A submissions. Two pristine source builds were
+byte-identical. Direct Mode A fix-validation
+`rh3-modea-status-batch-fix-20260909` passed, then fixed matrix
+`rh3-matrix-status-batch-fix-20260909` passed 14/14 children. No child failed,
+was cancelled, or was skipped, and no cleanup failed. Both passes completed
+fresh mono, fresh Mode A, fresh Mode B, preserved Mode B, reconnect Mode B,
+FLPR hang, and FLPR stall under frozen limits. Every child used clean HEAD
+`8123b94`, exact source and receiver image hashes, and freshly resolved
+nRF54L15/nRF5340 identities. All child and aggregate SHA-256 manifests
+verified. Evidence and scope:
+`docs/development/system-hil-rh3-controller-clock-result.md`.
+
+Verdict `TRANSPORT_RUNTIME_ACCEPTED` proves 10 ms two-device radio and firmware
+operation through I2S submission. It does not prove RH3-7p5, exact release
+artifacts, DAC output, analog audio, audibility, or stereo mapping. RH3-7p5
+remains open. RH4 exact-artifact transport/runtime integration is next when
+candidate archives exist.
+
+### Reinstated-matrix acceptance (2026-09-11, supersedes the above verdict's scope)
+
+**`TRANSPORT_RUNTIME_ACCEPTED` for BOTH 10 ms and 7.5 ms.** The RH3-7p5
+three-stage re-baseline passed every 7.5 ms row on the fixed 128 MHz
+controller-clock fixture (mono `rx_valid=16860/16859`, Mode B `16858/16859`,
+Mode A both CISes; source `skip=0` and healthy lead telemetry in every
+stage; records `system-hil-rh3-7p5-{mono,modeb,modea}-result.md`), and the
+user decision reinstated the three `48_3_1` rows in the mandatory matrix
+(commit `6ab8e3b`, plan revision). The reinstated two-pass matrix at that
+clean commit passed **20/20 children**: the four 10 ms healthy rows, the
+three 7.5 ms rows, preserved Mode B, reconnect, FLPR hang, and FLPR stall
+per pass, under the frozen limits, with every 7.5 ms child matching its
+re-baseline values exactly and FLPR at 7.5 ms in the documented
+ASRC-fallback shape (ACTIVE, zero submit/success). Receiver CPUAPP
+`f779c0d2...` at the revision HEAD; source images byte-identical to the
+accepted tuple. Canonical record:
+`docs/development/system-hil-rh3-matrix-48-3-1-reinstated-result.md`.
+RH4 exact-artifact transport/runtime integration is next when candidate
+archives exist; the analog extensions remain separate.
+
+**Pinned lessons entry (2026-09-11):** the root cause of the ModeA9-ModeA18
+collapse chain was the HIL source fixture itself, not the SoftDevice
+Controller: the source app core ran at 64 MHz (missing
+`NRF_CLOCK_HFCLK_DIV_1`) and its two LC3 encodes per 10 ms interval did not
+fit, so the fixture starved its own controller-clock scheduler. The
+withdrawn SDC-defect escalation and its corrected DRGN-23776 citation
+(v2.9.0 fix entry, still open in the online known-issues list) are recorded
+in `docs/development/devzone-sdc-central-iso-tx-question-draft.md` and the
+review response there. The durable lessons (128 MHz throughput budget,
+mirrored controller-clock scheduling, telemetry semantics, investigation
+discipline) are pinned in `AGENTS.md` under "HIL source fixture timing".
+
+
+### Plan revision and RH3a transport limits (2026-09-03)
+
+**Plan of record revised and RH3a ACCEPTED (software).**
+`docs/development/system-hil-milestones.md` is the plan of record with four
+standing decisions: (1) nRF54L15 is the only production receiver target, the
+nRF5340 release track is eliminated from this plan and the nRF5340DK keeps
+only the HIL source-fixture role; (2) 7.5 ms (`48_3_1`) must work or must not
+be supported, removed from the mandatory matrix until the named RH3-7p5 phase
+closes it; (3) receiver transport limits are frozen in the plan and enforced
+by the runner; (4) reruns are the fix-validation mechanism (classify, fix,
+same-row rerun, full-matrix rerun; only blind unclassified retries are
+prohibited). The mandatory RH3 matrix is now 4 healthy 10 ms rows plus
+reconnect/hang/stall follow-ons, two passes.
+
+**RH3a implementation (all host, no hardware):**
+`scripts/hil/receiver.py` gains frozen `RX_VALID_RATIO_FLOOR = 0.90` and
+`PLC_RATIO_CEILING = 0.05` plus pure `validate_stream_transport()`
+(fail-closed on missing extended fields; `rx_lost`/`rx_no_ts` are
+record-only); `scripts/hil/runner.py` `_step_session_end` enforces them with
+self-explaining failure detail; `scripts/hil/rows.py` moves the three
+`48_3_1` rows into `RH3_7P5_DIAGNOSTIC_ROWS` (still single-run selectable,
+out of `RH3_PASS_ROWS`). The H42-class hole is closed: with H42's real
+numbers (`rx_valid=24` of `16859` submitted, `plc=38924` of `decoded=38972`)
+the runner now fails with both the delivery-floor and the concealment-ceiling
+violations. Verification: `py_compile` pass, `scripts/test_hil_runner.py`
+83 passed, `tests/hil/` 290 passed + 1 pre-existing skip (15 new tests),
+`check-test-matrix` 0 errors, `git diff --check` clean. The fake-lab default
+receiver summary now emits a healthy full-grammar line (extended RX fields
+present, values above every row's floor), and four existing retention-shape
+tests were updated to healthy values without weakening their assertions.
+Evidence: `docs/development/system-hil-rh3a-transport-limits-handoff.md`.
+
+**First RH3a matrix attempt (hardware):** one runner-owned attempt,
+`rh3-matrix-20260903-rh3a`, returned status `1`; its aggregate result is
+`failed` with 14 scheduled children, 2 attempted/completed, 1 passed, 1 failed,
+0 cancelled, and 12 not attempted. Pass 1 fresh mono passed. Pass 1 fresh Mode
+A failed at `session end` with `missing receiver stream summary slot(s): [0,
+1]`. Retained raw Mode A summaries also violate frozen delivery limits
+(`rx_valid=135` and `133` versus 90% of 12,644 submitted) and the slot-0 PLC
+ceiling (`28458` of `28726`). This is classified evidence, not a cause
+diagnosis or acceptance. Aggregate and attempted-child SHA-256 verification
+passed; no child was retried. Full evidence and classification:
+`docs/development/system-hil-rh3-matrix-20260903-result.md`. At that checkpoint,
+RH3 transport/runtime acceptance remained absent. The 2026-09-09 matrix above
+supersedes that stop point without altering its immutable evidence.
+
+## System HIL — RH4 host integration (2026-08-13)
+
+**RH4 host integration is implemented, not hardware accepted.** The HIL runner
+has immutable artifact mode only through `run-rh4-matrix`: an exact FR1
+`nrf54l15-xiao` factory ZIP plus deterministic HIL-source ZIP are strict
+validated before staging private image files outside repository. Archive/member
+metadata, canonical manifests, internal checksums, archive hashes, image hashes,
+roles, boards, flash order, no-symlink boundaries, and drift checks fail closed.
+Existing `run` and `run-rh3-matrix` retain local build behavior and accept no
+artifact inputs. Aggregate evidence copies and hashes exact original ZIP bytes;
+no transport/runtime or audio acceptance verdict is claimed. No RH4 hardware run
+has occurred.
 
 ## Firmware release — FR3 ACCEPTED (2026-08-09)
 

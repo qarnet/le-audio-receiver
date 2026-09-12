@@ -35,3 +35,12 @@ zephyr_include_directories(
 )
 
 zephyr_library_include_directories(${ZEPHYR_BASE}/samples/bluetooth)
+
+# LSP compile-database link: expose this BSim image's compile_commands.json
+# at the app root for clangd closest-ancestor discovery.  The link target is
+# absolute because the BSim build tree lives in the shared SDK bsim_out,
+# outside this repo; scripts/gen-lsp-links.sh can also repair it.
+file(CREATE_LINK
+     "${CMAKE_BINARY_DIR}/compile_commands.json"
+     "${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json"
+     SYMBOLIC)

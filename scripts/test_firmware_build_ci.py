@@ -24,6 +24,7 @@ import unittest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERSION_SCRIPT = os.path.join(REPO_ROOT, "scripts", "project-version.py")
 WORKFLOW = os.path.join(REPO_ROOT, ".github", "workflows", "firmware-build.yml")
+FLAKE = os.path.join(REPO_ROOT, "flake.nix")
 
 ERROR_PREFIX = "project-version: error: "
 
@@ -64,6 +65,11 @@ def workflow_text():
 
 def workflow_lines():
     return workflow_text().splitlines()
+
+
+def flake_text():
+    with open(FLAKE, "r", encoding="utf-8") as fh:
+        return fh.read()
 
 
 def run_scripts():
@@ -398,12 +404,9 @@ class TestWorkflowCommands(unittest.TestCase):
     def test_build_contract_and_version_steps_exact(self):
         text = workflow_text()
         for command in (
-            "./scripts/bin/fw-build-5340",
             "./scripts/bin/fw-build-54l15",
             "scripts/check-build-contract.py",
-            "--nrf5340 build/nrf5340",
             "--nrf54l15 build/nrf54l15",
-            "build/nrf5340/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h",
             "build/nrf54l15/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h",
             "APP_VERSION_STRING",
             "#define\\s+APP_VERSION_STRING",
@@ -413,6 +416,22 @@ class TestWorkflowCommands(unittest.TestCase):
             'test "$(python3 scripts/project-version.py)" = "$PROJECT_VERSION"',
         ):
             self.assertIn(command, text, "missing %r" % command)
+
+    def test_nrf5340_receiver_workflow_paths_are_absent(self):
+        text = workflow_text()
+        for forbidden in (
+            "nrf5340",
+            "./scripts/bin/fw-build-5340",
+            "--nrf5340 build/nrf5340",
+            "build/nrf5340",
+            "nrf5340-e83",
+            "nRF5340",
+        ):
+            self.assertNotIn(
+                forbidden,
+                text,
+                "nRF5340 receiver workflow string must be absent: %r" % forbidden,
+            )
 
     def test_project_identity_and_packager_inputs_exact(self):
         text = workflow_text()
@@ -476,21 +495,19 @@ class TestWorkflowArtifactContract(unittest.TestCase):
         text = workflow_text()
         self.assertIn("sha256sum --strict -c SHA256SUMS", text)
         self.assertIn(
-            'test "$(find dist -mindepth 1 -maxdepth 1 | wc -l)" -eq 3',
+            'test "$(find dist -mindepth 1 -maxdepth 1 | wc -l)" -eq 2',
             text,
             "exact total top-level entry count check missing",
         )
         self.assertIn(
-            'test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 3',
+            'test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 2',
             text,
             "exact regular-file top-level count check missing",
         )
         for needle in (
-            'zip5340="le-audio-receiver-v${version}-nrf5340-e83-factory.zip"',
             'zip54l15="le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip"',
-            'for f in "$zip5340" "$zip54l15" SHA256SUMS ; do',
+            'for f in "$zip54l15" SHA256SUMS ; do',
             'test -f "dist/$f"',
-            'python3 -m zipfile --test "dist/$zip5340"',
             'python3 -m zipfile --test "dist/$zip54l15"',
         ):
             self.assertIn(needle, text, "missing %r" % needle)
@@ -516,12 +533,11 @@ class TestWorkflowArtifactContract(unittest.TestCase):
         self.assertEqual(
             listed,
             [
-                "workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf5340-e83-factory.zip",
                 "workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf54l15-xiao-factory.zip",
                 "workspace/le-audio-receiver/dist/SHA256SUMS",
             ],
-            "upload path must list exactly the three workspace-root-relative "
-            "files individually, with both ZIP paths expression-derived",
+            "upload path must list exactly the two workspace-root-relative "
+            "files individually, with the ZIP path expression-derived",
         )
         for line in upload_lines[path_index + 1 :]:
             if not line.strip():
@@ -539,14 +555,6 @@ class TestTestsJobContract(unittest.TestCase):
     environment on a plain host runner, invoked as scripts/test-all.sh,
     and always uploading its retained output."""
 
-    SDK_MANAGER_URL = (
-        "https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/"
-        "packages/nrfutil-sdk-manager/"
-        "nrfutil-sdk-manager-x86_64-unknown-linux-gnu-1.16.1.tar.gz"
-    )
-    SDK_MANAGER_SHA256 = (
-        "d2fe97f143f888a679223d9c6e0b51d730eb60b4a5f4a5dafc970acd2020fe38"
-    )
     NIX_INSTALLER_SHA = "ef8a148080ab6020fd15196c2084a2eea5ff2d25"
     CACHE_NIX_SHA = "7df957e333c1e5da7721f60227dbba6d06080569"
     ACTIONS_CACHE_SHA = "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
@@ -637,30 +645,29 @@ class TestTestsJobContract(unittest.TestCase):
         self.assertIn("path: /home/runner/ncs", block)
         self.assertIn("key: ncs-v3.3.0-911f4c5c26", block)
 
-    def test_tests_job_sdk_manager_provisioning_exact(self):
+    def test_nrfutil_sdk_manager_is_source_pinned_without_ci_path_injection(self):
+        flake = flake_text()
+        self.assertIn('url = "github:qarnet/nix-nrf-dev";', flake)
+        self.assertIn('inputs.nixpkgs.follows = "nixpkgs";', flake)
+        self.assertNotIn("nrfutilPackage =", flake)
+        self.assertNotIn("nrfutilWithSdkManager1161", flake)
         block = self._tests_block()
-        for needle in (
-            self.SDK_MANAGER_URL,
-            self.SDK_MANAGER_SHA256,
-            "curl --fail-with-body --show-error --location --retry 3 --retry-delay 5",
-            "--connect-timeout 20 --max-time 600",
-            "sha256sum --strict -c -",
-            "--strip-components=2",
-            "$RUNNER_TEMP/nrfutil/bin",
-            'printf \'%s\\n\' "$RUNNER_TEMP/nrfutil/bin" >> "$GITHUB_PATH"',
+        self.assertIn('nrfutil sdk-manager --version | grep -F "1.16.1"', block)
+        install_i = block.index("Install NCS SDK and toolchain")
+        version_i = block.index('nrfutil sdk-manager --version | grep -F "1.16.1"')
+        config_i = block.index('nrfutil sdk-manager config install-dir set "$HOME/ncs"')
+        self.assertGreater(version_i, install_i)
+        self.assertLess(version_i, config_i)
+        for forbidden in (
+            "Provision nrfutil sdk-manager",
+            "$RUNNER_TEMP/nrfutil",
+            "$GITHUB_PATH",
+            "nrfutil core",
         ):
-            self.assertIn(needle, block, "missing %r in tests job" % needle)
-        # The provisioning step itself must never use sudo or shell piping
-        # of the download; sudo is confined to the separate Free disk space
-        # step that precedes Nix installation.
-        provision = block.split("Install NCS SDK and toolchain", 1)[0].split(
-            "Provision nrfutil sdk-manager", 1
-        )[1]
-        for forbidden in ("sudo", "curl -sL", "| bash", "nrfutil core"):
             self.assertNotIn(
                 forbidden,
-                provision,
-                "forbidden %r in sdk-manager provisioning" % forbidden,
+                block,
+                "forbidden %r in Nix-managed sdk-manager supply" % forbidden,
             )
 
     def test_tests_job_ncs_install_locked_shell(self):
@@ -915,7 +922,6 @@ class TestReleaseJobContract(unittest.TestCase):
             "--draft",
             '--title "LE Audio Receiver $tag"',
             "--notes-file release-metadata/release-notes.md",
-            '"dist/le-audio-receiver-v${version}-nrf5340-e83-factory.zip"',
             '"dist/le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip"',
             "dist/SHA256SUMS",
             "release-metadata/release-provenance.json",
@@ -1008,7 +1014,6 @@ class TestReleaseJobContract(unittest.TestCase):
             'print("draft release URL: %s" % release["url"])',
             '"SHA256SUMS",',
             '"release-provenance.json",',
-            "le-audio-receiver-v%s-nrf5340-e83-factory.zip",
             "le-audio-receiver-v%s-nrf54l15-xiao-factory.zip",
         ):
             self.assertIn(needle, text, "missing %r" % needle)
