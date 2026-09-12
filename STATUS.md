@@ -64,12 +64,12 @@
 wait for: `tests` → `firmware` → `release` (trusted main only).  The
 `tests` job runs on the plain ubuntu-22.04 host runner (no Nordic
 container) inside the repository's locked Nix dev shell: the flake
-provides the exact tools (`gcovr 8.4`, `gcov (GCC) 14.3.0`, nrfutil core,
-west), and the exact NCS v3.3.0 SDK plus `911f4c5c26` toolchain are
-installed into `$HOME/ncs` by the pinned `nrfutil sdk-manager` 1.16.1
-plugin (versioned URL, SHA-256 verified before extraction, nrfutil core
-never downloaded).  Nix is installed with the pinned Determinate
-installer and the Nix store is cached keyed from `flake.lock` with a
+provides the exact tools (`gcovr 8.4`, `gcov (GCC) 14.3.0`, nrfutil,
+west), including `nrfutil sdk-manager` 1.16.1 built from a versioned
+Nordic package archive with a fixed Nix SHA-256. The exact NCS v3.3.0 SDK
+plus `911f4c5c26` toolchain are installed into `$HOME/ncs`; CI neither
+downloads nor PATH-injects nrfutil. Nix is installed with the pinned
+Determinate installer and the Nix store is cached keyed from `flake.lock` with a
 bounded gc; `/home/runner/ncs` is cached keyed `ncs-v3.3.0-911f4c5c26`.
 An early disk cleanup step frees only well-known preinstalled toolchain
 caches (Nix closure ~4.5 GiB + NCS/toolchain ~4.6 GiB + retained native

@@ -132,8 +132,8 @@ tests -> firmware -> release (trusted main only)
 
 The `tests` job runs on the plain `ubuntu-22.04` host runner (no Nordic
 container): the repository's locked Nix dev shell provides the exact toolchain
-tools (gcovr 8.4, gcov 14.3.0, nrfutil core, west), and `nrfutil sdk-manager`
-owns the exact NCS v3.3.0 installation. It does not share mutable build state
+tools (gcovr 8.4, gcov 14.3.0, nrfutil, west), and `nrfutil sdk-manager` owns
+the exact NCS v3.3.0 installation. It does not share mutable build state
 with `firmware` and does not checkout sdk-nrf separately:
 
 - checkout application at the repository root, `fetch-depth: 0`, credentials
@@ -150,12 +150,10 @@ with `firmware` and does not checkout sdk-nrf separately:
   `flake.lock` with a bounded `gc-max-store-size` (6G, grounded in the measured
   dev-shell closure), and cache `/home/runner/ncs` with the pinned
   `actions/cache` keyed `ncs-v3.3.0-911f4c5c26` and `id: cache-ncs`;
-- provision `nrfutil sdk-manager` 1.16.1 only: download the exact versioned
-  URL with `curl --fail-with-body --show-error --location` and bounded
-  retries/timeouts, verify the exact SHA-256 before extraction, extract with
-  `--strip-components=2` to `$RUNNER_TEMP/nrfutil/bin`, verify the executable,
-  and append that bin to `$GITHUB_PATH`. nrfutil core is never downloaded or
-  replaced; the locked Nix shell provides it;
+- compose Nixpkgs `nrfutil` with the exact `nrfutil sdk-manager` 1.16.1
+  versioned Nordic package archive, fixed by its Nix SHA-256, and pass that
+  package through `mkNrfShell`'s `nrfutilPackage` option. CI does not download
+  or PATH-inject nrfutil;
 - install the SDK through the locked shell, setting the install directory on
   every run and branching on the NCS cache step's exact `cache-hit` output
   (`CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}`), never on directory
@@ -226,8 +224,8 @@ Extend `scripts/test_firmware_build_ci.py` to prove public workflow behavior:
   pinned runner/shell and read-only permissions;
 - checkout at the repository root only, with the exact Nix installer, Nix
   store cache, and NCS cache pins;
-- exact sdk-manager 1.16.1 provisioning (versioned URL, SHA-256 before
-  extraction, no sudo, no pipe-to-shell) and locked-shell NCS install;
+- Nix-managed sdk-manager 1.16.1 supply (versioned URL, fixed SHA-256, no CI
+  PATH injection) and locked-shell NCS install;
 - exact gcovr/gcov/ZEPHYR_BASE/sdk-HEAD/VERSION/toolchain-ID verification and
   fail-fast BabbleSim build exist;
 - canonical invocation is `scripts/test-all.sh`, not copied suite lists;

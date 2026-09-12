@@ -24,6 +24,8 @@ import unittest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERSION_SCRIPT = os.path.join(REPO_ROOT, "scripts", "project-version.py")
 WORKFLOW = os.path.join(REPO_ROOT, ".github", "workflows", "firmware-build.yml")
+FLAKE = os.path.join(REPO_ROOT, "flake.nix")
+NRFUTIL_SDK_MANAGER_PACKAGE = os.path.join(REPO_ROOT, "nix", "nrfutil-sdk-manager.nix")
 
 ERROR_PREFIX = "project-version: error: "
 
@@ -64,6 +66,16 @@ def workflow_text():
 
 def workflow_lines():
     return workflow_text().splitlines()
+
+
+def flake_text():
+    with open(FLAKE, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+def nrfutil_sdk_manager_package_text():
+    with open(NRFUTIL_SDK_MANAGER_PACKAGE, "r", encoding="utf-8") as fh:
+        return fh.read()
 
 
 def run_scripts():
@@ -554,9 +566,7 @@ class TestTestsJobContract(unittest.TestCase):
         "packages/nrfutil-sdk-manager/"
         "nrfutil-sdk-manager-x86_64-unknown-linux-gnu-1.16.1.tar.gz"
     )
-    SDK_MANAGER_SHA256 = (
-        "d2fe97f143f888a679223d9c6e0b51d730eb60b4a5f4a5dafc970acd2020fe38"
-    )
+    SDK_MANAGER_HASH = "sha256-0v6X8UP4iKZ5Ij2cbgtR1zDrYLSl9KXa/JcKzSAg/jg="
     NIX_INSTALLER_SHA = "ef8a148080ab6020fd15196c2084a2eea5ff2d25"
     CACHE_NIX_SHA = "7df957e333c1e5da7721f60227dbba6d06080569"
     ACTIONS_CACHE_SHA = "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
@@ -647,30 +657,25 @@ class TestTestsJobContract(unittest.TestCase):
         self.assertIn("path: /home/runner/ncs", block)
         self.assertIn("key: ncs-v3.3.0-911f4c5c26", block)
 
-    def test_tests_job_sdk_manager_provisioning_exact(self):
+    def test_nrfutil_sdk_manager_is_flake_pinned_without_ci_path_injection(self):
+        flake = flake_text()
+        package = nrfutil_sdk_manager_package_text()
+        self.assertIn("nrfutilPackage = nrfutilWithSdkManager1161;", flake)
+        self.assertIn(self.SDK_MANAGER_URL, package)
+        self.assertIn(self.SDK_MANAGER_HASH, package)
+        self.assertIn("pkgs.nrfutil", package)
+        self.assertNotIn("/executables/", package)
         block = self._tests_block()
-        for needle in (
-            self.SDK_MANAGER_URL,
-            self.SDK_MANAGER_SHA256,
-            "curl --fail-with-body --show-error --location --retry 3 --retry-delay 5",
-            "--connect-timeout 20 --max-time 600",
-            "sha256sum --strict -c -",
-            "--strip-components=2",
-            "$RUNNER_TEMP/nrfutil/bin",
-            'printf \'%s\\n\' "$RUNNER_TEMP/nrfutil/bin" >> "$GITHUB_PATH"',
+        for forbidden in (
+            "Provision nrfutil sdk-manager",
+            "$RUNNER_TEMP/nrfutil",
+            "$GITHUB_PATH",
+            "nrfutil core",
         ):
-            self.assertIn(needle, block, "missing %r in tests job" % needle)
-        # The provisioning step itself must never use sudo or shell piping
-        # of the download; sudo is confined to the separate Free disk space
-        # step that precedes Nix installation.
-        provision = block.split("Install NCS SDK and toolchain", 1)[0].split(
-            "Provision nrfutil sdk-manager", 1
-        )[1]
-        for forbidden in ("sudo", "curl -sL", "| bash", "nrfutil core"):
             self.assertNotIn(
                 forbidden,
-                provision,
-                "forbidden %r in sdk-manager provisioning" % forbidden,
+                block,
+                "forbidden %r in Nix-managed sdk-manager supply" % forbidden,
             )
 
     def test_tests_job_ncs_install_locked_shell(self):

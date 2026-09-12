@@ -142,10 +142,10 @@ before `firmware` (topology `tests` → `firmware` → `release`, with
 `release` still trusted-main-only and write-capable only there).  The
 `tests` job runs on the plain `ubuntu-22.04` host runner inside the
 repository's locked Nix dev shell, which provides the exact flake tools
-(`gcovr 8.4`, `gcov (GCC) 14.3.0`, nrfutil core, west); the exact NCS
-v3.3.0 SDK and `911f4c5c26` toolchain are installed into `$HOME/ncs` by
-the pinned `nrfutil sdk-manager` 1.16.1 plugin (versioned URL, SHA-256
-verified before extraction, no nrfutil-core replacement).  An early disk
+(`gcovr 8.4`, `gcov (GCC) 14.3.0`, nrfutil, west); the flake composes the
+pinned `nrfutil sdk-manager` 1.16.1 package from a versioned Nordic archive
+with a fixed Nix SHA-256. The exact NCS v3.3.0 SDK and `911f4c5c26`
+toolchain are installed into `$HOME/ncs` without CI PATH injection. An early disk
 cleanup step frees only well-known preinstalled toolchain caches (the Nix
 closure ~4.5 GiB plus NCS/toolchain ~4.6 GiB plus retained native build
 trees exceed the ephemeral runner disk); the NCS cache is keyed

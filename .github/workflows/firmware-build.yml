@@ -53,19 +53,6 @@ jobs:
         with:
           path: /home/runner/ncs
           key: ncs-v3.3.0-911f4c5c26
-      - name: Provision nrfutil sdk-manager
-        run: |
-          set -euo pipefail
-          sdk_manager_url="https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/packages/nrfutil-sdk-manager/nrfutil-sdk-manager-x86_64-unknown-linux-gnu-1.16.1.tar.gz"
-          sdk_manager_sha256="d2fe97f143f888a679223d9c6e0b51d730eb60b4a5f4a5dafc970acd2020fe38"
-          archive="$RUNNER_TEMP/nrfutil-sdk-manager.tar.gz"
-          curl --fail-with-body --show-error --location --retry 3 --retry-delay 5 \
-            --connect-timeout 20 --max-time 600 -o "$archive" "$sdk_manager_url"
-          printf '%s  %s\n' "$sdk_manager_sha256" "$archive" | sha256sum --strict -c -
-          mkdir -p "$RUNNER_TEMP/nrfutil"
-          tar -xzf "$archive" -C "$RUNNER_TEMP/nrfutil" --strip-components=2
-          test -x "$RUNNER_TEMP/nrfutil/bin/nrfutil-sdk-manager"
-          printf '%s\n' "$RUNNER_TEMP/nrfutil/bin" >> "$GITHUB_PATH"
       - name: Install NCS SDK and toolchain
         env:
           CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}

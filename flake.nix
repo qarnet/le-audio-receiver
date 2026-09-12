@@ -22,11 +22,25 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        nrfutilPkgs = import nixpkgs {
+          inherit system;
+          config = {
+            allowUnfree = true;
+            segger-jlink.acceptLicense = true;
+          };
+        };
+        nrfutilWithSdkManager1161 = import ./nix/nrfutil-sdk-manager.nix {
+          pkgs = nrfutilPkgs;
+        };
       in
       {
         devShells.default = nix-nrf-dev.lib.${system}.mkNrfShell {
           name = "le-audio-receiver";
           ncsVersion = "v3.3.0";
+          # Receiver Nixpkgs has sdk-manager 1.8.0. Keep the known-compatible
+          # 1.16.1 archive in the Nix closure instead of relying on CI PATH
+          # injection.
+          nrfutilPackage = nrfutilWithSdkManager1161;
           # Runtime deps for scripts/bap_central.py (BlueZ BAP source endpoint
           # via D-Bus). These land on the shell's nixpkgs python — the NCS
           # toolchain python stays scoped inside the west wrapper, so there is
