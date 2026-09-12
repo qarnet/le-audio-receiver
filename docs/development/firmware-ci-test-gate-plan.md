@@ -150,10 +150,11 @@ with `firmware` and does not checkout sdk-nrf separately:
   `flake.lock` with a bounded `gc-max-store-size` (6G, grounded in the measured
   dev-shell closure), and cache `/home/runner/ncs` with the pinned
   `actions/cache` keyed `ncs-v3.3.0-911f4c5c26` and `id: cache-ncs`;
-- compose Nixpkgs `nrfutil` with the exact `nrfutil sdk-manager` 1.16.1
-  versioned Nordic package archive, fixed by its Nix SHA-256, and pass that
-  package through `mkNrfShell`'s `nrfutilPackage` option. CI does not download
-  or PATH-inject nrfutil;
+- consume `nix-nrf-dev`'s default `nrfutil` supply: Nixpkgs core plus exact
+  `nrfutil sdk-manager` 1.16.1 from a versioned Nordic archive fixed by its
+  Nix SHA-256. The receiver does not override `mkNrfShell`'s package; before
+  any NCS installation, CI checks `nrfutil sdk-manager --version` for 1.16.1
+  and never downloads or PATH-injects nrfutil;
 - install the SDK through the locked shell, setting the install directory on
   every run and branching on the NCS cache step's exact `cache-hit` output
   (`CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}`), never on directory

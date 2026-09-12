@@ -59,6 +59,7 @@ jobs:
         run: |
           nix develop --accept-flake-config --command bash -s <<'EOF'
           set -euo pipefail
+          nrfutil sdk-manager --version | grep -F "1.16.1"
           nrfutil sdk-manager config install-dir set "$HOME/ncs"
           if [ "$CACHE_HIT" = "true" ]; then
             test -d "$HOME/ncs/v3.3.0/nrf"

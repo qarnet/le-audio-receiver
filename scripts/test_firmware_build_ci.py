@@ -25,7 +25,6 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERSION_SCRIPT = os.path.join(REPO_ROOT, "scripts", "project-version.py")
 WORKFLOW = os.path.join(REPO_ROOT, ".github", "workflows", "firmware-build.yml")
 FLAKE = os.path.join(REPO_ROOT, "flake.nix")
-NRFUTIL_SDK_MANAGER_PACKAGE = os.path.join(REPO_ROOT, "nix", "nrfutil-sdk-manager.nix")
 
 ERROR_PREFIX = "project-version: error: "
 
@@ -70,11 +69,6 @@ def workflow_lines():
 
 def flake_text():
     with open(FLAKE, "r", encoding="utf-8") as fh:
-        return fh.read()
-
-
-def nrfutil_sdk_manager_package_text():
-    with open(NRFUTIL_SDK_MANAGER_PACKAGE, "r", encoding="utf-8") as fh:
         return fh.read()
 
 
@@ -561,12 +555,6 @@ class TestTestsJobContract(unittest.TestCase):
     environment on a plain host runner, invoked as scripts/test-all.sh,
     and always uploading its retained output."""
 
-    SDK_MANAGER_URL = (
-        "https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/"
-        "packages/nrfutil-sdk-manager/"
-        "nrfutil-sdk-manager-x86_64-unknown-linux-gnu-1.16.1.tar.gz"
-    )
-    SDK_MANAGER_HASH = "sha256-0v6X8UP4iKZ5Ij2cbgtR1zDrYLSl9KXa/JcKzSAg/jg="
     NIX_INSTALLER_SHA = "ef8a148080ab6020fd15196c2084a2eea5ff2d25"
     CACHE_NIX_SHA = "7df957e333c1e5da7721f60227dbba6d06080569"
     ACTIONS_CACHE_SHA = "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
@@ -657,15 +645,19 @@ class TestTestsJobContract(unittest.TestCase):
         self.assertIn("path: /home/runner/ncs", block)
         self.assertIn("key: ncs-v3.3.0-911f4c5c26", block)
 
-    def test_nrfutil_sdk_manager_is_flake_pinned_without_ci_path_injection(self):
+    def test_nrfutil_sdk_manager_is_source_pinned_without_ci_path_injection(self):
         flake = flake_text()
-        package = nrfutil_sdk_manager_package_text()
-        self.assertIn("nrfutilPackage = nrfutilWithSdkManager1161;", flake)
-        self.assertIn(self.SDK_MANAGER_URL, package)
-        self.assertIn(self.SDK_MANAGER_HASH, package)
-        self.assertIn("pkgs.nrfutil", package)
-        self.assertNotIn("/executables/", package)
+        self.assertIn('url = "github:qarnet/nix-nrf-dev";', flake)
+        self.assertIn('inputs.nixpkgs.follows = "nixpkgs";', flake)
+        self.assertNotIn("nrfutilPackage =", flake)
+        self.assertNotIn("nrfutilWithSdkManager1161", flake)
         block = self._tests_block()
+        self.assertIn('nrfutil sdk-manager --version | grep -F "1.16.1"', block)
+        install_i = block.index("Install NCS SDK and toolchain")
+        version_i = block.index('nrfutil sdk-manager --version | grep -F "1.16.1"')
+        config_i = block.index('nrfutil sdk-manager config install-dir set "$HOME/ncs"')
+        self.assertGreater(version_i, install_i)
+        self.assertLess(version_i, config_i)
         for forbidden in (
             "Provision nrfutil sdk-manager",
             "$RUNNER_TEMP/nrfutil",
