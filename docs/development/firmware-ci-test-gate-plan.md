@@ -154,7 +154,7 @@ with `firmware` and does not checkout sdk-nrf separately:
   `nrfutil sdk-manager` 1.16.1 from a versioned Nordic archive fixed by its
   Nix SHA-256. The receiver does not override `mkNrfShell`'s package; before
   any NCS installation, CI checks `nrfutil sdk-manager --version` for 1.16.1
-  and never downloads or PATH-injects nrfutil;
+  and performs no separate nrfutil provisioning or PATH injection;
 - install the SDK through the locked shell, setting the install directory on
   every run and branching on the NCS cache step's exact `cache-hit` output
   (`CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}`), never on directory

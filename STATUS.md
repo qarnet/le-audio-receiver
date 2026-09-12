@@ -1,4 +1,4 @@
-# STATUS: le-audio-receiver, 2026-09-11
+# STATUS: le-audio-receiver, 2026-09-12
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
@@ -68,10 +68,11 @@ provides the exact tools (`gcovr 8.4`, `gcov (GCC) 14.3.0`, nrfutil,
 west), including `nrfutil sdk-manager` 1.16.1 supplied by locked
 `nix-nrf-dev` from a versioned Nordic package archive with a fixed Nix
 SHA-256. The exact NCS v3.3.0 SDK
-plus `911f4c5c26` toolchain are installed into `$HOME/ncs`; CI neither
-downloads nor PATH-injects nrfutil. Nix is installed with the pinned
-Determinate installer and the Nix store is cached keyed from `flake.lock` with a
-bounded gc; `/home/runner/ncs` is cached keyed `ncs-v3.3.0-911f4c5c26`.
+plus `911f4c5c26` toolchain are installed into `$HOME/ncs`. Nix realizes the
+package archive; CI performs no separate nrfutil provisioning or PATH
+injection. Nix is installed with the pinned Determinate installer and the Nix
+store is cached keyed from `flake.lock` with a bounded gc;
+`/home/runner/ncs` is cached keyed `ncs-v3.3.0-911f4c5c26`.
 An early disk cleanup step frees only well-known preinstalled toolchain
 caches (Nix closure ~4.5 GiB + NCS/toolchain ~4.6 GiB + retained native
 build trees exceed the ephemeral runner disk); the NCS install step
