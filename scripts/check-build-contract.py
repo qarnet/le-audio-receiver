@@ -14,6 +14,10 @@ fixed order; every failed assertion is listed in one run.  Exit status:
 
 Invocation:
   python3 scripts/check-build-contract.py \
+    --nrf54l15 build/nrf54l15
+
+Optional legacy local validation:
+  python3 scripts/check-build-contract.py \
     --nrf5340 build/nrf5340 \
     --nrf54l15 build/nrf54l15
 """
@@ -1270,7 +1274,8 @@ def _read_required(path, what):
 
 
 def resolve_inputs(nrf5340_root, nrf54l15_root, bt_bap_path):
-    """Resolve and parse every required input; hard-fail on any problem.
+    """Resolve and parse required active inputs and optional legacy nRF5340
+    inputs; hard-fail on any supplied-input problem.
 
     Returns a dict of parsed inputs.  Raises ConfigError/DtsError/OSError
     for hard failures (missing/duplicate/unreadable/malformed).
@@ -1303,19 +1308,25 @@ def resolve_inputs(nrf5340_root, nrf54l15_root, bt_bap_path):
         nodes, labels = parse_dts(dts_text)
         return cfg, nodes, labels
 
-    app5340_name = default_image_name(nrf5340_root)
-    app54_name = default_image_name(nrf54l15_root)
-    app5340 = image(nrf5340_root, app5340_name)
-    net = image(nrf5340_root, "hci_ipc")
+    if nrf5340_root is not None:
+        app5340_name = default_image_name(nrf5340_root)
+        app54_name = default_image_name(nrf54l15_root)
+        app5340 = image(nrf5340_root, app5340_name)
+        net = image(nrf5340_root, "hci_ipc")
+        legacy = {
+            "app5340_cfg": app5340[0],
+            "app5340_dts": app5340[1],
+            "app5340_labels": app5340[2],
+            "net_cfg": net[0],
+            "net_dts": net[1],
+            "net_labels": net[2],
+        }
+    else:
+        app54_name = default_image_name(nrf54l15_root)
+        legacy = {}
     app54 = image(nrf54l15_root, app54_name)
     flpr = image(nrf54l15_root, "flpr")
-    return {
-        "app5340_cfg": app5340[0],
-        "app5340_dts": app5340[1],
-        "app5340_labels": app5340[2],
-        "net_cfg": net[0],
-        "net_dts": net[1],
-        "net_labels": net[2],
+    parsed = {
         "app54_cfg": app54[0],
         "app54_dts": app54[1],
         "app54_labels": app54[2],
@@ -1324,20 +1335,23 @@ def resolve_inputs(nrf5340_root, nrf54l15_root, bt_bap_path):
         "flpr_labels": flpr[2],
         "bt_bap_path": bt_bap_path,
     }
+    parsed.update(legacy)
+    return parsed
 
 
 def run_all(parsed):
     """Run every contract check; returns a ContractResult."""
     result = ContractResult()
-    run_nrf5340_checks(
-        parsed["app5340_cfg"],
-        parsed["app5340_dts"],
-        parsed["app5340_labels"],
-        parsed["net_cfg"],
-        parsed["net_dts"],
-        parsed["net_labels"],
-        result,
-    )
+    if "app5340_cfg" in parsed:
+        run_nrf5340_checks(
+            parsed["app5340_cfg"],
+            parsed["app5340_dts"],
+            parsed["app5340_labels"],
+            parsed["net_cfg"],
+            parsed["net_dts"],
+            parsed["net_labels"],
+            result,
+        )
     run_nrf54_checks(
         parsed["app54_cfg"],
         parsed["app54_dts"],
@@ -1367,9 +1381,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Resolved build-contract checker")
     parser.add_argument(
         "--nrf5340",
-        required=True,
         metavar="BUILD_ROOT",
-        help="sysbuild root of the nRF5340 build (build/nrf5340)",
+        help="optional legacy local nRF5340 sysbuild root (build/nrf5340)",
     )
     parser.add_argument(
         "--nrf54l15",

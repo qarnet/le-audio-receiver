@@ -2,8 +2,9 @@
 """Tests for scripts/check-build-contract.py.
 
 Builds minimal temporary sysbuild fixtures (resolved .config + zephyr.dts
-for both targets incl. the netcore and FLPR images) and exercises the
-parser/check functions directly plus the CLI exit codes.
+for the active nRF54L15 target and optional legacy nRF5340 target, including
+the FLPR and netcore images) and exercises parser/check functions directly
+plus CLI exit codes.
 """
 
 import importlib.util
@@ -24,6 +25,8 @@ _CHECKER = os.path.join(
     "check-build-contract.py",
 )
 _SPEC = importlib.util.spec_from_file_location("check_build_contract", _CHECKER)
+if _SPEC is None or _SPEC.loader is None:
+    raise RuntimeError("cannot load check-build-contract.py")
 cbc = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(cbc)
 
@@ -545,7 +548,8 @@ class TestParseDts(unittest.TestCase):
         anc = part.parent
         while anc is not None and anc.unit_addr is None:
             anc = anc.parent
-        self.assertIsNotNone(anc)
+        if anc is None:
+            self.fail("expected partition ancestor with a unit address")
         self.assertEqual(anc.unit_addr, "@165000")
 
 
@@ -568,6 +572,22 @@ class TestValidFixture(unittest.TestCase):
                 [
                     "--nrf5340",
                     fx.nrf5340,
+                    "--nrf54l15",
+                    fx.nrf54l15,
+                    "--bt-bap-source",
+                    fx.bt_bap,
+                ]
+            )
+            self.assertEqual(rc, 0)
+        finally:
+            fx.destroy()
+
+    def test_cli_nrf54l15_only_succeeds_without_nrf5340_build_root(self):
+        fx = Fixture()
+        try:
+            shutil.rmtree(fx.nrf5340)
+            rc = cbc.main(
+                [
                     "--nrf54l15",
                     fx.nrf54l15,
                     "--bt-bap-source",

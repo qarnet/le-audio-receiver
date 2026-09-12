@@ -398,12 +398,9 @@ class TestWorkflowCommands(unittest.TestCase):
     def test_build_contract_and_version_steps_exact(self):
         text = workflow_text()
         for command in (
-            "./scripts/bin/fw-build-5340",
             "./scripts/bin/fw-build-54l15",
             "scripts/check-build-contract.py",
-            "--nrf5340 build/nrf5340",
             "--nrf54l15 build/nrf54l15",
-            "build/nrf5340/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h",
             "build/nrf54l15/le-audio-receiver/zephyr/include/generated/zephyr/app_version.h",
             "APP_VERSION_STRING",
             "#define\\s+APP_VERSION_STRING",
@@ -413,6 +410,22 @@ class TestWorkflowCommands(unittest.TestCase):
             'test "$(python3 scripts/project-version.py)" = "$PROJECT_VERSION"',
         ):
             self.assertIn(command, text, "missing %r" % command)
+
+    def test_nrf5340_receiver_workflow_paths_are_absent(self):
+        text = workflow_text()
+        for forbidden in (
+            "nrf5340",
+            "./scripts/bin/fw-build-5340",
+            "--nrf5340 build/nrf5340",
+            "build/nrf5340",
+            "nrf5340-e83",
+            "nRF5340",
+        ):
+            self.assertNotIn(
+                forbidden,
+                text,
+                "nRF5340 receiver workflow string must be absent: %r" % forbidden,
+            )
 
     def test_project_identity_and_packager_inputs_exact(self):
         text = workflow_text()
@@ -476,21 +489,19 @@ class TestWorkflowArtifactContract(unittest.TestCase):
         text = workflow_text()
         self.assertIn("sha256sum --strict -c SHA256SUMS", text)
         self.assertIn(
-            'test "$(find dist -mindepth 1 -maxdepth 1 | wc -l)" -eq 3',
+            'test "$(find dist -mindepth 1 -maxdepth 1 | wc -l)" -eq 2',
             text,
             "exact total top-level entry count check missing",
         )
         self.assertIn(
-            'test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 3',
+            'test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 2',
             text,
             "exact regular-file top-level count check missing",
         )
         for needle in (
-            'zip5340="le-audio-receiver-v${version}-nrf5340-e83-factory.zip"',
             'zip54l15="le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip"',
-            'for f in "$zip5340" "$zip54l15" SHA256SUMS ; do',
+            'for f in "$zip54l15" SHA256SUMS ; do',
             'test -f "dist/$f"',
-            'python3 -m zipfile --test "dist/$zip5340"',
             'python3 -m zipfile --test "dist/$zip54l15"',
         ):
             self.assertIn(needle, text, "missing %r" % needle)
@@ -516,12 +527,11 @@ class TestWorkflowArtifactContract(unittest.TestCase):
         self.assertEqual(
             listed,
             [
-                "workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf5340-e83-factory.zip",
                 "workspace/le-audio-receiver/dist/le-audio-receiver-v${{ steps.project-version.outputs.version }}-nrf54l15-xiao-factory.zip",
                 "workspace/le-audio-receiver/dist/SHA256SUMS",
             ],
-            "upload path must list exactly the three workspace-root-relative "
-            "files individually, with both ZIP paths expression-derived",
+            "upload path must list exactly the two workspace-root-relative "
+            "files individually, with the ZIP path expression-derived",
         )
         for line in upload_lines[path_index + 1 :]:
             if not line.strip():
@@ -915,7 +925,6 @@ class TestReleaseJobContract(unittest.TestCase):
             "--draft",
             '--title "LE Audio Receiver $tag"',
             "--notes-file release-metadata/release-notes.md",
-            '"dist/le-audio-receiver-v${version}-nrf5340-e83-factory.zip"',
             '"dist/le-audio-receiver-v${version}-nrf54l15-xiao-factory.zip"',
             "dist/SHA256SUMS",
             "release-metadata/release-provenance.json",
@@ -1008,7 +1017,6 @@ class TestReleaseJobContract(unittest.TestCase):
             'print("draft release URL: %s" % release["url"])',
             '"SHA256SUMS",',
             '"release-provenance.json",',
-            "le-audio-receiver-v%s-nrf5340-e83-factory.zip",
             "le-audio-receiver-v%s-nrf54l15-xiao-factory.zip",
         ):
             self.assertIn(needle, text, "missing %r" % needle)
