@@ -21,6 +21,7 @@ import unittest
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 RUNNER_SRC = os.path.join(REPO_ROOT, "scripts", "test-coverage.sh")
 INVENTORY_SRC = os.path.join(REPO_ROOT, "scripts", "test_inventory.py")
+TEST_ALL_SRC = os.path.join(REPO_ROOT, "scripts", "test-all.sh")
 
 FAKE_WEST = """#!/usr/bin/env bash
 d=""
@@ -667,12 +668,12 @@ class TestAllGateOutputRoot(unittest.TestCase):
 
     TEST_ALL = os.path.join(REPO_ROOT, "scripts", "test-all.sh")
 
-    def _run(self, env_extra):
+    def _run(self, env_extra, args=()):
         env = dict(os.environ)
         env.pop("ZEPHYR_BASE", None)
         env.update(env_extra)
         proc = subprocess.run(
-            ["bash", self.TEST_ALL],
+            ["bash", self.TEST_ALL] + list(args),
             capture_output=True,
             text=True,
             env=env,
@@ -725,6 +726,246 @@ class TestAllGateOutputRoot(unittest.TestCase):
             # Caller-owned root stays present and untouched.
             self.assertTrue(os.path.isdir(tmp))
             self.assertEqual(os.listdir(tmp), [])
+
+
+class TestAllGatePhaseSelection(unittest.TestCase):
+    """Public phase-selection behavior with fake child commands.
+
+    The copied gate runs against a fixture repository. Fake inventory, west,
+    coverage, matrix, and BSim commands record only public dispatch order, so
+    these tests do not depend on real Zephyr or BabbleSim builds.
+    """
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="testall-phase-")
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.repo = os.path.join(self.root, "repo")
+        self.scripts = os.path.join(self.repo, "scripts")
+        self.bin = os.path.join(self.root, "bin")
+        self.home = os.path.join(self.root, "home")
+        self.output = os.path.join(self.root, "results")
+        self.events_path = os.path.join(self.root, "events.log")
+        os.makedirs(self.scripts)
+        os.makedirs(self.bin)
+        os.makedirs(self.home)
+
+        self._copy_gate()
+        self._write_fixture_scripts()
+        self._write_fixture_children()
+
+        self.env = dict(os.environ)
+        self.env.update(
+            {
+                "PATH": self.bin + os.pathsep + self.env.get("PATH", ""),
+                "HOME": self.home,
+                "PHASE_EVENT_LOG": self.events_path,
+                "TEST_OUTPUT_DIR": self.output,
+                "ZEPHYR_BASE": "/fake/zephyr",
+            }
+        )
+
+    def _write_file(self, path, text, executable=False):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        if executable:
+            os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR)
+
+    def _copy_gate(self):
+        destination = os.path.join(self.scripts, "test-all.sh")
+        shutil.copy(TEST_ALL_SRC, destination)
+        os.chmod(destination, os.stat(destination).st_mode | stat.S_IXUSR)
+        self.test_all = destination
+
+    def _write_fixture_scripts(self):
+        self._write_file(
+            os.path.join(self.scripts, "test_inventory.py"),
+            """#!/usr/bin/env python3
+import sys
+
+if sys.argv[1:] == ["--twister"]:
+    print("twister_alpha")
+elif sys.argv[1:] == ["--exec-only"]:
+    print("exec_beta")
+elif sys.argv[1:] == ["--python"]:
+    print("python_gamma\\ttests/unit/python_gamma/test_gamma.py")
+else:
+    raise SystemExit(2)
+""",
+            executable=True,
+        )
+        self._write_file(
+            os.path.join(self.scripts, "test-coverage.sh"),
+            """#!/usr/bin/env bash
+set -euo pipefail
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+mkdir -p "$out"
+touch "$out/coverage.json"
+printf 'coverage:%s\\n' "$out" >> "$PHASE_EVENT_LOG"
+[ "${FAKE_FAIL:-}" != "coverage" ]
+""",
+            executable=True,
+        )
+        self._write_file(
+            os.path.join(self.scripts, "check-test-matrix.py"),
+            """#!/usr/bin/env python3
+import os
+import sys
+
+with open(os.environ["PHASE_EVENT_LOG"], "a", encoding="utf-8") as fh:
+    fh.write("matrix:%s\\n" % " ".join(sys.argv[1:]))
+
+raise SystemExit(17 if os.environ.get("FAKE_FAIL") == "matrix" else 0)
+""",
+            executable=True,
+        )
+        self._write_file(
+            os.path.join(self.scripts, "bsim-stage1-run.sh"),
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf 'bsim\\n' >> "$PHASE_EVENT_LOG"
+[ "${FAKE_FAIL:-}" != "bsim" ]
+""",
+            executable=True,
+        )
+        self._write_file(
+            os.path.join(self.bin, "west"),
+            """#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *twister_alpha*) kind=twister ;;
+  *exec_beta*) kind=exec ;;
+  *) exit 2 ;;
+esac
+printf '%s\\n' "$kind" >> "$PHASE_EVENT_LOG"
+[ "${FAKE_FAIL:-}" != "$kind" ]
+""",
+            executable=True,
+        )
+        self._write_file(
+            os.path.join(self.bin, "nrfutil"),
+            """#!/usr/bin/env bash
+printf 'nrfutil\\n' >> "$PHASE_EVENT_LOG"
+exit 1
+""",
+            executable=True,
+        )
+
+    def _write_fixture_children(self):
+        self._write_file(
+            os.path.join(self.repo, "tests", "unit", "python_gamma", "test_gamma.py"),
+            """import os
+
+with open(os.environ["PHASE_EVENT_LOG"], "a", encoding="utf-8") as fh:
+    fh.write("python\\n")
+
+if os.environ.get("FAKE_FAIL") == "python":
+    raise SystemExit(17)
+""",
+        )
+
+    def _events(self):
+        if not os.path.exists(self.events_path):
+            return []
+        with open(self.events_path, "r", encoding="utf-8") as fh:
+            return fh.read().splitlines()
+
+    def _run(self, args=(), fail=None, resolve_environment=False):
+        with open(self.events_path, "w", encoding="utf-8"):
+            pass
+        env = dict(self.env)
+        if fail is not None:
+            env["FAKE_FAIL"] = fail
+        if resolve_environment:
+            env.pop("ZEPHYR_BASE", None)
+        proc = subprocess.run(
+            ["bash", self.test_all] + list(args),
+            cwd=self.repo,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+        return proc.returncode, proc.stdout + proc.stderr
+
+    def test_invalid_phase_forms_fail_before_environment_resolution(self):
+        cases = (
+            (("--phase",), "--phase requires one of"),
+            (("--phase", "unknown"), "invalid phase: unknown"),
+            (
+                ("--phase", "unit", "--phase", "bsim"),
+                "--phase may be specified only once",
+            ),
+            (("unexpected",), "unexpected positional argument: unexpected"),
+            (("--unknown",), "unknown option: --unknown"),
+        )
+        for args, error in cases:
+            with self.subTest(args=args):
+                rc, out = self._run(args, resolve_environment=True)
+                self.assertNotEqual(rc, 0)
+                self.assertIn("Usage:", out)
+                self.assertIn(error, out)
+                self.assertNotIn("ZEPHYR_BASE", out)
+                self.assertEqual(self._events(), [], "invalid arguments ran a child")
+
+    def test_omitted_phase_and_explicit_all_have_same_dispatch_order(self):
+        expected = [
+            "twister",
+            "exec",
+            "python",
+            "coverage:%s" % os.path.join(self.output, "coverage"),
+            "matrix:--repo-root %s --coverage-json %s"
+            % (self.repo, os.path.join(self.output, "coverage", "coverage.json")),
+            "bsim",
+        ]
+        rc, out = self._run()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self._events(), expected)
+        self.assertIn("Gate complete: 6 PASS / 0 FAIL / 6 TOTAL", out)
+
+        rc, out = self._run(("--phase", "all"))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self._events(), expected)
+        self.assertIn("Gate complete: 6 PASS / 0 FAIL / 6 TOTAL", out)
+
+    def test_unit_phase_runs_only_unit_children(self):
+        rc, out = self._run(("--phase", "unit"))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self._events(), ["twister", "exec", "python"])
+        self.assertIn("Gate complete: 3 PASS / 0 FAIL / 3 TOTAL", out)
+
+    def test_coverage_phase_runs_coverage_then_matrix_with_coverage_output(self):
+        rc, out = self._run(("--phase", "coverage"))
+        coverage_dir = os.path.join(self.output, "coverage")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(
+            self._events(),
+            [
+                "coverage:%s" % coverage_dir,
+                "matrix:--repo-root %s --coverage-json %s"
+                % (self.repo, os.path.join(coverage_dir, "coverage.json")),
+            ],
+        )
+        self.assertIn("Gate complete: 2 PASS / 0 FAIL / 2 TOTAL", out)
+
+    def test_bsim_phase_runs_only_bsim(self):
+        rc, out = self._run(("--phase", "bsim"))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self._events(), ["bsim"])
+        self.assertIn("Gate complete: 1 PASS / 0 FAIL / 1 TOTAL", out)
+
+    def test_selected_phase_continues_after_child_failure_and_fails(self):
+        rc, out = self._run(("--phase", "unit"), fail="twister")
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(self._events(), ["twister", "exec", "python"])
+        self.assertIn("Gate complete: 2 PASS / 1 FAIL / 3 TOTAL", out)
+        self.assertIn("FAIL", out)
 
 
 if __name__ == "__main__":

@@ -297,3 +297,48 @@ baseline and BSim pins. Hosted PR acceptance is recorded:
 After merge, protected-main acceptance requires the same
 `tests -> firmware -> release` dependency chain. Hardware acceptance remains a
 separate FR4 operation on exact draft assets.
+
+## Parallelization amendment (2026-09-13)
+
+Status: local implementation complete pending hosted PR acceptance for PR 12.
+
+Completed hosted run `34719725244` at `3b8954c` measured a 58m02s workflow
+critical path. Its monolithic `tests` job took 52m28s: normal unit children
+took about 16m38s, coverage plus matrix about 16m52s, and BabbleSim about
+11m40s. The 69 unit children, coverage, matrix, and BabbleSim remain the 72
+canonical gate children. This amendment changes worker scheduling only, with a
+target hosted critical path of about 28-30 minutes.
+
+The workflow now uses this logical DAG:
+
+```text
+test-unit --------------------> firmware -----------+
+    |                                               |
+    +--------------------------> tests aggregate ----+--> release (trusted main only)
+test-heavy (coverage) --------> tests aggregate
+test-heavy (bsim) ------------> tests aggregate
+```
+
+- `test-unit` runs Twister, exec-only, and Python inventory children through
+  `scripts/test-all.sh --phase unit`.
+- `test-heavy` has only `coverage` and `bsim` matrix phases, with
+  `fail-fast: false`. Coverage runs baseline enforcement then its matrix check.
+  BSim keeps its component build and all 26 simulation runs in one matrix child.
+- `tests` is a five-minute, always-run aggregate. It preserves required status
+  context `tests` and fails unless both worker results are successful.
+- `firmware` needs only `test-unit`; `release` needs both `tests` and
+  `firmware`, with existing trusted-main guard and write scope unchanged.
+
+Worker artifacts are phase-specific and always uploaded for seven days:
+`le-audio-test-unit-${{ github.sha }}`,
+`le-audio-test-coverage-${{ github.sha }}`, and
+`le-audio-test-bsim-${{ github.sha }}`. BSim scenario logs stay below its
+separate `scenarios/` directory, while its phase console log stays outside that
+directory. Production nRF54L15 firmware and host-i386 BSim receiver/client
+binaries remain separate artifacts; BSim never consumes production firmware.
+
+Hosted acceptance remains pending. It must show the aggregate `tests` and
+`firmware` required contexts, exact `72 PASS / 0 FAIL / 72 TOTAL`, unchanged
+coverage baseline, and unchanged 17-scenario/26-run BSim matrix. `STATUS.md`
+and `AGENTS.md` remain unchanged until that hosted evidence supplies final
+run/job IDs and timings.
