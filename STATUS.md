@@ -1,4 +1,4 @@
-# STATUS: le-audio-receiver, 2026-09-12
+# STATUS: le-audio-receiver, 2026-09-13
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
@@ -19,8 +19,8 @@
 > `8123b94`) is superseded by this verdict; its evidence stays immutable.
 > This covers 10 ms and 7.5 ms real-device transport through I2S
 > submission, not exact release artifacts, DAC activity, analog output,
-> audibility, or stereo channel mapping. Canonical software gate **65
-> PASS / 0 FAIL / 65 TOTAL** on the clean tree (35 twister + 5 exec-only + 22 Python +
+> audibility, or stereo channel mapping. Canonical software gate **72
+> PASS / 0 FAIL / 72 TOTAL** on the clean tree (40 Twister + 5 exec-only + 24 Python +
 > coverage + matrix + BSim Stage 1; the FR2 clean-tree run at `75a8093`
 > and the FR1 clean run at `1671a9f` are historical, with earlier clean
 > runs recorded in
@@ -28,8 +28,8 @@
 > `b8bd633` and the production-fix canonical run at `f2f9336`, after
 > the empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
 > (`f2f9336`) fixes — the committed coverage baseline is unchanged),
-> coverage population **36** (4777/5234 lines, 2091/2896
-> branches, 363/363 functions, committed baseline unchanged), build
+> coverage population **37** (4962/5420 lines, 2153/2960
+> branches, 380/380 functions, committed baseline unchanged), build
 > contract **96/96**, BSim 17 scenarios / 26 runs pins byte-identical,
 > P1–P8 user pairing control ACCEPTED (nRF54L15 enabled, nRF5340
 > feature-off), FR1 deterministic firmware packager ACCEPTED, FR2
@@ -40,7 +40,10 @@
 > on unchanged `VERSION`), PR 11 hosted canonical test-gate ACCEPTED
 > (hosted run 31432411543: `tests` 65 PASS / 0 FAIL / 65 TOTAL,
 > `firmware` SUCCESS after tests, `release` SKIPPED on pull_request;
-> ruleset 20658259 requires status contexts `tests` and `firmware`),
+> ruleset 20658259 requires status contexts `tests` and `firmware`), PR 12
+> logical parallelization ACCEPTED (hosted run `34725825883`: `test-unit`
+> unblocks `firmware`, all three workers feed aggregate `tests`, and `release`
+> joins `tests` with `firmware` and was SKIPPED on pull_request),
 > and FR4 exact-artifact hardware acceptance
 > **BLOCKED**: the exact draft `v0.1.0` FAILED mandatory nRF5340 mono
 > acceptance and remains private, unpublished, and untagged; the local
@@ -54,6 +57,61 @@
 > population 33, contract 79/79) are the **historical** R10 baseline
 > (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
 > for their own commits.
+
+## Firmware CI — logical parallelization acceptance (PR 12, 2026-09-13)
+
+**Logical-DAG acceptance — ACCEPTED.** PR 12 was CLEAN at source HEAD
+`463fa6b57042e026985ffd0a25d1ba0687f651b7`. Local implementation acceptance
+passed the 69-child unit inventory, 35 workflow-contract tests, 40
+coverage-runner boundary tests, `61 PASS / 0 FAIL` BSim parser suite, and the
+full `72 PASS / 0 FAIL / 72 TOTAL` gate with population 37, unchanged coverage
+baseline, and unchanged BSim pins; `git diff --check` passed. The accepted DAG
+is:
+
+```text
+test-unit --------------------> firmware -----------+
+    |                                               |
+    +--------------------------> tests aggregate ----+--> release (trusted main only)
+test-heavy (coverage) --------> tests aggregate
+test-heavy (bsim) ------------> tests aggregate
+```
+
+Hosted PR 12 acceptance run `34725825883` used source HEAD
+`463fa6b57042e026985ffd0a25d1ba0687f651b7`; its workflow checkout and artifact
+names use pull-request merge SHA `11c4c6fda43e93d7214f4d463b25b50874342d02`.
+It ran from `2026-09-12T23:35:44Z` through `2026-09-13T00:02:15Z` (26m31s),
+versus 58m02s for monolithic comparison run `34719725244`: 31m31s faster,
+about 54 percent.
+
+- `test-unit`, job `103639640307`, SUCCESS (21m34s): `69 PASS / 0 FAIL / 69
+  TOTAL`.
+- `test-heavy (coverage)`, job `103639640227`, SUCCESS (21m40s): `2 PASS / 0
+  FAIL / 2 TOTAL`; 45 traces merged; population 37 = 4962/5420 lines,
+  2153/2960 branches, and 380/380 functions; baseline enforcement PASS;
+  matrix checker 0 errors and 0 notes.
+- `test-heavy (bsim)`, job `103639640334`, SUCCESS (16m59s): `1 PASS / 0 FAIL /
+  1 TOTAL`; all 17 scenarios and 26 runs strict-checked with unchanged pinned
+  hashes. Combined worker result: `72 PASS / 0 FAIL / 72 TOTAL`.
+- Aggregate required context `tests`, job `103642036590`, SUCCESS (9s) after
+  all workers; required context `firmware`, job `103642024613`, SUCCESS
+  (4m53s) after `test-unit`, retaining build-contract, version, package,
+  verification, and upload steps; `release`, job `103642582348`, SKIPPED on
+  pull_request.
+
+Accepted artifacts: unit ID `10307838803`, digest
+`sha256:14b08bd07c4bab18cd9272777c23f338186e15d76dddd60defa1963f3df3e05f`;
+coverage ID `10307798767`, digest
+`sha256:e676b744c9638e10893255c9ad5be3821a5e18c0116e33f2696e903dd7164875`;
+BSim ID `10307039786`, digest
+`sha256:0e5a51d01c1fb74fdbfe709b5bbed7175245c2096acdcaade6827dcc1de2ab41`; and
+firmware ID `10308350180`, digest
+`sha256:7c3b313916dc32b2813f0f1825be42ed9c461ab3b8808279a27b8b5da544c6bf`.
+Test artifacts retain seven days; firmware retains 14 days. Active ruleset
+`20658259` remains unchanged: exact required contexts are `tests` and
+`firmware`, with no strict latest-main requirement. PR 12 remains unmerged;
+this acceptance does not claim a protected-main run, draft creation,
+exact-artifact FR4 acceptance, publication, or hardware acceptance. FR4 stays
+BLOCKED and release remains limited to trusted main.
 
 ## Firmware CI — canonical test gate (PR 11, 2026-08-10)
 

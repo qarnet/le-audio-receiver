@@ -300,7 +300,7 @@ separate FR4 operation on exact draft assets.
 
 ## Parallelization amendment (2026-09-13)
 
-Status: local implementation complete pending hosted PR acceptance for PR 12.
+Status: ACCEPTED. Local implementation and hosted PR 12 acceptance are complete.
 
 Completed hosted run `34719725244` at `3b8954c` measured a 58m02s workflow
 critical path. Its monolithic `tests` job took 52m28s: normal unit children
@@ -337,8 +337,37 @@ separate `scenarios/` directory, while its phase console log stays outside that
 directory. Production nRF54L15 firmware and host-i386 BSim receiver/client
 binaries remain separate artifacts; BSim never consumes production firmware.
 
-Hosted acceptance remains pending. It must show the aggregate `tests` and
-`firmware` required contexts, exact `72 PASS / 0 FAIL / 72 TOTAL`, unchanged
-coverage baseline, and unchanged 17-scenario/26-run BSim matrix. `STATUS.md`
-and `AGENTS.md` remain unchanged until that hosted evidence supplies final
-run/job IDs and timings.
+Hosted PR 12 acceptance is **ACCEPTED**. Local implementation acceptance passed
+the 69-child unit inventory, 35 workflow-contract tests, 40 coverage-runner
+boundary tests, `61 PASS / 0 FAIL` BSim parser suite, full `72 PASS / 0 FAIL /
+72 TOTAL` gate with population 37 and unchanged baseline/pins, and `git diff
+--check`. Hosted run `34725825883` accepted source HEAD
+`463fa6b57042e026985ffd0a25d1ba0687f651b7`; workflow checkout and artifact
+names use pull-request merge SHA `11c4c6fda43e93d7214f4d463b25b50874342d02`.
+
+- `test-unit` job `103639640307` SUCCESS (21m34s): `69 PASS / 0 FAIL / 69
+  TOTAL`.
+- `test-heavy (coverage)` job `103639640227` SUCCESS (21m40s): `2 PASS / 0
+  FAIL / 2 TOTAL`, 45 traces merged, population 37 (4962/5420 lines,
+  2153/2960 branches, 380/380 functions), baseline enforcement PASS, and
+  matrix checker 0 errors / 0 notes.
+- `test-heavy (bsim)` job `103639640334` SUCCESS (16m59s): `1 PASS / 0 FAIL /
+  1 TOTAL`, with all 17 scenarios and 26 runs strict-checked against unchanged
+  pinned hashes. The three worker summaries combine to `72 PASS / 0 FAIL / 72
+  TOTAL`.
+- Aggregate required context `tests`, job `103642036590`, SUCCESS (9s) after
+  all workers. Required context `firmware`, job `103642024613`, SUCCESS
+  (4m53s), started after `test-unit` and retained build-contract, version,
+  package, verification, and upload steps. `release`, job `103642582348`, was
+  SKIPPED on pull_request.
+
+The run lasted 26m31s (`2026-09-12T23:35:44Z` through
+`2026-09-13T00:02:15Z`) versus 58m02s for monolithic comparison run
+`34719725244`, a 31m31s reduction (about 54 percent). Accepted artifacts are
+unit ID `10307838803` (`sha256:14b08bd07c4bab18cd9272777c23f338186e15d76dddd60defa1963f3df3e05f`),
+coverage ID `10307798767` (`sha256:e676b744c9638e10893255c9ad5be3821a5e18c0116e33f2696e903dd7164875`),
+BSim ID `10307039786` (`sha256:0e5a51d01c1fb74fdbfe709b5bbed7175245c2096acdcaade6827dcc1de2ab41`),
+and firmware ID `10308350180` (`sha256:7c3b313916dc32b2813f0f1825be42ed9c461ab3b8808279a27b8b5da544c6bf`).
+Test artifacts retain seven days; firmware retains 14 days. PR 12 was CLEAN at
+`463fa6b`; active ruleset `20658259` remains unchanged, requiring exact
+contexts `tests` and `firmware` without a strict latest-main requirement.
