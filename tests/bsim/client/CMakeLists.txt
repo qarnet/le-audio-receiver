@@ -29,3 +29,12 @@ zephyr_include_directories(
   ${BSIM_COMPONENTS_PATH}/libUtilv1/src/
   ${BSIM_COMPONENTS_PATH}/libPhyComv1/src/
 )
+
+# LSP compile-database link: expose this BSim client image's
+# compile_commands.json at the app root for clangd closest-ancestor
+# discovery.  Absolute target (build tree lives in the shared SDK
+# bsim_out); scripts/gen-lsp-links.sh can also repair it.
+file(CREATE_LINK
+     "${CMAKE_BINARY_DIR}/compile_commands.json"
+     "${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json"
+     SYMBOLIC)

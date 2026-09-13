@@ -13,7 +13,7 @@ Base: accepted T2 commit `0408b6d` on `test/pre-refactor-behavior`.
 Both suites compile and execute the real current production source
 `src/audio_i2s.c` — including the T3 hardening (transactional startup,
 output/offload validation, idempotent initialization) — against the fake
-driver and mocks, plus the unchanged `src/audio_sink.h` interface.  No
+driver and mocks, plus the `src/audio_sink.h` interface.  No
 production algorithm is copied into test code.
 
 | Suite | Resampler | Actuator | Offload | Output rate | Purpose |
@@ -23,7 +23,8 @@ production algorithm is copied into test code.
 
 Variant selection uses **test-only CMake compile definitions**
 (`CONFIG_AUDIO_RESAMPLER_*`, `CONFIG_AUDIO_CLOCK_ACTUATOR_*`,
-`CONFIG_AUDIO_OFFLOAD_ASRC`, `CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ`) —
+`CONFIG_AUDIO_OFFLOAD_ASRC`, `CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ`,
+`CONFIG_AUDIO_I2S_WRITE_TIMEOUT_MS`) —
 those symbols do not exist in the test apps' Kconfig, so they must not be
 assigned in `prj.conf`.  Zephyr I2S syscall API (`CONFIG_I2S=y`) and ztest
 (`CONFIG_ZTEST=y`) are enabled through valid `prj.conf` symbols; the
@@ -53,6 +54,17 @@ from NCS v3.3.0 `include/zephyr/drivers/i2s.h` and is instantiated with
 - Tests release selected/all queued blocks (`fake_i2s_release*`) to emulate
   DMA completion; write records persist after release so tests can prove
   pointer history.
+- Tests can fill the simulated 15-entry TX queue, observe positive timeout
+  selection, and release one queued block through semaphores.  The ASRC
+  variant uses a 20 ms timeout; the identity variant uses 0 ms and preserves
+  the immediate `-ENOMSG` boundary.  This proves queue-full recovery without
+  sleep polling: ASRC succeeds after test-controlled fake DMA release, or
+  returns `-EAGAIN` when no release occurs.
+- Tests also fill all sixteen slab blocks through a started public push, then
+  observe post-start primary slab timeout selection.  The ASRC variant returns
+  success after one test-controlled fake DMA release, or returns bounded
+  `-EAGAIN` without release; the identity variant selects no wait and returns
+  `-ENOMEM` immediately.
 - The fake detects a pointer submitted **while still queued** (the
   double-write DMA-corruption class) and records it as a violation; tests
   assert zero violations after every complex sequence.
@@ -92,6 +104,7 @@ header `audio_i2s_test_hook.h` and provides:
 | `audio_i2s_test_device_is_ready()` / `set_device_ready()` | controllable `device_is_ready()` result |
 | `audio_i2s_test_inject_slab_alloc_failure()` / `set_slab_alloc_failure()` | repeat-fallback allocation failure injection |
 | `audio_i2s_test_reset_module_state()` | reset of module-static state between tests (after fake-owned blocks are purged) |
+| `audio_i2s_test_arm_main_slab_alloc()` / `last_main_slab_alloc_waited()` / `note_main_slab_alloc()` | one-shot observation of primary post-start slab timeout selection and semaphore-controlled entry |
 | `audio_i2s_test_is_configured/started()`, `input_frames()`, `saved_frame_len()` | read-only snapshots |
 | `audio_i2s_test_offload_sequence()`, `asrc_prev_l/r()`, `asrc_prev_valid()` | ASRC/offload state snapshots (ASRC variant only) |
 | `audio_i2s_test_get_slab()` | internal slab accessor (pre-exhaustion, exact free count) |
@@ -153,15 +166,18 @@ actuator / timing (and ASRC) failure, input-frame-selection preservation.
 
 | Suite | Tests | Result |
 |-------|-------|--------|
-| `tests/unit/audio_i2s/` (ASRC/offload) | 61 | 61/61 PASS |
-| `tests/unit/audio_i2s_identity/` (identity/APLL) | 59 | 59/59 PASS |
-| **Total** | **120** | **120/120 PASS** |
+| `tests/unit/audio_i2s/` (ASRC/offload) | 67 | 67/67 PASS |
+| `tests/unit/audio_i2s_identity/` (identity/APLL) | 65 | 65/65 PASS |
+| **Total** | **132** | **132/132 PASS** |
 
 The counts and the coverage list below describe the **current** suites:
 the original T3 50/48 cases plus the later R1 admission/drain concurrency
 additions (+10 per suite across the shared common tests) and the
-2026-08-09 startup-reservoir follow-up (11-block startup, +1 per suite),
-so 50 + 10 + 1 = 61 and 48 + 10 + 1 = 59.  The original-T3 run evidence
+2026-08-09 startup-reservoir follow-up (15-block startup, +1 per suite),
+plus the target-specific TX queue wait regression (+1 per suite), the two
+shared post-start slab-backpressure regressions (+2 per suite), and the three
+shared performance-timing regressions (+3 per suite), so
+50 + 10 + 1 + 1 + 2 + 3 = 67 and 48 + 10 + 1 + 1 + 2 + 3 = 65.  The original-T3 run evidence
 (50/50 and 48/48 focused runs, 25-child gate) is preserved verbatim in
 the next section.
 
@@ -169,7 +185,8 @@ Coverage of the required behaviors:
 
 - common/init/input: device-not-ready (no dependency calls), exact I2S
   config (TX, 16-bit, 2ch, I2S format, bit/frame master, 48000 Hz, internal
-  slab, block size 1924, timeout 0), configure/ASRC-init/actuator-init/
+  slab, block size 1924, variant timeout (20 ms ASRC/nRF54L15, 0 ms
+  identity/nRF5340), configure/ASRC-init/actuator-init/
   timing-init error propagation with no later calls, configured-only-after-
   success, idempotent re-init (success no-op; active-stream queue/pointer/
   free-count preservation; retry after configure/actuator/timing/ASRC
@@ -177,15 +194,22 @@ Coverage of the required behaviors:
   360/480 vs 0/1/359/361/479/481/65535, all push rejection classes,
   malformed push zero side effects, push-before-init `-EIO` with no slab
   allocation;
-- startup/ownership: eleven-block ordering for 480 and 360 input
-  (ten zero-filled silence blocks, then the data block, then START),
+- startup/ownership: fifteen-block ordering for 480 and 360 input
+  (fourteen zero-filled silence blocks, then the data block, then START),
   rate-converter-selected silence sizes, distinct pointers, START only
-  after the eleventh write, silence-alloc failure at each of the ten
+  after the fifteenth write, silence-alloc failure at each of the fourteen
   positions, silence-write failure at each index, data-write failure,
-  START failure purging all eleven, DROP-failure observability without
+  START failure purging all fifteen, DROP-failure observability without
   double free, rate-converter 482/0/partial-then-482 bounds, and the
-  ten-block-gap reservoir regression (ten ordered DMA completions leave
-  one driver-owned block, slab free 15, zero duplicate writes);
+  fourteen-block-gap reservoir regression (fourteen ordered DMA completions leave
+  one driver-owned block, slab free 15, zero duplicate writes); full-TX-queue
+  recovery selects finite-timeout wait and waits for one simulated DMA
+  completion on the ASRC variant, while the identity variant preserves real
+  `-ENOMSG` return, telemetry, and failed-write ownership; two post-start
+  primary slab backpressure regressions use the same selection framing:
+  ASRC succeeds after one semaphore-controlled DMA release and bounded
+  `-EAGAIN` without release, while identity selects no wait and returns
+  `-ENOMEM` with no extra write;
 - identity/APLL steady state: no drift before START, one drift update per
   started block with pre-allocation free count, zero ppm never applied,
   ±ppm applied exactly once, exact data bytes/size, non-`-EIO` write error

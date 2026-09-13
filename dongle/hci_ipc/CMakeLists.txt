@@ -7,3 +7,11 @@ project(hci_ipc)
 
 target_sources(app PRIVATE src/main.c)
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+# LSP compile-database link: expose the net-core image's
+# compile_commands.json at the app root for clangd closest-ancestor
+# discovery.  Idempotent; re-created on reconfigure.
+file(CREATE_LINK
+     "${CMAKE_BINARY_DIR}/compile_commands.json"
+     "${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json"
+     SYMBOLIC)

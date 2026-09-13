@@ -666,9 +666,11 @@ class BluezWirePlumberGate:
 
             # Poll wpctl: the receiver's node (address form) must appear so
             # the audio profile is actually exposed, not merely any BlueZ
-            # object.
+            # object.  Request node-name output (`wpctl status -n`): plain
+            # `wpctl status` renders friendly descriptions, which never carry
+            # the address-bearing node name on the accepted host stack.
             try:
-                wproc = _run(["wpctl", "status"], timeout=10.0)
+                wproc = _run(["wpctl", "status", "-n"], timeout=10.0)
                 last_wpctl = wproc.stdout
                 if receiver_addr:
                     if receiver_addr in last_wpctl:
@@ -692,7 +694,9 @@ class BluezWirePlumberGate:
                 f"found_device={found_device} found_sink={found_sink} "
                 f"found_profile={found_profile} (receiver_addr={receiver_addr})"
             )
-            result.evidence.append(f"Last wpctl status:\n{last_wpctl[:2000]}")
+            result.evidence.append(
+                f"Last wpctl status -n (node-name form):\n{last_wpctl[:2000]}"
+            )
             result.evidence.append(
                 f"Last pw-dump summary: "
                 f"{json.dumps(self._summarize_pw_dump(last_dump))}"

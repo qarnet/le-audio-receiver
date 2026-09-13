@@ -35,8 +35,11 @@ int audio_sink_init(void);
  *
  * Data format: [L0, R0, L1, R1, ...] int16_t interleaved.
  * Expects exactly @p sample_count stereo samples (i.e. 2×n int16_t values).
- * Allocates from internal slab and queues via DMA.  Returns immediately
- * (non-blocking) unless all DMA buffer slots are exhausted (underrun).
+ * Allocates from internal slab and queues via DMA.  Default/zero-timeout
+ * behavior is non-blocking.  On nRF54L15, a started push may wait up to the
+ * configured timeout while blocked on either a full I2S descriptor queue or a
+ * released primary slab block.  Startup pre-fill and repeat fallback allocations
+ * remain no-wait.
  *
  * @param stereo_data  Interleaved stereo PCM (int16_t, L/R/L/R/...).
  * @param sample_count Total int16_t values in buffer (must be even).
@@ -44,7 +47,11 @@ int audio_sink_init(void);
  * @retval 0 on success
  * @retval -EIO if sink not initialized
  * @retval -EBUSY if sink is configured but push admission is closed
- * @retval -ENOMEM if no free DMA slot (underrun; drop frame, PLC fills gap)
+ * @retval -ENOMEM if no free slab block in no-wait paths
+ *         (startup pre-fill, repeat fallback, or configured timeout disabled)
+ * @retval -ENOMSG if the no-wait I2S descriptor queue is full.
+ * @retval -EAGAIN if configured finite-timeout wait expires for a full
+ *         descriptor queue or a post-START primary slab allocation.
  */
 int audio_sink_push(const int16_t *stereo_data, size_t sample_count);
 

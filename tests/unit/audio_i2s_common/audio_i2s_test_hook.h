@@ -42,6 +42,15 @@ bool audio_i2s_test_inject_slab_alloc_failure(void);
 /** Set the repeat-fallback slab allocation failure injection. */
 void audio_i2s_test_set_slab_alloc_failure(bool fail);
 
+/** Arm observation of the next primary rendered-block slab allocation. */
+void audio_i2s_test_arm_main_slab_alloc(struct k_sem *entered);
+
+/** Return whether the observed primary allocation used a positive timeout. */
+bool audio_i2s_test_last_main_slab_alloc_waited(void);
+
+/** Record primary allocation timeout selection and signal an armed waiter. */
+void audio_i2s_test_note_main_slab_alloc(bool waits);
+
 /* ── Module-static state reset / snapshots ───────────────────────── */
 
 /**

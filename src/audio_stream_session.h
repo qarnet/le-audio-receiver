@@ -7,7 +7,7 @@
  * The session is the exclusive owner of app audio receive state: validated
  * codec shape per sink slot, LC3 decoder contexts, per-CIS ISO sequence
  * trackers and timestamp-cadence trackers, the shared Mode A event
- * assembler, configured occupancy, presentation delay, receive counters,
+ * assembler, configured occupancy, presentation delay, receive-status counters,
  * and the decode/conceal/volume/push mechanics with their statistics,
  * perf, and BSim-observer calls.
  *
@@ -55,6 +55,21 @@ enum audio_stream_mode {
 	AUDIO_STREAM_MODE_MODEA,    /* 2 ASEs, both mono */
 };
 
+enum audio_stream_rx_status {
+	AUDIO_STREAM_RX_STATUS_VALID,
+	AUDIO_STREAM_RX_STATUS_ERROR,
+	AUDIO_STREAM_RX_STATUS_LOST,
+	AUDIO_STREAM_RX_STATUS_UNKNOWN,
+};
+
+struct audio_stream_rx_stats {
+	size_t valid;
+	size_t error;
+	size_t lost;
+	size_t unknown;
+	size_t no_ts;
+};
+
 /**
  * Initialize the session: zero all slot/assembler state, configured_count,
  * and leave receive admission CLOSED (only rx_open() enables it).
@@ -67,7 +82,7 @@ int audio_stream_session_init(void);
 
 /**
  * Store the validated codec shape for sink @p idx (ASCS Config success).
- * Resets the slot's receive count, presentation delay, decoder context,
+ * Resets the slot's receive-status counters, presentation delay, decoder context,
  * sequence tracker, and timestamp-cadence tracker, and increments the
  * configured count.  The slot becomes "configured" (occupancy for the
  * lifecycle gate) but receive admission is NOT opened here.
@@ -119,14 +134,14 @@ void audio_stream_session_start_clear(void);
 /**
  * Release sink @p idx (ASCS Release): after receive admission was closed
  * and drained by the caller, reset the slot's decoder/sequence/cadence
- * state, clear shape/pd/recv count, and decrement the configured count.
+ * state, clear shape/pd/receive-status counters, and decrement the configured count.
  * Does not touch the bt_bap_stream object and does not reopen admission.
  */
 void audio_stream_session_release(size_t idx);
 
 /**
  * Reset ALL session state (ACL disconnect): close is already done by the
- * caller via rx_close(); this clears every slot (shape, recv count, pd,
+ * caller via rx_close(); this clears every slot (shape, receive-status counters, pd,
  * decoder, sequence, cadence), the Mode A assembler, and the configured
  * count.  Receive admission stays closed.
  */
@@ -169,16 +184,39 @@ int audio_stream_session_recv(size_t idx, bool valid, bool has_ts, uint32_t ts, 
 			      const uint8_t *data, size_t len);
 
 /**
- * Increment the valid-receive counter for sink @p idx and return the new
- * count.  Called by the bt_bap adapter for every VALID packet BEFORE the
- * gate check (gate-independent counting, identical to the pre-R6
- * behavior); the adapter uses the returned count for the periodic SDU log.
+ * Record one ISO callback delivered to the application for sink @p idx.
+ * Recording is gate-independent: it happens before receive admission and
+ * configuration checks, and does not describe decode, PLC, or audio output
+ * success.
+ *
+ * @ref AUDIO_STREAM_RX_STATUS_VALID increments valid,
+ * @ref AUDIO_STREAM_RX_STATUS_ERROR increments error,
+ * @ref AUDIO_STREAM_RX_STATUS_LOST increments lost, and
+ * @ref AUDIO_STREAM_RX_STATUS_UNKNOWN or any invalid status value increments
+ * unknown.
+ * A false @p has_ts increments no_ts independently of status.
+ *
+ * @param idx    sink slot index
+ * @param status callback status classification
+ * @param has_ts true when callback includes an ISO timestamp
+ *
+ * @return post-record valid count.  Returns zero for an out-of-range slot
+ *         without changing session state.
  */
-size_t audio_stream_session_recv_valid_count(size_t idx);
+size_t audio_stream_session_rx_status_record(size_t idx, enum audio_stream_rx_status status,
+					     bool has_ts);
 
 /**
- * Zero the receive counter of sink @p idx (stream_started per-slot reset).
+ * Return a mutex-consistent snapshot of receive-status counters for sink @p idx.
+ * The returned value is a copy and never an internal session pointer.
+ *
+ * @param idx sink slot index
+ *
+ * @return all-zero snapshot when @p idx is out of range.
  */
+struct audio_stream_rx_stats audio_stream_session_rx_stats_get(size_t idx);
+
+/** Zero the receive-status counters of sink @p idx (stream_started per-slot reset). */
 void audio_stream_session_recv_reset(size_t idx);
 
 /* ── accessors (thread-safe scalar reads) ─────────────────────────── */
@@ -205,7 +243,7 @@ enum audio_stream_mode audio_stream_session_mode(size_t idx);
 /** Negotiated presentation delay of sink @p idx (0 when not configured). */
 uint32_t audio_stream_session_pd(size_t idx);
 
-/** Valid-receive counter of sink @p idx (0 when not configured). */
+/** Valid receive-status counter of sink @p idx (0 when not configured). */
 size_t audio_stream_session_recv_count(size_t idx);
 
 #if defined(CONFIG_ZTEST)

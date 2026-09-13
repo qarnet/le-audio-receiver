@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Canonical full local gate script for le-audio-receiver.
+# Canonical local gate script for le-audio-receiver.
 #
-# Runs every test suite:
+# Default invocation runs every test suite:
 #   1. Twister C unit suites (testcase.yaml under tests/unit/)
 #   2. Exec-only C unit suites (CMakeLists.txt without testcase.yaml under
 #      tests/unit/ — audio_offload, flpr_audio_process, flpr_ring,
@@ -18,9 +18,20 @@
 # All suite discovery comes from scripts/test_inventory.py (the single
 # filesystem classification source shared with test-coverage.sh and
 # check-test-matrix.py) — adding a suite cannot silently omit it from the
-# gate.  Current inventory (scripts/test_inventory.py): 35 twister + 5
-# exec-only + 22 Python = 62 unit children; the canonical gate is 65
-# children (62 + coverage + matrix + BSim).
+# gate.  Current inventory (scripts/test_inventory.py): 40 twister + 5
+# exec-only + 24 Python = 69 unit children; the canonical gate is 72
+# children (69 + coverage + matrix + BSim).
+#
+# Logical phase selection:
+#   ./scripts/test-all.sh                 # all phases (historical default)
+#   ./scripts/test-all.sh --phase unit    # Twister, exec-only, Python
+#   ./scripts/test-all.sh --phase coverage # coverage baseline, then matrix
+#   ./scripts/test-all.sh --phase bsim    # Stage 1 once
+#   ./scripts/test-all.sh --phase all     # all phases
+#
+# CI owns logical worker selection: test-unit runs the unit phase, test-heavy
+# runs coverage and BSim in separate matrix children, and local invocation
+# without --phase remains the complete one-command gate.
 #
 # Optional external output root: TEST_OUTPUT_DIR.  When set to an absolute
 # directory outside the repository, coverage reports are retained at
@@ -54,8 +65,53 @@ TOTAL=0
 TMP_ROOT=""
 TEST_OUTPUT_DIR="${TEST_OUTPUT_DIR:-}"
 COVERAGE_DIR=""
+PHASE="all"
+PHASE_SET=0
 
 die() { echo "FATAL: $*" >&2; exit 1; }
+
+usage() {
+    cat >&2 <<'EOF'
+Usage: scripts/test-all.sh [--phase all|unit|coverage|bsim]
+
+Runs the canonical local gate. Without arguments, identical to --phase all.
+EOF
+}
+
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --phase)
+                if [ "$PHASE_SET" -ne 0 ]; then
+                    usage
+                    die "--phase may be specified only once"
+                fi
+                if [ "$#" -lt 2 ] || [[ "$2" == --* ]]; then
+                    usage
+                    die "--phase requires one of: all, unit, coverage, bsim"
+                fi
+                PHASE="$2"
+                case "$PHASE" in
+                    all|unit|coverage|bsim) : ;;
+                    *)
+                        usage
+                        die "invalid phase: $PHASE (expected all, unit, coverage, or bsim)"
+                        ;;
+                esac
+                PHASE_SET=1
+                shift 2
+                ;;
+            --*)
+                usage
+                die "unknown option: $1"
+                ;;
+            *)
+                usage
+                die "unexpected positional argument: $1"
+                ;;
+        esac
+    done
+}
 
 validate_test_output_dir() {
     # TEST_OUTPUT_DIR (optional): absolute directory outside the repository
@@ -202,8 +258,11 @@ run_bsim_stage1() {
 }
 
 # ================================================================
+parse_args "$@"
+
 printf '=== le-audio-receiver full local gate ===\n'
 printf 'Repo: %s\n' "$REPO_ROOT"
+printf 'Phase: %s\n' "$PHASE"
 printf '\n'
 
 validate_test_output_dir
@@ -223,15 +282,35 @@ fi
 
 cd "$REPO_ROOT"
 
-run_twister_suites
-run_exec_suites
-run_python_suites
-run_coverage
-run_matrix_check
+case "$PHASE" in
+    unit)
+        run_twister_suites
+        run_exec_suites
+        run_python_suites
+        ;;
+    coverage)
+        run_coverage
+        run_matrix_check
+        ;;
+    bsim)
+        # BSim is an accepted regular gate, not an optional smoke test.
+        # Missing prerequisites therefore fail the gate through the runner's
+        # own checks.
+        run_bsim_stage1
+        ;;
+    all)
+        run_twister_suites
+        run_exec_suites
+        run_python_suites
+        run_coverage
+        run_matrix_check
 
-# BSim is an accepted regular gate, not an optional smoke test. Missing
-# prerequisites therefore fail the gate through the runner's own checks.
-run_bsim_stage1
+        # BSim is an accepted regular gate, not an optional smoke test.
+        # Missing prerequisites therefore fail the gate through the runner's
+        # own checks.
+        run_bsim_stage1
+        ;;
+esac
 
 printf '\n============================================================\n'
 printf 'Gate complete: %d PASS / %d FAIL / %d TOTAL\n' "$PASSES" "$FAILURES" "$TOTAL"

@@ -26,6 +26,18 @@ config AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ
 	  decoder output to drain rate. The I2S config frame_clk_freq
 	  stays at 48000 (the nominal requested rate).
 
+config AUDIO_I2S_WRITE_TIMEOUT_MS
+	int "I2S TX write timeout (ms)"
+	default 0
+	range 0 100
+	help
+	  This value bounds two independent backpressure points. The
+	  struct i2s_config.timeout field bounds one i2s_write() when the TX
+	  descriptor queue is full. Primary PCM slab allocation uses this
+	  timeout only after DMA START and only in the started path. 0 means
+	  no wait. Startup pre-fill and repeat fallback slab allocations always
+	  use no wait. K_FOREVER is never used.
+
 choice AUDIO_RESAMPLER
 	prompt "Audio resampler"
 	default AUDIO_RESAMPLER_IDENTITY
@@ -118,6 +130,147 @@ config AUDIO_ACCEPTANCE_DIAGNOSTICS
 	  nRF5340 target has no FLPR acceptance commands.  The FLPR-image
 	  fault-handler gating is the separate
 	  CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS option.
+
+config HIL_BAP_ENABLE_TRACE
+	bool "HIL BAP enable callback trace"
+	default n
+	depends on SOC_NRF54L15 && BT && LOG
+	help
+	  Temporary nRF54L15 HIL-only marker after the receiver stream enabled
+	  callback returns from bt_bap_stream_start(). It records the stream slot
+	  and return code for one pre-stream diagnostic branch. Keep disabled in
+	  normal builds. It does not establish peer delivery, a root cause, or a
+	  production repair.
+
+config HIL_RX_TIMING_TRACE
+	bool "HIL receiver RX delivery timing trace"
+	default n
+	depends on SOC_NRF54L15 && BT && BT_ISO && LOG
+	help
+	  Temporary nRF54L15 HIL-only diagnostic. Logs each ISO RX callback's
+	  disposition and timing for the first N callbacks and then one
+	  summary line per second of wall time: counts of valid/lost/error
+	  callbacks and the receiver-clock timestamp of the last valid SDU.
+	  Keep disabled in normal builds. It does not establish a root cause
+	  or a repair.
+
+config HIL_HCI_REMOVE_ISO_PATH_TRACE
+	bool "HIL callback-timed HCI Remove ISO Path trace"
+	default n
+	depends on SOC_NRF54L15 && BT && LOG_RUNTIME_FILTERING
+	help
+	  Temporary HIL-only diagnostic. Arms the bt_hci_core and
+	  bt_sdc_hci_driver runtime log sources at lc3_disable(). Keep this
+	  option disabled in normal builds.
+
+config HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE
+	bool "Temporary HIL-only SDC LE Remove ISO Data Path wrapper trace"
+	default n
+	depends on SOC_NRF54L15 && BT && BT_ISO && LOG
+	depends on !HIL_HCI_REMOVE_ISO_PATH_TRACE
+	help
+	  Temporary HIL-only diagnostic. Wrap the SDC LE Remove ISO Data Path
+	  call and emit low-volume entry and return markers for nRF54L15 HIL.
+	  Keep this option disabled in normal builds. It cannot coexist with
+	  the callback-timed HCI Remove ISO Path trace.
+
+choice HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_PROBE
+	prompt "SDC LE Remove ISO Data Path trace probe"
+	default HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_WORK_STATE_SNAPSHOT
+	depends on HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE
+
+config HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_WORK_STATE_SNAPSHOT
+	bool "Work-state snapshot"
+	help
+	  Preserve the delayed MPSL work-state snapshot used by the existing
+	  callback-timed HIL trace.
+
+config HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_SCHEDULER_UNLOCK
+	bool "Scheduler unlock"
+	help
+	  Record the sender thread after target receive-work submission and
+	  trace its next scheduler unlock. The state marker records only MPSL
+	  work-queue switch-ins observed while control is inside that exact
+	  wrapped unlock window. A positive switch count does not prove that
+	  the receive handler fetched the command. This probe must not schedule
+	  any additional work.
+
+config HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_RECEIVE_DISPOSITION
+	bool "Receive disposition"
+	help
+	  Temporary HIL-only diagnostic. Record target-owned receive disposition
+	  in the MPSL receive work context, without making a root-cause claim.
+	  Normal builds keep this diagnostic disabled.
+endchoice
+
+config HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME
+	bool "ISO RX lifetime"
+	default n
+	depends on HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_RECEIVE_DISPOSITION
+	depends on !NET_BUF_LOG
+	help
+	  Temporary nRF54L15 HIL-only diagnostic. Track host ISO RX
+	  allocation and final-release occupancy. Requires the receive-
+	  disposition trace and relies on ordinary net_buf_unref linkage, so
+	  NET_BUF_LOG must remain off. Normal builds keep this diagnostic
+	  disabled.
+
+config HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_DISPOSITION
+	bool "ISO RX lifetime disposition"
+	default n
+	depends on HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME
+	help
+	  Temporary nRF54L15 HIL-only diagnostic. Record bounded host-dispatch
+	  and app-callback progression for tracked ISO RX buffers at lifetime
+	  snapshots. Wrap internal bt_conn_recv only for this exact NCS build.
+	  This does not establish buffer ownership or queue location. Normal
+	  builds keep this diagnostic disabled.
+
+config HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH
+	bool "ISO RX lifetime TX-notify flush progression"
+	default n
+	depends on HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_DISPOSITION
+	help
+	  Temporary nRF54L15 HIL-only diagnostic. Observe k_work_flush()
+	  while an HIL diagnostic bt_conn_recv() context is live for tracked
+	  ISO RX buffers. This does not establish a work owner, blocking cause,
+	  or repair. Normal builds keep this diagnostic disabled.
+
+config HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE
+	bool "ISO RX lifetime TX-notify flush semaphore progression"
+	default n
+	depends on HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH
+	help
+	  Temporary nRF54L15 HIL-only diagnostic. Observe entry and return of the
+	  exact matching generated z_impl_k_sem_take() reached by the scoped
+	  k_work_flush() call. This does not establish that the semaphore pended,
+	  identify work ownership, or authorize a repair. Normal builds keep this
+	  diagnostic disabled.
+
+config HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE_PEND
+	bool "ISO RX lifetime TX-notify flush semaphore pend progression"
+	default n
+	depends on HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE
+	help
+	  Temporary nRF54L15 HIL-only diagnostic. Observe entry and return of the
+	  exact matching z_pend_curr() wait queue selected after the scoped flusher
+	  semaphore path. This does not establish a completed pend, work owner,
+	  blocking cause, deadlock, or a production repair. Normal builds keep this
+	  diagnostic disabled.
+
+config HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE_PEND_SCHED_GIVE
+	bool "ISO RX lifetime TX-notify flush semaphore pend scheduler and give progression"
+	default n
+	depends on HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE_PEND
+	depends on TRACING_USER
+	depends on TRACING_THREAD
+	help
+	  Temporary nRF54L15 HIL-only diagnostic. Observe only the H38-scoped user
+	  scheduler-pend hook after a thread is marked pending, plus entry to the
+	  exact captured flusher semaphore's generated give implementation. This
+	  explicitly excludes wait-queue insertion, work ownership or execution,
+	  wake completion, root cause, and repair claims. Normal builds keep this
+	  diagnostic disabled.
 
 # ── FLPR ASRC offload ──────────────────────────────────────────────
 

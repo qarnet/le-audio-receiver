@@ -11,14 +11,30 @@
  *   0x20030000..0x20040000  FLPR execution SRAM  ( 64 KB)
  *
  * The nordic-flpr snippet defines cpuflpr_sram_code_data at 0x20028000
- * with 96 KB. We /delete-property/ its reg and redefine, moving the node
- * contents to 0x20030000 with 64 KB so the shared IPC region is clear.
+ * with 96 KB. Delete and redeclare it at 0x20030000 with 64 KB so the
+ * shared IPC region is clear.
  */
 
-&cpuflpr_sram_code_data {
-	/delete-property/ reg;
-	reg = <0x20030000 DT_SIZE_K(64)>;
-	ranges = <0x0 0x20030000 0x10000>;
+/delete-node/ &cpuflpr_sram_code_data;
+
+/ {
+	reserved-memory {
+		cpuflpr_code_partition: image@165000 {
+			reg = <0x165000 DT_SIZE_K(96)>;
+		};
+	};
+
+	soc {
+		/delete-node/ reserved-memory;
+
+		cpuflpr_sram_code_data: memory@20030000 {
+			compatible = "mmio-sram";
+			reg = <0x20030000 DT_SIZE_K(64)>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges = <0x0 0x20030000 0x10000>;
+		};
+	};
 };
 
 /* Ensure cpuapp_sram stays at 160 KB (ending before shared IPC). */

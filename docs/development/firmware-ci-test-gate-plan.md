@@ -38,10 +38,18 @@ non-fast-forward, no bypass actors,
 complete; protected-main runs and release creation remain separate
 operations.
 
+## Release-line narrowing update (2026-09-12)
+
+The PR 11 hosted two-target firmware run is historical evidence. The current
+firmware workflow builds, contract-checks, packages, uploads, and prepares
+draft releases for nRF54L15 only. Local `scripts/check-build-contract.py`
+keeps optional `--nrf5340` validation for legacy local use pending separate
+cleanup; it is not part of current GitHub workflow execution.
+
 ## Goal
 
 Make every pull request and every protected `main` merge pass the repository's
-canonical software gate before either production receiver firmware build can
+canonical software gate before the active nRF54L15 release firmware build can
 start. A failed test gate must prevent firmware packaging, artifact upload, and
 draft-release creation.
 
@@ -50,12 +58,12 @@ draft-release creation.
 - `.github/workflows/firmware-build.yml` has one `firmware` job followed by a
   trusted-`main` `release` job. The firmware job initializes an exact NCS v3.3.0
   west workspace in Nordic's digest-pinned toolchain container, then builds
-  nRF5340 and nRF54L15.
+  nRF54L15 only.
 - `scripts/test-all.sh` is the canonical software gate and discovers suites
   only through `scripts/test_inventory.py`.
-- Current inventory is 35 Twister C suites, 5 exec-only C suites, and 22 Python
+- Current inventory is 40 Twister C suites, 5 exec-only C suites, and 24 Python
   suites. Coverage baseline enforcement, matrix validation, and BabbleSim
-  Stage 1 make the public gate total 65 children.
+  Stage 1 make the public gate total 72 children.
 - `scripts/test-coverage.sh` requires a clean exact commit in baseline mode,
   `gcovr 8.4`, gcov 14.3.0, west, Python, and `ZEPHYR_BASE`.
 - `scripts/bsim-stage1-run.sh` builds the repository receiver/client and runs
@@ -64,9 +72,10 @@ draft-release creation.
 - NCS v3.3.0's west manifest imports pinned BabbleSim projects through
   `tools/bsim`; `make -C tools/bsim everything` builds the required simulator
   components.
-- `scripts/check-build-contract.py` against real nRF5340/nRF54L15 build trees is
-  a post-build contract, not a pre-build test. Its own 52-test Python suite is
-  already one of the 22 canonical Python children.
+- `scripts/check-build-contract.py` against the real nRF54L15 build tree is a
+  post-build contract, not a pre-build test. Its optional `--nrf5340` local
+  legacy validation remains pending cleanup. Its own 56-test Python suite is
+  already one of the 24 canonical Python children.
 
 ## Scope
 
@@ -123,8 +132,8 @@ tests -> firmware -> release (trusted main only)
 
 The `tests` job runs on the plain `ubuntu-22.04` host runner (no Nordic
 container): the repository's locked Nix dev shell provides the exact toolchain
-tools (gcovr 8.4, gcov 14.3.0, nrfutil core, west), and `nrfutil sdk-manager`
-owns the exact NCS v3.3.0 installation. It does not share mutable build state
+tools (gcovr 8.4, gcov 14.3.0, nrfutil, west), and `nrfutil sdk-manager` owns
+the exact NCS v3.3.0 installation. It does not share mutable build state
 with `firmware` and does not checkout sdk-nrf separately:
 
 - checkout application at the repository root, `fetch-depth: 0`, credentials
@@ -141,12 +150,11 @@ with `firmware` and does not checkout sdk-nrf separately:
   `flake.lock` with a bounded `gc-max-store-size` (6G, grounded in the measured
   dev-shell closure), and cache `/home/runner/ncs` with the pinned
   `actions/cache` keyed `ncs-v3.3.0-911f4c5c26` and `id: cache-ncs`;
-- provision `nrfutil sdk-manager` 1.16.1 only: download the exact versioned
-  URL with `curl --fail-with-body --show-error --location` and bounded
-  retries/timeouts, verify the exact SHA-256 before extraction, extract with
-  `--strip-components=2` to `$RUNNER_TEMP/nrfutil/bin`, verify the executable,
-  and append that bin to `$GITHUB_PATH`. nrfutil core is never downloaded or
-  replaced; the locked Nix shell provides it;
+- consume `nix-nrf-dev`'s default `nrfutil` supply: Nixpkgs core plus exact
+  `nrfutil sdk-manager` 1.16.1 from a versioned Nordic archive fixed by its
+  Nix SHA-256. The receiver does not override `mkNrfShell`'s package; before
+  any NCS installation, CI checks `nrfutil sdk-manager --version` for 1.16.1
+  and performs no separate nrfutil provisioning or PATH injection;
 - install the SDK through the locked shell, setting the install directory on
   every run and branching on the NCS cache step's exact `cache-hit` output
   (`CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}`), never on directory
@@ -217,8 +225,8 @@ Extend `scripts/test_firmware_build_ci.py` to prove public workflow behavior:
   pinned runner/shell and read-only permissions;
 - checkout at the repository root only, with the exact Nix installer, Nix
   store cache, and NCS cache pins;
-- exact sdk-manager 1.16.1 provisioning (versioned URL, SHA-256 before
-  extraction, no sudo, no pipe-to-shell) and locked-shell NCS install;
+- Nix-managed sdk-manager 1.16.1 supply (versioned URL, fixed SHA-256, no CI
+  PATH injection) and locked-shell NCS install;
 - exact gcovr/gcov/ZEPHYR_BASE/sdk-HEAD/VERSION/toolchain-ID verification and
   fail-fast BabbleSim build exist;
 - canonical invocation is `scripts/test-all.sh`, not copied suite lists;
@@ -289,3 +297,77 @@ baseline and BSim pins. Hosted PR acceptance is recorded:
 After merge, protected-main acceptance requires the same
 `tests -> firmware -> release` dependency chain. Hardware acceptance remains a
 separate FR4 operation on exact draft assets.
+
+## Parallelization amendment (2026-09-13)
+
+Status: ACCEPTED. Local implementation and hosted PR 12 acceptance are complete.
+
+Completed hosted run `34719725244` at `3b8954c` measured a 58m02s workflow
+critical path. Its monolithic `tests` job took 52m28s: normal unit children
+took about 16m38s, coverage plus matrix about 16m52s, and BabbleSim about
+11m40s. The 69 unit children, coverage, matrix, and BabbleSim remain the 72
+canonical gate children. This amendment changes worker scheduling only, with a
+target hosted critical path of about 28-30 minutes.
+
+The workflow now uses this logical DAG:
+
+```text
+test-unit --------------------> firmware -----------+
+    |                                               |
+    +--------------------------> tests aggregate ----+--> release (trusted main only)
+test-heavy (coverage) --------> tests aggregate
+test-heavy (bsim) ------------> tests aggregate
+```
+
+- `test-unit` runs Twister, exec-only, and Python inventory children through
+  `scripts/test-all.sh --phase unit`.
+- `test-heavy` has only `coverage` and `bsim` matrix phases, with
+  `fail-fast: false`. Coverage runs baseline enforcement then its matrix check.
+  BSim keeps its component build and all 26 simulation runs in one matrix child.
+- `tests` is a five-minute, always-run aggregate. It preserves required status
+  context `tests` and fails unless both worker results are successful.
+- `firmware` needs only `test-unit`; `release` needs both `tests` and
+  `firmware`, with existing trusted-main guard and write scope unchanged.
+
+Worker artifacts are phase-specific and always uploaded for seven days:
+`le-audio-test-unit-${{ github.sha }}`,
+`le-audio-test-coverage-${{ github.sha }}`, and
+`le-audio-test-bsim-${{ github.sha }}`. BSim scenario logs stay below its
+separate `scenarios/` directory, while its phase console log stays outside that
+directory. Production nRF54L15 firmware and host-i386 BSim receiver/client
+binaries remain separate artifacts; BSim never consumes production firmware.
+
+Hosted PR 12 acceptance is **ACCEPTED**. Local implementation acceptance passed
+the 69-child unit inventory, 35 workflow-contract tests, 40 coverage-runner
+boundary tests, `61 PASS / 0 FAIL` BSim parser suite, full `72 PASS / 0 FAIL /
+72 TOTAL` gate with population 37 and unchanged baseline/pins, and `git diff
+--check`. Hosted run `34725825883` accepted source HEAD
+`463fa6b57042e026985ffd0a25d1ba0687f651b7`; workflow checkout and artifact
+names use pull-request merge SHA `11c4c6fda43e93d7214f4d463b25b50874342d02`.
+
+- `test-unit` job `103639640307` SUCCESS (21m34s): `69 PASS / 0 FAIL / 69
+  TOTAL`.
+- `test-heavy (coverage)` job `103639640227` SUCCESS (21m40s): `2 PASS / 0
+  FAIL / 2 TOTAL`, 45 traces merged, population 37 (4962/5420 lines,
+  2153/2960 branches, 380/380 functions), baseline enforcement PASS, and
+  matrix checker 0 errors / 0 notes.
+- `test-heavy (bsim)` job `103639640334` SUCCESS (16m59s): `1 PASS / 0 FAIL /
+  1 TOTAL`, with all 17 scenarios and 26 runs strict-checked against unchanged
+  pinned hashes. The three worker summaries combine to `72 PASS / 0 FAIL / 72
+  TOTAL`.
+- Aggregate required context `tests`, job `103642036590`, SUCCESS (9s) after
+  all workers. Required context `firmware`, job `103642024613`, SUCCESS
+  (4m53s), started after `test-unit` and retained build-contract, version,
+  package, verification, and upload steps. `release`, job `103642582348`, was
+  SKIPPED on pull_request.
+
+The run lasted 26m31s (`2026-09-12T23:35:44Z` through
+`2026-09-13T00:02:15Z`) versus 58m02s for monolithic comparison run
+`34719725244`, a 31m31s reduction (about 54 percent). Accepted artifacts are
+unit ID `10307838803` (`sha256:14b08bd07c4bab18cd9272777c23f338186e15d76dddd60defa1963f3df3e05f`),
+coverage ID `10307798767` (`sha256:e676b744c9638e10893255c9ad5be3821a5e18c0116e33f2696e903dd7164875`),
+BSim ID `10307039786` (`sha256:0e5a51d01c1fb74fdbfe709b5bbed7175245c2096acdcaade6827dcc1de2ab41`),
+and firmware ID `10308350180` (`sha256:7c3b313916dc32b2813f0f1825be42ed9c461ab3b8808279a27b8b5da544c6bf`).
+Test artifacts retain seven days; firmware retains 14 days. PR 12 was CLEAN at
+`463fa6b`; active ruleset `20658259` remains unchanged, requiring exact
+contexts `tests` and `firmware` without a strict latest-main requirement.

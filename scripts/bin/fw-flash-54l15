@@ -15,7 +15,8 @@
 # address).  There is no merged.hex path — the partition-manager fallback
 # was removed; require both images.
 #
-# The probe is auto-detected by target identity (nrf-probes --find nrf54l).
+# The probe is auto-detected by target identity (nrf-probes --find nrf54l)
+# unless FW_NRF54L15_PROBE_SERIAL supplies a runner-resolved exact serial.
 #
 # Build dir:  build/nrf54l15
 
@@ -33,6 +34,47 @@ BUILD_DIR="$(_fw_repo_dir)/build/nrf54l15"
 CPUAPP_HEX="$BUILD_DIR/le-audio-receiver/zephyr/zephyr.hex"
 FLPR_HEX="$BUILD_DIR/flpr/zephyr/zephyr.hex"
 OPENOCD_CFG="$ZEPHYR_BASE/boards/seeed/xiao_nrf54l15/support/openocd.cfg"
+
+validate_hex_override() {
+  local name="$1"
+  local path="$2"
+  local repo
+  repo="$(realpath "$(_fw_repo_dir)")"
+
+  if [ -z "$path" ]; then
+    printf 'Invalid %s: empty path\n' "$name" >&2
+    exit 1
+  fi
+  if [[ "$path" != /* ]]; then
+    printf 'Invalid %s: path must be absolute\n' "$name" >&2
+    exit 1
+  fi
+  if [ -L "$path" ] || [ ! -f "$path" ] || [ ! -s "$path" ]; then
+    printf 'Invalid %s: must be a non-symlink nonempty regular file\n' "$name" >&2
+    exit 1
+  fi
+  if [[ "$path" != *.hex ]]; then
+    printf 'Invalid %s: path must end in .hex\n' "$name" >&2
+    exit 1
+  fi
+  path="$(realpath "$path")"
+  if [[ "$path" == "$repo" || "$path" == "$repo"/* ]]; then
+    printf 'Invalid %s: path must be outside repository\n' "$name" >&2
+    exit 1
+  fi
+  printf '%s\n' "$path"
+}
+
+CPUAPP_OVERRIDE="${FW_NRF54L15_CPUAPP_HEX:-}"
+FLPR_OVERRIDE="${FW_NRF54L15_FLPR_HEX:-}"
+if [ -n "$CPUAPP_OVERRIDE" ] || [ -n "$FLPR_OVERRIDE" ]; then
+  if [ -z "$CPUAPP_OVERRIDE" ] || [ -z "$FLPR_OVERRIDE" ]; then
+    printf 'FW_NRF54L15_CPUAPP_HEX and FW_NRF54L15_FLPR_HEX must be supplied together\n' >&2
+    exit 1
+  fi
+  CPUAPP_HEX="$(validate_hex_override FW_NRF54L15_CPUAPP_HEX "$CPUAPP_OVERRIDE")"
+  FLPR_HEX="$(validate_hex_override FW_NRF54L15_FLPR_HEX "$FLPR_OVERRIDE")"
+fi
 
 # Flashing requires both cpuapp and flpr images. Fail if either missing.
 # Each hex is loaded at the address encoded in the file.
@@ -53,8 +95,18 @@ HEX_ARGS=(
 )
 printf 'Loading cpuapp + flpr hex images\n'
 
-SERIAL="$(nrf-probes --find nrf54l)"
-printf 'Probe %s (auto-detected: target identifies as nRF54L15)\n' "$SERIAL"
+SERIAL="${FW_NRF54L15_PROBE_SERIAL:-}"
+if [ -n "$SERIAL" ]; then
+  if ! [[ "$SERIAL" =~ ^[[:alnum:]_.:-]+$ ]]; then
+    printf 'Invalid FW_NRF54L15_PROBE_SERIAL %q: must match ^[[:alnum:]_.:-]+$\n' \
+      "$SERIAL" >&2
+    exit 1
+  fi
+  printf 'Probe %s (runner-resolved nRF54L15 identity)\n' "$SERIAL"
+else
+  SERIAL="$(nrf-probes --find nrf54l)"
+  printf 'Probe %s (auto-detected: target identifies as nRF54L15)\n' "$SERIAL"
+fi
 
 exec openocd \
   -c "adapter serial $SERIAL" \

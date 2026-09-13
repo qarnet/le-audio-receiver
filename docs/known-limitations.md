@@ -18,7 +18,10 @@ On the nRF54L15, the FLPR (secondary processor) ASRC offload contract takes
 **480 input frames** per call. Stream shapes that produce a different call
 size (specifically **360-frame (7.5 ms)** calls) fall back to the identical
 cpuapp ASRC implementation. This is a documented behavior, not a failure; the
-audio still plays, just without the FLPR offload for those streams.
+audio still plays, just without the FLPR offload for those streams. 7.5 ms
+transport is hardware-validated end to end (see the developer documentation
+on the System HIL track); the FLPR simply does not participate in the rate
+conversion for those streams.
 
 ## 3. Volume curve is linear
 

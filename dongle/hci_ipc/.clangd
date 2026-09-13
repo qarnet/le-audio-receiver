@@ -1,0 +1,7 @@
+---
+# cpunet images build with soft float ABI and no -mfpu flag; clangd's
+# cortex-m33 default enables FPU features, tripping the CMSIS
+# __FPU_PRESENT/#error guard (clangd-only artifact; the GCC build emits
+# no FPU instructions). Pin the FPU off for LSP parses.
+CompileFlags:
+  Add: [-mfpu=none]

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# Build the dedicated LE Audio source fixture (RH1B) for the nRF5340DK.
+#
+# Build dir:  build/hil-source
+# Result:     build/hil-source/merged.hex,
+#             build/hil-source/merged_CPUNET.hex,
+#             app + hci_ipc zephyr.elf/zephyr.hex
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/bin/fw-common.sh
+source "$SCRIPT_DIR/fw-common.sh"
+
+_fw_require_env
+
+cd "$(_fw_repo_dir)"
+
+BUILD_DIR="$(_fw_repo_dir)/build/hil-source"
+
+exec west build -b nrf5340dk/nrf5340/cpuapp --sysbuild --pristine \
+  -d "$BUILD_DIR" hil/source/app -- "$@"

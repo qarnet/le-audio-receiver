@@ -283,14 +283,14 @@ ZTEST(audio_i2s, test_closed_rejection_and_reconnect)
 	zassert_equal(mock_drift_update_calls, 0, "no drift while closed");
 	zassert_false(audio_i2s_test_is_started(), "still stopped");
 
-	/* Explicit stream open then a push performs a fresh eleven-block
+	/* Explicit stream open then a push performs a fresh fifteen-block
 	 * prefill and START without reconfigure. */
 	zassert_equal(audio_sink_stream_open(), 0, "stream open");
 	zassert_true(audio_i2s_test_is_accepting(), "admission open");
 
 	fake_i2s_reset();
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0, "reconnect push");
-	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "fresh eleven-block prefill");
+	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "fresh fifteen-block prefill");
 	zassert_equal(fake_i2s_trigger_calls(), 1, "fresh START");
 	zassert_equal(fake_i2s_trigger_rec(0)->cmd, I2S_TRIGGER_START, "START");
 	zassert_true(audio_i2s_test_is_started(), "started again");
@@ -427,6 +427,7 @@ ZTEST(audio_i2s, test_close_is_nonblocking)
 	zassert_equal(audio_i2s_test_active_pushes(), 0, "drained");
 
 	/* Explicit open restores admission. */
+	fake_i2s_release(fake_i2s_queued_ptr(0));
 	zassert_equal(audio_sink_stream_open(), 0, "open after close");
 	zassert_true(audio_i2s_test_is_accepting(), "accepting again");
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0,
@@ -537,8 +538,8 @@ ZTEST(audio_i2s, test_admitted_push_uses_single_input_frames_snapshot)
 	zassert_equal(pc.ret, 0, "admitted push returns 0");
 
 	/* Every block of the admitted operation retained the 480-frame
-	 * shape: ten silence blocks + one 480-frame data block. */
-	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "eleven startup writes");
+	 * shape: fourteen silence blocks + one 480-frame data block. */
+	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "fifteen startup writes");
 	zassert_equal(fake_i2s_trigger_calls(), 1, "one START");
 	zassert_equal(fake_i2s_trigger_rec(0)->cmd, I2S_TRIGGER_START, "START");
 	for (int i = 0; i < STARTUP_SILENCE_BLOCKS; i++) {
@@ -560,7 +561,7 @@ ZTEST(audio_i2s, test_admitted_push_uses_single_input_frames_snapshot)
 					    test_input_480()),
 		     "exact 480-frame input bytes queued");
 #endif
-	zassert_equal(fake_i2s_queued_count(), STARTUP_TOTAL_BLOCKS, "eleven queued");
+	zassert_equal(fake_i2s_queued_count(), STARTUP_TOTAL_BLOCKS, "fifteen queued");
 	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - STARTUP_TOTAL_BLOCKS,
 		      "no overflow / leak");
 	zassert_true(audio_i2s_test_is_started(), "started");
@@ -588,7 +589,7 @@ ZTEST(audio_i2s, test_admitted_push_uses_single_input_frames_snapshot)
 					    test_input_360()),
 		     "exact 360-frame input bytes queued");
 #endif
-	zassert_equal(fake_i2s_queued_count(), STARTUP_TOTAL_BLOCKS + 1, "twelve queued");
+	zassert_equal(fake_i2s_queued_count(), STARTUP_TOTAL_BLOCKS + 1, "sixteen queued");
 	zassert_equal(test_slab_free(), TEST_SLAB_BLOCKS - (STARTUP_TOTAL_BLOCKS + 1),
 		      "slab consistent");
 	test_assert_no_duplicate_writes();

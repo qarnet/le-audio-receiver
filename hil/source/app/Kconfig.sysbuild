@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Sysbuild Kconfig for the dedicated LE Audio source fixture.
+#
+# The nRF5340DK net core runs the hci_ipc sample with the SoftDevice
+# Controller (SDC); the app core is the BAP unicast client host.  The netcore
+# board is selected only when the main image targets the nRF5340 cpuapp.
+
+source "share/sysbuild/Kconfig"
+
+config NET_CORE_BOARD
+	string
+	default "nrf5340dk/nrf5340/cpunet" if SOC_NRF5340_CPUAPP
+
+config NET_CORE_IMAGE_HCI_IPC
+	bool "HCI IPC image on network core"
+	default y
+	depends on NET_CORE_BOARD != ""

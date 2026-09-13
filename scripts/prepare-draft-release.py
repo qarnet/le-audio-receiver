@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Deterministic draft-release preparation and validation CLI (stdlib only).
 
-Validates a downloaded FR1 factory firmware artifact set (two target ZIPs
-plus a top-level SHA256SUMS) and writes deterministic draft-release
-metadata, exactly per ``docs/development/firmware-release-plan.md`` FR3.
+Validates a downloaded FR1 factory firmware artifact set (the nRF54L15
+target ZIP plus a top-level SHA256SUMS; the nRF5340 receiver target is
+eliminated from the release line, 2026-09-03 decision) and writes
+deterministic draft-release metadata, exactly per
+``docs/development/firmware-release-plan.md`` FR3.
 
 Public CLI (all arguments required):
 
@@ -29,15 +31,16 @@ Guarantees:
   FR3 values for this release track;
 - run ID and attempt are canonical positive decimal integers;
 - the artifact directory must be a real directory (not a symlink) holding
-  exactly the three expected regular non-symlink files and nothing else;
+  exactly the two expected regular non-symlink files and nothing else;
 - the top-level checksum file is ASCII/UTF-8 GNU two-space format, sorted,
-  one line per ZIP only, no duplicates, and both hashes match the files;
-- both ZIPs pass integrity checks, have no duplicate/directory/
+  exactly one line for the nRF54L15 ZIP, no duplicates, and the hash matches
+  the file;
+- the ZIP passes integrity checks, has no duplicate/directory/
   path-traversal members, and exactly the FR1 member order;
-- each ZIP's ``FLASHING.md`` is strict UTF-8;
+- the ZIP's ``FLASHING.md`` is strict UTF-8;
 - each internal SHA256SUMS is exact/sorted and hashes every member except
   itself;
-- each release-manifest.json matches the exact FR1 schema and reports the
+- the release-manifest.json matches the exact FR1 schema and reports the
   supplied version/commit/NCS plus the expected target and image records,
   and every image size/hash matches the packaged bytes;
 - no host paths, timestamps, runner paths, usernames, tokens, or mutable
@@ -88,14 +91,7 @@ _GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _POSITIVE_INT_RE = re.compile(r"^[1-9][0-9]*$")
 
-# Expected FR1 member order per target ZIP.
-MEMBERS_5340 = (
-    "FLASHING.md",
-    "merged.hex",
-    "merged_CPUNET.hex",
-    "release-manifest.json",
-    "SHA256SUMS",
-)
+# Expected FR1 member order for the active nRF54L15 target ZIP.
 MEMBERS_54L15 = (
     "FLASHING.md",
     "cpuapp.hex",
@@ -104,12 +100,8 @@ MEMBERS_54L15 = (
     "SHA256SUMS",
 )
 
-# Expected image records per target ZIP: (filename, role, original path,
-# flash order), sorted by flash order.
-IMAGES_5340 = (
-    ("merged.hex", "cpuapp", "nrf5340/merged.hex", 0),
-    ("merged_CPUNET.hex", "cpunet", "nrf5340/merged_CPUNET.hex", 1),
-)
+# Expected image records for the active nRF54L15 target ZIP: (filename, role,
+# original path, flash order), sorted by flash order.
 IMAGES_54L15 = (
     ("cpuapp.hex", "cpuapp", "nrf54l15/le-audio-receiver/zephyr/zephyr.hex", 0),
     ("flpr.hex", "flpr", "nrf54l15/flpr/zephyr/zephyr.hex", 1),
@@ -232,7 +224,7 @@ def _parse_sums(text, label):
 
 
 def _validate_artifact_dir(artifact_dir, version):
-    """Require a real directory holding exactly the three expected regular
+    """Require a real directory holding exactly the two expected regular
     non-symlink files and nothing else."""
     if os.path.islink(artifact_dir):
         raise ReleaseError("artifact directory is a symlink: %s" % artifact_dir)
@@ -247,7 +239,6 @@ def _validate_artifact_dir(artifact_dir, version):
 
     expected = {
         "SHA256SUMS",
-        _expected_zip_name("nrf5340-e83", version),
         _expected_zip_name("nrf54l15-xiao", version),
     }
     try:
@@ -274,13 +265,12 @@ def _validate_artifact_dir(artifact_dir, version):
 
 
 def _validate_top_checksum(artifact_dir, version):
-    """Validate the top-level SHA256SUMS: exact format, sorted, one line per
-    ZIP only, no duplicates, and both hashes match the files."""
+    """Validate the top-level SHA256SUMS: exact format, sorted, exactly one
+    nRF54L15 ZIP line, no duplicates, and the hash matches the file."""
     path = os.path.join(artifact_dir, "SHA256SUMS")
     text = _read_text_file(path, "top-level SHA256SUMS")
     parsed = _parse_sums(text, "top-level SHA256SUMS")
     expected_names = [
-        _expected_zip_name("nrf5340-e83", version),
         _expected_zip_name("nrf54l15-xiao", version),
     ]
     if sorted(parsed) != sorted(expected_names):
@@ -549,8 +539,8 @@ def _release_notes(version, commit, ncs, repository, run_id, zip_names):
     lines.append("- SHA256SUMS")
     lines.append("")
     lines.append(
-        "The two target ZIPs form one release tuple: companion images must "
-        "be flashed together from the same version and must never be mixed "
+        "The nRF54L15 target ZIP is a release tuple: its companion images must be "
+        "flashed together from the same version and must never be mixed "
         "across versions."
     )
     lines.append("")
@@ -621,23 +611,10 @@ def _run(args):
     _validate_artifact_dir(artifact_dir, version)
     _validate_top_checksum(artifact_dir, version)
 
-    zip_names = (
-        _expected_zip_name("nrf5340-e83", version),
-        _expected_zip_name("nrf54l15-xiao", version),
-    )
+    zip_names = (_expected_zip_name("nrf54l15-xiao", version),)
     mappings = {
         zip_names[0]: _validate_zip(
             os.path.join(artifact_dir, zip_names[0]),
-            version,
-            commit,
-            ncs,
-            "nrf5340-e83",
-            "ebyte_e83_nrf5340/nrf5340/cpuapp",
-            MEMBERS_5340,
-            IMAGES_5340,
-        ),
-        zip_names[1]: _validate_zip(
-            os.path.join(artifact_dir, zip_names[1]),
             version,
             commit,
             ncs,

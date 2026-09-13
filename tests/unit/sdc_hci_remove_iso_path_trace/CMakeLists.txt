@@ -1,0 +1,30 @@
+cmake_minimum_required(VERSION 3.20.0)
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+project(test_sdc_hci_remove_iso_path_trace)
+
+target_compile_definitions(app PRIVATE
+  SDC_HCI_REMOVE_ISO_PATH_TRACE_TEST=1
+  SDC_HCI_REMOVE_ISO_PATH_TRACE_TEST_SCHEDULER_UNLOCK=1
+  SDC_HCI_REMOVE_ISO_PATH_TRACE_TEST_RECEIVE_DISPOSITION=1
+  SDC_HCI_REMOVE_ISO_PATH_TRACE_TEST_ISO_RX_LIFETIME=1
+  SDC_HCI_REMOVE_ISO_PATH_TRACE_TEST_ISO_RX_LIFETIME_DISPOSITION=1
+  SDC_HCI_REMOVE_ISO_PATH_TRACE_TEST_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH=1
+  SDC_HCI_REMOVE_ISO_PATH_TRACE_TEST_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE=1
+  SDC_HCI_REMOVE_ISO_PATH_TRACE_TEST_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE_PEND=1
+  SDC_HCI_REMOVE_ISO_PATH_TRACE_TEST_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE_PEND_SCHED_GIVE=1
+)
+
+target_sources(app PRIVATE
+  src/test_sdc_hci_remove_iso_path_trace.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../src/sdc_hci_remove_iso_path_trace.c
+)
+
+target_include_directories(app PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../../src
+  ${ZEPHYR_NRFXLIB_MODULE_DIR}/softdevice_controller/include
+  ${ZEPHYR_BASE}/../modules/hal/nordic/nrfx
+  ${ZEPHYR_BASE}/modules/hal_nordic/nrfx
+  ${ZEPHYR_BASE}/../modules/hal/nordic/nrfx/bsp/stable
+  ${ZEPHYR_BASE}/../modules/hal/nordic/nrfx/bsp/stable/templates
+)

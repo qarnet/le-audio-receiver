@@ -7,7 +7,7 @@
  * See audio_stream_session.h for the contract.  This module is the
  * exclusive owner of the app audio receive path extracted from bt_bap.c:
  * validated codec shape, decoder contexts, per-CIS sequence trackers, the
- * shared Mode A assembler, receive counters, presentation delay, and the
+ * shared Mode A assembler, receive-status counters, presentation delay, and the
  * decode/conceal/volume/push mechanics.  It never touches Bluetooth stack
  * objects (struct bt_bap_stream / conn / ep / codec_cfg / qos / iso).
  *
@@ -63,7 +63,7 @@ struct audio_stream_slot {
 	bool configured;
 	struct audio_stream_codec_shape shape;
 	uint32_t pd_us;
-	size_t recv_cnt;
+	struct audio_stream_rx_stats rx_stats;
 	struct audio_decode_ctx decode;
 
 	/* Per-CIS HCI packet-sequence tracker (audio_iso_seq.c): detects
@@ -109,8 +109,9 @@ struct audio_stream_session_data {
 	size_t in_flight;
 };
 
-/* The mutex guards only admission/generation/in-flight; never decode or
- * sink work.  Thread-context only (BT RX WQ + shell), never ISR. */
+/* The mutex serializes session admission/lifetime/configuration and per-slot
+ * receive-status state; it never spans decode, sink, logging, or Bluetooth
+ * work.  Thread-context only (BT RX WQ + shell), never ISR. */
 static K_MUTEX_DEFINE(session_mutex);
 static K_CONDVAR_DEFINE(session_drained);
 static struct audio_stream_session_data s;
@@ -160,7 +161,7 @@ int audio_stream_session_config(size_t idx, const struct audio_stream_codec_shap
 	sl->configured = true;
 	sl->shape = *shape;
 	sl->pd_us = 0U;
-	sl->recv_cnt = 0U;
+	memset(&sl->rx_stats, 0, sizeof(sl->rx_stats));
 	audio_decode_reset(&sl->decode);
 	audio_iso_seq_reset(&sl->seq);
 	audio_iso_cadence_reset(&sl->cadence);
@@ -282,7 +283,7 @@ void audio_stream_session_release(size_t idx)
 	audio_iso_seq_reset(&sl->seq);
 	audio_iso_cadence_reset(&sl->cadence);
 #endif
-	sl->recv_cnt = 0U;
+	memset(&sl->rx_stats, 0, sizeof(sl->rx_stats));
 	sl->pd_us = 0U;
 	sl->configured = false;
 	memset(&sl->shape, 0, sizeof(sl->shape));
@@ -307,7 +308,7 @@ void audio_stream_session_reset_all(void)
 		s.slots[i].configured = false;
 		memset(&s.slots[i].shape, 0, sizeof(s.slots[i].shape));
 		s.slots[i].pd_us = 0U;
-		s.slots[i].recv_cnt = 0U;
+		memset(&s.slots[i].rx_stats, 0, sizeof(s.slots[i].rx_stats));
 	}
 	s.configured_count = 0U;
 	session_start_clear_locked();
@@ -782,9 +783,10 @@ int audio_stream_session_recv(size_t idx, bool valid, bool has_ts, uint32_t ts, 
 	return 0;
 }
 
-/* ── valid-recv counting / accessors ─────────────────────────────── */
+/* ── receive-status accounting / accessors ───────────────────────── */
 
-size_t audio_stream_session_recv_valid_count(size_t idx)
+size_t audio_stream_session_rx_status_record(size_t idx, enum audio_stream_rx_status status,
+					     bool has_ts)
 {
 	k_mutex_lock(&session_mutex, K_FOREVER);
 	struct audio_stream_slot *sl = slot_at(idx);
@@ -793,11 +795,44 @@ size_t audio_stream_session_recv_valid_count(size_t idx)
 		k_mutex_unlock(&session_mutex);
 		return 0U;
 	}
-	sl->recv_cnt++;
-	const size_t cnt = sl->recv_cnt;
+
+	switch (status) {
+	case AUDIO_STREAM_RX_STATUS_VALID:
+		sl->rx_stats.valid++;
+		break;
+	case AUDIO_STREAM_RX_STATUS_ERROR:
+		sl->rx_stats.error++;
+		break;
+	case AUDIO_STREAM_RX_STATUS_LOST:
+		sl->rx_stats.lost++;
+		break;
+	case AUDIO_STREAM_RX_STATUS_UNKNOWN:
+	default:
+		sl->rx_stats.unknown++;
+		break;
+	}
+
+	if (!has_ts) {
+		sl->rx_stats.no_ts++;
+	}
+	const size_t cnt = sl->rx_stats.valid;
 
 	k_mutex_unlock(&session_mutex);
 	return cnt;
+}
+
+struct audio_stream_rx_stats audio_stream_session_rx_stats_get(size_t idx)
+{
+	struct audio_stream_rx_stats stats = {0};
+
+	k_mutex_lock(&session_mutex, K_FOREVER);
+	struct audio_stream_slot *sl = slot_at(idx);
+
+	if (sl != NULL) {
+		stats = sl->rx_stats;
+	}
+	k_mutex_unlock(&session_mutex);
+	return stats;
 }
 
 void audio_stream_session_recv_reset(size_t idx)
@@ -806,7 +841,7 @@ void audio_stream_session_recv_reset(size_t idx)
 	struct audio_stream_slot *sl = slot_at(idx);
 
 	if (sl != NULL) {
-		sl->recv_cnt = 0U;
+		memset(&sl->rx_stats, 0, sizeof(sl->rx_stats));
 	}
 	k_mutex_unlock(&session_mutex);
 }
@@ -872,7 +907,7 @@ size_t audio_stream_session_recv_count(size_t idx)
 {
 	k_mutex_lock(&session_mutex, K_FOREVER);
 	struct audio_stream_slot *sl = slot_at(idx);
-	const size_t cnt = (sl != NULL) ? sl->recv_cnt : 0U;
+	const size_t cnt = (sl != NULL) ? sl->rx_stats.valid : 0U;
 
 	k_mutex_unlock(&session_mutex);
 	return cnt;

@@ -10,25 +10,24 @@
  */
 
 / {
-		soc {
-		reserved-memory {
-			#address-cells = <1>;
-			#size-cells = <1>;
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
 
-			sram_tx: memory@20028000 {
-				reg = <0x20028000 0x2000>;
-			};
+		sram_tx: memory@20028000 {
+			reg = <0x20028000 0x2000>;
+		};
 
-			sram_rx: memory@2002A000 {
-				reg = <0x2002A000 0x2000>;
-			};
+		sram_rx: memory@2002A000 {
+			reg = <0x2002A000 0x2000>;
+		};
 
-			/* PCM rings: 16 KiB at 0x2002C000.
-			 * Mirrors cpuapp overlay.
-			 */
-			pcm_ring: memory@2002C000 {
-				reg = <0x2002C000 0x4000>;
-			};
+		/* PCM rings: 16 KiB at 0x2002C000.
+		 * Mirrors cpuapp overlay.
+		 */
+		pcm_ring: memory@2002C000 {
+			reg = <0x2002C000 0x4000>;
 		};
 	};
 
@@ -53,12 +52,24 @@
 	status = "okay";
 };
 
+&cpuflpr_rram {
+	ranges;
+};
+
 /*
  * Override FLPR SRAM to 0x20030000 with 64 KB (was 96 KB at 0x20028000
  * in stock board DTS). The 32 KB at 0x20028000 is now shared IPC memory.
  * Must stay in sync with cpuapp VPR memory overlay's cpuflpr_sram_code_data.
  */
-&cpuflpr_sram {
-	reg = <0x20030000 DT_SIZE_K(64)>;
-	ranges = <0x0 0x20030000 0x10000>;
+/delete-node/ &cpuflpr_sram;
+
+/ {
+	cpuflpr_sram: memory@20030000 {
+		compatible = "mmio-sram";
+		reg = <0x20030000 DT_SIZE_K(64)>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges = <0x0 0x20030000 0x10000>;
+		status = "okay";
+	};
 };

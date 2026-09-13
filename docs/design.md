@@ -385,7 +385,8 @@ the nRF54L15 target building.
 ## Phase 0 — Tooling & hygiene
 
 - Port the serial-mcp flake approach (table in Part I): dynamic
-  `nrfutil sdk-manager toolchain env` shellHook, `nrfutil-core` derivation,
+  `nrfutil sdk-manager toolchain env` shellHook, locked `nix-nrf-dev`
+  `nrfutil` package,
   `ZEPHYR_BASE` fallback derivation, `flake-utils`, helper scripts
   (`fw-build-5340`, `fw-build-54l15`, `fw-flash`, …), compile-DB export
   wired to `.clangd`. Keep `openocd-master`.

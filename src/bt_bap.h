@@ -6,6 +6,9 @@
 #ifndef BT_BAP_H
 #define BT_BAP_H
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "pairing_mode.h" /* enum pairing_access_mode (P4 public surface) */
 
 /**
@@ -62,6 +65,49 @@ int bt_bap_pairing_reset(void);
  * gate-close observer event fires exactly once (first open→closed).
  */
 void bt_bap_audio_path_stop(void);
+
+struct bt_bap_iso_link_quality {
+	size_t slot;
+	uint16_t handle;
+	uint32_t tx_unacked_packets;
+	uint32_t tx_flushed_packets;
+	uint32_t tx_last_subevent_packets;
+	uint32_t retransmitted_packets;
+	uint32_t crc_error_packets;
+	uint32_t rx_unreceived_packets;
+	uint32_t duplicate_packets;
+	uint16_t iso_interval_1250us;
+	uint8_t nse;
+	uint32_t cig_sync_us;
+	uint32_t cis_sync_us;
+	uint16_t c_max_pdu;
+	uint8_t c_phy;
+	uint8_t c_bn;
+	uint32_t c_flush_1250us;
+};
+
+/**
+ * Read ISO link-quality counters and selected C-to-P CIS-layout fields for
+ * active sink CISes.
+ *
+ * Thread context only. Do not call from ISO RX callback, ISR, or with a
+ * lifecycle lock held.
+ *
+ * Caller must pass non-NULL snapshots, non-NULL count, and capacity > 0.
+ * On entry, *count is initialized to 0 and snapshots are only valid on
+ * success.
+ *
+ * Returned snapshots are ordered by stable sink slot and include only active CISes.
+ * Selected layout fields are copied from bt_iso_chan_get_info(); link-quality
+ * counters are read from the controller.
+ *
+ * @retval 0       success
+ * @retval -ENOTCONN no active CIS present
+ * @retval -ENOTSUP nRF5340/unsupported implementation
+ * @retval <0      exact errno for endpoint/handle/HCI/malformed-response/capacity failures
+ */
+int bt_bap_iso_link_quality_get_active(struct bt_bap_iso_link_quality *snapshots, size_t capacity,
+				       size_t *count);
 
 #if defined(CONFIG_USER_PAIRING_CONTROL)
 /*

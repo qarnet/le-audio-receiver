@@ -20,6 +20,7 @@ target_sources(app PRIVATE
   ${COMMON_DIR}/test_sink_startup.c
   ${COMMON_DIR}/test_sink_stop.c
   ${COMMON_DIR}/test_sink_concurrent.c
+  ${COMMON_DIR}/test_sink_queue_wait.c
   ${COMMON_DIR}/test_support.c
   ${SRC_DIR}/audio_i2s.c
   ${COMMON_DIR}/fake_i2s.c
@@ -41,6 +42,7 @@ target_compile_definitions(app PRIVATE
   CONFIG_AUDIO_CLOCK_ACTUATOR_NONE=1
   CONFIG_AUDIO_OFFLOAD_ASRC=1
   CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ=47619
+  CONFIG_AUDIO_I2S_WRITE_TIMEOUT_MS=20
   AUDIO_I2S_NATIVE_TEST=1
   AUDIO_I2S_TEST_MARKER_ASRC=1
 )

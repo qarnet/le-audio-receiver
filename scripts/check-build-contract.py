@@ -14,6 +14,10 @@ fixed order; every failed assertion is listed in one run.  Exit status:
 
 Invocation:
   python3 scripts/check-build-contract.py \
+    --nrf54l15 build/nrf54l15
+
+Optional legacy local validation:
+  python3 scripts/check-build-contract.py \
     --nrf5340 build/nrf5340 \
     --nrf54l15 build/nrf54l15
 """
@@ -356,6 +360,36 @@ def node_by_label(labels, label):
     return labels.get(label)
 
 
+def is_root_child(node):
+    """True when node is a direct child of the resolved root node."""
+    return node is not None and node.parent is not None and node.parent.name == "/"
+
+
+def is_root_reserved_memory_child(node):
+    """True for a direct child of a valid root ``reserved-memory`` node."""
+    reserved = node.parent if node is not None else None
+    root = reserved.parent if reserved is not None else None
+    return (
+        reserved is not None
+        and reserved.name == "reserved-memory"
+        and root is not None
+        and root.name == "/"
+        and reserved.prop("#address-cells") == [[1]]
+        and reserved.prop("#size-cells") == [[1]]
+        and reserved.prop("ranges") == []
+    )
+
+
+def unit_address_matches_reg(node, reg):
+    """True when node unit address equals first address in its first reg."""
+    if node is None or reg is None or not node.unit_addr:
+        return False
+    try:
+        return int(node.unit_addr[1:], 16) == reg[0]
+    except ValueError:
+        return False
+
+
 def find_chosen(nodes):
     """The chosen node (directly at root, or under the '/' root node)."""
     for n in nodes:
@@ -551,6 +585,7 @@ def check_clock_caps(result, labels, label, tag, prefix):
 def check_memory_ranges(result, labels, tag, prefix):
     """Exact app-side ranges, contiguity, non-overlap, physical bounds."""
     ok_all = True
+    shared_labels = {"sram_rx", "sram_tx", "pcm_ring"}
     for label, want_addr, want_size in SRAM_CHAIN:
         node = node_by_label(labels, label)
         if node is None:
@@ -558,12 +593,21 @@ def check_memory_ranges(result, labels, tag, prefix):
             ok_all = False
             continue
         reg = node.reg()
-        if reg != (want_addr, want_size):
+        location_ok = label not in shared_labels or is_root_reserved_memory_child(node)
+        unit_ok = unit_address_matches_reg(node, reg)
+        if reg != (want_addr, want_size) or not location_ok or not unit_ok:
             result.add(
                 False,
                 tag,
-                "%s %s reg = %s, expected (%s, %s)"
-                % (prefix, label, reg, hex(want_addr), hex(want_size)),
+                "%s %s reg/unit/parent match expected memory layout" % (prefix, label),
+                "reg=%s unit=%r root_reserved=%s expected=(%s, %s)"
+                % (
+                    reg,
+                    node.unit_addr,
+                    location_ok,
+                    hex(want_addr),
+                    hex(want_size),
+                ),
             )
             ok_all = False
         else:
@@ -911,9 +955,12 @@ def run_nrf54_checks(
     check_memory_ranges(result, labels_app, "54l15-025", "app")
     part = node_by_label(labels_app, "cpuflpr_code_partition")
     result.add(
-        part is not None and part.reg() == (0x165000, 0x18000),
+        part is not None
+        and part.reg() == (0x165000, 0x18000)
+        and is_root_reserved_memory_child(part)
+        and unit_address_matches_reg(part, part.reg()),
         "54l15-026",
-        "app FLPR code partition reg = (0x165000, 0x18000)",
+        "app FLPR code partition is root reserved-memory child with reg = (0x165000, 0x18000)",
         "got %r" % ((part.reg() if part else None),),
     )
 
@@ -924,10 +971,13 @@ def run_nrf54_checks(
     got = flpr_sram.reg() if flpr_sram else None
     app_got = app_flpr_sram.reg() if app_flpr_sram else None
     result.add(
-        got == want,
+        got == want
+        and is_root_child(flpr_sram)
+        and unit_address_matches_reg(flpr_sram, got),
         "54l15-027",
-        "FLPR image cpuflpr_sram reg = (0x20030000, 0x10000)",
-        "got %r" % (got,),
+        "FLPR image cpuflpr_sram is root memory@20030000 with reg = (0x20030000, 0x10000)",
+        "got %r unit=%r root=%s"
+        % (got, flpr_sram.unit_addr if flpr_sram else None, is_root_child(flpr_sram)),
     )
     result.add(
         got == app_got,
@@ -1224,7 +1274,8 @@ def _read_required(path, what):
 
 
 def resolve_inputs(nrf5340_root, nrf54l15_root, bt_bap_path):
-    """Resolve and parse every required input; hard-fail on any problem.
+    """Resolve and parse required active inputs and optional legacy nRF5340
+    inputs; hard-fail on any supplied-input problem.
 
     Returns a dict of parsed inputs.  Raises ConfigError/DtsError/OSError
     for hard failures (missing/duplicate/unreadable/malformed).
@@ -1257,19 +1308,25 @@ def resolve_inputs(nrf5340_root, nrf54l15_root, bt_bap_path):
         nodes, labels = parse_dts(dts_text)
         return cfg, nodes, labels
 
-    app5340_name = default_image_name(nrf5340_root)
-    app54_name = default_image_name(nrf54l15_root)
-    app5340 = image(nrf5340_root, app5340_name)
-    net = image(nrf5340_root, "hci_ipc")
+    if nrf5340_root is not None:
+        app5340_name = default_image_name(nrf5340_root)
+        app54_name = default_image_name(nrf54l15_root)
+        app5340 = image(nrf5340_root, app5340_name)
+        net = image(nrf5340_root, "hci_ipc")
+        legacy = {
+            "app5340_cfg": app5340[0],
+            "app5340_dts": app5340[1],
+            "app5340_labels": app5340[2],
+            "net_cfg": net[0],
+            "net_dts": net[1],
+            "net_labels": net[2],
+        }
+    else:
+        app54_name = default_image_name(nrf54l15_root)
+        legacy = {}
     app54 = image(nrf54l15_root, app54_name)
     flpr = image(nrf54l15_root, "flpr")
-    return {
-        "app5340_cfg": app5340[0],
-        "app5340_dts": app5340[1],
-        "app5340_labels": app5340[2],
-        "net_cfg": net[0],
-        "net_dts": net[1],
-        "net_labels": net[2],
+    parsed = {
         "app54_cfg": app54[0],
         "app54_dts": app54[1],
         "app54_labels": app54[2],
@@ -1278,20 +1335,23 @@ def resolve_inputs(nrf5340_root, nrf54l15_root, bt_bap_path):
         "flpr_labels": flpr[2],
         "bt_bap_path": bt_bap_path,
     }
+    parsed.update(legacy)
+    return parsed
 
 
 def run_all(parsed):
     """Run every contract check; returns a ContractResult."""
     result = ContractResult()
-    run_nrf5340_checks(
-        parsed["app5340_cfg"],
-        parsed["app5340_dts"],
-        parsed["app5340_labels"],
-        parsed["net_cfg"],
-        parsed["net_dts"],
-        parsed["net_labels"],
-        result,
-    )
+    if "app5340_cfg" in parsed:
+        run_nrf5340_checks(
+            parsed["app5340_cfg"],
+            parsed["app5340_dts"],
+            parsed["app5340_labels"],
+            parsed["net_cfg"],
+            parsed["net_dts"],
+            parsed["net_labels"],
+            result,
+        )
     run_nrf54_checks(
         parsed["app54_cfg"],
         parsed["app54_dts"],
@@ -1321,9 +1381,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Resolved build-contract checker")
     parser.add_argument(
         "--nrf5340",
-        required=True,
         metavar="BUILD_ROOT",
-        help="sysbuild root of the nRF5340 build (build/nrf5340)",
+        help="optional legacy local nRF5340 sysbuild root (build/nrf5340)",
     )
     parser.add_argument(
         "--nrf54l15",

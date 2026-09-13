@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import resource
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -34,7 +35,6 @@ WORKFLOW_REF = REPOSITORY + "/.github/workflows/firmware-build.yml@refs/heads/ma
 RUN_ID = "123456"
 RUN_ATTEMPT = "1"
 
-ZIP5340 = "le-audio-receiver-v0.1.0-nrf5340-e83-factory.zip"
 ZIP54L15 = "le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip"
 TOP_SUMS = "SHA256SUMS"
 OUTPUT_DIR = "release-metadata"
@@ -77,18 +77,8 @@ def make_hex(records=None):
 
 
 def default_images():
-    """Four valid, mutually distinct image inputs for both targets."""
+    """Two valid, mutually distinct nRF54L15 image inputs."""
     return {
-        "nrf5340/merged.hex": make_hex(
-            [
-                hex_record(0, 0, b"\xaa\xbb"),
-                hex_record(0, 0x100, b"\x01\x02\x03\x04"),
-                eof_record(),
-            ]
-        ),
-        "nrf5340/merged_CPUNET.hex": make_hex(
-            [hex_record(0, 0, b"\xcc"), eof_record()]
-        ),
         "nrf54l15/le-audio-receiver/zephyr/zephyr.hex": make_hex(
             [hex_record(0, 0, b"\x10\x20\x30"), eof_record()]
         ),
@@ -350,7 +340,7 @@ class TestHappyPath(unittest.TestCase):
                 sorted(names),
                 "artifacts must be sorted by filename",
             )
-            self.assertEqual(names, ["SHA256SUMS", ZIP5340, ZIP54L15])
+            self.assertEqual(names, ["SHA256SUMS", ZIP54L15])
 
             with open(
                 os.path.join(output, "release-notes.md"), "r", encoding="utf-8"
@@ -364,7 +354,6 @@ class TestHappyPath(unittest.TestCase):
                 "https://github.com/qarnet/le-audio-receiver/actions/runs/123456",
                 notes,
             )
-            self.assertIn(ZIP5340, notes)
             self.assertIn(ZIP54L15, notes)
             self.assertIn("SHA256SUMS", notes)
             self.assertIn("companion", notes)
@@ -519,7 +508,7 @@ class TestArtifactDirectory(unittest.TestCase):
     fail."""
 
     def test_missing_entry_fails(self):
-        for name in (TOP_SUMS, ZIP5340, ZIP54L15):
+        for name in (TOP_SUMS, ZIP54L15):
             with self.subTest(missing=name):
                 with tempfile.TemporaryDirectory() as tmp:
                     dist = build_dist(tmp)
@@ -551,7 +540,7 @@ class TestArtifactDirectory(unittest.TestCase):
     def test_symlink_entry_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            target = os.path.join(dist, ZIP5340)
+            target = os.path.join(dist, TOP_SUMS)
             link = os.path.join(dist, ZIP54L15)
             os.unlink(link)
             os.symlink(target, link)
@@ -573,7 +562,7 @@ class TestArtifactDirectory(unittest.TestCase):
 
 
 class TestTopChecksum(unittest.TestCase):
-    """Test 5: malformed/unsorted/duplicate/wrong-name/wrong-digest top
+    """Test 5: malformed/duplicate/wrong-name/wrong-digest top
     checksum files fail."""
 
     def _write_top_sums(self, dist, text):
@@ -596,21 +585,10 @@ class TestTopChecksum(unittest.TestCase):
     def test_short_digest_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            self._write_top_sums(dist, "abcd  %s\n" % ZIP5340)
+            self._write_top_sums(dist, "abcd  %s\n" % ZIP54L15)
             res = run_prepare(tmp, dist)
             self.assertNotEqual(res.returncode, 0)
             self.assertTrue(res.stderr.startswith(ERROR_PREFIX), res.stderr)
-
-    def test_unsorted_fails(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            dist = build_dist(tmp)
-            lines = self._top_sums_text(dist).split("\n")[:-1]
-            self.assertEqual(len(lines), 2)
-            self._write_top_sums(dist, lines[1] + "\n" + lines[0] + "\n")
-            res = run_prepare(tmp, dist)
-            self.assertNotEqual(res.returncode, 0)
-            self.assertIn("sorted", res.stderr.lower())
-            self.assertFalse(os.path.exists(os.path.join(tmp, OUTPUT_DIR)))
 
     def test_duplicate_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -626,7 +604,7 @@ class TestTopChecksum(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
             lines = self._top_sums_text(dist).split("\n")[:-1]
-            self._write_top_sums(dist, lines[0] + "\nother.zip  deadbeef\n")
+            self._write_top_sums(dist, lines[0] + "\n" + ("0" * 64) + "  other.zip\n")
             res = run_prepare(tmp, dist)
             self.assertNotEqual(res.returncode, 0)
             self.assertFalse(os.path.exists(os.path.join(tmp, OUTPUT_DIR)))
@@ -635,7 +613,9 @@ class TestTopChecksum(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
             lines = self._top_sums_text(dist).split("\n")[:-1]
-            self._write_top_sums(dist, lines[0] + "\n../escape.zip  deadbeef\n")
+            self._write_top_sums(
+                dist, lines[0] + "\n" + ("0" * 64) + "  ../escape.zip\n"
+            )
             res = run_prepare(tmp, dist)
             self.assertNotEqual(res.returncode, 0)
             self.assertFalse(os.path.exists(os.path.join(tmp, OUTPUT_DIR)))
@@ -659,7 +639,7 @@ class TestZipIntegrity(unittest.TestCase):
     def test_corrupt_zip_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            corrupt_zip_bytes(os.path.join(dist, ZIP5340))
+            corrupt_zip_bytes(os.path.join(dist, ZIP54L15))
             rehash_top_sums(dist)
             res = run_prepare(tmp, dist)
             self.assertNotEqual(res.returncode, 0)
@@ -669,7 +649,7 @@ class TestZipIntegrity(unittest.TestCase):
     def test_duplicate_member_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            members = zip_members(os.path.join(dist, ZIP5340))
+            members = zip_members(os.path.join(dist, ZIP54L15))
             self.assertEqual(members[0][0], "FLASHING.md")
             dup = members + [members[0]]
             # The deliberate duplicate fixture write triggers zipfile's own
@@ -678,7 +658,7 @@ class TestZipIntegrity(unittest.TestCase):
             # duplicate member is the fixture for the validator rejection.
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
-                rewrite_zip(os.path.join(dist, ZIP5340), dup)
+                rewrite_zip(os.path.join(dist, ZIP54L15), dup)
             self.assertEqual(
                 len(caught), 1, "expected exactly one duplicate-name warning"
             )
@@ -705,9 +685,9 @@ class TestZipIntegrity(unittest.TestCase):
     def test_traversal_member_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            members = zip_members(os.path.join(dist, ZIP5340))
+            members = zip_members(os.path.join(dist, ZIP54L15))
             members.append(("../escape.txt", b"escape"))
-            rewrite_zip(os.path.join(dist, ZIP5340), members)
+            rewrite_zip(os.path.join(dist, ZIP54L15), members)
             rehash_top_sums(dist)
             res = run_prepare(tmp, dist)
             self.assertNotEqual(res.returncode, 0)
@@ -716,9 +696,9 @@ class TestZipIntegrity(unittest.TestCase):
     def test_absolute_member_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            members = zip_members(os.path.join(dist, ZIP5340))
+            members = zip_members(os.path.join(dist, ZIP54L15))
             members.append(("/abs.txt", b"abs"))
-            rewrite_zip(os.path.join(dist, ZIP5340), members)
+            rewrite_zip(os.path.join(dist, ZIP54L15), members)
             rehash_top_sums(dist)
             res = run_prepare(tmp, dist)
             self.assertNotEqual(res.returncode, 0)
@@ -727,9 +707,9 @@ class TestZipIntegrity(unittest.TestCase):
     def test_directory_member_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            members = zip_members(os.path.join(dist, ZIP5340))
+            members = zip_members(os.path.join(dist, ZIP54L15))
             members.append(("dir/", b""))
-            rewrite_zip(os.path.join(dist, ZIP5340), members)
+            rewrite_zip(os.path.join(dist, ZIP54L15), members)
             rehash_top_sums(dist)
             res = run_prepare(tmp, dist)
             self.assertNotEqual(res.returncode, 0)
@@ -739,10 +719,10 @@ class TestZipIntegrity(unittest.TestCase):
     def test_wrong_member_order_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            members = zip_members(os.path.join(dist, ZIP5340))
+            members = zip_members(os.path.join(dist, ZIP54L15))
             # Move FLASHING.md to the end; the FR1 order requires it first.
             reordered = members[1:] + [members[0]]
-            rewrite_zip(os.path.join(dist, ZIP5340), reordered)
+            rewrite_zip(os.path.join(dist, ZIP54L15), reordered)
             rehash_top_sums(dist)
             res = run_prepare(tmp, dist)
             self.assertNotEqual(res.returncode, 0)
@@ -757,7 +737,7 @@ class TestInternalSumsAndManifest(unittest.TestCase):
     def test_internal_sums_missing_member_line_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            path = os.path.join(dist, ZIP5340)
+            path = os.path.join(dist, ZIP54L15)
             members = zip_members(path)
             sums = members[-1][1].decode("ascii")
             lines = sums.split("\n")[:-1]
@@ -774,7 +754,7 @@ class TestInternalSumsAndManifest(unittest.TestCase):
     def test_internal_sums_wrong_digest_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            path = os.path.join(dist, ZIP5340)
+            path = os.path.join(dist, ZIP54L15)
             members = zip_members(path)
             sums = members[-1][1].decode("ascii")
             lines = sums.split("\n")[:-1]
@@ -793,7 +773,7 @@ class TestInternalSumsAndManifest(unittest.TestCase):
     def test_internal_sums_unsorted_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            path = os.path.join(dist, ZIP5340)
+            path = os.path.join(dist, ZIP54L15)
             members = zip_members(path)
             sums = members[-1][1].decode("ascii")
             lines = sums.split("\n")[:-1]
@@ -811,7 +791,7 @@ class TestInternalSumsAndManifest(unittest.TestCase):
     def test_internal_sums_hashes_itself_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            path = os.path.join(dist, ZIP5340)
+            path = os.path.join(dist, ZIP54L15)
             members = zip_members(path)
             sums = members[-1][1].decode("ascii")
             lines = sums.split("\n")[:-1]
@@ -831,9 +811,9 @@ class TestInternalSumsAndManifest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
             replace_member(
-                os.path.join(dist, ZIP5340), "release-manifest.json", b"{not json"
+                os.path.join(dist, ZIP54L15), "release-manifest.json", b"{not json"
             )
-            rehash_zip(os.path.join(dist, ZIP5340))
+            rehash_zip(os.path.join(dist, ZIP54L15))
             rehash_top_sums(dist)
             res = run_prepare(tmp, dist)
             self.assertNotEqual(res.returncode, 0)
@@ -846,7 +826,7 @@ class TestInternalSumsAndManifest(unittest.TestCase):
         is specifically the invalid note, not a checksum mismatch."""
         with tempfile.TemporaryDirectory() as tmp:
             dist = build_dist(tmp)
-            path = os.path.join(dist, ZIP5340)
+            path = os.path.join(dist, ZIP54L15)
             replace_member(path, "FLASHING.md", b"\xff\xfe\x00 not text\n")
             rehash_zip(path)
             rehash_top_sums(dist)
@@ -860,7 +840,7 @@ class TestInternalSumsAndManifest(unittest.TestCase):
 
     def _mutated_manifest_case(self, tmp, mutate, check):
         dist = build_dist(tmp)
-        path = os.path.join(dist, ZIP5340)
+        path = os.path.join(dist, ZIP54L15)
         manifest = get_manifest(path)
         mutate(manifest)
         put_manifest(path, manifest)
@@ -1065,7 +1045,9 @@ class TestProcessContract(unittest.TestCase):
             self.assertTrue(res.stderr.startswith(ERROR_PREFIX), res.stderr)
             self.assertNotIn("Traceback", res.stderr)
             # Corrupt artifact.
-            corrupt_zip_bytes(os.path.join(dist, ZIP5340))
+            shutil.rmtree(dist)
+            dist = build_dist(tmp)
+            corrupt_zip_bytes(os.path.join(dist, ZIP54L15))
             res = run_prepare(tmp, dist, output)
             self.assertNotEqual(res.returncode, 0)
             self.assertTrue(res.stderr.startswith(ERROR_PREFIX), res.stderr)

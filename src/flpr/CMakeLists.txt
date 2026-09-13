@@ -27,3 +27,12 @@ target_sources(app PRIVATE
 # (src/flpr/Kconfig; enabled in src/flpr/prj.conf for the current lab
 # build).  Config-off images contain no acceptance symbols.
 zephyr_sources_ifdef(CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS acceptance.c)
+
+# LSP compile-database link: expose the RISC-V image's compile_commands.json
+# at this app root (src/flpr/) for clangd closest-ancestor discovery, so the
+# FLPR firmware files parse with the rv32emc toolchain instead of inheriting
+# the repo-root ARM database.  Idempotent; re-created on reconfigure.
+file(CREATE_LINK
+     "${CMAKE_BINARY_DIR}/compile_commands.json"
+     "${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json"
+     SYMBOLIC)

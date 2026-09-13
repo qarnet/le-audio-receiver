@@ -447,15 +447,16 @@ into the fixed 481-frame (1924-byte) slab block.  No buffer write may exceed
 
 ### I2S-002 — Transactional startup pre-fill
 
-On first push, the sink queues ten distinct silence blocks (zero-filled,
+On first push, the sink queues fourteen distinct silence blocks (zero-filled,
 rate-converter-selected sizes), then the first audio data block, then issues
-`i2s_trigger(START)`.  No audio output before START.  The 11-block startup
-provides an 82.5 ms reservoir at 7.5 ms/frame (11 × 7.5 ms), covering short
-controller callback gaps (e.g. PipeWire suspend) without draining nrfx I2S
-into ERROR before ASCS Disable arrives.
+`i2s_trigger(START)`.  No audio output before START.  The 15-block startup
+provides a 112.5 ms reservoir at 7.5 ms/frame (15 × 7.5 ms) and about 150 ms
+at 10 ms/frame, covering short controller callback gaps (e.g. PipeWire
+suspend) without draining nrfx I2S into ERROR before ASCS Disable arrives.
 
 Startup is transactional.  For any startup allocation/write/START failure the
-sink returns the exact primary failure (`-ENOMEM` for slab exhaustion, the
+sink returns the exact primary failure (`-ENOMEM` for startup non-wait slab
+exhaustion, the
 driver errno for write/trigger failures, `-ENOSPC` when the rate converter
 reports an impossible silence count outside [1, 481]) and:
 
@@ -465,6 +466,11 @@ reports an impossible silence count outside [1, 481]) and:
 - leaves `started = false`, `configured = true`;
 - leaves the slab fully reclaimable after the DROP.
 
+All startup pre-fill slab allocations are nonblocking. Valid startup queues
+fifteen blocks into descriptor capacity guaranteed by the build assertion, so it
+does not hit descriptor-queue backpressure. The configured timeout remains
+available when any i2s_write() finds a full descriptor queue.
+
 ### I2S-003 — Distinct slab ownership
 
 Every `i2s_write` call owns its own distinct slab block.  The same `void *block`
@@ -473,6 +479,12 @@ same block to I2S causes DMA corruption on the free slab block.  A failed
 `i2s_write` never transfers ownership: the caller keeps (and frees) the block.
 A successful write transfers ownership to the driver; the driver releases the
 block back to the slab only on DMA completion or DROP/PREPARE purge.
+
+After DMA START, primary slab allocation uses the configured finite timeout
+only when it is greater than zero.  nRF54L15 returns `-EAGAIN` after its 20 ms
+bound if no DMA block is released; nRF5340 keeps no-wait allocation and returns
+`-ENOMEM`.  Allocation failure performs no I2S write and leaves the started,
+configured sink intact.
 
 ### I2S-004 — Drift controller once per block
 
@@ -492,6 +504,7 @@ margin against DMA starvation; it is counted via
 `audio_perf_repeat_fallback()` exactly once per attempted fallback, whether
 or not the separate block could be allocated/written.  The repeat block is
 always a separate allocation — never the just-written data block.
+Repeat-fallback allocation remains nonblocking.
 
 Slab allocation failure in the main push path is a different event: it logs
 `"I2S slab full"`, increments `i2s_underruns`, and returns the allocation error
@@ -502,8 +515,16 @@ Slab allocation failure in the main push path is a different event: it logs
 An `i2s_write` returning `-EIO` frees the caller block, records a stream reset
 counter, calls `i2s_trigger(PREPARE)` to return the peripheral to READY state,
 and marks the stream as not-started so the next push performs a fresh
-ten-silence pre-fill and re-triggers START.  A non-`-EIO` write error frees the
+fourteen-silence pre-fill and re-triggers START.  A non-`-EIO` write error frees the
 caller block and keeps the stream started.
+
+`CONFIG_AUDIO_I2S_WRITE_TIMEOUT_MS` bounds a full tx descriptor queue as
+seen by `i2s_write`, and primary slab allocation only after START.  The
+default and nRF5340 value is 0 ms, so both paths remain nonblocking.  nRF54L15
+uses a bounded 20 ms wait for both wait points, which covers one maximum
+~10.1 ms 481-frame output block plus scheduling margin while remaining safe
+for stream teardown.  Startup and repeat allocations stay no-wait.  The
+configured wait is `-EAGAIN` on timeout.
 
 ### I2S-007 — Stop order
 
@@ -826,9 +847,11 @@ APIs:
   truncation, and zero total frames prints `(0%)` without division.
 - `audio perf` prints the exact path labels, zero-count averages, integer
   one-decimal deadline percentage, and the queue fields consumed by
-  diagnostics.  With `CONFIG_AUDIO_PERF_MEASUREMENT` disabled the deadline
-  is unavailable and the percentage prints a truthful `0.0%` — never a
-  value computed against a fake deadline.
+  diagnostics, including maximum RX callback gap, maximum started-stream
+  I2S write completion gap, and maximum I2S write-call duration in microseconds.  With
+  `CONFIG_AUDIO_PERF_MEASUREMENT` disabled the deadline and timing telemetry
+  are unavailable and print zero-safe values, never values computed against
+  a fake deadline.
 - The commands are reachable under their documented names:
   `audio reset-stats`, `audio perf-reset`, `audio stop` (the previous
   `reset - stats` / `perf - reset` spaced syntax strings could not be
@@ -930,9 +953,11 @@ image loading.
 app DTS (cpuapp SRAM `0x20000000`+`0x28000`, RX `0x20028000`+`0x2000`,
 TX `0x2002A000`+`0x2000`, PCM ring `0x2002C000`+`0x4000`, FLPR execution
 SRAM `0x20030000`+`0x10000`, FLPR code partition `0x165000`+`0x18000`),
-that the SRAM intervals are contiguous in the designed order, non-
-overlapping, and within physical `0x20000000..0x20040000`, and cross-checks
-the FLPR image's resolved memory/chosen/code-partition values
+Shared RX/TX/PCM leaves are direct children of root `/reserved-memory`, and
+resolved memory-node unit addresses match the first address in each `reg`.
+The checker also asserts that SRAM intervals are contiguous in the designed
+order, non-overlapping, and within physical `0x20000000..0x20040000`, and
+cross-checks the FLPR image's resolved memory/chosen/code-partition values
 (`cpuflpr_sram`, chosen `zephyr,sram`/`zephyr,code-partition`,
 `CONFIG_FLASH_BASE_ADDRESS`/`CONFIG_FLASH_LOAD_SIZE`) against the
 app-side launcher ranges.

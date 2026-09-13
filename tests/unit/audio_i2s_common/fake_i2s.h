@@ -28,6 +28,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <zephyr/kernel.h>
 #include <zephyr/drivers/i2s.h>
 
 /** Bytes snapshotted per write record (enough to prove silence, audio,
@@ -38,6 +39,9 @@
 #define FAKE_I2S_MAX_WRITES   256
 #define FAKE_I2S_MAX_TRIGGERS 64
 #define FAKE_I2S_MAX_QUEUED   64
+
+/* Matches production CONFIG_I2S_NRFX_TX_BLOCK_COUNT=15. */
+#define FAKE_I2S_QUEUE_CAPACITY 15
 
 struct fake_i2s_write_rec {
 	void *ptr;
@@ -80,6 +84,15 @@ void fake_i2s_set_write_fail_errno(int err);
 
 /** Per-command trigger result; default 0 for every command. */
 void fake_i2s_set_trigger_ret(enum i2s_trigger_cmd cmd, int ret);
+
+/** Fill the simulated TX queue to its production capacity. */
+int fake_i2s_force_queue_full(void);
+
+/** Wait until a finite-timeout write is blocked by the full TX queue. */
+int fake_i2s_wait_until_queue_full_write(k_timeout_t timeout);
+
+/** Release one queued block and wake the blocked finite-timeout writer. */
+void fake_i2s_release_one_for_queue_wait(void);
 
 /* ── observation ─────────────────────────────────────────────────── */
 

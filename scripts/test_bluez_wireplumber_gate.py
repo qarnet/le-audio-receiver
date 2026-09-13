@@ -250,6 +250,35 @@ class TestReceiverIdentity(unittest.TestCase):
         )
         self.assertTrue(ok, "\n".join(result.evidence))
 
+    def test_poll_requests_wpctl_node_names(self):
+        # The profile-exposure poll must request node-name output
+        # (wpctl status -n): plain `wpctl status` renders friendly
+        # descriptions, so the address-bearing node name never appears
+        # there on the accepted host stack.  This regression asserts the
+        # exact argv; it fails if the gate still polls plain status.
+        dump = [_card(RECEIVER_ADDR), _sink(RECEIVER_ADDR)]
+        calls = []
+
+        def fake_run(args, timeout=10.0):
+            calls.append(args)
+            return SimpleNamespace(
+                stdout="Sinks:\n  * 51. bluez_output.%s.1\n" % RECEIVER_ADDR
+            )
+
+        gate = self._gate()
+        gate._receiver_addr = RECEIVER_ADDR
+        gate._get_pw_dump = lambda: dump
+        with (
+            mock.patch.object(_bg, "_run", side_effect=fake_run),
+            mock.patch.object(_bg.time, "sleep", lambda *a, **k: None),
+        ):
+            result = GateResult()
+            ok = gate.poll_pipewire_objects(result, timeout=0.05)
+        self.assertTrue(ok, "\n".join(result.evidence))
+        wpctl_calls = [c for c in calls if c and c[0] == "wpctl"]
+        self.assertTrue(wpctl_calls, "no wpctl invocation captured")
+        self.assertEqual(wpctl_calls[0], ["wpctl", "status", "-n"])
+
     def test_poll_unrelated_midi_node_fails(self):
         dump = [
             _card(OTHER_ADDR, "MIDI Keyboard"),

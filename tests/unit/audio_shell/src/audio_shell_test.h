@@ -20,5 +20,7 @@ int audio_shell_test_cmd_stop(const struct shell *sh, size_t argc, char **argv);
 int audio_shell_test_cmd_perf(const struct shell *sh, size_t argc, char **argv);
 int audio_shell_test_cmd_perf_reset(const struct shell *sh, size_t argc, char **argv);
 int audio_shell_test_cmd_bt_unpair(const struct shell *sh, size_t argc, char **argv);
+int audio_shell_test_cmd_bt_identity(const struct shell *sh, size_t argc, char **argv);
+int audio_shell_test_cmd_bt_bonds(const struct shell *sh, size_t argc, char **argv);
 
 #endif /* AUDIO_SHELL_TEST_H */

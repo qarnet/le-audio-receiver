@@ -26,10 +26,13 @@
 #include <string.h>
 
 #include <zephyr/autoconf.h>
+#include <zephyr/bluetooth/addr.h>
+#include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/kernel.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/shell/shell_dummy.h>
 #include <zephyr/sys/time_units.h>
+#include <zephyr/sys/util.h>
 #include <zephyr/ztest.h>
 
 #include "pairing_mode.h"
@@ -37,6 +40,7 @@
 /* AUDIO_SHELL_TEST seam wrapper exposed by src/bt_shell.c in test builds
  * only; declared here (the audio_shell suites share the same header). */
 int audio_shell_test_cmd_bt_unpair(const struct shell *sh, size_t argc, char **argv);
+int audio_shell_test_cmd_bt_identity(const struct shell *sh, size_t argc, char **argv);
 
 /* ── fake pairing_mode_request_reset_sync ────────────────────────── */
 
@@ -59,6 +63,70 @@ static void fake_reset_reset(void)
 	g_fake_calls = 0;
 	g_fake_result = 0;
 	g_fake_timeout = K_NO_WAIT;
+}
+
+/* ── fake bt_id_get (identity seam) ──────────────────────────────── */
+
+#define TEST_MAX_IDENTITIES 8
+
+static bt_addr_le_t g_fake_ids[TEST_MAX_IDENTITIES];
+static size_t g_fake_id_count;
+static size_t g_fake_bond_count;
+
+/* The production `bt identity` command body calls this; the tests script
+ * the identity table.  bt_addr_le_to_str() stays the real inline
+ * formatter from the public addr.h header, never mocked. */
+void bt_id_get(bt_addr_le_t *addrs, size_t *count)
+{
+	size_t n = MIN(*count, g_fake_id_count);
+
+	memcpy(addrs, g_fake_ids, n * sizeof(bt_addr_le_t));
+	*count = g_fake_id_count;
+}
+
+static void fake_ids_reset(void)
+{
+	memset(g_fake_ids, 0, sizeof(g_fake_ids));
+	g_fake_id_count = 0;
+}
+
+void bt_foreach_bond(uint8_t id, void (*func)(const struct bt_bond_info *info, void *user_data),
+		     void *user_data)
+{
+	struct bt_bond_info info = {0};
+	size_t i;
+
+	ARG_UNUSED(id);
+	for (i = 0U; i < g_fake_bond_count; i++) {
+		func(&info, user_data);
+	}
+}
+
+static void fake_bonds_set(size_t count)
+{
+	g_fake_bond_count = count;
+}
+
+static void fake_ids_set(const bt_addr_le_t *ids, size_t count)
+{
+	fake_ids_reset();
+	fake_bonds_set(0U);
+	g_fake_id_count = MIN(count, TEST_MAX_IDENTITIES);
+	memcpy(g_fake_ids, ids, g_fake_id_count * sizeof(bt_addr_le_t));
+}
+
+/* Canonical identity bytes that render as "DB:A6:0C:05:A2:AA": the shell
+ * prints val[5]..val[0], so the array holds the reversed byte order. */
+static void set_identity(bt_addr_le_t *id, uint8_t type, uint8_t b0, uint8_t b1, uint8_t b2,
+			 uint8_t b3, uint8_t b4, uint8_t b5)
+{
+	id->type = type;
+	id->a.val[0] = b0;
+	id->a.val[1] = b1;
+	id->a.val[2] = b2;
+	id->a.val[3] = b3;
+	id->a.val[4] = b4;
+	id->a.val[5] = b5;
 }
 
 /* ── dummy-backend shell harness (same pattern as audio_shell) ───── */
@@ -93,6 +161,22 @@ static void assert_output_contains(const char *out, const char *needle)
 /* ── suite ───────────────────────────────────────────────────────── */
 
 ZTEST_SUITE(bt_shell_pairing, NULL, NULL, NULL, NULL, NULL);
+
+/* Receiver cleanup boundary: exact persisted-bond count, read only. */
+ZTEST(bt_shell_pairing, test_bonds_reports_exact_count)
+{
+	fake_bonds_set(0U);
+	int rc = -1;
+	const char *out = run_cmd("bt bonds", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Bond count: 0");
+
+	fake_bonds_set(3U);
+	out = run_cmd("bt bonds", &rc);
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Bond count: 3");
+}
 
 /* Success: exact feature-on text, exact result, one call, and the
  * configured timeout argument reaching the controller. */
@@ -180,4 +264,112 @@ ZTEST(bt_shell_pairing, test_wrapper_seam_matches_dispatch)
 
 	zassert_equal(rc, 0);
 	zassert_equal(g_fake_calls, 1);
+}
+
+/* ── bt identity (feature-on build) ──────────────────────────────── */
+
+/* Success, public type: exact identity line, zero result, no pairing
+ * reset involved. */
+ZTEST(bt_shell_pairing, test_identity_success_public)
+{
+	fake_reset_reset();
+	fake_ids_reset();
+	bt_addr_le_t ids[1];
+
+	set_identity(&ids[0], BT_ADDR_LE_PUBLIC, 0xAA, 0xA2, 0x05, 0x0C, 0xA6, 0xDB);
+	fake_ids_set(ids, 1);
+
+	int rc = -1;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Identity: DB:A6:0C:05:A2:AA (public)");
+	zassert_equal(g_fake_calls, 0, "identity is read-only, no reset");
+}
+
+/* Success, random type: exact "(random)" suffix. */
+ZTEST(bt_shell_pairing, test_identity_success_random)
+{
+	fake_reset_reset();
+	fake_ids_reset();
+	bt_addr_le_t ids[1];
+
+	set_identity(&ids[0], BT_ADDR_LE_RANDOM, 0xAA, 0xA2, 0x05, 0x0C, 0xA6, 0xDB);
+	fake_ids_set(ids, 1);
+
+	int rc = -1;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Identity: DB:A6:0C:05:A2:AA (random)");
+}
+
+/* Identity aliases retain public/random-only HIL wire output. */
+ZTEST(bt_shell_pairing, test_identity_public_id_normalizes_to_public)
+{
+	fake_reset_reset();
+	fake_ids_reset();
+	bt_addr_le_t ids[1];
+
+	set_identity(&ids[0], BT_ADDR_LE_PUBLIC_ID, 0xAA, 0xA2, 0x05, 0x0C, 0xA6, 0xDB);
+	fake_ids_set(ids, 1);
+
+	int rc = -1;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Identity: DB:A6:0C:05:A2:AA (public)");
+}
+
+/* No usable identity: shell error text and -ENOENT, never a fabricated
+ * address. */
+ZTEST(bt_shell_pairing, test_identity_no_identity_fails)
+{
+	fake_reset_reset();
+	fake_ids_reset();
+	fake_ids_set(NULL, 0);
+
+	int rc = 0;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, -ENOENT);
+	assert_output_contains(out, "Identity unavailable.");
+}
+
+/* Deleted (BT_ADDR_LE_ANY) identity 0 is skipped; the first usable
+ * identity is printed. */
+ZTEST(bt_shell_pairing, test_identity_skips_any_and_prints_next)
+{
+	fake_reset_reset();
+	fake_ids_reset();
+	bt_addr_le_t ids[2];
+
+	memset(&ids[0], 0, sizeof(ids[0]));
+	set_identity(&ids[1], BT_ADDR_LE_PUBLIC, 0xAA, 0xA2, 0x05, 0x0C, 0xA6, 0xDB);
+	fake_ids_set(ids, 2);
+
+	int rc = -1;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Identity: DB:A6:0C:05:A2:AA (public)");
+}
+
+/* BT_ADDR_LE_ANY is public/all-zero only. A random zero identity remains
+ * valid and must not be dropped by the cleanup identity boundary. */
+ZTEST(bt_shell_pairing, test_identity_zero_random_is_usable)
+{
+	fake_reset_reset();
+	fake_ids_reset();
+	bt_addr_le_t ids[1];
+
+	memset(&ids[0], 0, sizeof(ids[0]));
+	ids[0].type = BT_ADDR_LE_RANDOM;
+	fake_ids_set(ids, 1);
+
+	int rc = -1;
+	const char *out = run_cmd("bt identity", &rc);
+
+	zassert_equal(rc, 0);
+	assert_output_contains(out, "Identity: 00:00:00:00:00:00 (random)");
 }

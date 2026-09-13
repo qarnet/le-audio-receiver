@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "fixture_id": "local-nrf54l15-receiver",
+  "roles": {
+    "receiver": {
+      "probe": {
+        "backend": "nrf-probes",
+        "family": "nrf54l"
+      },
+      "serial": {
+        "baud": 115200,
+        "dtr": true,
+        "rts": false,
+        "udev": {}
+      }
+    },
+    "source": {
+      "probe": {
+        "backend": "jlink",
+        "family": "nrf53",
+        "udev": {
+          "ID_VENDOR_ID": "REPLACE_WITH_HEX_VENDOR",
+          "ID_MODEL_ID": "REPLACE_WITH_HEX_PRODUCT",
+          "ID_SERIAL_SHORT": "REPLACE_WITH_STABLE_SERIAL"
+        }
+      },
+      "serial": {
+        "baud": 115200,
+        "dtr": true,
+        "rts": false,
+        "udev": {}
+      }
+    }
+  }
+}

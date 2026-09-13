@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# Flash the dedicated HIL source firmware (nRF5340DK app core + hci_ipc
+# net core) via OpenOCD and the DK's onboard Segger J-Link.
+#
+# Mirrors fw-flash-dongle but uses the HIL source build-tree paths and
+# REQUIRES an explicit J-Link serial: there is no auto-detection in this
+# helper.  The serial is resolved by the HIL runner from the current
+# matching USB device (probe udev map); nrf-probes is never invoked here
+# because it enumerates CMSIS-DAP probes only, and the source nRF5340DK
+# uses an onboard J-Link.
+#
+# Both cores are programmed explicitly (net core first, then app core).
+# Each image is verified immediately after programming, then the target
+# is reset and run.
+#
+# UICR.APPROTECT is not touched here: the nRF5340DK ships with APPROTECT
+# disabled by default and this firmware never re-enables it. If debug
+# access is ever lost, run an nrf53 CTRL-AP recovery (mass erase) and
+# reflash.
+#
+# Build dir:  build/hil-source
+# Build with: fw-build-hil-source
+#
+# Required override (validated before OpenOCD starts):
+#   FW_HIL_SOURCE_JLINK_SERIAL=<jlink-serial>
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/bin/fw-common.sh
+source "$SCRIPT_DIR/fw-common.sh"
+
+_fw_require_env
+
+cd "$(_fw_repo_dir)"
+
+BUILD_DIR="$(_fw_repo_dir)/build/hil-source"
+APP_HEX="$BUILD_DIR/app/zephyr/zephyr.hex"
+NET_HEX="$BUILD_DIR/hci_ipc/zephyr/zephyr.hex"
+
+validate_hex_override() {
+	local name="$1"
+	local path="$2"
+	local repo
+	repo="$(realpath "$(_fw_repo_dir)")"
+
+	if [ -z "$path" ]; then
+		printf 'Invalid %s: empty path\n' "$name" >&2
+		exit 1
+	fi
+	if [[ "$path" != /* ]]; then
+		printf 'Invalid %s: path must be absolute\n' "$name" >&2
+		exit 1
+	fi
+	if [ -L "$path" ] || [ ! -f "$path" ] || [ ! -s "$path" ]; then
+		printf 'Invalid %s: must be a non-symlink nonempty regular file\n' "$name" >&2
+		exit 1
+	fi
+	if [[ "$path" != *.hex ]]; then
+		printf 'Invalid %s: path must end in .hex\n' "$name" >&2
+		exit 1
+	fi
+	path="$(realpath "$path")"
+	if [[ "$path" == "$repo" || "$path" == "$repo"/* ]]; then
+		printf 'Invalid %s: path must be outside repository\n' "$name" >&2
+		exit 1
+	fi
+	printf '%s\n' "$path"
+}
+
+APP_OVERRIDE="${FW_HIL_SOURCE_CPUAPP_HEX:-}"
+NET_OVERRIDE="${FW_HIL_SOURCE_CPUNET_HEX:-}"
+if [ -n "$APP_OVERRIDE" ] || [ -n "$NET_OVERRIDE" ]; then
+	if [ -z "$APP_OVERRIDE" ] || [ -z "$NET_OVERRIDE" ]; then
+		printf 'FW_HIL_SOURCE_CPUAPP_HEX and FW_HIL_SOURCE_CPUNET_HEX must be supplied together\n' >&2
+		exit 1
+	fi
+	APP_HEX="$(validate_hex_override FW_HIL_SOURCE_CPUAPP_HEX "$APP_OVERRIDE")"
+	NET_HEX="$(validate_hex_override FW_HIL_SOURCE_CPUNET_HEX "$NET_OVERRIDE")"
+fi
+
+if [ ! -f "$APP_HEX" ] || [ ! -f "$NET_HEX" ]; then
+	printf 'No build artifacts found under %s\n' "$BUILD_DIR" >&2
+	printf 'Build first: fw-build-hil-source\n' >&2
+	exit 1
+fi
+
+# Explicit J-Link serial is mandatory; no auto-detection in the HIL
+# helper. The runner passes the serial resolved from the probe udev map.
+JLINK_SERIAL="${FW_HIL_SOURCE_JLINK_SERIAL:-}"
+if [ -z "$JLINK_SERIAL" ]; then
+	printf 'FW_HIL_SOURCE_JLINK_SERIAL is required (no auto-detection)\n' >&2
+	exit 1
+fi
+if ! [[ "$JLINK_SERIAL" =~ ^[[:alnum:]_.:-]+$ ]]; then
+	printf 'Invalid FW_HIL_SOURCE_JLINK_SERIAL %q: must match ^[[:alnum:]_.:-]+$\n' \
+		"$JLINK_SERIAL" >&2
+	exit 1
+fi
+printf 'Using J-Link serial %s\n' "$JLINK_SERIAL"
+
+# NOTE: openocd -f interface/jlink.cfg (the DK's onboard J-Link), not
+# cmsis-dap. Build the argv as an array so the serial -c argument is a
+# single argv element (no fragile IFS word-splitting). Net core first,
+# then app core, each verified immediately, then reset run.
+OPENOCD_ARGS=(
+	-f interface/jlink.cfg
+	-c "transport select swd"
+	-c "adapter speed 2000"
+	-c "adapter serial $JLINK_SERIAL"
+	-f target/nordic/nrf53.cfg
+	-c init
+	-c "targets nrf53.cpunet"
+	-c "program $NET_HEX verify"
+	-c "targets nrf53.cpuapp"
+	-c "program $APP_HEX verify"
+	-c "reset run"
+	-c shutdown
+)
+
+exec openocd "${OPENOCD_ARGS[@]}"

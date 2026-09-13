@@ -101,7 +101,7 @@ ZTEST(audio_i2s, test_push_after_stop_starts_fresh_prefill)
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), 0,
 		      "push after stop without re-init");
 
-	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "fresh eleven-block prefill");
+	zassert_equal(fake_i2s_write_calls(), STARTUP_TOTAL_BLOCKS, "fresh fifteen-block prefill");
 	zassert_equal(fake_i2s_trigger_calls(), 1, "fresh START");
 	zassert_equal(fake_i2s_trigger_rec(0)->cmd, I2S_TRIGGER_START, "START");
 	zassert_true(audio_i2s_test_is_started(), "started again");
