@@ -463,3 +463,23 @@ completion, while noting completion timing is implementation-dependent. Here it
 is synchronization only; receiver concealment count remains peer-delivery truth
 and must equal 18 in both runs. Do not expose completion counts in PASS/schema,
 use them as acceptance evidence, alter parser transport semantics, or repin.
+
+## P1 exact-cap repair result (2026-09-15)
+
+The final one-CIS-loss repair replaced polling pause placement with a per-slot
+exact send-cap notification. The right stream starts at cap 48, drains accepted
+right completions, waits 17 left pause-window completions, then changes to cap
+110 and resumes. Evidence is retained at
+`/tmp/opencode/pb031-p1-exact-gap-fix-20260915`.
+
+Parser tests passed `94 PASS / 0 FAIL`; strict Stage 1 passed all 17 scenarios
+and 26 runs. Both loss runs retained:
+
+```text
+pushes1=100 trans1=8 szero1=8 splc1=16 plc1=34 total1=216 derr1=0 mal1=0
+h1=0x30D6BAF0 lh1=0x32777D65 rh1=0x9859F1D8
+txc0=110 txh0=0x8980C79D txc1=110 txh1=0xDD25CC21
+```
+
+No compiler or non-allowlisted runtime warning appeared. Unit phase, `backlog
+doctor`, and `git diff --check` passed.

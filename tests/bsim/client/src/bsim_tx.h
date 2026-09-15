@@ -87,6 +87,19 @@ void bsim_tx_schedule_malformed(struct bt_bap_stream *bap_stream, uint16_t at_se
  */
 void bsim_tx_set_send_limit(struct bt_bap_stream *bap_stream, uint32_t limit);
 
+/**
+ * Wait until @p bap_stream has committed its configured nonzero exact send
+ * limit and auto-paused.
+ *
+ * @retval 0 cap reached
+ * @retval -EINVAL NULL stream or zero timeout
+ * @retval -ENODATA stream is not registered or has no nonzero limit
+ * @retval -ETIMEDOUT semaphore wait expired
+ * @retval -ESTALE registration generation, stream association, or expected
+ *         limit state changed while waiting
+ */
+int bsim_tx_wait_send_limit(struct bt_bap_stream *bap_stream, uint32_t timeout_ms);
+
 /** Successful send count for one stream. */
 uint32_t bsim_tx_send_count(struct bt_bap_stream *bap_stream);
 

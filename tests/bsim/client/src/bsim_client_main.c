@@ -46,11 +46,18 @@
 
 /* Wait-for-sends pacing: generous margins keep teardown/reconnect timing
  * deterministic in BSim while never outrunning the receiver. */
-#define SEND_POLL_MS                  50
-#define SEND_WAIT_MS                  15000
-#define TEARDOWN_MARGIN_MS            500
-#define COMPLETION_WAIT_MS            10000
-#define MODEA_ONE_CIS_LOSS_SEND_COUNT 18U
+#define SEND_POLL_MS                          50
+#define SEND_WAIT_MS                          15000
+#define TEARDOWN_MARGIN_MS                    500
+#define COMPLETION_WAIT_MS                    10000
+#define MODEA_ONE_CIS_LOSS_COUNT              18U
+#define MODEA_ONE_CIS_REFILL_LEAD_COMPLETIONS 1U
+#define MODEA_ONE_CIS_PRE_GAP_SENDS           48U
+
+BUILD_ASSERT(MODEA_ONE_CIS_PRE_GAP_SENDS > 0U, "pre-gap sends must be nonzero");
+BUILD_ASSERT(MODEA_ONE_CIS_PRE_GAP_SENDS < 110U, "pre-gap sends must be below final send limit");
+BUILD_ASSERT(MODEA_ONE_CIS_LOSS_COUNT > MODEA_ONE_CIS_REFILL_LEAD_COMPLETIONS,
+	     "loss count must exceed refill lead");
 
 /* ── scenario ids (mirror receiver + runner) ─────────────────────── */
 
@@ -1815,17 +1822,17 @@ static void test_main_normal_modea_reverse_start(void)
 }
 
 /*
- * Scenario 16: Mode A with an event-counted mid-stream pause on the right
- * stream. After both streams send 50 SDUs, the right stream pauses until every
- * controller completion for its already accepted SDUs arrives. The left stream
- * then advances MODEA_ONE_CIS_LOSS_SEND_COUNT controller completions before the
- * right stream resumes. Controller completions synchronize the pause only; the
- * receiver's peer-delivery loss count remains the oracle. The receiver's Mode A
- * event assembler must keep output cadence: every lost right event is concealed
- * (PLC) and paired with its left half, so the receiver still produces 100
- * pushes. The unaffected left channel stays byte-identical to the lossless Mode
- * A oracle (pinned L hash). Both streams send 110 SDUs (the pause only delays
- * the right stream).
+ * Scenario 16: Mode A with an exact mid-stream right send cap. The cap places
+ * the gap after 48 valid right fixture frames. Draining right controller
+ * completions ensures already accepted frames finish. The left stream then
+ * advances 17 pause-window controller completions; one measured sender-refill
+ * lead completion produces 18 peer-observed missing-right events. .sent
+ * synchronizes fixture state, but the receiver remains peer-delivery truth.
+ * The receiver's Mode A event assembler must keep output cadence: every lost
+ * right event is concealed (PLC) and paired with its left half, so the receiver
+ * still produces 100 pushes. The unaffected left channel stays byte-identical
+ * to the lossless Mode A oracle (pinned L hash). Both streams send 110 SDUs
+ * (the cap only delays the right stream).
  */
 static void test_main_normal_modea_one_cis_loss(void)
 {
@@ -1857,36 +1864,40 @@ static void test_main_normal_modea_one_cis_loss(void)
 			if (err != 0) {
 				break;
 			}
-			bsim_tx_set_send_limit(&streams[i], 110);
+			bsim_tx_set_send_limit(&streams[i],
+					       i == 0U ? 110U : MODEA_ONE_CIS_PRE_GAP_SENDS);
 		}
 	}
 	if (err == 0) {
 		err = stream_up(presets, 2, false);
 	}
 	if (err == 0) {
-		/* Mid-stream, both channels flowing: synchronize the right pause
-		 * and left loss window to controller completions. */
-		err = wait_for_sends(0, 50);
-	}
-	if (err == 0) {
-		err = wait_for_sends(1, 50);
-	}
-	if (err == 0) {
-		uint32_t right_send_count;
+		uint32_t right_send_count = 0U;
 		uint32_t left_completion_count = 0U;
 		uint32_t left_completion_target = 0U;
 
-		bsim_tx_pause(&streams[1]);
-		right_send_count = bsim_tx_send_count(&streams[1]);
-		printk("CLI right stream paused (loss window), right sends %u completions %u\n",
-		       (unsigned int)right_send_count, (unsigned int)stream_completion_count(1));
-		err = wait_for_completions(1, right_send_count);
+		err = bsim_tx_wait_send_limit(&streams[1], COMPLETION_WAIT_MS);
 		if (err == 0) {
-			left_completion_count = stream_completion_count(0);
-			left_completion_target =
-				left_completion_count + MODEA_ONE_CIS_LOSS_SEND_COUNT;
-			err = wait_for_completions(0, left_completion_target);
+			right_send_count = bsim_tx_send_count(&streams[1]);
+			if (right_send_count != MODEA_ONE_CIS_PRE_GAP_SENDS) {
+				err = -ESTALE;
+			}
 		}
+		if (err == 0) {
+			printk("CLI right stream paused (loss window), right sends %u completions "
+			       "%u\n",
+			       (unsigned int)right_send_count,
+			       (unsigned int)stream_completion_count(1));
+			err = wait_for_completions(1, right_send_count);
+			if (err == 0) {
+				left_completion_count = stream_completion_count(0);
+				left_completion_target = left_completion_count +
+							 (MODEA_ONE_CIS_LOSS_COUNT -
+							  MODEA_ONE_CIS_REFILL_LEAD_COMPLETIONS);
+				err = wait_for_completions(0, left_completion_target);
+			}
+		}
+		bsim_tx_set_send_limit(&streams[1], 110U);
 		bsim_tx_resume(&streams[1]);
 		printk("CLI right stream resumed, left completions %u target %u\n",
 		       (unsigned int)stream_completion_count(0),

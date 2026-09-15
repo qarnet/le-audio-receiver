@@ -98,6 +98,19 @@ Valid records report `max_abs_error=1`, `rms_error=1`, and `correlation_q15=3276
 Production receiver cpuapp and FLPR were rebuilt and restored. Raw evidence: `/tmp/opencode/pb031-calibration/production-restore-identity.log`, `/tmp/opencode/pb031-calibration/production-restore-build.log`, `/tmp/opencode/pb031-calibration/production-restore-flash.log`, and `/tmp/opencode/pb031-calibration/production-restore-console.log`, SHA-256 `e0e59ade36e08cfe24d38c4db050d5a7928a69d0274200f14c4a31609f750bf3`. Boot reached BLE ready, `settings_load() OK`, audio timing and I2S ready, FLPR READY with rings and runtime ready, then advertising. No boot warning or error occurred. Restore-build output contains only repository-known documented diagnostics: dirty-worktree notice, nRF54L15 watchdog no-sources CMake diagnostic, and Zephyr `__ASSERT()` globally enabled CMake diagnostic. Do not call this build warning-free.
 
 Thresholds remain unset. P0 remains blocked only on identified Intel x86_64 calibration and later full mandatory threshold-bound controls. Current P0a diagnostic classes do not complete parent-plan adversarial coverage.
+
+P1 exact one-CIS-loss placement repair completed 2026-09-15. The BSim TX slot
+now exposes a binary exact send-cap notification; the right loss stream starts
+at 48 valid sends, drains accepted completions, waits 17 left pause-window
+completions, then resumes with cap 110. Evidence root:
+`/tmp/opencode/pb031-p1-exact-gap-fix-20260915`. Parser tests passed
+`94 PASS / 0 FAIL`; strict Stage 1 passed all 17 scenarios and 26 runs. Both
+loss runs retained `pushes1=100`, `trans1=8`, `szero1=8`, `splc1=16`,
+`plc1=34`, `total1=216`, `derr1=0`, `mal1=0`, receiver hashes
+`0x30D6BAF0`/`0x32777D65`/`0x9859F1D8`, and TX hashes
+`0x8980C79D`/`0xDD25CC21`. No `LOSS_*` output or non-allowlisted runtime
+warning appeared. Unit phase passed `71 PASS / 0 FAIL / 71 TOTAL`; `backlog
+doctor` and `git diff --check` passed.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
