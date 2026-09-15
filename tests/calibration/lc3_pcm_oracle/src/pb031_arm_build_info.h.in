@@ -1,0 +1,18 @@
+/*
+ * Copyright (c) 2026
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Generated at CMake configure time. Do not edit generated output.
+ */
+
+#ifndef PB031_ARM_BUILD_INFO_H_
+#define PB031_ARM_BUILD_INFO_H_
+
+#define PB031_MANIFEST_SHA256 "@PB031_MANIFEST_SHA256@"
+#define PB031_MAIN_C_SHA256 "@PB031_MAIN_C_SHA256@"
+#define PB031_PCM_ORACLE_C_SHA256 "@PB031_PCM_ORACLE_C_SHA256@"
+#define PB031_PCM_ORACLE_H_SHA256 "@PB031_PCM_ORACLE_H_SHA256@"
+#define PB031_NCS_VERSION "@PB031_NCS_VERSION@"
+#define PB031_LIBLC3_REVISION "@PB031_LIBLC3_REVISION@"
+
+#endif /* PB031_ARM_BUILD_INFO_H_ */

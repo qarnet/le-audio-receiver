@@ -5,10 +5,9 @@
  * BSIM deterministic multi-channel TX — repository-owned replacement for
  * the upstream repeated-tone stream_tx/stream_lc3 helpers.
  *
- * Keeps the real BAP send and liblc3 encode APIs.  PCM is generated with
- * defined unsigned integer arithmetic only (no floating point), differs
- * by channel and evolves by sequence number, so swap, duplication, stale
- * pairing, overwrite, and cross-pairing change the receiver hashes.
+ * Keeps the real BAP send API while selecting sequence-indexed, checked-in
+ * LC3 corpus frames.  Every successful send contributes its logical sequence
+ * and final payload bytes to the retained per-stream FNV-1a audit.
  */
 
 #ifndef BSIM_TX_H
@@ -19,7 +18,8 @@
 
 #include <zephyr/bluetooth/audio/bap.h>
 
-#define BSIM_TX_MAX_STREAMS 2
+#define BSIM_TX_MAX_STREAMS        2
+#define BSIM_TX_FNV1A_OFFSET_BASIS UINT32_C(0x811C9DC5)
 
 struct bsim_tx_config {
 	/** Negotiated octets per frame per channel (from the codec preset). */
@@ -37,6 +37,11 @@ struct bsim_tx_config {
 	uint8_t channel_idx;
 };
 
+struct bsim_tx_result {
+	uint32_t send_count;
+	uint32_t fnv1a_hash;
+};
+
 /**
  * Initialize the TX thread.  Idempotent.
  */
@@ -44,10 +49,11 @@ int bsim_tx_init(void);
 
 /**
  * Register a stream for TX.  The stream must already carry the negotiated
- * codec config (used only for logging; the explicit @p cfg drives
- * encoding).  seq_num starts at 0.
+ * codec config (used only for logging; the explicit @p cfg selects fixed
+ * corpus frames).  seq_num starts at 0.
  *
  * @retval 0 success
+ * @retval -EINVAL null or unsupported corpus geometry
  * @retval -ENOMEM all TX slots in use
  */
 int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_config *cfg);
@@ -55,7 +61,7 @@ int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_conf
 /** Unregister a stream from TX (stops sending on it). */
 int bsim_tx_unregister(struct bt_bap_stream *bap_stream);
 
-/** Pause sending on one stream (keeps registration/encoder state). */
+/** Pause sending on one stream (keeps registration state). */
 void bsim_tx_pause(struct bt_bap_stream *bap_stream);
 
 /** Resume sending on one stream. */
@@ -83,6 +89,16 @@ void bsim_tx_set_send_limit(struct bt_bap_stream *bap_stream, uint32_t limit);
 
 /** Successful send count for one stream. */
 uint32_t bsim_tx_send_count(struct bt_bap_stream *bap_stream);
+
+/**
+ * Retained successful-send result for one logical stream.  The result remains
+ * available after bsim_tx_unregister().
+ *
+ * @retval 0 result copied
+ * @retval -EINVAL NULL argument
+ * @retval -ENODATA stream has never been registered
+ */
+int bsim_tx_result(const struct bt_bap_stream *bap_stream, struct bsim_tx_result *result);
 
 /** Number of registered streams currently in the streaming state. */
 int bsim_tx_streaming_count(void);

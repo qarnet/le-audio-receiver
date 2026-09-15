@@ -26,6 +26,19 @@ build and flash helpers, and optional legacy nRF5340 build-contract checks
 remain in tree until the dedicated cleanup branch. This scope update does not
 delete or reinterpret those historical records.
 
+Current product-item ownership is
+[PB-006](../product/backlog/tasks/pb-006%20-%20Create-replacement-nRF54L15-release-candidate.md)
+for replacement candidate creation,
+[PB-007](../product/backlog/tasks/pb-007%20-%20Accept-exact-candidate-through-RH4-and-FR4.md)
+for exact RH4 and FR4 acceptance,
+[PB-008](../product/backlog/tasks/pb-008%20-%20Provide-public-friendly-nRF54L15-flashing.md)
+for public-friendly flashing, and
+[PB-009](../product/backlog/tasks/pb-009%20-%20Publish-first-public-firmware-release.md)
+for human publication. Future DFU research is
+[PB-011](../product/backlog/tasks/pb-011%20-%20Design-MCUboot-and-signed-firmware-updates.md).
+This plan retains lifecycle and historical evidence; it does not own current
+item status.
+
 ## Goal
 
 Publish factory-flash firmware binaries that public users can download, verify,

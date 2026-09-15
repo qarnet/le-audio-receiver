@@ -8,19 +8,24 @@
       url = "github:qarnet/nix-nrf-dev";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    backlog-md.url = "github:MrLesk/Backlog.md/3c7fde65e28a6e5e154f63126957649514eee370";
   };
 
-  outputs = {
-    self,
-    nixpkgs,
-    flake-utils,
-    nix-nrf-dev,
-    ...
-  }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      nix-nrf-dev,
+      backlog-md,
+      ...
+    }:
     flake-utils.lib.eachDefaultSystem (
-      system: let
+      system:
+      let
         pkgs = nixpkgs.legacyPackages.${system};
-      in {
+      in
+      {
         devShells.default = nix-nrf-dev.lib.${system}.mkNrfShell {
           name = "le-audio-receiver";
           ncsVersion = "v3.3.0";
@@ -31,19 +36,28 @@
           # Host-only system HIL dependencies. ALSA tools and NumPy support
           # capture schema/oracle tests; they do not start a capture by
           # themselves.
-          packages =
-            [
-              pkgs.gcovr
-              pkgs.alsa-utils
-            ]
-            ++ (with pkgs.python3Packages; [
-              dbus-python
-              intelhex
-              numpy
-              pygobject3
-              pytest
-              pyserial
-            ]);
+          packages = [
+            pkgs.gcovr
+            pkgs.alsa-utils
+          ]
+          ++ (with pkgs.python3Packages; [
+            dbus-python
+            intelhex
+            numpy
+            pygobject3
+            pytest
+            pyserial
+          ])
+          ++
+            pkgs.lib.optionals
+              (builtins.elem system [
+                "x86_64-linux"
+                "aarch64-linux"
+                "aarch64-darwin"
+              ])
+              [
+                backlog-md.packages.${system}.backlog-md
+              ];
         };
       }
     );

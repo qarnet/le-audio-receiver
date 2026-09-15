@@ -1119,13 +1119,18 @@ always last.  Do not combine two high-risk phases into one commit or handoff.
 
 ## Deferred feature list after refactoring
 
-- Decide/implement 360-frame (7.5 ms) FLPR offload or document cpuapp-only
+- [PB-013](../product/backlog/tasks/pb-013%20-%20Decide-360-frame-FLPR-offload-policy.md):
+  decide or implement 360-frame (7.5 ms) FLPR offload, or document cpuapp-only
   offload policy as permanent.
-- Multi-rate audio.
-- Pairing-reset physical button GPIO and debounce/hold UX.
-- Emergency-fallback crossfade.
-- External fractional-N clock actuator/custom PCB.
-- CI revival.
+- [PB-001](../product/backlog/tasks/pb-001%20-%20Support-additional-LC3-sample-rates.md):
+  multi-rate audio.
+- [PB-005](../product/backlog/tasks/pb-005%20-%20Add-nRF5340-physical-pairing-controls.md):
+  pairing-reset physical button GPIO and debounce/hold UX.
+- [PB-014](../product/backlog/tasks/pb-014%20-%20Crossfade-emergency-audio-fallback.md):
+  emergency-fallback crossfade.
+- [PB-015](../product/backlog/tasks/pb-015%20-%20Evaluate-external-fractional-N-clock-actuator.md):
+  external fractional-N clock actuator/custom PCB.
+- CI revival is accepted, not backlog work.
 
 These are separate features.  They must not be smuggled into behavior-preserving
 refactor phases.

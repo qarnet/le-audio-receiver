@@ -79,8 +79,9 @@ Rewrite em dashes with commas, parentheses, colons, semicolons, or separate
 sentences, preserving meaning and formatting (links, tables, code spans,
 numeric ranges, and warning strength).
 
-User-facing scope: `README.md`, `PLANNED_FEATURES.md`, and the public docs
-listed in the README Documentation table (`docs/user-guide.md`,
+User-facing scope: `README.md`, `docs/product/README.md`, every
+`docs/product/backlog/**/*.md` task file, and the public docs listed in the
+README Documentation table (`docs/user-guide.md`,
 `docs/supported-sources.md`, `docs/linux-le-audio-host-setup.md`,
 `docs/bluetooth-adapter-evaluation.md`, `docs/hardware-wiring.md`,
 `docs/known-limitations.md`, `docs/technology/nrf5340.md`,
@@ -90,6 +91,36 @@ listed in the README Documentation table (`docs/user-guide.md`,
 Internal and historical contributor docs (for example `docs/development/`,
 `docs/testing/`, `STATUS.md`) are outside this style rule unless explicitly
 requested.
+
+## Documentation and product backlog lifecycle
+
+- Current product planning lives under `docs/product/`, managed with
+  Backlog.md. `docs/product/README.md` owns configuration, field vocabulary,
+  and lifecycle contract. `docs/product/backlog/` is sole current source for
+  product item status, priority, and dependencies; one Markdown file represents
+  each item.
+- `tasks/` holds active Backlog, Ready, In Progress, Blocked, and Review items;
+  `completed/` holds accepted Done history; `archive/` holds dropped history.
+  Completed and dropped items stay retained. Change status through `backlog`
+  CLI, not hand edits, so IDs, filenames, and metadata stay consistent. Record
+  drop rationale in Final Summary before `backlog task archive`.
+- Implementation agents may only begin Ready work. Do not silently edit
+  product-owned title, priority, status, type, Description product sections, or
+  acceptance-criteria text. An agent may take item to Done only through PR
+  gate: criteria checked from evidence, repository gates green, Final Summary
+  filled, and Done transition committed with work in one PR titled with item ID
+  prefix, for example `PB-006: ...`. Human product-owner merge is official
+  acceptance. If PR is rejected or changes are requested, move item back to
+  `tasks/` with In Progress or Review, fix, and re-PR. An agent never merges
+  own PR.
+- Existing `docs/development/` plans, results, and handoffs remain technical
+  context and immutable evidence where applicable. `STATUS.md` remains
+  implementation and evidence snapshot, not a second task list. Active
+  standalone plans and design docs cite PB IDs; completed or historical plans
+  do not need conversion to Done tasks. Do not move existing development or
+  testing documentation as part of backlog work.
+- Use product-backlog skills when available. Keep execution subtasks inside PB
+  item rather than creating independent product items.
 
 ## Plan of record
 

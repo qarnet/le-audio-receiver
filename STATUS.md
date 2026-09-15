@@ -3,6 +3,10 @@
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
+> **Product backlog:** current product work is tracked only in
+> `docs/product/backlog/`. STATUS.md is an implementation and evidence snapshot,
+> not a second task list.
+
 > **Current state (2026-09-11):** System HIL plan of record revised
 > (`docs/development/system-hil-milestones.md`): nRF54L15 is the only
 > production receiver target, and receiver transport limits are frozen and
@@ -50,8 +54,10 @@
 > replacement preflight passed both targets but is not exact-artifact
 > acceptance; the root `VERSION` remains `0.1.0` and the firmware-build
 > workflow is version-driven; no replacement version or candidate has been
-> selected; a replacement candidate must be created through the
-> trusted-main lifecycle and its exact assets must pass FR4 before FR5
+> selected ([PB-006](docs/product/backlog/tasks/pb-006%20-%20Create-replacement-nRF54L15-release-candidate.md));
+> its exact assets must pass FR4 through
+> [PB-007](docs/product/backlog/tasks/pb-007%20-%20Accept-exact-candidate-through-RH4-and-FR4.md)
+> before [PB-009](docs/product/backlog/tasks/pb-009%20-%20Publish-first-public-firmware-release.md)
 > can publish anything; nothing published.
 > The R0–R10 refactor figures below (gate 55/0/55,
 > population 33, contract 79/79) are the **historical** R10 baseline

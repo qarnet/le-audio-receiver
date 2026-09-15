@@ -47,6 +47,48 @@ static const char *scenario_names[] = {
 	"duplicate_release_10ms",       /* 17 */
 };
 
+static int bsim_volatile_settings_load(struct settings_store *cs,
+				       const struct settings_load_arg *arg)
+{
+	(void)cs;
+	(void)arg;
+
+	return 0;
+}
+
+static int bsim_volatile_settings_save(struct settings_store *cs, const char *name,
+				       const char *value, size_t val_len)
+{
+	(void)cs;
+	(void)name;
+	(void)value;
+	(void)val_len;
+
+	return 0;
+}
+
+static const struct settings_store_itf bsim_volatile_settings_itf = {
+	.csi_load = bsim_volatile_settings_load,
+	.csi_save = bsim_volatile_settings_save,
+};
+
+static struct settings_store bsim_volatile_settings_store = {
+	.cs_itf = &bsim_volatile_settings_itf,
+};
+
+static bool bsim_volatile_settings_registered;
+
+static void bsim_volatile_settings_register(void)
+{
+	if (bsim_volatile_settings_registered) {
+		return;
+	}
+
+	settings_src_register(&bsim_volatile_settings_store);
+	settings_dst_register(&bsim_volatile_settings_store);
+	bsim_volatile_settings_registered = true;
+}
+
 static void test_init_f(void)
 {
 	bst_ticker_set_next_tick_absolute(TEST_TIMEOUT_US);
@@ -185,11 +227,22 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 
 static void scenario_main(enum bsim_sink_scenario scn, int dec_calls)
 {
+	bt_addr_le_t identity = {
+		.type = BT_ADDR_LE_RANDOM,
+		.a = {.val = {0x00, 0x00, 0x00, 0x00, 0x00, 0xC0}},
+	};
 	int err;
 	bool disc_handled = false;
 	uint32_t last_disc = 0U;
 
 	printk("=== LE Audio Receiver BSIM Test — scenario %s ===\n", scenario_names[scn]);
+
+	bsim_volatile_settings_register();
+	err = bt_id_create(&identity, NULL);
+	if (err != BT_ID_DEFAULT) {
+		FAIL("le_audio_receiver: identity create failed: %d\n", err);
+		return;
+	}
 
 	err = bt_enable(NULL);
 	if (err) {
@@ -198,9 +251,8 @@ static void scenario_main(enum bsim_sink_scenario scn, int dec_calls)
 	}
 	printk("BLE ready\n");
 
-	/* settings_load required for dynamic PACS/ASCS registration.
-	 * No persistent storage in bsim — the settings_none backend
-	 * returns success without loading anything. */
+	/* settings_load required for dynamic PACS/ASCS registration. The test-local
+	 * volatile backend returns success without loading or retaining entries. */
 	err = settings_load();
 	if (err) {
 		FAIL("le_audio_receiver: settings_load failed: %d\n", err);

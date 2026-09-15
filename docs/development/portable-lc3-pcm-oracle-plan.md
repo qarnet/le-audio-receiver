@@ -1,0 +1,291 @@
+# Portable LC3/PCM test oracle plan
+
+Status: Proposed, planning-only.
+
+Product item: [PB-031](../product/backlog/tasks/pb-031%20-%20Make-LC3-PCM-test-oracle-platform-independent.md), Make LC3/PCM test oracle platform-independent.
+
+## Decision
+
+Retain production liblc3 v1.1.2 and `-O3 -ffast-math`. Move determinism
+boundary from decoded PCM bytes to checked-in LC3 bytes plus portable numerical
+PCM acceptance.
+
+After migration, old decoded-PCM hashes remain diagnostic evidence only. They
+are never pass/fail values.
+
+## Goal
+
+Keep BSim transport, routing, lifecycle, frame-count, PLC, and decoder-error
+contracts strict while making decoded-PCM acceptance valid across supported
+host CPU and compiler instruction paths.
+
+## Evidence
+
+- Current BSim TX in `tests/bsim/client/src/bsim_tx.c` generates integer PCM
+  from channel, sequence, and sample, then calls `lc3_encode()` at runtime.
+- Receiver sink in `tests/bsim/src/audio_sink_stub.c` FNV-hashes interleaved
+  and per-channel `int16_t` PCM. `tests/bsim/stage1-scenarios.json` and
+  `scripts/bsim_stage1_parse.py` pin exact values.
+- `tests/unit/decode/src/test_decode.c` similarly compares decoded PCM
+  byte-for-byte and CRC against host-generated PCM.
+- NCS v3.3.0 liblc3 CMake requires `-O3 -std=c11 -ffast-math`. Generated
+  native x86 code uses reciprocal-square-root instructions in liblc3 LTPF/SNS
+  paths. Exact PCM bytes are therefore wrong portability boundary.
+- Hosted failure retained correct observable counts and energy but changed PCM
+  hash. Same-SHA rerun passed. Do not claim root CPU model unless evidence
+  names it.
+
+## Scope and non-scope
+
+### Expected future implementation files
+
+Future implementation may change only the following areas, subject to phase gates:
+
+- `tests/fixtures/lc3/README.md`
+- `tests/fixtures/lc3/generate.sh`
+- `tests/fixtures/lc3/gen_fixtures.c`, or separate checked-in corpus generator
+- New fixture manifest and corpus files under `tests/fixtures/lc3/`
+- `tests/bsim/client/CMakeLists.txt`
+- `tests/bsim/client/src/bsim_tx.c` and `tests/bsim/client/src/bsim_tx.h`
+- `tests/bsim/src/bsim_observer.c` and `tests/bsim/src/bsim_observer.h`
+- `src/audio_stream_session.c`, only for `CONFIG_BSIM_OBSERVER` sequence
+  metadata
+- `tests/bsim/src/audio_sink_stub.c`
+- `tests/bsim/src/bsim_sink_oracle.h`
+- `tests/bsim/src/bsim_test_main.c`
+- `tests/bsim/stage1-scenarios.json`
+- `scripts/bsim_stage1_parse.py`
+- `scripts/bsim-stage1-run.sh`, only if artifact or report plumbing requires it
+- `tests/unit/bsim_runner/`
+- `tests/unit/decode/CMakeLists.txt` and `tests/unit/decode/src/test_decode.c`
+- New shared test-only integer comparator under `tests/support/`, plus focused
+  unit suite
+- `docs/testing/t2-audio-pipeline-tests.md`
+- `docs/testing/behavior-contract.md`
+- `docs/testing/coverage-matrix.md`
+- `STATUS.md`, only when implementation evidence exists
+
+### Non-scope
+
+Non-goals are changing production decoder or audio behavior, removing
+`-ffast-math`, making liblc3 bit-exact, changing BAP scenario, lifecycle, PLC,
+or count contracts, repinning old host-specific PCM hashes, and changing
+firmware, release, or hardware behavior.
+
+No workflow runner diversification belongs in this item except a temporary or
+bounded calibration mechanism. Permanent multi-architecture CI is separate
+work unless required to keep oracle calibration current.
+
+## Target architecture
+
+### 1. Checked-in BSim corpus
+
+- Provide 128 logical frames per channel, enough for current maximum
+  110-send scenarios and reconnect reset.
+- Provide 48 kHz 10 ms/120-byte and 7.5 ms/90-byte LC3. Left and right source
+  patterns must be distinct, deterministic, and evolve by logical sequence.
+- Store raw concatenated per-channel LC3 and little-endian decoded reference
+  PCM. Reference PCM is comparison anchor, not exact-output contract.
+- Manifest records schema, NCS/liblc3 version, flags, frame geometry and count,
+  source formula, and SHA-256 for every binary.
+- Generator is reproducibility-only and never runs in normal tests. Generation
+  output must be warning-free. Regeneration requires explicit manifest and
+  documentation update, never silent baseline rewrite.
+
+### 2. Exact TX boundary
+
+- Replace runtime `lc3_encode()` in BSim client with sequence-indexed fixture
+  lookup. Mono uses left corpus. Mode A uses left and right corpus by stream.
+  Mode B appends left then right for same sequence. Reconnect restarts at
+  sequence zero.
+- Preserve malformed scenario by deriving one-byte-short SDU from fixture path,
+  not old synthetic bytes.
+- Maintain running per-stream hash over sequence marker plus final transmitted
+  SDU bytes. Emit it in client `PASS` output.
+- Python parser independently computes expected hash from checked-in corpus,
+  scenario send count, layout, and injection. It rejects duplication, omission,
+  reorder, wrong channel, and corruption.
+- Do not put platform PCM hashes back in scenario JSON.
+
+### 3. Sequence-aware receiver oracle
+
+- Extend `CONFIG_BSIM_OBSERVER`-only pre-push metadata to carry source
+  sequence per channel. Mono and Mode B supply same ISO sequence. Mode A
+  supplies assembler event per-half sequences, including synthetic lost-half
+  sequence when available.
+- Production signatures outside test macro and production behavior stay
+  unchanged.
+- Sink uses sequence to select expected decoded reference PCM. Valid channels
+  compare against decoded reference PCM. Source-invalid startup halves and
+  expected one-CIS PLC half are excluded from decoded reference PCM numerical
+  comparison, but remain covered by exact validity and PLC counts.
+- Invalid-SDU sequence gap maps directly. It must not shift reference cursor.
+
+### 4. Shared integer comparator
+
+- Add test-only module accepting actual `int16_t` channel samples,
+  little-endian reference PCM, sample count, and immutable threshold set.
+- Report compared sample and frame count, maximum absolute sample error, sum
+  squared error and integer RMS, and scale-safe signed correlation score. Use
+  no floating-point acceptance math.
+- Give accumulators explicit overflow bounds and static or runtime guards.
+- Pass requires exact dimensions, enough compared samples, maximum and RMS at
+  or below limits, and correlation at or above floor.
+- Mono duplication remains exact `L == R`. Stereo channel distinction remains
+  required. Existing exact energy, source-validity, lifecycle, stats, guard,
+  malformed-shape, and no-push-after-stop assertions remain.
+- Diagnostic output includes observed values and configured limits, enough to
+  diagnose hosted failure without raw PCM logs.
+
+### 5. Scenario data and parser
+
+- Bump scenario schema deliberately. Remove `known.full`, `known.l`, and
+  `known.r` decoded PCM pins. Preserve exact `known.total` and all scenario
+  count metadata.
+- Add explicit fixture, duration, and layout references where needed instead of
+  parsing scenario names.
+- Parser requires numerical metric fields and threshold compliance, exact TX
+  hashes, and all existing counts and fault scans.
+
+### 6. Real decoder unit tests
+
+- Replace only byte-exact decoded PCM and CRC acceptance with shared comparator
+  against checked-in reference PCM.
+- Retain exact LC3 fixture integrity, sizes, output sample counts, guards, mono
+  duplication, Mode B channel placement, decoder behavior, stats, and error
+  behavior.
+- Exact integer helpers and transforms remain exact.
+
+## Calibration phase and stop gate
+
+Before thresholds become pass/fail constants, run same checked-in LC3 corpus
+and comparator diagnostics on at least one identified Intel x86_64 environment,
+one identified AMD x86_64 environment, and one identified ARM environment.
+When raw CPU identity proves vendor for environment that reproduced old
+mismatch, include it in matching Intel or AMD calibration evidence. Record raw
+CPU identity, including vendor and model, OS, architecture, compiler and
+toolchain, NCS/liblc3 revision, flags, fixture SHA-256, per-shape and
+per-channel maximum, RMS, correlation, and repeatability.
+
+Do not call random GitHub runner labels Intel or AMD without raw CPU evidence.
+
+Select smallest documented integer thresholds above measured valid envelope with
+explicit bounded headroom. Thresholds cannot proceed if any adversarial mutation
+overlaps valid envelope.
+
+Mandatory adversarial controls:
+
+1. Exact channel swap.
+2. Prior-frame reference shift.
+3. Next-frame reference shift.
+4. One-byte LC3 corruption that still decodes.
+5. Dead or zero channel.
+6. Sample corruption just above maximum-error limit.
+7. Distributed error just above RMS limit.
+8. Low-correlation waveform.
+
+Every control must fail for named reason. If valid and adversarial distributions
+cannot be separated, stop. Do not widen tolerance or weaken routing or order
+assertions. Escalate with measurements and redesign fixture or comparator.
+
+## Phases and verification
+
+### P0: Baseline and calibration scaffold
+
+Files: fixture generator, manifest, corpus files, `tests/fixtures/lc3/README.md`,
+shared comparator diagnostic, focused comparator unit suite, and any bounded
+calibration artifact plumbing.
+
+Work: establish reproducible fixture provenance and diagnostic-only comparison.
+Do not replace gate acceptance in this phase.
+
+Verify: fixture manifest hashes; repeat decode reports; retained cross-platform
+artifacts with raw host and toolchain provenance; all valid and adversarial
+envelopes separable before setting thresholds.
+
+### P1: Fixed TX corpus and exact transport oracle
+
+Files: `tests/bsim/client/CMakeLists.txt`, `tests/bsim/client/src/bsim_tx.c`,
+`tests/bsim/client/src/bsim_tx.h`, fixture corpus and manifest,
+`tests/bsim/stage1-scenarios.json`, `scripts/bsim_stage1_parse.py`, and
+`tests/unit/bsim_runner/`.
+
+Work: remove runtime encoder dependence from BSim traffic, add corpus-derived
+malformed injection, and make exact TX hash parser-owned.
+
+Verify: focused Python parser tests, then BSim subset covering mono, Mode A,
+Mode B, malformed, and reconnect.
+
+### P2: Sequence-aware PCM oracle
+
+Files: `tests/bsim/src/bsim_observer.c`, `tests/bsim/src/bsim_observer.h`,
+`src/audio_stream_session.c` test hook, `tests/bsim/src/audio_sink_stub.c`,
+`tests/bsim/src/bsim_sink_oracle.h`, `tests/bsim/src/bsim_test_main.c`, and
+shared comparator plus focused tests.
+
+Work: carry test-only source sequence metadata to sink and enforce portable PCM
+comparison without changing production signatures or behavior.
+
+Verify: named negative controls and BSim subset for every duration, mode, and
+loss case.
+
+### P3: Real-decoder fixture migration and documentation
+
+Files: `tests/unit/decode/CMakeLists.txt`, `tests/unit/decode/src/test_decode.c`,
+fixture documentation and manifest, `docs/testing/t2-audio-pipeline-tests.md`,
+`docs/testing/behavior-contract.md`, and `docs/testing/coverage-matrix.md`.
+
+Work: apply same portable comparison policy at real `audio_decode_sdu()` public
+boundary while retaining exact integer-only contracts.
+
+Verify: decode suite and fixture integrity checks.
+
+### P4: Full acceptance
+
+Run after P0 through P3 pass their focused gates:
+
+```bash
+nix develop -c ./scripts/test-all.sh
+nix develop -c fw-build-5340
+nix develop -c fw-build-54l15
+nix develop -c python3 scripts/check-build-contract.py --nrf5340 build/nrf5340 --nrf54l15 build/nrf54l15
+git diff --check
+```
+
+Require warning-free generation, tests, and both receiver builds. Update test
+inventory or count baseline only if adding a new suite changes count. Do not
+change a baseline solely to mask migration failure.
+
+## Acceptance mapping
+
+| PB-031 criterion | Smallest public-boundary proof |
+| --- | --- |
+| 1. Checked-in corpus and exact transport | BSim client `PASS` TX hash plus parser test independently deriving corpus bytes for each layout, send count, and malformed injection. |
+| 2. Portable numerical PCM policy | Recorded identified Intel x86_64 and AMD x86_64 reports, plus an identified ARM environment corpus/comparator report with fixture hashes and raw provenance, followed by sink comparator acceptance at public `audio_sink_push()` boundary. |
+| 3. Negative controls | Focused comparator and BSim sink tests inject each named mutation through public test boundaries and assert named failure. |
+| 4. Stage 1 contracts | Full `scripts/bsim-stage1-run.sh` public result covering all 17 scenarios and 26 runs with exact lifecycle, routing, count, PLC, decode-error, and teardown checks. |
+| 5. Real-decoder fixture policy | Decode suite drives real `audio_decode_sdu()` with checked-in LC3 and portable comparator while exact routing, dimensions, guards, stats, and fixture hashes remain asserted. |
+| 6. Gate and build preservation | Canonical software gate, both receiver builds, and resolved build-contract command pass with no warnings and no production decoder or flag changes. |
+
+## Rollback criteria
+
+Rollback proposed implementation if any condition occurs:
+
+- Exact transport hashes are removed or weakened.
+- Runtime encoding remains in BSim traffic.
+- Thresholds lack identified Intel x86_64, AMD x86_64, and ARM environment evidence.
+- Valid and mutation envelopes overlap.
+- BSim count or lifecycle contract changes.
+- Production liblc3 flags or decoder code changes.
+- Any warning appears.
+- Either receiver target build regresses.
+
+Old platform hash mismatch is expected to disappear because decoded PCM byte
+hash is no longer accepted. Do not preserve old hashes as fallback.
+
+## Open decisions
+
+- Threshold numbers deliberately remain unset until P0 evidence exists.
+- Exact ARM calibration environment may be CI or controlled local hardware, but it
+  must expose raw identity and provenance and execute same corpus and comparator.
+- Permanent CI architecture matrix is follow-up decision, not hidden scope.

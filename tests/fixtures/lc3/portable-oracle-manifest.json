@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "ncs_version": "v3.3.0",
+  "liblc3": {
+    "semantic_label": "1.1.2",
+    "west_revision": "48bbd3eacd36e99a57317a0a4867002e0b09e183"
+  },
+  "generator_flags": [
+    "-O3",
+    "-std=c11",
+    "-ffast-math",
+    "-Wall",
+    "-Wextra",
+    "-Wdouble-promotion",
+    "-Wvla",
+    "-pedantic",
+    "-Werror"
+  ],
+  "source_formula_identifier": "bsim_tx_hash_mix_seq_i_ch_v1",
+  "corpus_frame_count": 128,
+  "streams": [
+    {
+      "stem": "bsim_48k_10ms_120b_l",
+      "duration_us": 10000,
+      "frequency_hz": 48000,
+      "channel": "left",
+      "frame_bytes": 120,
+      "samples_per_frame": 480,
+      "frame_count": 128,
+      "lc3": {
+        "path": "bsim_48k_10ms_120b_l.lc3",
+        "size": 15360,
+        "sha256": "c16222f9d0e107488a1aec502d1bbb5a4c6e3944ce28b7f886c55415f51130be"
+      },
+      "pcm": {
+        "path": "bsim_48k_10ms_120b_l.pcm",
+        "size": 122880,
+        "sha256": "b42fd31158d24d255214580a63261087d57322266563cec778abc1d9f7f830a7"
+      }
+    },
+    {
+      "stem": "bsim_48k_10ms_120b_r",
+      "duration_us": 10000,
+      "frequency_hz": 48000,
+      "channel": "right",
+      "frame_bytes": 120,
+      "samples_per_frame": 480,
+      "frame_count": 128,
+      "lc3": {
+        "path": "bsim_48k_10ms_120b_r.lc3",
+        "size": 15360,
+        "sha256": "0b31725f64b9857c2b5c32e2370ef67e6d0623c43662cd66ce4c93042286fde0"
+      },
+      "pcm": {
+        "path": "bsim_48k_10ms_120b_r.pcm",
+        "size": 122880,
+        "sha256": "7383216bd256165633da98a8a3e8af31bd2e1c4903001cf7ad749f87db18c8ca"
+      }
+    },
+    {
+      "stem": "bsim_48k_7p5ms_90b_l",
+      "duration_us": 7500,
+      "frequency_hz": 48000,
+      "channel": "left",
+      "frame_bytes": 90,
+      "samples_per_frame": 360,
+      "frame_count": 128,
+      "lc3": {
+        "path": "bsim_48k_7p5ms_90b_l.lc3",
+        "size": 11520,
+        "sha256": "2a10e889d1b460d06b75391c8ba7c4bab76ad124b366a8d184e6c37e1ff6264e"
+      },
+      "pcm": {
+        "path": "bsim_48k_7p5ms_90b_l.pcm",
+        "size": 92160,
+        "sha256": "1e720b1f4f782f50b16b1e173a3fde0ba0bcd972a550d5a8b2a70282a37ffac6"
+      }
+    },
+    {
+      "stem": "bsim_48k_7p5ms_90b_r",
+      "duration_us": 7500,
+      "frequency_hz": 48000,
+      "channel": "right",
+      "frame_bytes": 90,
+      "samples_per_frame": 360,
+      "frame_count": 128,
+      "lc3": {
+        "path": "bsim_48k_7p5ms_90b_r.lc3",
+        "size": 11520,
+        "sha256": "5d5a8fcb2b573804a27d81c01d07756431b22592725e7ee126b23db07c0e3a7e"
+      },
+      "pcm": {
+        "path": "bsim_48k_7p5ms_90b_r.pcm",
+        "size": 92160,
+        "sha256": "112a32ac37ab26ae50b7dfc3db082d06f3d0c5c866532306112e2d94a45914dd"
+      }
+    }
+  ]
+}

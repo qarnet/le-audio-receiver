@@ -16,6 +16,11 @@ analog feedback. Mono aggregate feedback may be added with existing USB adapter
 after safe electrical qualification. Stereo analog acceptance remains a later
 extension.
 
+Current product-item status, priority, and dependencies are owned by
+`docs/product/backlog/`; this plan remains technical context and evidence.
+Relevant future work is linked at RH4, MA0/MA1, SA0/SA1, Milestone 2, and the
+optional `48_5_1` discussion below.
+
 ## Standing decisions (2026-09-03)
 
 1. nRF54L15 is the only production receiver target for this plan. All nRF5340
@@ -471,6 +476,7 @@ per-channel codec values with FL|FR allocation and doubled SDU size, matching
 The PipeWire gate's observed 7.5 ms `48_5_1` shape uses 117 octets per channel.
 That remains separate interoperability evidence. Add an optional `48_5_1` row
 only after baseline matrix passes; never mix its result into `48_3_1` evidence.
+Current decision item: [PB-029](../product/backlog/tasks/pb-029%20-%20Evaluate-optional-LC3-48_5_1-interoperability-row.md).
 
 `48_3_1` is retained for RH3-7p5 diagnostics only. It is not a supported
 release shape until that phase closes it: working and reinstated, or removed
@@ -720,6 +726,8 @@ from the production PACS. The reinstatement branch was taken 2026-09-11.
 
 ### RH4: exact-artifact transport/runtime integration
 
+Current product item: [PB-007](../product/backlog/tasks/pb-007%20-%20Accept-exact-candidate-through-RH4-and-FR4.md).
+
 - Run same accepted HIL matrix against immutable candidate assets, not a local
   rebuild.
 - Preserve artifact identities, image hashes, flash logs, source identity,
@@ -738,6 +746,8 @@ be relabeled.
 
 ### MA0: qualify existing mono adapter
 
+Current product item: [PB-023](../product/backlog/tasks/pb-023%20-%20Qualify-mono-analog-capture-fixture.md).
+
 - Starts only after RH3 works; never blocks RH0-RH3.
 - Add `alsa-utils` and NumPy to pinned shell.
 - Build and electrically review passive L/R summing, attenuation, and
@@ -752,6 +762,8 @@ smoke only.
 
 ### MA1: mono aggregate matrix
 
+Current product item: [PB-024](../product/backlog/tasks/pb-024%20-%20Run-mono-aggregate-HIL-matrix.md).
+
 - Reuse RH3 matrix and source bytes unchanged with capture capability `mono`.
 - Require both distinct carriers for Mode A and Mode B rows.
 - Require expected single carrier for mono rows.
@@ -761,6 +773,8 @@ Exit: base matrix plus mono checks passes twice. Record verdict
 `MONO_OUTPUT_SMOKE_ACCEPTED`; do not claim channel order or stereo acceptance.
 
 ### SA0: future stereo fixture and oracle
+
+Current product item: [PB-025](../product/backlog/tasks/pb-025%20-%20Qualify-stereo-analog-capture-fixture.md).
 
 - Acquire and qualify simultaneous stereo line-capture hardware.
 - Implement capture capability `stereo` behind same runner interface.
@@ -772,6 +786,8 @@ Exit: base matrix plus mono checks passes twice. Record verdict
 Exit: stereo fixture detects each injected defect for right reason.
 
 ### SA1: future stereo matrix
+
+Current product item: [PB-026](../product/backlog/tasks/pb-026%20-%20Run-stereo-output-HIL-matrix.md).
 
 - Reuse RH3 matrix, source firmware, source bytes, receiver firmware, control
   protocol, clean-state flow, and evidence schema unchanged.
@@ -861,6 +877,9 @@ Passing base plus stereo sections means `STEREO_OUTPUT_ACCEPTED`. Raw captures,
 WAV hashes, oracle metrics, and stereo fixture identity join base manifest.
 
 ## Milestone 2: future transmitter interoperability
+
+Current product items: [PB-027](../product/backlog/tasks/pb-027%20-%20Define-transmitter-interoperability-contract.md)
+then [PB-028](../product/backlog/tasks/pb-028%20-%20Evaluate-transmitter-interoperability.md).
 
 Start only after SA1 records `STEREO_OUTPUT_ACCEPTED` for receiver fixture and
 analog oracle.
@@ -954,7 +973,10 @@ Do not install NCS v3.4.0. Do not start RH4 hardware until exact candidate
 receiver and HIL-source archives exist and pass artifact validation. MA and SA
 remain separate analog extensions. Keep verdict names distinct so
 transport/runtime or mono smoke cannot be mistaken for stereo output
-acceptance.
+acceptance. Product sequencing is [PB-007](../product/backlog/tasks/pb-007%20-%20Accept-exact-candidate-through-RH4-and-FR4.md)
+first, followed by [PB-023](../product/backlog/tasks/pb-023%20-%20Qualify-mono-analog-capture-fixture.md)
+through [PB-029](../product/backlog/tasks/pb-029%20-%20Evaluate-optional-LC3-48_5_1-interoperability-row.md)
+only when their prerequisites are ready.
 
 ## nRF5340 elimination (2026-09-03 decision)
 

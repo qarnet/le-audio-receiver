@@ -1,16 +1,16 @@
 # Known limitations
 
-An honest list of current gaps, caveats, and open questions. This is a
-living document: keep it in sync with the [Planned
-features](../PLANNED_FEATURES.md) backlog.
+An honest list of current gaps, caveats, and open questions. Current product
+work is tracked in the [product backlog](product/README.md); this document
+records limitations, not task status.
 
 ## 1. 48 kHz only
 
 The receiver currently supports a single sample rate: **48 kHz**. PACS
 capability advertisement, codec-config validation, the LC3 decoder, and the
 I2S/sink path all hardcode 48 kHz. A source that negotiates any other rate is
-rejected. Multi-rate support is planned (see
-[Planned features](../PLANNED_FEATURES.md) item A).
+rejected. Multi-rate support is tracked in
+[PB-001](product/backlog/tasks/pb-001%20-%20Support-additional-LC3-sample-rates.md).
 
 ## 2. nRF54L15: 7.5 ms / 360-frame streams fall back to CPU ASRC
 
@@ -22,6 +22,8 @@ audio still plays, just without the FLPR offload for those streams. 7.5 ms
 transport is hardware-validated end to end (see the developer documentation
 on the System HIL track); the FLPR simply does not participate in the rate
 conversion for those streams.
+Policy decision is tracked in
+[PB-013](product/backlog/tasks/pb-013%20-%20Decide-360-frame-FLPR-offload-policy.md).
 
 ## 3. Volume curve is linear
 
@@ -30,7 +32,8 @@ by volume/255). Reported behavior: the first roughly **third of the volume
 slider** causes most of the perceived loudness change, and adjustments near
 the top of the range are barely audible. The mechanism is the linear scaling;
 no specific psychoacoustic cause is asserted. A perceptual/logarithmic curve
-is planned (see [Planned features](../PLANNED_FEATURES.md) item B).
+is tracked in
+[PB-002](product/backlog/tasks/pb-002%20-%20Use-perceptual-fixed-point-volume-mapping.md).
 
 ## 4. Startup pop after long idle (observed, root cause unconfirmed)
 
@@ -38,7 +41,8 @@ An audible pop has been observed when playback starts after a long idle
 period. The root cause is **not yet confirmed**. A likely area to investigate
 is DAC/I2S idle and power sequencing (stop/start order, startup prefill,
 silence/ramp/mute sequencing), but this is an investigation direction, not a
-confirmed cause. Tracked in [Planned features](../PLANNED_FEATURES.md) item C.
+confirmed cause. Tracked in
+[PB-003](product/backlog/tasks/pb-003%20-%20Eliminate-long-idle-resume-pop.md).
 
 ## 5. Duplicate BONDING advertisements (observed, root cause unconfirmed)
 
@@ -46,8 +50,9 @@ During BONDING, **two scanner entries / advertisements have been observed**,
 and only one of them pairs. The root cause is **unconfirmed**; it may be an
 advertising-set, identity/address, or central-side discovery artifact. The
 invariant we want is exactly one connectable receiver advertisement at any
-time. Tracked in [Planned features](../PLANNED_FEATURES.md) item D. This is a
-bug, distinct from the intentional NORMAL/BONDING advertising-payload
+time. Tracked in
+[PB-004](product/backlog/tasks/pb-004%20-%20Remove-duplicate-BONDING-advertisements.md).
+This bug is distinct from the intentional NORMAL/BONDING advertising-payload
 distinction.
 
 ## 6. nRF5340 physical pairing button not wired
@@ -59,7 +64,8 @@ compiled in). There is no user button, no mode LED, and no NORMAL/BONDING/
 RESET behavior on the E83 board. What remains is the **legacy shell reset**:
 the `bt unpair` developer-shell command clears all saved pairings,
 disconnects the active peer, and reopens pairing. The nRF54L15 build has a
-working button. Tracked in [Planned features](../PLANNED_FEATURES.md) item E.
+working button. Tracked in
+[PB-005](product/backlog/tasks/pb-005%20-%20Add-nRF5340-physical-pairing-controls.md).
 
 ## 7. Source-device availability limits
 
@@ -74,7 +80,11 @@ Linux](supported-sources.md).
 
 Ready-made firmware binaries are planned but **not yet available**. The
 firmware currently must be built from source with the developer toolchain.
-Tracked in [Planned features](../PLANNED_FEATURES.md) item F.
+Release path is tracked in
+[PB-006](product/backlog/tasks/pb-006%20-%20Create-replacement-nRF54L15-release-candidate.md),
+[PB-007](product/backlog/tasks/pb-007%20-%20Accept-exact-candidate-through-RH4-and-FR4.md),
+[PB-008](product/backlog/tasks/pb-008%20-%20Provide-public-friendly-nRF54L15-flashing.md),
+and [PB-009](product/backlog/tasks/pb-009%20-%20Publish-first-public-firmware-release.md).
 
 ## 9. nRF54L15 scope and Nordic guidance caveat
 

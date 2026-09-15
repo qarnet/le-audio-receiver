@@ -17,9 +17,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sc
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from bsim_stage1_parse import (  # noqa: E402
+    FNV1A_OFFSET_BASIS,
     ParseError,
     ScenarioDataError,
+    TRANSPORT_VALUES,
     check,
+    expected_transport_hash,
     extract_pass_line,
     known_values,
     load_scenarios,
@@ -27,7 +30,6 @@ from bsim_stage1_parse import (  # noqa: E402
     parse_client_pass,
     parse_receiver_pass,
     parse_tokens,
-    scan_faults,
 )
 
 FAILURES = 0
@@ -73,18 +75,51 @@ def recv_pass(scenario, **over):
 
 
 def cli_pass(scenario, **over):
-    base = (
+    values = {
+        "sends0": 100,
+        "sends1": 0,
+        "cfgrsps": 1,
+        "relrsps": 0,
+        "disrsps": 0,
+    }
+    values.update(over)
+    for stream in (0, 1):
+        count_key = "txc%d" % stream
+        hash_key = "txh%d" % stream
+        sends_key = "sends%d" % stream
+        if count_key not in values:
+            values[count_key] = values[sends_key]
+        if hash_key not in values:
+            transport = next(
+                (
+                    entry
+                    for entry in TRANSPORT_VALUES[scenario]
+                    if entry["stream"] == stream
+                ),
+                None,
+            )
+            values[hash_key] = (
+                expected_transport_hash(transport, values[count_key])
+                if transport is not None
+                else FNV1A_OFFSET_BASIS
+            )
+    return (
         "d_01: @00:00:06.400000 INFO: bsim_client: "
-        "scenario=%s sends0=100 sends1=0 cfgrsps=1 relrsps=0 disrsps=0\n" % scenario
+        "scenario=%s sends0=%d sends1=%d cfgrsps=%d relrsps=%d disrsps=%d "
+        "txc0=%d txh0=0x%08X txc1=%d txh1=0x%08X\n"
+        % (
+            scenario,
+            values["sends0"],
+            values["sends1"],
+            values["cfgrsps"],
+            values["relrsps"],
+            values["disrsps"],
+            values["txc0"],
+            values["txh0"],
+            values["txc1"],
+            values["txh1"],
+        )
     )
-    import re
-
-    def repl(m):
-        return "%s=%s" % (m.group(1), over[m.group(1)])
-
-    for k in over:
-        base = re.sub(r"\b(%s)=\d+" % k, repl, base)
-    return base
 
 
 def run_check(root, scenario, recv_text, cli_text, known=None, expect_ok=True):
@@ -203,23 +238,54 @@ def test_total_frames_mismatch():
 
 def test_invalid_sdu_resume():
     root = tempfile.mkdtemp()
-    recv = recv_pass("invalid_sdu_resume_10ms", derr1=1, obs_mal=1)
+    scenario = "invalid_sdu_resume_10ms"
+    pinned = known_values(scenario)
+    known = {"known_total": pinned.get("total")}
+    recv = recv_pass(scenario, derr1=1, obs_mal=1)
     ok = run_check(
         root,
-        "invalid_sdu_resume_10ms",
+        scenario,
         recv,
-        cli_pass("invalid_sdu_resume_10ms", sends0=101),
+        cli_pass(scenario, sends0=101),
+        known,
     )
-    report("invalid_sdu_resume ok", ok)
+    report(
+        "invalid_sdu_resume has no full pin and keeps total 108",
+        pinned == {"total": 108},
+    )
+    report("invalid_sdu_resume exact contract", ok)
 
-    recv_bad = recv_pass("invalid_sdu_resume_10ms", derr1=0, obs_mal=1)
-    ok = run_check(
-        root,
-        "invalid_sdu_resume_10ms",
-        recv_bad,
-        cli_pass("invalid_sdu_resume_10ms", sends0=101),
-    )
-    report("invalid_sdu_resume missing decode-error rejected", not ok)
+    transport = TRANSPORT_VALUES[scenario][0]
+    exact_hash = expected_transport_hash(transport, 101)
+    cases = [
+        (
+            "invalid_sdu_resume send count rejected",
+            recv,
+            cli_pass(scenario, sends0=100),
+        ),
+        (
+            "invalid_sdu_resume TX hash rejected",
+            recv,
+            cli_pass(scenario, sends0=101, txh0=exact_hash ^ 1),
+        ),
+        (
+            "invalid_sdu_resume malformed observer and decode error required",
+            recv_pass(scenario, derr1=0, obs_mal=0),
+            cli_pass(scenario, sends0=101),
+        ),
+        (
+            "invalid_sdu_resume resumed pushes required",
+            recv_pass(scenario, pushes1=99, derr1=1, obs_mal=1),
+            cli_pass(scenario, sends0=101),
+        ),
+        (
+            "invalid_sdu_resume lifecycle checks retained",
+            recv_pass(scenario, derr1=1, obs_mal=1, obs_gate_c=1),
+            cli_pass(scenario, sends0=101),
+        ),
+    ]
+    for label, bad_recv, bad_cli in cases:
+        report(label, not run_check(root, scenario, bad_recv, bad_cli, known))
 
 
 def test_modea_first_stop():
@@ -333,17 +399,26 @@ def test_reconnect_second_stream():
         root,
         "reconnect_second_stream_10ms",
         recv,
-        cli_pass("reconnect_second_stream_10ms", sends0=0, sends1=100),
+        cli_pass("reconnect_second_stream_10ms", sends0=25, sends1=100),
         known,
     )
-    report("reconnect_second_stream ok", ok)
+    session0, session1 = TRANSPORT_VALUES["reconnect_second_stream_10ms"]
+    fresh_mono = expected_transport_hash(TRANSPORT_VALUES["mono_10ms"][0], 100)
+    reconnect_hashes_ok = (
+        expected_transport_hash(session0, 25) != FNV1A_OFFSET_BASIS
+        and expected_transport_hash(session1, 100) == fresh_mono
+    )
+    report(
+        "reconnect retained stream 0 and fresh stream 1 hashes",
+        ok and reconnect_hashes_ok,
+    )
 
     recv_bad = recv.replace("h2=0xABCD1234", "h2=0xDEADBEEF")
     ok = run_check(
         root,
         "reconnect_second_stream_10ms",
         recv_bad,
-        cli_pass("reconnect_second_stream_10ms", sends0=0, sends1=100),
+        cli_pass("reconnect_second_stream_10ms", sends0=25, sends1=100),
         known,
     )
     report("reconnect seg2 hash mismatch rejected", not ok)
@@ -508,68 +583,92 @@ def test_duplicate_release():
 
 def test_fault_scan():
     root = tempfile.mkdtemp()
-    # Scenario 1: any decode fault marker fails.
-    log = "d_00: ... INFO: le_audio_receiver: scenario=mono_10ms ...\n<err> bt_bap: LC3 decode error -5\n"
-    p = write_log(root, "r.log", log)
-    try:
-        scan_faults(p, "mono_10ms")
-        report("fault scan detects decode error", False)
-    except ParseError:
-        report("fault scan detects decode error", True)
+    mono_recv = recv_pass("mono_10ms")
+    mono_cli = cli_pass("mono_10ms")
 
-    # Any bt_bap warning is a fault (no allowlist).
-    logw = "d_00: ... <wrn> bt_bap: Source direction unsupported\n"
-    pw = write_log(root, "rw.log", logw)
-    try:
-        scan_faults(pw, "unsupported_source_direction")
-        report("bt_bap warning rejected everywhere", False)
-    except ParseError:
-        report("bt_bap warning rejected everywhere", True)
+    def rejected(label, scenario, receiver, client):
+        report(label, not run_check(root, scenario, receiver, client))
 
-    # Any bt_ascs warning is a fault (the CONF_REJECTED path logs INFO).
-    logr = "d_00: ... <wrn> bt_ascs: Invalid application error code: 9\n"
-    pr = write_log(root, "rr.log", logr)
-    try:
-        scan_faults(pr, "invalid_codec_fields")
-        report("ascs rsp warning rejected everywhere", False)
-    except ParseError:
-        report("ascs rsp warning rejected everywhere", True)
+    rejected(
+        "receiver semantic fault marker rejected",
+        "mono_10ms",
+        mono_recv + "d_00: FATAL receiver failure\n",
+        mono_cli,
+    )
+    rejected(
+        "receiver ANSI warning rejected",
+        "mono_10ms",
+        mono_recv + "\x1b[1;33m<wrn> bt_hci_core: unexpected warning\x1b[0m\n",
+        mono_cli,
+    )
+    rejected(
+        "receiver ANSI error rejected",
+        "mono_10ms",
+        mono_recv + "\x1b[1;31m<err> bt_gatt: unexpected error\x1b[0m\n",
+        mono_cli,
+    )
+    rejected(
+        "client ANSI warning rejected",
+        "mono_10ms",
+        mono_recv,
+        mono_cli + "\x1b[1;33m<wrn> bt_hci_core: unexpected warning\x1b[0m\n",
+    )
+    rejected(
+        "client ANSI error rejected",
+        "mono_10ms",
+        mono_recv,
+        mono_cli + "\x1b[1;31m<err> bsim_tx: unexpected error\x1b[0m\n",
+    )
 
-    # The duplicate-release scenario's deliberate server rejection of the
-    # second Release PDU (ascs.c: "Invalid operation in state: releasing")
-    # is allowed ONLY for that scenario and only for that exact line.
-    dup_ok = "d_00: ... <wrn> bt_ascs: Invalid operation in state: releasing\n"
-    pd = write_log(root, "dup.log", dup_ok)
-    try:
-        scan_faults(pd, "duplicate_release_10ms")
-        report("duplicate-release server rejection allowlisted", True)
-    except ParseError:
-        report("duplicate-release server rejection allowlisted", False)
-
-    pdx = write_log(root, "dupx.log", dup_ok)
-    try:
-        scan_faults(pdx, "mono_10ms")
-        report("duplicate-release line still a fault elsewhere", False)
-    except ParseError:
-        report("duplicate-release line still a fault elsewhere", True)
-
-    # A DIFFERENT bt_ascs warning is still a fault inside the
-    # duplicate-release scenario (the allowlist is exact-line only).
-    pd2 = write_log(root, "dup2.log", "d_00: ... <wrn> bt_ascs: something else\n")
-    try:
-        scan_faults(pd2, "duplicate_release_10ms")
-        report("other bt_ascs warning still a fault in scenario 17", False)
-    except ParseError:
-        report("other bt_ascs warning still a fault in scenario 17", True)
-
-    # Any bt_bap error is a fault.
-    log14 = "d_00: ... <err> bt_bap: No free sink slot (max 2)\n"
-    p14 = write_log(root, "r14.log", log14)
-    try:
-        scan_faults(p14, "no_free_sink_slot")
-        report("bt_bap error rejected everywhere", False)
-    except ParseError:
-        report("bt_bap error rejected everywhere", True)
+    duplicate_recv = recv_pass(
+        "duplicate_release_10ms",
+        pushes1=25,
+        total1=33,
+        seg=1,
+        obs_gate_o=1,
+        obs_gate_c=1,
+        obs_rel=2,
+        obs_rel_ss=1,
+        obs_disc=1,
+    )
+    duplicate_cli = cli_pass("duplicate_release_10ms", sends0=25, cfgrsps=2, relrsps=3)
+    exact_warning = (
+        "d_00: \x1b[1;33m<wrn> bt_ascs: Invalid operation in state: releasing\x1b[0m\n"
+    )
+    report(
+        "duplicate-release receiver warning allowlisted",
+        run_check(
+            root,
+            "duplicate_release_10ms",
+            duplicate_recv + exact_warning,
+            duplicate_cli,
+        ),
+    )
+    rejected(
+        "duplicate-release warning rejected outside scenario 17",
+        "mono_10ms",
+        mono_recv + exact_warning,
+        mono_cli,
+    )
+    rejected(
+        "duplicate-release warning rejected in client log",
+        "duplicate_release_10ms",
+        duplicate_recv,
+        duplicate_cli + exact_warning,
+    )
+    rejected(
+        "duplicate-release warning requires exact text",
+        "duplicate_release_10ms",
+        duplicate_recv + exact_warning.rstrip() + " extra\n",
+        duplicate_cli,
+    )
+    rejected(
+        "duplicate-release error remains rejected",
+        "duplicate_release_10ms",
+        duplicate_recv
+        + "d_00: \x1b[1;31m<err> bt_ascs: Invalid operation in state: releasing\x1b[0m\n",
+        duplicate_cli,
+    )
 
 
 def test_client_pass_parse():
@@ -579,7 +678,13 @@ def test_client_pass_parse():
     t = parse_client_pass(p)
     report(
         "client pass parse",
-        t["scenario"] == "mono_10ms" and t["sends0"] == 100 and t["cfgrsps"] == 1,
+        t["scenario"] == "mono_10ms"
+        and t["sends0"] == 100
+        and t["cfgrsps"] == 1
+        and t["txc0"] == 100
+        and t["txh0"] == expected_transport_hash(TRANSPORT_VALUES["mono_10ms"][0], 100)
+        and t["txc1"] == 0
+        and t["txh1"] == FNV1A_OFFSET_BASIS,
     )
 
 
@@ -599,9 +704,10 @@ PRODUCTION_DATA = os.path.join(REPO_ROOT, "tests", "bsim", "stage1-scenarios.jso
 
 
 def test_production_pins_load_unchanged():
-    """All 17 production pins load from the versioned file, unchanged."""
+    """Schema 2 loads all production scenarios and preserves receiver pins."""
     data = load_scenarios()
     scenarios = data["scenarios"]
+    report("production schema 2", data["schema_version"] == 2)
     report("production pin count", len(scenarios) == 17)
 
     # Every scenario has the full metadata contract.
@@ -611,6 +717,7 @@ def test_production_pins_load_unchanged():
         ok = ok and isinstance(s["runs"], int) and s["runs"] >= 1
         ok = ok and isinstance(s["dec_calls"], int) and s["dec_calls"] >= 1
         ok = ok and s["channel_mode"] in ("mono", "stereo")
+        ok = ok and isinstance(s["transport"], list) and len(s["transport"]) <= 2
     report("production scenario metadata shape", ok)
 
     # Exact pinned values from the pre-R3 shell tables (no repinning).
@@ -657,7 +764,7 @@ def test_production_pins_load_unchanged():
             "r": 0x129591EE,
             "total": 222,
         },
-        "invalid_sdu_resume_10ms": {"full": 0x0C61918D, "total": 108},
+        "invalid_sdu_resume_10ms": {"total": 108},
         "modea_one_cis_loss_10ms": {
             "full": 0x30D6BAF0,
             "l": 0x32777D65,
@@ -677,6 +784,12 @@ def test_production_pins_load_unchanged():
             pins_ok = False
             report("pin %s" % name, False, "got %r want %r" % (got, want))
     report("production pins unchanged (no repinning)", pins_ok)
+
+    malformed = _scenario(data, "invalid_sdu_resume_10ms")
+    report(
+        "malformed scenario omits only full pin",
+        malformed.get("known") == {"total": 108},
+    )
 
     unpinned = {
         "unsupported_source_direction",
@@ -703,6 +816,7 @@ def _valid_scenario(name="scn", runs=1, dec_calls=1, channel_mode="mono", known=
         "runs": runs,
         "dec_calls": dec_calls,
         "channel_mode": channel_mode,
+        "transport": [],
     }
     if known:
         entry["known"] = known
@@ -732,8 +846,9 @@ def test_schema_shape_errors():
     root = tempfile.mkdtemp()
     cases = [
         ("missing schema_version", {"scenarios": [_valid_scenario()]}),
-        ("empty scenarios", {"schema_version": 1, "scenarios": []}),
-        ("missing scenarios key", {"schema_version": 1}),
+        ("schema 1", {"schema_version": 1, "scenarios": [_valid_scenario()]}),
+        ("empty scenarios", {"schema_version": 2, "scenarios": []}),
+        ("missing scenarios key", {"schema_version": 2}),
     ]
     for label, payload in cases:
         p = _write_scenario_file(root, payload)
@@ -749,7 +864,7 @@ def test_schema_entry_errors():
     dup = _write_scenario_file(
         root,
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "scenarios": [_valid_scenario("dup"), _valid_scenario("dup")],
         },
     )
@@ -761,7 +876,7 @@ def test_schema_entry_errors():
 
     bad_chan = _write_scenario_file(
         root,
-        {"schema_version": 1, "scenarios": [_valid_scenario(channel_mode="jazz")]},
+        {"schema_version": 2, "scenarios": [_valid_scenario(channel_mode="jazz")]},
     )
     try:
         load_scenarios(bad_chan)
@@ -770,7 +885,7 @@ def test_schema_entry_errors():
         report("schema bad channel_mode rejected", True)
 
     bad_runs = _write_scenario_file(
-        root, {"schema_version": 1, "scenarios": [_valid_scenario(runs=0)]}
+        root, {"schema_version": 2, "scenarios": [_valid_scenario(runs=0)]}
     )
     try:
         load_scenarios(bad_runs)
@@ -780,7 +895,7 @@ def test_schema_entry_errors():
 
     bad_known = _write_scenario_file(
         root,
-        {"schema_version": 1, "scenarios": [_valid_scenario(known={"full": "nope"})]},
+        {"schema_version": 2, "scenarios": [_valid_scenario(known={"full": "nope"})]},
     )
     try:
         load_scenarios(bad_known)
@@ -790,7 +905,7 @@ def test_schema_entry_errors():
 
     unknown_key = _write_scenario_file(
         root,
-        {"schema_version": 1, "scenarios": [_valid_scenario(known={"floof": "0x1"})]},
+        {"schema_version": 2, "scenarios": [_valid_scenario(known={"floof": "0x1"})]},
     )
     try:
         load_scenarios(unknown_key)
@@ -801,8 +916,10 @@ def test_schema_entry_errors():
     missing_name = _write_scenario_file(
         root,
         {
-            "schema_version": 1,
-            "scenarios": [{"runs": 1, "dec_calls": 1, "channel_mode": "mono"}],
+            "schema_version": 2,
+            "scenarios": [
+                {"runs": 1, "dec_calls": 1, "channel_mode": "mono", "transport": []}
+            ],
         },
     )
     try:
@@ -810,6 +927,246 @@ def test_schema_entry_errors():
         report("schema missing name rejected", False)
     except ScenarioDataError:
         report("schema missing name rejected", True)
+
+
+def _production_payload():
+    with open(PRODUCTION_DATA, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _scenario(payload, name):
+    return next(entry for entry in payload["scenarios"] if entry["name"] == name)
+
+
+def test_transport_schema_errors():
+    root = tempfile.mkdtemp()
+    cases = []
+
+    payload = _production_payload()
+    _scenario(payload, "mono_10ms").pop("transport")
+    cases.append(("missing transport", payload))
+
+    payload = _production_payload()
+    _scenario(payload, "mono_10ms")["transport"][0]["extra"] = True
+    cases.append(("unknown transport key", payload))
+
+    payload = _production_payload()
+    entry = _scenario(payload, "modea_10ms")["transport"][0]
+    _scenario(payload, "modea_10ms")["transport"].append(json.loads(json.dumps(entry)))
+    cases.append(("duplicate stream", payload))
+
+    payload = _production_payload()
+    _scenario(payload, "mono_10ms")["transport"][0]["fixtures"] = ["not-a-fixture"]
+    cases.append(("unknown fixture", payload))
+
+    payload = _production_payload()
+    _scenario(payload, "mono_10ms")["transport"][0]["layout"] = "interleaved"
+    cases.append(("bad layout", payload))
+
+    payload = _production_payload()
+    _scenario(payload, "mono_10ms")["transport"][0]["fixtures"] = []
+    cases.append(("wrong mono fixture count", payload))
+
+    payload = _production_payload()
+    _scenario(payload, "modeb_10ms")["transport"][0]["fixtures"].reverse()
+    cases.append(("Mode B fixture reversal", payload))
+
+    payload = _production_payload()
+    _scenario(payload, "invalid_sdu_resume_10ms")["transport"][0]["malformed_at"] = 128
+    cases.append(("invalid malformed_at", payload))
+
+    ok = True
+    for label, payload in cases:
+        path = _write_scenario_file(root, payload)
+        try:
+            load_scenarios(path)
+            ok = False
+            report("transport schema %s rejected" % label, False)
+        except ScenarioDataError:
+            report("transport schema %s rejected" % label, True)
+    report("transport schema errors rejected", ok)
+
+
+def test_transport_pass_fields_and_counts():
+    root = tempfile.mkdtemp()
+    recv = recv_pass("mono_10ms")
+    valid = cli_pass("mono_10ms")
+    missing = valid.replace(" txh1=0x%08X" % FNV1A_OFFSET_BASIS, "")
+    missing_ok = not run_check(root, "mono_10ms", recv, missing)
+    report("missing TX PASS field rejected", missing_ok)
+
+    mismatch = cli_pass("mono_10ms", txc0=99)
+    mismatch_ok = not run_check(root, "mono_10ms", recv, mismatch)
+    report("TX count differing from sends rejected", mismatch_ok)
+
+    good_hash = expected_transport_hash(TRANSPORT_VALUES["mono_10ms"][0], 100)
+    changed = cli_pass("mono_10ms", txh0=good_hash ^ 1)
+    hash_ok = not run_check(root, "mono_10ms", recv, changed)
+    report("TX hash bit change rejected", hash_ok)
+
+
+def _stereo_receiver(scenario):
+    recv = recv_pass(scenario, total1=216)
+    return recv.replace("lh1=0x12345678", "lh1=0x11111111").replace(
+        "rh1=0x12345678", "rh1=0x22222222"
+    )
+
+
+def test_transport_channel_layout_hash_rejections():
+    root = tempfile.mkdtemp()
+
+    wrong_mono = {"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_r"]}
+    mono_ok = not run_check(
+        root,
+        "mono_10ms",
+        recv_pass("mono_10ms"),
+        cli_pass("mono_10ms", txh0=expected_transport_hash(wrong_mono, 100)),
+    )
+    report("mono wrong-channel TX hash rejected", mono_ok)
+
+    modea_left, modea_right = TRANSPORT_VALUES["modea_10ms"]
+    modea_ok = not run_check(
+        root,
+        "modea_10ms",
+        _stereo_receiver("modea_10ms"),
+        cli_pass(
+            "modea_10ms",
+            sends0=110,
+            sends1=110,
+            txh0=expected_transport_hash(modea_right, 110),
+            txh1=expected_transport_hash(modea_left, 110),
+        ),
+    )
+    report("Mode A channel swap TX hashes rejected", modea_ok)
+
+    reverse_modeb = {
+        "stream": 0,
+        "layout": "stereo-concat",
+        "fixtures": ["bsim_48k_10ms_120b_r", "bsim_48k_10ms_120b_l"],
+    }
+    modeb_ok = not run_check(
+        root,
+        "modeb_10ms",
+        _stereo_receiver("modeb_10ms"),
+        cli_pass("modeb_10ms", txh0=expected_transport_hash(reverse_modeb, 100)),
+    )
+    report("Mode B concatenation reversal rejected", modeb_ok)
+
+
+def _hash_records(records):
+    hash_value = FNV1A_OFFSET_BASIS
+    for sequence, payload in records:
+        for byte in sequence.to_bytes(4, "little") + payload:
+            hash_value = ((hash_value ^ byte) * 0x01000193) & 0xFFFFFFFF
+    return hash_value
+
+
+def _mono_10ms_frames(count):
+    path = os.path.join(
+        REPO_ROOT, "tests", "fixtures", "lc3", "bsim_48k_10ms_120b_l.lc3"
+    )
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    return [raw[index * 120 : (index + 1) * 120] for index in range(count)]
+
+
+def test_transport_sequence_and_payload_mutations():
+    root = tempfile.mkdtemp()
+    frames = _mono_10ms_frames(101)
+    expected_hash = expected_transport_hash(TRANSPORT_VALUES["mono_10ms"][0], 100)
+    ordered = [(sequence, frames[sequence]) for sequence in range(100)]
+    omitted = [
+        (sequence, frames[sequence])
+        for sequence in list(range(20)) + list(range(21, 101))
+    ]
+    duplicated = (
+        [(sequence, frames[sequence]) for sequence in range(50)]
+        + [(49, frames[49])]
+        + [(sequence, frames[sequence]) for sequence in range(50, 99)]
+    )
+    reordered = list(ordered)
+    reordered[40], reordered[41] = reordered[41], reordered[40]
+    corrupted = list(ordered)
+    payload = bytearray(corrupted[50][1])
+    payload[0] ^= 1
+    corrupted[50] = (50, bytes(payload))
+    mutations = {
+        "omission": omitted,
+        "duplication": duplicated,
+        "reorder": reordered,
+        "payload corruption": corrupted,
+    }
+
+    ok = True
+    for label, records in mutations.items():
+        observed_hash = _hash_records(records)
+        rejected = not run_check(
+            root,
+            "mono_10ms",
+            recv_pass("mono_10ms"),
+            cli_pass("mono_10ms", txh0=observed_hash),
+        )
+        mutation_ok = observed_hash != expected_hash and rejected
+        ok = ok and mutation_ok
+        report("TX %s hash rejected" % label, mutation_ok)
+    report("TX sequence and payload mutations differ from expected", ok)
+
+
+def test_malformed_fixture_transport_hash():
+    root = tempfile.mkdtemp()
+    frames = _mono_10ms_frames(101)
+    records = [(sequence, frames[sequence]) for sequence in range(101)]
+    records[20] = (20, bytes(0x40 + index for index in range(119)))
+    synthetic_hash = _hash_records(records)
+    correct_hash = expected_transport_hash(
+        TRANSPORT_VALUES["invalid_sdu_resume_10ms"][0], 101
+    )
+    recv = recv_pass("invalid_sdu_resume_10ms", derr1=1, obs_mal=1)
+    truncated_ok = run_check(
+        root,
+        "invalid_sdu_resume_10ms",
+        recv,
+        cli_pass("invalid_sdu_resume_10ms", sends0=101),
+    )
+    synthetic_rejected = not run_check(
+        root,
+        "invalid_sdu_resume_10ms",
+        recv,
+        cli_pass("invalid_sdu_resume_10ms", sends0=101, txh0=synthetic_hash),
+    )
+    report(
+        "malformed frame uses truncated corpus bytes",
+        truncated_ok and synthetic_hash != correct_hash and synthetic_rejected,
+    )
+
+
+def test_no_transport_requires_zero_result():
+    root = tempfile.mkdtemp()
+    recv = recv_pass(
+        "unsupported_source_direction",
+        seg=0,
+        pushes1=0,
+        obs_rej=1,
+        obs_dir=2,
+        obs_code=7,
+        obs_reason=0,
+        obs_ok=0,
+    )
+    zero_ok = run_check(
+        root,
+        "unsupported_source_direction",
+        recv,
+        cli_pass("unsupported_source_direction", sends0=0),
+    )
+    nonzero_rejected = not run_check(
+        root,
+        "unsupported_source_direction",
+        recv,
+        cli_pass("unsupported_source_direction", sends0=1),
+    )
+    report(
+        "no-transport scenarios require zero TX result", zero_ok and nonzero_rejected
+    )
 
 
 def _run_cli(args):
@@ -989,6 +1346,12 @@ def main():
     test_schema_invalid_json()
     test_schema_shape_errors()
     test_schema_entry_errors()
+    test_transport_schema_errors()
+    test_transport_pass_fields_and_counts()
+    test_transport_channel_layout_hash_rejections()
+    test_transport_sequence_and_payload_mutations()
+    test_malformed_fixture_transport_hash()
+    test_no_transport_requires_zero_result()
     test_cli_known_precedence()
     test_bsim_log_root_relative_rejected_early()
     test_bsim_log_root_root_and_home_rejected_early()

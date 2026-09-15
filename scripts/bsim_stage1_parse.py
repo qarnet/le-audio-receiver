@@ -6,8 +6,8 @@ scenario run and asserts the scenario-specific contract:
 
   - exact per-scenario response/count/hash expectations;
   - channel-hash relations (mono L == R, Mode A/B L != R);
-  - no decode/lifecycle fault markers in the receiver log (with a
-    per-scenario allowlist for intentionally exercised paths);
+  - no semantic fault markers or `<wrn>`/`<err>` records in either app log,
+    with a narrow per-scenario allowlist for intentionally exercised paths;
   - exact client-side send counts and ASCS response counts.
 
 The bash runner uses `check` per run; unit tests in tests/unit/bsim_runner
@@ -20,6 +20,12 @@ import json
 import os
 import re
 import sys
+
+from lc3_pcm_calibrate import (  # strict fixture validation shared with calibration
+    CalibrationError,
+    FIXTURES_DIR,
+    load_manifest as load_portable_manifest,
+)
 
 # ── scenario metadata (versioned data file) ────────────────────────────
 # tests/bsim/stage1-scenarios.json is the single source for scenario
@@ -37,11 +43,49 @@ _SCENARIOS_FILE = os.path.join(
 
 CHANNEL_MODES = ("mono", "stereo")
 KNOWN_KEYS = ("full", "l", "r", "total")
+TRANSPORT_LAYOUTS = ("mono", "stereo-concat")
+FNV1A_OFFSET_BASIS = 0x811C9DC5
+FNV1A_PRIME = 0x01000193
 _HEX_RE = re.compile(r"^0x[0-9A-Fa-f]+$")
+
+# Every production scenario declares each logical stream that can transmit.
+# The schema, rather than scenario-name parsing, owns the selected fixtures.
+REQUIRED_TRANSPORT_STREAMS = {
+    "mono_10ms": {0},
+    "mono_7p5ms": {0},
+    "modea_10ms": {0, 1},
+    "modea_7p5ms": {0, 1},
+    "modea_reverse_start_10ms": {0, 1},
+    "modeb_10ms": {0},
+    "modeb_7p5ms": {0},
+    "invalid_sdu_resume_10ms": {0},
+    "modea_one_cis_loss_10ms": {0, 1},
+    "modea_first_stop_10ms": {0, 1},
+    "release_without_disable_10ms": {0},
+    "disconnect_streaming_10ms": {0},
+    "reconnect_second_stream_10ms": {0, 1},
+    "unsupported_source_direction": set(),
+    "no_free_sink_slot": set(),
+    "invalid_codec_fields": set(),
+    "duplicate_release_10ms": {0},
+}
 
 
 class ScenarioDataError(ValueError):
     """Raised when the versioned scenario data file is malformed."""
+
+
+def load_transport_manifest():
+    """Load P0's strict portable corpus manifest for transport derivation."""
+    try:
+        manifest, _fixture_hashes, _manifest_hash = load_portable_manifest()
+    except CalibrationError as exc:
+        raise ScenarioDataError("portable LC3 manifest invalid: %s" % exc) from exc
+    return manifest
+
+
+def _fixture_map(manifest):
+    return {entry["stem"]: entry for entry in manifest["streams"]}
 
 
 def load_scenarios(path=None):
@@ -65,12 +109,15 @@ def load_scenarios(path=None):
         raise ScenarioDataError(
             "%s: must be an object with a 'scenarios' list" % data_path
         )
-    if data.get("schema_version") != 1:
+    if data.get("schema_version") != 2:
         raise ScenarioDataError(
-            "%s: missing/unsupported schema_version (expected 1)" % data_path
+            "%s: missing/unsupported schema_version (expected 2)" % data_path
         )
     if not data["scenarios"]:
         raise ScenarioDataError("%s: empty 'scenarios' list" % data_path)
+
+    manifest = load_transport_manifest()
+    fixtures = _fixture_map(manifest)
 
     seen = set()
     for idx, entry in enumerate(data["scenarios"]):
@@ -112,18 +159,140 @@ def load_scenarios(path=None):
                     raise ScenarioDataError(
                         "%s: known.%s must be a 0x-hex string" % (where, key)
                     )
+
+        if "transport" not in entry:
+            raise ScenarioDataError("%s: missing 'transport'" % where)
+        transport = entry["transport"]
+        if not isinstance(transport, list) or len(transport) > 2:
+            raise ScenarioDataError(
+                "%s: 'transport' must be a list of zero to two entries" % where
+            )
+
+        transport_streams = set()
+        for transport_idx, transport_entry in enumerate(transport):
+            transport_where = "%s.transport[%d]" % (where, transport_idx)
+            if not isinstance(transport_entry, dict):
+                raise ScenarioDataError("%s: not an object" % transport_where)
+            allowed_keys = {"stream", "layout", "fixtures", "malformed_at"}
+            required_keys = {"stream", "layout", "fixtures"}
+            actual_keys = set(transport_entry)
+            unknown = sorted(actual_keys - allowed_keys)
+            missing = sorted(required_keys - actual_keys)
+            if unknown:
+                raise ScenarioDataError(
+                    "%s: unknown fields %s" % (transport_where, ", ".join(unknown))
+                )
+            if missing:
+                raise ScenarioDataError(
+                    "%s: missing fields %s" % (transport_where, ", ".join(missing))
+                )
+
+            stream = transport_entry["stream"]
+            if type(stream) is not int or stream not in (0, 1):
+                raise ScenarioDataError("%s.stream must be 0 or 1" % transport_where)
+            if stream in transport_streams:
+                raise ScenarioDataError(
+                    "%s: duplicate transport stream %d" % (where, stream)
+                )
+            transport_streams.add(stream)
+
+            layout = transport_entry["layout"]
+            if layout not in TRANSPORT_LAYOUTS:
+                raise ScenarioDataError(
+                    "%s.layout must be one of %s"
+                    % (transport_where, ", ".join(TRANSPORT_LAYOUTS))
+                )
+            fixture_stems = transport_entry["fixtures"]
+            if not isinstance(fixture_stems, list) or not all(
+                isinstance(stem, str) for stem in fixture_stems
+            ):
+                raise ScenarioDataError(
+                    "%s.fixtures must be a list of strings" % transport_where
+                )
+            if any(stem not in fixtures for stem in fixture_stems):
+                raise ScenarioDataError(
+                    "%s.fixtures contains an unknown fixture" % transport_where
+                )
+
+            if layout == "mono":
+                if len(fixture_stems) != 1:
+                    raise ScenarioDataError(
+                        "%s mono layout needs one fixture" % transport_where
+                    )
+            else:
+                if len(fixture_stems) != 2:
+                    raise ScenarioDataError(
+                        "%s stereo-concat layout needs two fixtures" % transport_where
+                    )
+                left, right = (fixtures[stem] for stem in fixture_stems)
+                if left["channel"] != "left" or right["channel"] != "right":
+                    raise ScenarioDataError(
+                        "%s stereo-concat fixtures must be left then right"
+                        % transport_where
+                    )
+                if (
+                    left["duration_us"],
+                    left["frequency_hz"],
+                    left["frame_bytes"],
+                    left["frame_count"],
+                ) != (
+                    right["duration_us"],
+                    right["frequency_hz"],
+                    right["frame_bytes"],
+                    right["frame_count"],
+                ):
+                    raise ScenarioDataError(
+                        "%s stereo-concat fixtures have different geometry"
+                        % transport_where
+                    )
+
+            malformed_at = transport_entry.get("malformed_at")
+            if "malformed_at" in transport_entry:
+                if type(malformed_at) is not int or not 0 <= malformed_at < 128:
+                    raise ScenarioDataError(
+                        "%s.malformed_at must be an integer from 0 through 127"
+                        % transport_where
+                    )
+                if (
+                    name != "invalid_sdu_resume_10ms"
+                    or stream != 0
+                    or malformed_at != 20
+                ):
+                    raise ScenarioDataError(
+                        "%s.malformed_at is only valid for invalid_sdu_resume_10ms stream 0 at 20"
+                        % transport_where
+                    )
+
+        if name == "invalid_sdu_resume_10ms" and (
+            len(transport) != 1 or "malformed_at" not in transport[0]
+        ):
+            raise ScenarioDataError(
+                "%s: invalid-SDU scenario must declare malformed_at 20" % where
+            )
+        expected_streams = REQUIRED_TRANSPORT_STREAMS.get(name)
+        if expected_streams is not None and transport_streams != expected_streams:
+            raise ScenarioDataError(
+                "%s: transport streams %s != required %s"
+                % (where, sorted(transport_streams), sorted(expected_streams))
+            )
     return data
 
 
 # Scenario name -> (decoder calls per push, mono or stereo, runs in matrix)
+_SCENARIO_DATA = load_scenarios()
+
 SCENARIOS = {
     entry["name"]: (entry["dec_calls"], entry["channel_mode"], entry["runs"])
-    for entry in load_scenarios()["scenarios"]
+    for entry in _SCENARIO_DATA["scenarios"]
+}
+
+TRANSPORT_VALUES = {
+    entry["name"]: entry["transport"] for entry in _SCENARIO_DATA["scenarios"]
 }
 
 # Scenario name -> pinned known values (ints) from the versioned file.
 KNOWN_VALUES = {}
-for _entry in load_scenarios()["scenarios"]:
+for _entry in _SCENARIO_DATA["scenarios"]:
     _known = _entry.get("known") or {}
     _val = {}
     for _key in ("full", "l", "r"):
@@ -217,7 +386,18 @@ def parse_receiver_pass(path):
 def parse_client_pass(path):
     line = extract_pass_line(path, "bsim_client")
     tokens = parse_tokens(line)
-    need = ["scenario", "sends0", "sends1", "cfgrsps", "relrsps", "disrsps"]
+    need = [
+        "scenario",
+        "sends0",
+        "sends1",
+        "cfgrsps",
+        "relrsps",
+        "disrsps",
+        "txc0",
+        "txh0",
+        "txc1",
+        "txh1",
+    ]
     missing = [k for k in need if k not in tokens]
     if missing:
         raise ParseError("client PASS missing fields %s" % missing)
@@ -226,10 +406,7 @@ def parse_client_pass(path):
 
 # ── fault-marker scan ────────────────────────────────────────────────
 
-# Receiver log markers that indicate a decode/lifecycle fault.  There is
-# no warning allowlist: the expected control paths (unsupported source,
-# rejected codec shape, pool full, malformed SDU) log at INFO level, so
-# every remaining bt_bap / bt_ascs warning or error is a fault.
+# Log markers that indicate a semantic decode/lifecycle fault.
 FAULT_MARKERS = [
     "ASSERTION FAILURE",
     "FATAL",
@@ -245,35 +422,46 @@ FAULT_MARKERS = [
 ]
 
 # Narrow per-scenario allowlist for deliberately exercised negative paths
-# that log at WRN/ERR level in the SDK.  Each entry is an exact substring
-# of the expected line; nothing else is forgiven.
+# that log at WRN/ERR level in the SDK. The receiver warning must end with
+# this exact message; nothing else is forgiven.
 SCENARIO_ALLOW = {
-    # The server's documented rejection of the duplicate Release PDU on
-    # the already-RELEASING ASE (ascs.c ase_release) — the deliberate
-    # duplicate same-slot release of scenario 17.  No app callback fires;
-    # the cleanup observer count stays exactly one.
-    "duplicate_release_10ms": ["Invalid operation in state: releasing"],
+    "duplicate_release_10ms": re.compile(
+        r"<wrn>\s+bt_ascs: Invalid operation in state: releasing\s*$"
+    ),
 }
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_LOG_LEVEL_RE = re.compile(r"<(?:wrn|err)>")
 
-def scan_faults(receiver_path, scenario):
+
+def _warning_is_allowed(role, scenario, line):
+    allowed = SCENARIO_ALLOW.get(scenario)
+
+    return (
+        role == "receiver" and allowed is not None and allowed.search(line) is not None
+    )
+
+
+def scan_faults(receiver_path, client_path, scenario):
+    """Reject semantic faults and warning/error records from both app logs."""
     hits = []
-    allow = SCENARIO_ALLOW.get(scenario, [])
-    try:
-        with open(receiver_path, "r", errors="replace") as fh:
-            for line in fh:
-                if any(marker in line for marker in FAULT_MARKERS):
-                    hits.append(line.strip())
-                    continue
-                if "<wrn> bt_bap:" in line or "<wrn> bt_ascs:" in line:
-                    if not any(a in line for a in allow):
-                        hits.append(line.strip())
-                elif "<err> bt_bap:" in line:
-                    hits.append(line.strip())
-    except OSError as exc:
-        raise ParseError("cannot read %s: %s" % (receiver_path, exc))
+
+    for role, path in (("receiver", receiver_path), ("client", client_path)):
+        try:
+            with open(path, "r", errors="replace") as fh:
+                for raw_line in fh:
+                    line = _ANSI_ESCAPE_RE.sub("", raw_line).rstrip()
+                    if any(marker in line for marker in FAULT_MARKERS):
+                        hits.append("%s: %s" % (role, line))
+                        continue
+                    if _LOG_LEVEL_RE.search(line) and not _warning_is_allowed(
+                        role, scenario, line
+                    ):
+                        hits.append("%s: %s" % (role, line))
+        except OSError as exc:
+            raise ParseError("cannot read %s log %s: %s" % (role, path, exc))
     if hits:
-        raise ParseError("fault markers in receiver log: %s" % "; ".join(hits[:5]))
+        raise ParseError("fault markers in app logs: %s" % "; ".join(hits[:5]))
 
 
 # ── scenario checks ──────────────────────────────────────────────────
@@ -285,6 +473,115 @@ def _h(rec, key, scenario, field):
     return rec[key]
 
 
+def _fnv1a_bytes(hash_value, payload):
+    for byte in payload:
+        hash_value = ((hash_value ^ byte) * FNV1A_PRIME) & 0xFFFFFFFF
+    return hash_value
+
+
+def _transport_fixture_map():
+    try:
+        return _fixture_map(load_transport_manifest())
+    except ScenarioDataError as exc:
+        raise ParseError("cannot validate portable LC3 manifest: %s" % exc) from exc
+
+
+def _fixture_lc3_bytes(fixture):
+    path = FIXTURES_DIR / fixture["lc3"]["path"]
+    try:
+        payload = path.read_bytes()
+    except OSError as exc:
+        raise ParseError("cannot read LC3 fixture %s: %s" % (path, exc)) from exc
+    expected_size = fixture["frame_bytes"] * fixture["frame_count"]
+    if len(payload) != expected_size:
+        raise ParseError(
+            "LC3 fixture size changed after manifest validation: %s" % path
+        )
+    return payload
+
+
+def expected_transport_hash(transport, count, fixtures=None):
+    """Derive C-contract FNV-1a from validated corpus frames and transport data."""
+    if type(count) is not int or count < 0:
+        raise ParseError("transport count must be a non-negative integer")
+    if fixtures is None:
+        fixtures = _transport_fixture_map()
+
+    fixture_entries = [fixtures[stem] for stem in transport["fixtures"]]
+    capacity = fixture_entries[0]["frame_count"]
+    if count > capacity:
+        raise ParseError(
+            "transport count %d exceeds corpus capacity %d" % (count, capacity)
+        )
+
+    corpus = {entry["stem"]: _fixture_lc3_bytes(entry) for entry in fixture_entries}
+    hash_value = FNV1A_OFFSET_BASIS
+    malformed_at = transport.get("malformed_at")
+    for sequence in range(count):
+        payload = b"".join(
+            corpus[entry["stem"]][
+                sequence * entry["frame_bytes"] : (sequence + 1) * entry["frame_bytes"]
+            ]
+            for entry in fixture_entries
+        )
+        if sequence == malformed_at:
+            payload = payload[:-1]
+        hash_value = _fnv1a_bytes(hash_value, sequence.to_bytes(4, "little"))
+        hash_value = _fnv1a_bytes(hash_value, payload)
+    return hash_value
+
+
+def check_transport(scenario, client):
+    """Check retained client TX evidence against schema-owned corpus bytes."""
+    entries = {entry["stream"]: entry for entry in TRANSPORT_VALUES[scenario]}
+    fixtures = _transport_fixture_map()
+    errs = []
+
+    for stream in (0, 1):
+        sends = client["sends%d" % stream]
+        count = client["txc%d" % stream]
+        observed_hash = client["txh%d" % stream]
+        prefix = "stream %d" % stream
+
+        if (
+            type(sends) is not int
+            or sends < 0
+            or type(count) is not int
+            or count < 0
+            or type(observed_hash) is not int
+            or not 0 <= observed_hash <= 0xFFFFFFFF
+        ):
+            errs.append("%s TX fields are not unsigned integers" % prefix)
+            continue
+        if count != sends:
+            errs.append(
+                "%s txc%d %d != sends%d %d" % (prefix, stream, count, stream, sends)
+            )
+            continue
+
+        transport = entries.get(stream)
+        if transport is None:
+            if count != 0 or sends != 0 or observed_hash != FNV1A_OFFSET_BASIS:
+                errs.append(
+                    "%s without transport must have zero sends/count and offset-basis hash"
+                    % prefix
+                )
+            continue
+
+        try:
+            expected_hash = expected_transport_hash(transport, count, fixtures)
+        except ParseError as exc:
+            errs.append("%s %s" % (prefix, exc))
+            continue
+        if observed_hash != expected_hash:
+            errs.append(
+                "%s txh%d 0x%08X != expected 0x%08X"
+                % (prefix, stream, observed_hash, expected_hash)
+            )
+
+    return errs
+
+
 def check_scenario(scenario, recv, cli, known):
     """Assert the full scenario contract.  `known` maps
     known_full/known_l/known_r for the scenarios that pin hashes."""
@@ -294,9 +591,11 @@ def check_scenario(scenario, recv, cli, known):
 
     r = parse_receiver_pass(recv)
     c = parse_client_pass(cli)
-    scan_faults(recv, scenario)
+    scan_faults(recv, cli, scenario)
 
     errs = []
+
+    errs.extend(check_transport(scenario, c))
 
     if r["scenario"] != scenario:
         errs.append("receiver scenario %s != %s" % (r["scenario"], scenario))
@@ -768,8 +1067,10 @@ def main(argv):
         return 1
 
     r = parse_receiver_pass(args.receiver)
+    c = parse_client_pass(args.client)
     print(
-        "PASS: %s seg=%d pushes1=%s h1=0x%08X lh1=0x%08X rh1=0x%08X"
+        "PASS: %s seg=%d pushes1=%s h1=0x%08X lh1=0x%08X rh1=0x%08X "
+        "txc0=%d txh0=0x%08X txc1=%d txh1=0x%08X"
         % (
             args.scenario,
             r.get("seg"),
@@ -777,6 +1078,10 @@ def main(argv):
             r.get("h1", 0),
             r.get("lh1", 0),
             r.get("rh1", 0),
+            c["txc0"],
+            c["txh0"],
+            c["txc1"],
+            c["txh1"],
         )
     )
     return 0

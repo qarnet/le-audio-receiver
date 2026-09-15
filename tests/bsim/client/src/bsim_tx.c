@@ -7,13 +7,15 @@
  * One TX thread round-robins over registered streams.  A stream sends
  * only while its endpoint is in the streaming state, and only when the
  * scenario-required stream count is streaming (Mode A holds both).
- * Per-channel encoders are independent; PCM patterns are deterministic
- * integer functions of (channel, sequence number, sample index).
+ * Frames come from fixed, checked-in LC3 corpus files.  The selected corpus
+ * frame depends only on validated codec geometry, channel, and logical
+ * sequence number.
  *
  * Cross-thread ownership protocol (scenario thread vs TX thread):
  *
- *  - One mutex (tx_lock) protects every tx_streams field access.  It is
- *    never held across net_buf_alloc or bt_bap_stream_send (blocking).
+ *  - One mutex (tx_lock) protects every tx_streams and tx_audits field
+ *    access. It is never held across net_buf_alloc or bt_bap_stream_send
+ *    (blocking).
  *  - A candidate slot snapshot is taken under the lock and increments
  *    that slot's in_flight counter, recording generation, stream, and
  *    sequence.  Every path after the unlock (encode failure, send
@@ -21,17 +23,17 @@
  *    counters/sequence/injection are committed only if the generation
  *    and stream still match the snapshot.
  *  - register() takes the lock and selects only a slot with
- *    bap_stream == NULL and in_flight == 0; the config and encoders are
- *    initialized while protected, the generation is bumped to a nonzero
- *    value, and bap_stream is published last.  The only memset happens
- *    while in_flight == 0 under the lock, so it can never race an
- *    in-flight encode/send, and the generation is reassigned afterwards.
+ *    bap_stream == NULL and in_flight == 0; the config and retained audit
+ *    association are initialized while protected, the generation is bumped
+ *    to a nonzero value, and bap_stream is published last.  The only memset
+ *    happens while in_flight == 0 under the lock, so it can never race an
+ *    in-flight build/send, and the generation is reassigned afterwards.
  *  - unregister() clears bap_stream and bumps the generation under the
  *    lock, then waits (without holding the lock) until in_flight == 0.
  *  - pause() sets paused under the lock then waits for in_flight == 0;
  *    resume() is synchronized under the lock.
- *  - The TX thread is the sole mutator of the encoder state while a slot
- *    is in flight; register() cannot touch a slot with in_flight > 0.
+ *  - The TX thread is the sole mutator of active sequence/hash state while a
+ *    slot is in flight; register() cannot touch a slot with in_flight > 0.
  */
 
 #include "bsim_tx.h"
@@ -42,31 +44,82 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <lc3.h>
-#include <zephyr/bluetooth/audio/audio.h>
 #include <zephyr/bluetooth/audio/bap.h>
 #include <zephyr/bluetooth/iso.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/net_buf.h>
-#include <zephyr/sys/printk.h>
 #include <zephyr/sys/util.h>
-#include <zephyr/sys_clock.h>
-#include <zephyr/types.h>
 
 LOG_MODULE_REGISTER(bsim_tx, LOG_LEVEL_INF);
 
-#define BSIM_TX_MAX_SAMPLES 480 /* 48 kHz × 10 ms */
+#define BSIM_TX_CORPUS_FRAMES 128U
+#define BSIM_TX_FNV1A_PRIME   UINT32_C(0x01000193)
+#define BSIM_TX_IDLE_WAIT_MS  1000U
 
-#define BSIM_TX_IDLE_WAIT_MS 1000U
+struct bsim_tx_fixture {
+	const uint8_t *left;
+	const uint8_t *right;
+	uint16_t frame_bytes;
+	uint32_t frame_duration_us;
+	uint32_t frame_count;
+};
+
+static const uint8_t bsim_48k_10ms_120b_l[] = {
+#include <bsim_48k_10ms_120b_l.lc3.inc>
+};
+
+static const uint8_t bsim_48k_10ms_120b_r[] = {
+#include <bsim_48k_10ms_120b_r.lc3.inc>
+};
+
+static const uint8_t bsim_48k_7p5ms_90b_l[] = {
+#include <bsim_48k_7p5ms_90b_l.lc3.inc>
+};
+
+static const uint8_t bsim_48k_7p5ms_90b_r[] = {
+#include <bsim_48k_7p5ms_90b_r.lc3.inc>
+};
+
+BUILD_ASSERT(sizeof(bsim_48k_10ms_120b_l) == BSIM_TX_CORPUS_FRAMES * 120U,
+	     "10 ms left corpus size");
+BUILD_ASSERT(sizeof(bsim_48k_10ms_120b_r) == BSIM_TX_CORPUS_FRAMES * 120U,
+	     "10 ms right corpus size");
+BUILD_ASSERT(sizeof(bsim_48k_7p5ms_90b_l) == BSIM_TX_CORPUS_FRAMES * 90U,
+	     "7.5 ms left corpus size");
+BUILD_ASSERT(sizeof(bsim_48k_7p5ms_90b_r) == BSIM_TX_CORPUS_FRAMES * 90U,
+	     "7.5 ms right corpus size");
+
+static const struct bsim_tx_fixture fixture_48k_10ms_120b = {
+	.left = bsim_48k_10ms_120b_l,
+	.right = bsim_48k_10ms_120b_r,
+	.frame_bytes = 120U,
+	.frame_duration_us = 10000U,
+	.frame_count = BSIM_TX_CORPUS_FRAMES,
+};
+
+static const struct bsim_tx_fixture fixture_48k_7p5ms_90b = {
+	.left = bsim_48k_7p5ms_90b_l,
+	.right = bsim_48k_7p5ms_90b_r,
+	.frame_bytes = 90U,
+	.frame_duration_us = 7500U,
+	.frame_count = BSIM_TX_CORPUS_FRAMES,
+};
+
+struct bsim_tx_audit {
+	const struct bt_bap_stream *bap_stream;
+	uint32_t send_count;
+	uint32_t fnv1a_hash;
+};
 
 struct bsim_tx_stream {
 	struct bt_bap_stream *bap_stream;
 	struct bsim_tx_config cfg;
-	lc3_encoder_t encoder[2];
-	lc3_encoder_mem_48k_t encoder_mem[2];
+	const struct bsim_tx_fixture *fixture;
+	struct bsim_tx_audit *audit;
 	uint16_t seq_num;
 	uint32_t send_count;
+	uint32_t fnv1a_hash;
 	uint32_t send_limit; /* 0 = unlimited */
 	uint32_t generation; /* bumped on register/unregister; 0 = never used */
 	uint32_t in_flight;  /* TX candidates currently past the snapshot */
@@ -76,6 +129,7 @@ struct bsim_tx_stream {
 };
 
 static struct bsim_tx_stream tx_streams[BSIM_TX_MAX_STREAMS];
+static struct bsim_tx_audit tx_audits[BSIM_TX_MAX_STREAMS];
 static atomic_int required_streaming = 1;
 
 static K_MUTEX_DEFINE(tx_lock);
@@ -83,13 +137,49 @@ static K_MUTEX_DEFINE(tx_lock);
 /* Caller must hold tx_lock. */
 static int bsim_tx_streaming_count_locked(void);
 
+static uint32_t bsim_tx_next_generation(uint32_t generation)
+{
+	generation++;
+	return generation == 0U ? 1U : generation;
+}
+
 static struct bsim_tx_stream *tx_lookup_locked(const struct bt_bap_stream *bap_stream)
 {
+	if (bap_stream == NULL) {
+		return NULL;
+	}
+
 	for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
 		if (tx_streams[i].bap_stream == bap_stream) {
 			return &tx_streams[i];
 		}
 	}
+	return NULL;
+}
+
+static struct bsim_tx_audit *tx_audit_lookup_locked(const struct bt_bap_stream *bap_stream)
+{
+	if (bap_stream == NULL) {
+		return NULL;
+	}
+
+	for (size_t i = 0U; i < ARRAY_SIZE(tx_audits); i++) {
+		if (tx_audits[i].bap_stream == bap_stream) {
+			return &tx_audits[i];
+		}
+	}
+
+	return NULL;
+}
+
+static struct bsim_tx_audit *tx_audit_empty_locked(void)
+{
+	for (size_t i = 0U; i < ARRAY_SIZE(tx_audits); i++) {
+		if (tx_audits[i].bap_stream == NULL) {
+			return &tx_audits[i];
+		}
+	}
+
 	return NULL;
 }
 
@@ -110,58 +200,106 @@ static bool stream_is_streaming(const struct bt_bap_stream *bap_stream)
 	return ep_info.state == BT_BAP_EP_STATE_STREAMING;
 }
 
-/*
- * Deterministic integer PCM pattern: differs by channel and evolves by
- * sequence number.  Full-range int16 values (nonzero energy per frame).
- * No floating point.
- */
-static uint32_t bsim_tx_hash_mix(uint32_t x)
+static const struct bsim_tx_fixture *bsim_tx_fixture_for_config(const struct bsim_tx_config *cfg)
 {
-	x ^= x >> 16;
-	x *= 0x7feb352dU;
-	x ^= x >> 15;
-	x *= 0x846ca68bU;
-	x ^= x >> 16;
-	return x;
+	if (cfg == NULL || cfg->freq_hz != 48000U) {
+		return NULL;
+	}
+
+	if (cfg->frame_duration_us == fixture_48k_10ms_120b.frame_duration_us &&
+	    cfg->octets_per_frame == fixture_48k_10ms_120b.frame_bytes) {
+		return &fixture_48k_10ms_120b;
+	}
+	if (cfg->frame_duration_us == fixture_48k_7p5ms_90b.frame_duration_us &&
+	    cfg->octets_per_frame == fixture_48k_7p5ms_90b.frame_bytes) {
+		return &fixture_48k_7p5ms_90b;
+	}
+
+	return NULL;
 }
 
-static void bsim_tx_fill_pcm(const struct bsim_tx_stream *s, int16_t *pcm, uint8_t channel_sel)
+static int bsim_tx_validate_config(const struct bsim_tx_config *cfg,
+				   const struct bsim_tx_fixture **fixture)
 {
-	const uint32_t n = (s->cfg.frame_duration_us * s->cfg.freq_hz) / USEC_PER_SEC;
+	const struct bsim_tx_fixture *selected = bsim_tx_fixture_for_config(cfg);
 
-	for (uint32_t i = 0U; i < n; i++) {
-		uint32_t v = s->seq_num ^ ((i + 1U) * 747796405U) ^ ((uint32_t)channel_sel << 24);
-
-		v = bsim_tx_hash_mix(v);
-		pcm[i] = (int16_t)(v & 0xFFFFU);
+	if (selected == NULL || (cfg->chan_count != 1U && cfg->chan_count != 2U) ||
+	    (cfg->chan_count == 1U && cfg->channel_idx > 1U) ||
+	    selected->frame_count < BSIM_TX_CORPUS_FRAMES) {
+		return -EINVAL;
 	}
+
+	if (fixture != NULL) {
+		*fixture = selected;
+	}
+
+	return 0;
 }
 
-static bool bsim_tx_encode_sdu(struct bsim_tx_stream *s, struct net_buf *buf)
+static uint32_t bsim_tx_fnv1a_byte(uint32_t hash, uint8_t byte)
 {
-	int16_t pcm[BSIM_TX_MAX_SAMPLES];
+	return (hash ^ (uint32_t)byte) * BSIM_TX_FNV1A_PRIME;
+}
 
-	for (uint8_t ch = 0U; ch < s->cfg.chan_count; ch++) {
-		uint8_t channel_sel;
+static uint32_t bsim_tx_fnv1a_sdu(uint32_t hash, uint16_t seq, const struct net_buf *buf)
+{
+	const uint32_t logical_seq = seq;
 
-		if (s->cfg.chan_count == 2) {
-			channel_sel = ch; /* Mode B: L then R */
-		} else {
-			channel_sel = s->cfg.channel_idx; /* mono / Mode A half */
-		}
-
-		bsim_tx_fill_pcm(s, pcm, channel_sel);
-
-		int err = lc3_encode(s->encoder[ch], LC3_PCM_FORMAT_S16, pcm, 1,
-				     s->cfg.octets_per_frame, net_buf_tail(buf));
-
-		if (err < 0) {
-			LOG_ERR("LC3 encode failed: %d", err);
-			return false;
-		}
-		buf->len += s->cfg.octets_per_frame;
+	for (size_t i = 0U; i < sizeof(logical_seq); i++) {
+		hash = bsim_tx_fnv1a_byte(hash, (uint8_t)(logical_seq >> (i * 8U)));
 	}
-	return true;
+	for (size_t i = 0U; i < buf->len; i++) {
+		hash = bsim_tx_fnv1a_byte(hash, buf->data[i]);
+	}
+
+	return hash;
+}
+
+static int bsim_tx_build_sdu(const struct bsim_tx_config *cfg,
+			     const struct bsim_tx_fixture *fixture, uint16_t seq, bool inject,
+			     struct net_buf *buf)
+{
+	const uint8_t *left;
+	size_t sdu_len;
+
+	if (cfg == NULL || fixture == NULL || buf == NULL || seq >= fixture->frame_count) {
+		return -EINVAL;
+	}
+
+	left = fixture->left + ((size_t)seq * fixture->frame_bytes);
+	sdu_len = (size_t)cfg->chan_count * fixture->frame_bytes;
+
+	if (inject) {
+		if (cfg->chan_count != 1U || cfg->channel_idx != 0U ||
+		    fixture != &fixture_48k_10ms_120b) {
+			return -EINVAL;
+		}
+		sdu_len--;
+	}
+
+	if (net_buf_tailroom(buf) < sdu_len) {
+		return -EMSGSIZE;
+	}
+
+	if (inject) {
+		net_buf_add_mem(buf, left, fixture->frame_bytes - 1U);
+		return 0;
+	}
+
+	if (cfg->chan_count == 1U) {
+		const uint8_t *frame =
+			cfg->channel_idx == 0U
+				? left
+				: fixture->right + ((size_t)seq * fixture->frame_bytes);
+
+		net_buf_add_mem(buf, frame, fixture->frame_bytes);
+	} else {
+		net_buf_add_mem(buf, left, fixture->frame_bytes);
+		net_buf_add_mem(buf, fixture->right + ((size_t)seq * fixture->frame_bytes),
+				fixture->frame_bytes);
+	}
+
+	return 0;
 }
 
 static void tx_thread_func(void *arg1, void *arg2, void *arg3)
@@ -176,13 +314,16 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 		for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
 			struct bsim_tx_stream *s = &tx_streams[i];
 			struct bt_bap_stream *stream;
+			struct bsim_tx_config cfg;
+			const struct bsim_tx_fixture *fixture;
 			uint16_t seq;
 			bool inject;
 			uint32_t gen;
+			uint32_t previous_hash;
 
 			/* Candidate snapshot under the lock: increment
 			 * in_flight and record generation/stream/seq.  The
-			 * lock is never held across alloc/encode/send. */
+			 * lock is never held across alloc/build/send. */
 			k_mutex_lock(&tx_lock, K_FOREVER);
 			if (s->bap_stream == NULL || s->paused) {
 				k_mutex_unlock(&tx_lock);
@@ -198,37 +339,45 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 				k_mutex_unlock(&tx_lock);
 				continue;
 			}
+			if (s->seq_num >= BSIM_TX_CORPUS_FRAMES) {
+				const uint16_t exhausted_seq = s->seq_num;
+
+				s->paused = true;
+				k_mutex_unlock(&tx_lock);
+				LOG_ERR("TX[%zu]: corpus exhausted at seq %u", i, exhausted_seq);
+				continue;
+			}
 			stream = s->bap_stream;
+			cfg = s->cfg;
+			fixture = s->fixture;
 			seq = s->seq_num;
 			inject = s->inject_pending && s->seq_num == s->inject_at_seq;
 			gen = s->generation;
+			previous_hash = s->fnv1a_hash;
 
 			s->in_flight++;
 			k_mutex_unlock(&tx_lock);
 
-			/* Build the SDU without the lock (encoder state is
+			/* Build the SDU without the lock (active TX state is
 			 * TX-thread-owned while in_flight > 0; register
 			 * cannot touch this slot). */
 			struct net_buf *buf = net_buf_alloc(&tx_pool, K_FOREVER);
+			int err;
+
+			if (buf == NULL) {
+				LOG_ERR("TX[%zu]: buffer allocation failed", i);
+				k_mutex_lock(&tx_lock, K_FOREVER);
+				s->in_flight--;
+				k_mutex_unlock(&tx_lock);
+				continue;
+			}
 
 			net_buf_reserve(buf, BT_ISO_CHAN_SEND_RESERVE);
-
-			if (inject) {
-				/* Exactly one malformed SDU at a controlled
-				 * sequence, then resume valid LC3.  The ISO
-				 * stack drops a 1-byte SDU before the BAP
-				 * callback (never observed receiver-side), so
-				 * the malformed SDU is one byte short of the
-				 * configured shape (119 of 120) — still a
-				 * wrong-length SDU for the receiver's exact
-				 * payload validation. */
-				for (int j = 0; j < (int)s->cfg.octets_per_frame - 1; j++) {
-					net_buf_add_u8(buf, (uint8_t)(0x40 + j));
-				}
-				LOG_INF("TX[%zu]: injected malformed %u-byte SDU at seq %u", i,
-					s->cfg.octets_per_frame - 1U, seq);
-			} else if (!bsim_tx_encode_sdu(s, buf)) {
-				/* Encode failure: decrement in_flight, no commit. */
+			err = bsim_tx_build_sdu(&cfg, fixture, seq, inject, buf);
+			if (err != 0) {
+				/* Build failure: decrement in_flight, release the buffer,
+				 * and leave count, sequence, and audit unchanged. */
+				LOG_ERR("TX[%zu]: SDU build failed: %d", i, err);
 				k_mutex_lock(&tx_lock, K_FOREVER);
 				s->in_flight--;
 				k_mutex_unlock(&tx_lock);
@@ -236,11 +385,19 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 				continue;
 			}
 
-			int err = bt_bap_stream_send(stream, buf, seq);
+			if (inject) {
+				LOG_INF("TX[%zu]: injected malformed %u-byte SDU at seq %u", i,
+					(unsigned int)buf->len, seq);
+			}
+
+			/* Hash the exact final payload while the caller still owns buf. */
+			uint32_t candidate_hash = bsim_tx_fnv1a_sdu(previous_hash, seq, buf);
+
+			err = bt_bap_stream_send(stream, buf, seq);
 
 			if (err == 0) {
 				sent_any = true;
-			} else {
+			} else if (stream_is_streaming(stream)) {
 				LOG_ERR("TX[%zu]: send failed: %d", i, err);
 			}
 
@@ -251,7 +408,10 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 			if (s->generation == gen && s->bap_stream == stream) {
 				if (err == 0) {
 					s->send_count++;
+					s->fnv1a_hash = candidate_hash;
 					s->seq_num++;
+					s->audit->send_count = s->send_count;
+					s->audit->fnv1a_hash = candidate_hash;
 					if (inject) {
 						s->inject_pending = false;
 					}
@@ -296,37 +456,49 @@ int bsim_tx_init(void)
 
 int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_config *cfg)
 {
+	const struct bsim_tx_fixture *fixture;
+	int err;
+
 	if (bap_stream == NULL || cfg == NULL) {
 		return -EINVAL;
+	}
+	err = bsim_tx_validate_config(cfg, &fixture);
+	if (err != 0) {
+		return err;
 	}
 
 	k_mutex_lock(&tx_lock, K_FOREVER);
 	for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
 		/* Select only an empty slot with no in-flight TX: the
-		 * memset and encoder setup below can never race a TX that
+		 * memset and retained-audit setup below can never race a TX that
 		 * already passed its candidate snapshot. */
 		if (tx_streams[i].bap_stream == NULL && tx_streams[i].in_flight == 0U) {
 			struct bsim_tx_stream *s = &tx_streams[i];
+			struct bsim_tx_audit *audit = tx_audit_lookup_locked(bap_stream);
+			const uint32_t generation = bsim_tx_next_generation(s->generation);
+
+			if (audit == NULL) {
+				audit = tx_audit_empty_locked();
+			}
+			if (audit == NULL) {
+				k_mutex_unlock(&tx_lock);
+				return -ENOMEM;
+			}
 
 			memset(s, 0, sizeof(*s));
 			s->cfg = *cfg;
+			s->fixture = fixture;
+			s->audit = audit;
 			s->seq_num = 0U;
+			s->fnv1a_hash = BSIM_TX_FNV1A_OFFSET_BASIS;
 			/* Reassign a nonzero generation so any stale TX
 			 * snapshot from a previous registration fails the
 			 * commit check. */
-			s->generation++;
+			s->generation = generation;
 
-			for (uint8_t ch = 0U; ch < cfg->chan_count; ch++) {
-				s->encoder[ch] =
-					lc3_setup_encoder(cfg->frame_duration_us, cfg->freq_hz, 0,
-							  &s->encoder_mem[ch]);
-				if (s->encoder[ch] == NULL) {
-					LOG_ERR("TX: encoder setup failed for slot %zu ch %u", i,
-						ch);
-					k_mutex_unlock(&tx_lock);
-					return -ENOEXEC;
-				}
-			}
+			audit->bap_stream = bap_stream;
+			audit->send_count = 0U;
+			audit->fnv1a_hash = BSIM_TX_FNV1A_OFFSET_BASIS;
 
 			/* Publish the stream pointer last. */
 			s->bap_stream = bap_stream;
@@ -378,7 +550,7 @@ int bsim_tx_unregister(struct bt_bap_stream *bap_stream)
 	 * in-flight TX fails its commit check; then wait for it to drain
 	 * without holding the lock. */
 	s->bap_stream = NULL;
-	s->generation++;
+	s->generation = bsim_tx_next_generation(s->generation);
 	k_mutex_unlock(&tx_lock);
 
 	return tx_wait_idle(s);
@@ -441,11 +613,33 @@ void bsim_tx_set_send_limit(struct bt_bap_stream *bap_stream, uint32_t limit)
 uint32_t bsim_tx_send_count(struct bt_bap_stream *bap_stream)
 {
 	k_mutex_lock(&tx_lock, K_FOREVER);
-	struct bsim_tx_stream *s = tx_lookup_locked(bap_stream);
-	uint32_t count = (s != NULL) ? s->send_count : 0U;
+	struct bsim_tx_audit *audit = tx_audit_lookup_locked(bap_stream);
+	uint32_t count = (audit != NULL) ? audit->send_count : 0U;
 
 	k_mutex_unlock(&tx_lock);
 	return count;
+}
+
+int bsim_tx_result(const struct bt_bap_stream *bap_stream, struct bsim_tx_result *result)
+{
+	struct bsim_tx_audit *audit;
+
+	if (bap_stream == NULL || result == NULL) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	audit = tx_audit_lookup_locked(bap_stream);
+	if (audit == NULL) {
+		k_mutex_unlock(&tx_lock);
+		return -ENODATA;
+	}
+
+	result->send_count = audit->send_count;
+	result->fnv1a_hash = audit->fnv1a_hash;
+	k_mutex_unlock(&tx_lock);
+
+	return 0;
 }
 
 /* Caller must hold tx_lock. */
