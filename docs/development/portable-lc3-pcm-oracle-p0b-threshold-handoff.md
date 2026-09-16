@@ -1,8 +1,9 @@
 # PB-031 P0b handoff: freeze PCM limits and complete controls
 
-Status: Approved implementation handoff. Intel, AMD, and ARM calibration
-envelopes are available. This phase freezes candidate limits and proves all
-mandatory controls before P2 may consume them.
+Status: P0b implementation/review HEAD
+`c7f64aa76b0525e81ddf31fbdccf238e5d978a25` accepted as P0b stop gate on
+2026-09-16. P2 still owns first BSim gate consumption. No PB-031 acceptance
+criterion is complete.
 
 Parent plan: `docs/development/portable-lc3-pcm-oracle-plan.md`.
 
@@ -331,3 +332,112 @@ After reviewing Executor commit and local AMD evidence, orchestrator will:
 4. verify all three environments pass policy and all controls fail by exact
    name;
 5. append reviewed evidence and only then open P2 handoff work.
+
+## Reviewed orchestrator result
+
+P0b implementation/review at
+`c7f64aa76b0525e81ddf31fbdccf238e5d978a25` was accepted as P0b stop gate on
+2026-09-16. P2 still owns first BSim gate consumption. No PB-031 acceptance
+criterion is complete.
+
+### Frozen schema-2 policy and report result
+
+The manifest policy is frozen at:
+
+```text
+max_abs_error=2048
+max_rms_error=512
+min_correlation_q15=32750
+```
+
+Six reports were reviewed, two each on AMD, Intel, and ARM, with 26 records
+per report. Cross-platform record identity and order are equal, and repeat
+metrics are equal within each environment. All four valid records pass.
+Mandatory controls evaluate exactly:
+`lc3-byte-corruption=max-error`, `max-error-boundary=max-error`,
+`rms-error-boundary=rms-error`, and
+`correlation-boundary=correlation`. Existing channel/order/dead/synthetic
+controls evaluate `max-error`.
+
+### AMD evidence
+
+- `/tmp/opencode/pb031-calibration/amd-p0b-c7f64aa-run-1.json`, SHA-256
+  `5a1f2988791ed5662f01e32b2401b38997f54c84fad1175f5341304b2e4cbb0c`
+- `/tmp/opencode/pb031-calibration/amd-p0b-c7f64aa-run-2.json`, SHA-256
+  `ad02292d4e6532184f0f4bd063a4dd24e89e9aaa56a39fcf0922d2b6d347cabc`
+
+Valid envelope: maximum error `0`, RMS error `0`, minimum correlation Q15
+`32767`.
+
+### Intel evidence
+
+Evidence root: `/tmp/opencode/pb031-calibration-intel-c7f64aa-i3-6100u/`.
+Host: `GenuineIntel`, Intel Core i3-6100U, x86_64 Linux, Clang 21.1.8.
+
+- run 1 SHA-256
+  `744bbcb053b454d4bc403de734b48342c514faf994b34a9a90462ed23008792f`
+- run 2 SHA-256
+  `a8a7c66b17176b6c018f2c0f3ecedd21f202e812066e4eeeeab20135b249b15d`
+- `validation.txt` SHA-256
+  `583af03d56304476ca5e8e3c40195875bc5d80f8cc34395befe479c4ec3b84e2`
+
+Valid envelope: maximum error `1977`, RMS error `426`, minimum correlation
+Q15 `32757`.
+
+### ARM evidence
+
+Pristine `xiao_nrf54l15/nrf54l15/cpuapp` build at
+`/tmp/opencode/pb031-p0b-arm-calibration-c7f64aa` passed: FLASH
+`593904 B/1428 KiB`, RAM `27808 B/188 KiB`. Exact image flash wrote and
+verified `593900` bytes.
+
+Fresh identity evidence records CMSIS-DAP serial `8EE9B3FF`, DPIDR
+`0x6ba02477`, AP IDRs `0x84770001`, `0x84770001`, `0x32880000`,
+`0x00000000`, FICR PART `0x00054b15`, and VARIANT `0x41414330`.
+`/tmp/opencode/pb031-calibration/arm-p0b-c7f64aa-identity-preflash-full.log`
+has SHA-256
+`ecb17806b8811a2b13aec31fb843d3b307abfe93bbfd270c3d6d6994e8218bf5`.
+
+- `/tmp/opencode/pb031-calibration/arm-p0b-c7f64aa-run-1-console.log`,
+  SHA-256
+  `69b9bb069a7e733b84293a807071d16669db347cd154a4b637ae55dc510b4486`
+- `/tmp/opencode/pb031-calibration/arm-p0b-c7f64aa-run-2-console.log`,
+  SHA-256
+  `20e727914494e46cadfd8f12b8ca3d321f9887d694d0a3598fce55bf32498565`
+
+Both runs have exact BEGIN/SOURCE records, 26 metrics, PASS, and no fault,
+FAIL, or error. Main stack usage is `2888/8192` (35 percent), with `5304`
+unused. Valid envelope: maximum error `1`, RMS error `1`, minimum correlation
+Q15 `32767`. ARM validation is
+`/tmp/opencode/pb031-calibration/arm-p0b-c7f64aa-validation.txt`, SHA-256
+`acf42f5372508df8dc06b9a1b496c9892e40067e693319fc68c81e17a4879102`.
+
+### Cross-platform validation
+
+`/tmp/opencode/pb031-calibration/p0b-c7f64aa-cross-platform-validation.txt`
+has SHA-256
+`fb399a964d45ebeca7fbd6441806c7b2fa82052b8f7f8b54cbe9a5665cf36ade`.
+Its exact final marker is:
+
+```text
+PB031_P0B_CROSS_PLATFORM_PASS environments=3 runs=6 records_per_run=26 identity_order_equal=true evaluations_expected=true
+```
+
+### Production firmware restoration and repair review
+
+Fresh identity preceded production restoration. Current
+`c7f64aa76b0525e81ddf31fbdccf238e5d978a25` cpuapp and FLPR were rebuilt,
+flashed, and verified: cpuapp `536948` bytes and FLPR `32604` bytes. Evidence
+paths share prefix
+`/tmp/opencode/pb031-calibration/production-p0b-c7f64aa-restore-{identity,build,flash,console}.log`.
+Console SHA-256 is
+`749e221c26b00ab0fac2a0c6f45d26b43ec8a35faf67b4076e251071712b5738`.
+Boot reached BLE ready, `settings_load() OK`, timing/I2S ready, FLPR READY,
+rings/runtime ready, and advertising. Build output contained only the
+repository-documented nRF54L15 watchdog `No SOURCES` and Zephyr `__ASSERT()`
+diagnostics; it is not described as warning-free.
+
+Repair review passed Raw-HCI warning suite (54 tests, no `ResourceWarning` or
+unclosed-file output), PCM oracle (12 PASS), calibration Python (18 PASS),
+BSim parser (94 PASS), and unit gate (`71 PASS / 0 FAIL / 71 TOTAL`).
+`backlog doctor` and `git diff --check` also passed.

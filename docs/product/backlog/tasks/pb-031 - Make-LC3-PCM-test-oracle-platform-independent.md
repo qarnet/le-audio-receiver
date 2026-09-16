@@ -127,8 +127,29 @@ channel/order/dead/synthetic controls, byte-0 XOR `0x04` LC3 corruption over
 all 128 10 ms left frames, and maximum, RMS, and correlation boundary controls.
 The ARM build reads numeric limits from the manifest at CMake configure time
 into generated build information and uses static bounded control buffers while
-retaining the 8192-byte main stack. P2 has not consumed this policy, and no
-schema-2 AMD, Intel, or ARM calibration evidence is claimed here.
+retaining the 8192-byte main stack.
+
+P0b implementation/review at `c7f64aa76b0525e81ddf31fbdccf238e5d978a25`
+was accepted as P0b stop gate on 2026-09-16. P2 still owns first BSim gate
+consumption. No PB-031 acceptance criterion is complete.
+
+Reviewed schema-2 evidence includes two 26-record reports each on AMD, Intel,
+and ARM. Record identity/order matched across platforms, repeat metrics matched
+within each environment, and all four valid records pass. Mandatory controls
+evaluate exactly: LC3 byte corruption and maximum-error boundary return
+`max-error`; RMS boundary returns `rms-error`; correlation boundary returns
+`correlation`. Existing channel/order/dead/synthetic controls return
+`max-error`. Valid envelopes are AMD `0/0/32767`, Intel `1977/426/32757`, and
+ARM `1/1/32767` for maximum error/RMS error/minimum correlation Q15.
+
+Cross-platform validation is retained at
+`/tmp/opencode/pb031-calibration/p0b-c7f64aa-cross-platform-validation.txt`,
+SHA-256 `fb399a964d45ebeca7fbd6441806c7b2fa82052b8f7f8b54cbe9a5665cf36ade`,
+with final marker
+`PB031_P0B_CROSS_PLATFORM_PASS environments=3 runs=6 records_per_run=26 identity_order_equal=true evaluations_expected=true`.
+Full reviewed AMD, Intel, and ARM report hashes, ARM fresh-identity/build/flash
+evidence, production restoration, and repair-review results are recorded in
+`docs/development/portable-lc3-pcm-oracle-p0b-threshold-handoff.md`.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
