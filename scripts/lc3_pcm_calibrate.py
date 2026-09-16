@@ -109,6 +109,28 @@ def _require_int(value, label, lower=None, upper=None):
     return value
 
 
+def _validate_pcm_limits(value):
+    _require_keys(
+        value,
+        ("max_abs_error", "max_rms_error", "min_correlation_q15"),
+        "pcm_limits",
+    )
+    return {
+        "max_abs_error": _require_int(
+            value["max_abs_error"], "pcm_limits.max_abs_error", 0, 65535
+        ),
+        "max_rms_error": _require_int(
+            value["max_rms_error"], "pcm_limits.max_rms_error", 0, 65535
+        ),
+        "min_correlation_q15": _require_int(
+            value["min_correlation_q15"],
+            "pcm_limits.min_correlation_q15",
+            -32768,
+            32767,
+        ),
+    }
+
+
 def _sha256(path):
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -200,11 +222,12 @@ def load_manifest():
             "generator_flags",
             "source_formula_identifier",
             "corpus_frame_count",
+            "pcm_limits",
             "streams",
         ),
         "manifest",
     )
-    if _require_int(manifest["schema_version"], "schema_version") != 1:
+    if _require_int(manifest["schema_version"], "schema_version") != 2:
         raise CalibrationError("unsupported manifest schema_version")
     if _require_string(manifest["ncs_version"], "ncs_version") != EXPECTED_NCS_VERSION:
         raise CalibrationError("manifest NCS version is not %s" % EXPECTED_NCS_VERSION)
@@ -236,6 +259,8 @@ def load_manifest():
         raise CalibrationError("manifest source formula identifier is unknown")
     if _require_int(manifest["corpus_frame_count"], "corpus_frame_count", 1) != 128:
         raise CalibrationError("manifest corpus frame count is not 128")
+    pcm_limits = _validate_pcm_limits(manifest["pcm_limits"])
+    manifest["pcm_limits"] = pcm_limits
 
     streams = manifest["streams"]
     if not isinstance(streams, list) or len(streams) != len(EXPECTED_STREAMS):
@@ -419,7 +444,7 @@ def compiler_argv():
     return command
 
 
-def run_calibrator(compiler, liblc3):
+def run_calibrator(compiler, liblc3, pcm_limits):
     for source in (CALIBRATOR_SOURCE, ORACLE_SOURCE):
         if not source.is_file():
             raise CalibrationError("calibration source missing: %s" % source)
@@ -456,7 +481,15 @@ def run_calibrator(compiler, liblc3):
 
         try:
             ran = subprocess.run(
-                [str(binary), str(FIXTURES_DIR)], check=False, capture_output=True
+                [
+                    str(binary),
+                    str(FIXTURES_DIR),
+                    str(pcm_limits["max_abs_error"]),
+                    str(pcm_limits["max_rms_error"]),
+                    str(pcm_limits["min_correlation_q15"]),
+                ],
+                check=False,
+                capture_output=True,
             )
         except OSError as exc:
             raise CalibrationError("cannot run calibrator: %s" % exc) from exc
@@ -474,28 +507,96 @@ def run_calibrator(compiler, liblc3):
             raise CalibrationError(
                 "calibrator metric output exceeds bounded evidence limit"
             )
-        return command, parse_metric_records(ran.stdout.decode("utf-8", "strict"))
+        return command, parse_metric_records(
+            ran.stdout.decode("utf-8", "strict"), pcm_limits
+        )
 
 
-def parse_metric_records(text):
+def expected_metric_records():
     expected = []
     geometry = {stream[0]: stream for stream in EXPECTED_STREAMS}
     for stem, _duration, _frequency, _channel, _bytes, samples in EXPECTED_STREAMS:
-        expected.append(("valid", stem, stem, 128, samples * 128))
+        expected.append(("valid", stem, stem, 128, samples * 128, "pass"))
     for left, right in (
         ("bsim_48k_10ms_120b_l", "bsim_48k_10ms_120b_r"),
         ("bsim_48k_7p5ms_90b_l", "bsim_48k_7p5ms_90b_r"),
     ):
-        expected.append(("channel-swap", left, right, 128, geometry[left][5] * 128))
+        expected.append(
+            ("channel-swap", left, right, 128, geometry[left][5] * 128, "max-error")
+        )
     for stem, _duration, _frequency, _channel, _bytes, samples in EXPECTED_STREAMS:
         expected.extend(
             (
-                ("prior-frame-shift", stem, stem, 127, samples * 127),
-                ("next-frame-shift", stem, stem, 127, samples * 127),
-                ("dead-channel", stem, stem, 128, samples * 128),
-                ("low-correlation-synthetic", stem, stem, 128, samples * 128),
+                ("prior-frame-shift", stem, stem, 127, samples * 127, "max-error"),
+                ("next-frame-shift", stem, stem, 127, samples * 127, "max-error"),
+                ("dead-channel", stem, stem, 128, samples * 128, "max-error"),
+                (
+                    "low-correlation-synthetic",
+                    stem,
+                    stem,
+                    128,
+                    samples * 128,
+                    "max-error",
+                ),
             )
         )
+    control_stem = EXPECTED_STREAMS[0][0]
+    control_samples = EXPECTED_STREAMS[0][5]
+    expected.extend(
+        (
+            (
+                "lc3-byte-corruption",
+                control_stem,
+                control_stem,
+                128,
+                control_samples * 128,
+                "max-error",
+            ),
+            (
+                "max-error-boundary",
+                control_stem,
+                control_stem,
+                1,
+                control_samples,
+                "max-error",
+            ),
+            (
+                "rms-error-boundary",
+                control_stem,
+                control_stem,
+                1,
+                control_samples,
+                "rms-error",
+            ),
+            (
+                "correlation-boundary",
+                control_stem,
+                control_stem,
+                1,
+                control_samples,
+                "correlation",
+            ),
+        )
+    )
+    return expected
+
+
+def evaluate_metric_record(record, pcm_limits):
+    if record["max_abs_error"] > pcm_limits["max_abs_error"]:
+        return "max-error"
+    if record["rms_error"] > pcm_limits["max_rms_error"]:
+        return "rms-error"
+    if (
+        record["actual_energy_scaled"] == 0
+        or record["reference_energy_scaled"] == 0
+        or record["correlation_q15"] < pcm_limits["min_correlation_q15"]
+    ):
+        return "correlation"
+    return "pass"
+
+
+def parse_metric_records(text, pcm_limits):
+    expected = expected_metric_records()
 
     lines = text.splitlines()
     if len(lines) != len(expected):
@@ -517,6 +618,7 @@ def parse_metric_records(text):
         "max_abs_error",
         "rms_error",
         "correlation_q15",
+        "evaluation",
     )
     for index, (line, expectation) in enumerate(zip(lines, expected)):
         try:
@@ -526,13 +628,18 @@ def parse_metric_records(text):
                 "malformed calibrator metric record %d: %s" % (index, exc)
             ) from exc
         _require_keys(record, fields, "metric[%d]" % index)
-        comparison, stem, reference_stem, frames, samples = expectation
+        comparison, stem, reference_stem, frames, samples, evaluation = expectation
         if record["record"] != "metric":
             raise CalibrationError("metric[%d] record marker is invalid" % index)
         if record["comparison"] != comparison or record["stem"] != stem:
             raise CalibrationError("metric[%d] comparison identity is invalid" % index)
         if record["reference_stem"] != reference_stem:
             raise CalibrationError("metric[%d] reference identity is invalid" % index)
+        if (
+            _require_string(record["evaluation"], "metric[%d].evaluation" % index)
+            != evaluation
+        ):
+            raise CalibrationError("metric[%d] evaluation is invalid" % index)
         for name in (
             "squared_error",
             "actual_energy_scaled",
@@ -559,6 +666,11 @@ def parse_metric_records(text):
         )
         if record["frames"] != frames or record["samples"] != samples:
             raise CalibrationError("metric[%d] dimensions are invalid" % index)
+        observed_evaluation = evaluate_metric_record(record, pcm_limits)
+        if record["evaluation"] != observed_evaluation:
+            raise CalibrationError(
+                "metric[%d] evaluation does not match policy" % index
+            )
         records.append(record)
     return records
 
@@ -600,6 +712,7 @@ def main(argv=None):
     try:
         output = validate_output(args.output)
         manifest, fixture_hashes, manifest_sha256 = load_manifest()
+        pcm_limits = manifest["pcm_limits"]
         ncs, liblc3, liblc3_revision = resolve_ncs(manifest)
         compiler = compiler_argv()
         captured_at_utc = capture_utc_timestamp()
@@ -608,9 +721,9 @@ def main(argv=None):
         lscpu_raw = _capture(["lscpu"], "lscpu")
         uname_raw = _capture(["uname", "-a"], "uname")
         compiler_version_raw = _capture(compiler + ["--version"], "compiler version")
-        compile_command, metrics = run_calibrator(compiler, liblc3)
+        compile_command, metrics = run_calibrator(compiler, liblc3, pcm_limits)
         report = {
-            "schema_version": 1,
+            "schema_version": 2,
             "captured_at_utc": captured_at_utc,
             "repository": repository,
             "ncs_version": manifest["ncs_version"],
@@ -628,6 +741,7 @@ def main(argv=None):
             "generator_flags": list(EXPECTED_FLAGS),
             "source_formula_identifier": manifest["source_formula_identifier"],
             "corpus_frame_count": manifest["corpus_frame_count"],
+            "pcm_limits": pcm_limits,
             "manifest_sha256": manifest_sha256,
             "fixture_hashes": fixture_hashes,
             "calibration_inputs": calibration_inputs,

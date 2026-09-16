@@ -391,3 +391,90 @@ ZTEST(pcm_oracle, test_limit_boundaries_and_precedence)
 	limits.min_correlation_q15 = INT16_MAX + 1;
 	assert_evaluation(&metrics, &limits, PCM_ORACLE_RESULT_CORRELATION);
 }
+
+ZTEST(pcm_oracle, test_production_policy_controls)
+{
+	const struct pcm_oracle_limits limits = {
+		.min_samples = 480U,
+		.max_abs_error = 2048U,
+		.max_rms_error = 512U,
+		.min_correlation_q15 = 32750,
+	};
+	static int16_t actual[480];
+	static uint8_t reference[480 * 2];
+	struct pcm_oracle oracle;
+	struct pcm_oracle_metrics metrics;
+
+	for (size_t sample = 0U; sample < ARRAY_SIZE(actual); sample++) {
+		int16_t expected = 4096;
+
+		actual[sample] = 4096;
+		write_reference(reference + sample * 2U, 2U, &expected, 1U);
+	}
+	actual[0] = 2048;
+	zassert_ok(pcm_oracle_init(&oracle), "maximum boundary init");
+	zassert_ok(pcm_oracle_accumulate(&oracle, actual, 1U, reference, 2U, ARRAY_SIZE(actual)),
+		   "maximum boundary accumulate");
+	zassert_ok(pcm_oracle_finalize(&oracle, &metrics), "maximum boundary finalize");
+	zassert_equal(metrics.max_abs_error, 2048U, "maximum boundary");
+	zassert_true(metrics.rms_error <= 512U, "maximum boundary RMS");
+	assert_evaluation(&metrics, &limits, PCM_ORACLE_RESULT_PASS);
+
+	for (size_t sample = 0U; sample < ARRAY_SIZE(actual); sample++) {
+		int16_t expected = 4096;
+
+		actual[sample] = 3584;
+		write_reference(reference + sample * 2U, 2U, &expected, 1U);
+	}
+	zassert_ok(pcm_oracle_init(&oracle), "RMS boundary init");
+	zassert_ok(pcm_oracle_accumulate(&oracle, actual, 1U, reference, 2U, ARRAY_SIZE(actual)),
+		   "RMS boundary accumulate");
+	zassert_ok(pcm_oracle_finalize(&oracle, &metrics), "RMS boundary finalize");
+	zassert_equal(metrics.max_abs_error, 512U, "RMS boundary maximum");
+	zassert_equal(metrics.rms_error, 512U, "RMS boundary");
+	assert_evaluation(&metrics, &limits, PCM_ORACLE_RESULT_PASS);
+
+	for (size_t sample = 0U; sample < ARRAY_SIZE(actual); sample++) {
+		int16_t expected = 4096;
+
+		actual[sample] = 4096;
+		write_reference(reference + sample * 2U, 2U, &expected, 1U);
+	}
+	actual[0] = 2047;
+	zassert_ok(pcm_oracle_init(&oracle), "maximum control init");
+	zassert_ok(pcm_oracle_accumulate(&oracle, actual, 1U, reference, 2U, ARRAY_SIZE(actual)),
+		   "maximum control accumulate");
+	zassert_ok(pcm_oracle_finalize(&oracle, &metrics), "maximum control finalize");
+	zassert_equal(metrics.max_abs_error, 2049U, "maximum control value");
+	zassert_true(metrics.rms_error <= 512U, "maximum control RMS");
+	assert_evaluation(&metrics, &limits, PCM_ORACLE_RESULT_MAX_ERROR);
+
+	for (size_t sample = 0U; sample < ARRAY_SIZE(actual); sample++) {
+		int16_t expected = 4096;
+
+		actual[sample] = 3583;
+		write_reference(reference + sample * 2U, 2U, &expected, 1U);
+	}
+	zassert_ok(pcm_oracle_init(&oracle), "RMS control init");
+	zassert_ok(pcm_oracle_accumulate(&oracle, actual, 1U, reference, 2U, ARRAY_SIZE(actual)),
+		   "RMS control accumulate");
+	zassert_ok(pcm_oracle_finalize(&oracle, &metrics), "RMS control finalize");
+	zassert_equal(metrics.max_abs_error, 513U, "RMS control maximum");
+	zassert_equal(metrics.rms_error, 513U, "RMS control value");
+	assert_evaluation(&metrics, &limits, PCM_ORACLE_RESULT_RMS_ERROR);
+
+	for (size_t sample = 0U; sample < ARRAY_SIZE(actual); sample++) {
+		int16_t expected = (sample & 1U) == 0U ? 256 : -256;
+
+		actual[sample] = (int16_t)-expected;
+		write_reference(reference + sample * 2U, 2U, &expected, 1U);
+	}
+	zassert_ok(pcm_oracle_init(&oracle), "correlation control init");
+	zassert_ok(pcm_oracle_accumulate(&oracle, actual, 1U, reference, 2U, ARRAY_SIZE(actual)),
+		   "correlation control accumulate");
+	zassert_ok(pcm_oracle_finalize(&oracle, &metrics), "correlation control finalize");
+	zassert_equal(metrics.max_abs_error, 512U, "correlation control maximum");
+	zassert_equal(metrics.rms_error, 512U, "correlation control RMS");
+	zassert_equal(metrics.correlation_q15, INT16_MIN, "correlation control value");
+	assert_evaluation(&metrics, &limits, PCM_ORACLE_RESULT_CORRELATION);
+}

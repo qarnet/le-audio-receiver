@@ -47,10 +47,13 @@ sample = (int16_t)(v & 0xFFFFU);
 `portable-oracle-manifest.json`. Each stream keeps one encoder and one decoder
 alive across all 128 frames, preserving codec history.
 
-The manifest is schema version 1. It records NCS `v3.3.0`, liblc3 semantic
+The manifest is schema version 2. It records NCS `v3.3.0`, liblc3 semantic
 label `1.1.2`, west revision
 `48bbd3eacd36e99a57317a0a4867002e0b09e183`, exact generator flags, geometry,
-and binary SHA-256 values. It contains no accepted tolerance values.
+binary SHA-256 values, and the sole calibration-policy object: maximum absolute
+error `2048`, maximum RMS error `512`, and minimum correlation Q15 `32750`.
+Calibration validates this policy without changing BSim or decoder acceptance;
+P2 owns its first gate use.
 
 ### P1 BSim transport contract
 
@@ -102,21 +105,21 @@ PCM acceptance for this path.
 
 `tests/calibration/lc3_pcm_oracle` is a standalone diagnostic Zephyr image
 for PB-031 ARM measurement. It embeds all eight portable-corpus files in
-flash, uses the checked-in integer `pcm_oracle` comparator unchanged, and
-keeps only one `int16_t[480]` work buffer plus one liblc3 decoder state in
-RAM. It does not set acceptance thresholds or change production behavior.
+flash, uses the checked-in integer `pcm_oracle` comparator unchanged, reads
+manifest-owned limits at configure time, and keeps bounded static work buffers
+plus one liblc3 decoder state in RAM. It does not change production behavior.
 
-The calibration rerun uses `CONFIG_MAIN_STACK_SIZE=8192`. The first ARM
-execution resolved its main stack to 1024 bytes and faulted in liblc3 SNS
-spectral shaping before its first metric. The 8192-byte value is a conservative
-repair configuration, not an accepted stack high-water mark. Reviewed
-fault-free UART captures report remaining main-stack space before threshold
-work proceeds. This repair does not disable stack-protection or assertion
-settings.
+The reviewed schema-1 calibration rerun uses `CONFIG_MAIN_STACK_SIZE=8192`.
+The first ARM execution resolved its main stack to 1024 bytes and faulted in
+liblc3 SNS spectral shaping before its first metric. The 8192-byte value is a
+conservative repair configuration, not an accepted stack high-water mark.
+Reviewed fault-free UART captures report remaining main-stack space before
+threshold work proceeds. This repair does not disable stack-protection or
+assertion settings.
 
 The image enables `CONFIG_THREAD_ANALYZER=y`,
 `CONFIG_THREAD_ANALYZER_USE_PRINTK=y`, and `CONFIG_THREAD_NAME=y`. It calls
-`thread_analyzer_print(0U)` after all 22 metric records and immediately before
+`thread_analyzer_print(0U)` after all 26 metric records and immediately before
 the PASS record. `CONFIG_THREAD_ANALYZER_AUTO` remains disabled, so no periodic
 analyzer thread changes the measurement run. Thread names make the report's
 `main` line identify the main-thread `unused` and `usage` values.
@@ -126,7 +129,7 @@ Build it from the repository root with the installed NCS v3.3.0 toolchain:
 ```bash
 nix develop -c west build --no-sysbuild \
   -b xiao_nrf54l15/nrf54l15/cpuapp \
-  -d /tmp/opencode/pb031-arm-calibration \
+  -d /tmp/opencode/pb031-p0b-arm-calibration \
   tests/calibration/lc3_pcm_oracle -p
 ```
 
@@ -138,24 +141,24 @@ capture one complete record sequence. Do not use this build command as a flash
 command.
 
 Normal UART output is ASCII. PB-031 records have this order; Zephyr's
-human-readable thread-analyzer report appears after the 22 metric records and
+human-readable thread-analyzer report appears after the 26 metric records and
 before PASS:
 
 ```text
-PB031_ARM_BEGIN schema=1 manifest_sha256=<64 lowercase hex> ncs=v3.3.0 liblc3=48bbd3eacd36e99a57317a0a4867002e0b09e183
+PB031_ARM_BEGIN schema=2 manifest_sha256=<64 lowercase hex> ncs=v3.3.0 liblc3=48bbd3eacd36e99a57317a0a4867002e0b09e183 max_abs_error=2048 max_rms_error=512 min_correlation_q15=32750
 PB031_ARM_SOURCE main_c_sha256=<64 lowercase hex> pcm_oracle_c_sha256=<64 lowercase hex> pcm_oracle_h_sha256=<64 lowercase hex>
 PB031_METRIC {"record":"metric",...}
-... exactly 22 PB031_METRIC lines ...
+... exactly 26 PB031_METRIC lines, each ending with an `evaluation` string ...
 Thread analyze:
  main                 : STACK: unused <bytes> usage <bytes> / 8192 (<percent> %); CPU: <percent> %
 ... other thread-analyzer lines ...
-PB031_ARM_PASS metrics=22
+PB031_ARM_PASS metrics=26
 ```
 
 Thread-analyzer lines are not PB-031 protocol records. Retain the complete
 report and record the line labeled `main` when reviewing ARM stack headroom.
 
-### Reviewed ARM calibration evidence
+### Reviewed schema-1 ARM calibration evidence
 
 The repaired nRF54L15 calibration image was reviewed with fresh identity
 evidence at `/tmp/opencode/pb031-calibration/arm-identity-stack-fix.log`:
@@ -189,7 +192,7 @@ least `21604`, and correlation `79..300`; dead channel has max error `32768`,
 RMS at least `15283`, and correlation `0`; low-correlation synthetic has max
 error `65535`, RMS at least `36158`, and correlation `-9..-2`. These are P0a
 diagnostic facts, not acceptance thresholds or complete parent-plan adversarial
-coverage. Thresholds remain unset.
+coverage. At capture time, thresholds remained unset.
 
 The original 1024-byte main-stack fault remains superseded diagnostic evidence.
 Production receiver cpuapp and FLPR were rebuilt and restored afterward.
@@ -207,10 +210,12 @@ CMake diagnostic. It is not a warning-free build.
 Metric JSON uses this field order: `record`, `comparison`, `stem`,
 `reference_stem`, `squared_error`, `actual_energy_scaled`,
 `reference_energy_scaled`, `dot_product_scaled`, `samples`, `frames`,
-`max_abs_error`, `rms_error`, and `correlation_q15`. Records are four `valid`,
-two `channel-swap`, then `prior-frame-shift`, `next-frame-shift`,
-`dead-channel`, and `low-correlation-synthetic` for each manifest stream in
-order.
+`max_abs_error`, `rms_error`, `correlation_q15`, and `evaluation`. Records are
+four `valid`, two `channel-swap`, then `prior-frame-shift`,
+`next-frame-shift`, `dead-channel`, and `low-correlation-synthetic` for each
+manifest stream in order, followed by `lc3-byte-corruption`,
+`max-error-boundary`, `rms-error-boundary`, and `correlation-boundary` for the
+10 ms left stream.
 
 On first error, the image emits one line and no PASS line:
 

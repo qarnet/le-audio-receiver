@@ -119,6 +119,25 @@ def require_int(value, label, lower=None):
     return value
 
 
+def validate_pcm_limits(value):
+    require_keys(
+        value,
+        ("max_abs_error", "max_rms_error", "min_correlation_q15"),
+        "manifest.pcm_limits",
+    )
+    return {
+        "max_abs_error": require_int(
+            value["max_abs_error"], "manifest.pcm_limits.max_abs_error", 0
+        ),
+        "max_rms_error": require_int(
+            value["max_rms_error"], "manifest.pcm_limits.max_rms_error", 0
+        ),
+        "min_correlation_q15": require_int(
+            value["min_correlation_q15"], "manifest.pcm_limits.min_correlation_q15"
+        ),
+    }
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -187,11 +206,12 @@ def main():
             "generator_flags",
             "source_formula_identifier",
             "corpus_frame_count",
+            "pcm_limits",
             "streams",
         ),
         "manifest",
     )
-    if require_int(manifest["schema_version"], "manifest.schema_version") != 1:
+    if require_int(manifest["schema_version"], "manifest.schema_version") != 2:
         raise ValidationError("unsupported manifest schema_version")
     if require_string(manifest["ncs_version"], "manifest.ncs_version") != "v3.3.0":
         raise ValidationError("manifest NCS version is not v3.3.0")
@@ -206,6 +226,13 @@ def main():
         raise ValidationError("manifest source formula identifier is unknown")
     if require_int(manifest["corpus_frame_count"], "manifest.corpus_frame_count", 1) != 128:
         raise ValidationError("manifest corpus frame count is not 128")
+    pcm_limits = validate_pcm_limits(manifest["pcm_limits"])
+    if pcm_limits["max_abs_error"] > 65535:
+        raise ValidationError("manifest.pcm_limits.max_abs_error is above range")
+    if pcm_limits["max_rms_error"] > 65535:
+        raise ValidationError("manifest.pcm_limits.max_rms_error is above range")
+    if not -32768 <= pcm_limits["min_correlation_q15"] <= 32767:
+        raise ValidationError("manifest.pcm_limits.min_correlation_q15 is outside range")
 
     streams = manifest["streams"]
     if not isinstance(streams, list) or len(streams) != len(EXPECTED_STREAMS):
@@ -292,6 +319,8 @@ def main():
             % ", ".join(mismatches),
             file=sys.stderr,
         )
+
+    return pcm_limits
 
 
 try:

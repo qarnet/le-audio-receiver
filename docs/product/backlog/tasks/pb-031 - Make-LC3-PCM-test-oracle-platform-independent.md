@@ -111,6 +111,24 @@ loss runs retained `pushes1=100`, `trans1=8`, `szero1=8`, `splc1=16`,
 `0x8980C79D`/`0xDD25CC21`. No `LOSS_*` output or non-allowlisted runtime
 warning appeared. Unit phase passed `71 PASS / 0 FAIL / 71 TOTAL`; `backlog
 doctor` and `git diff --check` passed.
+
+P0b freezes manifest schema 2 policy at maximum absolute error `2048`, maximum
+RMS error `512`, and minimum correlation Q15 `32750`. The manifest
+`pcm_limits` object is the sole calibration-policy source. Reviewed schema-1
+Intel evidence from the identified Intel Core i3-6100U with Clang 21.1.8 had
+valid maximum error `1977`, RMS error `426`, and minimum correlation Q15
+`32757`. The selected maximum is the next power-of-two boundary, 71 samples
+above `1977`; RMS is the next power-of-two boundary, 86 samples above `426`;
+the correlation floor is seven Q15 counts below `32757`.
+
+P0b host and ARM calibration protocols now emit 26 ordered metric records with
+an `evaluation` from `pcm_oracle_evaluate()`: four valid passes, existing
+channel/order/dead/synthetic controls, byte-0 XOR `0x04` LC3 corruption over
+all 128 10 ms left frames, and maximum, RMS, and correlation boundary controls.
+The ARM build reads numeric limits from the manifest at CMake configure time
+into generated build information and uses static bounded control buffers while
+retaining the 8192-byte main stack. P2 has not consumed this policy, and no
+schema-2 AMD, Intel, or ARM calibration evidence is claimed here.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
