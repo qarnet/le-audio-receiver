@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "pcm_oracle_test_limits.h"
 #include "pcm_oracle.h"
 
 ZTEST_SUITE(pcm_oracle, NULL, NULL, NULL, NULL, NULL);
@@ -396,9 +397,9 @@ ZTEST(pcm_oracle, test_production_policy_controls)
 {
 	const struct pcm_oracle_limits limits = {
 		.min_samples = 480U,
-		.max_abs_error = 2048U,
-		.max_rms_error = 512U,
-		.min_correlation_q15 = 32750,
+		.max_abs_error = PB031_PCM_MAX_ABS_ERROR,
+		.max_rms_error = PB031_PCM_MAX_RMS_ERROR,
+		.min_correlation_q15 = PB031_PCM_MIN_CORRELATION_Q15,
 	};
 	static int16_t actual[480];
 	static uint8_t reference[480 * 2];
@@ -411,27 +412,27 @@ ZTEST(pcm_oracle, test_production_policy_controls)
 		actual[sample] = 4096;
 		write_reference(reference + sample * 2U, 2U, &expected, 1U);
 	}
-	actual[0] = 2048;
+	actual[0] = (int16_t)(4096 - (int32_t)PB031_PCM_MAX_ABS_ERROR);
 	zassert_ok(pcm_oracle_init(&oracle), "maximum boundary init");
 	zassert_ok(pcm_oracle_accumulate(&oracle, actual, 1U, reference, 2U, ARRAY_SIZE(actual)),
 		   "maximum boundary accumulate");
 	zassert_ok(pcm_oracle_finalize(&oracle, &metrics), "maximum boundary finalize");
-	zassert_equal(metrics.max_abs_error, 2048U, "maximum boundary");
-	zassert_true(metrics.rms_error <= 512U, "maximum boundary RMS");
+	zassert_equal(metrics.max_abs_error, PB031_PCM_MAX_ABS_ERROR, "maximum boundary");
+	zassert_true(metrics.rms_error <= PB031_PCM_MAX_RMS_ERROR, "maximum boundary RMS");
 	assert_evaluation(&metrics, &limits, PCM_ORACLE_RESULT_PASS);
 
 	for (size_t sample = 0U; sample < ARRAY_SIZE(actual); sample++) {
 		int16_t expected = 4096;
 
-		actual[sample] = 3584;
+		actual[sample] = (int16_t)(4096 - (int32_t)PB031_PCM_MAX_RMS_ERROR);
 		write_reference(reference + sample * 2U, 2U, &expected, 1U);
 	}
 	zassert_ok(pcm_oracle_init(&oracle), "RMS boundary init");
 	zassert_ok(pcm_oracle_accumulate(&oracle, actual, 1U, reference, 2U, ARRAY_SIZE(actual)),
 		   "RMS boundary accumulate");
 	zassert_ok(pcm_oracle_finalize(&oracle, &metrics), "RMS boundary finalize");
-	zassert_equal(metrics.max_abs_error, 512U, "RMS boundary maximum");
-	zassert_equal(metrics.rms_error, 512U, "RMS boundary");
+	zassert_equal(metrics.max_abs_error, PB031_PCM_MAX_RMS_ERROR, "RMS boundary maximum");
+	zassert_equal(metrics.rms_error, PB031_PCM_MAX_RMS_ERROR, "RMS boundary");
 	assert_evaluation(&metrics, &limits, PCM_ORACLE_RESULT_PASS);
 
 	for (size_t sample = 0U; sample < ARRAY_SIZE(actual); sample++) {
@@ -440,27 +441,27 @@ ZTEST(pcm_oracle, test_production_policy_controls)
 		actual[sample] = 4096;
 		write_reference(reference + sample * 2U, 2U, &expected, 1U);
 	}
-	actual[0] = 2047;
+	actual[0] = (int16_t)(4096 - ((int32_t)PB031_PCM_MAX_ABS_ERROR + 1));
 	zassert_ok(pcm_oracle_init(&oracle), "maximum control init");
 	zassert_ok(pcm_oracle_accumulate(&oracle, actual, 1U, reference, 2U, ARRAY_SIZE(actual)),
 		   "maximum control accumulate");
 	zassert_ok(pcm_oracle_finalize(&oracle, &metrics), "maximum control finalize");
-	zassert_equal(metrics.max_abs_error, 2049U, "maximum control value");
-	zassert_true(metrics.rms_error <= 512U, "maximum control RMS");
+	zassert_equal(metrics.max_abs_error, PB031_PCM_MAX_ABS_ERROR + 1U, "maximum control value");
+	zassert_true(metrics.rms_error <= PB031_PCM_MAX_RMS_ERROR, "maximum control RMS");
 	assert_evaluation(&metrics, &limits, PCM_ORACLE_RESULT_MAX_ERROR);
 
 	for (size_t sample = 0U; sample < ARRAY_SIZE(actual); sample++) {
 		int16_t expected = 4096;
 
-		actual[sample] = 3583;
+		actual[sample] = (int16_t)(4096 - ((int32_t)PB031_PCM_MAX_RMS_ERROR + 1));
 		write_reference(reference + sample * 2U, 2U, &expected, 1U);
 	}
 	zassert_ok(pcm_oracle_init(&oracle), "RMS control init");
 	zassert_ok(pcm_oracle_accumulate(&oracle, actual, 1U, reference, 2U, ARRAY_SIZE(actual)),
 		   "RMS control accumulate");
 	zassert_ok(pcm_oracle_finalize(&oracle, &metrics), "RMS control finalize");
-	zassert_equal(metrics.max_abs_error, 513U, "RMS control maximum");
-	zassert_equal(metrics.rms_error, 513U, "RMS control value");
+	zassert_equal(metrics.max_abs_error, PB031_PCM_MAX_RMS_ERROR + 1U, "RMS control maximum");
+	zassert_equal(metrics.rms_error, PB031_PCM_MAX_RMS_ERROR + 1U, "RMS control value");
 	assert_evaluation(&metrics, &limits, PCM_ORACLE_RESULT_RMS_ERROR);
 
 	for (size_t sample = 0U; sample < ARRAY_SIZE(actual); sample++) {
@@ -476,5 +477,9 @@ ZTEST(pcm_oracle, test_production_policy_controls)
 	zassert_equal(metrics.max_abs_error, 512U, "correlation control maximum");
 	zassert_equal(metrics.rms_error, 512U, "correlation control RMS");
 	zassert_equal(metrics.correlation_q15, INT16_MIN, "correlation control value");
+	zassert_true(metrics.max_abs_error <= PB031_PCM_MAX_ABS_ERROR,
+		     "correlation control maximum must pass policy");
+	zassert_true(metrics.rms_error <= PB031_PCM_MAX_RMS_ERROR,
+		     "correlation control RMS must pass policy");
 	assert_evaluation(&metrics, &limits, PCM_ORACLE_RESULT_CORRELATION);
 }

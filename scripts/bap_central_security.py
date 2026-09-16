@@ -228,6 +228,7 @@ class RawHciConnect:
         self._hold_add_s = hold_add_s
         self.proc = None
         self._terminated = False
+        self._pipes_closed = False
 
     def argv(self):
         """Exact helper argv (sudo boundary preserved)."""
@@ -324,6 +325,33 @@ class RawHciConnect:
             raise CentralError("raw hci connected gate failed") from None
         print("[main] Device1 Connected confirmed")
 
+    def _close_helper_pipes(self):
+        """Close helper-owned parent pipes once after a termination attempt."""
+        if self._pipes_closed:
+            return True
+        self._pipes_closed = True
+
+        errors = []
+        for name in ("stdout", "stderr"):
+            pipe = getattr(self.proc, name, None)
+            if pipe is None:
+                continue
+            try:
+                pipe.close()
+            except Exception as e:  # noqa: BLE001
+                errors.append("{}: {}".format(name, e))
+
+        if errors:
+            print(
+                "[error] Raw-HCI helper pipe close failed: {}".format(
+                    "; ".join(errors)
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+            return False
+        return True
+
     def terminate(self, verbose=False):
         """Idempotent helper termination with a guaranteed-reaped guarantee.
 
@@ -338,6 +366,7 @@ class RawHciConnect:
         self._terminated = True
         if self.proc is None:
             return
+        pipes_closed = False
         try:
             try:
                 self.proc.terminate()
@@ -370,7 +399,9 @@ class RawHciConnect:
                 flush=True,
             )
             return
-        if verbose:
+        finally:
+            pipes_closed = self._close_helper_pipes()
+        if verbose and pipes_closed:
             print("[cleanup] Raw-HCI helper terminated")
 
 
