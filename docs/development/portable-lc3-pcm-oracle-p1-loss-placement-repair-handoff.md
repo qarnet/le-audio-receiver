@@ -302,3 +302,16 @@ No `LOSS_*` output remained. No compiler or non-allowlisted runtime warning
 appeared; the only runtime warning was the exact scenario 17 receiver
 allowlist, `Invalid operation in state: releasing`. Unit phase passed
 `71 PASS / 0 FAIL / 71 TOTAL`; `backlog doctor` and `git diff --check` passed.
+
+## Review correction (2026-09-16)
+
+Commit `63e8181` used a reusable slot-embedded binary semaphore for
+`bsim_tx_wait_send_limit()`. Before P1 closure, that notification was replaced
+with process-lifetime per-slot condition variables under `tx_lock`: semaphore
+reset during a limit change and reinitialization during slot reuse could not
+satisfy documented `-ESTALE` semantics for pending waiters. The exact cap 48,
+completion count 17, refill lead 1, final cap 110, and accepted one-CIS-loss
+records remain unchanged. Review-fix evidence is retained at
+`/tmp/opencode/pb031-p1-send-cap-wait-fix-20260916`; parser tests passed
+`94 PASS / 0 FAIL`, the strict matrix passed 17 scenarios / 26 runs, and unit
+phase passed `71 PASS / 0 FAIL / 71 TOTAL`.

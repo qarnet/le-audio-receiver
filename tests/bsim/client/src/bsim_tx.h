@@ -94,7 +94,7 @@ void bsim_tx_set_send_limit(struct bt_bap_stream *bap_stream, uint32_t limit);
  * @retval 0 cap reached
  * @retval -EINVAL NULL stream or zero timeout
  * @retval -ENODATA stream is not registered or has no nonzero limit
- * @retval -ETIMEDOUT semaphore wait expired
+ * @retval -ETIMEDOUT notification wait expired
  * @retval -ESTALE registration generation, stream association, or expected
  *         limit state changed while waiting
  */

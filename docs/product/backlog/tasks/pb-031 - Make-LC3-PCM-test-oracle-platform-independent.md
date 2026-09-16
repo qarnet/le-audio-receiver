@@ -100,9 +100,9 @@ Production receiver cpuapp and FLPR were rebuilt and restored. Raw evidence: `/t
 Thresholds remain unset. P0 remains blocked only on identified Intel x86_64 calibration and later full mandatory threshold-bound controls. Current P0a diagnostic classes do not complete parent-plan adversarial coverage.
 
 P1 exact one-CIS-loss placement repair completed 2026-09-15. The BSim TX slot
-now exposes a binary exact send-cap notification; the right loss stream starts
-at 48 valid sends, drains accepted completions, waits 17 left pause-window
-completions, then resumes with cap 110. Evidence root:
+now exposes exact send-cap condition-variable notification; the right loss
+stream starts at 48 valid sends, drains accepted completions, waits 17 left
+pause-window completions, then resumes with cap 110. Evidence root:
 `/tmp/opencode/pb031-p1-exact-gap-fix-20260915`. Parser tests passed
 `94 PASS / 0 FAIL`; strict Stage 1 passed all 17 scenarios and 26 runs. Both
 loss runs retained `pushes1=100`, `trans1=8`, `szero1=8`, `splc1=16`,

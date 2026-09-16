@@ -457,7 +457,8 @@ oracle, or expected pins.
 ## Resolution result (2026-09-15)
 
 The modeled 48-valid-right-frame placement was implemented with an exact
-right-stream send cap and semaphore notification. Strict evidence at
+right-stream send cap and process-lifetime per-slot condition-variable
+notification. Strict evidence at
 `/tmp/opencode/pb031-p1-exact-gap-fix-20260915` passed all 17 scenarios and 26
 runs. Both one-CIS-loss runs retained count 18, full/left/right hashes
 `0x30D6BAF0`/`0x32777D65`/`0x9859F1D8`, and TX hashes

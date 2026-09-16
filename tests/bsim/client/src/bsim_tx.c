@@ -24,21 +24,20 @@
  *    and stream still match the snapshot.
  *  - register() takes the lock and selects only a slot with
  *    bap_stream == NULL and in_flight == 0; the config and retained audit
- *    association plus exact-cap semaphore are initialized while protected,
- *    the generation is bumped to a nonzero value, and bap_stream is published
- *    last. The only memset happens while in_flight == 0 under the lock, so it
- *    can never race an in-flight build/send, and the generation is reassigned
- *    afterwards.
+ *    association are initialized while protected, the generation is bumped to
+ *    a nonzero value, and bap_stream is published last. The only memset
+ *    happens while in_flight == 0 under the lock, so it can never race an
+ *    in-flight build/send, and the generation is reassigned afterwards.
  *  - unregister() clears bap_stream and bumps the generation under the
  *    lock, then waits (without holding the lock) until in_flight == 0.
  *  - pause() sets paused under the lock then waits for in_flight == 0;
  *    resume() is synchronized under the lock.
  *  - The TX thread is the sole mutator of active sequence/hash state while a
  *    slot is in flight; register() cannot touch a slot with in_flight > 0.
- *  - An exact send cap auto-pauses a stream and signals its binary semaphore
- *    when a successful commit reaches the cap. wait_send_limit() snapshots
- *    slot state, waits without tx_lock, then revalidates association,
- *    generation, limit, count, and paused state.
+ *  - Each reusable slot has a process-lifetime condition variable. Send-limit
+ *    state changes broadcast under tx_lock. wait_send_limit() atomically
+ *    releases/reacquires tx_lock while waiting and fully revalidates
+ *    association, generation, limit, count, and paused state after wake.
  */
 
 #include "bsim_tx.h"
@@ -128,13 +127,13 @@ struct bsim_tx_stream {
 	uint32_t send_limit; /* 0 = unlimited */
 	uint32_t generation; /* bumped on register/unregister; 0 = never used */
 	uint32_t in_flight;  /* TX candidates currently past the snapshot */
-	struct k_sem send_limit_reached;
 	bool paused;
 	bool inject_pending;
 	uint16_t inject_at_seq;
 };
 
 static struct bsim_tx_stream tx_streams[BSIM_TX_MAX_STREAMS];
+static struct k_condvar send_limit_changed[BSIM_TX_MAX_STREAMS];
 static struct bsim_tx_audit tx_audits[BSIM_TX_MAX_STREAMS];
 static atomic_int required_streaming = 1;
 
@@ -424,7 +423,7 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 					if (s->send_limit > 0U && s->send_count >= s->send_limit) {
 						/* Exact send-count cap: pause at the limit. */
 						s->paused = true;
-						k_sem_give(&s->send_limit_reached);
+						(void)k_condvar_broadcast(&send_limit_changed[i]);
 					}
 				}
 			}
@@ -452,6 +451,14 @@ int bsim_tx_init(void)
 		static K_KERNEL_STACK_DEFINE(tx_thread_stack, 4096U);
 		static struct k_thread tx_thread;
 		const int tx_thread_prio = K_PRIO_PREEMPT(5);
+		int err;
+
+		for (size_t i = 0U; i < ARRAY_SIZE(send_limit_changed); i++) {
+			err = k_condvar_init(&send_limit_changed[i]);
+			if (err != 0) {
+				return err;
+			}
+		}
 
 		k_thread_create(&tx_thread, tx_thread_stack, K_KERNEL_STACK_SIZEOF(tx_thread_stack),
 				tx_thread_func, NULL, NULL, NULL, tx_thread_prio, 0, K_NO_WAIT);
@@ -493,7 +500,6 @@ int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_conf
 			}
 
 			memset(s, 0, sizeof(*s));
-			k_sem_init(&s->send_limit_reached, 0, 1);
 			s->cfg = *cfg;
 			s->fixture = fixture;
 			s->audit = audit;
@@ -510,6 +516,7 @@ int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_conf
 
 			/* Publish the stream pointer last. */
 			s->bap_stream = bap_stream;
+			(void)k_condvar_broadcast(&send_limit_changed[i]);
 
 			LOG_INF("TX: registered slot %zu stream %p (ch=%u octets=%u "
 				"seq starts at 0)",
@@ -547,6 +554,8 @@ static int tx_wait_idle(struct bsim_tx_stream *s)
 
 int bsim_tx_unregister(struct bt_bap_stream *bap_stream)
 {
+	size_t index;
+
 	k_mutex_lock(&tx_lock, K_FOREVER);
 	struct bsim_tx_stream *s = tx_lookup_locked(bap_stream);
 
@@ -554,11 +563,13 @@ int bsim_tx_unregister(struct bt_bap_stream *bap_stream)
 		k_mutex_unlock(&tx_lock);
 		return -ENODATA;
 	}
+	index = (size_t)(s - tx_streams);
 	/* Clear the pointer and bump the generation under the lock so any
 	 * in-flight TX fails its commit check; then wait for it to drain
 	 * without holding the lock. */
 	s->bap_stream = NULL;
 	s->generation = bsim_tx_next_generation(s->generation);
+	(void)k_condvar_broadcast(&send_limit_changed[index]);
 	k_mutex_unlock(&tx_lock);
 
 	return tx_wait_idle(s);
@@ -609,25 +620,27 @@ void bsim_tx_schedule_malformed(struct bt_bap_stream *bap_stream, uint16_t at_se
 
 void bsim_tx_set_send_limit(struct bt_bap_stream *bap_stream, uint32_t limit)
 {
+	size_t index;
+
 	k_mutex_lock(&tx_lock, K_FOREVER);
 	struct bsim_tx_stream *s = tx_lookup_locked(bap_stream);
 
 	if (s != NULL) {
-		k_sem_reset(&s->send_limit_reached);
+		index = (size_t)(s - tx_streams);
 		s->send_limit = limit;
 		if (limit > 0U && s->send_count >= limit) {
 			s->paused = true;
-			k_sem_give(&s->send_limit_reached);
 		}
+		(void)k_condvar_broadcast(&send_limit_changed[index]);
 	}
 	k_mutex_unlock(&tx_lock);
 }
 
 int bsim_tx_wait_send_limit(struct bt_bap_stream *bap_stream, uint32_t timeout_ms)
 {
-	struct bsim_tx_stream *s;
 	uint32_t generation;
 	uint32_t limit;
+	size_t index;
 	int err;
 
 	if (bap_stream == NULL || timeout_ms == 0U) {
@@ -635,29 +648,36 @@ int bsim_tx_wait_send_limit(struct bt_bap_stream *bap_stream, uint32_t timeout_m
 	}
 
 	k_mutex_lock(&tx_lock, K_FOREVER);
-	s = tx_lookup_locked(bap_stream);
-	if (s == NULL || s->send_limit == 0U) {
-		k_mutex_unlock(&tx_lock);
-		return -ENODATA;
-	}
-	generation = s->generation;
-	limit = s->send_limit;
-	if (s->send_count >= limit && s->paused) {
-		k_mutex_unlock(&tx_lock);
-		return 0;
-	}
-	k_mutex_unlock(&tx_lock);
+	{
+		struct bsim_tx_stream *s = tx_lookup_locked(bap_stream);
 
-	err = k_sem_take(&s->send_limit_reached, K_MSEC(timeout_ms));
+		if (s == NULL || s->send_limit == 0U) {
+			k_mutex_unlock(&tx_lock);
+			return -ENODATA;
+		}
+		index = (size_t)(s - tx_streams);
+		generation = s->generation;
+		limit = s->send_limit;
+		if (s->send_count >= limit && s->paused) {
+			k_mutex_unlock(&tx_lock);
+			return 0;
+		}
+	}
+
+	err = k_condvar_wait(&send_limit_changed[index], &tx_lock, K_MSEC(timeout_ms));
 	if (err != 0) {
+		k_mutex_unlock(&tx_lock);
 		return -ETIMEDOUT;
 	}
 
-	k_mutex_lock(&tx_lock, K_FOREVER);
-	if (s->bap_stream != bap_stream || s->generation != generation || s->send_limit != limit ||
-	    s->send_count < limit || !s->paused) {
-		k_mutex_unlock(&tx_lock);
-		return -ESTALE;
+	{
+		struct bsim_tx_stream *s = &tx_streams[index];
+
+		if (s->bap_stream != bap_stream || s->generation != generation ||
+		    s->send_limit != limit || s->send_count < limit || !s->paused) {
+			k_mutex_unlock(&tx_lock);
+			return -ESTALE;
+		}
 	}
 	k_mutex_unlock(&tx_lock);
 
