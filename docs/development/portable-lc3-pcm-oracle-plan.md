@@ -1,7 +1,6 @@
 # Portable LC3/PCM test oracle plan
 
-Status: P0, P0b, P0c, and P1 accepted; P0d corrective calibration in progress;
-P2 blocked on P0d cross-platform acceptance; P3 and P4 pending.
+Status: P0, P0b, P0c, P0d, and P1 accepted; P2 in progress; P3 and P4 pending.
 
 Product item: [PB-031](../product/backlog/tasks/pb-031%20-%20Make-LC3-PCM-test-oracle-platform-independent.md), Make LC3/PCM test oracle platform-independent.
 
@@ -219,8 +218,27 @@ at action 10, PLC actions 11 and 12, then corpus frames 1 through 100. Both
 channels therefore have 101 source-valid outputs and 12 PLC actions. The right
 post-valid PLC history changes later decoder output, so it needs a generated
 stateful PCM reference. P0d corrects recipes five and six while retaining the
-schema-3 38-record protocol and frozen `2048/512/32750` policy. P2 remains
-blocked pending repeated AMD, Intel, and ARM P0d calibration acceptance.
+schema-3 38-record protocol and frozen `2048/512/32750` policy.
+
+P0d cross-platform acceptance completed on 2026-09-17 at reviewed commit
+`4fbe9bc135d9077aff90a56f0f6f70fe92637ebb`. Two schema-3 reports per
+identified AMD Ryzen 9 5950X with GCC 14.3.0, Intel Core i3-6100U with Clang
+21.1.8, and nRF54L15 ARM with Zephyr SDK 0.17.0 GCC 12.2.0 each contained 38
+records. Record identity and order matched across environments, and repeats
+matched within each environment. Corrected Mode A 7.5 ms left/right
+max-error/RMS/correlation Q15 metrics were AMD `0/0/32767` and `0/0/32767`,
+Intel `1902/424/32761` and `1883/426/32760`, and ARM `1/1/32767` and
+`1/1/32767`.
+
+The eight-stateful-valid envelope was maximum absolute error 1977, maximum RMS
+426, and minimum correlation Q15 32756, inside frozen `2048/512/32750`.
+All eight stateful-valid records passed and all four mutations returned
+`max-error`. Clean reviewed production source was restored after calibration:
+cpuapp and FLPR image hashes and flash bytes verified, required boot markers
+were present, and no UART warning or error lines occurred. Evidence remains
+external, not checked into this repository, at
+`/tmp/opencode/pb031-p0d-acceptance-4fbe9bc/acceptance-report.md`. P0d
+unblocks P2, now in progress.
 
 ## Phases and verification
 

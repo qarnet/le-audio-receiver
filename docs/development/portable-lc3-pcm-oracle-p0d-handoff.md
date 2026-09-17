@@ -1,6 +1,6 @@
 # PB-031 P0d handoff: correct Mode A 7.5 ms stateful recipes
 
-Status: Implementation complete, cross-platform acceptance pending.
+Status: Accepted, 2026-09-17.
 
 Parent plan: `docs/development/portable-lc3-pcm-oracle-plan.md`.
 
@@ -325,19 +325,51 @@ output, widen policy, or invent another architecture.
   stateful-valid records pass; all four mutations evaluate `max-error`. Formal
   Intel and ARM execution acceptance remains orchestrator work.
 
-## Post-implementation orchestrator gate
+## Completed cross-platform acceptance (2026-09-17)
 
-Executor implementation is not P0d acceptance. Orchestrator will review the
-commit and actual diff in a clean detached worktree, then capture:
+P0d is accepted at reviewed commit
+`4fbe9bc135d9077aff90a56f0f6f70fe92637ebb`. Evidence is external and is not
+checked into this repository:
 
-1. two AMD schema-3 reports;
-2. two Intel schema-3 reports on identified Intel x86_64;
-3. two ARM 38-record UART reports after fresh target identity and exact-image
-   flash;
-4. cross-platform record identity/order equality, repeatability, all eight
-   stateful-valid PASS results, and all four mutation `max-error` results;
-5. frozen-limit envelope check;
-6. production nRF54L15 firmware restoration and warning-free boot evidence.
+- root: `/tmp/opencode/pb031-p0d-acceptance-4fbe9bc`;
+- authoritative report:
+  `/tmp/opencode/pb031-p0d-acceptance-4fbe9bc/acceptance-report.md`.
 
-Only reviewed cross-platform PASS permits P2 handoff correction and resumed P2
-implementation.
+Clean detached review-tree checks passed, and main-worktree dirty P2 status
+preservation passed. Strict stateful generation, original LC3/PCM corpus
+no-diff, 37 Python tests, native `pcm_oracle` 12/12, pristine nRF54L15
+calibration build, `backlog doctor`, and `git diff --check` all passed.
+
+Two schema-3 reports per environment contained exactly 38 metric records.
+Record identity and order matched across AMD, Intel, and ARM; repeat metrics
+matched within each environment.
+
+| Environment | Toolchain | Mode A 7.5 ms left, max/RMS/correlation Q15 | Mode A 7.5 ms right, max/RMS/correlation Q15 |
+| --- | --- | --- | --- |
+| AMD Ryzen 9 5950X | GCC 14.3.0 | 0 / 0 / 32767 | 0 / 0 / 32767 |
+| Intel Core i3-6100U | Clang 21.1.8 | 1902 / 424 / 32761 | 1883 / 426 / 32760 |
+| nRF54L15 ARM | Zephyr SDK 0.17.0, GCC 12.2.0 | 1 / 1 / 32767 | 1 / 1 / 32767 |
+
+Across all eight stateful-valid records, maximum absolute error was 1977,
+maximum RMS error was 426, and minimum correlation was Q15 32756, inside the
+frozen `2048 / 512 / 32750` envelope. All eight stateful-valid records passed;
+all four stateful mutations returned `max-error`.
+
+ARM calibration identity: CMSIS-DAP `8EE9B3FF`; DPIDR `0x6ba02477`; AP0/AP1
+`0x84770001`; AP2 `0x32880000`; PART `0x00054b15`; VARIANT `0x41414330`.
+Calibration image verification covered 845316 bytes. Full RRAM use was
+845316/1462272 bytes, with 616956 bytes headroom. RAM use was 27808/192512
+bytes, with 164704 bytes headroom. Main stack was 2920/8192 bytes, 35 percent,
+in both runs.
+
+Production was restored from clean reviewed source. Cpuapp SHA-256 was
+`a3700e9314814e60b48ecf539d28c31e635d61f9bb29bbe43410506c8fba0c8e`; FLPR
+SHA-256 was
+`45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+Verified flash bytes were 536948 for cpuapp and 32604 for FLPR. Boot banner
+was `4fbe9bc135d9`; required BLE, settings, timing, I2S, FLPR, and advertising
+markers were present, with no UART warning or error lines.
+
+Only documented production-build diagnostics occurred: `No SOURCES given to
+Zephyr library: drivers__watchdog` and `__ASSERT() statements are globally
+ENABLED`. No unexplained warning occurred. P0d unblocks P2.
