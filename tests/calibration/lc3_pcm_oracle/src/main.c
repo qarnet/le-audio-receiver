@@ -20,12 +20,13 @@
 #include <lc3.h>
 
 #include "pb031_arm_build_info.h"
+#include "lc3_stateful_recipes.h"
 #include "pcm_oracle.h"
 
 #define CORPUS_FRAMES         128U
 #define MAX_SAMPLES_PER_FRAME 480U
 #define MAX_FRAME_BYTES       120U
-#define METRIC_RECORD_COUNT   26U
+#define METRIC_RECORD_COUNT   38U
 #define OUTPUT_LINE_SIZE      768U
 
 struct corpus_stream {
@@ -45,6 +46,11 @@ struct calibration_failure {
 	const char *stage;
 	const char *stream;
 	int code;
+};
+
+struct stateful_reference {
+	const uint8_t *bytes;
+	size_t size;
 };
 
 enum comparison_input {
@@ -84,6 +90,14 @@ static const uint8_t bsim_48k_7p5ms_90b_r_pcm[] = {
 #include "bsim_48k_7p5ms_90b_r_pcm.inc"
 };
 
+static const uint8_t stateful_48k_10ms_skip20_l_pcm[] = {
+#include "stateful_48k_10ms_skip20_l_pcm.inc"
+};
+
+static const uint8_t stateful_48k_10ms_loss48x18_r_pcm[] = {
+#include "stateful_48k_10ms_loss48x18_r_pcm.inc"
+};
+
 _Static_assert(sizeof(bsim_48k_10ms_120b_l_lc3) == CORPUS_FRAMES * 120U,
 	       "10 ms left LC3 geometry mismatch");
 _Static_assert(sizeof(bsim_48k_10ms_120b_l_pcm) == CORPUS_FRAMES * 480U * 2U,
@@ -100,6 +114,10 @@ _Static_assert(sizeof(bsim_48k_7p5ms_90b_r_lc3) == CORPUS_FRAMES * 90U,
 	       "7.5 ms right LC3 geometry mismatch");
 _Static_assert(sizeof(bsim_48k_7p5ms_90b_r_pcm) == CORPUS_FRAMES * 360U * 2U,
 	       "7.5 ms right PCM geometry mismatch");
+_Static_assert(sizeof(stateful_48k_10ms_skip20_l_pcm) == 100U * 480U * 2U,
+	       "skip20 reference geometry mismatch");
+_Static_assert(sizeof(stateful_48k_10ms_loss48x18_r_pcm) == 82U * 480U * 2U,
+	       "loss48x18 reference geometry mismatch");
 
 static const struct corpus_stream streams[] = {
 	{
@@ -149,6 +167,82 @@ static const struct corpus_stream streams[] = {
 		.lc3_size = sizeof(bsim_48k_7p5ms_90b_r_lc3),
 		.pcm = bsim_48k_7p5ms_90b_r_pcm,
 		.pcm_size = sizeof(bsim_48k_7p5ms_90b_r_pcm),
+	},
+};
+
+static const struct lc3_stateful_step payload_off_by_one_steps[] = {
+	{LC3_STATEFUL_ACTION_PLC, 0U, 8U},
+	{LC3_STATEFUL_ACTION_CORPUS, 1U, 100U},
+};
+
+static const struct lc3_stateful_step normal_start_steps[] = {
+	{LC3_STATEFUL_ACTION_PLC, 0U, 8U},
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
+};
+
+static const struct lc3_stateful_step loss_burst_omitted_steps[] = {
+	{LC3_STATEFUL_ACTION_PLC, 0U, 8U},
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 82U},
+};
+
+static const struct lc3_stateful_recipe stateful_mutations[] = {
+	{
+		.id = "start8_10ms_l_payload_plus1",
+		.source_stem = "bsim_48k_10ms_120b_l",
+		.reference_path = "bsim_48k_10ms_120b_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 108U,
+		.valid_frame_count = 100U,
+		.steps = payload_off_by_one_steps,
+		.step_count =
+			sizeof(payload_off_by_one_steps) / sizeof(payload_off_by_one_steps[0]),
+	},
+	{
+		.id = "start8_10ms_l_ignore_skip20",
+		.source_stem = "bsim_48k_10ms_120b_l",
+		.reference_path = "stateful_48k_10ms_skip20_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_GENERATED_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 108U,
+		.valid_frame_count = 100U,
+		.steps = normal_start_steps,
+		.step_count = sizeof(normal_start_steps) / sizeof(normal_start_steps[0]),
+	},
+	{
+		.id = "start8_10ms_r_omit_loss48x18",
+		.source_stem = "bsim_48k_10ms_120b_r",
+		.reference_path = "stateful_48k_10ms_loss48x18_r.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_GENERATED_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 90U,
+		.valid_frame_count = 82U,
+		.steps = loss_burst_omitted_steps,
+		.step_count =
+			sizeof(loss_burst_omitted_steps) / sizeof(loss_burst_omitted_steps[0]),
+	},
+	{
+		.id = "start8_10ms_r_wrong_channel",
+		.source_stem = "bsim_48k_10ms_120b_r",
+		.reference_path = "bsim_48k_10ms_120b_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 108U,
+		.valid_frame_count = 100U,
+		.steps = normal_start_steps,
+		.step_count = sizeof(normal_start_steps) / sizeof(normal_start_steps[0]),
 	},
 };
 
@@ -207,6 +301,197 @@ static int setup_decoder(const struct corpus_stream *stream, lc3_decoder_t *deco
 				     &decoder_memory);
 
 	return (*decoder == NULL) ? -EINVAL : 0;
+}
+
+static const struct corpus_stream *stream_for_stem(const char *stem)
+{
+	if (stem == NULL) {
+		return NULL;
+	}
+	for (size_t index = 0U; index < ARRAY_SIZE(streams); index++) {
+		if (strcmp(stem, streams[index].stem) == 0) {
+			return &streams[index];
+		}
+	}
+
+	return NULL;
+}
+
+static int stream_matches_portable_pcm_path(const struct corpus_stream *stream,
+					    const char *reference_path)
+{
+	size_t stem_length;
+
+	if (stream == NULL || reference_path == NULL) {
+		return 0;
+	}
+	stem_length = strlen(stream->stem);
+	return strlen(reference_path) == stem_length + strlen(".pcm") &&
+	       memcmp(reference_path, stream->stem, stem_length) == 0 &&
+	       strcmp(reference_path + stem_length, ".pcm") == 0;
+}
+
+static int reference_for_recipe(const struct lc3_stateful_recipe *recipe,
+				struct stateful_reference *reference,
+				struct calibration_failure *failure)
+{
+	size_t expected_size;
+
+	if (recipe == NULL || reference == NULL || recipe->samples_per_frame == 0U ||
+	    (size_t)recipe->valid_frame_count >
+		    SIZE_MAX / ((size_t)recipe->samples_per_frame * sizeof(int16_t))) {
+		return set_failure(failure, "reference-geometry", "none", -EINVAL);
+	}
+	expected_size =
+		(size_t)recipe->valid_frame_count * recipe->samples_per_frame * sizeof(int16_t);
+	if (recipe->reference_kind == LC3_STATEFUL_REFERENCE_GENERATED_PCM) {
+		if (strcmp(recipe->reference_path, "stateful_48k_10ms_skip20_l.pcm") == 0) {
+			reference->bytes = stateful_48k_10ms_skip20_l_pcm;
+			reference->size = sizeof(stateful_48k_10ms_skip20_l_pcm);
+		} else if (strcmp(recipe->reference_path, "stateful_48k_10ms_loss48x18_r.pcm") ==
+			   0) {
+			reference->bytes = stateful_48k_10ms_loss48x18_r_pcm;
+			reference->size = sizeof(stateful_48k_10ms_loss48x18_r_pcm);
+		} else {
+			return set_failure(failure, "reference-path", recipe->id, -EINVAL);
+		}
+		if (reference->size != expected_size) {
+			return set_failure(failure, "reference-size", recipe->id, -EINVAL);
+		}
+		return 0;
+	}
+	if (recipe->reference_kind != LC3_STATEFUL_REFERENCE_PORTABLE_PCM) {
+		return set_failure(failure, "reference-kind", recipe->id, -EINVAL);
+	}
+
+	for (size_t index = 0U; index < ARRAY_SIZE(streams); index++) {
+		const struct corpus_stream *stream = &streams[index];
+		size_t first_offset;
+
+		if (!stream_matches_portable_pcm_path(stream, recipe->reference_path) ||
+		    stream->samples_per_frame != recipe->samples_per_frame ||
+		    (size_t)recipe->reference_first_frame >
+			    SIZE_MAX / ((size_t)recipe->samples_per_frame * sizeof(int16_t))) {
+			continue;
+		}
+		first_offset = (size_t)recipe->reference_first_frame * recipe->samples_per_frame *
+			       sizeof(int16_t);
+		if (first_offset > stream->pcm_size ||
+		    expected_size > stream->pcm_size - first_offset) {
+			return set_failure(failure, "reference-range", recipe->id, -EINVAL);
+		}
+		reference->bytes = stream->pcm + first_offset;
+		reference->size = expected_size;
+		return 0;
+	}
+
+	return set_failure(failure, "reference-path", recipe->id, -EINVAL);
+}
+
+static int replay_stateful_recipe(const struct corpus_stream *actual_stream,
+				  const struct lc3_stateful_recipe *recipe,
+				  const struct stateful_reference *reference,
+				  struct pcm_oracle_metrics *metrics,
+				  struct calibration_failure *failure)
+{
+	lc3_decoder_t decoder;
+	struct pcm_oracle oracle;
+	size_t reference_offset = 0U;
+	size_t expected_size;
+	int err;
+
+	if (actual_stream == NULL || recipe == NULL || reference == NULL || metrics == NULL ||
+	    !lc3_stateful_recipes_validate(recipe, 1U) ||
+	    actual_stream->duration_us != recipe->duration_us ||
+	    actual_stream->frame_bytes != recipe->frame_bytes ||
+	    actual_stream->samples_per_frame != recipe->samples_per_frame ||
+	    recipe->samples_per_frame > ARRAY_SIZE(frame_buffer) ||
+	    (size_t)recipe->valid_frame_count >
+		    SIZE_MAX / ((size_t)recipe->samples_per_frame * sizeof(int16_t))) {
+		return set_failure(failure, "stateful-geometry", "none", -EINVAL);
+	}
+	expected_size =
+		(size_t)recipe->valid_frame_count * recipe->samples_per_frame * sizeof(int16_t);
+	if (reference->bytes == NULL || reference->size != expected_size) {
+		return set_failure(failure, "reference-size", recipe->id, -EINVAL);
+	}
+	err = setup_decoder(actual_stream, &decoder);
+	if (err != 0) {
+		return set_failure(failure, "decoder-setup", actual_stream->stem, err);
+	}
+	err = pcm_oracle_init(&oracle);
+	if (err != 0) {
+		return set_failure(failure, "comparator-init", actual_stream->stem, err);
+	}
+
+	for (size_t step_index = 0U; step_index < recipe->step_count; step_index++) {
+		const struct lc3_stateful_step *step = &recipe->steps[step_index];
+
+		for (uint16_t action_index = 0U; action_index < step->count; action_index++) {
+			if (step->action == LC3_STATEFUL_ACTION_PLC) {
+				err = lc3_decode(decoder, NULL, 0, LC3_PCM_FORMAT_S16, frame_buffer,
+						 1);
+				if (err != 1) {
+					return set_failure(failure, "plc-decode", recipe->id, err);
+				}
+				continue;
+			}
+
+			err = lc3_decode(decoder,
+					 actual_stream->lc3 +
+						 (size_t)(step->first_sequence + action_index) *
+							 recipe->frame_bytes,
+					 recipe->frame_bytes, LC3_PCM_FORMAT_S16, frame_buffer, 1);
+			if (err != 0 ||
+			    (size_t)recipe->samples_per_frame * sizeof(int16_t) > reference->size ||
+			    reference_offset > reference->size - (size_t)recipe->samples_per_frame *
+									 sizeof(int16_t)) {
+				return set_failure(failure, "stateful-decode", recipe->id,
+						   err == 0 ? -EINVAL : err);
+			}
+			err = pcm_oracle_accumulate(&oracle, frame_buffer, 1U,
+						    reference->bytes + reference_offset, 2U,
+						    recipe->samples_per_frame);
+			if (err != 0) {
+				return set_failure(failure, "accumulate", recipe->id, err);
+			}
+			reference_offset += (size_t)recipe->samples_per_frame * sizeof(int16_t);
+		}
+	}
+
+	err = pcm_oracle_finalize(&oracle, metrics);
+	if (err != 0 || reference_offset != reference->size ||
+	    metrics->frames != recipe->valid_frame_count ||
+	    metrics->samples != (uint32_t)recipe->valid_frame_count * recipe->samples_per_frame) {
+		return set_failure(failure, "stateful-finalize", recipe->id, err == 0 ? -EIO : err);
+	}
+	return 0;
+}
+
+static int run_stateful_comparison(const struct lc3_stateful_recipe *actual_recipe,
+				   const struct lc3_stateful_recipe *reference_recipe,
+				   struct pcm_oracle_metrics *metrics,
+				   struct calibration_failure *failure)
+{
+	const struct corpus_stream *actual_stream;
+	struct stateful_reference reference = {0};
+	int err;
+
+	if (actual_recipe == NULL || reference_recipe == NULL ||
+	    !lc3_stateful_recipes_validate(actual_recipe, 1U) ||
+	    !lc3_stateful_recipes_validate(reference_recipe, 1U) ||
+	    actual_recipe->samples_per_frame != reference_recipe->samples_per_frame) {
+		return set_failure(failure, "stateful-recipe", "none", -EINVAL);
+	}
+	actual_stream = stream_for_stem(actual_recipe->source_stem);
+	if (actual_stream == NULL) {
+		return set_failure(failure, "stateful-source", actual_recipe->id, -EINVAL);
+	}
+	err = reference_for_recipe(reference_recipe, &reference, failure);
+	if (err != 0) {
+		return err;
+	}
+	return replay_stateful_recipe(actual_stream, actual_recipe, &reference, metrics, failure);
 }
 
 static int evaluate_metrics(const struct pcm_oracle_metrics *metrics,
@@ -546,7 +831,7 @@ static int emit_begin(void)
 {
 	int written =
 		snprintf(output_line, sizeof(output_line),
-			 "PB031_ARM_BEGIN schema=2 manifest_sha256=%s ncs=%s liblc3=%s "
+			 "PB031_ARM_BEGIN schema=3 manifest_sha256=%s ncs=%s liblc3=%s "
 			 "max_abs_error=%u max_rms_error=%u min_correlation_q15=%d",
 			 PB031_MANIFEST_SHA256, PB031_NCS_VERSION, PB031_LIBLC3_REVISION,
 			 (unsigned int)PB031_PCM_MAX_ABS_ERROR,
@@ -561,11 +846,13 @@ static int emit_begin(void)
 
 static int emit_source(void)
 {
-	int written =
-		snprintf(output_line, sizeof(output_line),
-			 "PB031_ARM_SOURCE main_c_sha256=%s pcm_oracle_c_sha256=%s "
-			 "pcm_oracle_h_sha256=%s",
-			 PB031_MAIN_C_SHA256, PB031_PCM_ORACLE_C_SHA256, PB031_PCM_ORACLE_H_SHA256);
+	int written = snprintf(output_line, sizeof(output_line),
+			       "PB031_ARM_SOURCE main_c_sha256=%s pcm_oracle_c_sha256=%s "
+			       "pcm_oracle_h_sha256=%s stateful_manifest_sha256=%s "
+			       "stateful_recipe_c_sha256=%s stateful_recipe_h_sha256=%s",
+			       PB031_MAIN_C_SHA256, PB031_PCM_ORACLE_C_SHA256,
+			       PB031_PCM_ORACLE_H_SHA256, PB031_STATEFUL_MANIFEST_SHA256,
+			       PB031_STATEFUL_RECIPE_C_SHA256, PB031_STATEFUL_RECIPE_H_SHA256);
 
 	if (written < 0 || (size_t)written >= sizeof(output_line)) {
 		return -ENOSPC;
@@ -574,8 +861,7 @@ static int emit_source(void)
 	return emit_line(output_line);
 }
 
-static int emit_metric(const char *comparison, const struct corpus_stream *stream,
-		       const struct corpus_stream *reference_stream,
+static int emit_metric(const char *comparison, const char *stem, const char *reference_stem,
 		       const struct pcm_oracle_metrics *metrics, const char *evaluation)
 {
 	int written = snprintf(
@@ -586,7 +872,7 @@ static int emit_metric(const char *comparison, const struct corpus_stream *strea
 		",\"reference_energy_scaled\":%" PRIu64 ",\"dot_product_scaled\":%" PRId64
 		",\"samples\":%" PRIu32 ",\"frames\":%" PRIu32 ",\"max_abs_error\":%" PRIu32
 		",\"rms_error\":%" PRIu32 ",\"correlation_q15\":%" PRId32 ",\"evaluation\":\"%s\"}",
-		comparison, stream->stem, reference_stream->stem, metrics->squared_error,
+		comparison, stem, reference_stem, metrics->squared_error,
 		metrics->actual_energy_scaled, metrics->reference_energy_scaled,
 		metrics->dot_product_scaled, metrics->samples, metrics->frames,
 		metrics->max_abs_error, metrics->rms_error, metrics->correlation_q15, evaluation);
@@ -612,8 +898,7 @@ static void emit_failure(const struct calibration_failure *failure)
 	(void)emit_line(output_line);
 }
 
-static int emit_record(const char *comparison, const struct corpus_stream *stream,
-		       const struct corpus_stream *reference_stream,
+static int emit_record(const char *comparison, const char *stem, const char *reference_stem,
 		       const struct pcm_oracle_metrics *metrics, uint32_t *metric_count,
 		       enum pcm_oracle_result expected_result, struct calibration_failure *failure)
 {
@@ -622,16 +907,16 @@ static int emit_record(const char *comparison, const struct corpus_stream *strea
 
 	err = evaluate_metrics(metrics, &result);
 	if (err != 0) {
-		return set_failure(failure, "evaluate", stream->stem, err);
+		return set_failure(failure, "evaluate", stem, err);
 	}
 	if (result != expected_result) {
-		return set_failure(failure, "evaluation", stream->stem, -EIO);
+		return set_failure(failure, "evaluation", stem, -EIO);
 	}
-	err = emit_metric(comparison, stream, reference_stream, metrics,
+	err = emit_metric(comparison, stem, reference_stem, metrics,
 			  pcm_oracle_result_name(result));
 
 	if (err != 0) {
-		return set_failure(failure, "metric-format", stream->stem, err);
+		return set_failure(failure, "metric-format", stem, err);
 	}
 
 	(*metric_count)++;
@@ -660,6 +945,10 @@ int main(void)
 		(void)set_failure(&failure, "source", "none", err);
 		goto fail;
 	}
+	if (!lc3_stateful_recipes_validate(lc3_stateful_recipes, lc3_stateful_recipe_count)) {
+		(void)set_failure(&failure, "stateful-recipe-table", "none", -EINVAL);
+		goto fail;
+	}
 
 	for (index = 0U; index < ARRAY_SIZE(streams); index++) {
 		err = validate_stream(&streams[index]);
@@ -675,7 +964,7 @@ int main(void)
 		if (err != 0) {
 			goto fail;
 		}
-		err = emit_record("valid", &streams[index], &streams[index], &metrics,
+		err = emit_record("valid", streams[index].stem, streams[index].stem, &metrics,
 				  &metric_count, PCM_ORACLE_RESULT_PASS, &failure);
 		if (err != 0) {
 			goto fail;
@@ -688,8 +977,8 @@ int main(void)
 		if (err != 0) {
 			goto fail;
 		}
-		err = emit_record("channel-swap", &streams[index], &streams[index + 1U], &metrics,
-				  &metric_count, PCM_ORACLE_RESULT_MAX_ERROR, &failure);
+		err = emit_record("channel-swap", streams[index].stem, streams[index + 1U].stem,
+				  &metrics, &metric_count, PCM_ORACLE_RESULT_MAX_ERROR, &failure);
 		if (err != 0) {
 			goto fail;
 		}
@@ -701,8 +990,8 @@ int main(void)
 		if (err != 0) {
 			goto fail;
 		}
-		err = emit_record("prior-frame-shift", &streams[index], &streams[index], &metrics,
-				  &metric_count, PCM_ORACLE_RESULT_MAX_ERROR, &failure);
+		err = emit_record("prior-frame-shift", streams[index].stem, streams[index].stem,
+				  &metrics, &metric_count, PCM_ORACLE_RESULT_MAX_ERROR, &failure);
 		if (err != 0) {
 			goto fail;
 		}
@@ -712,8 +1001,8 @@ int main(void)
 		if (err != 0) {
 			goto fail;
 		}
-		err = emit_record("next-frame-shift", &streams[index], &streams[index], &metrics,
-				  &metric_count, PCM_ORACLE_RESULT_MAX_ERROR, &failure);
+		err = emit_record("next-frame-shift", streams[index].stem, streams[index].stem,
+				  &metrics, &metric_count, PCM_ORACLE_RESULT_MAX_ERROR, &failure);
 		if (err != 0) {
 			goto fail;
 		}
@@ -722,8 +1011,8 @@ int main(void)
 		if (err != 0) {
 			goto fail;
 		}
-		err = emit_record("dead-channel", &streams[index], &streams[index], &metrics,
-				  &metric_count, PCM_ORACLE_RESULT_MAX_ERROR, &failure);
+		err = emit_record("dead-channel", streams[index].stem, streams[index].stem,
+				  &metrics, &metric_count, PCM_ORACLE_RESULT_MAX_ERROR, &failure);
 		if (err != 0) {
 			goto fail;
 		}
@@ -733,8 +1022,9 @@ int main(void)
 		if (err != 0) {
 			goto fail;
 		}
-		err = emit_record("low-correlation-synthetic", &streams[index], &streams[index],
-				  &metrics, &metric_count, PCM_ORACLE_RESULT_MAX_ERROR, &failure);
+		err = emit_record("low-correlation-synthetic", streams[index].stem,
+				  streams[index].stem, &metrics, &metric_count,
+				  PCM_ORACLE_RESULT_MAX_ERROR, &failure);
 		if (err != 0) {
 			goto fail;
 		}
@@ -744,8 +1034,8 @@ int main(void)
 	if (err != 0) {
 		goto fail;
 	}
-	err = emit_record("lc3-byte-corruption", &streams[0], &streams[0], &metrics, &metric_count,
-			  PCM_ORACLE_RESULT_MAX_ERROR, &failure);
+	err = emit_record("lc3-byte-corruption", streams[0].stem, streams[0].stem, &metrics,
+			  &metric_count, PCM_ORACLE_RESULT_MAX_ERROR, &failure);
 	if (err != 0) {
 		goto fail;
 	}
@@ -754,8 +1044,8 @@ int main(void)
 	if (err != 0) {
 		goto fail;
 	}
-	err = emit_record("max-error-boundary", &streams[0], &streams[0], &metrics, &metric_count,
-			  PCM_ORACLE_RESULT_MAX_ERROR, &failure);
+	err = emit_record("max-error-boundary", streams[0].stem, streams[0].stem, &metrics,
+			  &metric_count, PCM_ORACLE_RESULT_MAX_ERROR, &failure);
 	if (err != 0) {
 		goto fail;
 	}
@@ -764,8 +1054,8 @@ int main(void)
 	if (err != 0) {
 		goto fail;
 	}
-	err = emit_record("rms-error-boundary", &streams[0], &streams[0], &metrics, &metric_count,
-			  PCM_ORACLE_RESULT_RMS_ERROR, &failure);
+	err = emit_record("rms-error-boundary", streams[0].stem, streams[0].stem, &metrics,
+			  &metric_count, PCM_ORACLE_RESULT_RMS_ERROR, &failure);
 	if (err != 0) {
 		goto fail;
 	}
@@ -774,10 +1064,48 @@ int main(void)
 	if (err != 0) {
 		goto fail;
 	}
-	err = emit_record("correlation-boundary", &streams[0], &streams[0], &metrics, &metric_count,
-			  PCM_ORACLE_RESULT_CORRELATION, &failure);
+	err = emit_record("correlation-boundary", streams[0].stem, streams[0].stem, &metrics,
+			  &metric_count, PCM_ORACLE_RESULT_CORRELATION, &failure);
 	if (err != 0) {
 		goto fail;
+	}
+
+	for (index = 0U; index < lc3_stateful_recipe_count; index++) {
+		const struct lc3_stateful_recipe *recipe = &lc3_stateful_recipes[index];
+
+		err = run_stateful_comparison(recipe, recipe, &metrics, &failure);
+		if (err != 0) {
+			goto fail;
+		}
+		err = emit_record("stateful-valid", recipe->id, recipe->reference_path, &metrics,
+				  &metric_count, PCM_ORACLE_RESULT_PASS, &failure);
+		if (err != 0) {
+			goto fail;
+		}
+	}
+
+	for (index = 0U; index < ARRAY_SIZE(stateful_mutations); index++) {
+		static const char *const comparisons[] = {
+			"stateful-payload-off-by-one",
+			"stateful-skip-ignored",
+			"stateful-loss-burst-omitted",
+			"stateful-wrong-channel",
+		};
+		static const uint8_t reference_recipes[] = {0U, 6U, 7U, 0U};
+		const struct lc3_stateful_recipe *actual_recipe = &stateful_mutations[index];
+		const struct lc3_stateful_recipe *reference_recipe =
+			&lc3_stateful_recipes[reference_recipes[index]];
+
+		err = run_stateful_comparison(actual_recipe, reference_recipe, &metrics, &failure);
+		if (err != 0) {
+			goto fail;
+		}
+		err = emit_record(comparisons[index], actual_recipe->id,
+				  reference_recipe->reference_path, &metrics, &metric_count,
+				  PCM_ORACLE_RESULT_MAX_ERROR, &failure);
+		if (err != 0) {
+			goto fail;
+		}
 	}
 
 	if (metric_count != METRIC_RECORD_COUNT) {
@@ -786,7 +1114,7 @@ int main(void)
 	}
 
 	thread_analyzer_print(0U);
-	printk("PB031_ARM_PASS metrics=26\n");
+	printk("PB031_ARM_PASS metrics=38\n");
 	return 0;
 
 fail:

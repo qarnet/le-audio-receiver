@@ -150,6 +150,17 @@ with final marker
 Full reviewed AMD, Intel, and ARM report hashes, ARM fresh-identity/build/flash
 evidence, production restoration, and repair-review results are recorded in
 `docs/development/portable-lc3-pcm-oracle-p0b-threshold-handoff.md`.
+
+P0c adds schema-3 payload-identity and PLC-aware calibration before P2 resumes.
+Receiver controller sequence is diagnostic only and cannot select source fixture
+frame identity. Valid exact LC3 payload bytes select fixture sequence. Eight
+stateful recipes retain Stage 1 startup, malformed-rejection, and one-CIS-loss
+history; PLC and valid decode actions advance recipe state, while only
+source-valid decoded output enters numerical metrics. A malformed exact-shape
+rejection creates no decoder action. Host and ARM protocols extend from 26 to
+38 ordered records: eight stateful valid records pass frozen policy and four
+recipe mutations return `max-error`. P0c cross-platform calibration on
+identified Intel, AMD, and ARM environments remains mandatory before P2 work.
 <!-- SECTION:NOTES:END -->
 
 ## Comments

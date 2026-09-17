@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "lc3.h"
+#include "lc3_stateful_recipes.h"
 #include "pcm_oracle.h"
 
 #define CORPUS_FRAMES         128U
@@ -42,6 +43,82 @@ enum comparison_input {
 	COMPARISON_ACTUAL,
 	COMPARISON_DEAD,
 	COMPARISON_SYNTHETIC,
+};
+
+static const struct lc3_stateful_step payload_off_by_one_steps[] = {
+	{LC3_STATEFUL_ACTION_PLC, 0U, 8U},
+	{LC3_STATEFUL_ACTION_CORPUS, 1U, 100U},
+};
+
+static const struct lc3_stateful_step skip_ignored_steps[] = {
+	{LC3_STATEFUL_ACTION_PLC, 0U, 8U},
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
+};
+
+static const struct lc3_stateful_step loss_burst_omitted_steps[] = {
+	{LC3_STATEFUL_ACTION_PLC, 0U, 8U},
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 82U},
+};
+
+static const struct lc3_stateful_recipe stateful_mutations[] = {
+	{
+		.id = "start8_10ms_l_payload_plus1",
+		.source_stem = "bsim_48k_10ms_120b_l",
+		.reference_path = "bsim_48k_10ms_120b_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 108U,
+		.valid_frame_count = 100U,
+		.steps = payload_off_by_one_steps,
+		.step_count =
+			sizeof(payload_off_by_one_steps) / sizeof(payload_off_by_one_steps[0]),
+	},
+	{
+		.id = "start8_10ms_l_ignore_skip20",
+		.source_stem = "bsim_48k_10ms_120b_l",
+		.reference_path = "stateful_48k_10ms_skip20_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_GENERATED_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 108U,
+		.valid_frame_count = 100U,
+		.steps = skip_ignored_steps,
+		.step_count = sizeof(skip_ignored_steps) / sizeof(skip_ignored_steps[0]),
+	},
+	{
+		.id = "start8_10ms_r_omit_loss48x18",
+		.source_stem = "bsim_48k_10ms_120b_r",
+		.reference_path = "stateful_48k_10ms_loss48x18_r.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_GENERATED_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 90U,
+		.valid_frame_count = 82U,
+		.steps = loss_burst_omitted_steps,
+		.step_count =
+			sizeof(loss_burst_omitted_steps) / sizeof(loss_burst_omitted_steps[0]),
+	},
+	{
+		.id = "start8_10ms_r_wrong_channel",
+		.source_stem = "bsim_48k_10ms_120b_r",
+		.reference_path = "bsim_48k_10ms_120b_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 108U,
+		.valid_frame_count = 100U,
+		.steps = skip_ignored_steps,
+		.step_count = sizeof(skip_ignored_steps) / sizeof(skip_ignored_steps[0]),
+	},
 };
 
 static int parse_unsigned_limit(const char *text, uint32_t maximum, uint32_t *value)
@@ -189,6 +266,265 @@ out:
 		fprintf(stderr, "FATAL: close failed for %s\n", path);
 		rc = -1;
 	}
+	return rc;
+}
+
+static char *fixture_relative_path(const char *directory, const char *relative_path)
+{
+	size_t directory_len;
+	size_t relative_len;
+	char *path;
+
+	if (directory == NULL || relative_path == NULL) {
+		return NULL;
+	}
+	directory_len = strlen(directory);
+	relative_len = strlen(relative_path);
+	if (directory_len > SIZE_MAX - relative_len ||
+	    directory_len + relative_len > SIZE_MAX - 2U) {
+		return NULL;
+	}
+	path = malloc(directory_len + relative_len + 2U);
+	if (path == NULL) {
+		return NULL;
+	}
+	(void)snprintf(path, directory_len + relative_len + 2U, "%s/%s", directory, relative_path);
+	return path;
+}
+
+static const struct decoded_stream *find_decoded_stream(const struct decoded_stream *decoded,
+							size_t decoded_count, const char *stem)
+{
+	if (decoded == NULL || stem == NULL) {
+		return NULL;
+	}
+	for (size_t index = 0U; index < decoded_count; index++) {
+		if (decoded[index].stream != NULL &&
+		    strcmp(decoded[index].stream->stem, stem) == 0) {
+			return &decoded[index];
+		}
+	}
+
+	return NULL;
+}
+
+struct stateful_reference {
+	const uint8_t *bytes;
+	size_t size;
+	uint8_t *owned_bytes;
+};
+
+static int stream_matches_portable_pcm_path(const struct decoded_stream *decoded,
+					    const char *reference_path)
+{
+	size_t stem_length;
+
+	if (decoded == NULL || decoded->stream == NULL || reference_path == NULL) {
+		return 0;
+	}
+	stem_length = strlen(decoded->stream->stem);
+	return strlen(reference_path) == stem_length + strlen(".pcm") &&
+	       memcmp(reference_path, decoded->stream->stem, stem_length) == 0 &&
+	       strcmp(reference_path + stem_length, ".pcm") == 0;
+}
+
+static int load_generated_reference(const char *directory, const struct lc3_stateful_recipe *recipe,
+				    struct stateful_reference *reference)
+{
+	char *path = NULL;
+	size_t expected_size;
+	int rc = -1;
+
+	if (directory == NULL || recipe == NULL || reference == NULL ||
+	    recipe->reference_kind != LC3_STATEFUL_REFERENCE_GENERATED_PCM ||
+	    recipe->samples_per_frame == 0U ||
+	    (size_t)recipe->valid_frame_count >
+		    SIZE_MAX / ((size_t)recipe->samples_per_frame * sizeof(int16_t))) {
+		fprintf(stderr, "FATAL: invalid generated reference geometry\n");
+		goto out;
+	}
+	expected_size =
+		(size_t)recipe->valid_frame_count * recipe->samples_per_frame * sizeof(int16_t);
+	path = fixture_relative_path(directory, recipe->reference_path);
+	if (path == NULL) {
+		fprintf(stderr, "FATAL: generated reference path allocation failed for %s\n",
+			recipe->id);
+		goto out;
+	}
+	if (read_file(path, &reference->owned_bytes, expected_size) != 0) {
+		goto out;
+	}
+	reference->bytes = reference->owned_bytes;
+	reference->size = expected_size;
+	rc = 0;
+out:
+	free(path);
+	return rc;
+}
+
+static int reference_for_recipe(const char *directory, const struct decoded_stream *decoded,
+				size_t decoded_count, const struct lc3_stateful_recipe *recipe,
+				struct stateful_reference *reference)
+{
+	size_t expected_size;
+
+	if (directory == NULL || decoded == NULL || recipe == NULL || reference == NULL ||
+	    recipe->samples_per_frame == 0U ||
+	    (size_t)recipe->valid_frame_count >
+		    SIZE_MAX / ((size_t)recipe->samples_per_frame * sizeof(int16_t))) {
+		fprintf(stderr, "FATAL: invalid stateful reference geometry\n");
+		return -1;
+	}
+	memset(reference, 0, sizeof(*reference));
+	expected_size =
+		(size_t)recipe->valid_frame_count * recipe->samples_per_frame * sizeof(int16_t);
+	if (recipe->reference_kind == LC3_STATEFUL_REFERENCE_GENERATED_PCM) {
+		return load_generated_reference(directory, recipe, reference);
+	}
+	if (recipe->reference_kind != LC3_STATEFUL_REFERENCE_PORTABLE_PCM) {
+		fprintf(stderr, "FATAL: unknown stateful reference kind for %s\n", recipe->id);
+		return -1;
+	}
+
+	for (size_t index = 0U; index < decoded_count; index++) {
+		const struct decoded_stream *candidate = &decoded[index];
+		size_t first_offset;
+
+		if (!stream_matches_portable_pcm_path(candidate, recipe->reference_path) ||
+		    candidate->stream->samples_per_frame != (int)recipe->samples_per_frame ||
+		    (size_t)recipe->reference_first_frame >
+			    SIZE_MAX / ((size_t)recipe->samples_per_frame * sizeof(int16_t))) {
+			continue;
+		}
+		first_offset = (size_t)recipe->reference_first_frame * recipe->samples_per_frame *
+			       sizeof(int16_t);
+		if (first_offset > candidate->pcm_size ||
+		    expected_size > candidate->pcm_size - first_offset) {
+			fprintf(stderr, "FATAL: portable reference range is invalid for %s\n",
+				recipe->id);
+			return -1;
+		}
+		reference->bytes = candidate->pcm + first_offset;
+		reference->size = expected_size;
+		return 0;
+	}
+
+	fprintf(stderr, "FATAL: portable reference is unavailable for %s\n", recipe->id);
+	return -1;
+}
+
+static int replay_stateful_recipe(const struct decoded_stream *actual_stream,
+				  const struct lc3_stateful_recipe *recipe,
+				  const uint8_t *reference, size_t reference_size,
+				  struct pcm_oracle_metrics *metrics)
+{
+	lc3_decoder_mem_48k_t decoder_mem;
+	lc3_decoder_t decoder;
+	struct pcm_oracle oracle;
+	int16_t actual[MAX_SAMPLES_PER_FRAME];
+	size_t reference_offset = 0U;
+	size_t expected_reference_size;
+
+	if (actual_stream == NULL || actual_stream->stream == NULL || recipe == NULL ||
+	    reference == NULL || metrics == NULL || !lc3_stateful_recipes_validate(recipe, 1U) ||
+	    actual_stream->stream->duration_us != (int)recipe->duration_us ||
+	    actual_stream->stream->frame_bytes != (int)recipe->frame_bytes ||
+	    actual_stream->stream->samples_per_frame != (int)recipe->samples_per_frame ||
+	    recipe->samples_per_frame > MAX_SAMPLES_PER_FRAME ||
+	    (size_t)recipe->valid_frame_count >
+		    SIZE_MAX / ((size_t)recipe->samples_per_frame * sizeof(int16_t))) {
+		fprintf(stderr, "FATAL: invalid stateful replay geometry\n");
+		return -1;
+	}
+	expected_reference_size =
+		(size_t)recipe->valid_frame_count * recipe->samples_per_frame * sizeof(int16_t);
+	if (reference_size != expected_reference_size) {
+		fprintf(stderr, "FATAL: stateful trace size mismatch for %s\n", recipe->id);
+		return -1;
+	}
+	decoder = lc3_setup_decoder((int)recipe->duration_us, 48000, 0, &decoder_mem);
+	if (decoder == NULL || pcm_oracle_init(&oracle) != 0) {
+		fprintf(stderr, "FATAL: stateful replay setup failed for %s\n", recipe->id);
+		return -1;
+	}
+
+	for (size_t step_index = 0U; step_index < recipe->step_count; step_index++) {
+		const struct lc3_stateful_step *step = &recipe->steps[step_index];
+
+		for (uint16_t action_index = 0U; action_index < step->count; action_index++) {
+			int decode_result;
+
+			if (step->action == LC3_STATEFUL_ACTION_PLC) {
+				decode_result =
+					lc3_decode(decoder, NULL, 0, LC3_PCM_FORMAT_S16, actual, 1);
+				if (decode_result != 1) {
+					fprintf(stderr, "FATAL: PLC replay failed for %s\n",
+						recipe->id);
+					return -1;
+				}
+				continue;
+			}
+
+			decode_result = lc3_decode(
+				decoder,
+				actual_stream->lc3 + (size_t)(step->first_sequence + action_index) *
+							     recipe->frame_bytes,
+				recipe->frame_bytes, LC3_PCM_FORMAT_S16, actual, 1);
+			if (decode_result != 0 ||
+			    (size_t)recipe->samples_per_frame * sizeof(int16_t) > reference_size ||
+			    reference_offset > reference_size - (size_t)recipe->samples_per_frame *
+									sizeof(int16_t) ||
+			    pcm_oracle_accumulate(&oracle, actual, 1U, reference + reference_offset,
+						  2U, recipe->samples_per_frame) != 0) {
+				fprintf(stderr, "FATAL: stateful corpus replay failed for %s\n",
+					recipe->id);
+				return -1;
+			}
+			reference_offset += (size_t)recipe->samples_per_frame * sizeof(int16_t);
+		}
+	}
+
+	if (reference_offset != reference_size || pcm_oracle_finalize(&oracle, metrics) != 0 ||
+	    metrics->frames != recipe->valid_frame_count ||
+	    metrics->samples != (uint32_t)recipe->valid_frame_count * recipe->samples_per_frame) {
+		fprintf(stderr, "FATAL: stateful replay finalization failed for %s\n", recipe->id);
+		return -1;
+	}
+	return 0;
+}
+
+static int run_stateful_comparison(const char *directory, const struct decoded_stream *decoded,
+				   size_t decoded_count,
+				   const struct lc3_stateful_recipe *actual_recipe,
+				   const struct lc3_stateful_recipe *reference_recipe,
+				   struct pcm_oracle_metrics *metrics)
+{
+	const struct decoded_stream *actual_stream;
+	struct stateful_reference reference = {0};
+	int rc = -1;
+
+	if (actual_recipe == NULL || reference_recipe == NULL ||
+	    !lc3_stateful_recipes_validate(actual_recipe, 1U) ||
+	    !lc3_stateful_recipes_validate(reference_recipe, 1U) ||
+	    actual_recipe->samples_per_frame != reference_recipe->samples_per_frame) {
+		fprintf(stderr, "FATAL: invalid stateful comparison recipe\n");
+		goto out;
+	}
+	actual_stream = find_decoded_stream(decoded, decoded_count, actual_recipe->source_stem);
+	if (actual_stream == NULL) {
+		fprintf(stderr, "FATAL: stateful source stream is unavailable for %s\n",
+			actual_recipe->id);
+		goto out;
+	}
+	if (reference_for_recipe(directory, decoded, decoded_count, reference_recipe, &reference) !=
+		    0 ||
+	    replay_stateful_recipe(actual_stream, actual_recipe, reference.bytes, reference.size,
+				   metrics) != 0) {
+		goto out;
+	}
+	rc = 0;
+out:
+	free(reference.owned_bytes);
 	return rc;
 }
 
@@ -607,6 +943,10 @@ int main(int argc, char **argv)
 	if (parse_limits(argc, argv, &policy) != 0) {
 		return 1;
 	}
+	if (!lc3_stateful_recipes_validate(lc3_stateful_recipes, lc3_stateful_recipe_count)) {
+		fprintf(stderr, "FATAL: stateful recipe table is invalid\n");
+		return 1;
+	}
 	memset(decoded, 0, sizeof(decoded));
 
 	for (size_t index = 0U; index < sizeof(streams) / sizeof(streams[0]); index++) {
@@ -691,6 +1031,42 @@ int main(int argc, char **argv)
 			  &policy, PCM_ORACLE_RESULT_CORRELATION) != 0) {
 		fprintf(stderr, "FATAL: correlation boundary metric failed\n");
 		goto out;
+	}
+
+	for (size_t index = 0U; index < lc3_stateful_recipe_count; index++) {
+		const struct lc3_stateful_recipe *recipe = &lc3_stateful_recipes[index];
+
+		if (run_stateful_comparison(argv[1], decoded, sizeof(decoded) / sizeof(decoded[0]),
+					    recipe, recipe, &metrics) != 0 ||
+		    print_metrics("stateful-valid", recipe->id, recipe->reference_path, &metrics,
+				  &policy, PCM_ORACLE_RESULT_PASS) != 0) {
+			fprintf(stderr, "FATAL: stateful valid metric failed for %s\n", recipe->id);
+			goto out;
+		}
+	}
+
+	for (size_t index = 0U; index < sizeof(stateful_mutations) / sizeof(stateful_mutations[0]);
+	     index++) {
+		static const char *const comparisons[] = {
+			"stateful-payload-off-by-one",
+			"stateful-skip-ignored",
+			"stateful-loss-burst-omitted",
+			"stateful-wrong-channel",
+		};
+		static const uint8_t reference_recipes[] = {0U, 6U, 7U, 0U};
+		const struct lc3_stateful_recipe *actual_recipe = &stateful_mutations[index];
+		const struct lc3_stateful_recipe *reference_recipe =
+			&lc3_stateful_recipes[reference_recipes[index]];
+
+		if (run_stateful_comparison(argv[1], decoded, sizeof(decoded) / sizeof(decoded[0]),
+					    actual_recipe, reference_recipe, &metrics) != 0 ||
+		    print_metrics(comparisons[index], actual_recipe->id,
+				  reference_recipe->reference_path, &metrics, &policy,
+				  PCM_ORACLE_RESULT_MAX_ERROR) != 0) {
+			fprintf(stderr, "FATAL: stateful mutation metric failed for %s\n",
+				comparisons[index]);
+			goto out;
+		}
 	}
 
 	if (fflush(stdout) != 0) {

@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "ncs_version": "v3.3.0",
+  "liblc3": {
+    "semantic_label": "1.1.2",
+    "west_revision": "48bbd3eacd36e99a57317a0a4867002e0b09e183"
+  },
+  "generator_flags": [
+    "-O3",
+    "-std=c11",
+    "-ffast-math",
+    "-Wall",
+    "-Wextra",
+    "-Wdouble-promotion",
+    "-Wvla",
+    "-pedantic",
+    "-Werror"
+  ],
+  "source_portable_manifest": {
+    "path": "portable-oracle-manifest.json",
+    "size": 2831,
+    "sha256": "f82c85fed3097b6943b2d75733f7a377d0beb71a0a79fc5566ac8ed76bc7ba11"
+  },
+  "recipes": [
+    {
+      "id": "start8_10ms_l",
+      "source_stem": "bsim_48k_10ms_120b_l",
+      "duration_us": 10000,
+      "frame_bytes": 120,
+      "samples_per_frame": 480,
+      "output_action_count": 108,
+      "valid_frame_count": 100,
+      "steps": [
+        {"action": "plc", "first_sequence": 0, "count": 8},
+        {"action": "corpus", "first_sequence": 0, "count": 100}
+      ],
+      "reference": {
+        "kind": "portable-pcm",
+        "path": "bsim_48k_10ms_120b_l.pcm",
+        "first_frame": 0,
+        "frame_count": 100,
+        "size": 122880,
+        "sha256": "b42fd31158d24d255214580a63261087d57322266563cec778abc1d9f7f830a7"
+      }
+    },
+    {
+      "id": "start8_10ms_r",
+      "source_stem": "bsim_48k_10ms_120b_r",
+      "duration_us": 10000,
+      "frame_bytes": 120,
+      "samples_per_frame": 480,
+      "output_action_count": 108,
+      "valid_frame_count": 100,
+      "steps": [
+        {"action": "plc", "first_sequence": 0, "count": 8},
+        {"action": "corpus", "first_sequence": 0, "count": 100}
+      ],
+      "reference": {
+        "kind": "portable-pcm",
+        "path": "bsim_48k_10ms_120b_r.pcm",
+        "first_frame": 0,
+        "frame_count": 100,
+        "size": 122880,
+        "sha256": "7383216bd256165633da98a8a3e8af31bd2e1c4903001cf7ad749f87db18c8ca"
+      }
+    },
+    {
+      "id": "start11_7p5ms_l",
+      "source_stem": "bsim_48k_7p5ms_90b_l",
+      "duration_us": 7500,
+      "frame_bytes": 90,
+      "samples_per_frame": 360,
+      "output_action_count": 111,
+      "valid_frame_count": 100,
+      "steps": [
+        {"action": "plc", "first_sequence": 0, "count": 11},
+        {"action": "corpus", "first_sequence": 0, "count": 100}
+      ],
+      "reference": {
+        "kind": "portable-pcm",
+        "path": "bsim_48k_7p5ms_90b_l.pcm",
+        "first_frame": 0,
+        "frame_count": 100,
+        "size": 92160,
+        "sha256": "1e720b1f4f782f50b16b1e173a3fde0ba0bcd972a550d5a8b2a70282a37ffac6"
+      }
+    },
+    {
+      "id": "start11_7p5ms_r",
+      "source_stem": "bsim_48k_7p5ms_90b_r",
+      "duration_us": 7500,
+      "frame_bytes": 90,
+      "samples_per_frame": 360,
+      "output_action_count": 111,
+      "valid_frame_count": 100,
+      "steps": [
+        {"action": "plc", "first_sequence": 0, "count": 11},
+        {"action": "corpus", "first_sequence": 0, "count": 100}
+      ],
+      "reference": {
+        "kind": "portable-pcm",
+        "path": "bsim_48k_7p5ms_90b_r.pcm",
+        "first_frame": 0,
+        "frame_count": 100,
+        "size": 92160,
+        "sha256": "112a32ac37ab26ae50b7dfc3db082d06f3d0c5c866532306112e2d94a45914dd"
+      }
+    },
+    {
+      "id": "start13_7p5ms_l",
+      "source_stem": "bsim_48k_7p5ms_90b_l",
+      "duration_us": 7500,
+      "frame_bytes": 90,
+      "samples_per_frame": 360,
+      "output_action_count": 113,
+      "valid_frame_count": 100,
+      "steps": [
+        {"action": "plc", "first_sequence": 0, "count": 13},
+        {"action": "corpus", "first_sequence": 0, "count": 100}
+      ],
+      "reference": {
+        "kind": "portable-pcm",
+        "path": "bsim_48k_7p5ms_90b_l.pcm",
+        "first_frame": 0,
+        "frame_count": 100,
+        "size": 92160,
+        "sha256": "1e720b1f4f782f50b16b1e173a3fde0ba0bcd972a550d5a8b2a70282a37ffac6"
+      }
+    },
+    {
+      "id": "start13_7p5ms_r",
+      "source_stem": "bsim_48k_7p5ms_90b_r",
+      "duration_us": 7500,
+      "frame_bytes": 90,
+      "samples_per_frame": 360,
+      "output_action_count": 113,
+      "valid_frame_count": 100,
+      "steps": [
+        {"action": "plc", "first_sequence": 0, "count": 13},
+        {"action": "corpus", "first_sequence": 0, "count": 100}
+      ],
+      "reference": {
+        "kind": "portable-pcm",
+        "path": "bsim_48k_7p5ms_90b_r.pcm",
+        "first_frame": 0,
+        "frame_count": 100,
+        "size": 92160,
+        "sha256": "112a32ac37ab26ae50b7dfc3db082d06f3d0c5c866532306112e2d94a45914dd"
+      }
+    },
+    {
+      "id": "skip20_10ms_l",
+      "source_stem": "bsim_48k_10ms_120b_l",
+      "duration_us": 10000,
+      "frame_bytes": 120,
+      "samples_per_frame": 480,
+      "output_action_count": 108,
+      "valid_frame_count": 100,
+      "steps": [
+        {"action": "plc", "first_sequence": 0, "count": 8},
+        {"action": "corpus", "first_sequence": 0, "count": 20},
+        {"action": "corpus", "first_sequence": 21, "count": 80}
+      ],
+      "reference": {
+        "kind": "generated-pcm",
+        "path": "stateful_48k_10ms_skip20_l.pcm",
+        "first_frame": 0,
+        "frame_count": 100,
+        "size": 96000,
+        "sha256": "cead2e59efb32c78cb87818c710ca727082fd9bb9137bb8255b4f1e37d9be024"
+      }
+    },
+    {
+      "id": "loss48x18_10ms_r",
+      "source_stem": "bsim_48k_10ms_120b_r",
+      "duration_us": 10000,
+      "frame_bytes": 120,
+      "samples_per_frame": 480,
+      "output_action_count": 108,
+      "valid_frame_count": 82,
+      "steps": [
+        {"action": "plc", "first_sequence": 0, "count": 8},
+        {"action": "corpus", "first_sequence": 0, "count": 48},
+        {"action": "plc", "first_sequence": 0, "count": 18},
+        {"action": "corpus", "first_sequence": 48, "count": 34}
+      ],
+      "reference": {
+        "kind": "generated-pcm",
+        "path": "stateful_48k_10ms_loss48x18_r.pcm",
+        "first_frame": 0,
+        "frame_count": 82,
+        "size": 78720,
+        "sha256": "19087061a5f3d74d6d9631b7c5ba100fce358615cbffde322692ae65cc6e91be"
+      }
+    }
+  ]
+}

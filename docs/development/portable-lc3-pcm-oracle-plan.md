@@ -107,19 +107,22 @@ work unless required to keep oracle calibration current.
   reorder, wrong channel, and corruption.
 - Do not put platform PCM hashes back in scenario JSON.
 
-### 3. Sequence-aware receiver oracle
+### 3. Payload-and-recipe-aware receiver oracle
 
-- Extend `CONFIG_BSIM_OBSERVER`-only pre-push metadata to carry source
-  sequence per channel. Mono and Mode B supply same ISO sequence. Mode A
-  supplies assembler event per-half sequences, including synthetic lost-half
-  sequence when available.
+- Extend `CONFIG_BSIM_OBSERVER`-only pre-push metadata to carry exact accepted
+  LC3 payload identity and recipe progress per channel. Receiver controller
+  sequence remains diagnostic data, not source fixture identity. Mono and Mode
+  B carry one source identity. Mode A carries per-half source identity and
+  recipe state, including a synthetic lost-half action when required.
 - Production signatures outside test macro and production behavior stay
   unchanged.
-- Sink uses sequence to select expected decoded reference PCM. Valid channels
-  compare against decoded reference PCM. Source-invalid startup halves and
-  expected one-CIS PLC half are excluded from decoded reference PCM numerical
-  comparison, but remain covered by exact validity and PLC counts.
-- Invalid-SDU sequence gap maps directly. It must not shift reference cursor.
+- Sink uses exact valid payload bytes to select fixture sequence and stateful
+  recipe reference PCM. Recipe cursor advances for PLC and valid decode actions;
+  only source-valid decoded outputs enter numerical metrics. Source-invalid
+  startup halves and expected one-CIS PLC halves remain covered by exact
+  validity and PLC counts.
+- Malformed exact-shape rejection creates no decoder action and does not advance
+  source or recipe cursor.
 
 ### 4. Shared integer comparator
 
@@ -188,6 +191,11 @@ Every control must fail for named reason. If valid and adversarial distributions
 cannot be separated, stop. Do not widen tolerance or weaken routing or order
 assertions. Escalate with measurements and redesign fixture or comparator.
 
+P0c adds payload-identity proof and PLC-aware stateful reference calibration.
+P2 must not resume until identical schema-3, 38-record calibration reports pass
+on identified Intel, AMD, and ARM environments. Valid payload bytes, not
+receiver-controller sequence, select source fixture identity.
+
 ## Phases and verification
 
 ### P0: Baseline and calibration scaffold
@@ -216,15 +224,16 @@ malformed injection, and make exact TX hash parser-owned.
 Verify: focused Python parser tests, then BSim subset covering mono, Mode A,
 Mode B, malformed, and reconnect.
 
-### P2: Sequence-aware PCM oracle
+### P2: Payload-and-recipe-aware PCM oracle
 
 Files: `tests/bsim/src/bsim_observer.c`, `tests/bsim/src/bsim_observer.h`,
 `src/audio_stream_session.c` test hook, `tests/bsim/src/audio_sink_stub.c`,
 `tests/bsim/src/bsim_sink_oracle.h`, `tests/bsim/src/bsim_test_main.c`, and
 shared comparator plus focused tests.
 
-Work: carry test-only source sequence metadata to sink and enforce portable PCM
-comparison without changing production signatures or behavior.
+Work: carry test-only exact payload identity and stateful recipe metadata to sink
+and enforce portable PCM comparison without changing production signatures or
+behavior.
 
 Verify: named negative controls and BSim subset for every duration, mode, and
 loss case.

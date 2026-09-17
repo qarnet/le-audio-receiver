@@ -101,13 +101,72 @@ PCM acceptance for this path.
 | `bsim_48k_7p5ms_90b_r.lc3` | `5d5a8fcb2b573804a27d81c01d07756431b22592725e7ee126b23db07c0e3a7e` |
 | `bsim_48k_7p5ms_90b_r.pcm` | `112a32ac37ab26ae50b7dfc3db082d06f3d0c5c866532306112e2d94a45914dd` |
 
+## Stateful decoder-history references
+
+`stateful-reference-manifest.json` is schema version 1. It binds exact ordered
+decoder-history recipes to `portable-oracle-manifest.json` schema version 2,
+including source-manifest provenance, source geometry, action counts, reference
+kind, backing-file size, and SHA-256. The portable manifest remains sole owner
+of numerical PCM limits.
+
+Each recipe starts with the Stage 1 startup PLC history, then replays only the
+listed source-valid LC3 frames. PLC outputs advance decoder history but are not
+stored or compared numerically. Corpus outputs are stored in recipe order.
+
+| Recipe | Source-valid history after startup PLC | Reference |
+|--------|----------------------------------------|-----------|
+| `start8_10ms_l` | 8 PLC, corpus 0 through 99 | portable 10 ms left PCM, frame 0 |
+| `start8_10ms_r` | 8 PLC, corpus 0 through 99 | portable 10 ms right PCM, frame 0 |
+| `start11_7p5ms_l` | 11 PLC, corpus 0 through 99 | portable 7.5 ms left PCM, frame 0 |
+| `start11_7p5ms_r` | 11 PLC, corpus 0 through 99 | portable 7.5 ms right PCM, frame 0 |
+| `start13_7p5ms_l` | 13 PLC, corpus 0 through 99 | portable 7.5 ms left PCM, frame 0 |
+| `start13_7p5ms_r` | 13 PLC, corpus 0 through 99 | portable 7.5 ms right PCM, frame 0 |
+| `skip20_10ms_l` | 8 PLC, corpus 0 through 19, then 21 through 100 | generated trace |
+| `loss48x18_10ms_r` | 8 PLC, corpus 0 through 47, 18 PLC, then 48 through 81 | generated trace |
+
+Fresh-decoder startup PLC produces silence in pinned liblc3 and first valid
+decode resets that state. Therefore six normal-start recipes reference existing
+portable PCM directly and do not duplicate its bytes. Only state-changing
+midstream histories have generated traces:
+
+| File | Size | SHA-256 |
+|------|-----:|----------|
+| `stateful_48k_10ms_skip20_l.pcm` | 96000 B | `cead2e59efb32c78cb87818c710ca727082fd9bb9137bb8255b4f1e37d9be024` |
+| `stateful_48k_10ms_loss48x18_r.pcm` | 78720 B | `19087061a5f3d74d6d9631b7c5ba100fce358615cbffde322692ae65cc6e91be` |
+
+The two generated traces total 174720 B. Calibration proves every source stream
+has 128 distinct LC3 payloads and same-duration left/right streams have no
+byte-identical payload. Exact payload bytes select fixture sequence; receiver
+controller sequence remains diagnostic only.
+
+Regenerate or verify stateful traces from any directory with:
+
+```bash
+bash tests/fixtures/lc3/generate_stateful_references.sh
+```
+
+Default mode generates into temporary files, validates all checked-in source and
+stateful hashes, and requires byte-identical candidates. It does not rewrite
+checked-in traces. Intentional stateful-reference review uses:
+
+```bash
+bash tests/fixtures/lc3/generate_stateful_references.sh --rebase-stateful
+```
+
+Rebase mode still rejects source corpus or checked-in trace mismatch. It stages
+both generated traces before a rollback-protected replacement transaction and
+prints a reminder to update this README and the stateful manifest. Neither mode
+edits a manifest.
+
 ## ARM calibration image
 
 `tests/calibration/lc3_pcm_oracle` is a standalone diagnostic Zephyr image
-for PB-031 ARM measurement. It embeds all eight portable-corpus files in
-flash, uses the checked-in integer `pcm_oracle` comparator unchanged, reads
-manifest-owned limits at configure time, and keeps bounded static work buffers
-plus one liblc3 decoder state in RAM. It does not change production behavior.
+for PB-031 ARM measurement. It embeds all eight portable-corpus files and both
+generated stateful PCM traces in flash, uses the checked-in integer
+`pcm_oracle` comparator unchanged, reads portable-manifest-owned limits at
+configure time, validates the stateful manifest and backing hashes at configure
+time, and keeps bounded static work buffers plus one liblc3 decoder state in
+RAM. It does not change production behavior.
 
 The reviewed schema-1 calibration rerun uses `CONFIG_MAIN_STACK_SIZE=8192`.
 The first ARM execution resolved its main stack to 1024 bytes and faulted in
@@ -119,7 +178,7 @@ assertion settings.
 
 The image enables `CONFIG_THREAD_ANALYZER=y`,
 `CONFIG_THREAD_ANALYZER_USE_PRINTK=y`, and `CONFIG_THREAD_NAME=y`. It calls
-`thread_analyzer_print(0U)` after all 26 metric records and immediately before
+`thread_analyzer_print(0U)` after all 38 metric records and immediately before
 the PASS record. `CONFIG_THREAD_ANALYZER_AUTO` remains disabled, so no periodic
 analyzer thread changes the measurement run. Thread names make the report's
 `main` line identify the main-thread `unused` and `usage` values.
@@ -129,30 +188,30 @@ Build it from the repository root with the installed NCS v3.3.0 toolchain:
 ```bash
 nix develop -c west build --no-sysbuild \
   -b xiao_nrf54l15/nrf54l15/cpuapp \
-  -d /tmp/opencode/pb031-p0b-arm-calibration \
+  -d /tmp/opencode/pb031-p0c-arm-calibration \
   tests/calibration/lc3_pcm_oracle -p
 ```
 
 The build config calculates the raw manifest SHA-256 and SHA-256 values for
-the calibration `main.c`, `pcm_oracle.c`, and `pcm_oracle.h` at CMake configure
-time. It disables Zephyr logging and boot banner output. Hardware execution is
-reviewed orchestration work: start UART capture before any target action, then
-capture one complete record sequence. Do not use this build command as a flash
-command.
+the calibration `main.c`, `pcm_oracle.c`, `pcm_oracle.h`, stateful manifest,
+and stateful recipe C/header at CMake configure time. It disables Zephyr logging
+and boot banner output. Hardware execution is reviewed orchestration work: start
+UART capture before any target action, then capture one complete record sequence.
+Do not use this build command as a flash command.
 
 Normal UART output is ASCII. PB-031 records have this order; Zephyr's
-human-readable thread-analyzer report appears after the 26 metric records and
+human-readable thread-analyzer report appears after the 38 metric records and
 before PASS:
 
 ```text
-PB031_ARM_BEGIN schema=2 manifest_sha256=<64 lowercase hex> ncs=v3.3.0 liblc3=48bbd3eacd36e99a57317a0a4867002e0b09e183 max_abs_error=2048 max_rms_error=512 min_correlation_q15=32750
-PB031_ARM_SOURCE main_c_sha256=<64 lowercase hex> pcm_oracle_c_sha256=<64 lowercase hex> pcm_oracle_h_sha256=<64 lowercase hex>
+PB031_ARM_BEGIN schema=3 manifest_sha256=<64 lowercase hex> ncs=v3.3.0 liblc3=48bbd3eacd36e99a57317a0a4867002e0b09e183 max_abs_error=2048 max_rms_error=512 min_correlation_q15=32750
+PB031_ARM_SOURCE main_c_sha256=<64 lowercase hex> pcm_oracle_c_sha256=<64 lowercase hex> pcm_oracle_h_sha256=<64 lowercase hex> stateful_manifest_sha256=<64 lowercase hex> stateful_recipe_c_sha256=<64 lowercase hex> stateful_recipe_h_sha256=<64 lowercase hex>
 PB031_METRIC {"record":"metric",...}
-... exactly 26 PB031_METRIC lines, each ending with an `evaluation` string ...
+... exactly 38 PB031_METRIC lines, each ending with an `evaluation` string ...
 Thread analyze:
  main                 : STACK: unused <bytes> usage <bytes> / 8192 (<percent> %); CPU: <percent> %
 ... other thread-analyzer lines ...
-PB031_ARM_PASS metrics=26
+PB031_ARM_PASS metrics=38
 ```
 
 Thread-analyzer lines are not PB-031 protocol records. Retain the complete
@@ -215,7 +274,10 @@ four `valid`, two `channel-swap`, then `prior-frame-shift`,
 `next-frame-shift`, `dead-channel`, and `low-correlation-synthetic` for each
 manifest stream in order, followed by `lc3-byte-corruption`,
 `max-error-boundary`, `rms-error-boundary`, and `correlation-boundary` for the
-10 ms left stream.
+10 ms left stream. Schema-3 appends eight `stateful-valid` records in recipe
+table order, then `stateful-payload-off-by-one`, `stateful-skip-ignored`,
+`stateful-loss-burst-omitted`, and `stateful-wrong-channel`. Every stateful
+valid record evaluates `pass`; each stateful mutation evaluates `max-error`.
 
 On first error, the image emits one line and no PASS line:
 
