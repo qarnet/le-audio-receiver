@@ -109,32 +109,39 @@ including source-manifest provenance, source geometry, action counts, reference
 kind, backing-file size, and SHA-256. The portable manifest remains sole owner
 of numerical PCM limits.
 
-Each recipe starts with the Stage 1 startup PLC history, then replays only the
-listed source-valid LC3 frames. PLC outputs advance decoder history but are not
-stored or compared numerically. Corpus outputs are stored in recipe order.
+Each recipe replays its measured Stage 1 decoder history. PLC outputs advance
+decoder history but are not stored or compared numerically. Corpus outputs are
+stored in recipe order. Mode A 7.5 ms has 113 actions per channel: left has PLC
+actions 0 through 11, corpus frame 0 at action 12, then corpus frames 1 through
+100; right has PLC actions 0 through 9, corpus frame 0 at action 10, PLC
+actions 11 and 12, then corpus frames 1 through 100. First fully source-valid
+sink push is action 13.
 
-| Recipe | Source-valid history after startup PLC | Reference |
-|--------|----------------------------------------|-----------|
+| Recipe | Exact decoder action history | Reference |
+|--------|------------------------------|-----------|
 | `start8_10ms_l` | 8 PLC, corpus 0 through 99 | portable 10 ms left PCM, frame 0 |
 | `start8_10ms_r` | 8 PLC, corpus 0 through 99 | portable 10 ms right PCM, frame 0 |
 | `start11_7p5ms_l` | 11 PLC, corpus 0 through 99 | portable 7.5 ms left PCM, frame 0 |
 | `start11_7p5ms_r` | 11 PLC, corpus 0 through 99 | portable 7.5 ms right PCM, frame 0 |
-| `start13_7p5ms_l` | 13 PLC, corpus 0 through 99 | portable 7.5 ms left PCM, frame 0 |
-| `start13_7p5ms_r` | 13 PLC, corpus 0 through 99 | portable 7.5 ms right PCM, frame 0 |
+| `modea_start_7p5ms_l` | 12 PLC, corpus 0 through 100 | portable 7.5 ms left PCM, frame 0 |
+| `modea_start_7p5ms_r` | 10 PLC, corpus 0, 2 PLC, corpus 1 through 100 | generated trace |
 | `skip20_10ms_l` | 8 PLC, corpus 0 through 19, then 21 through 100 | generated trace |
 | `loss48x18_10ms_r` | 8 PLC, corpus 0 through 47, 18 PLC, then 48 through 81 | generated trace |
 
 Fresh-decoder startup PLC produces silence in pinned liblc3 and first valid
-decode resets that state. Therefore six normal-start recipes reference existing
-portable PCM directly and do not duplicate its bytes. Only state-changing
-midstream histories have generated traces:
+decode resets that state. Therefore five normal-start recipes reference existing
+portable PCM directly and do not duplicate its bytes. The Mode A 7.5 ms right
+recipe decodes corpus frame 0 before two PLC actions, so later source-valid
+output carries state that portable PCM cannot represent. It and other
+state-changing histories have generated traces:
 
 | File | Size | SHA-256 |
 |------|-----:|----------|
+| `stateful_48k_7p5ms_modea_start_r.pcm` | 72720 B | `d76724f3392321a4ce959a00867ae40d82bcb93854099ec5d9abc8c01239d858` |
 | `stateful_48k_10ms_skip20_l.pcm` | 96000 B | `cead2e59efb32c78cb87818c710ca727082fd9bb9137bb8255b4f1e37d9be024` |
 | `stateful_48k_10ms_loss48x18_r.pcm` | 78720 B | `19087061a5f3d74d6d9631b7c5ba100fce358615cbffde322692ae65cc6e91be` |
 
-The two generated traces total 174720 B. Calibration proves every source stream
+The three generated traces total 247440 B. Calibration proves every source stream
 has 128 distinct LC3 payloads and same-duration left/right streams have no
 byte-identical payload. Exact payload bytes select fixture sequence; receiver
 controller sequence remains diagnostic only.
@@ -145,23 +152,27 @@ Regenerate or verify stateful traces from any directory with:
 bash tests/fixtures/lc3/generate_stateful_references.sh
 ```
 
-Default mode generates into temporary files, validates all checked-in source and
-stateful hashes, and requires byte-identical candidates. It does not rewrite
-checked-in traces. Intentional stateful-reference review uses:
+Default mode generates all three traces into temporary files, validates all
+checked-in source and stateful hashes, and requires byte-identical candidates.
+It does not rewrite checked-in traces. Intentional stateful-reference review
+uses:
 
 ```bash
 bash tests/fixtures/lc3/generate_stateful_references.sh --rebase-stateful
 ```
 
-Rebase mode still rejects source corpus or checked-in trace mismatch. It stages
-both generated traces before a rollback-protected replacement transaction and
-prints a reminder to update this README and the stateful manifest. Neither mode
-edits a manifest.
+Rebase mode still rejects source corpus or existing checked-in trace mismatch.
+It stages all three generated traces before a rollback-protected replacement
+transaction and prints a reminder to update this README and the stateful
+manifest. Existing destinations retain their permissions and backups. Only the
+manifest-declared Mode A 7.5 ms generated trace may be absent during explicit
+rebase; it is created with normal non-executable permissions and removed if a
+later transaction step fails. Neither mode edits a manifest.
 
 ## ARM calibration image
 
 `tests/calibration/lc3_pcm_oracle` is a standalone diagnostic Zephyr image
-for PB-031 ARM measurement. It embeds all eight portable-corpus files and both
+for PB-031 ARM measurement. It embeds all eight portable-corpus files and three
 generated stateful PCM traces in flash, uses the checked-in integer
 `pcm_oracle` comparator unchanged, reads portable-manifest-owned limits at
 configure time, validates the stateful manifest and backing hashes at configure

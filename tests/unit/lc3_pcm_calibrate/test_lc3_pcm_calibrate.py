@@ -135,7 +135,9 @@ def update_portable_lc3_hash(fixture_dir, stem):
     update_stateful_source_manifest(fixture_dir)
 
 
-def write_fake_stateful_compiler(path, candidate_mode):
+def write_fake_stateful_compiler(path, candidate_mode, new_trace_template=None):
+    template = "" if new_trace_template is None else str(new_trace_template)
+
     path.write_text(
         textwrap.dedent(
             f"""\
@@ -158,11 +160,19 @@ def write_fake_stateful_compiler(path, candidate_mode):
             source = pathlib.Path(sys.argv[1])
             output = pathlib.Path(sys.argv[2])
             mode = {candidate_mode!r}
+            new_trace_template = {template!r}
             for name in (
+                "stateful_48k_7p5ms_modea_start_r.pcm",
                 "stateful_48k_10ms_skip20_l.pcm",
                 "stateful_48k_10ms_loss48x18_r.pcm",
             ):
-                data = (source / name).read_bytes()
+                source_path = source / name
+                if source_path.is_file():
+                    data = source_path.read_bytes()
+                elif name == "stateful_48k_7p5ms_modea_start_r.pcm" and new_trace_template:
+                    data = pathlib.Path(new_trace_template).read_bytes()
+                else:
+                    raise RuntimeError("missing fake stateful candidate: " + name)
                 if mode == "truncate" and name.endswith("loss48x18_r.pcm"):
                     data = data[:-1]
                 elif mode == "flip":
@@ -814,6 +824,53 @@ class Lc3PcmCalibrateProvenanceTests(unittest.TestCase):
             [0, 0],
         )
 
+    def test_modea_7p5ms_recipe_expansions_and_reference_are_exact(self):
+        portable_manifest, _fixture_hashes, _manifest_sha256 = calibrate.load_manifest()
+        _stateful_manifest, reference_hashes, _stateful_manifest_sha256 = (
+            calibrate.load_stateful_manifest(portable_manifest)
+        )
+        left = calibrate.EXPECTED_STATEFUL_RECIPES[4]
+        right = calibrate.EXPECTED_STATEFUL_RECIPES[5]
+
+        def expand(steps):
+            actions = []
+            for action, first_sequence, count in steps:
+                if action == "plc":
+                    actions.extend((action, None) for _ in range(count))
+                else:
+                    actions.extend(
+                        (action, first_sequence + offset) for offset in range(count)
+                    )
+            return actions
+
+        self.assertEqual(left[0], "modea_start_7p5ms_l")
+        self.assertEqual(right[0], "modea_start_7p5ms_r")
+        self.assertEqual(
+            expand(left[10]),
+            [("plc", None)] * 12 + [("corpus", sequence) for sequence in range(101)],
+        )
+        self.assertEqual(
+            expand(right[10]),
+            [("plc", None)] * 10
+            + [("corpus", 0)]
+            + [("plc", None)] * 2
+            + [("corpus", sequence) for sequence in range(1, 101)],
+        )
+        for recipe in (left, right):
+            self.assertEqual(recipe[8], 113)
+            self.assertEqual(recipe[9], 101)
+            self.assertEqual(
+                sum(count for action, _first, count in recipe[10] if action == "plc"),
+                12,
+            )
+        self.assertEqual(right[2], "generated-pcm")
+        self.assertEqual(right[3], "stateful_48k_7p5ms_modea_start_r.pcm")
+        self.assertEqual(reference_hashes[5]["size"], 72720)
+        self.assertEqual(
+            reference_hashes[5]["sha256"],
+            hashlib.sha256((FIXTURES_DIR / right[3]).read_bytes()).hexdigest(),
+        )
+
 
 class Lc3StatefulRecipeValidatorTests(unittest.TestCase):
     def test_validator_rejects_invalid_recipe_boundaries(self):
@@ -1085,6 +1142,27 @@ class Lc3PcmCalibrateProtocolTests(unittest.TestCase):
 
         self.assertEqual(len(records), 38)
         self.assertEqual(
+            records[30:32],
+            [
+                (
+                    "stateful-valid",
+                    "modea_start_7p5ms_l",
+                    "bsim_48k_7p5ms_90b_l.pcm",
+                    101,
+                    36360,
+                    "pass",
+                ),
+                (
+                    "stateful-valid",
+                    "modea_start_7p5ms_r",
+                    "stateful_48k_7p5ms_modea_start_r.pcm",
+                    101,
+                    36360,
+                    "pass",
+                ),
+            ],
+        )
+        self.assertEqual(
             records[26:34],
             [
                 (
@@ -1281,8 +1359,10 @@ class Lc3FixtureGeneratorTests(unittest.TestCase):
             root = Path(temp)
             repo = root / "repo"
             script, fixture_dir = copy_stateful_generator_repository(repo)
+            modea_path = fixture_dir / "stateful_48k_7p5ms_modea_start_r.pcm"
             skip_path = fixture_dir / "stateful_48k_10ms_skip20_l.pcm"
             loss_path = fixture_dir / "stateful_48k_10ms_loss48x18_r.pcm"
+            original_modea = modea_path.read_bytes()
             original_skip = skip_path.read_bytes()
             original_loss = loss_path.read_bytes()
             ncs = root / "ncs"
@@ -1304,8 +1384,44 @@ class Lc3FixtureGeneratorTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("fixture SHA-256 mismatch", result.stderr)
+            self.assertEqual(modea_path.read_bytes(), original_modea)
             self.assertEqual(skip_path.read_bytes(), original_skip)
             self.assertEqual(loss_path.read_bytes(), original_loss)
+
+    def test_stateful_strict_mode_verifies_all_generated_traces_without_copy(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            script, fixture_dir = copy_stateful_generator_repository(repo)
+            generated_paths = [
+                fixture_dir / "stateful_48k_7p5ms_modea_start_r.pcm",
+                fixture_dir / "stateful_48k_10ms_skip20_l.pcm",
+                fixture_dir / "stateful_48k_10ms_loss48x18_r.pcm",
+            ]
+            originals = {path.name: path.read_bytes() for path in generated_paths}
+            ncs = root / "ncs"
+            fake_compiler = root / "fake-cc"
+
+            write_fake_liblc3(ncs)
+            write_fake_stateful_compiler(fake_compiler, "same")
+            fake_git = write_pinned_fake_git(root / "fake-bin")
+            result = run_generator(
+                script,
+                [],
+                root,
+                {
+                    "NCS": str(ncs),
+                    "CC": str(fake_compiler),
+                    "PATH": str(fake_git) + os.pathsep + os.environ["PATH"],
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                "Stateful reference manifest hashes unchanged.", result.stdout
+            )
+            for path in generated_paths:
+                self.assertEqual(path.read_bytes(), originals[path.name])
 
     def test_stateful_generator_cleans_binary_if_output_temp_creation_fails(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -1397,6 +1513,9 @@ class Lc3FixtureGeneratorTests(unittest.TestCase):
             root = Path(temp)
             repo = root / "repo"
             script, fixture_dir = copy_stateful_generator_repository(repo)
+            original_modea = (
+                fixture_dir / "stateful_48k_7p5ms_modea_start_r.pcm"
+            ).read_bytes()
             original_skip = (
                 fixture_dir / "stateful_48k_10ms_skip20_l.pcm"
             ).read_bytes()
@@ -1424,6 +1543,10 @@ class Lc3FixtureGeneratorTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("fixture size mismatch", result.stderr)
             self.assertEqual(
+                (fixture_dir / "stateful_48k_7p5ms_modea_start_r.pcm").read_bytes(),
+                original_modea,
+            )
+            self.assertEqual(
                 (fixture_dir / "stateful_48k_10ms_skip20_l.pcm").read_bytes(),
                 original_skip,
             )
@@ -1432,13 +1555,34 @@ class Lc3FixtureGeneratorTests(unittest.TestCase):
                 original_loss,
             )
 
+    def test_stateful_rebase_rejects_missing_existing_generated_trace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script, fixture_dir = copy_stateful_generator_repository(root / "repo")
+            skip_path = fixture_dir / "stateful_48k_10ms_skip20_l.pcm"
+
+            skip_path.unlink()
+            result = run_generator(
+                script,
+                ["--rebase-stateful"],
+                root,
+                {"NCS": str(root / "missing-ncs")},
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("fixture is missing", result.stderr)
+            self.assertNotIn("liblc3 module not found", result.stderr)
+            self.assertFalse(skip_path.exists())
+
     def test_stateful_rebase_replaces_only_valid_generated_candidates(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             repo = root / "repo"
             script, fixture_dir = copy_stateful_generator_repository(repo)
+            modea_path = fixture_dir / "stateful_48k_7p5ms_modea_start_r.pcm"
             skip_path = fixture_dir / "stateful_48k_10ms_skip20_l.pcm"
             loss_path = fixture_dir / "stateful_48k_10ms_loss48x18_r.pcm"
+            original_modea = modea_path.read_bytes()
             original_skip = skip_path.read_bytes()
             original_loss = loss_path.read_bytes()
             portable_manifest = (
@@ -1467,6 +1611,10 @@ class Lc3FixtureGeneratorTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("REBASE STATEFUL:", result.stderr)
             self.assertEqual(
+                modea_path.read_bytes(),
+                bytes([original_modea[0] ^ 0x01]) + original_modea[1:],
+            )
+            self.assertEqual(
                 skip_path.read_bytes(),
                 bytes([original_skip[0] ^ 0x01]) + original_skip[1:],
             )
@@ -1474,6 +1622,142 @@ class Lc3FixtureGeneratorTests(unittest.TestCase):
                 loss_path.read_bytes(),
                 bytes([original_loss[0] ^ 0x01]) + original_loss[1:],
             )
+            self.assertEqual(
+                (fixture_dir / "portable-oracle-manifest.json").read_bytes(),
+                portable_manifest,
+            )
+            self.assertEqual(
+                (fixture_dir / "stateful-reference-manifest.json").read_bytes(),
+                stateful_manifest,
+            )
+
+    def test_stateful_rebase_adds_missing_generated_trace_transactionally(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            script, fixture_dir = copy_stateful_generator_repository(repo)
+            modea_path = fixture_dir / "stateful_48k_7p5ms_modea_start_r.pcm"
+            skip_path = fixture_dir / "stateful_48k_10ms_skip20_l.pcm"
+            loss_path = fixture_dir / "stateful_48k_10ms_loss48x18_r.pcm"
+            template = root / "modea-reference-template.pcm"
+            original_modea = modea_path.read_bytes()
+            original_skip = skip_path.read_bytes()
+            original_loss = loss_path.read_bytes()
+            portable_manifest = (
+                fixture_dir / "portable-oracle-manifest.json"
+            ).read_bytes()
+            stateful_manifest = (
+                fixture_dir / "stateful-reference-manifest.json"
+            ).read_bytes()
+            ncs = root / "ncs"
+            fake_compiler = root / "fake-cc"
+
+            template.write_bytes(original_modea)
+            modea_path.unlink()
+            skip_path.chmod(0o640)
+            loss_path.chmod(0o600)
+            write_fake_liblc3(ncs)
+            write_fake_stateful_compiler(fake_compiler, "flip", template)
+            fake_git = write_pinned_fake_git(root / "fake-bin")
+            result = run_generator(
+                script,
+                ["--rebase-stateful"],
+                root,
+                {
+                    "NCS": str(ncs),
+                    "CC": str(fake_compiler),
+                    "PATH": str(fake_git) + os.pathsep + os.environ["PATH"],
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                modea_path.read_bytes(),
+                bytes([original_modea[0] ^ 0x01]) + original_modea[1:],
+            )
+            self.assertEqual(modea_path.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(
+                skip_path.read_bytes(),
+                bytes([original_skip[0] ^ 0x01]) + original_skip[1:],
+            )
+            self.assertEqual(skip_path.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(
+                loss_path.read_bytes(),
+                bytes([original_loss[0] ^ 0x01]) + original_loss[1:],
+            )
+            self.assertEqual(loss_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(
+                (fixture_dir / "portable-oracle-manifest.json").read_bytes(),
+                portable_manifest,
+            )
+            self.assertEqual(
+                (fixture_dir / "stateful-reference-manifest.json").read_bytes(),
+                stateful_manifest,
+            )
+
+    def test_stateful_rebase_rolls_back_new_trace_after_later_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            script, fixture_dir = copy_stateful_generator_repository(repo)
+            modea_path = fixture_dir / "stateful_48k_7p5ms_modea_start_r.pcm"
+            skip_path = fixture_dir / "stateful_48k_10ms_skip20_l.pcm"
+            loss_path = fixture_dir / "stateful_48k_10ms_loss48x18_r.pcm"
+            template = root / "modea-reference-template.pcm"
+            original_modea = modea_path.read_bytes()
+            original_skip = skip_path.read_bytes()
+            original_loss = loss_path.read_bytes()
+            portable_manifest = (
+                fixture_dir / "portable-oracle-manifest.json"
+            ).read_bytes()
+            stateful_manifest = (
+                fixture_dir / "stateful-reference-manifest.json"
+            ).read_bytes()
+            ncs = root / "ncs"
+            fake_compiler = root / "fake-cc"
+            transaction = script.read_text(encoding="utf-8")
+            commit_loop = """\
+        for name in names:
+            os.replace(staged[name], destination_directory / name)
+            committed.append(name)
+"""
+            injected_commit_loop = """\
+        for name in names:
+            os.replace(staged[name], destination_directory / name)
+            committed.append(name)
+            if name == "stateful_48k_7p5ms_modea_start_r.pcm":
+                raise OSError("injected post-new-file failure")
+"""
+
+            self.assertIn(commit_loop, transaction)
+            script.write_text(
+                transaction.replace(commit_loop, injected_commit_loop), encoding="utf-8"
+            )
+            template.write_bytes(original_modea)
+            modea_path.unlink()
+            skip_path.chmod(0o640)
+            loss_path.chmod(0o600)
+            write_fake_liblc3(ncs)
+            write_fake_stateful_compiler(fake_compiler, "flip", template)
+            fake_git = write_pinned_fake_git(root / "fake-bin")
+            result = run_generator(
+                script,
+                ["--rebase-stateful"],
+                root,
+                {
+                    "NCS": str(ncs),
+                    "CC": str(fake_compiler),
+                    "PATH": str(fake_git) + os.pathsep + os.environ["PATH"],
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("injected post-new-file failure", result.stderr)
+            self.assertFalse(modea_path.exists())
+            self.assertEqual(skip_path.read_bytes(), original_skip)
+            self.assertEqual(skip_path.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(loss_path.read_bytes(), original_loss)
+            self.assertEqual(loss_path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(
                 (fixture_dir / "portable-oracle-manifest.json").read_bytes(),
                 portable_manifest,

@@ -1,6 +1,7 @@
 # Portable LC3/PCM test oracle plan
 
-Status: P0, P0b, P0c, and P1 accepted; P2 next/in progress; P3 and P4 pending.
+Status: P0, P0b, P0c, and P1 accepted; P0d corrective calibration in progress;
+P2 blocked on P0d cross-platform acceptance; P3 and P4 pending.
 
 Product item: [PB-031](../product/backlog/tasks/pb-031%20-%20Make-LC3-PCM-test-oracle-platform-independent.md), Make LC3/PCM test oracle platform-independent.
 
@@ -206,7 +207,20 @@ provenance. Stateful-valid max-abs/max-RMS/min-correlation envelopes are AMD
 `0/0/32767`, Intel `1977/425/32756`, and ARM `1/1/32767`; frozen limits remain
 `2048/512/32750`. Production cpuapp and FLPR were restored after calibration.
 Detailed evidence is in
-`docs/development/portable-lc3-pcm-oracle-p0c-handoff.md`. P2 is unblocked.
+`docs/development/portable-lc3-pcm-oracle-p0c-handoff.md`. P0c unblocked P2
+before later P2 diagnostic evidence found the Mode A 7.5 ms recipe error below.
+
+### P0d measured Mode A 7.5 ms correction
+
+P2 exact payload observation measured 113 decoder actions per Mode A 7.5 ms
+channel. Left has PLC actions 0 through 11, corpus frame 0 at action 12, then
+corpus frames 1 through 100. Right has PLC actions 0 through 9, corpus frame 0
+at action 10, PLC actions 11 and 12, then corpus frames 1 through 100. Both
+channels therefore have 101 source-valid outputs and 12 PLC actions. The right
+post-valid PLC history changes later decoder output, so it needs a generated
+stateful PCM reference. P0d corrects recipes five and six while retaining the
+schema-3 38-record protocol and frozen `2048/512/32750` policy. P2 remains
+blocked pending repeated AMD, Intel, and ARM P0d calibration acceptance.
 
 ## Phases and verification
 

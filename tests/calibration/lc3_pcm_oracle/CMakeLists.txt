@@ -23,6 +23,7 @@ set(PB031_PORTABLE_LC3_REFERENCES
   ${FIXTURES}/bsim_48k_7p5ms_90b_r.lc3
 )
 set(PB031_STATEFUL_GENERATED_REFERENCES
+  ${FIXTURES}/stateful_48k_7p5ms_modea_start_r.pcm
   ${FIXTURES}/stateful_48k_10ms_skip20_l.pcm
   ${FIXTURES}/stateful_48k_10ms_loss48x18_r.pcm
 )
@@ -505,8 +506,8 @@ set(PB031_EXPECTED_STATEFUL_RECIPES
   "start8_10ms_r|bsim_48k_10ms_120b_r|portable-pcm|bsim_48k_10ms_120b_r.pcm|0|10000|120|480|108|100|plc:0:8,corpus:0:100"
   "start11_7p5ms_l|bsim_48k_7p5ms_90b_l|portable-pcm|bsim_48k_7p5ms_90b_l.pcm|0|7500|90|360|111|100|plc:0:11,corpus:0:100"
   "start11_7p5ms_r|bsim_48k_7p5ms_90b_r|portable-pcm|bsim_48k_7p5ms_90b_r.pcm|0|7500|90|360|111|100|plc:0:11,corpus:0:100"
-  "start13_7p5ms_l|bsim_48k_7p5ms_90b_l|portable-pcm|bsim_48k_7p5ms_90b_l.pcm|0|7500|90|360|113|100|plc:0:13,corpus:0:100"
-  "start13_7p5ms_r|bsim_48k_7p5ms_90b_r|portable-pcm|bsim_48k_7p5ms_90b_r.pcm|0|7500|90|360|113|100|plc:0:13,corpus:0:100"
+  "modea_start_7p5ms_l|bsim_48k_7p5ms_90b_l|portable-pcm|bsim_48k_7p5ms_90b_l.pcm|0|7500|90|360|113|101|plc:0:12,corpus:0:101"
+  "modea_start_7p5ms_r|bsim_48k_7p5ms_90b_r|generated-pcm|stateful_48k_7p5ms_modea_start_r.pcm|0|7500|90|360|113|101|plc:0:10,corpus:0:1,plc:0:2,corpus:1:100"
   "skip20_10ms_l|bsim_48k_10ms_120b_l|generated-pcm|stateful_48k_10ms_skip20_l.pcm|0|10000|120|480|108|100|plc:0:8,corpus:0:20,corpus:21:80"
   "loss48x18_10ms_r|bsim_48k_10ms_120b_r|generated-pcm|stateful_48k_10ms_loss48x18_r.pcm|0|10000|120|480|108|82|plc:0:8,corpus:0:48,plc:0:18,corpus:48:34"
 )
@@ -677,6 +678,7 @@ foreach(stem
 endforeach()
 
 foreach(reference
+    stateful_48k_7p5ms_modea_start_r
     stateful_48k_10ms_skip20_l
     stateful_48k_10ms_loss48x18_r)
   generate_inc_file_for_target(

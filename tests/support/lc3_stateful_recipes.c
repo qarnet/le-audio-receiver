@@ -56,9 +56,16 @@ static const struct lc3_stateful_step start11_steps[] = {
 	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
 };
 
-static const struct lc3_stateful_step start13_steps[] = {
-	{LC3_STATEFUL_ACTION_PLC, 0U, 13U},
-	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
+static const struct lc3_stateful_step modea_start_7p5ms_l_steps[] = {
+	{LC3_STATEFUL_ACTION_PLC, 0U, 12U},
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 101U},
+};
+
+static const struct lc3_stateful_step modea_start_7p5ms_r_steps[] = {
+	{LC3_STATEFUL_ACTION_PLC, 0U, 10U},
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 1U},
+	{LC3_STATEFUL_ACTION_PLC, 0U, 2U},
+	{LC3_STATEFUL_ACTION_CORPUS, 1U, 100U},
 };
 
 static const struct lc3_stateful_step skip20_steps[] = {
@@ -132,7 +139,7 @@ const struct lc3_stateful_recipe lc3_stateful_recipes[] = {
 		.step_count = sizeof(start11_steps) / sizeof(start11_steps[0]),
 	},
 	{
-		.id = "start13_7p5ms_l",
+		.id = "modea_start_7p5ms_l",
 		.source_stem = "bsim_48k_7p5ms_90b_l",
 		.reference_path = "bsim_48k_7p5ms_90b_l.pcm",
 		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
@@ -141,23 +148,25 @@ const struct lc3_stateful_recipe lc3_stateful_recipes[] = {
 		.frame_bytes = 90U,
 		.samples_per_frame = 360U,
 		.output_action_count = 113U,
-		.valid_frame_count = 100U,
-		.steps = start13_steps,
-		.step_count = sizeof(start13_steps) / sizeof(start13_steps[0]),
+		.valid_frame_count = 101U,
+		.steps = modea_start_7p5ms_l_steps,
+		.step_count =
+			sizeof(modea_start_7p5ms_l_steps) / sizeof(modea_start_7p5ms_l_steps[0]),
 	},
 	{
-		.id = "start13_7p5ms_r",
+		.id = "modea_start_7p5ms_r",
 		.source_stem = "bsim_48k_7p5ms_90b_r",
-		.reference_path = "bsim_48k_7p5ms_90b_r.pcm",
-		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_path = "stateful_48k_7p5ms_modea_start_r.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_GENERATED_PCM,
 		.reference_first_frame = 0U,
 		.duration_us = 7500U,
 		.frame_bytes = 90U,
 		.samples_per_frame = 360U,
 		.output_action_count = 113U,
-		.valid_frame_count = 100U,
-		.steps = start13_steps,
-		.step_count = sizeof(start13_steps) / sizeof(start13_steps[0]),
+		.valid_frame_count = 101U,
+		.steps = modea_start_7p5ms_r_steps,
+		.step_count =
+			sizeof(modea_start_7p5ms_r_steps) / sizeof(modea_start_7p5ms_r_steps[0]),
 	},
 	{
 		.id = "skip20_10ms_l",
@@ -217,9 +226,16 @@ static const struct lc3_stateful_step expected_start11_steps[] = {
 	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
 };
 
-static const struct lc3_stateful_step expected_start13_steps[] = {
-	{LC3_STATEFUL_ACTION_PLC, 0U, 13U},
-	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
+static const struct lc3_stateful_step expected_modea_start_7p5ms_l_steps[] = {
+	{LC3_STATEFUL_ACTION_PLC, 0U, 12U},
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 101U},
+};
+
+static const struct lc3_stateful_step expected_modea_start_7p5ms_r_steps[] = {
+	{LC3_STATEFUL_ACTION_PLC, 0U, 10U},
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 1U},
+	{LC3_STATEFUL_ACTION_PLC, 0U, 2U},
+	{LC3_STATEFUL_ACTION_CORPUS, 1U, 100U},
 };
 
 static const struct lc3_stateful_step expected_skip20_steps[] = {
@@ -293,7 +309,7 @@ static const struct lc3_stateful_expected_recipe expected_recipes[] = {
 		.step_count = sizeof(expected_start11_steps) / sizeof(expected_start11_steps[0]),
 	},
 	{
-		.id = "start13_7p5ms_l",
+		.id = "modea_start_7p5ms_l",
 		.source_stem = "bsim_48k_7p5ms_90b_l",
 		.reference_path = "bsim_48k_7p5ms_90b_l.pcm",
 		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
@@ -302,23 +318,25 @@ static const struct lc3_stateful_expected_recipe expected_recipes[] = {
 		.frame_bytes = 90U,
 		.samples_per_frame = 360U,
 		.output_action_count = 113U,
-		.valid_frame_count = 100U,
-		.steps = expected_start13_steps,
-		.step_count = sizeof(expected_start13_steps) / sizeof(expected_start13_steps[0]),
+		.valid_frame_count = 101U,
+		.steps = expected_modea_start_7p5ms_l_steps,
+		.step_count = sizeof(expected_modea_start_7p5ms_l_steps) /
+			      sizeof(expected_modea_start_7p5ms_l_steps[0]),
 	},
 	{
-		.id = "start13_7p5ms_r",
+		.id = "modea_start_7p5ms_r",
 		.source_stem = "bsim_48k_7p5ms_90b_r",
-		.reference_path = "bsim_48k_7p5ms_90b_r.pcm",
-		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_path = "stateful_48k_7p5ms_modea_start_r.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_GENERATED_PCM,
 		.reference_first_frame = 0U,
 		.duration_us = 7500U,
 		.frame_bytes = 90U,
 		.samples_per_frame = 360U,
 		.output_action_count = 113U,
-		.valid_frame_count = 100U,
-		.steps = expected_start13_steps,
-		.step_count = sizeof(expected_start13_steps) / sizeof(expected_start13_steps[0]),
+		.valid_frame_count = 101U,
+		.steps = expected_modea_start_7p5ms_r_steps,
+		.step_count = sizeof(expected_modea_start_7p5ms_r_steps) /
+			      sizeof(expected_modea_start_7p5ms_r_steps[0]),
 	},
 	{
 		.id = "skip20_10ms_l",

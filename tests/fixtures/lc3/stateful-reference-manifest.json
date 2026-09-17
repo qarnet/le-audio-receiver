@@ -107,45 +107,47 @@
       }
     },
     {
-      "id": "start13_7p5ms_l",
+      "id": "modea_start_7p5ms_l",
       "source_stem": "bsim_48k_7p5ms_90b_l",
       "duration_us": 7500,
       "frame_bytes": 90,
       "samples_per_frame": 360,
       "output_action_count": 113,
-      "valid_frame_count": 100,
+      "valid_frame_count": 101,
       "steps": [
-        {"action": "plc", "first_sequence": 0, "count": 13},
-        {"action": "corpus", "first_sequence": 0, "count": 100}
+        {"action": "plc", "first_sequence": 0, "count": 12},
+        {"action": "corpus", "first_sequence": 0, "count": 101}
       ],
       "reference": {
         "kind": "portable-pcm",
         "path": "bsim_48k_7p5ms_90b_l.pcm",
         "first_frame": 0,
-        "frame_count": 100,
+        "frame_count": 101,
         "size": 92160,
         "sha256": "1e720b1f4f782f50b16b1e173a3fde0ba0bcd972a550d5a8b2a70282a37ffac6"
       }
     },
     {
-      "id": "start13_7p5ms_r",
+      "id": "modea_start_7p5ms_r",
       "source_stem": "bsim_48k_7p5ms_90b_r",
       "duration_us": 7500,
       "frame_bytes": 90,
       "samples_per_frame": 360,
       "output_action_count": 113,
-      "valid_frame_count": 100,
+      "valid_frame_count": 101,
       "steps": [
-        {"action": "plc", "first_sequence": 0, "count": 13},
-        {"action": "corpus", "first_sequence": 0, "count": 100}
+        {"action": "plc", "first_sequence": 0, "count": 10},
+        {"action": "corpus", "first_sequence": 0, "count": 1},
+        {"action": "plc", "first_sequence": 0, "count": 2},
+        {"action": "corpus", "first_sequence": 1, "count": 100}
       ],
       "reference": {
-        "kind": "portable-pcm",
-        "path": "bsim_48k_7p5ms_90b_r.pcm",
+        "kind": "generated-pcm",
+        "path": "stateful_48k_7p5ms_modea_start_r.pcm",
         "first_frame": 0,
-        "frame_count": 100,
-        "size": 92160,
-        "sha256": "112a32ac37ab26ae50b7dfc3db082d06f3d0c5c866532306112e2d94a45914dd"
+        "frame_count": 101,
+        "size": 72720,
+        "sha256": "d76724f3392321a4ce959a00867ae40d82bcb93854099ec5d9abc8c01239d858"
       }
     },
     {

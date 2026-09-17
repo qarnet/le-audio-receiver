@@ -47,11 +47,13 @@ SUPPORT_DIR="$HERE/../../support"
 validate_inputs() {
     local trace_directory="$1"
     local trace_hash_mode="$2"
+    local allow_missing_generated_file="$3"
 
     python3 - "$PORTABLE_MANIFEST" "$STATEFUL_MANIFEST" "$HERE" "$trace_directory" \
-        "$trace_hash_mode" <<'PY'
+        "$trace_hash_mode" "$allow_missing_generated_file" <<'PY'
 import hashlib
 import json
+import os
 import pathlib
 import re
 import sys
@@ -83,10 +85,10 @@ EXPECTED_RECIPES = (
      (("plc", 0, 11), ("corpus", 0, 100))),
     ("start11_7p5ms_r", "bsim_48k_7p5ms_90b_r", "portable-pcm", "bsim_48k_7p5ms_90b_r.pcm", 0, 7500, 90, 360, 111, 100,
      (("plc", 0, 11), ("corpus", 0, 100))),
-    ("start13_7p5ms_l", "bsim_48k_7p5ms_90b_l", "portable-pcm", "bsim_48k_7p5ms_90b_l.pcm", 0, 7500, 90, 360, 113, 100,
-     (("plc", 0, 13), ("corpus", 0, 100))),
-    ("start13_7p5ms_r", "bsim_48k_7p5ms_90b_r", "portable-pcm", "bsim_48k_7p5ms_90b_r.pcm", 0, 7500, 90, 360, 113, 100,
-     (("plc", 0, 13), ("corpus", 0, 100))),
+    ("modea_start_7p5ms_l", "bsim_48k_7p5ms_90b_l", "portable-pcm", "bsim_48k_7p5ms_90b_l.pcm", 0, 7500, 90, 360, 113, 101,
+     (("plc", 0, 12), ("corpus", 0, 101))),
+    ("modea_start_7p5ms_r", "bsim_48k_7p5ms_90b_r", "generated-pcm", "stateful_48k_7p5ms_modea_start_r.pcm", 0, 7500, 90, 360, 113, 101,
+     (("plc", 0, 10), ("corpus", 0, 1), ("plc", 0, 2), ("corpus", 1, 100))),
     ("skip20_10ms_l", "bsim_48k_10ms_120b_l", "generated-pcm", "stateful_48k_10ms_skip20_l.pcm", 0, 10000, 120, 480, 108, 100,
      (("plc", 0, 8), ("corpus", 0, 20), ("corpus", 21, 80))),
     ("loss48x18_10ms_r", "bsim_48k_10ms_120b_r", "generated-pcm", "stateful_48k_10ms_loss48x18_r.pcm", 0, 10000, 120, 480, 108, 82,
@@ -136,17 +138,21 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def safe_file(directory, name, label):
+def safe_file(directory, name, label, allow_missing=False):
     relative = pathlib.PurePath(require_string(name, label))
     if relative.is_absolute() or len(relative.parts) != 1 or relative.name != name:
         raise ValidationError("%s must be a safe fixture filename" % label)
-    candidate = (directory / relative).resolve(strict=False)
+    original = directory / relative
+    candidate = original.resolve(strict=False)
     if candidate.parent != directory or not candidate.is_file():
+        if allow_missing and not os.path.lexists(original):
+            return None
         raise ValidationError("%s fixture is missing or escapes fixture directory" % label)
     return candidate
 
 
-def validate_binary(entry, label, directory, expected_name, expected_size, allow_hash_mismatch):
+def validate_binary(entry, label, directory, expected_name, expected_size, allow_hash_mismatch,
+                    allow_missing=False):
     require_keys(entry, ("path", "size", "sha256"), label)
     path_name = require_string(entry["path"], label + ".path")
     if path_name != expected_name:
@@ -157,7 +163,9 @@ def validate_binary(entry, label, directory, expected_name, expected_size, allow
     declared_hash = require_string(entry["sha256"], label + ".sha256")
     if SHA256_RE.fullmatch(declared_hash) is None:
         raise ValidationError("%s.sha256 must be lowercase SHA-256" % label)
-    candidate = safe_file(directory, path_name, label + ".path")
+    candidate = safe_file(directory, path_name, label + ".path", allow_missing)
+    if candidate is None:
+        return None
     if candidate.stat().st_size != declared_size:
         raise ValidationError("%s fixture size mismatch" % label)
     actual_hash = sha256(candidate)
@@ -257,8 +265,8 @@ def validate_steps(steps, expected_steps, label):
 
 
 def validate_reference(reference, label, fixture_dir, generated_dir, hash_mode, source_stem,
-                       expected_kind, expected_path, expected_first_frame, expected_frame_count,
-                       samples_per_frame, portable_pcm):
+                        expected_kind, expected_path, expected_first_frame, expected_frame_count,
+                        samples_per_frame, portable_pcm, allow_missing_generated_file):
     require_keys(reference, ("kind", "path", "first_frame", "frame_count", "size", "sha256"), label)
     kind = require_string(reference["kind"], label + ".kind")
     path = require_string(reference["path"], label + ".path")
@@ -285,11 +293,15 @@ def validate_reference(reference, label, fixture_dir, generated_dir, hash_mode, 
         raise ValidationError("%s kind is unknown" % label)
     if first_frame != 0:
         raise ValidationError("%s generated first_frame must be zero" % label)
-    return validate_binary(backing, label, generated_dir, expected_path,
-                           frame_count * samples_per_frame * 2, hash_mode == "rebase")
+    return validate_binary(
+        backing, label, generated_dir, expected_path,
+        frame_count * samples_per_frame * 2, hash_mode == "rebase",
+        path == allow_missing_generated_file,
+    )
 
 
-def validate_stateful(manifest, portable_raw, fixture_dir, generated_dir, hash_mode, portable_pcm):
+def validate_stateful(manifest, portable_raw, fixture_dir, generated_dir, hash_mode, portable_pcm,
+                      allow_missing_generated_file):
     require_keys(
         manifest,
         ("schema_version", "ncs_version", "liblc3", "generator_flags", "source_portable_manifest", "recipes"),
@@ -336,7 +348,8 @@ def validate_stateful(manifest, portable_raw, fixture_dir, generated_dir, hash_m
         mismatch = validate_reference(
             entry["reference"], label + ".reference", fixture_dir, generated_dir, hash_mode,
             source_stem, reference_kind, reference_path, reference_first_frame,
-            valid_frame_count, samples_per_frame, portable_pcm)
+            valid_frame_count, samples_per_frame, portable_pcm,
+            allow_missing_generated_file)
         if mismatch:
             mismatches.append(reference_path)
     if mismatches:
@@ -344,20 +357,23 @@ def validate_stateful(manifest, portable_raw, fixture_dir, generated_dir, hash_m
 
 
 def main():
-    if len(sys.argv) != 6:
+    if len(sys.argv) != 7:
         raise ValidationError("internal validator arguments are invalid")
     portable_path = pathlib.Path(sys.argv[1]).resolve(strict=False)
     stateful_path = pathlib.Path(sys.argv[2]).resolve(strict=False)
     fixture_dir = pathlib.Path(sys.argv[3]).resolve(strict=True)
     trace_dir = pathlib.Path(sys.argv[4]).resolve(strict=True)
     hash_mode = sys.argv[5]
+    allow_missing_generated_file = sys.argv[6]
     if hash_mode not in ("strict", "rebase"):
         raise ValidationError("internal stateful hash mode is invalid")
+    if allow_missing_generated_file not in ("", "stateful_48k_7p5ms_modea_start_r.pcm"):
+        raise ValidationError("internal missing stateful reference is invalid")
     portable_raw, portable_manifest = load_json(portable_path, "portable manifest")
     _stateful_raw, stateful_manifest = load_json(stateful_path, "stateful manifest")
     portable_pcm = validate_portable(portable_manifest, fixture_dir)
     validate_stateful(stateful_manifest, portable_raw, fixture_dir, trace_dir, hash_mode,
-                      portable_pcm)
+                      portable_pcm, allow_missing_generated_file)
 
 
 try:
@@ -368,7 +384,11 @@ except ValidationError as exc:
 PY
 }
 
-validate_inputs "$HERE" strict
+ALLOW_MISSING_GENERATED_FILE=""
+if [ "$REBASE_STATEFUL" -eq 1 ]; then
+    ALLOW_MISSING_GENERATED_FILE="stateful_48k_7p5ms_modea_start_r.pcm"
+fi
+validate_inputs "$HERE" strict "$ALLOW_MISSING_GENERATED_FILE"
 
 NCS="${NCS:-$HOME/ncs/v3.3.0}"
 LC3="$NCS/modules/lib/liblc3"
@@ -517,15 +537,19 @@ GENERATED_HASH_MODE="strict"
 if [ "$REBASE_STATEFUL" -eq 1 ]; then
     GENERATED_HASH_MODE="rebase"
 fi
-validate_inputs "$TMP_OUTPUT_DIR" "$GENERATED_HASH_MODE"
+validate_inputs "$TMP_OUTPUT_DIR" "$GENERATED_HASH_MODE" ""
 
 STATEFUL_FILES=(
+    stateful_48k_7p5ms_modea_start_r.pcm
     stateful_48k_10ms_skip20_l.pcm
     stateful_48k_10ms_loss48x18_r.pcm
 )
+NEW_STATEFUL_FILES=(
+    stateful_48k_7p5ms_modea_start_r.pcm
+)
 
 copy_rebased_stateful_files() {
-    python3 - "$TMP_OUTPUT_DIR" "$HERE" "${STATEFUL_FILES[@]}" <<'PY'
+    python3 - "$TMP_OUTPUT_DIR" "$HERE" "${NEW_STATEFUL_FILES[@]}" -- "${STATEFUL_FILES[@]}" <<'PY'
 import os
 import pathlib
 import stat
@@ -559,24 +583,37 @@ def sync_directory(directory):
 
 
 def main():
-    if len(sys.argv) != 5:
+    if "--" not in sys.argv[3:]:
         raise RuntimeError("internal stateful copy arguments are invalid")
     source_directory = pathlib.Path(sys.argv[1])
     destination_directory = pathlib.Path(sys.argv[2])
-    names = tuple(sys.argv[3:])
+    separator = sys.argv.index("--", 3)
+    new_names = frozenset(sys.argv[3:separator])
+    names = tuple(sys.argv[separator + 1:])
+    if new_names != {"stateful_48k_7p5ms_modea_start_r.pcm"} or not names:
+        raise RuntimeError("internal stateful copy arguments are invalid")
     staged = {}
     backups = {}
     committed = []
+    created = set()
 
     try:
         for name in names:
             source = source_directory / name
             destination = destination_directory / name
-            if not source.is_file() or not destination.is_file():
-                raise RuntimeError("stateful transaction source or destination is missing: %s" % name)
-            mode = stat.S_IMODE(destination.stat().st_mode)
+            if not source.is_file():
+                raise RuntimeError("stateful transaction source is missing: %s" % name)
+            if os.path.lexists(destination):
+                if not destination.is_file():
+                    raise RuntimeError("stateful transaction destination is invalid: %s" % name)
+                mode = stat.S_IMODE(destination.stat().st_mode)
+                backups[name] = write_staged(destination_directory, name, destination.read_bytes(), mode)
+            elif name in new_names:
+                mode = 0o644
+                created.add(name)
+            else:
+                raise RuntimeError("stateful transaction destination is missing: %s" % name)
             staged[name] = write_staged(destination_directory, name, source.read_bytes(), mode)
-            backups[name] = write_staged(destination_directory, name, destination.read_bytes(), mode)
 
         for name in names:
             os.replace(staged[name], destination_directory / name)
@@ -586,7 +623,10 @@ def main():
         rollback_error = None
         for name in reversed(committed):
             try:
-                os.replace(backups[name], destination_directory / name)
+                if name in created:
+                    os.unlink(destination_directory / name)
+                else:
+                    os.replace(backups[name], destination_directory / name)
             except OSError as exc:
                 rollback_error = exc
         if committed:

@@ -98,6 +98,10 @@ static const uint8_t stateful_48k_10ms_loss48x18_r_pcm[] = {
 #include "stateful_48k_10ms_loss48x18_r_pcm.inc"
 };
 
+static const uint8_t stateful_48k_7p5ms_modea_start_r_pcm[] = {
+#include "stateful_48k_7p5ms_modea_start_r_pcm.inc"
+};
+
 _Static_assert(sizeof(bsim_48k_10ms_120b_l_lc3) == CORPUS_FRAMES * 120U,
 	       "10 ms left LC3 geometry mismatch");
 _Static_assert(sizeof(bsim_48k_10ms_120b_l_pcm) == CORPUS_FRAMES * 480U * 2U,
@@ -118,6 +122,8 @@ _Static_assert(sizeof(stateful_48k_10ms_skip20_l_pcm) == 100U * 480U * 2U,
 	       "skip20 reference geometry mismatch");
 _Static_assert(sizeof(stateful_48k_10ms_loss48x18_r_pcm) == 82U * 480U * 2U,
 	       "loss48x18 reference geometry mismatch");
+_Static_assert(sizeof(stateful_48k_7p5ms_modea_start_r_pcm) == 72720U,
+	       "Mode A 7.5 ms right reference geometry mismatch");
 
 static const struct corpus_stream streams[] = {
 	{
@@ -345,7 +351,10 @@ static int reference_for_recipe(const struct lc3_stateful_recipe *recipe,
 	expected_size =
 		(size_t)recipe->valid_frame_count * recipe->samples_per_frame * sizeof(int16_t);
 	if (recipe->reference_kind == LC3_STATEFUL_REFERENCE_GENERATED_PCM) {
-		if (strcmp(recipe->reference_path, "stateful_48k_10ms_skip20_l.pcm") == 0) {
+		if (strcmp(recipe->reference_path, "stateful_48k_7p5ms_modea_start_r.pcm") == 0) {
+			reference->bytes = stateful_48k_7p5ms_modea_start_r_pcm;
+			reference->size = sizeof(stateful_48k_7p5ms_modea_start_r_pcm);
+		} else if (strcmp(recipe->reference_path, "stateful_48k_10ms_skip20_l.pcm") == 0) {
 			reference->bytes = stateful_48k_10ms_skip20_l_pcm;
 			reference->size = sizeof(stateful_48k_10ms_skip20_l_pcm);
 		} else if (strcmp(recipe->reference_path, "stateful_48k_10ms_loss48x18_r.pcm") ==
