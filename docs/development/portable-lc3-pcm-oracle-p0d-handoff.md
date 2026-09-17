@@ -322,8 +322,9 @@ output, widen policy, or invent another architecture.
   `0644`, and removes it if a later transaction step fails. Strict mode only
   verifies temporary candidates and never writes checked-in traces.
 - Local AMD schema-3 repeats have 38 identical metric records. All eight
-  stateful-valid records pass; all four mutations evaluate `max-error`. Formal
-  Intel and ARM execution acceptance remains orchestrator work.
+  stateful-valid records pass; all four mutations evaluate `max-error`. At
+  implementation completion, formal Intel and ARM execution acceptance remained
+  orchestrator work; completed evidence follows below.
 
 ## Completed cross-platform acceptance (2026-09-17)
 
