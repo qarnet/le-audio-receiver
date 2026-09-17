@@ -1,6 +1,6 @@
 # PB-031 P0c handoff: payload identity and PLC-aware reference calibration
 
-Status: Ready for implementation. P0c blocks P2.
+Status: Reviewed and accepted 2026-09-17. P2 is unblocked.
 
 Parent plan: `docs/development/portable-lc3-pcm-oracle-plan.md`.
 
@@ -448,3 +448,106 @@ and actual diff, create a clean detached worktree at that commit, then capture:
 5. production nRF54L15 firmware restoration and boot evidence.
 
 Only reviewed cross-platform PASS permits revised P2 handoff work.
+
+## Final reviewed acceptance (2026-09-17)
+
+P0c is reviewed and accepted at implementation commit
+`262805eb51731ff7b2511e7e522762e4061bb270`
+(`test: add PLC-aware PCM calibration traces`). Review used clean detached
+worktree `/tmp/opencode/pb031-p0c-review-262805e`. P2 is unblocked.
+
+### Review verification
+
+- Strict stateful generator passed, and no original corpus diff was present.
+- Python calibration suite passed 32/32.
+- Native `pcm_oracle` passed 12/12.
+- ARM calibration build passed.
+- `backlog doctor` and `git diff --check` passed.
+- Generated compile-command links were restored after review work. Detached
+  worktree status then ended clean.
+
+### Cross-platform schema-3 reports
+
+AMD Ryzen 9 5950X with GCC 14.3.0:
+
+- `/tmp/opencode/pb031-p0c-calibration-262805e/amd-run-1.json`, SHA-256
+  `989da5425a69dc7a541a9bc3630d890ff0168be2e5bd8805118f03fff8d58d0e`
+- `/tmp/opencode/pb031-p0c-calibration-262805e/amd-run-2.json`, SHA-256
+  `1db0e14626ab4fc2ea4deab2333d327a6df8b883700342a51883c7b1f51bb124`
+
+Intel Core i3-6100U with Clang 21.1.8:
+
+- `/tmp/opencode/pb031-p0c-intel-262805e-i3-6100u/intel-run-1.json`, SHA-256
+  `630c49794f64adfde3963cf2b0d0890bb37933ac8e7a68aa1e87cdeaa408b53b`
+- `/tmp/opencode/pb031-p0c-intel-262805e-i3-6100u/intel-run-2.json`, SHA-256
+  `68b0cf8fe82d84616754fb74d37201137c1e7e874a5d9a0c2e453f8180042b2c`
+
+ARM UART reports:
+
+- `/tmp/opencode/pb031-p0c-arm-262805e/arm-run-1.log`, SHA-256
+  `c0ffc50baf7084f70c6c7b93f21d0e9aa3217595ffefad0fa54b19d8e4b1c8d2`
+- `/tmp/opencode/pb031-p0c-arm-262805e/arm-run-2.log`, SHA-256
+  `f9915a5b5c67d1a8a9cc1cfaeab2a7c83b11cfeb0fc25b011a47d3794b208457`
+
+Both ARM reports carry `PB031_ARM_PASS metrics=38`.
+
+### ARM identity, image, and resource evidence
+
+Fresh ARM identity evidence names CMSIS-DAP serial `8EE9B3FF`, DPIDR
+`0x6ba02477`, AP IDRs `0x84770001`, `0x84770001`, `0x32880000`, and
+`0x00000000`, FICR PART `0x00054b15`, and VARIANT `0x41414330`. Each of
+`/tmp/opencode/pb031-p0c-arm-262805e/identity-preflash.log`,
+`/tmp/opencode/pb031-p0c-arm-262805e/identity-run-1.log`, and
+`/tmp/opencode/pb031-p0c-arm-262805e/identity-run-2.log` has SHA-256
+`8cb5e27fffc8fb0f985ea0fc076582d7555c1b2dd85ee30c1bee4e4c8dee1334`.
+
+Exact calibration flash evidence is
+`/tmp/opencode/pb031-p0c-arm-262805e/flash.log`, SHA-256
+`a643d1c836d1f281ece9659016f43b709bba69a2be06aade706049f2fffab1c8`.
+It records 772472 bytes downloaded and verified.
+
+Exact-ELF `arm-zephyr-eabi-size` resource evidence is text 771132, data 1340,
+and bss 26476. Flash payload is 772472 bytes and static RAM is 27816 bytes.
+The full 1428 KiB RRAM headroom is 689800 bytes. The calibration image exceeds
+the production 664 KiB slot0 by 92536 bytes, expected because the direct
+calibration build uses `CONFIG_USE_DT_CODE_PARTITION=n`; production partitions
+remain unchanged. Both runs report main stack usage 2920/8192 (35%), unused
+5272, with no fault, FAIL, or error.
+
+### Cross-platform verdict
+
+Every environment has 38 records. Record identity and order are equal across
+AMD, Intel, and ARM, and metrics are exact between two runs within each
+environment. All eight stateful-valid records pass and all four exact stateful
+mutations return `max-error`. Embedded ARM manifest, policy, and support hashes
+match host provenance.
+
+Stateful-valid max-abs/max-RMS/min-correlation envelopes are AMD
+`0/0/32767`, Intel `1977/425/32756`, and ARM `1/1/32767`. Frozen limits remain
+unchanged at `2048/512/32750`.
+
+### Production restoration
+
+Clean `262805e` cpuapp and FLPR were rebuilt and flashed. CPUAPP SHA-256 is
+`33738ab087f87d42849d604e7d50032b52d4dc8ee691f060d898521cf4a44da7`; FLPR
+SHA-256 is
+`45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+Flash evidence records 536948 cpuapp bytes and 32604 FLPR bytes downloaded and
+verified. Boot evidence is
+`/tmp/opencode/pb031-p0c-arm-262805e/production-boot.log`, SHA-256
+`b6cd19ecd8e5af374c1b5e925cfccef9059c071c7c36c56b7a3e543562dfacff`.
+It reached commit banner `262805eb5173`, `BLE ready`, identity,
+`settings_load() OK`, audio timing and I2S ready, FLPR READY/rings/runtime,
+and advertising. No boot warning or error occurred.
+
+Production build diagnostics remain known diagnostics, not new defects: the
+documented nRF54L15 watchdog no-sources CMake diagnostic and global
+`__ASSERT()` CMake diagnostic. Production flash wrapper also logged transient
+Nix eval-cache SQLite busy message as `error (ignored)` because reader and
+flash entered Nix concurrently; flash verification and boot succeeded. Its
+dirty-tree warning came only from build-generated tracked compile-command
+symlink targets in detached worktree; those links were restored and final
+detached status was clean.
+
+**Verdict:** P0c accepted. P2 may resume. No threshold widening, corpus repin,
+production behavior change, or acceptance-criterion completion is claimed.

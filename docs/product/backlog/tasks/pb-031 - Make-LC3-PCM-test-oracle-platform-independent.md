@@ -161,6 +161,26 @@ rejection creates no decoder action. Host and ARM protocols extend from 26 to
 38 ordered records: eight stateful valid records pass frozen policy and four
 recipe mutations return `max-error`. P0c cross-platform calibration on
 identified Intel, AMD, and ARM environments remains mandatory before P2 work.
+
+P0c reviewed acceptance on 2026-09-17 covers implementation commit
+`262805eb51731ff7b2511e7e522762e4061bb270` (`test: add PLC-aware PCM
+calibration traces`). Six schema-3 reports, two each on AMD Ryzen 9 5950X with
+GCC 14.3.0, Intel Core i3-6100U with Clang 21.1.8, and ARM, contain 38 records
+each with per-environment repeat equality and cross-platform identity/order
+equality. All eight stateful-valid records pass; all four stateful mutations
+return `max-error`; stateful max-abs/max-RMS/min-correlation envelopes are AMD
+`0/0/32767`, Intel `1977/425/32756`, and ARM `1/1/32767`; frozen limits remain
+`2048/512/32750`. ARM identity is CMSIS-DAP serial `8EE9B3FF`, DPIDR
+`0x6ba02477`, AP IDRs `0x84770001`, `0x84770001`, `0x32880000`, and
+`0x00000000`, FICR PART `0x00054b15`, and VARIANT `0x41414330`. Both ARM runs
+reported main stack 2920/8192 (35%), unused 5272; calibration fit full 1428 KiB
+RRAM with 689800 bytes headroom. Its 92536-byte excess over production 664 KiB
+slot0 is expected with `CONFIG_USE_DT_CODE_PARTITION=n`, and production
+partitions remain unchanged. Clean `262805e` cpuapp and FLPR were rebuilt,
+flashed, verified, and booted without warning or error. P2 is unblocked.
+Detailed evidence is in
+`docs/development/portable-lc3-pcm-oracle-p0c-handoff.md`. No acceptance
+checkbox is completed by P0c alone.
 <!-- SECTION:NOTES:END -->
 
 ## Comments

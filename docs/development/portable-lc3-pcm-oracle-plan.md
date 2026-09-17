@@ -1,6 +1,6 @@
 # Portable LC3/PCM test oracle plan
 
-Status: Proposed, planning-only.
+Status: P0, P0b, P0c, and P1 accepted; P2 next/in progress; P3 and P4 pending.
 
 Product item: [PB-031](../product/backlog/tasks/pb-031%20-%20Make-LC3-PCM-test-oracle-platform-independent.md), Make LC3/PCM test oracle platform-independent.
 
@@ -195,6 +195,18 @@ P0c adds payload-identity proof and PLC-aware stateful reference calibration.
 P2 must not resume until identical schema-3, 38-record calibration reports pass
 on identified Intel, AMD, and ARM environments. Valid payload bytes, not
 receiver-controller sequence, select source fixture identity.
+
+Reviewed P0c acceptance on 2026-09-17 records six schema-3 reports across
+identified AMD Ryzen 9 5950X with GCC 14.3.0, Intel Core i3-6100U with Clang
+21.1.8, and ARM environments. Each report has 38 records; repeats are equal
+within each environment, and record identity/order is equal across platforms.
+All eight stateful-valid records pass, all four stateful mutations return
+`max-error`, and embedded ARM manifest, policy, and support hashes match host
+provenance. Stateful-valid max-abs/max-RMS/min-correlation envelopes are AMD
+`0/0/32767`, Intel `1977/425/32756`, and ARM `1/1/32767`; frozen limits remain
+`2048/512/32750`. Production cpuapp and FLPR were restored after calibration.
+Detailed evidence is in
+`docs/development/portable-lc3-pcm-oracle-p0c-handoff.md`. P2 is unblocked.
 
 ## Phases and verification
 
