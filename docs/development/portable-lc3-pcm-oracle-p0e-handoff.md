@@ -1,7 +1,7 @@
 # PB-031 P0e handoff: calibrate reconnect seven-PLC recipe
 
-Status: Approved corrective calibration phase. P2 remains blocked until this
-phase passes identified AMD, Intel, and ARM calibration.
+Status: Accepted corrective calibration phase. P2 resumed after identified AMD,
+Intel, and ARM calibration.
 
 ## Goal
 
@@ -369,3 +369,52 @@ Return:
 - accepted warnings/diagnostics with reasons;
 - P2 worktree byte-preservation proof and final status;
 - deviations and blockers.
+
+## Completed cross-platform acceptance (2026-09-18)
+
+P0e is accepted at reviewed commit
+`b38cfecebe6842172f2885e9439799a538946b8d`. Evidence is external and is not
+checked into this repository:
+
+- root: `/tmp/opencode/pb031-p0e-acceptance-b38cfec`;
+- authoritative report:
+  `/tmp/opencode/pb031-p0e-acceptance-b38cfec/acceptance-report.md`.
+
+Clean detached review-tree checks passed. Strict stateful generation and the
+original LC3, portable PCM, and generated-stateful PCM no-diff check passed.
+The focused Python suite passed 38 tests, native `pcm_oracle` passed 12/12, the
+pristine nRF54L15 calibration build passed, `backlog doctor` passed, and
+`git diff --check` passed.
+
+Two schema-3 reports per environment contained exactly 39 metric records.
+Record identity and order matched across AMD, Intel, and ARM; repeat metrics
+matched within each environment. All nine stateful-valid records passed and all
+four stateful mutations returned `max-error`.
+
+The new record 34, `start7_10ms_l`, replayed seven PLC actions followed by
+corpus frames 0 through 99. It has 107 actions, 100 valid frames, and 48000
+samples. Its max-error/RMS/correlation Q15 values were AMD `0/0/32767`, Intel
+`1862/389/32756`, and ARM `1/1/32767`.
+
+Across all nine stateful-valid records, maximum absolute error was 1977,
+maximum RMS error was 426, and minimum correlation was Q15 32756, inside frozen
+`2048/512/32750` limits. ARM calibration identity was CMSIS-DAP `8EE9B3FF`;
+DPIDR `0x6ba02477`; AP0/AP1 `0x84770001`; AP2 `0x32880000`; PART
+`0x00054b15`; VARIANT `0x41414330`. Calibration image verification covered
+845428 bytes. Full RRAM use was 845428/1462272 bytes, with 616844 bytes
+headroom. RAM use was 27808/192512 bytes, with 164704 bytes headroom. Main
+stack was 2920/8192 bytes, 35 percent, in both runs.
+
+Production was restored from clean reviewed source. Cpuapp SHA-256 was
+`111f40757ea986b03bd405aacf23e6f9f0acd0a91099bb1d03008895f2e2f323`; FLPR
+SHA-256 was
+`45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+Verified flash bytes were 536908 for cpuapp and 32604 for FLPR. Boot banner was
+`b38cfecebe68`; required BLE, settings, timing, I2S, FLPR, and advertising
+markers were present, with no UART warning or error lines. Only documented
+production-build diagnostics occurred: `No SOURCES given to Zephyr library:
+drivers__watchdog` and `__ASSERT() statements are globally ENABLED`.
+
+Main P2 worktree bytes remain preserved except the required active-truth update
+in the untracked P2 handoff, which remains unstaged. P0e resumes P2. Reconnect
+segment 2 must map to `start7_10ms_l`.

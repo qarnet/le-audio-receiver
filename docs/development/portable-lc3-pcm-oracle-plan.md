@@ -1,6 +1,6 @@
 # Portable LC3/PCM test oracle plan
 
-Status: P0, P0b, P0c, P0d, and P1 accepted; P2 in progress; P3 and P4 pending.
+Status: P0, P0b, P0c, P0d, P0e, and P1 accepted; P2 resumed; P3 and P4 pending.
 
 Product item: [PB-031](../product/backlog/tasks/pb-031%20-%20Make-LC3-PCM-test-oracle-platform-independent.md), Make LC3/PCM test oracle platform-independent.
 
@@ -239,6 +239,35 @@ were present, and no UART warning or error lines occurred. Evidence remains
 external, not checked into this repository, at
 `/tmp/opencode/pb031-p0d-acceptance-4fbe9bc/acceptance-report.md`. P0d
 unblocks P2, now in progress.
+
+### P0e reconnect seven-PLC correction
+
+P2 reconnect diagnostic evidence measured seven startup PLC actions followed
+by corpus frames 0 through 99 for second segment left output. P0e appends
+`start7_10ms_l` as the ninth recipe without changing existing recipe order,
+stateful references, source corpus, mutation records, schema, or frozen
+`2048/512/32750` policy. The new record is schema-3 record 34 with 107 actions,
+100 valid frames, and 48000 samples.
+
+P0e cross-platform acceptance completed on 2026-09-18 at reviewed commit
+`b38cfecebe6842172f2885e9439799a538946b8d`. Two schema-3 reports each on AMD
+Ryzen 9 5950X with GCC 14.3.0, Intel Core i3-6100U with Clang 21.1.8, and
+nRF54L15 ARM with Zephyr SDK 0.17.0 GCC 12.2.0 contained 39 records. Record
+identity and order matched across environments, and repeats matched within each
+environment. All nine stateful-valid records passed and all four stateful
+mutations returned `max-error`.
+
+For `start7_10ms_l`, max-error/RMS/correlation Q15 values were AMD
+`0/0/32767`, Intel `1862/389/32756`, and ARM `1/1/32767`. The nine-recipe
+cross-platform envelope was maximum absolute error 1977, maximum RMS 426, and
+minimum correlation Q15 32756, inside frozen `2048/512/32750` limits. Clean
+reviewed production cpuapp and FLPR firmware was restored, flash verified, and
+booted with required markers and no UART warning or error lines. Detailed
+external evidence is at
+`/tmp/opencode/pb031-p0e-acceptance-b38cfec/acceptance-report.md`.
+
+P0e resumes P2. Reconnect second segment must map to `start7_10ms_l`; P2
+remains responsible for applying that mapping and proving Stage 1 behavior.
 
 ## Phases and verification
 

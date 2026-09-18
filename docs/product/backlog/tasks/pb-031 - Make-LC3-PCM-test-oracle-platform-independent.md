@@ -181,6 +181,21 @@ flashed, verified, and booted without warning or error. P2 is unblocked.
 Detailed evidence is in
 `docs/development/portable-lc3-pcm-oracle-p0c-handoff.md`. No acceptance
 checkbox is completed by P0c alone.
+
+P0e reconnect correction accepted on 2026-09-18 at implementation commit
+`b38cfecebe6842172f2885e9439799a538946b8d` (`test: add reconnect PCM oracle
+recipe`). It appends `start7_10ms_l`, seven PLC actions followed by corpus
+frames 0 through 99, as the ninth stateful recipe and schema-3 record 34.
+Formal AMD GCC 14.3.0, Intel Clang 21.1.8, and nRF54L15 ARM GCC 12.2.0 evidence
+has two 39-record reports per environment. Repeats and cross-platform record
+identity/order match; all nine stateful-valid records pass; four mutations
+return `max-error`; envelope remains `1977/426/32756` inside frozen
+`2048/512/32750`. Clean reviewed nRF54L15 production cpuapp and FLPR images
+were flashed, verified, and booted with required markers and no UART warning or
+error. External evidence:
+`/tmp/opencode/pb031-p0e-acceptance-b38cfec/acceptance-report.md`. P2 resumes
+with reconnect segment 2 required to map to `start7_10ms_l`; no acceptance
+checkbox is completed by P0e alone.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
