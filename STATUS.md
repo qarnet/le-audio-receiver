@@ -2327,7 +2327,7 @@ Phase 4 evidence consolidated in `docs/development/phase4-acceptance-results.md`
 Neither target produces compiler warnings in application or Zephyr source.
 All printed diagnostics are Kconfig/CMake configuration messages.
 
-**nRF5340 (8 diagnostics):**
+**nRF5340 (9 diagnostics):**
 
 | Diagnostic | Classification | Cannot remove because |
 |---|---|---|
@@ -2337,6 +2337,7 @@ All printed diagnostics are Kconfig/CMake configuration messages.
 | Experimental `BT_LL_SW_SPLIT` | Required architecture | Only ISO-capable open-source controller for nRF5340 |
 | Experimental `BT_CTLR_SET_HOST_FEATURE` | Required for ISO | Feature negotiation required |
 | Experimental `BT_CTLR_PERIPHERAL_ISO` | Required for ISO | Peripheral ISO support required |
+| `CONFIG_BT_CTLR_ADVANCED_FEATURES=y, Advanced Features' default value change could change Zephyr Bluetooth Controller's functional behavior` | Upstream NCS v3.3.0 CMake diagnostic, not a compiler or Kconfig assigned-value warning | Imported required peripheral-ISO SW Split overlay enables `BT_CTLR_ADVANCED_FEATURES` to expose subordinate reservation controls and resolves `BT_CTLR_EVENT_OVERHEAD_RESERVE_MAX=y`; Zephyr emits this warning whenever this menu symbol is enabled. Removing it would hide required controls and change controller reservation behavior. |
 | `SB_CONFIG_PARTITION_MANAGER` sysbuild warning | Required sysbuild infrastructure | Partition manager required by NCS build system |
 
 **nRF54L15 configuration diagnostics:**

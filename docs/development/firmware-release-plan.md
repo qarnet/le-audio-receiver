@@ -142,7 +142,7 @@ Do not install J-Link in build-only CI.
 ## Canonical software test gate in CI (PR 11)
 
 Every pull request and every protected `main` merge must pass the
-repository's canonical software gate (currently 72 children: 69 unit
+repository's canonical software gate (currently 74 children: 71 unit
 suites plus coverage-baseline enforcement, test-matrix validation, and
 BabbleSim Stage 1) before the active nRF54L15 release firmware build can
 start.  A failed test gate must prevent firmware packaging, artifact

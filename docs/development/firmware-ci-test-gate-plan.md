@@ -61,9 +61,9 @@ draft-release creation.
   nRF54L15 only.
 - `scripts/test-all.sh` is the canonical software gate and discovers suites
   only through `scripts/test_inventory.py`.
-- Current inventory is 40 Twister C suites, 5 exec-only C suites, and 24 Python
+- Current inventory is 41 Twister C suites, 5 exec-only C suites, and 25 Python
   suites. Coverage baseline enforcement, matrix validation, and BabbleSim
-  Stage 1 make the public gate total 72 children.
+  Stage 1 make the public gate total 74 children.
 - `scripts/test-coverage.sh` requires a clean exact commit in baseline mode,
   `gcovr 8.4`, gcov 14.3.0, west, Python, and `ZEPHYR_BASE`.
 - `scripts/bsim-stage1-run.sh` builds the repository receiver/client and runs
@@ -75,7 +75,7 @@ draft-release creation.
 - `scripts/check-build-contract.py` against the real nRF54L15 build tree is a
   post-build contract, not a pre-build test. Its optional `--nrf5340` local
   legacy validation remains pending cleanup. Its own 56-test Python suite is
-  already one of the 24 canonical Python children.
+  already one of the 25 canonical Python children.
 
 ## Scope
 
