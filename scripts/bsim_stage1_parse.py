@@ -1,18 +1,10 @@
 #!/usr/bin/env python3
 """Strict parser for the T4 BabbleSim scenario logs.
 
-Parses every named field of the receiver and client PASS records for one
-scenario run and asserts the scenario-specific contract:
-
-  - exact per-scenario response/count/hash expectations;
-  - channel-hash relations (mono L == R, Mode A/B L != R);
-  - no semantic fault markers or `<wrn>`/`<err>` records in either app log,
-    with a narrow per-scenario allowlist for intentionally exercised paths;
-  - exact client-side send counts and ASCS response counts.
-
-The bash runner uses `check` per run; unit tests in tests/unit/bsim_runner
-cover parsing and every failure mode.  Nothing here validates only the
-PASS substring — every named field is parsed and asserted.
+Parses receiver and client PASS records for one scenario run and asserts exact
+transport, lifecycle, count, PLC, decoder-error, routing, and portable PCM
+contracts. Receiver PCM metrics are checked against limits independently read
+from the checked-in manifest. Client TX FNV remains exact parser-owned evidence.
 """
 
 import argparse
@@ -25,14 +17,12 @@ from lc3_pcm_calibrate import (  # strict fixture validation shared with calibra
     CalibrationError,
     FIXTURES_DIR,
     load_manifest as load_portable_manifest,
+    load_stateful_manifest,
 )
 
 # ── scenario metadata (versioned data file) ────────────────────────────
-# tests/bsim/stage1-scenarios.json is the single source for scenario
-# metadata (dec_calls / channel mode / runs) and the pinned known values.
-# scripts/bsim-stage1-run.sh derives its matrix/hashes/counts from the same
-# file; explicit CLI --known-* flags override the file defaults, and
-# --no-known disables known assertions entirely (baseline mode).
+# tests/bsim/stage1-scenarios.json is the single source for scenario metadata
+# and exact known totals. The portable manifest is sole source for PCM limits.
 
 _SCENARIOS_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -42,7 +32,7 @@ _SCENARIOS_FILE = os.path.join(
 )
 
 CHANNEL_MODES = ("mono", "stereo")
-KNOWN_KEYS = ("full", "l", "r", "total")
+KNOWN_KEYS = ("total",)
 TRANSPORT_LAYOUTS = ("mono", "stereo-concat")
 FNV1A_OFFSET_BASIS = 0x811C9DC5
 FNV1A_PRIME = 0x01000193
@@ -70,6 +60,126 @@ REQUIRED_TRANSPORT_STREAMS = {
     "duplicate_release_10ms": {0},
 }
 
+# Stage 1 owns a fixed 17-scenario/26-run matrix. Scenario JSON remains the
+# single source for transport metadata and known totals, but it must not be
+# able to silently add, remove, or reclassify matrix entries.
+EXPECTED_SCENARIO_CONTRACTS = {
+    "mono_10ms": (2, 1, "mono"),
+    "mono_7p5ms": (2, 1, "mono"),
+    "modea_10ms": (2, 2, "stereo"),
+    "modea_7p5ms": (2, 2, "stereo"),
+    "modea_reverse_start_10ms": (2, 2, "stereo"),
+    "modeb_10ms": (2, 2, "stereo"),
+    "modeb_7p5ms": (2, 2, "stereo"),
+    "invalid_sdu_resume_10ms": (2, 1, "mono"),
+    "modea_one_cis_loss_10ms": (2, 2, "stereo"),
+    "modea_first_stop_10ms": (1, 2, "stereo"),
+    "release_without_disable_10ms": (1, 1, "mono"),
+    "disconnect_streaming_10ms": (1, 1, "mono"),
+    "reconnect_second_stream_10ms": (1, 1, "mono"),
+    "unsupported_source_direction": (1, 1, "mono"),
+    "no_free_sink_slot": (1, 1, "mono"),
+    "invalid_codec_fields": (1, 1, "mono"),
+    "duplicate_release_10ms": (1, 1, "mono"),
+}
+
+EXPECTED_KNOWN_TOTALS = {
+    "mono_10ms": {"total": 108},
+    "mono_7p5ms": {"total": 111},
+    "modea_10ms": {"total": 216},
+    "modea_7p5ms": {"total": 226},
+    "modea_reverse_start_10ms": {"total": 216},
+    "modeb_10ms": {"total": 216},
+    "modeb_7p5ms": {"total": 222},
+    "invalid_sdu_resume_10ms": {"total": 108},
+    "modea_one_cis_loss_10ms": {"total": 216},
+    "modea_first_stop_10ms": {"total": 86},
+    "release_without_disable_10ms": {"total": 56},
+    "disconnect_streaming_10ms": {"total": 63},
+    "reconnect_second_stream_10ms": {"total": 63},
+    "unsupported_source_direction": {},
+    "no_free_sink_slot": {},
+    "invalid_codec_fields": {},
+    "duplicate_release_10ms": {"total": 56},
+}
+
+# (stream, layout, fixture stems, malformed index or None). Keep this fixed
+# contract separate from corpus-manifest validation: a well-formed replacement
+# fixture must not silently rebaseline Stage 1 transport evidence.
+EXPECTED_TRANSPORTS = {
+    "mono_10ms": ((0, "mono", ("bsim_48k_10ms_120b_l",), None),),
+    "mono_7p5ms": ((0, "mono", ("bsim_48k_7p5ms_90b_l",), None),),
+    "modea_10ms": (
+        (0, "mono", ("bsim_48k_10ms_120b_l",), None),
+        (1, "mono", ("bsim_48k_10ms_120b_r",), None),
+    ),
+    "modea_7p5ms": (
+        (0, "mono", ("bsim_48k_7p5ms_90b_l",), None),
+        (1, "mono", ("bsim_48k_7p5ms_90b_r",), None),
+    ),
+    "modea_reverse_start_10ms": (
+        (0, "mono", ("bsim_48k_10ms_120b_l",), None),
+        (1, "mono", ("bsim_48k_10ms_120b_r",), None),
+    ),
+    "modeb_10ms": (
+        (0, "stereo-concat", ("bsim_48k_10ms_120b_l", "bsim_48k_10ms_120b_r"), None),
+    ),
+    "modeb_7p5ms": (
+        (0, "stereo-concat", ("bsim_48k_7p5ms_90b_l", "bsim_48k_7p5ms_90b_r"), None),
+    ),
+    "invalid_sdu_resume_10ms": ((0, "mono", ("bsim_48k_10ms_120b_l",), 20),),
+    "modea_one_cis_loss_10ms": (
+        (0, "mono", ("bsim_48k_10ms_120b_l",), None),
+        (1, "mono", ("bsim_48k_10ms_120b_r",), None),
+    ),
+    "modea_first_stop_10ms": (
+        (0, "mono", ("bsim_48k_10ms_120b_l",), None),
+        (1, "mono", ("bsim_48k_10ms_120b_r",), None),
+    ),
+    "release_without_disable_10ms": ((0, "mono", ("bsim_48k_10ms_120b_l",), None),),
+    "disconnect_streaming_10ms": ((0, "mono", ("bsim_48k_10ms_120b_l",), None),),
+    "reconnect_second_stream_10ms": (
+        (0, "mono", ("bsim_48k_10ms_120b_l",), None),
+        (1, "mono", ("bsim_48k_10ms_120b_l",), None),
+    ),
+    "unsupported_source_direction": (),
+    "no_free_sink_slot": (),
+    "invalid_codec_fields": (),
+    "duplicate_release_10ms": ((0, "mono", ("bsim_48k_10ms_120b_l",), None),),
+}
+
+EXPECTED_RECEIVER_ORACLES = {
+    "mono_10ms": (("start8_10ms_l", "start8_10ms_l", "full"),),
+    "mono_7p5ms": (("start11_7p5ms_l", "start11_7p5ms_l", "full"),),
+    "modea_10ms": (("start8_10ms_l", "start8_10ms_r", "full"),),
+    "modea_7p5ms": (("modea_start_7p5ms_l", "modea_start_7p5ms_r", "full"),),
+    "modea_reverse_start_10ms": (("start8_10ms_l", "start8_10ms_r", "full"),),
+    "modeb_10ms": (("start8_10ms_l", "start8_10ms_r", "full"),),
+    "modeb_7p5ms": (("start11_7p5ms_l", "start11_7p5ms_r", "full"),),
+    "invalid_sdu_resume_10ms": (("skip20_10ms_l", "skip20_10ms_l", "full"),),
+    "modea_one_cis_loss_10ms": (("start8_10ms_l", "loss48x18_10ms_r", "full"),),
+    "modea_first_stop_10ms": (("start8_10ms_l", "start8_10ms_r", "prefix"),),
+    "release_without_disable_10ms": (("start8_10ms_l", "start8_10ms_l", "prefix"),),
+    "disconnect_streaming_10ms": (("start8_10ms_l", "start8_10ms_l", "prefix"),),
+    "reconnect_second_stream_10ms": (
+        ("start8_10ms_l", "start8_10ms_l", "prefix"),
+        ("start7_10ms_l", "start7_10ms_l", "full"),
+    ),
+    "unsupported_source_direction": (),
+    "no_free_sink_slot": (),
+    "invalid_codec_fields": (),
+    "duplicate_release_10ms": (("start8_10ms_l", "start8_10ms_l", "prefix"),),
+}
+
+RECEIVER_ORACLE_COMPLETIONS = ("full", "prefix")
+SCENARIO_ROOT_FIELDS = {
+    "schema_version",
+    "baselined",
+    "description",
+    "notes",
+    "scenarios",
+}
+
 
 class ScenarioDataError(ValueError):
     """Raised when the versioned scenario data file is malformed."""
@@ -86,6 +196,39 @@ def load_transport_manifest():
 
 def _fixture_map(manifest):
     return {entry["stem"]: entry for entry in manifest["streams"]}
+
+
+def _stateful_recipe_map(portable_manifest):
+    """Load accepted stateful reference manifest as immutable recipe authority."""
+    try:
+        stateful_manifest, _reference_hashes, _manifest_hash = load_stateful_manifest(
+            portable_manifest
+        )
+    except CalibrationError as exc:
+        raise ScenarioDataError(
+            "stateful reference manifest invalid: %s" % exc
+        ) from exc
+    return {entry["id"]: entry for entry in stateful_manifest["recipes"]}
+
+
+def _transport_geometry(transport, fixtures, where):
+    """Return one shared transport geometry or None for no-audio scenarios."""
+    geometry = None
+    for entry in transport:
+        for stem in entry["fixtures"]:
+            fixture = fixtures[stem]
+            candidate = (
+                fixture["duration_us"],
+                fixture["frame_bytes"],
+                fixture["samples_per_frame"],
+            )
+            if geometry is None:
+                geometry = candidate
+            elif geometry != candidate:
+                raise ScenarioDataError(
+                    "%s transport fixtures have mixed geometry" % where
+                )
+    return geometry
 
 
 def load_scenarios(path=None):
@@ -109,24 +252,52 @@ def load_scenarios(path=None):
         raise ScenarioDataError(
             "%s: must be an object with a 'scenarios' list" % data_path
         )
-    if data.get("schema_version") != 2:
+    unknown_root = sorted(set(data) - SCENARIO_ROOT_FIELDS)
+    if unknown_root:
         raise ScenarioDataError(
-            "%s: missing/unsupported schema_version (expected 2)" % data_path
+            "%s: unknown top-level fields %s" % (data_path, ", ".join(unknown_root))
+        )
+    if data.get("schema_version") != 3:
+        raise ScenarioDataError(
+            "%s: missing/unsupported schema_version (expected 3)" % data_path
         )
     if not data["scenarios"]:
         raise ScenarioDataError("%s: empty 'scenarios' list" % data_path)
 
     manifest = load_transport_manifest()
     fixtures = _fixture_map(manifest)
+    stateful_recipes = _stateful_recipe_map(manifest)
 
     seen = set()
     for idx, entry in enumerate(data["scenarios"]):
         where = "%s: scenario[%d]" % (data_path, idx)
         if not isinstance(entry, dict):
             raise ScenarioDataError("%s: not an object" % where)
+        allowed_keys = {
+            "name",
+            "runs",
+            "dec_calls",
+            "channel_mode",
+            "known",
+            "transport",
+            "receiver_oracle",
+        }
+        required_keys = allowed_keys - {"known"}
+        unknown = sorted(set(entry) - allowed_keys)
+        missing = sorted(required_keys - set(entry))
+        if unknown:
+            raise ScenarioDataError(
+                "%s: unknown fields %s" % (where, ", ".join(unknown))
+            )
+        if missing:
+            raise ScenarioDataError(
+                "%s: missing fields %s" % (where, ", ".join(missing))
+            )
         name = entry.get("name")
         if not isinstance(name, str) or not name:
             raise ScenarioDataError("%s: missing/empty 'name'" % where)
+        if name not in EXPECTED_SCENARIO_CONTRACTS:
+            raise ScenarioDataError("%s: unknown Stage 1 scenario %r" % (where, name))
         if name in seen:
             raise ScenarioDataError("%s: duplicate scenario name %r" % (where, name))
         seen.add(name)
@@ -141,9 +312,23 @@ def load_scenarios(path=None):
                 "%s: 'channel_mode' must be one of %s"
                 % (where, ", ".join(CHANNEL_MODES))
             )
+        expected_runs, expected_dec_calls, expected_channel_mode = (
+            EXPECTED_SCENARIO_CONTRACTS[name]
+        )
+        if (runs, dec_calls, entry["channel_mode"]) != (
+            expected_runs,
+            expected_dec_calls,
+            expected_channel_mode,
+        ):
+            raise ScenarioDataError(
+                "%s: matrix contract %r != expected %r"
+                % (
+                    where,
+                    (runs, dec_calls, entry["channel_mode"]),
+                    (expected_runs, expected_dec_calls, expected_channel_mode),
+                )
+            )
         known = entry.get("known", {})
-        if known is None:
-            known = {}
         if not isinstance(known, dict):
             raise ScenarioDataError("%s: 'known' must be an object" % where)
         for key, val in known.items():
@@ -154,11 +339,11 @@ def load_scenarios(path=None):
                     raise ScenarioDataError(
                         "%s: known.total must be a non-negative int" % where
                     )
-            else:
-                if not (isinstance(val, str) and _HEX_RE.match(val)):
-                    raise ScenarioDataError(
-                        "%s: known.%s must be a 0x-hex string" % (where, key)
-                    )
+        if known != EXPECTED_KNOWN_TOTALS[name]:
+            raise ScenarioDataError(
+                "%s: known contract %r != expected %r"
+                % (where, known, EXPECTED_KNOWN_TOTALS[name])
+            )
 
         if "transport" not in entry:
             raise ScenarioDataError("%s: missing 'transport'" % where)
@@ -169,6 +354,7 @@ def load_scenarios(path=None):
             )
 
         transport_streams = set()
+        observed_transport = []
         for transport_idx, transport_entry in enumerate(transport):
             transport_where = "%s.transport[%d]" % (where, transport_idx)
             if not isinstance(transport_entry, dict):
@@ -262,6 +448,9 @@ def load_scenarios(path=None):
                         "%s.malformed_at is only valid for invalid_sdu_resume_10ms stream 0 at 20"
                         % transport_where
                     )
+            observed_transport.append(
+                (stream, layout, tuple(fixture_stems), malformed_at)
+            )
 
         if name == "invalid_sdu_resume_10ms" and (
             len(transport) != 1 or "malformed_at" not in transport[0]
@@ -275,11 +464,85 @@ def load_scenarios(path=None):
                 "%s: transport streams %s != required %s"
                 % (where, sorted(transport_streams), sorted(expected_streams))
             )
+        if tuple(observed_transport) != EXPECTED_TRANSPORTS[name]:
+            raise ScenarioDataError(
+                "%s: transport contract %r != expected %r"
+                % (where, tuple(observed_transport), EXPECTED_TRANSPORTS[name])
+            )
+
+        receiver_oracle = entry["receiver_oracle"]
+        if not isinstance(receiver_oracle, list):
+            raise ScenarioDataError("%s.receiver_oracle must be a list" % where)
+        expected_oracle = EXPECTED_RECEIVER_ORACLES[name]
+        if len(receiver_oracle) != len(expected_oracle):
+            raise ScenarioDataError(
+                "%s.receiver_oracle length %d != required %d"
+                % (where, len(receiver_oracle), len(expected_oracle))
+            )
+
+        transport_geometry = _transport_geometry(transport, fixtures, where)
+        observed_oracle = []
+        for oracle_index, oracle_entry in enumerate(receiver_oracle):
+            oracle_where = "%s.receiver_oracle[%d]" % (where, oracle_index)
+            if not isinstance(oracle_entry, dict):
+                raise ScenarioDataError("%s: not an object" % oracle_where)
+            if set(oracle_entry) != {
+                "left_recipe",
+                "right_recipe",
+                "completion",
+            }:
+                raise ScenarioDataError(
+                    "%s: fields must be left_recipe/right_recipe/completion"
+                    % oracle_where
+                )
+            left_recipe = oracle_entry["left_recipe"]
+            right_recipe = oracle_entry["right_recipe"]
+            completion = oracle_entry["completion"]
+            if (
+                not isinstance(left_recipe, str)
+                or not isinstance(right_recipe, str)
+                or left_recipe not in stateful_recipes
+                or right_recipe not in stateful_recipes
+            ):
+                raise ScenarioDataError("%s: unknown recipe id" % oracle_where)
+            if completion not in RECEIVER_ORACLE_COMPLETIONS:
+                raise ScenarioDataError(
+                    "%s: completion must be full or prefix" % oracle_where
+                )
+            left_geometry = (
+                stateful_recipes[left_recipe]["duration_us"],
+                stateful_recipes[left_recipe]["frame_bytes"],
+                stateful_recipes[left_recipe]["samples_per_frame"],
+            )
+            right_geometry = (
+                stateful_recipes[right_recipe]["duration_us"],
+                stateful_recipes[right_recipe]["frame_bytes"],
+                stateful_recipes[right_recipe]["samples_per_frame"],
+            )
+            if (
+                transport_geometry is None
+                or left_geometry != transport_geometry
+                or right_geometry != transport_geometry
+            ):
+                raise ScenarioDataError(
+                    "%s: recipe geometry does not match transport" % oracle_where
+                )
+            observed_oracle.append((left_recipe, right_recipe, completion))
+        if tuple(observed_oracle) != expected_oracle:
+            raise ScenarioDataError(
+                "%s.receiver_oracle does not match fixed Stage 1 mapping" % where
+            )
+    if seen != set(EXPECTED_SCENARIO_CONTRACTS):
+        raise ScenarioDataError(
+            "%s: Stage 1 scenarios %s != required %s"
+            % (data_path, sorted(seen), sorted(EXPECTED_SCENARIO_CONTRACTS))
+        )
     return data
 
 
 # Scenario name -> (decoder calls per push, mono or stereo, runs in matrix)
 _SCENARIO_DATA = load_scenarios()
+_STATEFUL_RECIPES = _stateful_recipe_map(load_transport_manifest())
 
 SCENARIOS = {
     entry["name"]: (entry["dec_calls"], entry["channel_mode"], entry["runs"])
@@ -290,14 +553,19 @@ TRANSPORT_VALUES = {
     entry["name"]: entry["transport"] for entry in _SCENARIO_DATA["scenarios"]
 }
 
-# Scenario name -> pinned known values (ints) from the versioned file.
+RECEIVER_ORACLE_VALUES = {
+    entry["name"]: tuple(
+        (oracle["left_recipe"], oracle["right_recipe"], oracle["completion"])
+        for oracle in entry["receiver_oracle"]
+    )
+    for entry in _SCENARIO_DATA["scenarios"]
+}
+
+# Scenario name -> exact known totals from the versioned file.
 KNOWN_VALUES = {}
 for _entry in _SCENARIO_DATA["scenarios"]:
     _known = _entry.get("known") or {}
     _val = {}
-    for _key in ("full", "l", "r"):
-        if _key in _known:
-            _val[_key] = int(_known[_key], 16)
     if "total" in _known:
         _val["total"] = _known["total"]
     if _val:
@@ -339,7 +607,127 @@ def extract_pass_line(path, testid):
     return found
 
 
-_TOKEN_RE = re.compile(r"(\w+)=([0-9A-Za-z_.xX]+)")
+_TOKEN_RE = re.compile(r"(\w+)=([-0-9A-Za-z_.xX]+)")
+
+_RECEIVER_BASE_FIELDS = (
+    "scenario",
+    "seg",
+    "after",
+    "adv_restart",
+    "pacs",
+    "obs_ok",
+    "obs_rej",
+    "obs_dir",
+    "obs_code",
+    "obs_reason",
+    "obs_gate_o",
+    "obs_gate_c",
+    "obs_mal",
+    "obs_blk",
+    "obs_stale",
+    "obs_rel",
+    "obs_disc",
+    "obs_rej_code",
+    "obs_rej_reason",
+    "obs_mts",
+    "obs_rel_ss",
+    "rel_ss_seq",
+    "disc_seq",
+    "limmax",
+    "limrms",
+    "limcorr",
+)
+
+
+def _segment_recipe_id_fields(segment):
+    suffix = str(segment)
+    return ("lrid" + suffix, "rrid" + suffix)
+
+
+def _segment_recipe_count_fields(segment):
+    suffix = str(segment)
+    return (
+        "lact" + suffix,
+        "lval" + suffix,
+        "lplc" + suffix,
+        "ract" + suffix,
+        "rval" + suffix,
+        "rplc" + suffix,
+    )
+
+
+def _segment_metric_fields(segment):
+    suffix = str(segment)
+    return (
+        "pushes" + suffix,
+        "samples" + suffix,
+        "spc" + suffix,
+        "diff" + suffix,
+        "lfr" + suffix,
+        "lsm" + suffix,
+        "lex" + suffix,
+        "lmax" + suffix,
+        "lsse" + suffix,
+        "lrms" + suffix,
+        "lcorr" + suffix,
+        "lres" + suffix,
+        "rfr" + suffix,
+        "rsm" + suffix,
+        "rex" + suffix,
+        "rmax" + suffix,
+        "rsse" + suffix,
+        "rrms" + suffix,
+        "rcorr" + suffix,
+        "rres" + suffix,
+    )
+
+
+def _segment_integer_fields(segment):
+    return _segment_recipe_count_fields(segment) + _segment_metric_fields(segment)
+
+
+def _segment_fields(segment):
+    return _segment_recipe_id_fields(segment) + _segment_integer_fields(segment)
+
+
+def _receiver_segment_fields(segment):
+    suffix = str(segment)
+    return (
+        "pushes" + suffix,
+        "trans" + suffix,
+        "szero" + suffix,
+        "splc" + suffix,
+        "plc" + suffix,
+        "total" + suffix,
+        "derr" + suffix,
+        "mal" + suffix,
+        "samples" + suffix,
+        "spc" + suffix,
+        "diff" + suffix,
+        "lemin" + suffix,
+        "lemax" + suffix,
+        "remin" + suffix,
+        "remax" + suffix,
+    ) + _segment_fields(segment)
+
+
+RECEIVER_REQUIRED_FIELDS = (
+    _RECEIVER_BASE_FIELDS + _receiver_segment_fields(1) + _receiver_segment_fields(2)
+)
+CLIENT_REQUIRED_FIELDS = (
+    "scenario",
+    "sends0",
+    "sends1",
+    "cfgrsps",
+    "relrsps",
+    "disrsps",
+    "txc0",
+    "txh0",
+    "txc1",
+    "txh1",
+)
+RECEIVER_FIELD_SET = frozenset(RECEIVER_REQUIRED_FIELDS)
+CLIENT_FIELD_SET = frozenset(CLIENT_REQUIRED_FIELDS)
 
 
 def parse_tokens(line):
@@ -347,7 +735,7 @@ def parse_tokens(line):
     out = {}
     for key, val in _TOKEN_RE.findall(line):
         if key in out:
-            continue
+            raise ParseError("duplicate PASS token %s" % key)
         try:
             out[key] = int(val, 16) if val.lower().startswith("0x") else int(val)
         except ValueError:
@@ -358,49 +746,45 @@ def parse_tokens(line):
 def parse_receiver_pass(path):
     line = extract_pass_line(path, "le_audio_receiver")
     tokens = parse_tokens(line)
-    need = [
-        "scenario",
-        "seg",
-        "after",
-        "adv_restart",
-        "pacs",
-        "obs_ok",
-        "obs_rej",
-        "obs_dir",
-        "obs_code",
-        "obs_reason",
-        "obs_gate_o",
-        "obs_gate_c",
-        "obs_mal",
-        "obs_blk",
-        "obs_stale",
-        "obs_rel",
-        "obs_disc",
-    ]
-    missing = [k for k in need if k not in tokens]
+    unknown = sorted(set(tokens) - RECEIVER_FIELD_SET)
+    if unknown:
+        raise ParseError("receiver PASS unknown fields %s" % unknown)
+    missing = [k for k in RECEIVER_REQUIRED_FIELDS if k not in tokens]
     if missing:
         raise ParseError("receiver PASS missing fields %s" % missing)
+    string_fields = {"scenario", "lrid1", "rrid1", "lrid2", "rrid2"}
+    if any(type(tokens[key]) is not str or not tokens[key] for key in string_fields):
+        raise ParseError(
+            "receiver PASS recipe/scenario fields must be non-empty strings"
+        )
+    non_integer = [
+        key
+        for key in RECEIVER_REQUIRED_FIELDS
+        if key not in string_fields and type(tokens[key]) is not int
+    ]
+    if non_integer:
+        raise ParseError("receiver PASS non-integer fields %s" % non_integer)
     return tokens
 
 
 def parse_client_pass(path):
     line = extract_pass_line(path, "bsim_client")
     tokens = parse_tokens(line)
-    need = [
-        "scenario",
-        "sends0",
-        "sends1",
-        "cfgrsps",
-        "relrsps",
-        "disrsps",
-        "txc0",
-        "txh0",
-        "txc1",
-        "txh1",
-    ]
-    missing = [k for k in need if k not in tokens]
+    unknown = sorted(set(tokens) - CLIENT_FIELD_SET)
+    if unknown:
+        raise ParseError("client PASS unknown fields %s" % unknown)
+    missing = [k for k in CLIENT_REQUIRED_FIELDS if k not in tokens]
+    if type(tokens["scenario"]) is not str or not tokens["scenario"]:
+        raise ParseError("client PASS scenario must be a non-empty string")
     if missing:
         raise ParseError("client PASS missing fields %s" % missing)
+    non_integer = [
+        key
+        for key in CLIENT_REQUIRED_FIELDS
+        if key != "scenario" and type(tokens[key]) is not int
+    ]
+    if non_integer:
+        raise ParseError("client PASS non-integer fields %s" % non_integer)
     return tokens
 
 
@@ -582,34 +966,346 @@ def check_transport(scenario, client):
     return errs
 
 
-def check_scenario(scenario, recv, cli, known):
-    """Assert the full scenario contract.  `known` maps
-    known_full/known_l/known_r for the scenarios that pin hashes."""
-    if scenario not in SCENARIOS:
-        raise ParseError("unknown scenario %s" % scenario)
-    dec_calls, chan, _runs = SCENARIOS[scenario]
+PCM_ORACLE_RESULT_PASS = 0
+PCM_ORACLE_RESULT_INSUFFICIENT_SAMPLES = 1
 
-    r = parse_receiver_pass(recv)
-    c = parse_client_pass(cli)
-    scan_faults(recv, cli, scenario)
 
+def _manifest_pcm_limits():
+    """Load immutable PCM limits independently from scenario data."""
+    try:
+        manifest = load_transport_manifest()
+    except ScenarioDataError as exc:
+        raise ParseError("cannot validate portable PCM limits: %s" % exc) from exc
+    limits = manifest.get("pcm_limits")
+    names = ("max_abs_error", "max_rms_error", "min_correlation_q15")
+    if not isinstance(limits, dict) or set(limits) != set(names):
+        raise ParseError("portable manifest PCM limits malformed")
+    if any(type(limits[name]) is not int for name in names):
+        raise ParseError("portable manifest PCM limits must be integers")
+    return limits
+
+
+def _check_pcm_limits(record):
+    limits = _manifest_pcm_limits()
+    expected = {
+        "limmax": limits["max_abs_error"],
+        "limrms": limits["max_rms_error"],
+        "limcorr": limits["min_correlation_q15"],
+    }
+    errs = []
+    for key, value in expected.items():
+        observed = record.get(key)
+        if type(observed) is not int:
+            errs.append("%s missing or non-integer" % key)
+        elif observed != value:
+            errs.append("%s %s != manifest %s" % (key, observed, value))
+    return limits, errs
+
+
+def _segment_values(record, segment):
+    values = {}
+    errs = []
+    for key in _receiver_segment_fields(segment):
+        if key in _segment_recipe_id_fields(segment):
+            continue
+        value = record.get(key)
+        if type(value) is not int:
+            errs.append("segment %d %s missing or non-integer" % (segment, key))
+        else:
+            values[key] = value
+    return values, errs
+
+
+def _scenario_pcm_geometry(scenario):
+    entries = TRANSPORT_VALUES[scenario]
+    if not entries:
+        raise ParseError("%s has no transport PCM geometry" % scenario)
+    fixtures = _transport_fixture_map()
+    samples = None
+    for entry in entries:
+        for stem in entry["fixtures"]:
+            candidate = fixtures[stem]["samples_per_frame"]
+            if samples is None:
+                samples = candidate
+            elif samples != candidate:
+                raise ParseError(
+                    "%s transport fixtures have mixed PCM geometry" % scenario
+                )
+    if samples not in (360, 480):
+        raise ParseError(
+            "%s transport PCM geometry unsupported: %s" % (scenario, samples)
+        )
+    return samples
+
+
+def _recipe_prefix_counts(recipe, actions):
+    """Return valid/PLC counts at an exact expanded recipe prefix."""
+    if (
+        type(actions) is not int
+        or actions < 0
+        or actions > recipe["output_action_count"]
+    ):
+        return None
+
+    remaining = actions
+    valid = 0
+    plc = 0
+    for step in recipe["steps"]:
+        consumed = min(remaining, step["count"])
+        if step["action"] == "corpus":
+            valid += consumed
+        elif step["action"] == "plc":
+            plc += consumed
+        else:
+            return None
+        remaining -= consumed
+        if remaining == 0:
+            break
+    return (valid, plc) if remaining == 0 else None
+
+
+def _check_recipe_channel(record, segment, values, channel, expected_id, completion):
+    suffix = str(segment)
+    prefix = "l" if channel == "left" else "r"
+    recipe_id = record[prefix + "rid" + suffix]
+    recipe = _STATEFUL_RECIPES.get(recipe_id)
+    actions = values[prefix + "act" + suffix]
+    valid = values[prefix + "val" + suffix]
+    plc = values[prefix + "plc" + suffix]
+    frames = values[prefix + "fr" + suffix]
+    samples = values[prefix + "sm" + suffix]
+    excluded = values[prefix + "ex" + suffix]
+    pushes = values["pushes" + suffix]
+    transients = values["trans" + suffix]
+    samples_per_channel = values["spc" + suffix]
     errs = []
 
-    errs.extend(check_transport(scenario, c))
+    if recipe_id != expected_id or recipe is None:
+        return [
+            "segment %d %s recipe %s != expected %s"
+            % (segment, channel, recipe_id, expected_id)
+        ]
+    if recipe["samples_per_frame"] != samples_per_channel:
+        errs.append(
+            "segment %d %s recipe geometry %d != spc %d"
+            % (segment, channel, recipe["samples_per_frame"], samples_per_channel)
+        )
+    prefix_counts = _recipe_prefix_counts(recipe, actions)
+    if prefix_counts is None:
+        errs.append("segment %d %s recipe action overrun" % (segment, channel))
+        return errs
+    expected_valid, expected_plc = prefix_counts
+    pre_prefix_counts = _recipe_prefix_counts(recipe, transients)
+    if pre_prefix_counts is None:
+        errs.append("segment %d %s startup recipe prefix overrun" % (segment, channel))
+        return errs
+    pre_valid, pre_plc = pre_prefix_counts
+    if actions != transients + pushes:
+        errs.append(
+            "segment %d %s recipe actions %d != transients %d + pushes %d"
+            % (segment, channel, actions, transients, pushes)
+        )
+    if valid != expected_valid or plc != expected_plc:
+        errs.append(
+            "segment %d %s recipe prefix %d/%d != expected %d/%d"
+            % (segment, channel, valid, plc, expected_valid, expected_plc)
+        )
+    if valid != frames:
+        errs.append(
+            "segment %d %s recipe valid %d != compared frames %d"
+            % (segment, channel, valid, frames)
+        )
+    if plc != actions - valid:
+        errs.append(
+            "segment %d %s recipe PLC %d != actions %d - valid %d"
+            % (segment, channel, plc, actions, valid)
+        )
+    if pre_valid + pre_plc != transients:
+        errs.append(
+            "segment %d %s startup recipe prefix %d/%d != transients %d"
+            % (segment, channel, pre_valid, pre_plc, transients)
+        )
+    if excluded != plc - pre_plc:
+        errs.append(
+            "segment %d %s excluded %d != PLC %d - startup PLC %d"
+            % (segment, channel, excluded, plc, pre_plc)
+        )
+    if valid != pre_valid + pushes - excluded:
+        errs.append(
+            "segment %d %s valid %d != startup valid %d + pushes %d - excluded %d"
+            % (segment, channel, valid, pre_valid, pushes, excluded)
+        )
+    if plc != pre_plc + excluded:
+        errs.append(
+            "segment %d %s recipe PLC %d != startup PLC %d + excluded %d"
+            % (segment, channel, plc, pre_plc, excluded)
+        )
+    if samples != frames * samples_per_channel:
+        errs.append(
+            "segment %d %s samples %d != frames %d * spc %d"
+            % (segment, channel, samples, frames, samples_per_channel)
+        )
+    if completion == "full" and (
+        actions != recipe["output_action_count"]
+        or valid != recipe["valid_frame_count"]
+        or plc != recipe["output_action_count"] - recipe["valid_frame_count"]
+    ):
+        errs.append(
+            "segment %d %s full recipe progress is incomplete" % (segment, channel)
+        )
+    return errs
 
-    if r["scenario"] != scenario:
-        errs.append("receiver scenario %s != %s" % (r["scenario"], scenario))
-    if c["scenario"] != scenario:
-        errs.append("client scenario %s != %s" % (c["scenario"], scenario))
 
-    # PACS contexts must never be NONE.
-    if r["pacs"] != 1:
-        errs.append("pacs != 1")
+def _check_pcm_segment(scenario, record, segment, limits, receiver_oracle):
+    """Validate one pushed segment's stateful recipe and numerical record."""
+    values, errs = _segment_values(record, segment)
+    if errs:
+        return errs
 
-    seg = r["seg"]
-    after = r["after"]
+    expected_left, expected_right, completion = receiver_oracle
+    suffix = str(segment)
+    pushes = values["pushes" + suffix]
+    configured_samples = values["samples" + suffix]
+    samples_per_channel = values["spc" + suffix]
+    expected_samples_per_channel = _scenario_pcm_geometry(scenario)
 
-    if scenario in (
+    if pushes <= 0:
+        errs.append("segment %d pushes %d <= 0" % (segment, pushes))
+    if samples_per_channel != expected_samples_per_channel:
+        errs.append(
+            "segment %d spc %d != manifest duration geometry %d"
+            % (segment, samples_per_channel, expected_samples_per_channel)
+        )
+    if configured_samples != expected_samples_per_channel * 2:
+        errs.append(
+            "segment %d samples %d != configured stereo geometry %d"
+            % (segment, configured_samples, expected_samples_per_channel * 2)
+        )
+
+    errs.extend(
+        _check_recipe_channel(
+            record, segment, values, "left", expected_left, completion
+        )
+    )
+    errs.extend(
+        _check_recipe_channel(
+            record, segment, values, "right", expected_right, completion
+        )
+    )
+
+    for channel, frame, sample, excluded, maximum, squared, rms, corr, result in (
+        (
+            "left",
+            values["lfr" + suffix],
+            values["lsm" + suffix],
+            values["lex" + suffix],
+            values["lmax" + suffix],
+            values["lsse" + suffix],
+            values["lrms" + suffix],
+            values["lcorr" + suffix],
+            values["lres" + suffix],
+        ),
+        (
+            "right",
+            values["rfr" + suffix],
+            values["rsm" + suffix],
+            values["rex" + suffix],
+            values["rmax" + suffix],
+            values["rsse" + suffix],
+            values["rrms" + suffix],
+            values["rcorr" + suffix],
+            values["rres" + suffix],
+        ),
+    ):
+        if frame <= 0 or sample <= 0:
+            errs.append(
+                "segment %d %s compared frame/sample count is zero" % (segment, channel)
+            )
+        if excluded < 0 or maximum < 0 or squared < 0 or rms < 0:
+            errs.append("segment %d %s PCM metric is negative" % (segment, channel))
+        if corr < -32768 or corr > 32767:
+            errs.append(
+                "segment %d %s correlation %d outside Q15 range"
+                % (segment, channel, corr)
+            )
+        if result != PCM_ORACLE_RESULT_PASS:
+            errs.append(
+                "segment %d %s PCM result %d != pass" % (segment, channel, result)
+            )
+        if maximum > limits["max_abs_error"]:
+            errs.append(
+                "segment %d %s max %d > limit %d"
+                % (segment, channel, maximum, limits["max_abs_error"])
+            )
+        if rms > limits["max_rms_error"]:
+            errs.append(
+                "segment %d %s rms %d > limit %d"
+                % (segment, channel, rms, limits["max_rms_error"])
+            )
+        if corr < limits["min_correlation_q15"]:
+            errs.append(
+                "segment %d %s correlation %d < limit %d"
+                % (segment, channel, corr, limits["min_correlation_q15"])
+            )
+
+    differing = values["diff" + suffix]
+    if differing < 0:
+        errs.append(
+            "segment %d differing samples %d is negative" % (segment, differing)
+        )
+    elif SCENARIOS[scenario][1] == "mono":
+        if differing != 0:
+            errs.append(
+                "segment %d mono differing samples %d != 0" % (segment, differing)
+            )
+    elif differing == 0:
+        errs.append("segment %d stereo differing samples == 0" % segment)
+
+    if scenario == "modea_one_cis_loss_10ms" and (
+        values["ract" + suffix] != 108
+        or values["rval" + suffix] != 82
+        or values["rplc" + suffix] != 26
+        or values["rex" + suffix] != MODEA_LOSS_COUNT
+    ):
+        errs.append("one-CIS-loss right recipe progress/exclusion mismatch")
+    return errs
+
+
+def _check_absent_segment(record, segment, label):
+    """Absent/no-audio PASS segment must expose only none/zero evidence."""
+    values, errs = _segment_values(record, segment)
+    if errs:
+        return errs
+
+    suffix = str(segment)
+    for key in _segment_recipe_id_fields(segment):
+        if record[key] != "none":
+            errs.append("%s %s %s != none" % (label, key, record[key]))
+    for key, value in values.items():
+        if key in ("lres" + suffix, "rres" + suffix):
+            continue
+        if value != 0:
+            errs.append("%s %s %d != 0" % (label, key, value))
+    if values["lres" + suffix] != PCM_ORACLE_RESULT_INSUFFICIENT_SAMPLES:
+        errs.append("%s lres%d != insufficient-samples" % (label, segment))
+    if values["rres" + suffix] != PCM_ORACLE_RESULT_INSUFFICIENT_SAMPLES:
+        errs.append("%s rres%d != insufficient-samples" % (label, segment))
+    return errs
+
+
+def _check_no_audio_pcm(record):
+    """No-audio scenarios expose no recipe action or numerical evidence."""
+    return _check_absent_segment(record, 1, "no-audio") + _check_absent_segment(
+        record, 2, "no-audio"
+    )
+
+
+def check_scenario(scenario, recv, cli, known):
+    """Assert full scenario contract. `known` may override known_total only."""
+    if scenario not in SCENARIOS:
+        raise ParseError("unknown scenario %s" % scenario)
+    dec_calls, _channel_mode, _runs = SCENARIOS[scenario]
+    normal_audio = (
         "mono_10ms",
         "mono_7p5ms",
         "modea_10ms",
@@ -619,7 +1315,30 @@ def check_scenario(scenario, recv, cli, known):
         "modeb_7p5ms",
         "invalid_sdu_resume_10ms",
         "modea_one_cis_loss_10ms",
-    ):
+    )
+    no_audio = (
+        "unsupported_source_direction",
+        "no_free_sink_slot",
+        "invalid_codec_fields",
+    )
+
+    r = parse_receiver_pass(recv)
+    c = parse_client_pass(cli)
+    scan_faults(recv, cli, scenario)
+    limits, errs = _check_pcm_limits(r)
+
+    errs.extend(check_transport(scenario, c))
+    if r["scenario"] != scenario:
+        errs.append("receiver scenario %s != %s" % (r["scenario"], scenario))
+    if c["scenario"] != scenario:
+        errs.append("client scenario %s != %s" % (c["scenario"], scenario))
+    if r["pacs"] != 1:
+        errs.append("pacs != 1")
+
+    seg = r["seg"]
+    after = r["after"]
+
+    if scenario in normal_audio:
         if seg != 1:
             errs.append("seg %d != 1" % seg)
         if r.get("pushes1") != 100:
@@ -642,9 +1361,6 @@ def check_scenario(scenario, recv, cli, known):
                 errs.append("derr1 %s != 0" % r.get("derr1"))
             if r.get("obs_mal") != 0:
                 errs.append("obs_mal %s != 0" % r.get("obs_mal"))
-
-        # a normal audio scenario ends while still streaming — the
-        # gate never closed and no slot was ever released.
         if r.get("obs_gate_c", 0) != 0:
             errs.append(
                 "obs_gate_c %s != 0 (normal scenario must not close)"
@@ -659,85 +1375,37 @@ def check_scenario(scenario, recv, cli, known):
                 "obs_rel_ss %s != 0 (normal scenario has no release sink-stop)"
                 % r.get("obs_rel_ss")
             )
-
         if scenario == "modea_one_cis_loss_10ms":
-            # Exactly the scheduled losses produced post-start PLC and
-            # concealed pushes (the unaffected channel stays valid).
             if r.get("plc1", 0) != r.get("splc1", 0) + MODEA_LOSS_COUNT:
                 errs.append(
                     "post-start PLC (plc1 %s != splc1 %s + %d)"
                     % (r.get("plc1"), r.get("splc1"), MODEA_LOSS_COUNT)
                 )
-        else:
-            # Zero post-start PLC: every PLC frame happened during the
-            # startup phase (source-valid boundary).
-            if r.get("plc1", 0) != r.get("splc1", 0):
-                errs.append(
-                    "post-start PLC (plc1 %s != splc1 %s)"
-                    % (r.get("plc1"), r.get("splc1"))
-                )
-
-        # Exact known hashes.
-        for field, key in (("full", "h1"), ("l", "lh1"), ("r", "rh1")):
-            if key not in r:
-                errs.append("missing %s" % key)
-                continue
-            known_key = "known_%s" % field
-            if known_key in known and known[known_key] is not None:
-                if r[key] != known[known_key]:
-                    errs.append(
-                        "%s hash 0x%08X != known 0x%08X"
-                        % (field, r[key], known[known_key])
-                    )
-
-        # Channel-hash relation.
-        if chan == "mono":
-            if r.get("lh1") != r.get("rh1"):
-                errs.append("mono L hash != R hash")
-        else:
-            if r.get("lh1") == r.get("rh1"):
-                errs.append("stereo L hash == R hash")
-
-        # Decoder-invocation accounting: the total decoder invocations
-        # must at least cover every push (dec_calls each); the exact
-        # deterministic value (including unpaired-half decodes at the
-        # CIS activation skew) is pinned per scenario.
+        elif r.get("plc1", 0) != r.get("splc1", 0):
+            errs.append(
+                "post-start PLC (plc1 %s != splc1 %s)" % (r.get("plc1"), r.get("splc1"))
+            )
         expected_total = dec_calls * (r.get("pushes1", 0) + r.get("trans1", 0))
         if r.get("total1", 0) < expected_total:
             errs.append("total1 %s < %d" % (r.get("total1"), expected_total))
-        if "known_total" in known and known["known_total"] is not None:
-            if r.get("total1") != known["known_total"]:
-                errs.append(
-                    "total1 %s != pinned %d" % (r.get("total1"), known["known_total"])
-                )
-        # No missing-TS events in any audio scenario (the loss scenario's
-        # post-start PLC is checked above).
         if r.get("obs_mts", 0) != 0:
             errs.append("obs_mts %d != 0 (missing ISO TS flag)" % r.get("obs_mts"))
-
-        # Client send counts.
         if scenario == "invalid_sdu_resume_10ms":
             if c["sends0"] != 101:
                 errs.append("client sends0 %d != 101" % c["sends0"])
         elif scenario in ("modea_10ms", "modea_7p5ms", "modea_reverse_start_10ms"):
-            # Mode A sends 110 per stream: the deterministic CIS-sync
-            # losses are consumed by startup transients, and the strict
-            # oracle pins exactly 100 valid-sourced pushes.
             if c["sends0"] != 110 or c["sends1"] != 110:
                 errs.append(
                     "client sends %d/%d != 110/110" % (c["sends0"], c["sends1"])
                 )
         elif scenario == "modea_one_cis_loss_10ms":
-            # The right stream pauses mid-stream for a bounded window
-            # (its CIS loses those events); both streams still send 110.
             if c["sends0"] != 110 or c["sends1"] != 110:
                 errs.append(
                     "client sends %d/%d != 110/110 (loss scenario)"
                     % (c["sends0"], c["sends1"])
                 )
-        else:
-            if c["sends0"] != 100:
-                errs.append("client sends0 %d != 100" % c["sends0"])
+        elif c["sends0"] != 100:
+            errs.append("client sends0 %d != 100" % c["sends0"])
 
     elif scenario == "modea_first_stop_10ms":
         if seg != 1:
@@ -748,11 +1416,6 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("after %d != 0" % after)
         if r.get("derr1") != 0:
             errs.append("derr1 %s != 0" % r.get("derr1"))
-        # the first Disable closed the gate exactly once (later
-        # disable/release events are first-close no-ops); BOTH slot
-        # cleanups complete — the second runs while the gate is already
-        # closed; no Release caused the first edge (the Disable did), so
-        # no release sink-stop fired.
         if r.get("obs_gate_c", -1) != 1:
             errs.append("obs_gate_c %s != 1" % r.get("obs_gate_c", -1))
         if r.get("obs_rel", -1) != 2:
@@ -780,14 +1443,10 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("after %d != 0" % after)
         if r.get("derr1") != 0:
             errs.append("derr1 %s != 0" % r.get("derr1"))
-        # the Release was the single first edge (one gate close, one
-        # cleanup, one release sink-stop).
         if r.get("obs_gate_c", -1) != 1:
             errs.append("obs_gate_c %s != 1" % r.get("obs_gate_c", -1))
         if r.get("obs_rel", -1) != 1:
             errs.append("obs_rel %s != 1" % r.get("obs_rel", -1))
-        # Sink-stop ordering proof: the release path stopped the sink
-        # (segment finalize) before the ACL disconnect, by event sequence.
         if r.get("obs_rel_ss", -1) != 1:
             errs.append(
                 "obs_rel_ss %s != 1 (release must stop the sink)"
@@ -814,8 +1473,6 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("after %d != 0 (late pushes after disconnect)" % after)
         if r.get("derr1") != 0:
             errs.append("derr1 %s != 0" % r.get("derr1"))
-        # the disconnect was the single first edge; exactly one
-        # disconnect cleanup; no release in this scenario.
         if r.get("obs_gate_c", -1) != 1:
             errs.append("obs_gate_c %s != 1" % r.get("obs_gate_c", -1))
         if r.get("obs_disc", -1) != 1:
@@ -836,8 +1493,6 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("pushes2 %s != 100" % r.get("pushes2"))
         if after != 0:
             errs.append("after %d != 0" % after)
-        # session-1's disconnect closed the gate exactly once and ran
-        # one disconnect cleanup; no release in this scenario.
         if r.get("obs_gate_c", -1) != 1:
             errs.append(
                 "obs_gate_c %s != 1 (session-1 disconnect close)"
@@ -851,15 +1506,6 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("adv_restart != 1")
         if r.get("derr2") != 0:
             errs.append("derr2 %s != 0" % r.get("derr2"))
-        # Second segment must equal a fresh mono 10 ms oracle.
-        if "known_full" in known and known["known_full"] is not None:
-            if r.get("h2") != known["known_full"]:
-                errs.append(
-                    "seg2 full hash 0x%08X != fresh mono 10 ms 0x%08X"
-                    % (r.get("h2"), known["known_full"])
-                )
-        if r.get("lh2") != r.get("rh2"):
-            errs.append("mono seg2 L hash != R hash")
         expected_total = r.get("pushes2", 0) + r.get("trans2", 0)
         if r.get("total2") != expected_total:
             errs.append("total2 %s != %d" % (r.get("total2"), expected_total))
@@ -875,11 +1521,6 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("after %d != 0" % after)
         if r.get("derr1") != 0:
             errs.append("derr1 %s != 0" % r.get("derr1"))
-        # R7 exact duplicate-release oracle: the streaming release was the
-        # single first edge (one gate close, one release sink-stop); the
-        # duplicate same-slot release was rejected by the transport so the
-        # app cleanup observer fired exactly once per first-time cleanup —
-        # two total (streaming release + reused-slot release).
         if r.get("obs_gate_c", -1) != 1:
             errs.append("obs_gate_c %s != 1" % r.get("obs_gate_c", -1))
         if r.get("obs_rel_ss", -1) != 1:
@@ -893,15 +1534,9 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("obs_disc < 1 (disconnect cleanup expected)")
         if r.get("obs_gate_o", 0) != 1:
             errs.append("obs_gate_o %s != 1" % r.get("obs_gate_o"))
-        # Decoder-invocation accounting (same rule as the normal scenarios).
         expected_total = r.get("pushes1", 0) + r.get("trans1", 0)
         if r.get("total1", 0) < expected_total:
             errs.append("total1 %s < %d" % (r.get("total1"), expected_total))
-        if "known_total" in known and known["known_total"] is not None:
-            if r.get("total1") != known["known_total"]:
-                errs.append(
-                    "total1 %s != pinned %d" % (r.get("total1"), known["known_total"])
-                )
         if c["sends0"] < 20:
             errs.append("client sends0 %d < 20" % c["sends0"])
         if c["cfgrsps"] != 2:
@@ -913,12 +1548,10 @@ def check_scenario(scenario, recv, cli, known):
                 "client release responses %d != 3 (first + rejected duplicate + reuse)"
                 % c["relrsps"]
             )
+
     elif scenario == "unsupported_source_direction":
-        # The final disconnect finalizes an empty segment; seg may be 0
-        # (PASS before the disconnect) or 1 (empty segment).  Any push is
-        # a fault.
-        if seg not in (0, 1):
-            errs.append("seg %d not in (0, 1) (no audio expected)" % seg)
+        if seg != 0:
+            errs.append("seg %d != 0 (no audio expected)" % seg)
         if r.get("pushes1", 0) != 0:
             errs.append("pushes1 %s != 0 (no audio expected)" % r.get("pushes1"))
         if r.get("obs_rej") != 1:
@@ -931,7 +1564,6 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("obs_code 0x%02X != CONF_UNSUPPORTED" % r.get("obs_code"))
         if r.get("obs_reason") != 0:
             errs.append("obs_reason %d != NONE" % r.get("obs_reason"))
-        # never streamed, never released.
         if r.get("obs_gate_c", 0) != 0:
             errs.append("obs_gate_c %s != 0 (no gate close)" % r.get("obs_gate_c"))
         if r.get("obs_rel", 0) != 0:
@@ -942,11 +1574,8 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("client sends0 %d != 0" % c["sends0"])
 
     elif scenario == "no_free_sink_slot":
-        # The final disconnect finalizes an empty segment; seg may be 0
-        # (PASS before the disconnect) or 1 (empty segment).  Any push is
-        # a fault.
-        if seg not in (0, 1):
-            errs.append("seg %d not in (0, 1) (no audio expected)" % seg)
+        if seg != 0:
+            errs.append("seg %d != 0 (no audio expected)" % seg)
         if r.get("pushes1", 0) != 0:
             errs.append("pushes1 %s != 0 (no audio expected)" % r.get("pushes1"))
         if r.get("obs_ok", 0) < 3:
@@ -959,8 +1588,6 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("obs_mts %d != 0" % r.get("obs_mts"))
         if r.get("obs_rej_reason", -1) != 0:
             errs.append("obs_rej_reason %d != NONE" % r.get("obs_rej_reason", -1))
-        # exactly three first-time slot cleanups (2 initial + 1 reuse);
-        # never streamed, so no gate close and no release sink-stop.
         if r.get("obs_rel", -1) != 3:
             errs.append("obs_rel %s != 3 (clean releases)" % r.get("obs_rel", -1))
         if r.get("obs_gate_c", 0) != 0:
@@ -973,18 +1600,12 @@ def check_scenario(scenario, recv, cli, known):
             errs.append("client release responses %d != 3" % c["relrsps"])
 
     elif scenario == "invalid_codec_fields":
-        # The final disconnect finalizes an empty segment; seg may be 0
-        # (PASS before the disconnect) or 1 (empty segment).  Any push is
-        # a fault.
-        if seg not in (0, 1):
-            errs.append("seg %d not in (0, 1) (no audio expected)" % seg)
+        if seg != 0:
+            errs.append("seg %d != 0 (no audio expected)" % seg)
         if r.get("pushes1", 0) != 0:
             errs.append("pushes1 %s != 0 (no audio expected)" % r.get("pushes1"))
         if r.get("obs_rej", 0) < 9:
             errs.append("obs_rej %d < 9" % r.get("obs_rej"))
-        # Two successes overall: the valid mono config and the
-        # missing-frame-blocks fallback (the receiver PASSes only after
-        # both, so the observer counts are not reset per round).
         if r.get("obs_ok", 0) != 2:
             errs.append("obs_ok %d != 2 (valid mono + fallback)" % r.get("obs_ok"))
         if r.get("obs_rej_code", -1) != 0x08:
@@ -993,8 +1614,6 @@ def check_scenario(scenario, recv, cli, known):
             )
         if r.get("obs_rej_reason", -1) != 0x02:
             errs.append("obs_rej_reason %d != CODEC_DATA" % r.get("obs_rej_reason", -1))
-        # both accepted configs were released exactly once each
-        # (cleanup 2); never streamed, so no gate close / release stop.
         if r.get("obs_rel", -1) != 2:
             errs.append(
                 "obs_rel %s != 2 (two accepted configs released)" % r.get("obs_rel", -1)
@@ -1011,6 +1630,22 @@ def check_scenario(scenario, recv, cli, known):
 
     else:
         errs.append("scenario %s not handled" % scenario)
+
+    if "known_total" in known and known["known_total"] is not None:
+        if r.get("total1") != known["known_total"]:
+            errs.append(
+                "total1 %s != pinned %d" % (r.get("total1"), known["known_total"])
+            )
+
+    receiver_oracles = RECEIVER_ORACLE_VALUES[scenario]
+    if seg != len(receiver_oracles):
+        errs.append(
+            "seg %d != receiver_oracle segment count %d" % (seg, len(receiver_oracles))
+        )
+    for segment, receiver_oracle in enumerate(receiver_oracles, start=1):
+        errs.extend(_check_pcm_segment(scenario, r, segment, limits, receiver_oracle))
+    for segment in range(len(receiver_oracles) + 1, 3):
+        errs.extend(_check_absent_segment(r, segment, "absent"))
 
     return errs
 
@@ -1033,32 +1668,23 @@ def main(argv):
     ap.add_argument("--scenario", required=True)
     ap.add_argument("--receiver", required=True)
     ap.add_argument("--client", required=True)
-    ap.add_argument("--known-full", default=None)
-    ap.add_argument("--known-l", default=None)
-    ap.add_argument("--known-r", default=None)
     ap.add_argument("--known-total", default=None)
     ap.add_argument(
         "--no-known",
         action="store_true",
-        help="disable all known-value assertions (baseline mode; hashes printed only)",
+        help="disable versioned known-total assertions",
     )
     args = ap.parse_args(argv)
 
-    # Known-value precedence (documented): --no-known > explicit --known-*
-    # flags > versioned file defaults (tests/bsim/stage1-scenarios.json).
+    # Known-total precedence: --no-known disables all known assertions;
+    # otherwise an explicit --known-total overrides versioned data.
     known = {}
     if not args.no_known:
-        known = known_values(args.scenario)
-        for key, val in (
-            ("known_full", args.known_full),
-            ("known_l", args.known_l),
-            ("known_r", args.known_r),
-        ):
-            if val is not None:
-                known[key[6:]] = int(val, 16)
+        versioned = known_values(args.scenario)
+        if "total" in versioned:
+            known["known_total"] = versioned["total"]
         if args.known_total is not None:
-            known["total"] = int(args.known_total)
-    known = {"known_%s" % k: v for k, v in known.items()}
+            known["known_total"] = int(args.known_total, 0)
 
     try:
         check(args.scenario, args.receiver, args.client, known)
@@ -1069,15 +1695,18 @@ def main(argv):
     r = parse_receiver_pass(args.receiver)
     c = parse_client_pass(args.client)
     print(
-        "PASS: %s seg=%d pushes1=%s h1=0x%08X lh1=0x%08X rh1=0x%08X "
-        "txc0=%d txh0=0x%08X txc1=%d txh1=0x%08X"
+        "PASS: %s seg=%d pushes1=%s lmax1=%s lrms1=%s lcorr1=%s "
+        "rmax1=%s rrms1=%s rcorr1=%s txc0=%d txh0=0x%08X txc1=%d txh1=0x%08X"
         % (
             args.scenario,
             r.get("seg"),
             r.get("pushes1"),
-            r.get("h1", 0),
-            r.get("lh1", 0),
-            r.get("rh1", 0),
+            r.get("lmax1"),
+            r.get("lrms1"),
+            r.get("lcorr1"),
+            r.get("rmax1"),
+            r.get("rrms1"),
+            r.get("rcorr1"),
             c["txc0"],
             c["txh0"],
             c["txc1"],

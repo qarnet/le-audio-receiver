@@ -144,6 +144,44 @@ static uint32_t golden_hash_flat(const int16_t *pcm, size_t n)
 	return hash;
 }
 
+static void assert_last_observer_payloads(const uint8_t *left, size_t left_len,
+					  const uint8_t *right, size_t right_len)
+{
+	zassert_equal(left_len != 0U, fake_observer_last_push_l_valid(), "left validity");
+	zassert_equal(right_len != 0U, fake_observer_last_push_r_valid(), "right validity");
+	zassert_equal(left_len, fake_observer_last_push_l_payload_len(), "left payload length");
+	zassert_equal(right_len, fake_observer_last_push_r_payload_len(), "right payload length");
+	if (left_len != 0U) {
+		zassert_mem_equal(left, fake_observer_last_push_l_payload(), left_len,
+				  "left payload bytes");
+	}
+	if (right_len != 0U) {
+		zassert_mem_equal(right, fake_observer_last_push_r_payload(), right_len,
+				  "right payload bytes");
+	}
+}
+
+static void assert_pre_push_payloads(uint32_t index, const uint8_t *left, size_t left_len,
+				     const uint8_t *right, size_t right_len)
+{
+	zassert_equal(left_len != 0U, fake_observer_pre_push_l_valid_at(index),
+		      "left validity at %u", index);
+	zassert_equal(right_len != 0U, fake_observer_pre_push_r_valid_at(index),
+		      "right validity at %u", index);
+	zassert_equal(left_len, fake_observer_pre_push_l_payload_len_at(index),
+		      "left payload length at %u", index);
+	zassert_equal(right_len, fake_observer_pre_push_r_payload_len_at(index),
+		      "right payload length at %u", index);
+	if (left_len != 0U) {
+		zassert_mem_equal(left, fake_observer_pre_push_l_payload_at(index), left_len,
+				  "left payload bytes at %u", index);
+	}
+	if (right_len != 0U) {
+		zassert_mem_equal(right, fake_observer_pre_push_r_payload_at(index), right_len,
+				  "right payload bytes at %u", index);
+	}
+}
+
 /* ── init / config / accessors / invalid slots ───────────────────── */
 
 ZTEST(audio_stream_session, test_init_and_invalid_slots)
@@ -237,8 +275,7 @@ ZTEST(audio_stream_session, test_mono_valid_decode_push_golden)
 	zassert_equal(1U, stats.total_frames, "one frame decoded");
 	zassert_equal(0U, stats.plc_frames, "no PLC");
 	zassert_equal(0U, stats.decode_errors, "no errors");
-	zassert_true(fake_observer_last_push_l_valid(), "pre_push l valid");
-	zassert_true(fake_observer_last_push_r_valid(), "pre_push r valid");
+	assert_last_observer_payloads(mono10_lc3, MONO_LC3_LEN, mono10_lc3, MONO_LC3_LEN);
 	zassert_equal(1U, fake_observer_pre_push_count(), "one pre-push event");
 	zassert_equal(1U, fake_volume_apply_count(), "volume applied before push");
 }
@@ -260,6 +297,8 @@ ZTEST(audio_stream_session, test_modeb_valid_decode_push_golden)
 
 	zassert_equal(2U, stats.total_frames, "two decoders per SDU");
 	zassert_equal(0U, stats.decode_errors, "no errors");
+	assert_last_observer_payloads(modeb10_lc3, MONO_LC3_LEN, modeb10_lc3 + MONO_LC3_LEN,
+				      MONO_LC3_LEN);
 }
 
 ZTEST(audio_stream_session, test_modea_equal_ts_pair_golden)
@@ -281,8 +320,22 @@ ZTEST(audio_stream_session, test_modea_equal_ts_pair_golden)
 
 	zassert_equal(2U, stats.total_frames, "two decoders, one event");
 	zassert_equal(0U, stats.decode_errors, "no errors");
-	zassert_true(fake_observer_last_push_l_valid(), "left half source-valid");
-	zassert_true(fake_observer_last_push_r_valid(), "right half source-valid");
+	assert_last_observer_payloads(mono10_lc3, MONO_LC3_LEN, mono10_lc3, MONO_LC3_LEN);
+}
+
+ZTEST(audio_stream_session, test_modea_asymmetric_sequences_preserve_payload_halves)
+{
+	setup_modea();
+
+	/* Pairing uses timestamps, not controller sequence. Different per-CIS
+	 * sequence values must preserve each carried compressed payload. */
+	zassert_ok(audio_stream_session_recv(0, true, true, 10000, 7, modeb10_lc3, MONO_LC3_LEN));
+	zassert_ok(audio_stream_session_recv(1, true, true, 10000, 11, modeb10_lc3 + MONO_LC3_LEN,
+					     MONO_LC3_LEN));
+
+	zassert_equal(1U, fake_sink_push_count(), "asymmetric-sequence pair emits once");
+	assert_last_observer_payloads(modeb10_lc3, MONO_LC3_LEN, modeb10_lc3 + MONO_LC3_LEN,
+				      MONO_LC3_LEN);
 }
 
 ZTEST(audio_stream_session, test_modea_one_sided_loss_plc)
@@ -295,8 +348,7 @@ ZTEST(audio_stream_session, test_modea_one_sided_loss_plc)
 	/* Right delivers the NEXT event: left's older half is concealed. */
 	zassert_ok(audio_stream_session_recv(1, true, true, 20000, 1, mono10_lc3, MONO_LC3_LEN));
 	zassert_equal(1U, fake_sink_push_count(), "one PLC-backed event");
-	zassert_true(fake_observer_last_push_l_valid(), "real left half valid");
-	zassert_false(fake_observer_last_push_r_valid(), "concealed right half");
+	assert_last_observer_payloads(mono10_lc3, MONO_LC3_LEN, NULL, 0U);
 
 	struct audio_stats stats = audio_stats_get();
 
@@ -341,6 +393,7 @@ ZTEST(audio_stream_session, test_malformed_sdu_rejects_then_resumes_mono)
 	zassert_equal(1U, fake_sink_push_count(), "valid SDU pushes");
 	zassert_equal(1U, audio_stats_get().decode_errors, "error count unchanged by valid input");
 	zassert_equal(1U, audio_stats_get().total_frames, "one decoded frame");
+	assert_last_observer_payloads(mono10_lc3, MONO_LC3_LEN, mono10_lc3, MONO_LC3_LEN);
 }
 
 ZTEST(audio_stream_session, test_malformed_sdu_no_modea_mutation)
@@ -368,8 +421,7 @@ ZTEST(audio_stream_session, test_lost_sdu_plc_push)
 
 	zassert_ok(audio_stream_session_recv(0, false, false, 0, 1, NULL, 0U));
 	zassert_equal(1U, fake_sink_push_count(), "LOST conceals to one push");
-	zassert_false(fake_observer_last_push_l_valid(), "PLC push never source-valid");
-	zassert_false(fake_observer_last_push_r_valid(), "PLC push never source-valid");
+	assert_last_observer_payloads(NULL, 0U, NULL, 0U);
 	zassert_equal(1U, audio_stats_get().plc_frames, "one PLC frame");
 	zassert_equal(0U, audio_stats_get().decode_errors, "no errors");
 }
@@ -393,8 +445,7 @@ ZTEST(audio_stream_session, test_valid_empty_sdu_mono_plc_resumes)
 	zassert_equal(1U, audio_stats_get().total_frames, "PLC accounts as total");
 	zassert_equal(0U, audio_stats_get().decode_errors, "no decode errors");
 	zassert_equal(0U, fake_observer_malformed_sdu(), "no malformed observer event");
-	zassert_false(fake_observer_last_push_l_valid(), "normalized PLC push never source-valid");
-	zassert_false(fake_observer_last_push_r_valid(), "normalized PLC push never source-valid");
+	assert_last_observer_payloads(NULL, 0U, NULL, 0U);
 
 	/* The next valid SDU resumes normally and stays contiguous. */
 	zassert_ok(audio_stream_session_recv(0, true, true, 2000, 2, mono10_lc3, MONO_LC3_LEN));
@@ -415,6 +466,7 @@ ZTEST(audio_stream_session, test_valid_empty_sdu_modeb_plc)
 	zassert_equal(2U, audio_stats_get().total_frames, "two PLC decoders accounted");
 	zassert_equal(0U, audio_stats_get().decode_errors, "no decode errors");
 	zassert_equal(0U, fake_observer_malformed_sdu(), "no malformed observer event");
+	assert_last_observer_payloads(NULL, 0U, NULL, 0U);
 }
 
 ZTEST(audio_stream_session, test_valid_empty_sdu_modea_pairs_by_ts)
@@ -430,9 +482,7 @@ ZTEST(audio_stream_session, test_valid_empty_sdu_modea_pairs_by_ts)
 
 	zassert_ok(audio_stream_session_recv(1, true, true, 10000, 1, mono10_lc3, MONO_LC3_LEN));
 	zassert_equal(1U, fake_sink_push_count(), "equal-TS pair emits once");
-	zassert_false(fake_observer_last_push_l_valid(),
-		      "empty side concealed, never source-valid");
-	zassert_true(fake_observer_last_push_r_valid(), "real side source-valid");
+	assert_last_observer_payloads(NULL, 0U, mono10_lc3, MONO_LC3_LEN);
 
 	struct audio_stats stats = audio_stats_get();
 
@@ -478,6 +528,7 @@ ZTEST(audio_stream_session, test_hard_decode_failure_skips_push_mono)
 	zassert_equal(0U, fake_sink_push_count(), "hard failure skips push");
 	zassert_equal(1U, audio_stats_get().decode_errors, "failure accounted");
 	zassert_equal(0U, audio_stats_get().total_frames, "no decoded frame");
+	zassert_equal(0U, fake_observer_pre_push_count(), "hard failure has no snapshot");
 
 	/* Recovery: valid input proceeds. */
 	zassert_ok(audio_stream_session_recv(0, true, true, 2000, 2, mono10_lc3, MONO_LC3_LEN));
@@ -496,6 +547,7 @@ ZTEST(audio_stream_session, test_hard_decode_failure_modeb_no_push)
 	zassert_equal(0U, fake_sink_push_count(), "hard failure skips push");
 	zassert_equal(2U, audio_stats_get().decode_errors, "both Mode B decoders accounted");
 	zassert_equal(0U, audio_stats_get().total_frames, "no decoded frame");
+	zassert_equal(0U, fake_observer_pre_push_count(), "hard failure has no snapshot");
 
 	zassert_ok(audio_stream_session_recv(0, true, true, 2000, 2, modeb10_lc3, MODEB_LC3_LEN));
 	zassert_equal(1U, fake_sink_push_count(), "push after failure");
@@ -512,6 +564,7 @@ ZTEST(audio_stream_session, test_modea_hard_failure_consumes_event)
 
 	zassert_equal(0U, fake_sink_push_count(), "failed event never pushes");
 	zassert_equal(2U, audio_stats_get().decode_errors, "both halves accounted");
+	zassert_equal(0U, fake_observer_pre_push_count(), "hard failure has no snapshot");
 
 	/* The failed event is consumed: the next event resolves normally
 	 * instead of re-emitting the stale one. */
@@ -537,7 +590,11 @@ ZTEST(audio_stream_session, test_seq_gap_mono_plc_cadence)
 	zassert_equal(2U, audio_stats_get().plc_frames, "two concealed frames");
 	zassert_equal(2U, audio_stats_get().total_frames - audio_stats_get().plc_frames,
 		      "two decoded frames (first + current SDU)");
-	zassert_true(fake_observer_last_push_l_valid(), "final push valid (PLC came first)");
+	zassert_equal(4U, fake_observer_pre_push_count(), "all gap pushes observed");
+	assert_pre_push_payloads(0U, mono10_lc3, MONO_LC3_LEN, mono10_lc3, MONO_LC3_LEN);
+	assert_pre_push_payloads(1U, NULL, 0U, NULL, 0U);
+	assert_pre_push_payloads(2U, NULL, 0U, NULL, 0U);
+	assert_pre_push_payloads(3U, mono10_lc3, MONO_LC3_LEN, mono10_lc3, MONO_LC3_LEN);
 }
 
 ZTEST(audio_stream_session, test_seq_gap_modeb_plc)
@@ -553,6 +610,9 @@ ZTEST(audio_stream_session, test_seq_gap_modeb_plc)
 	zassert_equal(4U, audio_stats_get().plc_frames, "two PLC SDUs × 2 channels");
 	zassert_equal(4U, audio_stats_get().total_frames - audio_stats_get().plc_frames,
 		      "two valid SDUs × 2 channels");
+	zassert_equal(4U, fake_observer_pre_push_count(), "all Mode B pushes observed");
+	assert_pre_push_payloads(1U, NULL, 0U, NULL, 0U);
+	assert_pre_push_payloads(2U, NULL, 0U, NULL, 0U);
 }
 
 ZTEST(audio_stream_session, test_seq_gap_modea_synthetic_lost)
@@ -571,13 +631,14 @@ ZTEST(audio_stream_session, test_seq_gap_modea_synthetic_lost)
 
 	zassert_ok(audio_stream_session_recv(1, true, true, 20000, 2, mono10_lc3, MONO_LC3_LEN));
 	zassert_equal(2U, fake_sink_push_count(), "sentinel + real half = PLC-backed event");
-	zassert_false(fake_observer_last_push_l_valid(), "left half concealed");
-	zassert_true(fake_observer_last_push_r_valid(), "right half real");
+	assert_last_observer_payloads(NULL, 0U, mono10_lc3, MONO_LC3_LEN);
 
 	struct audio_stats stats = audio_stats_get();
 
 	zassert_equal(1U, stats.plc_frames, "one PLC half");
 	zassert_equal(4U, stats.total_frames, "event1 pair (2) + PLC-backed (2)");
+	zassert_equal(2U, fake_observer_pre_push_count(), "pair and synthetic event observed");
+	assert_pre_push_payloads(1U, NULL, 0U, mono10_lc3, MONO_LC3_LEN);
 }
 
 ZTEST(audio_stream_session, test_seq_resync_no_synthesis)

@@ -1,0 +1,16 @@
+/*
+ * Copyright (c) 2026
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Generated at CMake configure time from portable-oracle-manifest.json.
+ * Private to tests/bsim. Do not edit generated output.
+ */
+
+#ifndef BSIM_PCM_LIMITS_H_
+#define BSIM_PCM_LIMITS_H_
+
+#define BSIM_PCM_MAX_ABS_ERROR @PB031_PCM_MAX_ABS_ERROR@U
+#define BSIM_PCM_MAX_RMS_ERROR @PB031_PCM_MAX_RMS_ERROR@U
+#define BSIM_PCM_MIN_CORRELATION_Q15 @PB031_PCM_MIN_CORRELATION_Q15@
+
+#endif /* BSIM_PCM_LIMITS_H_ */

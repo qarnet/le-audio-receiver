@@ -196,6 +196,21 @@ error. External evidence:
 `/tmp/opencode/pb031-p0e-acceptance-b38cfec/acceptance-report.md`. P2 resumes
 with reconnect segment 2 required to map to `start7_10ms_l`; no acceptance
 checkbox is completed by P0e alone.
+
+P2 accepted on 2026-09-18. Test-only payload snapshots now carry exact valid
+LC3 bytes to the BSim sink, where stateful recipe cursors validate payload
+identity and compare only source-valid PCM through frozen portable limits.
+Reconnect segment 2 binds `start7_10ms_l` on both channels: seven PLC actions,
+100 valid frames, 107 actions, and 48000 compared samples per channel. The
+BSim binding table now permits all nine accepted recipes. Strict generator
+hashes stayed unchanged; calibration 38/38, parser 140 PASS / 0 FAIL, native
+`pcm_oracle` 12/12, native `audio_stream_session` 48/48, `backlog doctor`, and
+`git diff --check` passed. Full Stage 1 passed 17 scenarios and 26 runs with
+max error 257, max RMS 182, and minimum correlation Q15 32767. All 52
+receiver/client logs were inspected in
+`/tmp/opencode/pb031-p2-bsim-stage1.C6FBBY`; only exact scenario-17 warning
+`Invalid operation in state: releasing` appeared. P3 remains next; no
+acceptance checkbox changed.
 <!-- SECTION:NOTES:END -->
 
 ## Comments

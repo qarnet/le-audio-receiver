@@ -1,6 +1,6 @@
 # Portable LC3/PCM test oracle plan
 
-Status: P0, P0b, P0c, P0d, P0e, and P1 accepted; P2 resumed; P3 and P4 pending.
+Status: P0, P0b, P0c, P0d, P0e, P1, and P2 accepted; P3 and P4 pending.
 
 Product item: [PB-031](../product/backlog/tasks/pb-031%20-%20Make-LC3-PCM-test-oracle-platform-independent.md), Make LC3/PCM test oracle platform-independent.
 
@@ -310,6 +310,19 @@ behavior.
 
 Verify: named negative controls and BSim subset for every duration, mode, and
 loss case.
+
+Accepted 2026-09-18. P2 carries bounded exact payload snapshots through the
+test-only observer, identifies source-valid LC3 payloads against immutable
+stateful recipes, and evaluates only those outputs with the frozen portable
+limits. Reconnect segment 2 uses `start7_10ms_l` on both channels, with seven
+PLC actions followed by corpus frames 0 through 99. BSim binding capacity is
+nine accepted recipes. Focused generator, calibration, parser, `pcm_oracle`,
+and `audio_stream_session` gates passed. Full Stage 1 passed all 17 scenarios
+and 26 runs with max error 257, max RMS 182, and minimum correlation Q15
+32767. All receiver/client logs in
+`/tmp/opencode/pb031-p2-bsim-stage1.C6FBBY` were inspected; only exact
+scenario-17 warning `Invalid operation in state: releasing` appeared. P3 is
+next.
 
 ### P3: Real-decoder fixture migration and documentation
 
