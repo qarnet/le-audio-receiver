@@ -5,14 +5,19 @@ through GitHub Releases. This plan is documentation only; it does not add CI,
 packaging code, version files, tags, releases, MCUboot, or firmware behavior.
 Implementation phases FR1-FR5 are defined below.
 
-Phase status (2026-08-10): FR1-FR3 ACCEPTED; FR4 BLOCKED after the exact
-`v0.1.0` draft candidate failed mandatory nRF5340 mono hardware acceptance
-(the local replacement preflight passed both targets but is not
-exact-artifact acceptance); the root `VERSION` remains `0.1.0` and the
-firmware-build workflow is version-driven, but no replacement version or
-candidate has been selected; FR5 remains
-blocked pending a replacement
-candidate's exact-artifact FR4 pass.  Nothing published.
+Phase status (reconciled 2026-09-19): FR1-FR3 ACCEPTED; FR4 BLOCKED after
+historical exact `v0.1.0` draft candidate failed mandatory nRF5340 mono
+hardware acceptance. It served as stable harness baseline, then its GitHub
+draft and assets were deleted 2026-09-19; historical FR4 evidence remains
+unchanged. `gh release view v0.1.0` now fails, the GitHub release list is empty,
+and `refs/tags/v0.1.0` is absent. Nothing was published. The root `VERSION`
+remains `0.1.0`, and product owner selected it for a fresh replacement
+candidate because it was never published or tagged. No fresh candidate exists:
+the PB-031 PR has not been opened or human-merged. After PB-031 human merge and
+green hosted gates, trusted-main
+may create a fresh immutable nRF54L15-only candidate if no release/tag
+collision exists. FR4/FR5 remain blocked until exact new assets pass active
+nRF54L15 FR4.
 
 ## Current release-line scope update (2026-09-12)
 
@@ -214,25 +219,30 @@ operations and are not claimed here.
 ## Release lifecycle
 
 - Pull requests and manual dispatch build and upload workflow artifacts.
-- A trusted `main` push that changes the root `VERSION` file runs the same
-  build/package path, then CI creates one draft GitHub Release with the
-  exact CI-built artifacts. The draft's `tagName` and `targetCommitish`
-  reserve `v<version>` at the exact main commit; GitHub does not create the
-  git tag while the release stays a draft.
-- Later `main` pushes that do not change `VERSION` skip release creation, so
-  documentation or maintenance commits reuse the same version without
-  touching a pending or published release.
-- Maintainers must not push release tags manually; CI owns release
-  initiation, and GitHub creates the lightweight tag at the draft's stored
-  target SHA when the release is manually published.
-- GitHub-hosted CI never publishes the draft automatically.
+- A trusted `main` push runs the accepted build/package path and evaluates the
+  root `VERSION` against existing GitHub release and tag state.
+- If no release or tag exists for the current version, CI may create one fresh
+  draft GitHub Release from that exact trusted-main commit and its exact
+  CI-built artifacts. Its `tagName` and `targetCommitish` reserve
+  `v<version>`; GitHub does not create the git tag while the release stays a
+  draft.
+- If a release or tag already exists for the same version and `VERSION` is
+  unchanged, later `main` pushes skip release creation without touching its
+  pending or published release.
+- If a changed `VERSION` collides with an existing release or tag, CI fails
+  closed.
+- Maintainers must not push release tags manually; CI owns release initiation,
+  and GitHub creates the lightweight tag at the draft's stored target SHA only
+  when the release is manually published. GitHub-hosted CI never publishes a
+  draft automatically.
 - Maintainer downloads exact draft attachments, flashes those bytes, runs
   software and hardware acceptance, records results, then manually publishes.
-- Failed hardware acceptance leaves the release draft unpublished. A failed
-  draft is never mutated and its accepted evidence is never rewritten; a
-  later versioned candidate must be created through the same trusted-main
-  lifecycle (new `VERSION`, new draft) rather than editing the failed draft
-  or its assets. The failed draft stays private and unpublished.
+- A failed hardware candidate is never mutated. Product owner may delete an
+  unpublished, untagged failed draft after its stable-baseline purpose ends;
+  deletion preserves all historical evidence and neither publishes nor tags
+  anything. Reusing that semantic version requires no existing release/tag and
+  a fresh trusted-main draft from a new commit, never restoration, in-place
+  clobbering, manual upload, or manual asset replacement.
 - After manual publication, verify the created lightweight tag:
   `refs/tags/v<version>` must point at the release's target commit (FR5).
 
@@ -325,9 +335,9 @@ phase closeout, FR4-FR5 remained planned.
 ### FR4: exact-artifact hardware acceptance
 
 Add a release-candidate acceptance procedure and evidence template. Validate
-exact draft assets on both targets. Do not rebuild between download and test.
+exact active nRF54L15 draft assets. Do not rebuild between download and test.
 
-**FR4 EXECUTED 2026-08-10 AND BLOCKED.**  The procedure
+**FR4 EXECUTED 2026-08-10 AND BLOCKED.** The procedure
 (`docs/development/firmware-release-fr4-procedure.md`, now historical) ran
 against exact draft `367572702` (`v0.1.0`, target
 `3d9a9186ec288484a637dac1dc7460319daf5e84`).  The candidate passed every
@@ -335,14 +345,22 @@ download/provenance/identity check and the nRF5340 Mode A diagnostic, but
 failed the mandatory nRF5340 fresh mono row (receiver `stream_reset=225`
 with 225 each of `i2s_nrfx: Next buffers not supplied on time`, `Cannot
 write in state: 4`, and `I2S underrun, restarting DMA`), stopping the
-matrix before nRF54L15.  The exact `v0.1.0` candidate is therefore
-**failed** and remains private, unpublished, and untagged.  The local fix
-preflight (pristine builds at `5e7f502`) **passed** all six rows on both
-targets but is replacement-candidate preflight only, not FR4 exact-artifact
-  acceptance.  A **replacement exact-artifact run is pending**: no replacement
-  version has been selected.  A replacement candidate must be created through
-  the accepted trusted-main lifecycle, then its exact immutable assets must
-  rerun FR4 on both targets.  Full evidence:
+matrix before nRF54L15. The exact `v0.1.0` candidate therefore **failed** FR4.
+It served as stable harness baseline, then its GitHub draft and assets were
+deleted 2026-09-19; historical draft ID, target, hashes, and failure evidence
+remain immutable. `gh release view v0.1.0` now fails, the GitHub release list
+is empty, and `refs/tags/v0.1.0` is absent. The deleted draft is no longer a
+candidate; nothing was published. The local fix preflight (pristine builds at
+`5e7f502`) **passed** all six rows on both targets but remains historical
+replacement-candidate preflight only, not FR4 exact-artifact acceptance.
+Product owner selected unreleased, untagged `0.1.0` for a fresh replacement
+candidate because it was never published or tagged; the root `VERSION` remains
+`0.1.0`. No fresh candidate exists: the PB-031 PR has not been opened or
+human-merged. Only after PB-031 human merge and green hosted gates may
+trusted-main create a fresh immutable nRF54L15-only
+candidate after verifying no release/tag collision. Its exact new assets must
+run active nRF54L15 FR4 through PB-007 before FR5; failed assets must never be
+restored or clobbered. Full evidence:
 `docs/development/firmware-release-fr4-results.md`.
 
 ### FR5: first useful release and closeout

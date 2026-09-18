@@ -1,4 +1,4 @@
-# STATUS: le-audio-receiver, 2026-09-18
+# STATUS: le-audio-receiver, 2026-09-19
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
@@ -7,7 +7,7 @@
 > `docs/product/backlog/`. STATUS.md is an implementation and evidence snapshot,
 > not a second task list.
 
-> **Current state (2026-09-18):** System HIL plan of record revised
+> **Current state (2026-09-19):** System HIL plan of record revised
 > (`docs/development/system-hil-milestones.md`): nRF54L15 is the only
 > production receiver target, and receiver transport limits are frozen and
 > enforced by the runner (RH3a, 2026-09-03). RH3-7p5 is CLOSED by its
@@ -55,17 +55,23 @@
 > logical parallelization ACCEPTED (hosted run `34725825883`: `test-unit`
 > unblocks `firmware`, all three workers feed aggregate `tests`, and `release`
 > joins `tests` with `firmware` and was SKIPPED on pull_request),
-> and FR4 exact-artifact hardware acceptance
-> **BLOCKED**: the exact draft `v0.1.0` FAILED mandatory nRF5340 mono
-> acceptance and remains private, unpublished, and untagged; the local
-> replacement preflight passed both targets but is not exact-artifact
-> acceptance; the root `VERSION` remains `0.1.0` and the firmware-build
-> workflow is version-driven; no replacement version or candidate has been
-> selected ([PB-006](docs/product/backlog/tasks/pb-006%20-%20Create-replacement-nRF54L15-release-candidate.md));
-> its exact assets must pass FR4 through
+> and FR4 exact-artifact hardware acceptance **BLOCKED**: historical exact draft
+> `v0.1.0` FAILED mandatory nRF5340 mono acceptance. It served as stable harness
+> baseline, then its GitHub draft and assets were deleted 2026-09-19;
+> `gh release view v0.1.0` now fails, the GitHub release list is empty, and
+> `refs/tags/v0.1.0` is absent. Nothing was published. The local replacement
+> preflight passed both targets but remains historical preflight, not
+> exact-artifact acceptance. The root `VERSION` remains `0.1.0`, and product
+> owner selected it for a fresh replacement candidate because it was never
+> published or tagged. No fresh candidate exists: the PB-031 PR has not been
+> opened or human-merged. After PB-031 human
+> merge and green hosted gates, trusted-main may create a new immutable
+> nRF54L15-only candidate if no release/tag collision exists. Its exact new
+> assets must pass active nRF54L15 FR4 through
 > [PB-007](docs/product/backlog/tasks/pb-007%20-%20Accept-exact-candidate-through-RH4-and-FR4.md)
 > before [PB-009](docs/product/backlog/tasks/pb-009%20-%20Publish-first-public-firmware-release.md)
-> can publish anything; nothing published.
+> can publish anything; FR4/FR5 remain blocked and failed assets must never be
+> restored or clobbered.
 > The R0–R10 refactor figures below (gate 55/0/55,
 > population 33, contract 79/79) are the **historical** R10 baseline
 > (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
@@ -245,9 +251,13 @@ one CIS, receiver reported `SDUs=8876 decoded=8876 plc=0 decode_err=0
 i2s_underrun=0 stream_reset=225 empty_sdu=0`, and the receiver emitted 225
 each of `i2s_nrfx: Next buffers not supplied on time`, `i2s_nrfx: Cannot
 write in state: 4`, and `audio_i2s: I2S underrun, restarting DMA`. The
-deterministic failure stopped the matrix before nRF54L15. The exact
-candidate therefore FAILED FR4 and remains private, unpublished, and
-intentionally untagged.  The local replacement preflight (pristine builds
+deterministic failure stopped the matrix before nRF54L15. The exact candidate
+therefore FAILED FR4. It served as stable harness baseline, then its GitHub
+draft and assets were deleted 2026-09-19; historical draft ID, target, hash,
+and failure evidence remain immutable. `gh release view v0.1.0` now fails, the
+GitHub release list is empty, and `refs/tags/v0.1.0` is absent. The deleted
+draft is no longer a candidate; nothing was published. The local replacement
+preflight (pristine builds
 from committed HEAD `5e7f502`) PASSED all six rows on both targets with
 zero decode errors, underruns, stream resets, and cadence RESYNC warnings
 (see `docs/development/firmware-release-fr4-results.md` for row, stack, and
@@ -259,11 +269,15 @@ unchanged), BSim pins byte-identical.  Evidence:
 `docs/development/firmware-release-fr4-results.md`; procedure
 `docs/development/firmware-release-fr4-procedure.md` (historical, executed
 2026-08-10); retained run dirs under `/tmp/opencode/` (exact draft
-`fr4-v0.1.0-OEp9Kh`, cadence local `fr4-cadence-local-*`).  A replacement
-candidate must be created through the accepted trusted-main lifecycle and
-its exact immutable assets must rerun the full FR4 procedure on both
-targets before FR5 can publish anything; no replacement version or
-candidate has been selected.  FR4 and FR5 remain blocked; nothing
+`fr4-v0.1.0-OEp9Kh`, cadence local `fr4-cadence-local-*`). Product owner
+selected unreleased, untagged `0.1.0` for a fresh replacement candidate because
+it was never published or tagged; the root `VERSION` remains `0.1.0`. No fresh
+candidate exists: the PB-031 PR has not been opened or human-merged. Only after
+PB-031 human merge and green hosted
+gates may the trusted-main workflow create a fresh immutable nRF54L15-only
+candidate after verifying no release/tag collision. Its exact assets must pass
+active nRF54L15 FR4 through PB-007 before FR5 can publish anything; failed
+assets must never be restored or clobbered. FR4 and FR5 remain blocked; nothing
 published.
 
 ## System HIL: TRANSPORT_RUNTIME_ACCEPTED (2026-09-09)
@@ -396,11 +410,11 @@ git tag.  Corrected read-only checks passed independently against that same
 draft; the later hosted correction runs passed firmware and PR topology,
 and the final merged main run `31334643418` (main push `b70b978...`, job
 `93298378307`) PASS with release correctly SKIPPED on unchanged `VERSION`.
-Draft `v0.1.0` is
-private, unpublished, and intentionally untagged (authenticated git-ref
-lookup returns HTTP 404 as expected); the corrected paginated collision
-check detects it without printing release bodies.  No git tag, published
-binary, hardware acceptance, MCUboot, or DFU exists yet.  Local evidence:
+At FR3 closeout, draft `v0.1.0` was private, unpublished, and intentionally
+untagged (authenticated git-ref lookup returned HTTP 404 as expected); the
+corrected paginated collision check detected it without printing release
+bodies. At that time, no git tag, published binary, hardware acceptance,
+MCUboot, or DFU existed yet. Local evidence:
 canonical gate **65 PASS / 0 FAIL / 65 TOTAL** (35 twister + 5 exec-only +
 22 Python + coverage + matrix + BSim Stage 1), build contract **95/95**,
 coverage unchanged (population 36, 4674/5130 L, 2030/2824 B, 358/358 F),

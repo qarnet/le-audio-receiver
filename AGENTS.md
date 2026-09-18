@@ -166,17 +166,21 @@ parallelization is ACCEPTED on hosted run `34725825883` (source HEAD
 aggregate `tests`; `tests` and `firmware` join at trusted-main-only `release`.
 The workers combined to `72 PASS / 0 FAIL / 72 TOTAL`; aggregate `tests` and
 `firmware` passed, `release` was SKIPPED on pull requests, and total run time
-was 26m31s versus 58m02s monolithic. FR4
-exact-artifact hardware acceptance is **BLOCKED**: the exact draft
-`v0.1.0` FAILED mandatory nRF5340 mono acceptance and remains private,
-unpublished, and untagged; the local replacement preflight passed both
-targets at `5e7f502` but is not exact-artifact acceptance; the root
-`VERSION` remains `0.1.0` and the firmware-build workflow is now
-version-driven; no replacement version or candidate has been selected; a
-replacement
-candidate must be created through the trusted-main lifecycle and its
-exact assets must pass FR4 before FR5 can publish anything; nothing
-published. Historical PR 11 (`feature/firmware-release-acceptance`) established
+was 26m31s versus 58m02s monolithic. FR4 exact-artifact hardware acceptance is
+**BLOCKED**: historical exact draft `v0.1.0` FAILED mandatory nRF5340 mono
+acceptance. It served as stable harness baseline, then its GitHub draft and
+assets were deleted 2026-09-19; `gh release view v0.1.0` now fails, the GitHub
+release list is empty, and `refs/tags/v0.1.0` is absent. Nothing was published.
+The local replacement preflight passed both targets at `5e7f502` but remains
+historical preflight, not exact-artifact acceptance. The root `VERSION` remains
+`0.1.0`, and product owner selected it for a fresh replacement candidate because
+it was never published or tagged. No fresh candidate exists: the PB-031 PR has
+not been opened or human-merged.
+After PB-031 human merge and green hosted gates, trusted-main may create a new
+immutable nRF54L15-only candidate if no release/tag collision exists; it must
+never restore or clobber failed assets. FR4/FR5 remain blocked until exact new
+assets pass active nRF54L15 acceptance through PB-007; nothing published.
+Historical PR 11 (`feature/firmware-release-acceptance`) established
 the monolithic 65-child hosted canonical software gate: in that topology,
 `tests` passed before `firmware`, and `release` followed `firmware`. The job ran
 on the plain host runner inside the locked Nix dev shell with the exact
