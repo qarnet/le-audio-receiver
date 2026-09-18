@@ -6,6 +6,41 @@ Run full PB-031 software and firmware acceptance on exact clean P3 result,
 retain raw external logs, classify every emitted diagnostic under repository
 warning policy, record evidence, and move PB-031 from In Progress to Review.
 
+## Current resume point after matrix failure
+
+Preparation checkpoint is commit
+`56472e2ca5a0d0434ee031bc437ee7bdd482407e` (`docs: prepare PB-031 full
+acceptance`). Worktree was clean after failed gate. Second P4 attempt evidence
+is retained at `/tmp/opencode/pb031-p4.lnNZ6l`; it ended `73 PASS / 1 FAIL /
+74 TOTAL`. Coverage passed unchanged population 37 at 4969/5427 numeric lines,
+2177/2984 numeric branches, and 380/380 numeric functions. BSim passed 17
+scenarios/26 runs. Matrix alone failed with:
+
+```text
+error: invented witness: src/audio_decode.c: 'test_golden_mono_10ms'
+```
+
+Root cause is exact and local: P3 renamed the successful `audio_decode_sdu`
+fixture test from `test_golden_mono_10ms` to `test_fixture_mono_10ms` but left
+the sole old name in `tests/test-matrix.json`. New test still calls production
+`audio_decode_sdu`, requires return 0, and applies portable per-channel PCM
+checks, so it is correct replacement witness for same public outcome.
+
+This repair block supersedes section 1 for resumed execution:
+
+1. Require HEAD `56472e2ca5a0d0434ee031bc437ee7bdd482407e` and only this handoff modified.
+2. In `tests/test-matrix.json`, change only source `src/audio_decode.c`, API
+   `audio_decode_sdu`, outcome `0` witness from `test_golden_mono_10ms` to
+   `test_fixture_mono_10ms`.
+3. Verify repository has no remaining `test_golden_mono_10ms`, run
+   `python3 tests/unit/test_matrix/test_check_test_matrix.py`, run
+   `python3 scripts/check-test-matrix.py`, then run `git diff --check`.
+4. Inspect full status/diff/log. Stage exactly `tests/test-matrix.json` and this
+   handoff. Commit `test: repair decoder matrix witness`. Do not amend.
+5. Require clean status, create a new unique evidence root, then resume at
+   section 2. Rerun full gate and all firmware/build-contract checks; do not
+   reuse passing results from either superseded attempt.
+
 P3 implementation is commit
 `4957a1f37e306c44ff777b6801c73154981b4d69` (`test: migrate decoder
 fixtures to portable PCM oracle`) with documentation repair
@@ -19,6 +54,7 @@ unchanged and 43/43 tests passed. Worktree was clean.
 - Pristine nRF5340 and nRF54L15 receiver builds
 - Resolved two-target build-contract checker
 - Raw external logs and diagnostic review
+- One stale `tests/test-matrix.json` witness-name repair specified above
 - `docs/development/portable-lc3-pcm-oracle-plan.md`
 - `docs/development/portable-lc3-pcm-oracle-p4-handoff.md`
 - `STATUS.md`
