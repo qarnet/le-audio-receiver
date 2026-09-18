@@ -12,8 +12,8 @@ draft and assets were deleted 2026-09-19; historical FR4 evidence remains
 unchanged. `gh release view v0.1.0` now fails, the GitHub release list is empty,
 and `refs/tags/v0.1.0` is absent. Nothing was published. The root `VERSION`
 remains `0.1.0`, and product owner selected it for a fresh replacement
-candidate because it was never published or tagged. No fresh candidate exists:
-the PB-031 PR has not been opened or human-merged. After PB-031 human merge and
+candidate because it was never published or tagged. PB-031 has not been
+human-merged, so no fresh candidate exists. After PB-031 human merge and
 green hosted gates, trusted-main
 may create a fresh immutable nRF54L15-only candidate if no release/tag
 collision exists. FR4/FR5 remain blocked until exact new assets pass active
@@ -355,8 +355,8 @@ candidate; nothing was published. The local fix preflight (pristine builds at
 replacement-candidate preflight only, not FR4 exact-artifact acceptance.
 Product owner selected unreleased, untagged `0.1.0` for a fresh replacement
 candidate because it was never published or tagged; the root `VERSION` remains
-`0.1.0`. No fresh candidate exists: the PB-031 PR has not been opened or
-human-merged. Only after PB-031 human merge and green hosted gates may
+`0.1.0`. PB-031 has not been human-merged, so no fresh candidate exists. Only
+after PB-031 human merge and green hosted gates may
 trusted-main create a fresh immutable nRF54L15-only
 candidate after verifying no release/tag collision. Its exact new assets must
 run active nRF54L15 FR4 through PB-007 before FR5; failed assets must never be

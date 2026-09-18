@@ -63,8 +63,8 @@
 > preflight passed both targets but remains historical preflight, not
 > exact-artifact acceptance. The root `VERSION` remains `0.1.0`, and product
 > owner selected it for a fresh replacement candidate because it was never
-> published or tagged. No fresh candidate exists: the PB-031 PR has not been
-> opened or human-merged. After PB-031 human
+> published or tagged. PB-031 has not been human-merged, so no fresh candidate
+> exists. After PB-031 human
 > merge and green hosted gates, trusted-main may create a new immutable
 > nRF54L15-only candidate if no release/tag collision exists. Its exact new
 > assets must pass active nRF54L15 FR4 through
@@ -271,9 +271,9 @@ unchanged), BSim pins byte-identical.  Evidence:
 2026-08-10); retained run dirs under `/tmp/opencode/` (exact draft
 `fr4-v0.1.0-OEp9Kh`, cadence local `fr4-cadence-local-*`). Product owner
 selected unreleased, untagged `0.1.0` for a fresh replacement candidate because
-it was never published or tagged; the root `VERSION` remains `0.1.0`. No fresh
-candidate exists: the PB-031 PR has not been opened or human-merged. Only after
-PB-031 human merge and green hosted
+it was never published or tagged; the root `VERSION` remains `0.1.0`. PB-031
+has not been human-merged, so no fresh candidate exists. Only after PB-031 human
+merge and green hosted
 gates may the trusted-main workflow create a fresh immutable nRF54L15-only
 candidate after verifying no release/tag collision. Its exact assets must pass
 active nRF54L15 FR4 through PB-007 before FR5 can publish anything; failed
