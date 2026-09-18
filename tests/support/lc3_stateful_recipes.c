@@ -51,6 +51,11 @@ static const struct lc3_stateful_step start8_steps[] = {
 	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
 };
 
+static const struct lc3_stateful_step start7_steps[] = {
+	{LC3_STATEFUL_ACTION_PLC, 0U, 7U},
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
+};
+
 static const struct lc3_stateful_step start11_steps[] = {
 	{LC3_STATEFUL_ACTION_PLC, 0U, 11U},
 	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
@@ -196,6 +201,20 @@ const struct lc3_stateful_recipe lc3_stateful_recipes[] = {
 		.steps = loss48x18_steps,
 		.step_count = sizeof(loss48x18_steps) / sizeof(loss48x18_steps[0]),
 	},
+	{
+		.id = "start7_10ms_l",
+		.source_stem = "bsim_48k_10ms_120b_l",
+		.reference_path = "bsim_48k_10ms_120b_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 107U,
+		.valid_frame_count = 100U,
+		.steps = start7_steps,
+		.step_count = sizeof(start7_steps) / sizeof(start7_steps[0]),
+	},
 };
 
 const size_t lc3_stateful_recipe_count =
@@ -218,6 +237,11 @@ struct lc3_stateful_expected_recipe {
 
 static const struct lc3_stateful_step expected_start8_steps[] = {
 	{LC3_STATEFUL_ACTION_PLC, 0U, 8U},
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
+};
+
+static const struct lc3_stateful_step expected_start7_steps[] = {
+	{LC3_STATEFUL_ACTION_PLC, 0U, 7U},
 	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
 };
 
@@ -366,6 +390,20 @@ static const struct lc3_stateful_expected_recipe expected_recipes[] = {
 		.steps = expected_loss48x18_steps,
 		.step_count =
 			sizeof(expected_loss48x18_steps) / sizeof(expected_loss48x18_steps[0]),
+	},
+	{
+		.id = "start7_10ms_l",
+		.source_stem = "bsim_48k_10ms_120b_l",
+		.reference_path = "bsim_48k_10ms_120b_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 107U,
+		.valid_frame_count = 100U,
+		.steps = expected_start7_steps,
+		.step_count = sizeof(expected_start7_steps) / sizeof(expected_start7_steps[0]),
 	},
 };
 

@@ -510,6 +510,7 @@ set(PB031_EXPECTED_STATEFUL_RECIPES
   "modea_start_7p5ms_r|bsim_48k_7p5ms_90b_r|generated-pcm|stateful_48k_7p5ms_modea_start_r.pcm|0|7500|90|360|113|101|plc:0:10,corpus:0:1,plc:0:2,corpus:1:100"
   "skip20_10ms_l|bsim_48k_10ms_120b_l|generated-pcm|stateful_48k_10ms_skip20_l.pcm|0|10000|120|480|108|100|plc:0:8,corpus:0:20,corpus:21:80"
   "loss48x18_10ms_r|bsim_48k_10ms_120b_r|generated-pcm|stateful_48k_10ms_loss48x18_r.pcm|0|10000|120|480|108|82|plc:0:8,corpus:0:48,plc:0:18,corpus:48:34"
+  "start7_10ms_l|bsim_48k_10ms_120b_l|portable-pcm|bsim_48k_10ms_120b_l.pcm|0|10000|120|480|107|100|plc:0:7,corpus:0:100"
 )
 list(LENGTH PB031_EXPECTED_STATEFUL_RECIPES _expected_recipes_length)
 if(NOT "${_stateful_recipes_type_error}" STREQUAL "NOTFOUND" OR

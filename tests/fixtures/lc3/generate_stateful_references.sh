@@ -93,6 +93,8 @@ EXPECTED_RECIPES = (
      (("plc", 0, 8), ("corpus", 0, 20), ("corpus", 21, 80))),
     ("loss48x18_10ms_r", "bsim_48k_10ms_120b_r", "generated-pcm", "stateful_48k_10ms_loss48x18_r.pcm", 0, 10000, 120, 480, 108, 82,
      (("plc", 0, 8), ("corpus", 0, 48), ("plc", 0, 18), ("corpus", 48, 34))),
+    ("start7_10ms_l", "bsim_48k_10ms_120b_l", "portable-pcm", "bsim_48k_10ms_120b_l.pcm", 0, 10000, 120, 480, 107, 100,
+     (("plc", 0, 7), ("corpus", 0, 100))),
 )
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -328,7 +330,7 @@ def validate_stateful(manifest, portable_raw, fixture_dir, generated_dir, hash_m
     if SHA256_RE.fullmatch(source_hash) is None or source_hash != hashlib.sha256(portable_raw).hexdigest():
         raise ValidationError("stateful manifest source portable manifest SHA-256 mismatch")
     if type(manifest["recipes"]) is not list or len(manifest["recipes"]) != len(EXPECTED_RECIPES):
-        raise ValidationError("stateful manifest must contain exactly eight recipes")
+        raise ValidationError("stateful manifest must contain exactly nine recipes")
     mismatches = []
     for index, (entry, expected) in enumerate(zip(manifest["recipes"], EXPECTED_RECIPES)):
         (recipe_id, source_stem, reference_kind, reference_path, reference_first_frame,

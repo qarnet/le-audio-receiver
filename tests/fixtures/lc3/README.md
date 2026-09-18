@@ -127,9 +127,10 @@ sink push is action 13.
 | `modea_start_7p5ms_r` | 10 PLC, corpus 0, 2 PLC, corpus 1 through 100 | generated trace |
 | `skip20_10ms_l` | 8 PLC, corpus 0 through 19, then 21 through 100 | generated trace |
 | `loss48x18_10ms_r` | 8 PLC, corpus 0 through 47, 18 PLC, then 48 through 81 | generated trace |
+| `start7_10ms_l` | 7 PLC, corpus 0 through 99 | portable 10 ms left PCM, frame 0 |
 
 Fresh-decoder startup PLC produces silence in pinned liblc3 and first valid
-decode resets that state. Therefore five normal-start recipes reference existing
+decode resets that state. Therefore six normal-start recipes reference existing
 portable PCM directly and do not duplicate its bytes. The Mode A 7.5 ms right
 recipe decodes corpus frame 0 before two PLC actions, so later source-valid
 output carries state that portable PCM cannot represent. It and other
@@ -176,8 +177,8 @@ for PB-031 ARM measurement. It embeds all eight portable-corpus files and three
 generated stateful PCM traces in flash, uses the checked-in integer
 `pcm_oracle` comparator unchanged, reads portable-manifest-owned limits at
 configure time, validates the stateful manifest and backing hashes at configure
-time, and keeps bounded static work buffers plus one liblc3 decoder state in
-RAM. It does not change production behavior.
+time, validates all nine recipes, and keeps bounded static work buffers plus one
+liblc3 decoder state in RAM. It does not change production behavior.
 
 The reviewed schema-1 calibration rerun uses `CONFIG_MAIN_STACK_SIZE=8192`.
 The first ARM execution resolved its main stack to 1024 bytes and faulted in
@@ -189,7 +190,7 @@ assertion settings.
 
 The image enables `CONFIG_THREAD_ANALYZER=y`,
 `CONFIG_THREAD_ANALYZER_USE_PRINTK=y`, and `CONFIG_THREAD_NAME=y`. It calls
-`thread_analyzer_print(0U)` after all 38 metric records and immediately before
+`thread_analyzer_print(0U)` after all 39 metric records and immediately before
 the PASS record. `CONFIG_THREAD_ANALYZER_AUTO` remains disabled, so no periodic
 analyzer thread changes the measurement run. Thread names make the report's
 `main` line identify the main-thread `unused` and `usage` values.
@@ -211,18 +212,18 @@ UART capture before any target action, then capture one complete record sequence
 Do not use this build command as a flash command.
 
 Normal UART output is ASCII. PB-031 records have this order; Zephyr's
-human-readable thread-analyzer report appears after the 38 metric records and
+human-readable thread-analyzer report appears after the 39 metric records and
 before PASS:
 
 ```text
 PB031_ARM_BEGIN schema=3 manifest_sha256=<64 lowercase hex> ncs=v3.3.0 liblc3=48bbd3eacd36e99a57317a0a4867002e0b09e183 max_abs_error=2048 max_rms_error=512 min_correlation_q15=32750
 PB031_ARM_SOURCE main_c_sha256=<64 lowercase hex> pcm_oracle_c_sha256=<64 lowercase hex> pcm_oracle_h_sha256=<64 lowercase hex> stateful_manifest_sha256=<64 lowercase hex> stateful_recipe_c_sha256=<64 lowercase hex> stateful_recipe_h_sha256=<64 lowercase hex>
 PB031_METRIC {"record":"metric",...}
-... exactly 38 PB031_METRIC lines, each ending with an `evaluation` string ...
+... exactly 39 PB031_METRIC lines, each ending with an `evaluation` string ...
 Thread analyze:
  main                 : STACK: unused <bytes> usage <bytes> / 8192 (<percent> %); CPU: <percent> %
 ... other thread-analyzer lines ...
-PB031_ARM_PASS metrics=38
+PB031_ARM_PASS metrics=39
 ```
 
 Thread-analyzer lines are not PB-031 protocol records. Retain the complete
@@ -285,10 +286,12 @@ four `valid`, two `channel-swap`, then `prior-frame-shift`,
 `next-frame-shift`, `dead-channel`, and `low-correlation-synthetic` for each
 manifest stream in order, followed by `lc3-byte-corruption`,
 `max-error-boundary`, `rms-error-boundary`, and `correlation-boundary` for the
-10 ms left stream. Schema-3 appends eight `stateful-valid` records in recipe
+10 ms left stream. Schema-3 appends nine `stateful-valid` records in recipe
 table order, then `stateful-payload-off-by-one`, `stateful-skip-ignored`,
-`stateful-loss-burst-omitted`, and `stateful-wrong-channel`. Every stateful
-valid record evaluates `pass`; each stateful mutation evaluates `max-error`.
+`stateful-loss-burst-omitted`, and `stateful-wrong-channel`. The appended ninth
+record is `start7_10ms_l`: 7 PLC actions followed by corpus frames 0 through
+99, with portable 10 ms left PCM from frame 0. Every stateful valid record
+evaluates `pass`; each stateful mutation evaluates `max-error`.
 
 On first error, the image emits one line and no PASS line:
 

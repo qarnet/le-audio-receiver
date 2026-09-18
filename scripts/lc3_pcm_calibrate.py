@@ -174,6 +174,19 @@ EXPECTED_STATEFUL_RECIPES = (
         82,
         (("plc", 0, 8), ("corpus", 0, 48), ("plc", 0, 18), ("corpus", 48, 34)),
     ),
+    (
+        "start7_10ms_l",
+        "bsim_48k_10ms_120b_l",
+        "portable-pcm",
+        "bsim_48k_10ms_120b_l.pcm",
+        0,
+        10000,
+        120,
+        480,
+        107,
+        100,
+        (("plc", 0, 7), ("corpus", 0, 100)),
+    ),
 )
 STATEFUL_MUTATIONS = (
     (
@@ -643,7 +656,7 @@ def load_stateful_manifest(portable_manifest):
 
     recipes = manifest["recipes"]
     if not isinstance(recipes, list) or len(recipes) != len(EXPECTED_STATEFUL_RECIPES):
-        raise CalibrationError("stateful manifest must contain exactly eight recipes")
+        raise CalibrationError("stateful manifest must contain exactly nine recipes")
     portable_pcm = {
         stream["stem"]: stream["pcm"] for stream in portable_manifest["streams"]
     }

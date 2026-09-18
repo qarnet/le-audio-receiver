@@ -26,7 +26,7 @@
 #define CORPUS_FRAMES         128U
 #define MAX_SAMPLES_PER_FRAME 480U
 #define MAX_FRAME_BYTES       120U
-#define METRIC_RECORD_COUNT   38U
+#define METRIC_RECORD_COUNT   39U
 #define OUTPUT_LINE_SIZE      768U
 
 struct corpus_stream {
@@ -1123,7 +1123,7 @@ int main(void)
 	}
 
 	thread_analyzer_print(0U);
-	printk("PB031_ARM_PASS metrics=38\n");
+	printk("PB031_ARM_PASS metrics=39\n");
 	return 0;
 
 fail:

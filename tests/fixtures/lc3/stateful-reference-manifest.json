@@ -194,6 +194,27 @@
         "size": 78720,
         "sha256": "19087061a5f3d74d6d9631b7c5ba100fce358615cbffde322692ae65cc6e91be"
       }
+    },
+    {
+      "id": "start7_10ms_l",
+      "source_stem": "bsim_48k_10ms_120b_l",
+      "duration_us": 10000,
+      "frame_bytes": 120,
+      "samples_per_frame": 480,
+      "output_action_count": 107,
+      "valid_frame_count": 100,
+      "steps": [
+        {"action": "plc", "first_sequence": 0, "count": 7},
+        {"action": "corpus", "first_sequence": 0, "count": 100}
+      ],
+      "reference": {
+        "kind": "portable-pcm",
+        "path": "bsim_48k_10ms_120b_l.pcm",
+        "first_frame": 0,
+        "frame_count": 100,
+        "size": 122880,
+        "sha256": "b42fd31158d24d255214580a63261087d57322266563cec778abc1d9f7f830a7"
+      }
     }
   ]
 }

@@ -747,7 +747,7 @@ class Lc3PcmCalibrateProvenanceTests(unittest.TestCase):
             [entry["id"] for entry in stateful_manifest["recipes"]],
             [entry[0] for entry in calibrate.EXPECTED_STATEFUL_RECIPES],
         )
-        self.assertEqual(len(reference_hashes), 8)
+        self.assertEqual(len(reference_hashes), 9)
         self.assertEqual(
             [record["kind"] for record in reference_hashes],
             [entry[2] for entry in calibrate.EXPECTED_STATEFUL_RECIPES],
@@ -869,6 +869,51 @@ class Lc3PcmCalibrateProvenanceTests(unittest.TestCase):
         self.assertEqual(
             reference_hashes[5]["sha256"],
             hashlib.sha256((FIXTURES_DIR / right[3]).read_bytes()).hexdigest(),
+        )
+
+    def test_start7_10ms_left_recipe_expansion_and_reference_are_exact(self):
+        portable_manifest, _fixture_hashes, _manifest_sha256 = calibrate.load_manifest()
+        _stateful_manifest, reference_hashes, _stateful_manifest_sha256 = (
+            calibrate.load_stateful_manifest(portable_manifest)
+        )
+        recipe = calibrate.EXPECTED_STATEFUL_RECIPES[8]
+        portable_pcm = next(
+            stream["pcm"]
+            for stream in portable_manifest["streams"]
+            if stream["stem"] == "bsim_48k_10ms_120b_l"
+        )
+
+        def expand(steps):
+            actions = []
+            for action, first_sequence, count in steps:
+                if action == "plc":
+                    actions.extend((action, None) for _ in range(count))
+                else:
+                    actions.extend(
+                        (action, first_sequence + offset) for offset in range(count)
+                    )
+            return actions
+
+        self.assertEqual(recipe[0], "start7_10ms_l")
+        self.assertEqual(recipe[1], "bsim_48k_10ms_120b_l")
+        self.assertEqual(recipe[2], "portable-pcm")
+        self.assertEqual(recipe[3], "bsim_48k_10ms_120b_l.pcm")
+        self.assertEqual(recipe[4], 0)
+        self.assertEqual(recipe[5:10], (10000, 120, 480, 107, 100))
+        self.assertEqual(
+            expand(recipe[10]),
+            [("plc", None)] * 7 + [("corpus", sequence) for sequence in range(100)],
+        )
+        self.assertEqual(
+            reference_hashes[8],
+            {
+                "kind": "portable-pcm",
+                "path": "bsim_48k_10ms_120b_l.pcm",
+                "first_frame": 0,
+                "frame_count": 100,
+                "size": portable_pcm["size"],
+                "sha256": portable_pcm["sha256"],
+            },
         )
 
 
@@ -1096,7 +1141,7 @@ class Lc3PcmCalibrateProtocolTests(unittest.TestCase):
 
         cases = []
         wrong_count = records[:-1]
-        cases.append(("record count", wrong_count, "returned 37 records"))
+        cases.append(("record count", wrong_count, "returned 38 records"))
 
         wrong_order = json.loads(json.dumps(records))
         wrong_order[0], wrong_order[1] = wrong_order[1], wrong_order[0]
@@ -1140,7 +1185,7 @@ class Lc3PcmCalibrateProtocolTests(unittest.TestCase):
     def test_stateful_metric_protocol_is_exact(self):
         records = calibrate.expected_metric_records()
 
-        self.assertEqual(len(records), 38)
+        self.assertEqual(len(records), 39)
         self.assertEqual(
             records[30:32],
             [
@@ -1185,10 +1230,21 @@ class Lc3PcmCalibrateProtocolTests(unittest.TestCase):
                     _output_action_count,
                     valid_frame_count,
                     _steps,
-                ) in calibrate.EXPECTED_STATEFUL_RECIPES
+                ) in calibrate.EXPECTED_STATEFUL_RECIPES[:8]
             ],
         )
-        self.assertEqual(records[34:], list(calibrate.STATEFUL_MUTATIONS))
+        self.assertEqual(
+            records[34],
+            (
+                "stateful-valid",
+                "start7_10ms_l",
+                "bsim_48k_10ms_120b_l.pcm",
+                100,
+                48000,
+                "pass",
+            ),
+        )
+        self.assertEqual(records[35:], list(calibrate.STATEFUL_MUTATIONS))
 
 
 class Lc3FixtureGeneratorTests(unittest.TestCase):
