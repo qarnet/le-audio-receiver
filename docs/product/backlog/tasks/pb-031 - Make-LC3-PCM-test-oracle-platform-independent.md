@@ -211,6 +211,19 @@ receiver/client logs were inspected in
 `/tmp/opencode/pb031-p2-bsim-stage1.C6FBBY`; only exact scenario-17 warning
 `Invalid operation in state: releasing` appeared. P3 remains next; no
 acceptance checkbox changed.
+
+P3 accepted on 2026-09-18. `tests/unit/decode` now compares each real
+`audio_decode_sdu()` output channel against its checked-in interleaved
+little-endian PCM anchor through the shared integer comparator with immutable
+manifest limits. Exact LC3 geometry, mono duplication, Mode B placement,
+guards, state preservation, statistics, and error checks remain; decoded PCM
+byte equality and CRC acceptance are removed. Focused results: `bash
+tests/fixtures/lc3/generate.sh` reported legacy fixture hashes and portable
+corpus manifest hashes unchanged; `env NIX_HARDENING_ENABLE="" west build
+--no-sysbuild -b native_sim/native/64 -d /tmp/opencode/pb031-p3-decode
+tests/unit/decode -p -t run` reported 43/43 passing; `backlog doctor` and
+`git diff --check` passed. P4 owns full acceptance; no acceptance checkbox
+changed.
 <!-- SECTION:NOTES:END -->
 
 ## Comments

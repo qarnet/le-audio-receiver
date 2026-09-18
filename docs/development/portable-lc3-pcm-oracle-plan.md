@@ -1,6 +1,6 @@
 # Portable LC3/PCM test oracle plan
 
-Status: P0, P0b, P0c, P0d, P0e, P1, and P2 accepted; P3 and P4 pending.
+Status: P0 through P3 accepted; P4 pending.
 
 Product item: [PB-031](../product/backlog/tasks/pb-031%20-%20Make-LC3-PCM-test-oracle-platform-independent.md), Make LC3/PCM test oracle platform-independent.
 
@@ -334,6 +334,18 @@ Work: apply same portable comparison policy at real `audio_decode_sdu()` public
 boundary while retaining exact integer-only contracts.
 
 Verify: decode suite and fixture integrity checks.
+
+Accepted 2026-09-18. `tests/unit/decode` now evaluates real
+`audio_decode_sdu()` fixture output with the shared per-channel integer PCM
+comparator and immutable manifest limits. Exact LC3 geometry, routing, guards,
+state preservation, statistics, and error contracts remain in the 43-test
+suite; decoded PCM byte equality and CRC acceptance are removed.
+
+Focused P3 verification passed: `bash tests/fixtures/lc3/generate.sh` reported
+legacy fixture hashes and portable corpus manifest hashes unchanged; `env
+NIX_HARDENING_ENABLE="" west build --no-sysbuild -b native_sim/native/64 -d
+/tmp/opencode/pb031-p3-decode tests/unit/decode -p -t run` reported 43/43
+passing; `backlog doctor` and `git diff --check` passed. P4 remains pending.
 
 ### P4: Full acceptance
 

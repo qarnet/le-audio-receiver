@@ -1,6 +1,6 @@
 # LC3 test fixtures
 
-Checked-in, reproducible LC3 bitstream + expected-PCM pairs for the
+Checked-in, reproducible LC3 bitstream + PCM comparison-anchor pairs for the
 receiver's legacy decode fixtures and portable BSim diagnostic corpus. Legacy
 fixture binaries are embedded by
 `tests/unit/decode` (see `docs/testing/t2-audio-pipeline-tests.md`) and
@@ -15,17 +15,27 @@ are never regenerated during normal test runs.
 | `modeb_48k_7p5ms_60b` | Mode B, 48 kHz, 7.5 ms, `[L 60 B][R 60 B]` | 120 B | 1440 B (720 stereo samples) |
 | `modeb_48k_10ms_60b` | Mode B, 48 kHz, 10 ms, `[L 60 B][R 60 B]` | 120 B | 1920 B (960 stereo samples) |
 
-`.pcm` files hold interleaved stereo `int16_t` little-endian: `[L][R][L][R]…`.
-Mono expected output duplicates each decoded sample; Mode B expected
-output interleaves independently decoded left/right channels.  Left and
-right Mode B channel hashes differ.
+Every `.pcm` file is a checked-in comparison anchor, not a byte-exact decoded
+output contract. They hold interleaved stereo `int16_t` little-endian:
+`[L][R][L][R]…`. Mono reference output duplicates each decoded sample; Mode B
+reference output interleaves independently decoded left/right channels.
+
+`tests/unit/decode` compares each channel independently. For channel `ch`, it
+passes `actual + ch` with an actual-sample stride of 2 and `reference + 2 * ch`
+with a reference-byte stride of 4 to the shared integer comparator. The suite
+requires exactly one frame and the configured samples-per-channel count for
+each channel, then applies the immutable schema-2 manifest limits: maximum
+absolute error `2048`, maximum RMS error `512`, and minimum Q15 correlation
+`32750`. `portable-oracle-manifest.json` is the sole owner of those numerical
+limits; the decode suite does not hard-code them.
 
 ## Portable BSim corpus
 
 P0a provides four logical streams with 128 continuous LC3 codec frames each.
 P1 embeds only their `.lc3` files in the BabbleSim client. Each file is raw
 concatenated per-frame LC3 data. The `.pcm` file remains a diagnostic
-comparison anchor, not a decoded-output acceptance threshold.
+comparison anchor for portable numerical acceptance, not a byte-exact
+decoded-output acceptance threshold.
 
 | Stem | Duration | Channel | LC3 bytes/frame | PCM samples/frame | `.lc3` size | `.pcm` size |
 |------|----------|---------|----------------:|------------------:|------------:|------------:|
@@ -52,8 +62,9 @@ label `1.1.2`, west revision
 `48bbd3eacd36e99a57317a0a4867002e0b09e183`, exact generator flags, geometry,
 binary SHA-256 values, and the sole calibration-policy object: maximum absolute
 error `2048`, maximum RMS error `512`, and minimum correlation Q15 `32750`.
-Calibration validates this policy without changing BSim or decoder acceptance;
-P2 owns its first gate use.
+P2 applies this policy at the BSim sink boundary, and P3 applies the same
+manifest-owned policy at the real `audio_decode_sdu()` fixture boundary.
+Decoded PCM bytes and CRC values are not pass/fail values in either suite.
 
 ### P1 BSim transport contract
 
@@ -362,11 +373,11 @@ L(i) = (int16_t)(((uint32_t)i * UINT32_C(1103515245) + UINT32_C(12345)) >> 12)
 R(i) = (int16_t)(((uint32_t)i * UINT32_C(2654435761) + UINT32_C(67890)) >> 12)
 ```
 
-Mono encodes `L` only (expected output duplicates the decoded sample).
+Mono encodes `L` only (reference output duplicates the decoded sample).
 Mode B encodes `L` and `R` with independent encoder instances.  The
 defined arithmetic produces byte-identical fixtures to the original
-formulation on the pinned toolchain (verified: two clean-copy runs,
-all SHA-256/CRC-32 unchanged).
+formulation on the pinned toolchain (verified: two clean-copy runs with all
+SHA-256 unchanged).
 
 ## SHA-256 (checked-in binaries)
 
@@ -381,21 +392,7 @@ all SHA-256/CRC-32 unchanged).
 | `modeb_48k_10ms_60b.lc3` | `30d880e4792a4c3c6c04bbf55b2f59a7f355f77869a41569cb65186eec609829` |
 | `modeb_48k_10ms_60b.pcm` | `a2c16351c1e7c4e7dc49bdf9dc6b91705099d4b9fcb6d87c27f0d8228ac12c7a` |
 
-## CRC-32 (IEEE 802.3, `crc32_ieee()`) asserted by the decode tests
-
-CRC-32 over the full interleaved PCM byte stream, over the left-channel
-samples, and over the right-channel samples (int16 little-endian bytes):
-
-| Fixture | full | left | right |
-|---------|------|------|-------|
-| `mono_48k_7p5ms_60b` | `E272CD4C` | `62AD330F` | `62AD330F` |
-| `mono_48k_10ms_60b` | `D546D96C` | `A7D0F060` | `A7D0F060` |
-| `modeb_48k_7p5ms_60b` | `446235E4` | `62AD330F` | `77673426` |
-| `modeb_48k_10ms_60b` | `6669E859` | `A7D0F060` | `D0036A17` |
-
-Mono left and right CRCs are equal by design (duplicated channel); Mode B
-left and right CRCs differ (verified by the generator itself).
-
-Golden PCM is exact for the pinned NCS v3.3.0 liblc3 1.1.2 and the
-native_sim host toolchain.  No audio-quality claim is made from these
-fixtures.
+Reference PCM was generated with pinned NCS v3.3.0 liblc3 1.1.2 and is
+retained with the exact SHA-256 integrity records above. The decode suite
+evaluates it only through portable per-channel metrics. No audio-quality claim
+is made from these fixtures.

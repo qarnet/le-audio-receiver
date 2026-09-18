@@ -1,0 +1,16 @@
+/*
+ * Copyright (c) 2026
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Generated at CMake configure time from portable-oracle-manifest.json.
+ * Private to tests/unit/decode. Do not edit generated output.
+ */
+
+#ifndef DECODE_PCM_LIMITS_H_
+#define DECODE_PCM_LIMITS_H_
+
+#define DECODE_PCM_MAX_ABS_ERROR @PB031_PCM_MAX_ABS_ERROR@U
+#define DECODE_PCM_MAX_RMS_ERROR @PB031_PCM_MAX_RMS_ERROR@U
+#define DECODE_PCM_MIN_CORRELATION_Q15 @PB031_PCM_MIN_CORRELATION_Q15@
+
+#endif /* DECODE_PCM_LIMITS_H_ */
