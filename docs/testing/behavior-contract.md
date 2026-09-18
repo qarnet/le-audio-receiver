@@ -310,7 +310,7 @@ Reset discipline: the cadence tracker is reset at every site that
 resets the sequence tracker (config, start-clear, release, reset-all),
 so no cadence gap can cross a session boundary.
 
-### CODEC-016 — Portable real-decoder fixture verification (PB-031 P3)
+### CODEC-017 — Portable real-decoder fixture verification (PB-031 P3)
 
 `tests/fixtures/lc3/generate.sh` verifies exact checked-in LC3 and PCM fixture
 integrity. `tests/unit/decode` embeds those fixtures and drives the public
