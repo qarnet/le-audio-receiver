@@ -135,18 +135,25 @@ refactoring track R0–R10. Read the applicable one before structural changes.
 `docs/design.md` remains the historical architecture and evidence document, not
 an active structural plan.
 
-Current status: **canonical gate 72 PASS / 0 FAIL / 72 TOTAL** on the
-clean tree (40 Twister + 5 exec-only + 24 Python + coverage + matrix +
-BSim; the FR2 clean-tree run at `75a8093`, the FR1 clean run at
+Current status: **canonical gate 74 PASS / 0 FAIL / 74 TOTAL** on clean
+PB-031 P4 commit `d8f2a8e4d5eb0d6a7af2310a2c29e21b08542f22` (41 Twister +
+5 exec-only + 25 Python + coverage + matrix + BSim; the FR2 clean-tree run at
+`75a8093`, the FR1 clean run at
 `1671a9f`, and earlier clean runs recorded in
 `docs/development/documentation-hygiene-behavior-fix-results.md` at
 `b8bd633` and the production-fix canonical run at `f2f9336`, after the
 empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
 (`f2f9336`) fixes — the committed coverage baseline is unchanged),
-coverage population **37** (4962/5420 lines, 2153/2960
+coverage population **37** (4969/5427 lines, 2177/2984
 branches, 380/380 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
 baseline unchanged), builds 3/3, build contract **96/96**, BSim Stage 1
-pins byte-identical, P1–P8 user pairing control ACCEPTED (nRF54L15
+pins exact fixture/sequence TX FNV hashes, mono 10 ms `0xC5C840B0`, mono
+7.5 ms `0x2CE69E65`, Mode A 10 ms L/R `0x8980C79D`/`0xDD25CC21`, Mode A
+7.5 ms L/R `0x7D1EAC0F`/`0x001D6366`, Mode B 10 ms `0xE5D37A85`, Mode B
+7.5 ms `0x4D9A9ED7`, and zero-stream `0x811C9DC5`; payload/recipe-aware
+portable PCM metrics are maximum/RMS/minimum-correlation 257/182/32767
+within immutable 2048/512/32750 limits, not byte-identical decoded PCM pins.
+P1–P8 user pairing control ACCEPTED (nRF54L15
 enabled, nRF5340 feature-off), FR1 deterministic firmware packager
 ACCEPTED, FR2 firmware-build CI ACCEPTED (hosted run 31326612845
 PASS; workflow artifacts only, no tag/release/hardware acceptance), and

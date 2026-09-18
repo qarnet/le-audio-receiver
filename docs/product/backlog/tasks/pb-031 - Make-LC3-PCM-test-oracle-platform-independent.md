@@ -1,10 +1,10 @@
 ---
 id: PB-031
 title: Make LC3/PCM test oracle platform-independent
-status: In Progress
+status: Review
 assignee: []
 created_date: '2026-09-13 03:09'
-updated_date: '2026-09-13 05:26'
+updated_date: '2026-09-18 20:45'
 labels:
   - 'size:L'
   - 'area:testing'
@@ -42,12 +42,12 @@ Numerical thresholds remain technical calibration output, not product behavior. 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Checked-in LC3 corpus drives BSim traffic, and exact fixture integrity, transmitted byte order, stream/channel placement, sequence, malformed injection, and send counts are verified without runtime encoder dependence.
-- [ ] #2 Decoded PCM checks use documented integer max-error, RMS-error, and correlation limits calibrated from identical LC3 bytes on distinct Intel, AMD, and ARM environments, with provenance and raw measurements retained.
-- [ ] #3 Negative controls prove channel swap, prior/next-frame shift, corruption, dead channel, malformed shape, and out-of-tolerance PCM fail at public test boundaries.
-- [ ] #4 All 17 BSim scenarios and 26 runs preserve exact lifecycle, routing, frame-count, PLC, decode-error, and teardown contracts without CPU-specific decoded-PCM hash pins.
-- [ ] #5 Real-decoder fixture tests use same portable comparison policy while exact integer-only routing, dimensions, guards, stats, and LC3 fixture hashes remain exact.
-- [ ] #6 Canonical software gate and both receiver firmware builds pass with no new warnings; production liblc3 flags and decoder code remain unchanged.
+- [x] #1 Checked-in LC3 corpus drives BSim traffic, and exact fixture integrity, transmitted byte order, stream/channel placement, sequence, malformed injection, and send counts are verified without runtime encoder dependence.
+- [x] #2 Decoded PCM checks use documented integer max-error, RMS-error, and correlation limits calibrated from identical LC3 bytes on distinct Intel, AMD, and ARM environments, with provenance and raw measurements retained.
+- [x] #3 Negative controls prove channel swap, prior/next-frame shift, corruption, dead channel, malformed shape, and out-of-tolerance PCM fail at public test boundaries.
+- [x] #4 All 17 BSim scenarios and 26 runs preserve exact lifecycle, routing, frame-count, PLC, decode-error, and teardown contracts without CPU-specific decoded-PCM hash pins.
+- [x] #5 Real-decoder fixture tests use same portable comparison policy while exact integer-only routing, dimensions, guards, stats, and LC3 fixture hashes remain exact.
+- [x] #6 Canonical software gate and both receiver firmware builds pass with no new warnings; production liblc3 flags and decoder code remain unchanged.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -224,6 +224,14 @@ corpus manifest hashes unchanged; `env NIX_HARDENING_ENABLE="" west build
 tests/unit/decode -p -t run` reported 43/43 passing; `backlog doctor` and
 `git diff --check` passed. P4 owns full acceptance; no acceptance checkbox
 changed.
+
+P4 full acceptance accepted 2026-09-18 at tested commit `d8f2a8e4d5eb0d6a7af2310a2c29e21b08542f22` (`test: repair decoder matrix witness`). Immutable raw evidence is `/tmp/opencode/pb031-p4.XgKVNM`, with seven raw-log SHA-256 values in `SHA256SUMS`.
+
+The stale matrix witness was repaired from `test_golden_mono_10ms` to `test_fixture_mono_10ms` for `audio_decode_sdu()` outcome `0`; focused matrix tests passed 42/42 and `check-test-matrix` reported 0 errors and 0 notes.
+
+Full validation passed: canonical gate `74 PASS / 0 FAIL / 74 TOTAL` (41 Twister, 5 exec-only, 25 Python, coverage, matrix, BSim); coverage population 37 at 4969/5427 numeric lines, 2177/2984 numeric branches, and 380/380 numeric functions; BSim 17 scenarios/26 runs with maximum/RMS/minimum-correlation 257/182/32767 inside immutable 2048/512/32750 limits; pristine nRF5340 and nRF54L15 builds; resolved build contract 96/96; `backlog doctor`; and `git diff --check`.
+
+nRF5340 emitted only documented STATUS warning-table classes, including `BT_CTLR_ADVANCED_FEATURES`; nRF54L15 emitted only documented watchdog no-sources and `__ASSERT()` CMake diagnostics. No compiler or Kconfig assigned-value warning appeared. No production behavior, production liblc3 revision or flags, decoder code, fixture bytes, manifest limits, coverage baseline, or firmware feature changed.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -234,3 +242,27 @@ created: 2026-09-13 03:20
 Refinement: detailed plan resolves implementation shape; threshold values are measured P0 output guarded by explicit stop criteria, not an unresolved product decision; size corrected to L because scope is cross-cutting.
 ---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Outcome: P0 through P4 technical acceptance passed.
+
+Key decisions:
+- Exact fixture-derived TX sequence hashes remain strict pass/fail checks.
+- Decoded PCM uses payload/recipe-aware portable integer metrics, not byte-identical decoded PCM pins.
+- Immutable limits remain maximum error 2048, RMS 512, and minimum correlation Q15 32750.
+
+Validation:
+- `nix develop -c ./scripts/test-all.sh`: `74 PASS / 0 FAIL / 74 TOTAL`; coverage population 37, 4969/5427 numeric lines, 2177/2984 numeric branches, 380/380 numeric functions; BSim 17 scenarios and 26 runs passed with 257/182/32767 maximum/RMS/minimum-correlation.
+- `nix develop -c fw-build-5340`: passed.
+- `nix develop -c fw-build-54l15`: passed.
+- `nix develop -c python3 scripts/check-build-contract.py --nrf5340 build/nrf5340 --nrf54l15 build/nrf54l15`: 96/96 passed.
+- `backlog doctor` and `git diff --check`: passed.
+
+Evidence: `/tmp/opencode/pb031-p4.XgKVNM` with raw logs and `SHA256SUMS`; tested commit `d8f2a8e4d5eb0d6a7af2310a2c29e21b08542f22`.
+
+No production behavior, production liblc3 revision or flags, decoder code, fixture bytes, manifest limits, coverage baseline, or firmware feature changed.
+
+Lifecycle: PB-031 moved to Review only. Done requires a PB-031 PR and human merge; no PR was opened and task was not marked Done.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -1,6 +1,6 @@
 # Portable LC3/PCM test oracle plan
 
-Status: P0 through P3 accepted; P4 pending.
+Status: P0 through P4 accepted; implementation complete.
 
 Product item: [PB-031](../product/backlog/tasks/pb-031%20-%20Make-LC3-PCM-test-oracle-platform-independent.md), Make LC3/PCM test oracle platform-independent.
 
@@ -345,7 +345,7 @@ Focused P3 verification passed: `bash tests/fixtures/lc3/generate.sh` reported
 legacy fixture hashes and portable corpus manifest hashes unchanged; `env
 NIX_HARDENING_ENABLE="" west build --no-sysbuild -b native_sim/native/64 -d
 /tmp/opencode/pb031-p3-decode tests/unit/decode -p -t run` reported 43/43
-passing; `backlog doctor` and `git diff --check` passed. P4 remains pending.
+passing; `backlog doctor` and `git diff --check` passed. P4 is accepted below.
 
 ### P4: Full acceptance
 
@@ -362,6 +362,37 @@ git diff --check
 Require warning-free generation, tests, and both receiver builds. Update test
 inventory or count baseline only if adding a new suite changes count. Do not
 change a baseline solely to mask migration failure.
+
+Accepted 2026-09-18 at tested commit
+`d8f2a8e4d5eb0d6a7af2310a2c29e21b08542f22`; immutable raw P4 evidence is
+`/tmp/opencode/pb031-p4.XgKVNM` with its log digests in `SHA256SUMS`. The
+canonical gate passed `74 PASS / 0 FAIL / 74 TOTAL` (41 Twister, 5 exec-only,
+25 Python, coverage, matrix, and BSim). Coverage baseline enforcement passed
+with population 37: 4969/5427 numeric lines, 2177/2984 numeric branches, and
+380/380 numeric functions. The matrix reported 0 errors and 0 notes.
+
+BSim Stage 1 passed all 17 scenarios and 26 runs. Exact fixture-derived TX
+sequence hashes included mono 10 ms `0xC5C840B0`, mono 7.5 ms `0x2CE69E65`,
+Mode A 10 ms L/R `0x8980C79D`/`0xDD25CC21`, Mode A 7.5 ms L/R
+`0x7D1EAC0F`/`0x001D6366`, Mode B 10 ms `0xE5D37A85`, Mode B 7.5 ms
+`0x4D9A9ED7`, and zero-stream `0x811C9DC5`. Payload- and recipe-aware
+portable PCM checks observed maximum error 257, maximum RMS 182, and minimum
+correlation Q15 32767, within immutable manifest limits 2048/512/32750.
+
+Both pristine receiver builds passed: nRF5340 app/net generated merged images,
+and nRF54L15 cpuapp/FLPR completed. Resolved build contract passed 96/96.
+nRF5340 emitted only documented `STATUS.md` classes (partition-manager
+deprecations, `__ASSERT()`, SW Split choice gap and experimental symbols,
+`BT_CTLR_ADVANCED_FEATURES`, and sysbuild partition-manager notice); nRF54L15
+emitted only documented watchdog no-sources and `__ASSERT()` CMake diagnostics.
+Neither build emitted a compiler warning or Kconfig assigned-value warning.
+Native test entropy and deliberately injected failure output were test-fixture
+evidence, not production-build diagnostics.
+
+No production behavior, production liblc3 revision or flags, production decoder
+code, fixture bytes, manifest limits, coverage baseline, or firmware feature
+changed during P4. The checkpointed `tests/test-matrix.json` repair only renamed
+the stale `audio_decode_sdu()` success witness to `test_fixture_mono_10ms`.
 
 ## Acceptance mapping
 

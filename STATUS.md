@@ -1,4 +1,4 @@
-# STATUS: le-audio-receiver, 2026-09-13
+# STATUS: le-audio-receiver, 2026-09-18
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
@@ -7,7 +7,7 @@
 > `docs/product/backlog/`. STATUS.md is an implementation and evidence snapshot,
 > not a second task list.
 
-> **Current state (2026-09-11):** System HIL plan of record revised
+> **Current state (2026-09-18):** System HIL plan of record revised
 > (`docs/development/system-hil-milestones.md`): nRF54L15 is the only
 > production receiver target, and receiver transport limits are frozen and
 > enforced by the runner (RH3a, 2026-09-03). RH3-7p5 is CLOSED by its
@@ -23,19 +23,26 @@
 > `8123b94`) is superseded by this verdict; its evidence stays immutable.
 > This covers 10 ms and 7.5 ms real-device transport through I2S
 > submission, not exact release artifacts, DAC activity, analog output,
-> audibility, or stereo channel mapping. Canonical software gate **72
-> PASS / 0 FAIL / 72 TOTAL** on the clean tree (40 Twister + 5 exec-only + 24 Python +
-> coverage + matrix + BSim Stage 1; the FR2 clean-tree run at `75a8093`
+> audibility, or stereo channel mapping. Canonical software gate **74
+> PASS / 0 FAIL / 74 TOTAL** on clean PB-031 P4 commit `d8f2a8e`
+> (41 Twister + 5 exec-only + 25 Python + coverage + matrix + BSim Stage 1;
+> the FR2 clean-tree run at `75a8093`
 > and the FR1 clean run at `1671a9f` are historical, with earlier clean
 > runs recorded in
 > `docs/development/documentation-hygiene-behavior-fix-results.md` at
 > `b8bd633` and the production-fix canonical run at `f2f9336`, after
 > the empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
 > (`f2f9336`) fixes — the committed coverage baseline is unchanged),
-> coverage population **37** (4962/5420 lines, 2153/2960
+> coverage population **37** (4969/5427 lines, 2177/2984
 > branches, 380/380 functions, committed baseline unchanged), build
-> contract **96/96**, BSim 17 scenarios / 26 runs pins byte-identical,
-> P1–P8 user pairing control ACCEPTED (nRF54L15 enabled, nRF5340
+> contract **96/96**, BSim 17 scenarios / 26 runs verify exact
+> fixture/sequence TX FNV hashes, mono 10 ms `0xC5C840B0`, mono 7.5 ms
+> `0x2CE69E65`, Mode A 10 ms L/R `0x8980C79D`/`0xDD25CC21`, Mode A 7.5 ms
+> L/R `0x7D1EAC0F`/`0x001D6366`, Mode B 10 ms `0xE5D37A85`, Mode B 7.5 ms
+> `0x4D9A9ED7`, and zero-stream `0x811C9DC5`; payload/recipe-aware portable
+> PCM limits are 2048/512/32750 and observed maximum/RMS/minimum-correlation
+> values are 257/182/32767, not byte-identical decoded PCM pins. P1–P8 user
+> pairing control ACCEPTED (nRF54L15 enabled, nRF5340
 > feature-off), FR1 deterministic firmware packager ACCEPTED, FR2
 > firmware-build CI ACCEPTED (hosted run 31326612845 PASS, workflow
 > artifacts only — no tag, GitHub Release, published binary, hardware
@@ -63,6 +70,26 @@
 > population 33, contract 79/79) are the **historical** R10 baseline
 > (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
 > for their own commits.
+
+## PB-031 portable LC3/PCM oracle P4 acceptance (2026-09-18)
+
+**P0 through P4 accepted, implementation complete.** Tested commit
+`d8f2a8e4d5eb0d6a7af2310a2c29e21b08542f22`; immutable raw evidence:
+`/tmp/opencode/pb031-p4.XgKVNM` and its `SHA256SUMS`. Full gate passed
+`74 PASS / 0 FAIL / 74 TOTAL`; coverage baseline passed with population 37,
+4969/5427 numeric lines, 2177/2984 numeric branches, and 380/380 numeric
+functions. BSim passed all 17 scenarios and 26 strict runs with exact TX hashes
+and portable PCM maximum/RMS/minimum-correlation 257/182/32767 under immutable
+2048/512/32750 limits. Both pristine receiver builds passed, and resolved build
+contract passed 96/96.
+
+nRF5340 diagnostics were only documented `Build warning diagnostics` table
+classes, including the required `BT_CTLR_ADVANCED_FEATURES` CMake diagnostic;
+nRF54L15 emitted only documented watchdog no-sources and `__ASSERT()` CMake
+diagnostics. No compiler or Kconfig assigned-value warning appeared. Test-only
+entropy and fault-injection output was not a production-build diagnostic. No
+production behavior, production liblc3 revision or flags, decoder code, fixture
+bytes, manifest limits, coverage baseline, or firmware feature changed.
 
 ## Firmware CI — logical parallelization acceptance (PR 12, 2026-09-13)
 
