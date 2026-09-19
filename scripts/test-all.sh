@@ -18,9 +18,9 @@
 # All suite discovery comes from scripts/test_inventory.py (the single
 # filesystem classification source shared with test-coverage.sh and
 # check-test-matrix.py) — adding a suite cannot silently omit it from the
-# gate.  Current inventory (scripts/test_inventory.py): 40 twister + 5
-# exec-only + 24 Python = 69 unit children; the canonical gate is 72
-# children (69 + coverage + matrix + BSim).
+# gate.  Current inventory (scripts/test_inventory.py): 41 Twister + 5
+# exec-only + 25 Python = 71 unit children; the canonical gate is 74
+# children (71 + coverage + matrix + BSim).
 #
 # Logical phase selection:
 #   ./scripts/test-all.sh                 # all phases (historical default)

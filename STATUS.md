@@ -1,9 +1,13 @@
-# STATUS: le-audio-receiver, 2026-09-13
+# STATUS: le-audio-receiver, 2026-09-19
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
 
-> **Current state (2026-09-11):** System HIL plan of record revised
+> **Product backlog:** current product work is tracked only in
+> `docs/product/backlog/`. STATUS.md is an implementation and evidence snapshot,
+> not a second task list.
+
+> **Current state (2026-09-19):** System HIL plan of record revised
 > (`docs/development/system-hil-milestones.md`): nRF54L15 is the only
 > production receiver target, and receiver transport limits are frozen and
 > enforced by the runner (RH3a, 2026-09-03). RH3-7p5 is CLOSED by its
@@ -19,19 +23,26 @@
 > `8123b94`) is superseded by this verdict; its evidence stays immutable.
 > This covers 10 ms and 7.5 ms real-device transport through I2S
 > submission, not exact release artifacts, DAC activity, analog output,
-> audibility, or stereo channel mapping. Canonical software gate **72
-> PASS / 0 FAIL / 72 TOTAL** on the clean tree (40 Twister + 5 exec-only + 24 Python +
-> coverage + matrix + BSim Stage 1; the FR2 clean-tree run at `75a8093`
+> audibility, or stereo channel mapping. Canonical software gate **74
+> PASS / 0 FAIL / 74 TOTAL** on clean PB-031 P4 commit `d8f2a8e`
+> (41 Twister + 5 exec-only + 25 Python + coverage + matrix + BSim Stage 1;
+> the FR2 clean-tree run at `75a8093`
 > and the FR1 clean run at `1671a9f` are historical, with earlier clean
 > runs recorded in
 > `docs/development/documentation-hygiene-behavior-fix-results.md` at
 > `b8bd633` and the production-fix canonical run at `f2f9336`, after
 > the empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
 > (`f2f9336`) fixes — the committed coverage baseline is unchanged),
-> coverage population **37** (4962/5420 lines, 2153/2960
+> coverage population **37** (4969/5427 lines, 2177/2984
 > branches, 380/380 functions, committed baseline unchanged), build
-> contract **96/96**, BSim 17 scenarios / 26 runs pins byte-identical,
-> P1–P8 user pairing control ACCEPTED (nRF54L15 enabled, nRF5340
+> contract **96/96**, BSim 17 scenarios / 26 runs verify exact
+> fixture/sequence TX FNV hashes, mono 10 ms `0xC5C840B0`, mono 7.5 ms
+> `0x2CE69E65`, Mode A 10 ms L/R `0x8980C79D`/`0xDD25CC21`, Mode A 7.5 ms
+> L/R `0x7D1EAC0F`/`0x001D6366`, Mode B 10 ms `0xE5D37A85`, Mode B 7.5 ms
+> `0x4D9A9ED7`, and zero-stream `0x811C9DC5`; payload/recipe-aware portable
+> PCM limits are 2048/512/32750 and observed maximum/RMS/minimum-correlation
+> values are 257/182/32767, not byte-identical decoded PCM pins. P1–P8 user
+> pairing control ACCEPTED (nRF54L15 enabled, nRF5340
 > feature-off), FR1 deterministic firmware packager ACCEPTED, FR2
 > firmware-build CI ACCEPTED (hosted run 31326612845 PASS, workflow
 > artifacts only — no tag, GitHub Release, published binary, hardware
@@ -44,19 +55,47 @@
 > logical parallelization ACCEPTED (hosted run `34725825883`: `test-unit`
 > unblocks `firmware`, all three workers feed aggregate `tests`, and `release`
 > joins `tests` with `firmware` and was SKIPPED on pull_request),
-> and FR4 exact-artifact hardware acceptance
-> **BLOCKED**: the exact draft `v0.1.0` FAILED mandatory nRF5340 mono
-> acceptance and remains private, unpublished, and untagged; the local
-> replacement preflight passed both targets but is not exact-artifact
-> acceptance; the root `VERSION` remains `0.1.0` and the firmware-build
-> workflow is version-driven; no replacement version or candidate has been
-> selected; a replacement candidate must be created through the
-> trusted-main lifecycle and its exact assets must pass FR4 before FR5
-> can publish anything; nothing published.
+> and FR4 exact-artifact hardware acceptance **BLOCKED**: historical exact draft
+> `v0.1.0` FAILED mandatory nRF5340 mono acceptance. It served as stable harness
+> baseline, then its GitHub draft and assets were deleted 2026-09-19;
+> `gh release view v0.1.0` now fails, the GitHub release list is empty, and
+> `refs/tags/v0.1.0` is absent. Nothing was published. The local replacement
+> preflight passed both targets but remains historical preflight, not
+> exact-artifact acceptance. The root `VERSION` remains `0.1.0`, and product
+> owner selected it for a fresh replacement candidate because it was never
+> published or tagged. PB-031 has not been human-merged, so no fresh candidate
+> exists. After PB-031 human
+> merge and green hosted gates, trusted-main may create a new immutable
+> nRF54L15-only candidate if no release/tag collision exists. Its exact new
+> assets must pass active nRF54L15 FR4 through
+> [PB-007](docs/product/backlog/tasks/pb-007%20-%20Accept-exact-candidate-through-RH4-and-FR4.md)
+> before [PB-009](docs/product/backlog/tasks/pb-009%20-%20Publish-first-public-firmware-release.md)
+> can publish anything; FR4/FR5 remain blocked and failed assets must never be
+> restored or clobbered.
 > The R0–R10 refactor figures below (gate 55/0/55,
 > population 33, contract 79/79) are the **historical** R10 baseline
 > (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
 > for their own commits.
+
+## PB-031 portable LC3/PCM oracle P4 acceptance (2026-09-18)
+
+**P0 through P4 accepted, implementation complete.** Tested commit
+`d8f2a8e4d5eb0d6a7af2310a2c29e21b08542f22`; immutable raw evidence:
+`/tmp/opencode/pb031-p4.XgKVNM` and its `SHA256SUMS`. Full gate passed
+`74 PASS / 0 FAIL / 74 TOTAL`; coverage baseline passed with population 37,
+4969/5427 numeric lines, 2177/2984 numeric branches, and 380/380 numeric
+functions. BSim passed all 17 scenarios and 26 strict runs with exact TX hashes
+and portable PCM maximum/RMS/minimum-correlation 257/182/32767 under immutable
+2048/512/32750 limits. Both pristine receiver builds passed, and resolved build
+contract passed 96/96.
+
+nRF5340 diagnostics were only documented `Build warning diagnostics` table
+classes, including the required `BT_CTLR_ADVANCED_FEATURES` CMake diagnostic;
+nRF54L15 emitted only documented watchdog no-sources and `__ASSERT()` CMake
+diagnostics. No compiler or Kconfig assigned-value warning appeared. Test-only
+entropy and fault-injection output was not a production-build diagnostic. No
+production behavior, production liblc3 revision or flags, decoder code, fixture
+bytes, manifest limits, coverage baseline, or firmware feature changed.
 
 ## Firmware CI — logical parallelization acceptance (PR 12, 2026-09-13)
 
@@ -212,9 +251,13 @@ one CIS, receiver reported `SDUs=8876 decoded=8876 plc=0 decode_err=0
 i2s_underrun=0 stream_reset=225 empty_sdu=0`, and the receiver emitted 225
 each of `i2s_nrfx: Next buffers not supplied on time`, `i2s_nrfx: Cannot
 write in state: 4`, and `audio_i2s: I2S underrun, restarting DMA`. The
-deterministic failure stopped the matrix before nRF54L15. The exact
-candidate therefore FAILED FR4 and remains private, unpublished, and
-intentionally untagged.  The local replacement preflight (pristine builds
+deterministic failure stopped the matrix before nRF54L15. The exact candidate
+therefore FAILED FR4. It served as stable harness baseline, then its GitHub
+draft and assets were deleted 2026-09-19; historical draft ID, target, hash,
+and failure evidence remain immutable. `gh release view v0.1.0` now fails, the
+GitHub release list is empty, and `refs/tags/v0.1.0` is absent. The deleted
+draft is no longer a candidate; nothing was published. The local replacement
+preflight (pristine builds
 from committed HEAD `5e7f502`) PASSED all six rows on both targets with
 zero decode errors, underruns, stream resets, and cadence RESYNC warnings
 (see `docs/development/firmware-release-fr4-results.md` for row, stack, and
@@ -226,11 +269,15 @@ unchanged), BSim pins byte-identical.  Evidence:
 `docs/development/firmware-release-fr4-results.md`; procedure
 `docs/development/firmware-release-fr4-procedure.md` (historical, executed
 2026-08-10); retained run dirs under `/tmp/opencode/` (exact draft
-`fr4-v0.1.0-OEp9Kh`, cadence local `fr4-cadence-local-*`).  A replacement
-candidate must be created through the accepted trusted-main lifecycle and
-its exact immutable assets must rerun the full FR4 procedure on both
-targets before FR5 can publish anything; no replacement version or
-candidate has been selected.  FR4 and FR5 remain blocked; nothing
+`fr4-v0.1.0-OEp9Kh`, cadence local `fr4-cadence-local-*`). Product owner
+selected unreleased, untagged `0.1.0` for a fresh replacement candidate because
+it was never published or tagged; the root `VERSION` remains `0.1.0`. PB-031
+has not been human-merged, so no fresh candidate exists. Only after PB-031 human
+merge and green hosted
+gates may the trusted-main workflow create a fresh immutable nRF54L15-only
+candidate after verifying no release/tag collision. Its exact assets must pass
+active nRF54L15 FR4 through PB-007 before FR5 can publish anything; failed
+assets must never be restored or clobbered. FR4 and FR5 remain blocked; nothing
 published.
 
 ## System HIL: TRANSPORT_RUNTIME_ACCEPTED (2026-09-09)
@@ -363,11 +410,11 @@ git tag.  Corrected read-only checks passed independently against that same
 draft; the later hosted correction runs passed firmware and PR topology,
 and the final merged main run `31334643418` (main push `b70b978...`, job
 `93298378307`) PASS with release correctly SKIPPED on unchanged `VERSION`.
-Draft `v0.1.0` is
-private, unpublished, and intentionally untagged (authenticated git-ref
-lookup returns HTTP 404 as expected); the corrected paginated collision
-check detects it without printing release bodies.  No git tag, published
-binary, hardware acceptance, MCUboot, or DFU exists yet.  Local evidence:
+At FR3 closeout, draft `v0.1.0` was private, unpublished, and intentionally
+untagged (authenticated git-ref lookup returned HTTP 404 as expected); the
+corrected paginated collision check detected it without printing release
+bodies. At that time, no git tag, published binary, hardware acceptance,
+MCUboot, or DFU existed yet. Local evidence:
 canonical gate **65 PASS / 0 FAIL / 65 TOTAL** (35 twister + 5 exec-only +
 22 Python + coverage + matrix + BSim Stage 1), build contract **95/95**,
 coverage unchanged (population 36, 4674/5130 L, 2030/2824 B, 358/358 F),
@@ -2321,7 +2368,7 @@ Phase 4 evidence consolidated in `docs/development/phase4-acceptance-results.md`
 Neither target produces compiler warnings in application or Zephyr source.
 All printed diagnostics are Kconfig/CMake configuration messages.
 
-**nRF5340 (8 diagnostics):**
+**nRF5340 (9 diagnostics):**
 
 | Diagnostic | Classification | Cannot remove because |
 |---|---|---|
@@ -2331,6 +2378,7 @@ All printed diagnostics are Kconfig/CMake configuration messages.
 | Experimental `BT_LL_SW_SPLIT` | Required architecture | Only ISO-capable open-source controller for nRF5340 |
 | Experimental `BT_CTLR_SET_HOST_FEATURE` | Required for ISO | Feature negotiation required |
 | Experimental `BT_CTLR_PERIPHERAL_ISO` | Required for ISO | Peripheral ISO support required |
+| `CONFIG_BT_CTLR_ADVANCED_FEATURES=y, Advanced Features' default value change could change Zephyr Bluetooth Controller's functional behavior` | Upstream NCS v3.3.0 CMake diagnostic, not a compiler or Kconfig assigned-value warning | Imported required peripheral-ISO SW Split overlay enables `BT_CTLR_ADVANCED_FEATURES` to expose subordinate reservation controls and resolves `BT_CTLR_EVENT_OVERHEAD_RESERVE_MAX=y`; Zephyr emits this warning whenever this menu symbol is enabled. Removing it would hide required controls and change controller reservation behavior. |
 | `SB_CONFIG_PARTITION_MANAGER` sysbuild warning | Required sysbuild infrastructure | Partition manager required by NCS build system |
 
 **nRF54L15 configuration diagnostics:**

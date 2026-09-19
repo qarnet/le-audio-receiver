@@ -153,7 +153,7 @@ required. This project's priority is the native HCI path.
 | [Technology: nRF5340](docs/technology/nrf5340.md) | Dual-core architecture, controller, audio PLL, flashing constraints |
 | [Technology: nRF54L15](docs/technology/nrf54l15.md) | Single-core SDC path, fixed clock, rate matching, ASRC |
 | [Flashing (developers)](docs/flashing.md) | Detailed nRF5340 dual-core flashing workflow |
-| [Planned features](PLANNED_FEATURES.md) | Structured backlog of planned work |
+| [Product backlog](docs/product/README.md) | Backlog.md tasks, lifecycle, and current product work |
 
 ## License
 

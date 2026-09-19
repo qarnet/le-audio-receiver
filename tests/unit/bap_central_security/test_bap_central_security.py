@@ -122,6 +122,17 @@ class EscalationRawProc(FakeRawProc):
         return self._rc
 
 
+class CloseErrorPipe:
+    """Pipe double used to verify close errors remain visible."""
+
+    def __init__(self):
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+        raise RuntimeError("close boom")
+
+
 class _StateProps:
     """Scripted Properties interface state used by multiple tests."""
 
@@ -287,6 +298,10 @@ class TestWaitForHelperReady(unittest.TestCase):
 
 
 class TestRawHciConnect(unittest.TestCase):
+    def assert_pipes_closed(self, proc):
+        self.assertTrue(proc.stdout.closed, "helper stdout closed")
+        self.assertTrue(proc.stderr.closed, "helper stderr closed")
+
     def test_exact_argv_and_hold(self):
         conn = sec.RawHciConnect(PEER, 30, 0)
         self.assertEqual(
@@ -314,15 +329,18 @@ class TestRawHciConnect(unittest.TestCase):
 
     def test_spawn_prints_and_uses_injected(self):
         seen = {}
+        proc = FakeRawProc()
 
         def fake_spawn(argv):
             seen["argv"] = argv
-            return FakeRawProc()
+            return proc
 
         conn = sec.RawHciConnect(PEER, 30, 0, spawn=fake_spawn)
         _, out = capture(lambda: conn.spawn())
         self.assertIn("[main] Creating persistent ACL via raw HCI (hold=150s)...", out)
         self.assertEqual(seen["argv"], conn.argv())
+        conn.terminate()
+        self.assert_pipes_closed(proc)
 
     def test_wait_ready_success(self):
         conn = sec.RawHciConnect(PEER, 30, 0)
@@ -331,6 +349,8 @@ class TestRawHciConnect(unittest.TestCase):
         _, out = capture(lambda: conn.wait_ready())
         self.assertIn("[main] Raw HCI link confirmed:", out)
         self.assertFalse(proc.terminated)
+        conn.terminate()
+        self.assert_pipes_closed(proc)
 
     def test_wait_ready_early_exit_terminates(self):
         conn = sec.RawHciConnect(PEER, 30, 0)
@@ -345,6 +365,7 @@ class TestRawHciConnect(unittest.TestCase):
         self.assertIn(
             "[error] Raw HCI connect failed: helper exited before ready", buf.getvalue()
         )
+        self.assert_pipes_closed(proc)
 
     def test_wait_ready_timeout_terminates(self):
         conn = sec.RawHciConnect(PEER, 30, 0, ready_deadline_s=0.05)
@@ -358,6 +379,7 @@ class TestRawHciConnect(unittest.TestCase):
         self.assertIn(
             "[error] Raw HCI connect failed: helper ready-line timeout", buf.getvalue()
         )
+        self.assert_pipes_closed(proc)
 
     def test_wait_connected_ok(self):
         conn = sec.RawHciConnect(PEER, 30, 0)
@@ -389,6 +411,7 @@ class TestRawHciConnect(unittest.TestCase):
             "[error] Device1 not Connected after confirmed raw HCI link",
             buf.getvalue(),
         )
+        self.assert_pipes_closed(proc)
 
     def test_terminate_verbose_idempotent(self):
         conn = sec.RawHciConnect(PEER, 30, 0)
@@ -399,6 +422,7 @@ class TestRawHciConnect(unittest.TestCase):
         conn.terminate(verbose=True)  # idempotent: no second print/terminate
         self.assertEqual(proc.terminate_calls, 1)
         self.assertEqual(out.count("[cleanup] Raw-HCI helper terminated"), 1)
+        self.assert_pipes_closed(proc)
 
     def test_terminate_sigterm_timeout_escalates_to_kill(self):
         """SIGTERM wait timeout must escalate to SIGKILL and still reap."""
@@ -409,6 +433,7 @@ class TestRawHciConnect(unittest.TestCase):
         self.assertEqual(proc.terminate_calls, 1)
         self.assertEqual(proc.kill_calls, 1)
         self.assertIn("[cleanup] Raw-HCI helper terminated", out)
+        self.assert_pipes_closed(proc)
 
     def test_terminate_sigkill_timeout_surfaces_failure(self):
         """Both SIGTERM and SIGKILL waits timing out must surface the
@@ -420,6 +445,7 @@ class TestRawHciConnect(unittest.TestCase):
         _, err = capture_err(lambda: None)
         self.assertEqual(proc.kill_calls, 1)
         self.assertNotIn("[cleanup] Raw-HCI helper terminated", out)
+        self.assert_pipes_closed(proc)
         # Fresh connection for the stderr assertion (terminate is idempotent).
         conn2 = sec.RawHciConnect(PEER, 30, 0)
         proc2 = EscalationRawProc(first_wait_timeout=True, second_wait_timeout=True)
@@ -427,6 +453,7 @@ class TestRawHciConnect(unittest.TestCase):
         _, err = capture_err(lambda: conn2.terminate(verbose=True))
         self.assertIn("did not exit after SIGKILL", err)
         self.assertNotIn("[cleanup] Raw-HCI helper terminated", err)
+        self.assert_pipes_closed(proc2)
 
     def test_terminate_already_exited_helper(self):
         """terminate() on an already-exited (ProcessLookupError) helper is
@@ -443,6 +470,7 @@ class TestRawHciConnect(unittest.TestCase):
         self.assertIn("[cleanup] Raw-HCI helper terminated", out)
         _, err = capture_err(lambda: conn.terminate(verbose=True))
         self.assertEqual(err, "")
+        self.assert_pipes_closed(proc)
 
     def test_terminate_silent_failure_still_surfaces(self):
         """An unreapable helper surfaces on stderr even on the silent
@@ -458,6 +486,7 @@ class TestRawHciConnect(unittest.TestCase):
         _, err = capture_err(lambda: conn.terminate())
         self.assertIn("[error] Raw-HCI helper termination failed: wait boom", err)
         self.assertNotIn("[cleanup] Raw-HCI helper terminated", err)
+        self.assert_pipes_closed(proc)
 
     def test_terminate_error_tolerated(self):
         conn = sec.RawHciConnect(PEER, 30, 0)
@@ -470,6 +499,25 @@ class TestRawHciConnect(unittest.TestCase):
         conn.proc = proc
         _, err = capture_err(lambda: conn.terminate(verbose=True))
         self.assertIn("[error] Raw-HCI helper termination failed: wait boom", err)
+        self.assert_pipes_closed(proc)
+
+        conn2 = sec.RawHciConnect(PEER, 30, 0)
+        proc2 = FakeRawProc(ready_payload=READY_PREFIX + b"\n")
+        proc2.stderr.close()
+        close_error = CloseErrorPipe()
+        proc2.stderr = close_error
+        conn2.proc = proc2
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            conn2.terminate(verbose=True)
+        self.assertIn(
+            "[error] Raw-HCI helper pipe close failed: stderr: close boom",
+            err.getvalue(),
+        )
+        self.assertNotIn("[cleanup] Raw-HCI helper terminated", out.getvalue())
+        self.assertTrue(proc2.stdout.closed, "helper stdout closed")
+        self.assertEqual(close_error.close_calls, 1)
 
     def test_terminate_never_errors_when_not_spawned(self):
         conn = sec.RawHciConnect(PEER, 30, 0)
@@ -1058,6 +1106,8 @@ class TestCleanupOrdering(unittest.TestCase):
 
         self.assertEqual(order, ["disconnect", "helper"])
         self.assertTrue(proc.terminated)
+        self.assertTrue(proc.stdout.closed)
+        self.assertTrue(proc.stderr.closed)
 
     def test_owner_run_idempotent(self):
         from bap_central import CentralCleanup  # noqa: E402

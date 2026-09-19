@@ -231,7 +231,7 @@
     {
      "api": "audio_decode_sdu",
      "outcome": "0",
-     "witness": "test_golden_mono_10ms"
+     "witness": "test_fixture_mono_10ms"
     },
     {
      "api": "audio_decode_sdu",

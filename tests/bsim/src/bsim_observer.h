@@ -15,6 +15,7 @@
 #define BSIM_OBSERVER_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <zephyr/bluetooth/audio/audio.h>
@@ -51,23 +52,29 @@ void bsim_observer_release_sink_stop(void);
 /** Mode A SDU arrived without the ISO TS flag (half skipped). */
 void bsim_observer_missing_ts(void);
 
-/**
- * Record the source-validity of the two halves about to be pushed
- * (called by the production receive path immediately before
- * audio_sink_push): mono/Mode B = packet BT_ISO_FLAGS_VALID for both
- * halves; Mode A = each half's own original VALID flag (a PLC half is
- * never source-valid).  Affects only the test oracle, never production
- * state.
- */
-void bsim_observer_pre_push(bool l_valid, bool r_valid);
+#define BSIM_OBSERVER_MAX_PAYLOAD_BYTES 120U
 
-/** Source validity of the most recently recorded pre-push SDU (both
- *  halves valid). */
-bool bsim_observer_get_last_push_src_valid(void);
+struct bsim_observer_push_half {
+	bool source_valid;
+	uint16_t payload_len;
+	uint8_t payload[BSIM_OBSERVER_MAX_PAYLOAD_BYTES];
+};
 
-/** Per-half source validity of the most recently recorded pre-push SDU. */
-bool bsim_observer_get_last_push_l_valid(void);
-bool bsim_observer_get_last_push_r_valid(void);
+struct bsim_observer_push {
+	struct bsim_observer_push_half left;
+	struct bsim_observer_push_half right;
+};
+
+/* Copy source-validity and exact compressed payload bytes immediately before
+ * a sink push. Valid halves require a non-null 1..120-byte payload; invalid
+ * halves require NULL/zero. The snapshot is consumed by the immediate sink
+ * call and never retains caller storage. */
+void bsim_observer_pre_push(bool l_valid, const uint8_t *l_payload, size_t l_payload_len,
+			    bool r_valid, const uint8_t *r_payload, size_t r_payload_len);
+
+/* Copy and consume the one fresh pre-push snapshot. False means absent,
+ * malformed, or already consumed metadata. */
+bool bsim_observer_take_push(struct bsim_observer_push *out);
 
 /* ── queries for the receiver scenario driver ────────────────────── */
 

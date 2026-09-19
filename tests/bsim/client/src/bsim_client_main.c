@@ -46,9 +46,18 @@
 
 /* Wait-for-sends pacing: generous margins keep teardown/reconnect timing
  * deterministic in BSim while never outrunning the receiver. */
-#define SEND_POLL_MS       50
-#define SEND_WAIT_MS       15000
-#define TEARDOWN_MARGIN_MS 500
+#define SEND_POLL_MS                          50
+#define SEND_WAIT_MS                          15000
+#define TEARDOWN_MARGIN_MS                    500
+#define COMPLETION_WAIT_MS                    10000
+#define MODEA_ONE_CIS_LOSS_COUNT              18U
+#define MODEA_ONE_CIS_REFILL_LEAD_COMPLETIONS 1U
+#define MODEA_ONE_CIS_PRE_GAP_SENDS           48U
+
+BUILD_ASSERT(MODEA_ONE_CIS_PRE_GAP_SENDS > 0U, "pre-gap sends must be nonzero");
+BUILD_ASSERT(MODEA_ONE_CIS_PRE_GAP_SENDS < 110U, "pre-gap sends must be below final send limit");
+BUILD_ASSERT(MODEA_ONE_CIS_LOSS_COUNT > MODEA_ONE_CIS_REFILL_LEAD_COMPLETIONS,
+	     "loss count must exceed refill lead");
 
 /* ── scenario ids (mirror receiver + runner) ─────────────────────── */
 
@@ -79,6 +88,7 @@ static struct bt_bap_unicast_group *unicast_group;
 static struct bt_bap_ep *sink_eps[MAX_SINKS];
 static struct bt_bap_ep *src_eps[MAX_SRCS];
 static struct bt_bap_stream streams[MAX_STREAMS];
+static atomic_uint stream_completion_counts[MAX_STREAMS];
 
 /* ASCS response capture (exact codes/reasons from the listener). */
 static struct bt_bap_ascs_rsp cfg_rsps[24];
@@ -277,12 +287,36 @@ static void stream_connected_cb(struct bt_bap_stream *stream)
 	k_sem_give(&sem_stream_connected);
 }
 
+static void stream_stopped(struct bt_bap_stream *stream, uint8_t reason)
+{
+	(void)stream;
+	(void)reason;
+}
+
+static void stream_released(struct bt_bap_stream *stream)
+{
+	(void)stream;
+}
+
+static void stream_sent(struct bt_bap_stream *stream)
+{
+	for (size_t i = 0U; i < ARRAY_SIZE(streams); i++) {
+		if (stream == &streams[i]) {
+			atomic_fetch_add(&stream_completion_counts[i], 1U);
+			return;
+		}
+	}
+}
+
 static struct bt_bap_stream_ops stream_ops = {
 	.configured = stream_configured,
 	.qos_set = stream_qos_set,
 	.enabled = stream_enabled,
 	.started = stream_started,
 	.connected = stream_connected_cb,
+	.stopped = stream_stopped,
+	.released = stream_released,
+	.sent = stream_sent,
 };
 
 /* ── scanning / connecting ───────────────────────────────────────── */
@@ -518,7 +552,7 @@ static int connect_streams(size_t stream_cnt, size_t base)
 }
 
 /*
- * Start streams in the given order.  Reverse start (scenario 5) begins
+ * Observe sink streams in the given order. Reverse start (scenario 5) begins
  * with stream 1 so both Mode A transmitted sequence counters start at
  * zero when TX finally releases (TX holds until both are streaming).
  */
@@ -526,24 +560,21 @@ static int start_streams(size_t stream_cnt, bool reverse, size_t base)
 {
 	for (size_t step = 0U; step < stream_cnt; step++) {
 		size_t i = (reverse ? (stream_cnt - 1U - step) : step) + base;
-		int err = bt_bap_stream_start(&streams[i]);
+		struct bt_bap_ep_info ep_info;
+		int err = bt_bap_ep_get_info(streams[i].ep, &ep_info);
 
-		/* -EINVAL: server already started (sink direction);
-		 * -EALREADY: already started.
-		 * -EBADMSG: the server auto-streams sink ASEs as soon as the
-		 * CIS connects (receiver_ready path), so the local ep state is
-		 * already STREAMING before the client Start op is sent. */
-		if (err == -EALREADY || err == -EINVAL || err == -EBADMSG) {
-			printk("CLI stream %zu already streaming (start %d)\n", i, err);
+		if (err != 0) {
+			return err;
+		}
+		if (ep_info.state == BT_BAP_EP_STATE_STREAMING) {
+			printk("CLI stream %zu already streaming\n", i);
 			continue;
 		}
-		if (err != 0) {
-			return err;
+		if (ep_info.state != BT_BAP_EP_STATE_ENABLING) {
+			return -EBADMSG;
 		}
-		err = k_sem_take(&sem_stream_started, K_SECONDS(10));
-		if (err != 0) {
-			return err;
-		}
+
+		printk("CLI stream %zu sink auto-start pending\n", i);
 	}
 	return 0;
 }
@@ -587,11 +618,41 @@ static int wait_for_sends(size_t stream_idx, uint32_t target)
 	return 0;
 }
 
+static uint32_t stream_completion_count(size_t stream_idx)
+{
+	return atomic_load(&stream_completion_counts[stream_idx]);
+}
+
+static int wait_for_completions(size_t stream_idx, uint32_t target)
+{
+	uint32_t waited_ms = 0U;
+
+	while (stream_completion_count(stream_idx) < target) {
+		if (waited_ms >= COMPLETION_WAIT_MS) {
+			return -ETIMEDOUT;
+		}
+		k_sleep(K_MSEC(1));
+		waited_ms++;
+	}
+
+	return 0;
+}
+
 /* ── scenario plumbing ───────────────────────────────────────────── */
 
 static int bt_init(void)
 {
+	bt_addr_le_t identity = {
+		.type = BT_ADDR_LE_RANDOM,
+		.a = {.val = {0x01, 0x00, 0x00, 0x00, 0x00, 0xC0}},
+	};
 	int err;
+
+	err = bt_id_create(&identity, NULL);
+	if (err != BT_ID_DEFAULT) {
+		printk("CLI identity create failed: %d\n", err);
+		return err < 0 ? err : -EIO;
+	}
 
 	err = bt_enable(NULL);
 	if (err != 0) {
@@ -661,11 +722,42 @@ static int stream_up(struct bt_bap_lc3_preset **presets, size_t stream_cnt, bool
 	return 0;
 }
 
-static void client_pass(const char *scenario)
+static int client_tx_result(size_t stream_idx, struct bsim_tx_result *result)
 {
-	PASS("bsim_client: scenario=%s sends0=%u sends1=%u cfgrsps=%zu relrsps=%zu disrsps=%zu\n",
-	     scenario, bsim_tx_send_count(&streams[0]), bsim_tx_send_count(&streams[1]),
-	     cfg_rsp_cnt, rel_rsp_cnt, dis_rsp_cnt);
+	int err = bsim_tx_result(&streams[stream_idx], result);
+
+	if (err == -ENODATA) {
+		result->send_count = 0U;
+		result->fnv1a_hash = BSIM_TX_FNV1A_OFFSET_BASIS;
+		return 0;
+	}
+	if (err != 0) {
+		FAIL("client: TX result %zu failed: %d\n", stream_idx, err);
+		return err;
+	}
+
+	return 0;
+}
+
+static int client_pass(const char *scenario)
+{
+	struct bsim_tx_result result[2];
+	int err;
+
+	for (size_t i = 0U; i < ARRAY_SIZE(result); i++) {
+		err = client_tx_result(i, &result[i]);
+		if (err != 0) {
+			return err;
+		}
+	}
+
+	PASS("bsim_client: scenario=%s sends0=%u sends1=%u cfgrsps=%zu relrsps=%zu disrsps=%zu "
+	     "txc0=%u txh0=0x%08X txc1=%u txh1=0x%08X\n",
+	     scenario, (unsigned int)result[0].send_count, (unsigned int)result[1].send_count,
+	     cfg_rsp_cnt, rel_rsp_cnt, dis_rsp_cnt, (unsigned int)result[0].send_count,
+	     (unsigned int)result[0].fnv1a_hash, (unsigned int)result[1].send_count,
+	     (unsigned int)result[1].fnv1a_hash);
+	return 0;
 }
 
 /* ── scenario implementations ────────────────────────────────────── */
@@ -719,8 +811,7 @@ static int scenario_normal(const char *scenario, struct bt_bap_lc3_preset **pres
 	/* Let the in-flight SDUs drain to the receiver. */
 	k_sleep(K_MSEC(TEARDOWN_MARGIN_MS));
 
-	client_pass(scenario);
-	return 0;
+	return client_pass(scenario);
 }
 
 /* Scenario 8: one malformed one-byte SDU at fixed sequence, then resume. */
@@ -763,8 +854,7 @@ static int scenario_invalid_sdu_resume(void)
 	}
 	k_sleep(K_MSEC(TEARDOWN_MARGIN_MS));
 
-	client_pass("invalid_sdu_resume_10ms");
-	return 0;
+	return client_pass("invalid_sdu_resume_10ms");
 }
 
 /* Scenario 9: first Mode A ASE stops while the second keeps sending. */
@@ -882,8 +972,7 @@ static int scenario_modea_first_stop(void)
 	bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 	k_sem_take(&sem_disconnected, K_SECONDS(10));
 
-	client_pass("modea_first_stop_10ms");
-	return 0;
+	return client_pass("modea_first_stop_10ms");
 }
 
 /* Scenario 10: Release directly from streaming (no prior Disable). */
@@ -942,8 +1031,7 @@ static int scenario_release_without_disable(void)
 	bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 	k_sem_take(&sem_disconnected, K_SECONDS(10));
 
-	client_pass("release_without_disable_10ms");
-	return 0;
+	return client_pass("release_without_disable_10ms");
 }
 
 /* Scenario 11: disconnect while streaming. */
@@ -989,8 +1077,7 @@ static int scenario_disconnect_streaming(void)
 		return err;
 	}
 
-	client_pass("disconnect_streaming_10ms");
-	return 0;
+	return client_pass("disconnect_streaming_10ms");
 }
 
 /* Scenario 12: disconnect, reconnect, second mono 10 ms stream. */
@@ -1100,8 +1187,7 @@ static int scenario_reconnect_second_stream(void)
 		return err;
 	}
 
-	client_pass("reconnect_second_stream_10ms");
-	return 0;
+	return client_pass("reconnect_second_stream_10ms");
 }
 
 /* Scenario 13: source-direction Config must get CONF_UNSUPPORTED / NONE. */
@@ -1131,8 +1217,7 @@ static int scenario_unsupported_source(void)
 	bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 	k_sem_take(&sem_disconnected, K_SECONDS(10));
 
-	client_pass("unsupported_source_direction");
-	return 0;
+	return client_pass("unsupported_source_direction");
 }
 
 /* Scenario 14: two valid configs, third NO_MEM, clean releases, reuse. */
@@ -1208,8 +1293,7 @@ static int scenario_no_free_sink_slot(void)
 	bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 	k_sem_take(&sem_disconnected, K_SECONDS(10));
 
-	client_pass("no_free_sink_slot");
-	return 0;
+	return client_pass("no_free_sink_slot");
 }
 
 /* ── Scenario 15: invalid codec field variants ───────────────────── */
@@ -1429,8 +1513,7 @@ static int scenario_invalid_codec_fields(void)
 	bt_conn_disconnect(default_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 	k_sem_take(&sem_disconnected, K_SECONDS(10));
 
-	client_pass("invalid_codec_fields");
-	return 0;
+	return client_pass("invalid_codec_fields");
 }
 
 /* Scenario 17: duplicate same-slot Release must be rejected and the app
@@ -1559,8 +1642,7 @@ static int scenario_duplicate_release(void)
 		return err;
 	}
 
-	client_pass("duplicate_release_10ms");
-	return 0;
+	return client_pass("duplicate_release_10ms");
 }
 
 /* ── test framework ──────────────────────────────────────────────── */
@@ -1740,17 +1822,17 @@ static void test_main_normal_modea_reverse_start(void)
 }
 
 /*
- * Scenario 16: Mode A with a bounded mid-stream pause on the right
- * stream (TX paused ~200 ms of sim time after the first 50 sends).  The
- * controller keeps the CIG running, so the right CIS transmits no data
- * for those events and the receiver's ISOAL delivers LOST callbacks on
- * the right channel only — the same observable single-CIS loss as an
- * RF-erased burst.  The receiver's Mode A event assembler must keep
- * output cadence: every lost right event is concealed (PLC) and paired
- * with its left half, so the receiver still produces 100 pushes.  The
- * unaffected left channel stays byte-identical to the lossless modea
- * oracle (pinned L hash).  Both streams send 110 SDUs (the pause only
- * delays the right stream).
+ * Scenario 16: Mode A with an exact mid-stream right send cap. The cap places
+ * the gap after 48 valid right fixture frames. Draining right controller
+ * completions ensures already accepted frames finish. The left stream then
+ * advances 17 pause-window controller completions; one measured sender-refill
+ * lead completion produces 18 peer-observed missing-right events. .sent
+ * synchronizes fixture state, but the receiver remains peer-delivery truth.
+ * The receiver's Mode A event assembler must keep output cadence: every lost
+ * right event is concealed (PLC) and paired with its left half, so the receiver
+ * still produces 100 pushes. The unaffected left channel stays byte-identical
+ * to the lossless Mode A oracle (pinned L hash). Both streams send 110 SDUs
+ * (the cap only delays the right stream).
  */
 static void test_main_normal_modea_one_cis_loss(void)
 {
@@ -1782,26 +1864,44 @@ static void test_main_normal_modea_one_cis_loss(void)
 			if (err != 0) {
 				break;
 			}
-			bsim_tx_set_send_limit(&streams[i], 110);
+			bsim_tx_set_send_limit(&streams[i],
+					       i == 0U ? 110U : MODEA_ONE_CIS_PRE_GAP_SENDS);
 		}
 	}
 	if (err == 0) {
 		err = stream_up(presets, 2, false);
 	}
 	if (err == 0) {
-		/* Mid-stream, both channels flowing: pause the right stream
-		 * for a bounded window so its CIS loses those events. */
-		err = wait_for_sends(0, 50);
-	}
-	if (err == 0) {
-		err = wait_for_sends(1, 50);
-	}
-	if (err == 0) {
-		bsim_tx_pause(&streams[1]);
-		printk("CLI right stream paused (loss window)\n");
-		k_sleep(K_MSEC(200));
+		uint32_t right_send_count = 0U;
+		uint32_t left_completion_count = 0U;
+		uint32_t left_completion_target = 0U;
+
+		err = bsim_tx_wait_send_limit(&streams[1], COMPLETION_WAIT_MS);
+		if (err == 0) {
+			right_send_count = bsim_tx_send_count(&streams[1]);
+			if (right_send_count != MODEA_ONE_CIS_PRE_GAP_SENDS) {
+				err = -ESTALE;
+			}
+		}
+		if (err == 0) {
+			printk("CLI right stream paused (loss window), right sends %u completions "
+			       "%u\n",
+			       (unsigned int)right_send_count,
+			       (unsigned int)stream_completion_count(1));
+			err = wait_for_completions(1, right_send_count);
+			if (err == 0) {
+				left_completion_count = stream_completion_count(0);
+				left_completion_target = left_completion_count +
+							 (MODEA_ONE_CIS_LOSS_COUNT -
+							  MODEA_ONE_CIS_REFILL_LEAD_COMPLETIONS);
+				err = wait_for_completions(0, left_completion_target);
+			}
+		}
+		bsim_tx_set_send_limit(&streams[1], 110U);
 		bsim_tx_resume(&streams[1]);
-		printk("CLI right stream resumed\n");
+		printk("CLI right stream resumed, left completions %u target %u\n",
+		       (unsigned int)stream_completion_count(0),
+		       (unsigned int)left_completion_target);
 	}
 	if (err == 0) {
 		err = wait_for_sends(0, 110);
@@ -1812,7 +1912,7 @@ static void test_main_normal_modea_one_cis_loss(void)
 	if (err == 0) {
 		/* Let the in-flight SDUs drain to the receiver. */
 		k_sleep(K_MSEC(TEARDOWN_MARGIN_MS));
-		client_pass("modea_one_cis_loss_10ms");
+		err = client_pass("modea_one_cis_loss_10ms");
 	}
 	if (err != 0 && bst_result != Failed) {
 		FAIL("bsim_client: modea_one_cis_loss_10ms failed: %d\n", err);

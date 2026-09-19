@@ -79,8 +79,9 @@ Rewrite em dashes with commas, parentheses, colons, semicolons, or separate
 sentences, preserving meaning and formatting (links, tables, code spans,
 numeric ranges, and warning strength).
 
-User-facing scope: `README.md`, `PLANNED_FEATURES.md`, and the public docs
-listed in the README Documentation table (`docs/user-guide.md`,
+User-facing scope: `README.md`, `docs/product/README.md`, every
+`docs/product/backlog/**/*.md` task file, and the public docs listed in the
+README Documentation table (`docs/user-guide.md`,
 `docs/supported-sources.md`, `docs/linux-le-audio-host-setup.md`,
 `docs/bluetooth-adapter-evaluation.md`, `docs/hardware-wiring.md`,
 `docs/known-limitations.md`, `docs/technology/nrf5340.md`,
@@ -90,6 +91,36 @@ listed in the README Documentation table (`docs/user-guide.md`,
 Internal and historical contributor docs (for example `docs/development/`,
 `docs/testing/`, `STATUS.md`) are outside this style rule unless explicitly
 requested.
+
+## Documentation and product backlog lifecycle
+
+- Current product planning lives under `docs/product/`, managed with
+  Backlog.md. `docs/product/README.md` owns configuration, field vocabulary,
+  and lifecycle contract. `docs/product/backlog/` is sole current source for
+  product item status, priority, and dependencies; one Markdown file represents
+  each item.
+- `tasks/` holds active Backlog, Ready, In Progress, Blocked, and Review items;
+  `completed/` holds accepted Done history; `archive/` holds dropped history.
+  Completed and dropped items stay retained. Change status through `backlog`
+  CLI, not hand edits, so IDs, filenames, and metadata stay consistent. Record
+  drop rationale in Final Summary before `backlog task archive`.
+- Implementation agents may only begin Ready work. Do not silently edit
+  product-owned title, priority, status, type, Description product sections, or
+  acceptance-criteria text. An agent may take item to Done only through PR
+  gate: criteria checked from evidence, repository gates green, Final Summary
+  filled, and Done transition committed with work in one PR titled with item ID
+  prefix, for example `PB-006: ...`. Human product-owner merge is official
+  acceptance. If PR is rejected or changes are requested, move item back to
+  `tasks/` with In Progress or Review, fix, and re-PR. An agent never merges
+  own PR.
+- Existing `docs/development/` plans, results, and handoffs remain technical
+  context and immutable evidence where applicable. `STATUS.md` remains
+  implementation and evidence snapshot, not a second task list. Active
+  standalone plans and design docs cite PB IDs; completed or historical plans
+  do not need conversion to Done tasks. Do not move existing development or
+  testing documentation as part of backlog work.
+- Use product-backlog skills when available. Keep execution subtasks inside PB
+  item rather than creating independent product items.
 
 ## Plan of record
 
@@ -104,18 +135,25 @@ refactoring track R0–R10. Read the applicable one before structural changes.
 `docs/design.md` remains the historical architecture and evidence document, not
 an active structural plan.
 
-Current status: **canonical gate 72 PASS / 0 FAIL / 72 TOTAL** on the
-clean tree (40 Twister + 5 exec-only + 24 Python + coverage + matrix +
-BSim; the FR2 clean-tree run at `75a8093`, the FR1 clean run at
+Current status: **canonical gate 74 PASS / 0 FAIL / 74 TOTAL** on clean
+PB-031 P4 commit `d8f2a8e4d5eb0d6a7af2310a2c29e21b08542f22` (41 Twister +
+5 exec-only + 25 Python + coverage + matrix + BSim; the FR2 clean-tree run at
+`75a8093`, the FR1 clean run at
 `1671a9f`, and earlier clean runs recorded in
 `docs/development/documentation-hygiene-behavior-fix-results.md` at
 `b8bd633` and the production-fix canonical run at `f2f9336`, after the
 empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
 (`f2f9336`) fixes — the committed coverage baseline is unchanged),
-coverage population **37** (4962/5420 lines, 2153/2960
+coverage population **37** (4969/5427 lines, 2177/2984
 branches, 380/380 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
 baseline unchanged), builds 3/3, build contract **96/96**, BSim Stage 1
-pins byte-identical, P1–P8 user pairing control ACCEPTED (nRF54L15
+pins exact fixture/sequence TX FNV hashes, mono 10 ms `0xC5C840B0`, mono
+7.5 ms `0x2CE69E65`, Mode A 10 ms L/R `0x8980C79D`/`0xDD25CC21`, Mode A
+7.5 ms L/R `0x7D1EAC0F`/`0x001D6366`, Mode B 10 ms `0xE5D37A85`, Mode B
+7.5 ms `0x4D9A9ED7`, and zero-stream `0x811C9DC5`; payload/recipe-aware
+portable PCM metrics are maximum/RMS/minimum-correlation 257/182/32767
+within immutable 2048/512/32750 limits, not byte-identical decoded PCM pins.
+P1–P8 user pairing control ACCEPTED (nRF54L15
 enabled, nRF5340 feature-off), FR1 deterministic firmware packager
 ACCEPTED, FR2 firmware-build CI ACCEPTED (hosted run 31326612845
 PASS; workflow artifacts only, no tag/release/hardware acceptance), and
@@ -128,17 +166,21 @@ parallelization is ACCEPTED on hosted run `34725825883` (source HEAD
 aggregate `tests`; `tests` and `firmware` join at trusted-main-only `release`.
 The workers combined to `72 PASS / 0 FAIL / 72 TOTAL`; aggregate `tests` and
 `firmware` passed, `release` was SKIPPED on pull requests, and total run time
-was 26m31s versus 58m02s monolithic. FR4
-exact-artifact hardware acceptance is **BLOCKED**: the exact draft
-`v0.1.0` FAILED mandatory nRF5340 mono acceptance and remains private,
-unpublished, and untagged; the local replacement preflight passed both
-targets at `5e7f502` but is not exact-artifact acceptance; the root
-`VERSION` remains `0.1.0` and the firmware-build workflow is now
-version-driven; no replacement version or candidate has been selected; a
-replacement
-candidate must be created through the trusted-main lifecycle and its
-exact assets must pass FR4 before FR5 can publish anything; nothing
-published. Historical PR 11 (`feature/firmware-release-acceptance`) established
+was 26m31s versus 58m02s monolithic. FR4 exact-artifact hardware acceptance is
+**BLOCKED**: historical exact draft `v0.1.0` FAILED mandatory nRF5340 mono
+acceptance. It served as stable harness baseline, then its GitHub draft and
+assets were deleted 2026-09-19; `gh release view v0.1.0` now fails, the GitHub
+release list is empty, and `refs/tags/v0.1.0` is absent. Nothing was published.
+The local replacement preflight passed both targets at `5e7f502` but remains
+historical preflight, not exact-artifact acceptance. The root `VERSION` remains
+`0.1.0`, and product owner selected it for a fresh replacement candidate because
+it was never published or tagged. PB-031 has not been human-merged, so no fresh
+candidate exists.
+After PB-031 human merge and green hosted gates, trusted-main may create a new
+immutable nRF54L15-only candidate if no release/tag collision exists; it must
+never restore or clobber failed assets. FR4/FR5 remain blocked until exact new
+assets pass active nRF54L15 acceptance through PB-007; nothing published.
+Historical PR 11 (`feature/firmware-release-acceptance`) established
 the monolithic 65-child hosted canonical software gate: in that topology,
 `tests` passed before `firmware`, and `release` followed `firmware`. The job ran
 on the plain host runner inside the locked Nix dev shell with the exact

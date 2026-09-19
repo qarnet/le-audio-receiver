@@ -109,8 +109,8 @@ advertisements are not yet distinguishable to every central. For this feature:
 3. Count that secure bonded reconnection as successful completion.
 4. Enter NORMAL, turn the LED off, and retain the active connection.
 
-Future differentiation of NORMAL and BONDING advertisements is recorded in
-`PLANNED_FEATURES.md`.
+Future differentiation of NORMAL and BONDING advertisements is tracked in
+[PB-012](../product/backlog/tasks/pb-012%20-%20Differentiate-NORMAL-and-BONDING-on-air.md).
 
 ### Any mode to RESETTING
 
@@ -310,7 +310,10 @@ that reset indication consists of complete LED half-periods. Enable only in
 
 ### P0 — contract and evidence lock
 
-- Commit this plan and `PLANNED_FEATURES.md`.
+- Commit this plan and record related future work as
+  [PB-005](../product/backlog/tasks/pb-005%20-%20Add-nRF5340-physical-pairing-controls.md)
+  and
+  [PB-012](../product/backlog/tasks/pb-012%20-%20Differentiate-NORMAL-and-BONDING-on-air.md).
 - Add behavior-contract identifiers for mode, timing, ordering, failure, and
   portability.
 - Record current baseline: canonical 55/55, population 33, build contract

@@ -364,7 +364,7 @@ static void session_mode_plc_push(size_t idx, struct audio_stream_slot *sl)
 	audio_volume_apply(s.stereo_out, sl->decode.samples_per_ch * 2);
 #if defined(CONFIG_BSIM_OBSERVER)
 	/* A concealed push is never source-valid (neither half had VALID). */
-	bsim_observer_pre_push(false, false);
+	bsim_observer_pre_push(false, NULL, 0U, false, NULL, 0U);
 #endif
 	if (audio_sink_push(s.stereo_out, sl->decode.samples_per_ch * 2) < 0) {
 		audio_perf_push_failure();
@@ -453,8 +453,13 @@ static void session_mode_a_store_and_process(enum modea_channel ch, const uint8_
 	audio_volume_apply(s.stereo_out, s.slots[0].decode.samples_per_ch * 2);
 
 #if defined(CONFIG_BSIM_OBSERVER)
-	bsim_observer_pre_push(s.modea_ev.half_src[MODEA_CH_LEFT],
-			       s.modea_ev.half_src[MODEA_CH_RIGHT]);
+	bsim_observer_pre_push(
+		s.modea_ev.half_src[MODEA_CH_LEFT],
+		s.modea_ev.half_src[MODEA_CH_LEFT] ? s.modea_ev.data[MODEA_CH_LEFT] : NULL,
+		s.modea_ev.half_src[MODEA_CH_LEFT] ? s.modea_ev.len[MODEA_CH_LEFT] : 0U,
+		s.modea_ev.half_src[MODEA_CH_RIGHT],
+		s.modea_ev.half_src[MODEA_CH_RIGHT] ? s.modea_ev.data[MODEA_CH_RIGHT] : NULL,
+		s.modea_ev.half_src[MODEA_CH_RIGHT] ? s.modea_ev.len[MODEA_CH_RIGHT] : 0U);
 #endif
 	if (audio_sink_push(s.stereo_out, s.slots[0].decode.samples_per_ch * 2) < 0) {
 		audio_perf_push_failure();
@@ -680,7 +685,12 @@ static void session_recv_path(size_t idx, struct audio_stream_slot *sl, bool val
 		audio_volume_apply(s.stereo_out, spc * 2);
 
 #if defined(CONFIG_BSIM_OBSERVER)
-		bsim_observer_pre_push(valid, valid);
+		const size_t channel_payload_len =
+			(size_t)sl->shape.octets_per_frame * sl->shape.frame_blocks_per_sdu;
+
+		bsim_observer_pre_push(valid, valid ? data : NULL, valid ? channel_payload_len : 0U,
+				       valid, valid ? data + channel_payload_len : NULL,
+				       valid ? channel_payload_len : 0U);
 #endif
 		if (audio_sink_push(s.stereo_out, spc * 2) < 0) {
 			audio_perf_push_failure();
@@ -732,7 +742,8 @@ static void session_recv_path(size_t idx, struct audio_stream_slot *sl, bool val
 		audio_volume_apply(s.stereo_out, spc * 2);
 
 #if defined(CONFIG_BSIM_OBSERVER)
-		bsim_observer_pre_push(valid, valid);
+		bsim_observer_pre_push(valid, valid ? data : NULL, valid ? len : 0U, valid,
+				       valid ? data : NULL, valid ? len : 0U);
 #endif
 		if (audio_sink_push(s.stereo_out, spc * 2) < 0) {
 			audio_perf_push_failure();

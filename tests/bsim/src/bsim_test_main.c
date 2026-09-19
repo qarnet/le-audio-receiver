@@ -21,6 +21,7 @@
 #include "bsim_test_helpers.h"
 #include "bsim_sink_oracle.h"
 #include "bsim_observer.h"
+#include "bsim_pcm_limits.h"
 #include "audio_sink.h"
 #include "bt_bap.h"
 
@@ -46,6 +47,48 @@ static const char *scenario_names[] = {
 	"modea_one_cis_loss_10ms",      /* 16 */
 	"duplicate_release_10ms",       /* 17 */
 };
+
+static int bsim_volatile_settings_load(struct settings_store *cs,
+				       const struct settings_load_arg *arg)
+{
+	(void)cs;
+	(void)arg;
+
+	return 0;
+}
+
+static int bsim_volatile_settings_save(struct settings_store *cs, const char *name,
+				       const char *value, size_t val_len)
+{
+	(void)cs;
+	(void)name;
+	(void)value;
+	(void)val_len;
+
+	return 0;
+}
+
+static const struct settings_store_itf bsim_volatile_settings_itf = {
+	.csi_load = bsim_volatile_settings_load,
+	.csi_save = bsim_volatile_settings_save,
+};
+
+static struct settings_store bsim_volatile_settings_store = {
+	.cs_itf = &bsim_volatile_settings_itf,
+};
+
+static bool bsim_volatile_settings_registered;
+
+static void bsim_volatile_settings_register(void)
+{
+	if (bsim_volatile_settings_registered) {
+		return;
+	}
+
+	settings_src_register(&bsim_volatile_settings_store);
+	settings_dst_register(&bsim_volatile_settings_store);
+	bsim_volatile_settings_registered = true;
+}
 
 static void test_init_f(void)
 {
@@ -125,48 +168,33 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 {
 	struct bsim_sink_segment s0;
 	struct bsim_sink_segment s1;
+	const struct bsim_sink_segment no_segment = {
+		.l_recipe_id = "none",
+		.r_recipe_id = "none",
+		.l_evaluation = PCM_ORACLE_RESULT_INSUFFICIENT_SAMPLES,
+		.r_evaluation = PCM_ORACLE_RESULT_INSUFFICIENT_SAMPLES,
+	};
 	bool have_s0 = audio_sink_test_get_segment(0, &s0);
 	bool have_s1 = audio_sink_test_get_segment(1, &s1);
-	uint32_t pushes1 = have_s0 ? s0.pushes : 0U;
-	uint32_t trans1 = have_s0 ? s0.transients : 0U;
-	uint32_t szero1 = have_s0 ? s0.startup_zero : 0U;
-	uint32_t splc1 = have_s0 ? s0.startup_plc : 0U;
-	uint32_t plc1 = have_s0 ? s0.plc_frames : 0U;
-	uint32_t total1 = have_s0 ? s0.total_frames : 0U;
-	uint32_t derr1 = have_s0 ? s0.decode_errors : 0U;
-	uint32_t mal1 = have_s0 ? s0.malformed_samples : 0U;
-	uint32_t h1 = have_s0 ? s0.full_hash : 0U;
-	uint32_t lh1 = have_s0 ? s0.l_hash : 0U;
-	uint32_t rh1 = have_s0 ? s0.r_hash : 0U;
-	int32_t lemin1 = have_s0 ? s0.l_energy_min : 0;
-	int32_t lemax1 = have_s0 ? s0.l_energy_max : 0;
-	int32_t remin1 = have_s0 ? s0.r_energy_min : 0;
-	int32_t remax1 = have_s0 ? s0.r_energy_max : 0;
-	uint32_t pushes2 = have_s1 ? s1.pushes : 0U;
-	uint32_t trans2 = have_s1 ? s1.transients : 0U;
-	uint32_t szero2 = have_s1 ? s1.startup_zero : 0U;
-	uint32_t splc2 = have_s1 ? s1.startup_plc : 0U;
-	uint32_t plc2 = have_s1 ? s1.plc_frames : 0U;
-	uint32_t total2 = have_s1 ? s1.total_frames : 0U;
-	uint32_t derr2 = have_s1 ? s1.decode_errors : 0U;
-	uint32_t mal2 = have_s1 ? s1.malformed_samples : 0U;
-	uint32_t h2 = have_s1 ? s1.full_hash : 0U;
-	uint32_t lh2 = have_s1 ? s1.l_hash : 0U;
-	uint32_t rh2 = have_s1 ? s1.r_hash : 0U;
-	int32_t lemin2 = have_s1 ? s1.l_energy_min : 0;
-	int32_t lemax2 = have_s1 ? s1.l_energy_max : 0;
-	int32_t remin2 = have_s1 ? s1.r_energy_min : 0;
-	int32_t remax2 = have_s1 ? s1.r_energy_max : 0;
+	const struct bsim_sink_segment *seg1 = have_s0 ? &s0 : &no_segment;
+	const struct bsim_sink_segment *seg2 = have_s1 ? &s1 : &no_segment;
 
 	PASS("le_audio_receiver: scenario=%s seg=%u after=%u adv_restart=%u pacs=1 "
 	     "obs_ok=%u obs_rej=%u obs_dir=%d obs_code=%d obs_reason=%d "
 	     "obs_gate_o=%u obs_gate_c=%u obs_mal=%u obs_blk=%u obs_stale=%u "
 	     "obs_rel=%u obs_disc=%u obs_rej_code=%d obs_rej_reason=%d "
 	     "obs_mts=%u obs_rel_ss=%u rel_ss_seq=%u disc_seq=%u "
+	     "limmax=%u limrms=%u limcorr=%d "
 	     "pushes1=%u trans1=%u szero1=%u splc1=%u plc1=%u total1=%u derr1=%u mal1=%u "
-	     "h1=0x%08X lh1=0x%08X rh1=0x%08X lemin1=%d lemax1=%d remin1=%d remax1=%d "
+	     "samples1=%u spc1=%u diff1=%u lemin1=%d lemax1=%d remin1=%d remax1=%d "
+	     "lrid1=%s lact1=%u lval1=%u lplc1=%u rrid1=%s ract1=%u rval1=%u rplc1=%u "
+	     "lfr1=%u lsm1=%u lex1=%u lmax1=%u lsse1=%llu lrms1=%u lcorr1=%d lres1=%u "
+	     "rfr1=%u rsm1=%u rex1=%u rmax1=%u rsse1=%llu rrms1=%u rcorr1=%d rres1=%u "
 	     "pushes2=%u trans2=%u szero2=%u splc2=%u plc2=%u total2=%u derr2=%u mal2=%u "
-	     "h2=0x%08X lh2=0x%08X rh2=0x%08X lemin2=%d lemax2=%d remin2=%d remax2=%d\n",
+	     "samples2=%u spc2=%u diff2=%u lemin2=%d lemax2=%d remin2=%d remax2=%d "
+	     "lrid2=%s lact2=%u lval2=%u lplc2=%u rrid2=%s ract2=%u rval2=%u rplc2=%u "
+	     "lfr2=%u lsm2=%u lex2=%u lmax2=%u lsse2=%llu lrms2=%u lcorr2=%d lres2=%u "
+	     "rfr2=%u rsm2=%u rex2=%u rmax2=%u rsse2=%llu rrms2=%u rcorr2=%d rres2=%u\n",
 	     scenario_names[scn], audio_sink_test_segment_count(),
 	     audio_sink_test_after_stop_total(), adv_restarted ? 1U : 0U,
 	     bsim_observer_get_config_accepted(), bsim_observer_get_config_rejected(),
@@ -177,19 +205,58 @@ static void receiver_pass(enum bsim_sink_scenario scn, bool adv_restarted)
 	     bsim_observer_get_release_cleanup(), bsim_observer_get_disconnect_cleanup(),
 	     bsim_observer_get_last_rej_code(), bsim_observer_get_last_rej_reason(),
 	     bsim_observer_get_missing_ts(), bsim_observer_get_release_sink_stop(),
-	     bsim_observer_get_release_sink_stop_seq(), bsim_observer_get_disconnect_seq(), pushes1,
-	     trans1, szero1, splc1, plc1, total1, derr1, mal1, h1, lh1, rh1, lemin1, lemax1, remin1,
-	     remax1, pushes2, trans2, szero2, splc2, plc2, total2, derr2, mal2, h2, lh2, rh2,
-	     lemin2, lemax2, remin2, remax2);
+	     bsim_observer_get_release_sink_stop_seq(), bsim_observer_get_disconnect_seq(),
+	     BSIM_PCM_MAX_ABS_ERROR, BSIM_PCM_MAX_RMS_ERROR, BSIM_PCM_MIN_CORRELATION_Q15,
+	     seg1->pushes, seg1->transients, seg1->startup_zero, seg1->startup_plc,
+	     seg1->plc_frames, seg1->total_frames, seg1->decode_errors, seg1->malformed_samples,
+	     seg1->configured_samples, seg1->samples_per_channel, seg1->differing_samples,
+	     seg1->l_energy_min, seg1->l_energy_max, seg1->r_energy_min, seg1->r_energy_max,
+	     seg1->l_recipe_id, seg1->l_recipe_actions, seg1->l_recipe_valid, seg1->l_recipe_plc,
+	     seg1->r_recipe_id, seg1->r_recipe_actions, seg1->r_recipe_valid, seg1->r_recipe_plc,
+	     seg1->l_metrics.frames, seg1->l_metrics.samples, seg1->l_excluded_frames,
+	     seg1->l_metrics.max_abs_error, (unsigned long long)seg1->l_metrics.squared_error,
+	     seg1->l_metrics.rms_error, seg1->l_metrics.correlation_q15,
+	     (unsigned int)seg1->l_evaluation, seg1->r_metrics.frames, seg1->r_metrics.samples,
+	     seg1->r_excluded_frames, seg1->r_metrics.max_abs_error,
+	     (unsigned long long)seg1->r_metrics.squared_error, seg1->r_metrics.rms_error,
+	     seg1->r_metrics.correlation_q15, (unsigned int)seg1->r_evaluation, seg2->pushes,
+	     seg2->transients, seg2->startup_zero, seg2->startup_plc, seg2->plc_frames,
+	     seg2->total_frames, seg2->decode_errors, seg2->malformed_samples,
+	     seg2->configured_samples, seg2->samples_per_channel, seg2->differing_samples,
+	     seg2->l_energy_min, seg2->l_energy_max, seg2->r_energy_min, seg2->r_energy_max,
+	     seg2->l_recipe_id, seg2->l_recipe_actions, seg2->l_recipe_valid, seg2->l_recipe_plc,
+	     seg2->r_recipe_id, seg2->r_recipe_actions, seg2->r_recipe_valid, seg2->r_recipe_plc,
+	     seg2->l_metrics.frames, seg2->l_metrics.samples, seg2->l_excluded_frames,
+	     seg2->l_metrics.max_abs_error, (unsigned long long)seg2->l_metrics.squared_error,
+	     seg2->l_metrics.rms_error, seg2->l_metrics.correlation_q15,
+	     (unsigned int)seg2->l_evaluation, seg2->r_metrics.frames, seg2->r_metrics.samples,
+	     seg2->r_excluded_frames, seg2->r_metrics.max_abs_error,
+	     (unsigned long long)seg2->r_metrics.squared_error, seg2->r_metrics.rms_error,
+	     seg2->r_metrics.correlation_q15, (unsigned int)seg2->r_evaluation);
 }
 
 static void scenario_main(enum bsim_sink_scenario scn, int dec_calls)
 {
+	bt_addr_le_t identity = {
+		.type = BT_ADDR_LE_RANDOM,
+		.a = {.val = {0x00, 0x00, 0x00, 0x00, 0x00, 0xC0}},
+	};
 	int err;
 	bool disc_handled = false;
 	uint32_t last_disc = 0U;
 
 	printk("=== LE Audio Receiver BSIM Test — scenario %s ===\n", scenario_names[scn]);
+	if (!audio_sink_test_recipes_validate()) {
+		FAIL("le_audio_receiver: stateful recipe table/binding validation failed\n");
+		return;
+	}
+
+	bsim_volatile_settings_register();
+	err = bt_id_create(&identity, NULL);
+	if (err != BT_ID_DEFAULT) {
+		FAIL("le_audio_receiver: identity create failed: %d\n", err);
+		return;
+	}
 
 	err = bt_enable(NULL);
 	if (err) {
@@ -198,9 +265,8 @@ static void scenario_main(enum bsim_sink_scenario scn, int dec_calls)
 	}
 	printk("BLE ready\n");
 
-	/* settings_load required for dynamic PACS/ASCS registration.
-	 * No persistent storage in bsim — the settings_none backend
-	 * returns success without loading anything. */
+	/* settings_load required for dynamic PACS/ASCS registration. The test-local
+	 * volatile backend returns success without loading or retaining entries. */
 	err = settings_load();
 	if (err) {
 		FAIL("le_audio_receiver: settings_load failed: %d\n", err);

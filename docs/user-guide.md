@@ -32,7 +32,7 @@ flashing a build looks like so the expected flow is clear.
 - **nRF54L15 build (Seeed Xiao):** flashing uses the board's **onboard
   debugger** (the SAMD11 USB bridge). A public-friendly flashing method is
   still under evaluation; the current route is the developer workflow
-  (see [Planned features](../PLANNED_FEATURES.md)). Expect this section to be
+  (see [PB-008](product/backlog/tasks/pb-008%20-%20Provide-public-friendly-nRF54L15-flashing.md)). Expect this section to be
   updated once a simple method is settled.
 
 ## Power on and boot
@@ -91,7 +91,7 @@ this time. What the nRF5340 build does have is the **legacy shell reset**: the
 active peer, and reopens pairing so a new device can connect. This is a
 developer workflow, not a button press. Tracked in
 [Known limitations](known-limitations.md) and
-[Planned features](../PLANNED_FEATURES.md).
+[PB-005](product/backlog/tasks/pb-005%20-%20Add-nRF5340-physical-pairing-controls.md).
 
 ## Supported source devices
 

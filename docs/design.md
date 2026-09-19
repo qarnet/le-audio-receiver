@@ -38,21 +38,24 @@ is historical evidence — see
 draft-release closeout (2026-08-09, canonical gate **65 PASS / 0 FAIL /
 65 TOTAL** at `b70b978`/`3d9a918...`, 35 twister + 5 exec-only + 22 Python
 + coverage + matrix + BSim) is historical evidence — see
-`docs/development/firmware-release-fr3-results.md`.  The current
-authoritative state is FR4 exact-artifact hardware acceptance, which is
-**BLOCKED** (2026-08-10): the exact draft `v0.1.0` failed mandatory
-nRF5340 mono acceptance and remains private, unpublished, and untagged;
-the local replacement preflight passed both targets at `5e7f502` but is
-not exact-artifact acceptance; the root `VERSION` remains `0.1.0` and the
-firmware-build workflow is version-driven, but no replacement version or
-candidate has been selected; a replacement candidate must be created
-through the trusted-main lifecycle and its exact assets must pass FR4
-before FR5 can publish anything.  Software gates at this code state:
-canonical gate **65 PASS / 0 FAIL / 65 TOTAL**, coverage population **36**
-(4777/5234 lines, 2091/2896 branches, 363/363 functions), build contract
-**96/96**, BSim 17 scenarios / 26 runs pins byte-identical — see `STATUS.md`
-and `docs/development/firmware-release-fr4-results.md` (canonical FR4
-evidence).
+`docs/development/firmware-release-fr3-results.md`. The current
+authoritative release state is FR4 exact-artifact hardware acceptance, which is
+**BLOCKED**: historical exact draft `v0.1.0` failed mandatory nRF5340 mono
+acceptance. It served as stable harness baseline, then its GitHub draft and
+assets were deleted 2026-09-19; `gh release view v0.1.0` now fails, the GitHub
+release list is empty, and `refs/tags/v0.1.0` is absent. Nothing was published.
+The local replacement preflight at `5e7f502` remains historical preflight, not
+exact-artifact acceptance. The root `VERSION` remains `0.1.0`, and product
+owner selected it for a fresh replacement candidate because it was never
+published or tagged. PB-031 has not been human-merged, so no fresh candidate
+exists. After PB-031 human
+merge and green hosted gates, trusted-main may create a new immutable
+nRF54L15-only candidate if no release/tag collision exists; its exact assets
+must pass active nRF54L15 FR4 through PB-007 before FR5 can publish anything.
+The historical 65-child figures in
+`docs/development/firmware-release-fr4-results.md` are FR4-era evidence, not
+current software figures; see `STATUS.md` for current figures. Failed assets
+must never be restored or clobbered.
 All
 "Phases 0–6" content below is dated architecture/evidence of the
 pre-refactor design and is superseded by the module ownership described

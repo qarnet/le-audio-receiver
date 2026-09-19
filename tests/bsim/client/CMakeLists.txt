@@ -8,10 +8,36 @@ target_sources(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/main.c
 )
 
-# ── Repo-owned deterministic multi-channel TX (replaces the upstream
-#    repeated-tone stream_tx/stream_lc3 helpers; real BAP send + liblc3) ─
+# ── Repo-owned deterministic multi-channel TX (real BAP send with
+#    checked-in LC3 corpus frames) ─────────────────────────────────────
 target_sources(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/bsim_tx.c
+)
+
+# Embed only the four fixed BSim LC3 corpus streams.  file2hex emits raw
+# initializer bytes; bsim_tx.c owns the array names and selects frames by
+# logical sequence.
+set(lc3_fixture_dir ${CMAKE_CURRENT_SOURCE_DIR}/../../fixtures/lc3)
+set(lc3_fixture_inc_dir ${ZEPHYR_BINARY_DIR}/include/generated)
+generate_inc_file_for_target(
+  app
+  ${lc3_fixture_dir}/bsim_48k_10ms_120b_l.lc3
+  ${lc3_fixture_inc_dir}/bsim_48k_10ms_120b_l.lc3.inc
+)
+generate_inc_file_for_target(
+  app
+  ${lc3_fixture_dir}/bsim_48k_10ms_120b_r.lc3
+  ${lc3_fixture_inc_dir}/bsim_48k_10ms_120b_r.lc3.inc
+)
+generate_inc_file_for_target(
+  app
+  ${lc3_fixture_dir}/bsim_48k_7p5ms_90b_l.lc3
+  ${lc3_fixture_inc_dir}/bsim_48k_7p5ms_90b_l.lc3.inc
+)
+generate_inc_file_for_target(
+  app
+  ${lc3_fixture_dir}/bsim_48k_7p5ms_90b_r.lc3
+  ${lc3_fixture_inc_dir}/bsim_48k_7p5ms_90b_r.lc3.inc
 )
 
 # ── BSIM test installer (one test_id per T4 scenario) ────────────────

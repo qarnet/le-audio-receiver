@@ -1,16 +1,17 @@
 # T2 — Audio pipeline unit characterization
 
-Version: T2, 2026-08-01.  Phase T2 locks LC3 decode/routing, volume, and
-statistics to direct production-source proof with deterministic 48 kHz
-golden output, and fixes three decoder defects found while building the
-proof.  Base: accepted T1 commit `3899c2f` (branch
-`test/pre-refactor-behavior`).
+Version: T2, 2026-08-01. Historical T2 records lock LC3 decode/routing,
+volume, and statistics to direct production-source proof with deterministic
+48 kHz fixture output, and record three decoder defects found while building
+the proof. Base: accepted T1 commit `3899c2f` (branch
+`test/pre-refactor-behavior`). Current PB-031 P3 policy evaluates real-decoder
+PCM through portable integer metrics, not decoded-output byte equality or CRC.
 
 ## Production sources linked and executed
 
 | Suite | Production source compiled | Support code |
 |-------|----------------------------|--------------|
-| `tests/unit/decode` | `src/audio_decode.c`, `src/audio_stats.c` (both real, `CONFIG_LIBLC3=y`, real NCS v3.3.0 liblc3 1.1.2) | `src/lc3_wrap.c` — linker `-Wl,--wrap=lc3_decode` failure injection; checked-in fixtures embedded via `generate_inc_file_for_target()` |
+| `tests/unit/decode` | `src/audio_decode.c`, `src/audio_stats.c` (both real, `CONFIG_LIBLC3=y`, real NCS v3.3.0 liblc3 1.1.2) | `src/lc3_wrap.c` — linker `-Wl,--wrap=lc3_decode` failure injection; shared `tests/support/pcm_oracle.c` with manifest-derived limits; checked-in fixtures embedded via `generate_inc_file_for_target()` |
 | `tests/unit/volume` | `src/audio_volume.c` (real VCP branch), `src/audio_perf.c` (real) | test-local shadow of `zephyr/bluetooth/audio/vcp.h` (exact NCS v3.3.0 renderer types, zero VOCS/AICS counts) + fake `bt_vcp_vol_rend_register()` |
 | `tests/unit/stats` | `src/audio_stats.c` (real) | none — no test seam needed |
 
@@ -23,27 +24,39 @@ definitions (`CONFIG_BT_VCP_VOL_REND=1`, `CONFIG_BT_AUDIO_VOL_DEFAULT=195`)
 `tests/fixtures/lc3/` — see `tests/fixtures/lc3/README.md` for the
 generator command, input formulas, and all hashes:
 
-| Fixture | Shape | `.lc3` | `.pcm` | SHA-256 (`.pcm`) | CRC-32 full |
-|---------|-------|--------|--------|------------------|-------------|
-| `mono_48k_7p5ms_60b` | mono 7.5 ms | 60 B | 1440 B | `8541ab2b…93763` | `E272CD4C` |
-| `mono_48k_10ms_60b` | mono 10 ms | 60 B | 1920 B | `7740e597…df4a3` | `D546D96C` |
-| `modeb_48k_7p5ms_60b` | Mode B 7.5 ms | 120 B | 1440 B | `a5df6d08…7f534` | `446235E4` |
-| `modeb_48k_10ms_60b` | Mode B 10 ms | 120 B | 1920 B | `a2c16351…2c12c7a` | `6669E859` |
+| Fixture | Shape | `.lc3` | `.pcm` | SHA-256 (`.pcm` anchor) |
+|---------|-------|--------|--------|----------------------------|
+| `mono_48k_7p5ms_60b` | mono 7.5 ms | 60 B | 1440 B | `8541ab2b…93763` |
+| `mono_48k_10ms_60b` | mono 10 ms | 60 B | 1920 B | `7740e597…df4a3` |
+| `modeb_48k_7p5ms_60b` | Mode B 7.5 ms | 120 B | 1440 B | `a5df6d08…7f534` |
+| `modeb_48k_10ms_60b` | Mode B 10 ms | 120 B | 1920 B | `a2c16351…2c12c7a` |
 
-(Full SHA-256 for all eight binaries and per-channel CRCs are in the
-fixture README.)  Generation: `bash tests/fixtures/lc3/generate.sh`,
+(Full SHA-256 for all eight binaries are in the fixture README.) Generation:
+`bash tests/fixtures/lc3/generate.sh`,
 deterministic and path-independent (verified: two runs in different
 directories produce identical SHA-256).  Fixtures are never regenerated
 during test runs; tests embed the checked-in binaries.
+
+### Current PB-031 decoded PCM policy
+
+`tests/unit/decode` drives real `audio_decode_sdu()` with the checked-in LC3
+fixtures. It keeps exact fixture geometry, output guards, mono duplication,
+Mode B channel placement, statistics, and error contracts. Each decoded
+channel is independently compared with the interleaved little-endian PCM
+anchor using actual stride 2 and reference-byte stride 4. The shared integer
+comparator requires one frame and the configured samples-per-channel count,
+then evaluates maximum absolute error, RMS error, and Q15 correlation against
+the immutable schema-2 limits in `portable-oracle-manifest.json`. Decoded PCM
+bytes and CRC values are no longer pass/fail conditions.
 
 ## Test counts
 
 | Suite | Tests | Result |
 |-------|-------|--------|
-| `tests/unit/decode` (audio.decode) | 37 | 37/37 PASS |
+| `tests/unit/decode` (audio.decode) | 43 | 43/43 PASS |
 | `tests/unit/volume` (audio.volume) | 12 | 12/12 PASS |
 | `tests/unit/stats` (audio.stats) | 10 | 10/10 PASS |
-| **Total new** | **59** | **59/59 PASS** |
+| **Total current** | **65** | **65/65 PASS** |
 
 ## Defects fixed (production `src/audio_decode.c`)
 
@@ -54,7 +67,7 @@ during test runs; tests embed the checked-in binaries.
    unread mono sample 1.  In-place expansion is now overlap-safe via
    backward expansion when input and output share the same base; separate
    buffers keep the forward path.  Locked by
-   `test_mono_to_stereo_inplace_overlap_safe` and the mono golden tests
+   `test_mono_to_stereo_inplace_overlap_safe` and the mono fixture tests
    (which decode through the exact production in-place path).
 2. **Mode B statistics imbalance** — the right-channel decoder only
    counted hard errors; success and PLC were uncounted.  Every LC3 decoder
@@ -86,7 +99,7 @@ stored unsupported shape, Mode B without a right decoder, `valid=true`
 with NULL data, zero valid length, valid per-channel frame length outside
 the liblc3 basic 20..400 byte range, Mode B length not divisible by the
 channel count, and any length that could truncate input (bounds checked
-before narrowing casts).  Rejection-then-golden tests prove decoder state
+before narrowing casts). Rejection-then-fixture tests prove decoder state
 survives every rejection.
 
 **PLC (`valid=false`) accepts any supplied length and never dereferences
@@ -158,7 +171,12 @@ other than 7.5/10 ms, and more than one frame block per SDU are rejected
 by `audio_decode_config()` — but translating those rejections into ASCS
 response codes in `bt_bap.c` remains **T4** (known gap, unchanged).
 
-## BabbleSim oracle hashes changed with the mono overlap fix
+## Historical T2 BabbleSim PCM hashes
+
+The decoded-PCM hashes in this section are historical T2 observations, not
+current acceptance. PB-031 P2 now checks exact transmitted LC3 payload hashes
+and payload/recipe-aware portable PCM metrics. PB-031 P3 uses the same
+portable comparison policy for direct real-decoder fixtures.
 
 The Stage 1 BSim oracle hashes locked in the *defective* mono output.  The
 old forward in-place expansion overwrote unread source samples: with
@@ -173,13 +191,11 @@ interleaved mono PCM, so the oracle values necessarily change:
 | 10 ms (48_4_1) | `0xFE0D4245` (startup_zero=8, energy 12480 const) | `0x9225F075` (startup_zero=7, energy varies 10.4M..13.9M) |
 | 7.5 ms (48_3_1) | `0x5853F445` (startup_zero=11) | `0x2011C0F9` (startup_zero=10) |
 
-Both T2 values are deterministic across repeated runs (pairwise hash
-equality enforced by `scripts/bsim-stage1-run.sh`, whose accepted-hash
-constants were updated accordingly).  The mechanism was verified by
-replaying the real BSim LC3 frames on the host: the old forward
-expansion reproduces the constant-energy/collapsed stream shape (8
-startup-zero pushes, 100 constant-energy pushes), while the corrected
-path matches the new oracle counters.
+Both T2 values were deterministic across repeated historical runs. The
+mechanism was verified by replaying the real BSim LC3 frames on the host: the
+old forward expansion reproduces the constant-energy/collapsed stream shape
+(8 startup-zero pushes, 100 constant-energy pushes), while the corrected path
+matches the historical oracle counters.
 
 ## Review-fix round (2026-08-01)
 
@@ -195,7 +211,7 @@ Closes the portability/safety defects found during orchestrator review
    nonzero shapes outside a valid divisible per-channel 20..400 range.
    New tests cover `SIZE_MAX`, `(size_t)INT_MAX + 1`, odd Mode B PLC
    lengths, nonzero too-short/too-long PLC lengths, zero-length
-   mono/Mode B PLC success, and rejection-then-golden state preservation.
+   mono/Mode B PLC success, and rejection-then-fixture state preservation.
    The public header now documents the exact supported configuration,
    PLC length semantics, output capacity, and `-EINVAL`/`-EBADMSG`
    outcomes.
@@ -216,9 +232,9 @@ Closes the portability/safety defects found during orchestrator review
    -pedantic`; the installed liblc3 does not trigger the diagnostic, so
    no suppression is needed).  Root `.gitattributes` marks
    `tests/fixtures/lc3/*.lc3` and `*.pcm` binary.  Regeneration from two
-   clean copies is byte-identical to the checked-in binaries (all
-   SHA-256/CRC-32 unchanged; the defined arithmetic produces the same
-   samples), so no fixture, README, or test-CRC updates were required.
+   clean copies are byte-identical to the checked-in binaries (all SHA-256
+   unchanged; the defined arithmetic produces the same samples), so no
+   fixture-reference update was required.
 
 ### Transient gate run disposition
 
@@ -245,8 +261,8 @@ truncated generated `build.ninja` files:
 
 ## Non-claims
 
-No audio-quality claim and no hardware claim are made from these
-native_sim tests.  Golden PCM is exact for the pinned NCS v3.3.0 /
-native_sim host toolchain only.  Production APIs, wire formats, and audio
-formats are unchanged except the documented safe rejection and defect
-corrections above.
+No audio-quality claim and no hardware claim are made from these native_sim
+tests. Historical T2 decoded-PCM byte observations apply only to the pinned
+NCS v3.3.0/native_sim host toolchain; current acceptance uses the portable
+policy above. Production APIs, wire formats, and audio formats are unchanged
+except the documented safe rejection and defect corrections above.

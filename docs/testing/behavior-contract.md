@@ -310,6 +310,24 @@ Reset discipline: the cadence tracker is reset at every site that
 resets the sequence tracker (config, start-clear, release, reset-all),
 so no cadence gap can cross a session boundary.
 
+### CODEC-017 — Portable real-decoder fixture verification (PB-031 P3)
+
+`tests/fixtures/lc3/generate.sh` verifies exact checked-in LC3 and PCM fixture
+integrity. `tests/unit/decode` embeds those fixtures and drives the public
+`audio_decode_sdu()` boundary with exact LC3 length and PCM geometry checks.
+For each decoded stereo channel, it compares the strided actual `int16_t`
+samples (stride 2) against the corresponding interleaved little-endian PCM
+reference channel (byte stride 4) through the shared integer comparator. Each
+comparison requires exactly one frame and the configured samples-per-channel
+count, then must satisfy the schema-2 manifest-owned maximum absolute error,
+maximum RMS error, and minimum Q15 correlation limits.
+
+This test verification remains exact for mono `L == R`, observable Mode B
+left/right placement, output guards, configured dimensions, decoder state,
+statistics, and rejection/error behavior. It does not make decoded PCM bytes
+or CRC values a pass/fail contract, and it does not change production decoder
+behavior.
+
 ## Statistics contract (`STAT-*`)
 
 ### STAT-001 — Counter coupling

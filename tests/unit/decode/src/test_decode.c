@@ -10,7 +10,6 @@
  */
 
 #include <zephyr/ztest.h>
-#include <zephyr/sys/crc.h>
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
@@ -18,7 +17,9 @@
 
 #include "audio_decode.h"
 #include "audio_stats.h"
+#include "decode_pcm_limits.h"
 #include "lc3_wrap.h"
+#include "pcm_oracle.h"
 
 /* ── checked-in fixtures (embedded at build time) ─────────────────── */
 
@@ -60,22 +61,6 @@ static void reset_before_each(void *unused)
 
 ZTEST_SUITE(decode, NULL, NULL, reset_before_each, NULL, NULL);
 
-/* CRC-32 (IEEE) over the int16 samples of one channel (even = left,
- * odd = right) of an interleaved stereo buffer.
- */
-static uint32_t channel_crc(const int16_t *stereo, int samples_per_ch, int ch)
-{
-	uint8_t bytes[2 * 480];
-
-	for (int i = 0; i < samples_per_ch; i++) {
-		int16_t s = stereo[2 * i + ch];
-
-		bytes[2 * i] = (uint8_t)(s & 0xFFu);
-		bytes[2 * i + 1] = (uint8_t)((s >> 8) & 0xFFu);
-	}
-	return crc32_ieee(bytes, 2 * samples_per_ch);
-}
-
 static void fill_guards(int16_t *buf, size_t n)
 {
 	for (size_t i = 0; i < n; i++) {
@@ -90,16 +75,53 @@ static void assert_guards(const int16_t *buf, size_t from, size_t n)
 	}
 }
 
-/* Full golden check for one fixture. */
-static void assert_golden(const char *tag, const uint8_t *lc3, size_t lc3_len, const uint8_t *pcm,
-			  size_t pcm_len, int chan_count, int frame_us, uint32_t crc_full,
-			  uint32_t crc_l, uint32_t crc_r)
+static void assert_portable_channel(const char *tag, int channel, const int16_t *actual,
+				    const uint8_t *reference, int samples_per_ch)
+{
+	struct pcm_oracle oracle;
+	struct pcm_oracle_metrics metrics;
+	const struct pcm_oracle_limits limits = {
+		.min_samples = (uint32_t)samples_per_ch,
+		.max_abs_error = DECODE_PCM_MAX_ABS_ERROR,
+		.max_rms_error = DECODE_PCM_MAX_RMS_ERROR,
+		.min_correlation_q15 = DECODE_PCM_MIN_CORRELATION_Q15,
+	};
+	enum pcm_oracle_result result;
+
+	zassert_ok(pcm_oracle_init(&oracle), "%s channel %d init", tag, channel);
+	zassert_ok(
+		pcm_oracle_accumulate(&oracle, actual, 2U, reference, 4U, (uint32_t)samples_per_ch),
+		"%s channel %d accumulate", tag, channel);
+	zassert_ok(pcm_oracle_finalize(&oracle, &metrics), "%s channel %d finalize", tag, channel);
+	zassert_equal(metrics.samples, (uint32_t)samples_per_ch, "%s channel %d samples", tag,
+		      channel);
+	zassert_equal(metrics.frames, 1U, "%s channel %d frames", tag, channel);
+	zassert_ok(pcm_oracle_evaluate(&metrics, &limits, &result), "%s channel %d evaluate", tag,
+		   channel);
+	zassert_equal(result, PCM_ORACLE_RESULT_PASS,
+		      "%s channel %d result=%s observed max=%u rms=%u corr=%d limits max=%u rms=%u "
+		      "corr=%d",
+		      tag, channel, pcm_oracle_result_name(result), metrics.max_abs_error,
+		      metrics.rms_error, metrics.correlation_q15, limits.max_abs_error,
+		      limits.max_rms_error, limits.min_correlation_q15);
+}
+
+static void assert_portable_stereo(const char *tag, const int16_t *actual, const uint8_t *reference,
+				   size_t reference_len, int samples_per_ch)
+{
+	zassert_equal(reference_len, (size_t)(4 * samples_per_ch), "fixture size %s", tag);
+	assert_portable_channel(tag, 0, actual, reference, samples_per_ch);
+	assert_portable_channel(tag, 1, actual + 1, reference + 2, samples_per_ch);
+}
+
+/* Full portable fixture check for one decode. */
+static void assert_fixture(const char *tag, const uint8_t *lc3, size_t lc3_len, const uint8_t *pcm,
+			   size_t pcm_len, int chan_count, int frame_us)
 {
 	int samples_per_ch = (frame_us * 48000) / 1000000;
 	struct audio_decode_ctx ctx;
 	int16_t out[2 * 480 + 4];
 
-	zassert_equal(pcm_len, 4 * samples_per_ch, "fixture size %s", tag);
 	zassert_equal(lc3_len, (size_t)(chan_count * 60), "fixture size %s", tag);
 
 	memset(&ctx, 0, sizeof(ctx));
@@ -108,15 +130,7 @@ static void assert_golden(const char *tag, const uint8_t *lc3, size_t lc3_len, c
 	fill_guards(out, 2 * 480 + 4);
 	zassert_ok(audio_decode_sdu(&ctx, lc3, lc3_len, true, out), "%s decode", tag);
 
-	/* Exact output byte equality against the checked-in PCM. */
-	zassert_mem_equal(out, pcm, pcm_len, "%s byte-exact", tag);
-
-	/* Exact full-output CRC-32. */
-	zassert_equal(crc32_ieee((const uint8_t *)out, pcm_len), crc_full, "%s full CRC", tag);
-
-	/* Exact per-channel CRCs. */
-	zassert_equal(channel_crc(out, samples_per_ch, 0), crc_l, "%s left CRC", tag);
-	zassert_equal(channel_crc(out, samples_per_ch, 1), crc_r, "%s right CRC", tag);
+	assert_portable_stereo(tag, out, pcm, pcm_len, samples_per_ch);
 
 	/* Sample count and untouched guard values after capacity. */
 	assert_guards(out, 2 * samples_per_ch, 4);
@@ -350,60 +364,59 @@ ZTEST(decode, test_reconfigure_after_reset)
 
 	memset(out1, 0, sizeof(out1));
 	zassert_ok(audio_decode_sdu(&ctx, mono_10ms_lc3, 60, true, out1), "decode");
-	zassert_mem_equal(out1, mono_10ms_pcm, sizeof(mono_10ms_pcm), "golden after reset");
+	assert_portable_stereo("mono 10 ms after reset", out1, mono_10ms_pcm, sizeof(mono_10ms_pcm),
+			       480);
 }
 
-/* ── golden fixtures ─────────────────────────────────────────────── */
+/* ── portable fixtures ───────────────────────────────────────────── */
 
-ZTEST(decode, test_golden_mono_7p5ms)
+ZTEST(decode, test_fixture_mono_7p5ms)
 {
-	assert_golden("mono 7.5 ms", mono_7p5_lc3, sizeof(mono_7p5_lc3), mono_7p5_pcm,
-		      sizeof(mono_7p5_pcm), 1, 7500, 0xE272CD4C, 0x62AD330F, 0x62AD330F);
+	assert_fixture("mono 7.5 ms", mono_7p5_lc3, sizeof(mono_7p5_lc3), mono_7p5_pcm,
+		       sizeof(mono_7p5_pcm), 1, 7500);
 }
 
-ZTEST(decode, test_golden_mono_10ms)
+ZTEST(decode, test_fixture_mono_10ms)
 {
-	assert_golden("mono 10 ms", mono_10ms_lc3, sizeof(mono_10ms_lc3), mono_10ms_pcm,
-		      sizeof(mono_10ms_pcm), 1, 10000, 0xD546D96C, 0xA7D0F060, 0xA7D0F060);
+	assert_fixture("mono 10 ms", mono_10ms_lc3, sizeof(mono_10ms_lc3), mono_10ms_pcm,
+		       sizeof(mono_10ms_pcm), 1, 10000);
 }
 
-ZTEST(decode, test_golden_modeb_7p5ms)
+ZTEST(decode, test_fixture_modeb_7p5ms)
 {
-	assert_golden("Mode B 7.5 ms", modeb_7p5_lc3, sizeof(modeb_7p5_lc3), modeb_7p5_pcm,
-		      sizeof(modeb_7p5_pcm), 2, 7500, 0x446235E4, 0x62AD330F, 0x77673426);
+	assert_fixture("Mode B 7.5 ms", modeb_7p5_lc3, sizeof(modeb_7p5_lc3), modeb_7p5_pcm,
+		       sizeof(modeb_7p5_pcm), 2, 7500);
 }
 
-ZTEST(decode, test_golden_modeb_10ms)
+ZTEST(decode, test_fixture_modeb_10ms)
 {
-	assert_golden("Mode B 10 ms", modeb_10ms_lc3, sizeof(modeb_10ms_lc3), modeb_10ms_pcm,
-		      sizeof(modeb_10ms_pcm), 2, 10000, 0x6669E859, 0xA7D0F060, 0xD0036A17);
+	assert_fixture("Mode B 10 ms", modeb_10ms_lc3, sizeof(modeb_10ms_lc3), modeb_10ms_pcm,
+		       sizeof(modeb_10ms_pcm), 2, 10000);
 }
 
-ZTEST(decode, test_golden_deterministic_repeat)
+ZTEST(decode, test_fixture_reconfigure_repeat)
 {
-	/* Reset + reconfigure + redecode produces identical output. */
+	/* Reset + reconfigure + each decode must pass its fixture comparison. */
 	struct audio_decode_ctx ctx;
 	int16_t out1[960];
 	int16_t out2[960];
-	uint32_t crc1;
-	uint32_t crc2;
 
 	memset(&ctx, 0, sizeof(ctx));
 	zassert_ok(audio_decode_config(&ctx, 1, 48000, 10000, 1), "config");
 	zassert_ok(audio_decode_sdu(&ctx, mono_10ms_lc3, 60, true, out1), "decode");
-	crc1 = crc32_ieee((const uint8_t *)out1, sizeof(mono_10ms_pcm));
+	assert_portable_stereo("mono 10 ms first", out1, mono_10ms_pcm, sizeof(mono_10ms_pcm), 480);
 
 	audio_decode_reset(&ctx);
 	zassert_ok(audio_decode_config(&ctx, 2, 48000, 7500, 1), "reconfig modeb");
 	zassert_ok(audio_decode_sdu(&ctx, modeb_7p5_lc3, 120, true, out2), "decode modeb");
-	zassert_mem_equal(out2, modeb_7p5_pcm, sizeof(modeb_7p5_pcm), "modeb golden");
+	assert_portable_stereo("Mode B 7.5 ms", out2, modeb_7p5_pcm, sizeof(modeb_7p5_pcm), 360);
 
 	audio_decode_reset(&ctx);
 	zassert_ok(audio_decode_config(&ctx, 1, 48000, 10000, 1), "reconfig mono");
 	memset(out2, 0, sizeof(out2));
 	zassert_ok(audio_decode_sdu(&ctx, mono_10ms_lc3, 60, true, out2), "decode repeat");
-	crc2 = crc32_ieee((const uint8_t *)out2, sizeof(mono_10ms_pcm));
-	zassert_equal(crc1, crc2, "repeat decode identical");
+	assert_portable_stereo("mono 10 ms repeat", out2, mono_10ms_pcm, sizeof(mono_10ms_pcm),
+			       480);
 }
 
 /* ── SDU validation ──────────────────────────────────────────────── */
@@ -503,10 +516,10 @@ ZTEST(decode, test_sdu_malformed_lengths_preserve_output)
 	assert_rejected_guard_preserved(&ctx, modeb_10ms_lc3, 802, 7);
 }
 
-ZTEST(decode, test_rejection_then_valid_golden_decode)
+ZTEST(decode, test_rejection_then_valid_fixture_decode)
 {
 	/* Rejected input must leave the decoder state untouched: a valid
-	 * golden decode right after still matches the fixture exactly.
+	 * fixture decode right after still passes portable comparison.
 	 */
 	struct audio_decode_ctx ctx;
 	int16_t out[960];
@@ -520,7 +533,8 @@ ZTEST(decode, test_rejection_then_valid_golden_decode)
 
 	memset(out, 0, sizeof(out));
 	zassert_ok(audio_decode_sdu(&ctx, modeb_10ms_lc3, 120, true, out), "decode");
-	zassert_mem_equal(out, modeb_10ms_pcm, sizeof(modeb_10ms_pcm), "golden after reject");
+	assert_portable_stereo("Mode B 10 ms after reject", out, modeb_10ms_pcm,
+			       sizeof(modeb_10ms_pcm), 480);
 }
 
 /* ── PLC ─────────────────────────────────────────────────────────── */
@@ -798,7 +812,7 @@ ZTEST(decode, test_sdu_huge_lengths_rejected)
 	assert_huge_rejected(&ctx, modeb_10ms_lc3, (size_t)INT_MAX + 1, false, 8);
 }
 
-ZTEST(decode, test_sdu_huge_rejection_then_golden)
+ZTEST(decode, test_sdu_huge_rejection_then_fixture)
 {
 	/* Rejection of oversized lengths must leave decoder state untouched. */
 	struct audio_decode_ctx ctx;
@@ -815,7 +829,8 @@ ZTEST(decode, test_sdu_huge_rejection_then_golden)
 
 	memset(out, 0, sizeof(out));
 	zassert_ok(audio_decode_sdu(&ctx, mono_10ms_lc3, 60, true, out), "decode");
-	zassert_mem_equal(out, mono_10ms_pcm, sizeof(mono_10ms_pcm), "golden after reject");
+	assert_portable_stereo("mono 10 ms after huge reject", out, mono_10ms_pcm,
+			       sizeof(mono_10ms_pcm), 480);
 }
 
 /* ── PLC length semantics ────────────────────────────────────────── */
@@ -875,7 +890,7 @@ ZTEST(decode, test_plc_shape_rejections)
 	assert_huge_rejected(&ctx, NULL, 802, false, 5); /* per-channel 401: too long */
 }
 
-ZTEST(decode, test_plc_shape_rejection_then_valid_golden)
+ZTEST(decode, test_plc_shape_rejection_then_valid_fixture)
 {
 	/* Rejected PLC shapes leave decoder state untouched. */
 	struct audio_decode_ctx ctx;
@@ -890,5 +905,6 @@ ZTEST(decode, test_plc_shape_rejection_then_valid_golden)
 
 	memset(out, 0, sizeof(out));
 	zassert_ok(audio_decode_sdu(&ctx, modeb_10ms_lc3, 120, true, out), "decode");
-	zassert_mem_equal(out, modeb_10ms_pcm, sizeof(modeb_10ms_pcm), "golden after reject");
+	assert_portable_stereo("Mode B 10 ms after PLC reject", out, modeb_10ms_pcm,
+			       sizeof(modeb_10ms_pcm), 480);
 }

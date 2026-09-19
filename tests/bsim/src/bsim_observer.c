@@ -14,6 +14,7 @@
 #include "bsim_observer.h"
 
 #include <stdatomic.h>
+#include <string.h>
 
 #include <zephyr/sys/printk.h>
 
@@ -38,9 +39,8 @@ static atomic_uint rel_ss_cnt;
 static atomic_uint rel_ss_seq;
 static atomic_uint mts_cnt;
 static atomic_uint disc_seq;
-static atomic_bool last_push_src_valid;
-static atomic_bool last_push_l_valid;
-static atomic_bool last_push_r_valid;
+static struct bsim_observer_push push_snapshot;
+static bool push_ready;
 
 static uint32_t obs_next_event(void)
 {
@@ -131,26 +131,52 @@ void bsim_observer_missing_ts(void)
 	printk("OBS missing ts\n");
 }
 
-void bsim_observer_pre_push(bool l_valid, bool r_valid)
+static bool push_half_well_formed(bool valid, const uint8_t *payload, size_t payload_len)
 {
-	atomic_store(&last_push_l_valid, l_valid);
-	atomic_store(&last_push_r_valid, r_valid);
-	atomic_store(&last_push_src_valid, l_valid && r_valid);
+	if (valid) {
+		return payload != NULL && payload_len > 0U &&
+		       payload_len <= BSIM_OBSERVER_MAX_PAYLOAD_BYTES;
+	}
+
+	return payload == NULL && payload_len == 0U;
 }
 
-bool bsim_observer_get_last_push_src_valid(void)
+void bsim_observer_pre_push(bool l_valid, const uint8_t *l_payload, size_t l_payload_len,
+			    bool r_valid, const uint8_t *r_payload, size_t r_payload_len)
 {
-	return atomic_load(&last_push_src_valid);
+	/* Clear readiness first so malformed metadata cannot leave an earlier
+	 * snapshot available to a later sink push. RX and sink execute in one
+	 * serialized call stack, so no lock is required. */
+	push_ready = false;
+	memset(&push_snapshot, 0, sizeof(push_snapshot));
+
+	if (!push_half_well_formed(l_valid, l_payload, l_payload_len) ||
+	    !push_half_well_formed(r_valid, r_payload, r_payload_len)) {
+		return;
+	}
+
+	push_snapshot.left.source_valid = l_valid;
+	push_snapshot.left.payload_len = (uint16_t)l_payload_len;
+	push_snapshot.right.source_valid = r_valid;
+	push_snapshot.right.payload_len = (uint16_t)r_payload_len;
+	if (l_valid) {
+		memcpy(push_snapshot.left.payload, l_payload, l_payload_len);
+	}
+	if (r_valid) {
+		memcpy(push_snapshot.right.payload, r_payload, r_payload_len);
+	}
+	push_ready = true;
 }
 
-bool bsim_observer_get_last_push_l_valid(void)
+bool bsim_observer_take_push(struct bsim_observer_push *out)
 {
-	return atomic_load(&last_push_l_valid);
-}
+	if (out == NULL || !push_ready) {
+		return false;
+	}
 
-bool bsim_observer_get_last_push_r_valid(void)
-{
-	return atomic_load(&last_push_r_valid);
+	*out = push_snapshot;
+	push_ready = false;
+	return true;
 }
 
 uint32_t bsim_observer_get_config_accepted(void)

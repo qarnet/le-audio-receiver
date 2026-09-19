@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/bsim_stage1_parse.py — strict T4 scenario parser.
+"""Unit tests for strict Stage 1 BSim parser and runner preflight.
 
-Covers PASS-line extraction, token parsing, per-scenario contract checks,
-fault-marker scanning with allowlists, and every major failure mode.
-No BabbleSim or hardware needed.
+Uses complete receiver/client PASS records. No BabbleSim or hardware needed.
 """
 
+import contextlib
+import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,9 +18,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sc
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from bsim_stage1_parse import (  # noqa: E402
+    EXPECTED_SCENARIO_CONTRACTS,
+    FNV1A_OFFSET_BASIS,
     ParseError,
+    RECEIVER_ORACLE_VALUES,
+    SCENARIOS,
     ScenarioDataError,
+    TRANSPORT_VALUES,
+    _STATEFUL_RECIPES,
     check,
+    expected_transport_hash,
     extract_pass_line,
     known_values,
     load_scenarios,
@@ -27,11 +35,12 @@ from bsim_stage1_parse import (  # noqa: E402
     parse_client_pass,
     parse_receiver_pass,
     parse_tokens,
-    scan_faults,
 )
 
 FAILURES = 0
 PASSES = 0
+BSIM_RUNNER = os.path.join(REPO_ROOT, "scripts", "bsim-stage1-run.sh")
+PRODUCTION_DATA = os.path.join(REPO_ROOT, "tests", "bsim", "stage1-scenarios.json")
 
 
 def report(name, ok, detail=""):
@@ -46,818 +55,1158 @@ def report(name, ok, detail=""):
 
 def write_log(root, name, text):
     path = os.path.join(root, name)
-    with open(path, "w") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         fh.write(text)
     return path
 
 
-def recv_pass(scenario, **over):
-    base = (
+def _recipe_prefix_counts(recipe_id, actions):
+    recipe = _STATEFUL_RECIPES[recipe_id]
+    remaining = actions
+    valid = 0
+    plc = 0
+
+    for step in recipe["steps"]:
+        consumed = min(remaining, step["count"])
+        if step["action"] == "corpus":
+            valid += consumed
+        else:
+            plc += consumed
+        remaining -= consumed
+        if remaining == 0:
+            break
+    if remaining != 0:
+        raise AssertionError("recipe prefix overrun")
+    return valid, plc
+
+
+def _populate_segment(
+    values,
+    segment,
+    *,
+    left_recipe="none",
+    right_recipe="none",
+    pushes=0,
+    transients=0,
+    spc=0,
+):
+    suffix = str(segment)
+    active = left_recipe != "none" or right_recipe != "none"
+    if active != (pushes > 0):
+        raise AssertionError("active segments must have pushes")
+    if active:
+        l_actions = transients + pushes
+        r_actions = transients + pushes
+        l_valid, l_plc = _recipe_prefix_counts(left_recipe, l_actions)
+        r_valid, r_plc = _recipe_prefix_counts(right_recipe, r_actions)
+        l_pre_valid, l_pre_plc = _recipe_prefix_counts(left_recipe, transients)
+        r_pre_valid, r_pre_plc = _recipe_prefix_counts(right_recipe, transients)
+    else:
+        l_actions = l_valid = l_plc = 0
+        r_actions = r_valid = r_plc = 0
+        l_pre_valid = l_pre_plc = 0
+        r_pre_valid = r_pre_plc = 0
+
+    values.update(
+        {
+            "pushes" + suffix: pushes,
+            "trans" + suffix: transients,
+            "szero" + suffix: transients,
+            "splc" + suffix: max(transients - 1, 0),
+            "plc" + suffix: max(transients - 1, 0),
+            "total" + suffix: 0,
+            "derr" + suffix: 0,
+            "mal" + suffix: 0,
+            "samples" + suffix: spc * 2 if active else 0,
+            "spc" + suffix: spc if active else 0,
+            "diff" + suffix: 0,
+            "lemin" + suffix: 1 if active else 0,
+            "lemax" + suffix: 2 if active else 0,
+            "remin" + suffix: 1 if active else 0,
+            "remax" + suffix: 2 if active else 0,
+            "lrid" + suffix: left_recipe,
+            "lact" + suffix: l_actions,
+            "lval" + suffix: l_valid,
+            "lplc" + suffix: l_plc,
+            "lfr" + suffix: l_valid,
+            "lsm" + suffix: l_valid * spc,
+            "lex" + suffix: l_plc - l_pre_plc,
+            "lmax" + suffix: 0,
+            "lsse" + suffix: 0,
+            "lrms" + suffix: 0,
+            "lcorr" + suffix: 32767 if active else 0,
+            "lres" + suffix: 0 if active else 1,
+            "rrid" + suffix: right_recipe,
+            "ract" + suffix: r_actions,
+            "rval" + suffix: r_valid,
+            "rplc" + suffix: r_plc,
+            "rfr" + suffix: r_valid,
+            "rsm" + suffix: r_valid * spc,
+            "rex" + suffix: r_plc - r_pre_plc,
+            "rmax" + suffix: 0,
+            "rsse" + suffix: 0,
+            "rrms" + suffix: 0,
+            "rcorr" + suffix: 32767 if active else 0,
+            "rres" + suffix: 0 if active else 1,
+        }
+    )
+
+
+def receiver_values(scenario):
+    """Complete valid receiver record for one schema-owned scenario."""
+    stereo = SCENARIOS[scenario][1] == "stereo"
+    total = known_values(scenario).get("total", 0)
+    values = {
+        "scenario": scenario,
+        "seg": len(RECEIVER_ORACLE_VALUES[scenario]),
+        "after": 0,
+        "adv_restart": 0,
+        "pacs": 1,
+        "obs_ok": 1,
+        "obs_rej": 0,
+        "obs_dir": 0,
+        "obs_code": 0,
+        "obs_reason": 0,
+        "obs_gate_o": 1,
+        "obs_gate_c": 0,
+        "obs_mal": 0,
+        "obs_blk": 0,
+        "obs_stale": 0,
+        "obs_rel": 0,
+        "obs_disc": 0,
+        "obs_rej_code": 0,
+        "obs_rej_reason": 0,
+        "obs_mts": 0,
+        "obs_rel_ss": 0,
+        "rel_ss_seq": 0,
+        "disc_seq": 0,
+        "limmax": 2048,
+        "limrms": 512,
+        "limcorr": 32750,
+    }
+
+    for segment, oracle in enumerate(RECEIVER_ORACLE_VALUES[scenario], start=1):
+        left_recipe, right_recipe, completion = oracle
+        left_actions = _STATEFUL_RECIPES[left_recipe]["output_action_count"]
+        right_actions = _STATEFUL_RECIPES[right_recipe]["output_action_count"]
+        if left_actions != right_actions:
+            raise AssertionError("scenario recipes need matching action counts")
+        pushes = 100 if completion == "full" else 25
+        transients = left_actions - pushes if completion == "full" else 8
+        spc = _STATEFUL_RECIPES[left_recipe]["samples_per_frame"]
+
+        _populate_segment(
+            values,
+            segment,
+            left_recipe=left_recipe,
+            right_recipe=right_recipe,
+            pushes=pushes,
+            transients=transients,
+            spc=spc,
+        )
+        values["total" + str(segment)] = total if segment == 1 else transients + pushes
+        values["diff" + str(segment)] = 1 if stereo else 0
+
+    for segment in range(len(RECEIVER_ORACLE_VALUES[scenario]) + 1, 3):
+        _populate_segment(values, segment)
+
+    if scenario == "modea_one_cis_loss_10ms":
+        values["plc1"] = values["splc1"] + 18
+
+    normal_audio = {
+        "mono_10ms",
+        "mono_7p5ms",
+        "modea_10ms",
+        "modea_7p5ms",
+        "modea_reverse_start_10ms",
+        "modeb_10ms",
+        "modeb_7p5ms",
+        "invalid_sdu_resume_10ms",
+        "modea_one_cis_loss_10ms",
+    }
+    if scenario in normal_audio:
+        if scenario == "invalid_sdu_resume_10ms":
+            values.update({"derr1": 1, "obs_mal": 1})
+        return values
+
+    if scenario == "modea_first_stop_10ms":
+        values.update({"obs_gate_c": 1, "obs_blk": 1, "obs_rel": 2})
+        return values
+
+    if scenario == "release_without_disable_10ms":
+        values.update(
+            {
+                "obs_gate_c": 1,
+                "obs_rel": 1,
+                "obs_rel_ss": 1,
+                "rel_ss_seq": 5,
+                "disc_seq": 9,
+                "obs_disc": 1,
+            }
+        )
+        return values
+
+    if scenario == "disconnect_streaming_10ms":
+        values.update({"adv_restart": 1, "obs_gate_c": 1, "obs_disc": 1})
+        return values
+
+    if scenario == "reconnect_second_stream_10ms":
+        values.update(
+            {
+                "adv_restart": 1,
+                "obs_ok": 2,
+                "obs_gate_o": 2,
+                "obs_gate_c": 1,
+                "obs_disc": 1,
+            }
+        )
+        return values
+
+    if scenario == "duplicate_release_10ms":
+        values.update({"obs_gate_c": 1, "obs_rel": 2, "obs_rel_ss": 1, "obs_disc": 1})
+        return values
+
+    if scenario == "unsupported_source_direction":
+        values.update({"obs_ok": 0, "obs_rej": 1, "obs_dir": 2, "obs_code": 7})
+    elif scenario == "no_free_sink_slot":
+        values.update(
+            {
+                "obs_ok": 3,
+                "obs_rej": 1,
+                "obs_rej_code": 13,
+                "obs_rel": 3,
+            }
+        )
+    elif scenario == "invalid_codec_fields":
+        values.update(
+            {
+                "obs_ok": 2,
+                "obs_rej": 9,
+                "obs_rej_code": 8,
+                "obs_rej_reason": 2,
+                "obs_rel": 2,
+            }
+        )
+    return values
+
+
+def receiver_pass(scenario, **overrides):
+    values = receiver_values(scenario)
+    values.update(overrides)
+    return (
         "d_00: @00:00:06.295366 INFO: le_audio_receiver: "
-        "scenario=%s seg=1 after=0 adv_restart=0 pacs=1 "
-        "obs_ok=1 obs_rej=0 obs_dir=0 obs_code=0 obs_reason=0 "
-        "obs_gate_o=1 obs_gate_c=0 obs_mal=0 obs_blk=0 obs_stale=0 obs_rel=0 obs_disc=0 "
-        "obs_rej_code=0 obs_rej_reason=0 obs_mts=0 obs_rel_ss=0 rel_ss_seq=0 disc_seq=0 "
-        "pushes1=100 trans1=8 szero1=8 splc1=7 total1=108 plc1=7 derr1=0 mal1=0 "
-        "h1=0x12345678 lh1=0x12345678 rh1=0x12345678 "
-        "lemin1=1234 lemax1=5678 remin1=1234 remax1=5678 samples1=960\n" % scenario
+        + " ".join("%s=%s" % (key, value) for key, value in values.items())
+        + "\n"
     )
-    import re
-
-    def repl(m):
-        return "%s=%s" % (m.group(1), over[m.group(1)])
-
-    for k in over:
-        base = re.sub(r"\b(%s)=\d+" % k, repl, base)
-    return base
 
 
-def cli_pass(scenario, **over):
-    base = (
+def client_values(scenario, **overrides):
+    values = {
+        "scenario": scenario,
+        "sends0": 100,
+        "sends1": 0,
+        "cfgrsps": 1,
+        "relrsps": 0,
+        "disrsps": 0,
+    }
+    if scenario in {
+        "modea_10ms",
+        "modea_7p5ms",
+        "modea_reverse_start_10ms",
+        "modea_one_cis_loss_10ms",
+    }:
+        values.update({"sends0": 110, "sends1": 110})
+    elif scenario == "invalid_sdu_resume_10ms":
+        values["sends0"] = 101
+    elif scenario == "modea_first_stop_10ms":
+        values.update({"sends0": 25, "sends1": 45, "relrsps": 2})
+    elif scenario == "release_without_disable_10ms":
+        values.update({"sends0": 25, "relrsps": 1})
+    elif scenario == "disconnect_streaming_10ms":
+        values["sends0"] = 25
+    elif scenario == "reconnect_second_stream_10ms":
+        values.update({"sends0": 25, "sends1": 100})
+    elif scenario == "unsupported_source_direction":
+        values.update({"sends0": 0, "cfgrsps": 1})
+    elif scenario == "no_free_sink_slot":
+        values.update({"sends0": 0, "cfgrsps": 4, "relrsps": 3})
+    elif scenario == "invalid_codec_fields":
+        values.update({"sends0": 0, "cfgrsps": 11})
+    elif scenario == "duplicate_release_10ms":
+        values.update({"sends0": 25, "cfgrsps": 2, "relrsps": 3})
+
+    values.update(overrides)
+    for stream in (0, 1):
+        sends_key = "sends%d" % stream
+        count_key = "txc%d" % stream
+        hash_key = "txh%d" % stream
+        if count_key not in overrides:
+            values[count_key] = values[sends_key]
+        if hash_key not in overrides:
+            transport = next(
+                (
+                    entry
+                    for entry in TRANSPORT_VALUES[scenario]
+                    if entry["stream"] == stream
+                ),
+                None,
+            )
+            values[hash_key] = (
+                expected_transport_hash(transport, values[count_key])
+                if transport is not None
+                else FNV1A_OFFSET_BASIS
+            )
+    return values
+
+
+def client_pass(scenario, **overrides):
+    values = client_values(scenario, **overrides)
+    return (
         "d_01: @00:00:06.400000 INFO: bsim_client: "
-        "scenario=%s sends0=100 sends1=0 cfgrsps=1 relrsps=0 disrsps=0\n" % scenario
+        "scenario=%s sends0=%d sends1=%d cfgrsps=%d relrsps=%d disrsps=%d "
+        "txc0=%d txh0=0x%08X txc1=%d txh1=0x%08X\n"
+        % (
+            values["scenario"],
+            values["sends0"],
+            values["sends1"],
+            values["cfgrsps"],
+            values["relrsps"],
+            values["disrsps"],
+            values["txc0"],
+            values["txh0"],
+            values["txc1"],
+            values["txh1"],
+        )
     )
-    import re
-
-    def repl(m):
-        return "%s=%s" % (m.group(1), over[m.group(1)])
-
-    for k in over:
-        base = re.sub(r"\b(%s)=\d+" % k, repl, base)
-    return base
 
 
-def run_check(root, scenario, recv_text, cli_text, known=None, expect_ok=True):
+def known_for(scenario):
+    total = known_values(scenario).get("total")
+    return {"known_total": total} if total is not None else {}
+
+
+def run_check(root, scenario, recv_text, cli_text, known=None):
     recv = write_log(root, "receiver.log", recv_text)
     cli = write_log(root, "client.log", cli_text)
     try:
-        check(scenario, recv, cli, known or {})
+        check(scenario, recv, cli, known_for(scenario) if known is None else known)
         return True
     except ParseError:
         return False
 
 
-def test_tokens():
-    line = "INFO: le_audio_receiver: scenario=mono_10ms seg=1 h1=0xFE0D4245 after=0"
-    t = parse_tokens(line)
+def remove_token(text, key):
+    return re.sub(r"\s%s=[^\s]+" % re.escape(key), "", text)
+
+
+def test_tokens_and_pass_extraction():
+    tokens = parse_tokens(
+        "INFO: le_audio_receiver: scenario=mono_10ms lcorr1=-12 txh0=0xFE0D4245"
+    )
     report(
-        "tokens",
-        t["scenario"] == "mono_10ms"
-        and t["seg"] == 1
-        and t["h1"] == 0xFE0D4245
-        and t["after"] == 0,
-        str(t),
+        "tokens preserve negative PCM metrics and TX hex",
+        tokens["scenario"] == "mono_10ms"
+        and tokens["lcorr1"] == -12
+        and tokens["txh0"] == 0xFE0D4245,
     )
-
-
-def test_extract_missing():
     root = tempfile.mkdtemp()
-    p = write_log(root, "x.log", "no pass here\n")
+    path = write_log(root, "missing.log", "no pass line\n")
     try:
-        extract_pass_line(p, "le_audio_receiver")
-        report("extract_missing", False)
+        extract_pass_line(path, "le_audio_receiver")
+        report("missing PASS line rejected", False)
     except ParseError:
-        report("extract_missing", True)
+        report("missing PASS line rejected", True)
 
 
-def test_mono_10ms_ok():
+def test_complete_production_scenario_records():
     root = tempfile.mkdtemp()
-    known = {"known_full": 0x12345678, "known_l": 0x12345678, "known_r": 0x12345678}
-    ok = run_check(
-        root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known
-    )
-    report("mono_10ms ok", ok)
-
-
-def test_mono_hash_mismatch():
-    root = tempfile.mkdtemp()
-    known = {"known_full": 0xDEADBEEF, "known_l": 0x12345678, "known_r": 0x12345678}
-    ok = run_check(
-        root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known
-    )
-    report("mono hash mismatch rejected", not ok)
-
-
-def test_mono_lr_equal():
-    root = tempfile.mkdtemp()
-    # Force L != R: stereo-like record on mono scenario must fail.
-    recv = recv_pass("mono_10ms").replace("rh1=0x12345678", "rh1=0xDEADBEEF")
-    ok = run_check(root, "mono_10ms", recv, cli_pass("mono_10ms"))
-    report("mono L!=R rejected", not ok)
-
-
-def test_modea_lr_distinct():
-    root = tempfile.mkdtemp()
-    recv = recv_pass("modea_10ms", pushes1=100, total1=216, szero1=8, obs_gate_o=2)
-    recv = recv.replace("lh1=0x12345678", "lh1=0x11111111").replace(
-        "rh1=0x12345678", "rh1=0x22222222"
-    )
-    ok = run_check(
-        root, "modea_10ms", recv, cli_pass("modea_10ms", sends0=110, sends1=110), {}
-    )
-    report("modea L!=R ok", ok)
-
-
-def test_modea_lr_equal_rejected():
-    root = tempfile.mkdtemp()
-    recv = recv_pass("modea_10ms", total1=216)
-    ok = run_check(
-        root, "modea_10ms", recv, cli_pass("modea_10ms", sends0=110, sends1=110), {}
-    )
-    report("modea L==R rejected", not ok)
-
-
-def test_total_pin():
-    root = tempfile.mkdtemp()
-    known = {"known_total": 108}
-    ok = run_check(
-        root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known
-    )
-    report("total pin ok", ok)
-
-    known_bad = {"known_total": 200}
-    ok = run_check(
-        root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"), known_bad
-    )
-    report("total pin mismatch rejected", not ok)
-
-
-def test_post_start_plc():
-    root = tempfile.mkdtemp()
-    ok = run_check(root, "mono_10ms", recv_pass("mono_10ms"), cli_pass("mono_10ms"))
-    report("zero post-start PLC ok", ok)
-
-    # plc1 != splc1 is a fault in every audio scenario.
-    recv = recv_pass("mono_10ms", plc1=9)
-    ok = run_check(root, "mono_10ms", recv, cli_pass("mono_10ms"))
-    report("post-start PLC rejected", not ok)
-
-
-def test_total_frames_mismatch():
-    root = tempfile.mkdtemp()
-    # Undercount: total below pushes+startup-zeros is a fault.
-    recv = recv_pass("mono_10ms", total1=100)
-    ok = run_check(root, "mono_10ms", recv, cli_pass("mono_10ms"))
-    report("total frames mismatch rejected", not ok)
-
-
-def test_invalid_sdu_resume():
-    root = tempfile.mkdtemp()
-    recv = recv_pass("invalid_sdu_resume_10ms", derr1=1, obs_mal=1)
-    ok = run_check(
-        root,
-        "invalid_sdu_resume_10ms",
-        recv,
-        cli_pass("invalid_sdu_resume_10ms", sends0=101),
-    )
-    report("invalid_sdu_resume ok", ok)
-
-    recv_bad = recv_pass("invalid_sdu_resume_10ms", derr1=0, obs_mal=1)
-    ok = run_check(
-        root,
-        "invalid_sdu_resume_10ms",
-        recv_bad,
-        cli_pass("invalid_sdu_resume_10ms", sends0=101),
-    )
-    report("invalid_sdu_resume missing decode-error rejected", not ok)
-
-
-def test_modea_first_stop():
-    root = tempfile.mkdtemp()
-    recv = recv_pass(
-        "modea_first_stop_10ms",
-        pushes1=25,
-        total1=66,
-        obs_gate_c=1,
-        obs_blk=5,
-        obs_rel=2,
-        obs_rel_ss=0,
-        szero1=8,
-        seg=1,
-    )
-    ok = run_check(
-        root,
-        "modea_first_stop_10ms",
-        recv,
-        cli_pass("modea_first_stop_10ms", sends0=25, sends1=45, relrsps=2),
-    )
-    report("modea_first_stop ok", ok)
-
-    recv_bad = recv_pass(
-        "modea_first_stop_10ms",
-        pushes1=25,
-        total1=66,
-        obs_gate_c=0,
-        obs_blk=5,
-        obs_rel=2,
-    )
-    ok = run_check(
-        root,
-        "modea_first_stop_10ms",
-        recv_bad,
-        cli_pass("modea_first_stop_10ms", sends0=25, sends1=45, relrsps=2),
-    )
-    report("modea_first_stop missing gate close rejected", not ok)
-
-
-def test_release_without_disable():
-    root = tempfile.mkdtemp()
-    recv = recv_pass(
-        "release_without_disable_10ms",
-        pushes1=25,
-        total1=33,
-        obs_rel=1,
-        obs_gate_c=1,
-        obs_rel_ss=1,
-        rel_ss_seq=5,
-        disc_seq=9,
-        obs_mts=0,
-        obs_disc=1,
-    )
-    ok = run_check(
-        root,
-        "release_without_disable_10ms",
-        recv,
-        cli_pass("release_without_disable_10ms", sends0=25, relrsps=1),
-    )
-    report("release_without_disable ok", ok)
-
-
-def test_disconnect_streaming():
-    root = tempfile.mkdtemp()
-    recv = recv_pass(
-        "disconnect_streaming_10ms",
-        pushes1=25,
-        total1=33,
-        adv_restart=1,
-        obs_disc=1,
-        obs_gate_c=1,
-        obs_rel=0,
-    )
-    ok = run_check(
-        root,
-        "disconnect_streaming_10ms",
-        recv,
-        cli_pass("disconnect_streaming_10ms", sends0=25),
-    )
-    report("disconnect_streaming ok", ok)
-
-    recv_bad = recv_pass(
-        "disconnect_streaming_10ms", pushes1=25, total1=33, adv_restart=0, obs_disc=1
-    )
-    ok = run_check(
-        root,
-        "disconnect_streaming_10ms",
-        recv_bad,
-        cli_pass("disconnect_streaming_10ms", sends0=25),
-    )
-    report("disconnect_streaming missing restart rejected", not ok)
-
-
-def test_reconnect_second_stream():
-    root = tempfile.mkdtemp()
-    known = {"known_full": 0xABCD1234}
-    recv = (
-        "d_00: INFO: le_audio_receiver: scenario=reconnect_second_stream_10ms seg=2 "
-        "after=0 adv_restart=1 pacs=1 obs_ok=2 obs_rej=0 obs_dir=0 obs_code=0 "
-        "obs_reason=0 obs_gate_o=2 obs_gate_c=1 obs_mal=0 obs_blk=0 obs_stale=0 "
-        "obs_rel=0 obs_disc=1 "
-        "pushes1=25 szero1=8 splc1=7 total1=33 plc1=7 derr1=0 mal1=0 "
-        "h1=0x11111111 lh1=0x11111111 rh1=0x11111111 "
-        "lemin1=1 lemax1=2 remin1=1 remax1=2 samples1=960 "
-        "pushes2=100 trans2=8 szero2=8 splc2=7 total2=108 plc2=7 derr2=0 mal2=0 "
-        "h2=0xABCD1234 lh2=0xABCD1234 rh2=0xABCD1234 "
-        "lemin2=1 lemax2=2 remin2=1 remax2=2 samples2=960\n"
-    )
-    ok = run_check(
-        root,
-        "reconnect_second_stream_10ms",
-        recv,
-        cli_pass("reconnect_second_stream_10ms", sends0=0, sends1=100),
-        known,
-    )
-    report("reconnect_second_stream ok", ok)
-
-    recv_bad = recv.replace("h2=0xABCD1234", "h2=0xDEADBEEF")
-    ok = run_check(
-        root,
-        "reconnect_second_stream_10ms",
-        recv_bad,
-        cli_pass("reconnect_second_stream_10ms", sends0=0, sends1=100),
-        known,
-    )
-    report("reconnect seg2 hash mismatch rejected", not ok)
-
-
-def test_unsupported_source():
-    root = tempfile.mkdtemp()
-    recv = recv_pass(
-        "unsupported_source_direction",
-        seg=0,
-        pushes1=0,
-        obs_rej=1,
-        obs_dir=2,
-        obs_code=7,
-        obs_reason=0,
-        obs_ok=0,
-    )
-    ok = run_check(
-        root,
-        "unsupported_source_direction",
-        recv,
-        cli_pass("unsupported_source_direction", sends0=0),
-    )
-    report("unsupported_source ok", ok)
-
-    recv_bad = recv_pass(
-        "unsupported_source_direction",
-        seg=0,
-        obs_rej=1,
-        obs_dir=1,
-        obs_code=7,
-        obs_reason=0,
-        obs_ok=0,
-    )
-    ok = run_check(
-        root,
-        "unsupported_source_direction",
-        recv_bad,
-        cli_pass("unsupported_source_direction", sends0=0),
-    )
-    report("unsupported_source wrong dir rejected", not ok)
-
-
-def test_no_free_sink_slot():
-    root = tempfile.mkdtemp()
-    recv = recv_pass(
-        "no_free_sink_slot",
-        seg=0,
-        pushes1=0,
-        obs_ok=3,
-        obs_rej=1,
-        obs_rej_code=13,
-        obs_rej_reason=0,
-        obs_rel=3,
-    )
-    ok = run_check(
-        root,
-        "no_free_sink_slot",
-        recv,
-        cli_pass("no_free_sink_slot", sends0=0, cfgrsps=4, relrsps=3),
-    )
-    report("no_free_sink_slot ok", ok)
-
-    recv_bad = recv_pass(
-        "no_free_sink_slot",
-        seg=0,
-        obs_ok=3,
-        obs_rej=1,
-        obs_rej_code=9,
-        obs_rej_reason=0,
-        obs_rel=3,
-    )
-    ok = run_check(
-        root,
-        "no_free_sink_slot",
-        recv_bad,
-        cli_pass("no_free_sink_slot", sends0=0, cfgrsps=4, relrsps=3),
-    )
-    report("no_free_sink_slot wrong code rejected", not ok)
-
-
-def test_invalid_codec_fields():
-    root = tempfile.mkdtemp()
-    recv = recv_pass(
-        "invalid_codec_fields",
-        seg=0,
-        pushes1=0,
-        obs_rej=9,
-        obs_ok=2,
-        obs_rej_code=8,
-        obs_rej_reason=2,
-        obs_rel=2,
-        obs_gate_c=0,
-        obs_rel_ss=0,
-    )
-    ok = run_check(
-        root,
-        "invalid_codec_fields",
-        recv,
-        cli_pass("invalid_codec_fields", sends0=0, cfgrsps=11),
-    )
-    report("invalid_codec_fields ok", ok)
-
-    recv_bad = recv_pass(
-        "invalid_codec_fields",
-        seg=0,
-        obs_rej=9,
-        obs_ok=2,
-        obs_rej_code=8,
-        obs_rej_reason=0,
-    )
-    ok = run_check(
-        root,
-        "invalid_codec_fields",
-        recv_bad,
-        cli_pass("invalid_codec_fields", sends0=0, cfgrsps=11),
-    )
-    report("invalid_codec_fields wrong reason rejected", not ok)
-
-
-def test_duplicate_release():
-    root = tempfile.mkdtemp()
-    recv = recv_pass(
-        "duplicate_release_10ms",
-        pushes1=25,
-        total1=33,
-        seg=1,
-        obs_gate_o=1,
-        obs_gate_c=1,
-        obs_rel=2,
-        obs_rel_ss=1,
-        obs_disc=1,
-    )
-    ok = run_check(
-        root,
-        "duplicate_release_10ms",
-        recv,
-        cli_pass("duplicate_release_10ms", sends0=25, cfgrsps=2, relrsps=3),
-    )
-    report("duplicate_release ok", ok)
-
-    # Duplicate same-slot release must NOT re-clean: cleanup count 3 is a
-    # fault (the scenario has exactly two first-time cleanups).
-    recv_bad = recv_pass(
-        "duplicate_release_10ms",
-        pushes1=25,
-        total1=33,
-        seg=1,
-        obs_gate_c=1,
-        obs_rel=3,
-        obs_rel_ss=1,
-        obs_disc=1,
-    )
-    ok = run_check(
-        root,
-        "duplicate_release_10ms",
-        recv_bad,
-        cli_pass("duplicate_release_10ms", sends0=25, cfgrsps=2, relrsps=3),
-    )
-    report("duplicate_release over-cleanup rejected", not ok)
-
-
-def test_fault_scan():
-    root = tempfile.mkdtemp()
-    # Scenario 1: any decode fault marker fails.
-    log = "d_00: ... INFO: le_audio_receiver: scenario=mono_10ms ...\n<err> bt_bap: LC3 decode error -5\n"
-    p = write_log(root, "r.log", log)
-    try:
-        scan_faults(p, "mono_10ms")
-        report("fault scan detects decode error", False)
-    except ParseError:
-        report("fault scan detects decode error", True)
-
-    # Any bt_bap warning is a fault (no allowlist).
-    logw = "d_00: ... <wrn> bt_bap: Source direction unsupported\n"
-    pw = write_log(root, "rw.log", logw)
-    try:
-        scan_faults(pw, "unsupported_source_direction")
-        report("bt_bap warning rejected everywhere", False)
-    except ParseError:
-        report("bt_bap warning rejected everywhere", True)
-
-    # Any bt_ascs warning is a fault (the CONF_REJECTED path logs INFO).
-    logr = "d_00: ... <wrn> bt_ascs: Invalid application error code: 9\n"
-    pr = write_log(root, "rr.log", logr)
-    try:
-        scan_faults(pr, "invalid_codec_fields")
-        report("ascs rsp warning rejected everywhere", False)
-    except ParseError:
-        report("ascs rsp warning rejected everywhere", True)
-
-    # The duplicate-release scenario's deliberate server rejection of the
-    # second Release PDU (ascs.c: "Invalid operation in state: releasing")
-    # is allowed ONLY for that scenario and only for that exact line.
-    dup_ok = "d_00: ... <wrn> bt_ascs: Invalid operation in state: releasing\n"
-    pd = write_log(root, "dup.log", dup_ok)
-    try:
-        scan_faults(pd, "duplicate_release_10ms")
-        report("duplicate-release server rejection allowlisted", True)
-    except ParseError:
-        report("duplicate-release server rejection allowlisted", False)
-
-    pdx = write_log(root, "dupx.log", dup_ok)
-    try:
-        scan_faults(pdx, "mono_10ms")
-        report("duplicate-release line still a fault elsewhere", False)
-    except ParseError:
-        report("duplicate-release line still a fault elsewhere", True)
-
-    # A DIFFERENT bt_ascs warning is still a fault inside the
-    # duplicate-release scenario (the allowlist is exact-line only).
-    pd2 = write_log(root, "dup2.log", "d_00: ... <wrn> bt_ascs: something else\n")
-    try:
-        scan_faults(pd2, "duplicate_release_10ms")
-        report("other bt_ascs warning still a fault in scenario 17", False)
-    except ParseError:
-        report("other bt_ascs warning still a fault in scenario 17", True)
-
-    # Any bt_bap error is a fault.
-    log14 = "d_00: ... <err> bt_bap: No free sink slot (max 2)\n"
-    p14 = write_log(root, "r14.log", log14)
-    try:
-        scan_faults(p14, "no_free_sink_slot")
-        report("bt_bap error rejected everywhere", False)
-    except ParseError:
-        report("bt_bap error rejected everywhere", True)
-
-
-def test_client_pass_parse():
-    root = tempfile.mkdtemp()
-    c = cli_pass("mono_10ms", sends0=100)
-    p = write_log(root, "c.log", c)
-    t = parse_client_pass(p)
+    rejected = []
+    for scenario in SCENARIOS:
+        if not run_check(
+            root, scenario, receiver_pass(scenario), client_pass(scenario)
+        ):
+            rejected.append(scenario)
     report(
-        "client pass parse",
-        t["scenario"] == "mono_10ms" and t["sends0"] == 100 and t["cfgrsps"] == 1,
+        "complete records pass all 17 scenario contracts", not rejected, repr(rejected)
     )
 
 
-def test_receiver_pass_parse():
+def test_required_receiver_fields_fail_closed():
     root = tempfile.mkdtemp()
-    p = write_log(root, "r.log", recv_pass("mono_10ms"))
-    t = parse_receiver_pass(p)
+    base = receiver_pass("mono_10ms")
     report(
-        "receiver pass parse",
-        t["h1"] == 0x12345678 and t["obs_ok"] == 1 and t["pacs"] == 1,
+        "missing compiled PCM limit rejected",
+        not run_check(
+            root, "mono_10ms", remove_token(base, "limcorr"), client_pass("mono_10ms")
+        ),
+    )
+    report(
+        "missing PCM segment field rejected",
+        not run_check(
+            root, "mono_10ms", remove_token(base, "rres1"), client_pass("mono_10ms")
+        ),
+    )
+    report(
+        "non-integer PCM field rejected",
+        not run_check(
+            root,
+            "mono_10ms",
+            receiver_pass("mono_10ms", lmax1="oops"),
+            client_pass("mono_10ms"),
+        ),
+    )
+    receiver = write_log(root, "receiver.log", receiver_pass("mono_10ms"))
+    client = write_log(
+        root, "client.log", remove_token(client_pass("mono_10ms"), "txh1")
+    )
+    try:
+        parse_receiver_pass(receiver)
+        parse_client_pass(client)
+        report("missing client TX field rejected", False)
+    except ParseError:
+        report("missing client TX field rejected", True)
+
+
+def test_recipe_pass_fields_and_accounting_fail_closed():
+    root = tempfile.mkdtemp()
+    mono = "mono_10ms"
+    base = receiver_pass(mono)
+    for key in (
+        "lrid1",
+        "rrid1",
+        "lact1",
+        "lval1",
+        "lplc1",
+        "ract1",
+        "rval1",
+        "rplc1",
+    ):
+        report(
+            "missing recipe field %s rejected" % key,
+            not run_check(root, mono, remove_token(base, key), client_pass(mono)),
+        )
+
+    cases = [
+        ("numeric recipe ID", {"lrid1": 1}),
+        ("wrong left recipe", {"lrid1": "start8_10ms_r"}),
+        ("unknown recipe", {"lrid1": "unknown_recipe"}),
+        ("recipe actions", {"lact1": 107}),
+        ("recipe valid count", {"lval1": 99}),
+        ("recipe PLC count", {"lplc1": 7}),
+        ("recipe geometry", {"spc1": 360}),
+        ("receiver segment count", {"seg": 2}),
+        ("absent segment recipe ID", {"lrid2": "start8_10ms_l"}),
+        ("absent segment recipe actions", {"lact2": 1}),
+    ]
+    for label, overrides in cases:
+        report(
+            "%s rejected" % label,
+            not run_check(
+                root, mono, receiver_pass(mono, **overrides), client_pass(mono)
+            ),
+        )
+
+    report(
+        "duplicate PASS token rejected",
+        not run_check(
+            root,
+            mono,
+            base.rstrip() + " lact1=108\n",
+            client_pass(mono),
+        ),
+    )
+    report(
+        "decoded receiver hash field rejected",
+        not run_check(
+            root, mono, base.rstrip() + " h1=0x12345678\n", client_pass(mono)
+        ),
+    )
+    report(
+        "unknown client PASS field rejected",
+        not run_check(
+            root,
+            mono,
+            base,
+            client_pass(mono).rstrip() + " extra=1\n",
+        ),
     )
 
 
-# ── R3: versioned scenario data (tests/bsim/stage1-scenarios.json) ──────
+def test_stateful_recipe_progress_fail_closed():
+    root = tempfile.mkdtemp()
+    loss = "modea_one_cis_loss_10ms"
+    for key, value in (
+        ("ract1", 107),
+        ("rval1", 81),
+        ("rplc1", 25),
+        ("rex1", 17),
+    ):
+        report(
+            "one-CIS loss %s exact contract rejected" % key,
+            not run_check(
+                root, loss, receiver_pass(loss, **{key: value}), client_pass(loss)
+            ),
+        )
 
-PRODUCTION_DATA = os.path.join(REPO_ROOT, "tests", "bsim", "stage1-scenarios.json")
+    malformed = "invalid_sdu_resume_10ms"
+    for key, value in (
+        ("lrid1", "start8_10ms_l"),
+        ("lact1", 107),
+        ("lval1", 99),
+    ):
+        report(
+            "malformed-resume %s rejected" % key,
+            not run_check(
+                root,
+                malformed,
+                receiver_pass(malformed, **{key: value}),
+                client_pass(malformed),
+            ),
+        )
+
+    prefix = "release_without_disable_10ms"
+    for key, value in (("lval1", 24), ("lact1", 109)):
+        report(
+            "prefix recipe %s rejected" % key,
+            not run_check(
+                root, prefix, receiver_pass(prefix, **{key: value}), client_pass(prefix)
+            ),
+        )
+
+    reconnect = "reconnect_second_stream_10ms"
+    reconnect_values = receiver_values(reconnect)
+    report(
+        "reconnect segment-2 start7 recipe accepted",
+        (
+            reconnect_values["lrid1"],
+            reconnect_values["rrid1"],
+            reconnect_values["lrid2"],
+            reconnect_values["rrid2"],
+            reconnect_values["lact2"],
+            reconnect_values["ract2"],
+            reconnect_values["lval2"],
+            reconnect_values["rval2"],
+            reconnect_values["lplc2"],
+            reconnect_values["rplc2"],
+        )
+        == (
+            "start8_10ms_l",
+            "start8_10ms_l",
+            "start7_10ms_l",
+            "start7_10ms_l",
+            107,
+            107,
+            100,
+            100,
+            7,
+            7,
+        )
+        and run_check(
+            root, reconnect, receiver_pass(reconnect), client_pass(reconnect)
+        ),
+    )
+    for key, value in (
+        ("lrid2", "start8_10ms_l"),
+        ("rrid2", "start8_10ms_l"),
+        ("lrid2", "start8_10ms_r"),
+        ("lact2", 108),
+        ("lval2", 99),
+    ):
+        report(
+            "reconnect fresh segment %s rejected" % key,
+            not run_check(
+                root,
+                reconnect,
+                receiver_pass(reconnect, **{key: value}),
+                client_pass(reconnect),
+            ),
+        )
+
+    no_audio = "unsupported_source_direction"
+    report(
+        "no-audio recipe evidence rejected",
+        not run_check(
+            root,
+            no_audio,
+            receiver_pass(no_audio, lrid1="start8_10ms_l"),
+            client_pass(no_audio),
+        ),
+    )
 
 
-def test_production_pins_load_unchanged():
-    """All 17 production pins load from the versioned file, unchanged."""
-    data = load_scenarios()
-    scenarios = data["scenarios"]
-    report("production pin count", len(scenarios) == 17)
+def test_modea_7p5ms_asymmetric_startup_accounting():
+    root = tempfile.mkdtemp()
+    scenario = "modea_7p5ms"
+    values = receiver_values(scenario)
+    left_pre = _recipe_prefix_counts("modea_start_7p5ms_l", values["trans1"])
+    right_pre = _recipe_prefix_counts("modea_start_7p5ms_r", values["trans1"])
+    expected = (
+        values["pushes1"] == 100
+        and values["trans1"] == 13
+        and values["lact1"] == values["ract1"] == 113
+        and values["lval1"] == values["rval1"] == 101
+        and values["lplc1"] == values["rplc1"] == 12
+        and values["lfr1"] == values["rfr1"] == 101
+        and values["lex1"] == values["rex1"] == 0
+        and values["lsm1"] == values["rsm1"] == 101 * 360
+        and left_pre == right_pre == (1, 12)
+    )
+    report(
+        "Mode A 7.5 ms asymmetric startup accounting accepted",
+        expected
+        and run_check(root, scenario, receiver_pass(scenario), client_pass(scenario)),
+    )
 
-    # Every scenario has the full metadata contract.
+    for label, overrides in (
+        ("action count", {"lact1": 112}),
+        ("startup transient count", {"trans1": 12}),
+        ("left startup valid frame", {"lval1": 100}),
+        ("right startup PLC frame", {"rplc1": 11}),
+        ("left post-boundary exclusion", {"lex1": 1}),
+        ("right post-boundary exclusion", {"rex1": 1}),
+        ("right compared frame", {"rfr1": 100}),
+        ("right compared sample", {"rsm1": 100 * 360}),
+    ):
+        report(
+            "Mode A 7.5 ms %s rejected" % label,
+            not run_check(
+                root,
+                scenario,
+                receiver_pass(scenario, **overrides),
+                client_pass(scenario),
+            ),
+        )
+
+
+def test_pcm_limits_and_metrics_fail_closed():
+    root = tempfile.mkdtemp()
+    cases = [
+        ("receiver max limit mismatch", {"limmax": 2047}),
+        ("max error violation", {"lmax1": 2049}),
+        ("RMS violation", {"lrms1": 513}),
+        ("correlation violation", {"lcorr1": 32749}),
+        ("Q15 range violation", {"lcorr1": 32768}),
+        ("non-pass evaluation", {"lres1": 1}),
+        ("compared frame accounting", {"lfr1": 99}),
+        ("compared sample accounting", {"lsm1": 47999}),
+        ("excluded frame accounting", {"lex1": 1}),
+    ]
     ok = True
-    for s in scenarios:
-        ok = ok and isinstance(s["name"], str) and s["name"]
-        ok = ok and isinstance(s["runs"], int) and s["runs"] >= 1
-        ok = ok and isinstance(s["dec_calls"], int) and s["dec_calls"] >= 1
-        ok = ok and s["channel_mode"] in ("mono", "stereo")
-    report("production scenario metadata shape", ok)
+    for label, overrides in cases:
+        rejected = not run_check(
+            root,
+            "mono_10ms",
+            receiver_pass("mono_10ms", **overrides),
+            client_pass("mono_10ms"),
+        )
+        report(label + " rejected", rejected)
+        ok = ok and rejected
+    report("numerical PCM records fail closed", ok)
 
-    # Exact pinned values from the pre-R3 shell tables (no repinning).
-    expected = {
-        "mono_10ms": {
-            "full": 0x22AB5C0D,
-            "l": 0x32777D65,
-            "r": 0x32777D65,
-            "total": 108,
-        },
-        "mono_7p5ms": {
-            "full": 0x01A3EB05,
-            "l": 0x30F0308C,
-            "r": 0x30F0308C,
-            "total": 111,
-        },
-        "modea_10ms": {
-            "full": 0xBAE24F7E,
-            "l": 0x32777D65,
-            "r": 0xD3EE3722,
-            "total": 216,
-        },
-        "modea_7p5ms": {
-            "full": 0x2D95D15C,
-            "l": 0xE1D60E7B,
-            "r": 0xA219B61E,
-            "total": 226,
-        },
-        "modea_reverse_start_10ms": {
-            "full": 0xBAE24F7E,
-            "l": 0x32777D65,
-            "r": 0xD3EE3722,
-            "total": 216,
-        },
-        "modeb_10ms": {
-            "full": 0xBAE24F7E,
-            "l": 0x32777D65,
-            "r": 0xD3EE3722,
-            "total": 216,
-        },
-        "modeb_7p5ms": {
-            "full": 0xFF82CADB,
-            "l": 0x30F0308C,
-            "r": 0x129591EE,
-            "total": 222,
-        },
-        "invalid_sdu_resume_10ms": {"full": 0x0C61918D, "total": 108},
-        "modea_one_cis_loss_10ms": {
-            "full": 0x30D6BAF0,
-            "l": 0x32777D65,
-            "r": 0x9859F1D8,
-            "total": 216,
-        },
-        "modea_first_stop_10ms": {"total": 86},
-        "release_without_disable_10ms": {"total": 56},
-        "disconnect_streaming_10ms": {"total": 63},
-        "reconnect_second_stream_10ms": {"full": 0x22AB5C0D, "total": 63},
-        "duplicate_release_10ms": {"total": 56},
-    }
-    pins_ok = True
-    for name, want in expected.items():
-        got = known_values(name)
-        if got != want:
-            pins_ok = False
-            report("pin %s" % name, False, "got %r want %r" % (got, want))
-    report("production pins unchanged (no repinning)", pins_ok)
 
-    unpinned = {
+def test_routing_and_loss_coverage_fail_closed():
+    root = tempfile.mkdtemp()
+    mono_bad = not run_check(
+        root, "mono_10ms", receiver_pass("mono_10ms", diff1=1), client_pass("mono_10ms")
+    )
+    stereo_bad = not run_check(
+        root,
+        "modea_10ms",
+        receiver_pass("modea_10ms", diff1=0),
+        client_pass("modea_10ms"),
+    )
+    negative_stereo = not run_check(
+        root,
+        "modea_10ms",
+        receiver_pass("modea_10ms", diff1=-1),
+        client_pass("modea_10ms"),
+    )
+    loss_bad = not run_check(
+        root,
+        "modea_one_cis_loss_10ms",
+        receiver_pass("modea_one_cis_loss_10ms", rex1=17),
+        client_pass("modea_one_cis_loss_10ms"),
+    )
+    report("mono non-identical routing rejected", mono_bad)
+    report("stereo no-distinction routing rejected", stereo_bad)
+    report("negative stereo distinction rejected", negative_stereo)
+    report("one-CIS-loss exact right exclusion required", loss_bad)
+
+
+def test_invalid_sdu_and_reconnect_contracts():
+    root = tempfile.mkdtemp()
+    invalid = "invalid_sdu_resume_10ms"
+    bad_sends = not run_check(
+        root, invalid, receiver_pass(invalid), client_pass(invalid, sends0=100)
+    )
+    exact_hash = expected_transport_hash(TRANSPORT_VALUES[invalid][0], 101)
+    bad_hash = not run_check(
+        root, invalid, receiver_pass(invalid), client_pass(invalid, txh0=exact_hash ^ 1)
+    )
+    bad_malformed = not run_check(
+        root,
+        invalid,
+        receiver_pass(invalid, derr1=0, obs_mal=0),
+        client_pass(invalid),
+    )
+    reconnect = "reconnect_second_stream_10ms"
+    bad_second_total = not run_check(
+        root,
+        reconnect,
+        receiver_pass(reconnect, total2=108),
+        client_pass(reconnect),
+    )
+    report("invalid-SDU send count retained", bad_sends)
+    report("invalid-SDU exact TX hash retained", bad_hash)
+    report("invalid-SDU malformed/decode evidence retained", bad_malformed)
+    report("reconnect fresh second total retained", bad_second_total)
+
+
+def test_lifecycle_and_known_totals_fail_closed():
+    root = tempfile.mkdtemp()
+    release_bad = not run_check(
+        root,
+        "release_without_disable_10ms",
+        receiver_pass("release_without_disable_10ms", rel_ss_seq=9, disc_seq=5),
+        client_pass("release_without_disable_10ms"),
+    )
+    duplicate_bad = not run_check(
+        root,
+        "duplicate_release_10ms",
+        receiver_pass("duplicate_release_10ms", obs_rel=3),
+        client_pass("duplicate_release_10ms"),
+    )
+    known_bad = not run_check(
+        root,
+        "release_without_disable_10ms",
+        receiver_pass("release_without_disable_10ms", total1=57),
+        client_pass("release_without_disable_10ms"),
+    )
+    no_audio_bad = not run_check(
+        root,
         "unsupported_source_direction",
-        "no_free_sink_slot",
-        "invalid_codec_fields",
+        receiver_pass("unsupported_source_direction", pushes1=1, lfr1=1, lsm1=480),
+        client_pass("unsupported_source_direction"),
+    )
+    report("release teardown ordering retained", release_bad)
+    report("duplicate-release cleanup count retained", duplicate_bad)
+    report("declared lifecycle known.total retained", known_bad)
+    report("no-audio zero PCM metrics retained", no_audio_bad)
+
+
+def test_transport_hash_contracts():
+    root = tempfile.mkdtemp()
+    mono = "mono_10ms"
+    good = expected_transport_hash(TRANSPORT_VALUES[mono][0], 100)
+    changed_hash = not run_check(
+        root, mono, receiver_pass(mono), client_pass(mono, txh0=good ^ 1)
+    )
+    changed_count = not run_check(
+        root, mono, receiver_pass(mono), client_pass(mono, txc0=99)
+    )
+    wrong_mono = {"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_r"]}
+    wrong_channel = not run_check(
+        root,
+        mono,
+        receiver_pass(mono),
+        client_pass(mono, txh0=expected_transport_hash(wrong_mono, 100)),
+    )
+    no_transport = not run_check(
+        root,
+        "unsupported_source_direction",
+        receiver_pass("unsupported_source_direction"),
+        client_pass("unsupported_source_direction", sends0=1),
+    )
+    report("TX payload/sequence hash mutation rejected", changed_hash)
+    report("TX count mismatch rejected", changed_count)
+    report("TX fixture channel swap rejected", wrong_channel)
+    report("no-transport TX rejected", no_transport)
+
+
+def _hash_records(records):
+    hash_value = FNV1A_OFFSET_BASIS
+    for sequence, payload in records:
+        for byte in sequence.to_bytes(4, "little") + payload:
+            hash_value = ((hash_value ^ byte) * 0x01000193) & 0xFFFFFFFF
+    return hash_value
+
+
+def _mono_10ms_frames(count):
+    path = os.path.join(
+        REPO_ROOT, "tests", "fixtures", "lc3", "bsim_48k_10ms_120b_l.lc3"
+    )
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    return [raw[index * 120 : (index + 1) * 120] for index in range(count)]
+
+
+def test_transport_byte_mutations_fail_closed():
+    root = tempfile.mkdtemp()
+    mono = "mono_10ms"
+    frames = _mono_10ms_frames(101)
+    expected_hash = expected_transport_hash(TRANSPORT_VALUES[mono][0], 100)
+    ordered = [(sequence, frames[sequence]) for sequence in range(100)]
+    mutations = {
+        "omission": [
+            (sequence, frames[sequence])
+            for sequence in list(range(20)) + list(range(21, 101))
+        ],
+        "duplication": [(sequence, frames[sequence]) for sequence in range(50)]
+        + [(49, frames[49])]
+        + [(sequence, frames[sequence]) for sequence in range(50, 99)],
+        "reorder": ordered[:40] + [ordered[41], ordered[40]] + ordered[42:],
+        "payload corruption": ordered[:50]
+        + [(50, bytes([frames[50][0] ^ 1]) + frames[50][1:])]
+        + ordered[51:],
     }
-    unpinned_ok = all(known_values(n) == {} for n in unpinned)
-    report("unpinned scenarios stay unpinned", unpinned_ok)
+    for label, records in mutations.items():
+        observed_hash = _hash_records(records)
+        report(
+            "TX %s byte/sequence mutation rejected" % label,
+            observed_hash != expected_hash
+            and not run_check(
+                root,
+                mono,
+                receiver_pass(mono),
+                client_pass(mono, txh0=observed_hash),
+            ),
+        )
+
+    malformed = "invalid_sdu_resume_10ms"
+    records = [(sequence, frames[sequence]) for sequence in range(101)]
+    records[20] = (20, bytes(0x40 + index for index in range(119)))
+    synthetic_hash = _hash_records(records)
+    correct_hash = expected_transport_hash(TRANSPORT_VALUES[malformed][0], 101)
+    report(
+        "malformed transport uses truncated corpus frame",
+        synthetic_hash != correct_hash
+        and run_check(root, malformed, receiver_pass(malformed), client_pass(malformed))
+        and not run_check(
+            root,
+            malformed,
+            receiver_pass(malformed),
+            client_pass(malformed, txh0=synthetic_hash),
+        ),
+    )
+
+    modea = "modea_10ms"
+    left, right = TRANSPORT_VALUES[modea]
+    report(
+        "Mode A transport channel swap rejected",
+        not run_check(
+            root,
+            modea,
+            receiver_pass(modea),
+            client_pass(
+                modea,
+                txh0=expected_transport_hash(right, 110),
+                txh1=expected_transport_hash(left, 110),
+            ),
+        ),
+    )
+    reverse_modeb = {
+        "stream": 0,
+        "layout": "stereo-concat",
+        "fixtures": ["bsim_48k_10ms_120b_r", "bsim_48k_10ms_120b_l"],
+    }
+    report(
+        "Mode B concatenation reversal rejected",
+        not run_check(
+            root,
+            "modeb_10ms",
+            receiver_pass("modeb_10ms"),
+            client_pass("modeb_10ms", txh0=expected_transport_hash(reverse_modeb, 100)),
+        ),
+    )
+    report(
+        "no-transport zero TX accepted",
+        run_check(
+            root,
+            "unsupported_source_direction",
+            receiver_pass("unsupported_source_direction"),
+            client_pass("unsupported_source_direction"),
+        ),
+    )
+
+
+def test_fault_scan_allowlist():
+    root = tempfile.mkdtemp()
+    warning = (
+        "d_00: \x1b[1;33m<wrn> bt_ascs: Invalid operation in state: releasing\x1b[0m\n"
+    )
+    accepted = run_check(
+        root,
+        "duplicate_release_10ms",
+        receiver_pass("duplicate_release_10ms") + warning,
+        client_pass("duplicate_release_10ms"),
+    )
+    outside = not run_check(
+        root,
+        "mono_10ms",
+        receiver_pass("mono_10ms") + warning,
+        client_pass("mono_10ms"),
+    )
+    error = not run_check(
+        root,
+        "duplicate_release_10ms",
+        receiver_pass("duplicate_release_10ms") + "d_00: <err> bt_ascs: unexpected\n",
+        client_pass("duplicate_release_10ms"),
+    )
+    report("scenario-17 exact warning allowlisted", accepted)
+    report("scenario-17 warning rejected elsewhere", outside)
+    report("all other warnings/errors rejected", error)
+    fault_cases = (
+        (
+            "receiver semantic fault",
+            "mono_10ms",
+            receiver_pass("mono_10ms") + "d_00: FATAL receiver failure\n",
+            client_pass("mono_10ms"),
+        ),
+        (
+            "receiver warning",
+            "mono_10ms",
+            receiver_pass("mono_10ms") + "d_00: <wrn> bt_hci_core: unexpected\n",
+            client_pass("mono_10ms"),
+        ),
+        (
+            "receiver error",
+            "mono_10ms",
+            receiver_pass("mono_10ms") + "d_00: <err> bt_gatt: unexpected\n",
+            client_pass("mono_10ms"),
+        ),
+        (
+            "client warning",
+            "mono_10ms",
+            receiver_pass("mono_10ms"),
+            client_pass("mono_10ms") + "d_01: <wrn> bsim_tx: unexpected\n",
+        ),
+        (
+            "client error",
+            "mono_10ms",
+            receiver_pass("mono_10ms"),
+            client_pass("mono_10ms") + "d_01: <err> bsim_tx: unexpected\n",
+        ),
+        (
+            "scenario-17 client warning",
+            "duplicate_release_10ms",
+            receiver_pass("duplicate_release_10ms"),
+            client_pass("duplicate_release_10ms") + warning,
+        ),
+        (
+            "scenario-17 warning text mutation",
+            "duplicate_release_10ms",
+            receiver_pass("duplicate_release_10ms") + warning.rstrip() + " extra\n",
+            client_pass("duplicate_release_10ms"),
+        ),
+    )
+    for label, scenario, receiver, client in fault_cases:
+        report(
+            "%s rejected" % label,
+            not run_check(root, scenario, receiver, client),
+        )
+
+
+def _production_payload():
+    with open(PRODUCTION_DATA, "r", encoding="utf-8") as fh:
+        return json.load(fh)
 
 
 def _write_scenario_file(root, payload):
     path = os.path.join(root, "scenarios.json")
     with open(path, "w", encoding="utf-8") as fh:
-        if isinstance(payload, str):
-            fh.write(payload)
-        else:
-            json.dump(payload, fh)
+        json.dump(payload, fh)
     return path
 
 
-def _valid_scenario(name="scn", runs=1, dec_calls=1, channel_mode="mono", known=None):
-    entry = {
-        "name": name,
-        "runs": runs,
-        "dec_calls": dec_calls,
-        "channel_mode": channel_mode,
-    }
-    if known:
-        entry["known"] = known
-    return entry
+def test_schema_three_and_matrix_contract():
+    data = load_scenarios()
+    scenarios = data["scenarios"]
+    report("production schema 3", data["schema_version"] == 3)
+    report(
+        "production fixed 17/26 matrix",
+        len(scenarios) == 17
+        and sum(entry["runs"] for entry in scenarios) == 26
+        and {entry["name"] for entry in scenarios} == set(EXPECTED_SCENARIO_CONTRACTS),
+    )
+    report(
+        "decoded PCM known hashes removed",
+        all(set((entry.get("known") or {})) <= {"total"} for entry in scenarios),
+    )
+    reconnect = next(
+        entry for entry in scenarios if entry["name"] == "reconnect_second_stream_10ms"
+    )
+    report(
+        "production reconnect segment-2 recipe mapping",
+        [
+            (entry["left_recipe"], entry["right_recipe"], entry["completion"])
+            for entry in reconnect["receiver_oracle"]
+        ]
+        == [
+            ("start8_10ms_l", "start8_10ms_l", "prefix"),
+            ("start7_10ms_l", "start7_10ms_l", "full"),
+        ],
+    )
 
-
-def test_schema_missing_file():
     root = tempfile.mkdtemp()
-    try:
-        load_scenarios(os.path.join(root, "nope.json"))
-        report("schema missing file rejected", False)
-    except ScenarioDataError:
-        report("schema missing file rejected", True)
-
-
-def test_schema_invalid_json():
-    root = tempfile.mkdtemp()
-    p = _write_scenario_file(root, "{not json")
-    try:
-        load_scenarios(p)
-        report("schema invalid json rejected", False)
-    except ScenarioDataError:
-        report("schema invalid json rejected", True)
-
-
-def test_schema_shape_errors():
-    root = tempfile.mkdtemp()
-    cases = [
-        ("missing schema_version", {"scenarios": [_valid_scenario()]}),
-        ("empty scenarios", {"schema_version": 1, "scenarios": []}),
-        ("missing scenarios key", {"schema_version": 1}),
+    cases = []
+    payload = _production_payload()
+    payload["scenarios"][0]["known"]["full"] = "0x12345678"
+    cases.append(("decoded known hash", payload))
+    payload = _production_payload()
+    payload["scenarios"][0]["runs"] = 1
+    cases.append(("changed run count", payload))
+    payload = _production_payload()
+    payload["scenarios"].pop()
+    cases.append(("missing scenario", payload))
+    payload = _production_payload()
+    payload["scenarios"][0]["channel_mode"] = "stereo"
+    cases.append(("changed channel mode", payload))
+    payload = _production_payload()
+    payload["scenarios"][0]["known"]["total"] = 109
+    cases.append(("changed known total", payload))
+    payload = _production_payload()
+    payload["scenarios"][0]["transport"][0]["fixtures"] = ["bsim_48k_10ms_120b_r"]
+    cases.append(("changed transport fixture", payload))
+    payload = _production_payload()
+    payload["scenarios"][0].pop("receiver_oracle")
+    cases.append(("missing receiver oracle", payload))
+    payload = _production_payload()
+    payload["scenarios"][0]["receiver_oracle"][0]["extra"] = True
+    cases.append(("unknown receiver oracle field", payload))
+    payload = _production_payload()
+    payload["scenarios"][0]["receiver_oracle"][0]["left_recipe"] = "unknown_recipe"
+    cases.append(("unknown receiver recipe", payload))
+    payload = _production_payload()
+    payload["scenarios"][0]["receiver_oracle"][0]["completion"] = "partial"
+    cases.append(("unknown receiver completion", payload))
+    payload = _production_payload()
+    payload["scenarios"][0]["receiver_oracle"][0]["right_recipe"] = "start8_10ms_r"
+    cases.append(("changed receiver mapping", payload))
+    payload = _production_payload()
+    reconnect = next(
+        entry
+        for entry in payload["scenarios"]
+        if entry["name"] == "reconnect_second_stream_10ms"
+    )
+    reconnect["receiver_oracle"][1]["left_recipe"] = "start8_10ms_l"
+    cases.append(("reconnect segment-2 left start8 recipe", payload))
+    payload = _production_payload()
+    reconnect = next(
+        entry
+        for entry in payload["scenarios"]
+        if entry["name"] == "reconnect_second_stream_10ms"
+    )
+    reconnect["receiver_oracle"][1]["right_recipe"] = "start8_10ms_l"
+    cases.append(("reconnect segment-2 right start8 recipe", payload))
+    payload = _production_payload()
+    payload["scenarios"][0]["receiver_oracle"].append(
+        dict(payload["scenarios"][0]["receiver_oracle"][0])
+    )
+    cases.append(("extra receiver segment", payload))
+    payload = _production_payload()
+    no_audio = next(
+        entry
+        for entry in payload["scenarios"]
+        if entry["name"] == "unsupported_source_direction"
+    )
+    no_audio["receiver_oracle"] = [
+        {
+            "left_recipe": "start8_10ms_l",
+            "right_recipe": "start8_10ms_l",
+            "completion": "full",
+        }
     ]
+    cases.append(("no-audio receiver segment", payload))
+    payload = _production_payload()
+    malformed = next(
+        entry
+        for entry in payload["scenarios"]
+        if entry["name"] == "invalid_sdu_resume_10ms"
+    )
+    malformed["transport"][0]["malformed_at"] = 19
+    cases.append(("changed malformed index", payload))
+    payload = _production_payload()
+    modea = next(
+        entry for entry in payload["scenarios"] if entry["name"] == "modea_10ms"
+    )
+    modea["transport"].reverse()
+    cases.append(("transport order mutation", payload))
+    payload = _production_payload()
+    payload["unexpected"] = True
+    cases.append(("unknown top-level field", payload))
+    payload = _production_payload()
+    payload["scenarios"][0]["unexpected"] = True
+    cases.append(("unknown scenario field", payload))
+    payload = _production_payload()
+    payload["scenarios"][0]["known"] = None
+    cases.append(("null known object", payload))
     for label, payload in cases:
-        p = _write_scenario_file(root, payload)
         try:
-            load_scenarios(p)
+            load_scenarios(_write_scenario_file(root, payload))
+            report("schema %s rejected" % label, False)
+        except ScenarioDataError:
+            report("schema %s rejected" % label, True)
+
+    invalid_path = write_log(root, "invalid.json", "{not valid json")
+    missing_path = os.path.join(root, "missing.json")
+    malformed_root_path = write_log(root, "bad-root.json", "[]")
+    for label, path in (
+        ("missing file", missing_path),
+        ("invalid JSON", invalid_path),
+        ("invalid root", malformed_root_path),
+    ):
+        try:
+            load_scenarios(path)
             report("schema %s rejected" % label, False)
         except ScenarioDataError:
             report("schema %s rejected" % label, True)
 
 
-def test_schema_entry_errors():
-    root = tempfile.mkdtemp()
-    dup = _write_scenario_file(
-        root,
-        {
-            "schema_version": 1,
-            "scenarios": [_valid_scenario("dup"), _valid_scenario("dup")],
-        },
-    )
-    try:
-        load_scenarios(dup)
-        report("schema duplicate name rejected", False)
-    except ScenarioDataError:
-        report("schema duplicate name rejected", True)
-
-    bad_chan = _write_scenario_file(
-        root,
-        {"schema_version": 1, "scenarios": [_valid_scenario(channel_mode="jazz")]},
-    )
-    try:
-        load_scenarios(bad_chan)
-        report("schema bad channel_mode rejected", False)
-    except ScenarioDataError:
-        report("schema bad channel_mode rejected", True)
-
-    bad_runs = _write_scenario_file(
-        root, {"schema_version": 1, "scenarios": [_valid_scenario(runs=0)]}
-    )
-    try:
-        load_scenarios(bad_runs)
-        report("schema non-positive runs rejected", False)
-    except ScenarioDataError:
-        report("schema non-positive runs rejected", True)
-
-    bad_known = _write_scenario_file(
-        root,
-        {"schema_version": 1, "scenarios": [_valid_scenario(known={"full": "nope"})]},
-    )
-    try:
-        load_scenarios(bad_known)
-        report("schema bad known hex rejected", False)
-    except ScenarioDataError:
-        report("schema bad known hex rejected", True)
-
-    unknown_key = _write_scenario_file(
-        root,
-        {"schema_version": 1, "scenarios": [_valid_scenario(known={"floof": "0x1"})]},
-    )
-    try:
-        load_scenarios(unknown_key)
-        report("schema unknown known key rejected", False)
-    except ScenarioDataError:
-        report("schema unknown known key rejected", True)
-
-    missing_name = _write_scenario_file(
-        root,
-        {
-            "schema_version": 1,
-            "scenarios": [{"runs": 1, "dec_calls": 1, "channel_mode": "mono"}],
-        },
-    )
-    try:
-        load_scenarios(missing_name)
-        report("schema missing name rejected", False)
-    except ScenarioDataError:
-        report("schema missing name rejected", True)
-
-
 def _run_cli(args):
-    import contextlib
-    import io
-
-    # Capture both streams: expected-negative CLI runs print FAIL to
-    # stderr, which must not leak into the canonical gate log.
-    buf = io.StringIO()
+    out = io.StringIO()
     err = io.StringIO()
-    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
-        code = bsim_main(args)
-    return code, buf.getvalue() + err.getvalue()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = bsim_main(args)
+        except SystemExit as exc:
+            code = exc.code
+    return code, out.getvalue() + err.getvalue()
 
 
-def test_cli_known_precedence():
-    """CLI precedence: --no-known > explicit --known-* > file defaults."""
+def test_cli_only_exposes_known_total_and_numerical_metrics():
     root = tempfile.mkdtemp()
-    # mono_10ms with the REAL pinned hashes (from the versioned file).
-    # Replace lh1/rh1 before h1: "h1=..." is a substring of "lh1=...".
-    recv = write_log(
-        root,
-        "receiver.log",
-        recv_pass("mono_10ms")
-        .replace("lh1=0x12345678", "lh1=0x32777D65")
-        .replace("rh1=0x12345678", "rh1=0x32777D65")
-        .replace("h1=0x12345678", "h1=0x22AB5C0D"),
+    recv = write_log(root, "receiver.log", receiver_pass("mono_10ms"))
+    client = write_log(root, "client.log", client_pass("mono_10ms"))
+    base = ["check", "--scenario", "mono_10ms", "--receiver", recv, "--client", client]
+    code, output = _run_cli(base)
+    report("CLI file known.total passes", code == 0)
+    report(
+        "CLI prints numerical metrics, not decoded hashes",
+        "lmax1=" in output and " h1=" not in output,
     )
-    cli = write_log(root, "client.log", cli_pass("mono_10ms"))
-    base = ["check", "--scenario", "mono_10ms", "--receiver", recv, "--client", cli]
-
-    code, _ = _run_cli(base)
-    report("cli file-default pins pass", code == 0)
-
-    code, _ = _run_cli(base + ["--known-full", "0xDEADBEEF"])
-    report("cli explicit override wins (mismatch fails)", code != 0)
-
-    code, _ = _run_cli(base + ["--no-known"])
-    report("cli --no-known disables pins", code == 0)
-
-    # Explicit total override still applies when no --no-known.
     code, _ = _run_cli(base + ["--known-total", "200"])
-    report("cli --known-total override fails on mismatch", code != 0)
+    report("CLI known-total override rejects mismatch", code != 0)
+    code, _ = _run_cli(base + ["--known-full", "0x12345678"])
+    report("CLI decoded hash option removed", code != 0)
 
-
-# ── BSIM_LOG_ROOT output-root behavior (shell runner) ────────────────────
-
-BSIM_RUNNER = os.path.join(REPO_ROOT, "scripts", "bsim-stage1-run.sh")
+    changed = write_log(
+        root, "changed-total.log", receiver_pass("mono_10ms", total1=109)
+    )
+    changed_base = [
+        "check",
+        "--scenario",
+        "mono_10ms",
+        "--receiver",
+        changed,
+        "--client",
+        client,
+    ]
+    code, _ = _run_cli(changed_base)
+    report("CLI versioned known.total rejects changed total", code != 0)
+    code, _ = _run_cli(changed_base + ["--no-known"])
+    report("CLI no-known disables only known.total pin", code == 0)
+    code, _ = _run_cli(changed_base + ["--known-total", "109"])
+    report("CLI explicit known.total overrides file pin", code == 0)
 
 
 def _run_bsim_runner(env_extra):
@@ -865,136 +1214,127 @@ def _run_bsim_runner(env_extra):
     env.pop("ZEPHYR_BASE", None)
     env.update(env_extra)
     proc = subprocess.run(
-        ["bash", BSIM_RUNNER],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=120,
+        ["bash", BSIM_RUNNER], capture_output=True, text=True, env=env, timeout=120
     )
     return proc.returncode, proc.stdout + proc.stderr
 
 
-def test_bsim_log_root_relative_rejected_early():
-    rc, out = _run_bsim_runner({"BSIM_LOG_ROOT": "relative-dir"})
+def test_runner_preflight_contracts():
+    rc, output = _run_bsim_runner({"BSIM_BASELINE": "1"})
     report(
-        "bsim log root relative rejected early",
+        "BSIM_BASELINE rejected before toolchain setup",
         rc != 0
-        and "BSIM_LOG_ROOT must be an absolute path" in out
-        and "ZEPHYR_BASE" not in out,
+        and "BSIM_BASELINE=1 was removed" in output
+        and "ZEPHYR_BASE" not in output,
     )
-
-
-def test_bsim_log_root_root_and_home_rejected_early():
-    ok = True
-    for bad in ("/", os.path.expanduser("~")):
-        rc, out = _run_bsim_runner({"BSIM_LOG_ROOT": bad})
-        ok = ok and rc != 0 and "BSIM_LOG_ROOT" in out and "ZEPHYR_BASE" not in out
-    report("bsim log root root/home rejected early", ok)
-
-
-def test_bsim_log_root_repo_paths_rejected():
-    ok = True
-    for bad in (REPO_ROOT, os.path.join(REPO_ROOT, "docs")):
-        rc, out = _run_bsim_runner({"BSIM_LOG_ROOT": bad})
-        ok = ok and rc != 0 and "BSIM_LOG_ROOT" in out and "ZEPHYR_BASE" not in out
-    report("bsim log root repo paths rejected early", ok)
-
-
-def test_bsim_log_root_nonempty_and_file_rejected_preserving_output():
-    root = tempfile.mkdtemp()
-    nonempty = os.path.join(root, "nonempty")
-    os.makedirs(nonempty)
-    marker = os.path.join(nonempty, "keep.txt")
-    with open(marker, "w") as fh:
-        fh.write("keep")
-    rc, out = _run_bsim_runner({"BSIM_LOG_ROOT": nonempty})
-    ok = rc != 0 and "BSIM_LOG_ROOT must be an empty directory" in out
-    ok = ok and os.path.exists(marker)
-    report("bsim log root nonempty rejected, caller output preserved", ok)
-
-    as_file = os.path.join(root, "afile")
-    with open(as_file, "w") as fh:
-        fh.write("x")
-    rc, out = _run_bsim_runner({"BSIM_LOG_ROOT": as_file})
+    rc, output = _run_bsim_runner({"BSIM_LOG_ROOT": "relative-dir"})
     report(
-        "bsim log root existing file rejected",
-        rc != 0 and "BSIM_LOG_ROOT is not a directory" in out,
+        "relative BSIM_LOG_ROOT rejected before toolchain setup",
+        rc != 0
+        and "BSIM_LOG_ROOT must be an absolute path" in output
+        and "ZEPHYR_BASE" not in output,
     )
 
 
-def test_bsim_log_root_valid_accepted_then_stops_at_nrfutil():
-    # Deterministic stop after validation: ZEPHYR_BASE points at a fake
-    # tree carrying the PHY binary so bsim-env.sh passes, and nrfutil is
-    # stripped from PATH so the toolchain check is the next failure.
-    path = [
-        p
-        for p in os.environ.get("PATH", "").split(os.pathsep)
-        if not os.path.isfile(os.path.join(p, "nrfutil"))
-    ]
-    if any(os.path.isfile(os.path.join(p, "nrfutil")) for p in path):
+def test_runner_log_root_ownership_preflight():
+    for label, path in (("root", "/"), ("home", os.path.expanduser("~"))):
+        rc, output = _run_bsim_runner({"BSIM_LOG_ROOT": path})
         report(
-            "bsim log root valid accepted then stops at nrfutil",
-            False,
-            "nrfutil still present on filtered PATH",
+            "BSIM_LOG_ROOT %s rejected before toolchain setup" % label,
+            rc != 0 and "BSIM_LOG_ROOT" in output and "ZEPHYR_BASE" not in output,
         )
-        return
+
+    for label, path in (
+        ("repository", REPO_ROOT),
+        ("repository child", os.path.join(REPO_ROOT, "docs")),
+    ):
+        rc, output = _run_bsim_runner({"BSIM_LOG_ROOT": path})
+        report(
+            "BSIM_LOG_ROOT %s rejected" % label,
+            rc != 0 and "BSIM_LOG_ROOT" in output and "ZEPHYR_BASE" not in output,
+        )
+
     with tempfile.TemporaryDirectory() as root:
+        nonempty = os.path.join(root, "nonempty")
+        os.makedirs(nonempty)
+        marker = os.path.join(nonempty, "keep.txt")
+        with open(marker, "w", encoding="utf-8") as fh:
+            fh.write("keep")
+        rc, output = _run_bsim_runner({"BSIM_LOG_ROOT": nonempty})
+        report(
+            "nonempty caller log root rejected without deletion",
+            rc != 0
+            and "BSIM_LOG_ROOT must be an empty directory" in output
+            and os.path.exists(marker),
+        )
+
+        as_file = os.path.join(root, "not-a-directory")
+        with open(as_file, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        rc, output = _run_bsim_runner({"BSIM_LOG_ROOT": as_file})
+        report(
+            "file caller log root rejected",
+            rc != 0 and "BSIM_LOG_ROOT is not a directory" in output,
+        )
+
+        filtered_path = [
+            path
+            for path in os.environ.get("PATH", "").split(os.pathsep)
+            if not os.path.isfile(os.path.join(path, "nrfutil"))
+        ]
+        if any(os.path.isfile(os.path.join(path, "nrfutil")) for path in filtered_path):
+            report(
+                "valid caller log root reaches nrfutil preflight",
+                False,
+                "nrfutil remains",
+            )
+            return
+
         fake_zephyr = os.path.join(root, "fake-zephyr")
         os.makedirs(fake_zephyr)
         bsim_bin = os.path.join(root, "tools", "bsim", "bin")
         os.makedirs(bsim_bin)
         phy = os.path.join(bsim_bin, "bs_2G4_phy_v1")
-        with open(phy, "w") as fh:
+        with open(phy, "w", encoding="utf-8") as fh:
             fh.write("#!/usr/bin/env bash\nexit 0\n")
         os.chmod(phy, 0o755)
-        log_root = os.path.join(root, "bsim-logs")
-        rc, out = _run_bsim_runner(
+        log_root = os.path.join(root, "caller-logs")
+        rc, output = _run_bsim_runner(
             {
-                "PATH": os.pathsep.join(path),
+                "PATH": os.pathsep.join(filtered_path),
                 "ZEPHYR_BASE": fake_zephyr,
+                "BSIM_OUT_PATH": "",
                 "BSIM_LOG_ROOT": log_root,
             }
         )
-        ok = rc != 0 and "nrfutil not in PATH" in out
-        ok = ok and "BSIM_LOG_ROOT must" not in out
-        ok = ok and os.path.isdir(log_root) and os.listdir(log_root) == []
-        report("bsim log root valid accepted then stops at nrfutil", ok)
+        report(
+            "valid caller log root preserved through nrfutil preflight",
+            rc != 0
+            and "nrfutil not in PATH" in output
+            and os.path.isdir(log_root)
+            and not os.listdir(log_root),
+        )
 
 
 def main():
     print("=== bsim_stage1_parse unit tests ===")
-    test_tokens()
-    test_extract_missing()
-    test_mono_10ms_ok()
-    test_mono_hash_mismatch()
-    test_mono_lr_equal()
-    test_modea_lr_distinct()
-    test_modea_lr_equal_rejected()
-    test_total_frames_mismatch()
-    test_total_pin()
-    test_post_start_plc()
-    test_invalid_sdu_resume()
-    test_modea_first_stop()
-    test_release_without_disable()
-    test_disconnect_streaming()
-    test_reconnect_second_stream()
-    test_unsupported_source()
-    test_no_free_sink_slot()
-    test_invalid_codec_fields()
-    test_fault_scan()
-    test_client_pass_parse()
-    test_receiver_pass_parse()
-    test_production_pins_load_unchanged()
-    test_schema_missing_file()
-    test_schema_invalid_json()
-    test_schema_shape_errors()
-    test_schema_entry_errors()
-    test_cli_known_precedence()
-    test_bsim_log_root_relative_rejected_early()
-    test_bsim_log_root_root_and_home_rejected_early()
-    test_bsim_log_root_repo_paths_rejected()
-    test_bsim_log_root_nonempty_and_file_rejected_preserving_output()
-    test_bsim_log_root_valid_accepted_then_stops_at_nrfutil()
+    test_tokens_and_pass_extraction()
+    test_complete_production_scenario_records()
+    test_required_receiver_fields_fail_closed()
+    test_recipe_pass_fields_and_accounting_fail_closed()
+    test_stateful_recipe_progress_fail_closed()
+    test_modea_7p5ms_asymmetric_startup_accounting()
+    test_pcm_limits_and_metrics_fail_closed()
+    test_routing_and_loss_coverage_fail_closed()
+    test_invalid_sdu_and_reconnect_contracts()
+    test_lifecycle_and_known_totals_fail_closed()
+    test_transport_hash_contracts()
+    test_transport_byte_mutations_fail_closed()
+    test_fault_scan_allowlist()
+    test_schema_three_and_matrix_contract()
+    test_cli_only_exposes_known_total_and_numerical_metrics()
+    test_runner_preflight_contracts()
+    test_runner_log_root_ownership_preflight()
     print("=== %d PASS / %d FAIL ===" % (PASSES, FAILURES))
     return 0 if FAILURES == 0 else 1
 

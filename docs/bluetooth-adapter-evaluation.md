@@ -14,6 +14,15 @@ dongle firmware) are outside this native-HCI support contract; see
 [supported-sources.md](supported-sources.md) for that separate, unverified
 research matrix.
 
+Current candidate and revalidation work is tracked in
+[PB-016](product/backlog/tasks/pb-016%20-%20Complete-ASUS-USB-BT540-qualification.md),
+[PB-017](product/backlog/tasks/pb-017%20-%20Evaluate-ASUS-USB-BT600.md),
+[PB-018](product/backlog/tasks/pb-018%20-%20Validate-nRF5340-DK-as-Linux-HCI-UART-adapter.md),
+[PB-019](product/backlog/tasks/pb-019%20-%20Validate-nRF54L15-DK-as-Linux-HCI-UART-adapter.md),
+[PB-020](product/backlog/tasks/pb-020%20-%20Evaluate-self-contained-USB-LE-Audio-transmitters.md),
+and [PB-021](product/backlog/tasks/pb-021%20-%20Revalidate-AX210-with-complete-evidence-record.md).
+This document retains adapter evidence and evaluation contract, not task state.
+
 ## Tested and supported adapters
 
 ### Intel Wi-Fi 6E AX210: Supported (project-validated)
