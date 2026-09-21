@@ -77,9 +77,10 @@ None.
 
 - Applied target-role policy: Seeed XIAO nRF54L15 is sole supported final receiver. Physical E83 nRF5340 receiver remains best-effort legacy engineering/regression with no release, product-parity, physical-control, or future-feature obligation. nRF5340BSim, nRF5340DK HIL source, and HCI-UART dongle remain required fixtures; migration is deferred.
 - No runtime firmware, board, build/flash helper, CI workflow, release package/provenance, HIL, dongle, or release-asset change.
-- Canonical validation mirrored complete primary patch before this task metadata update into temporary standalone clone under /tmp/opencode. Throwaway local commit `dbcd2c9deb7aa5a97151523e9e21b0b5ed2183be` ran `nix develop -c ./scripts/test-all.sh`: `Gate complete: 74 PASS / 0 FAIL / 74 TOTAL`. Clone was deleted and never pushed. Primary worktree remains uncommitted; these notes, Final Summary, and Review transition were not part of throwaway commit.
+- Canonical validation mirrored the complete implementation patch before final task metadata updates into a temporary standalone clone under `/tmp/opencode`. Throwaway local commit `dbcd2c9deb7aa5a97151523e9e21b0b5ed2183be` ran `nix develop -c ./scripts/test-all.sh`: `Gate complete: 74 PASS / 0 FAIL / 74 TOTAL`. Clone was deleted and never pushed. The primary worktree was uncommitted during this validation; later PR-gate metadata updates did not change tested code or behavior.
 - Focused primary checks passed: matrix unit test (43), matrix checker (0 errors, 0 notes), firmware CI (35), firmware package (19), draft release (47), HIL source package (4), and RH4 artifact (11). `backlog doctor` and `git diff --check` passed. User-doc U+2014, dual-choice phrase, stale command-name, archive/completed link, and retained-fixture path checks passed.
 - Earlier linked-worktree validation could not run coverage because its `.git` is a file while `test-coverage.sh` requires a directory. Product owner selected standalone clone validation. No coverage or gate behavior changed.
+- PR-gate state: implementation was committed on branch `feature/pb-032-nrf54l15-final-target` and submitted as PR #14. Human product-owner merge remains official acceptance.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -98,5 +99,5 @@ Public product documentation now presents Seeed XIAO nRF54L15 as sole supported 
 
 Test-matrix terminology now separates final receiver, legacy receiver regression, and fixture build roles while retaining all recognized build commands. PB-005 is archived with product-owner rationale. Existing nRF54L15-only CI, package, provenance, draft-release, RH4, and FR4 boundaries remain unchanged.
 
-Validation passed on throwaway local clone commit `dbcd2c9deb7aa5a97151523e9e21b0b5ed2183be`: `nix develop -c ./scripts/test-all.sh` reported `74 PASS / 0 FAIL / 74 TOTAL`. Clone was deleted and never pushed. Primary worktree remains uncommitted. Deferred: migrate retained nRF5340BSim, nRF5340DK HIL source, and HCI-UART fixture roles in separate work.
+Validation passed on throwaway local clone commit `dbcd2c9deb7aa5a97151523e9e21b0b5ed2183be`: `nix develop -c ./scripts/test-all.sh` reported `74 PASS / 0 FAIL / 74 TOTAL`. Focused matrix, release-boundary, artifact, backlog, diff, public-doc, and retained-path checks also passed. Work is committed on `feature/pb-032-nrf54l15-final-target` and submitted as PR #14; human product-owner merge remains official acceptance. Deferred: migrate retained nRF5340BSim, nRF5340DK HIL source, and HCI-UART fixture roles in separate work.
 <!-- SECTION:FINAL_SUMMARY:END -->
