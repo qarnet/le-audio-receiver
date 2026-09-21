@@ -1,4 +1,8 @@
-# nRF5340 Flashing
+# Legacy nRF5340 developer flashing reference
+
+> **Status: legacy engineering only.** This guide is not general user flashing
+> guidance and does not describe a supported final receiver or current release
+> asset. The Seeed XIAO nRF54L15 is the sole supported final receiver.
 
 ## Hardware
 
@@ -120,4 +124,3 @@ was previously an overlay on the nRF5340DK. The board files are:
 
 The `boards/ebyte/e83_nrf5340/support/flash_nrf5340.tcl` (moved from `scripts/`) provides the
 `flash_west` and `check_approtect` TCL procs used by the OpenOCD runner.
-

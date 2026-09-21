@@ -1,9 +1,8 @@
 # User guide
 
-This guide covers the receiver as a device: what you need, what to expect on
-boot, how to pair, and how the pairing modes behave. It is written to be
-platform-agnostic: most of it applies the same way to both supported boards
-(the nRF5340 build and the nRF54L15 build).
+This guide covers the **Seeed XIAO nRF54L15**, this project's sole supported
+final receiver: what you need, what to expect on boot, how to pair, and how
+the pairing modes behave.
 
 ## What you need
 
@@ -24,12 +23,7 @@ available for download today; the firmware must be built from source using the
 developer toolchain documented in the repository. This section explains what
 flashing a build looks like so the expected flow is clear.
 
-- **nRF5340 build (Ebyte E83):** the current tested route uses an **external
-  CMSIS-DAP debug probe** (for example a Raspberry Pi Pico running CMSIS-DAP
-  firmware) and an OpenOCD build from mainline/master. The developer workflow
-  is documented in detail in [Flashing (developers)](flashing.md). It flashes
-  both cores of the nRF5340 in one session.
-- **nRF54L15 build (Seeed Xiao):** flashing uses the board's **onboard
+- **nRF54L15 build (Seeed XIAO):** flashing uses the board's **onboard
   debugger** (the SAMD11 USB bridge). A public-friendly flashing method is
   still under evaluation; the current route is the developer workflow
   (see [PB-008](product/backlog/tasks/pb-008%20-%20Provide-public-friendly-nRF54L15-flashing.md)). Expect this section to be
@@ -56,10 +50,8 @@ current pairing mode (below).
 
 ## Pairing modes
 
-The receiver has three modes. The button behavior below applies to the
-**nRF54L15 (Seeed Xiao)** build, which has a physical user button and LED.
-**The nRF5340 build has no physical pairing button yet**: see the note at
-the end of this section.
+The receiver has three modes. The Seeed XIAO nRF54L15 has a physical user
+button and LED for this behavior.
 
 | Mode | How to enter | LED | What it means |
 |---|---|---|---|
@@ -78,20 +70,6 @@ Notes:
 - If a previously bonded device reconnects during BONDING and completes
   security, the receiver treats that as successful completion and returns to
   NORMAL.
-
-### nRF5340 note
-
-**The nRF5340 build has no physical pairing controls yet.** The new
-button/LED pairing controller (NORMAL/BONDING/RESET) is **not enabled** on
-the nRF5340: its configuration symbols (`CONFIG_USER_PAIRING_CONTROL` /
-`CONFIG_USER_PAIRING_INPUT`) are off for this build, so there is no user
-button, no mode LED, and no NORMAL/BONDING/RESET behavior on the E83 board at
-this time. What the nRF5340 build does have is the **legacy shell reset**: the
-`bt unpair` developer-shell command clears all saved pairings, disconnects the
-active peer, and reopens pairing so a new device can connect. This is a
-developer workflow, not a button press. Tracked in
-[Known limitations](known-limitations.md) and
-[PB-005](product/backlog/tasks/pb-005%20-%20Add-nRF5340-physical-pairing-controls.md).
 
 ## Supported source devices
 
@@ -146,6 +124,4 @@ See also the full [Known limitations](known-limitations.md) list.
 
 - [Hardware wiring](hardware-wiring.md)
 - [Known limitations](known-limitations.md)
-- [Technology: nRF5340](technology/nrf5340.md)
 - [Technology: nRF54L15](technology/nrf54l15.md)
-- [Flashing (developers)](flashing.md)

@@ -1,10 +1,10 @@
 ---
 id: PB-031
 title: Make LC3/PCM test oracle platform-independent
-status: Review
+status: Done
 assignee: []
 created_date: '2026-09-13 03:09'
-updated_date: '2026-09-18 20:45'
+updated_date: '2026-09-20 19:23'
 labels:
   - 'size:L'
   - 'area:testing'
@@ -264,5 +264,5 @@ Evidence: `/tmp/opencode/pb031-p4.XgKVNM` with raw logs and `SHA256SUMS`; tested
 
 No production behavior, production liblc3 revision or flags, decoder code, fixture bytes, manifest limits, coverage baseline, or firmware feature changed.
 
-Lifecycle: PB-031 moved to Review only. Done requires a PB-031 PR and human merge; no PR was opened and task was not marked Done.
+Lifecycle closure: PR #13, `PB-031: Make LC3/PCM test oracle platform-independent`, was human-merged into `main` at `b59e1d8f99b8f4e7435c7086bfe81700007b221d`. Required PR checks passed: `test-unit`, `test-heavy (coverage)`, `test-heavy (bsim)`, aggregate `tests`, and `firmware`; `release` was skipped on the pull request. Human merge satisfies acceptance. Trusted-main follow-on candidate creation belongs to PB-006.
 <!-- SECTION:FINAL_SUMMARY:END -->

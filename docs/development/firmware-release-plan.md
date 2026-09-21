@@ -5,19 +5,29 @@ through GitHub Releases. This plan is documentation only; it does not add CI,
 packaging code, version files, tags, releases, MCUboot, or firmware behavior.
 Implementation phases FR1-FR5 are defined below.
 
-Phase status (reconciled 2026-09-19): FR1-FR3 ACCEPTED; FR4 BLOCKED after
+Phase status (reconciled 2026-09-20): FR1-FR3 ACCEPTED; FR4 BLOCKED after
 historical exact `v0.1.0` draft candidate failed mandatory nRF5340 mono
 hardware acceptance. It served as stable harness baseline, then its GitHub
 draft and assets were deleted 2026-09-19; historical FR4 evidence remains
-unchanged. `gh release view v0.1.0` now fails, the GitHub release list is empty,
-and `refs/tags/v0.1.0` is absent. Nothing was published. The root `VERSION`
-remains `0.1.0`, and product owner selected it for a fresh replacement
-candidate because it was never published or tagged. PB-031 has not been
-human-merged, so no fresh candidate exists. After PB-031 human merge and
-green hosted gates, trusted-main
-may create a fresh immutable nRF54L15-only candidate if no release/tag
-collision exists. FR4/FR5 remain blocked until exact new assets pass active
-nRF54L15 FR4.
+unchanged. Failed assets were not restored or clobbered. Nothing was published.
+Root `VERSION` remains `0.1.0`. PR #13 human-merged PB-031 into `main` at
+`b59e1d8f99b8f4e7435c7086bfe81700007b221d`. Trusted-main workflow run
+`35429538264` attempt `1` passed `test-unit`, `test-heavy (coverage)`,
+`test-heavy (bsim)`, aggregate `tests`, `firmware`, and `release`, then created
+active private draft release `391991202`: tag label `v0.1.0`, title
+`LE Audio Receiver v0.1.0`, target
+`b59e1d8f99b8f4e7435c7086bfe81700007b221d`, draft `true`, prerelease `false`,
+and `published_at: null`. No `refs/tags/v0.1.0` exists. Exact assets are
+`le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip` (627096 bytes, SHA-256
+`bd5fe73636b831e9b685cd20f53704fbe342be60b124f5ae5379dd7969ac9f10`),
+`SHA256SUMS` (117 bytes, SHA-256
+`ea653102fc318d22e0b4b5d3c7b08a05874aa435b73098ea5f65790a913398ff`), and
+`release-provenance.json` (1077 bytes, SHA-256
+`49ca660cc83e99a12e07982f466d5d44f64730e708f162a03582dc60fe157238`).
+Provenance binds version `0.1.0`, NCS `v3.3.0`, run `35429538264` attempt `1`,
+the exact SHA, and the nRF54L15-only factory ZIP. No RH4 or FR4 acceptance has
+run. FR4/FR5 remain blocked until exact active nRF54L15 assets pass FR4 through
+PB-007.
 
 ## Current release-line scope update (2026-09-12)
 
@@ -32,7 +42,7 @@ remain in tree until the dedicated cleanup branch. This scope update does not
 delete or reinterpret those historical records.
 
 Current product-item ownership is
-[PB-006](../product/backlog/tasks/pb-006%20-%20Create-replacement-nRF54L15-release-candidate.md)
+[PB-006](../product/backlog/completed/pb-006%20-%20Create-replacement-nRF54L15-release-candidate.md)
 for replacement candidate creation,
 [PB-007](../product/backlog/tasks/pb-007%20-%20Accept-exact-candidate-through-RH4-and-FR4.md)
 for exact RH4 and FR4 acceptance,
@@ -348,19 +358,28 @@ write in state: 4`, and `I2S underrun, restarting DMA`), stopping the
 matrix before nRF54L15. The exact `v0.1.0` candidate therefore **failed** FR4.
 It served as stable harness baseline, then its GitHub draft and assets were
 deleted 2026-09-19; historical draft ID, target, hashes, and failure evidence
-remain immutable. `gh release view v0.1.0` now fails, the GitHub release list
-is empty, and `refs/tags/v0.1.0` is absent. The deleted draft is no longer a
-candidate; nothing was published. The local fix preflight (pristine builds at
-`5e7f502`) **passed** all six rows on both targets but remains historical
-replacement-candidate preflight only, not FR4 exact-artifact acceptance.
-Product owner selected unreleased, untagged `0.1.0` for a fresh replacement
-candidate because it was never published or tagged; the root `VERSION` remains
-`0.1.0`. PB-031 has not been human-merged, so no fresh candidate exists. Only
-after PB-031 human merge and green hosted gates may
-trusted-main create a fresh immutable nRF54L15-only
-candidate after verifying no release/tag collision. Its exact new assets must
-run active nRF54L15 FR4 through PB-007 before FR5; failed assets must never be
-restored or clobbered. Full evidence:
+remain immutable. The failed assets were not restored or clobbered, and the
+deleted draft is no longer a candidate; nothing was published. The local fix
+preflight (pristine builds at `5e7f502`) **passed** all six rows on both targets
+but remains historical replacement-candidate preflight only, not FR4
+exact-artifact acceptance. Root `VERSION` remains `0.1.0`. PR #13 human-merged
+PB-031 into `main` at `b59e1d8f99b8f4e7435c7086bfe81700007b221d`.
+Trusted-main workflow run `35429538264` attempt `1` passed `test-unit`,
+`test-heavy (coverage)`, `test-heavy (bsim)`, aggregate `tests`, `firmware`,
+and `release`, then created active private draft release `391991202`: tag label
+`v0.1.0`, title `LE Audio Receiver v0.1.0`, target
+`b59e1d8f99b8f4e7435c7086bfe81700007b221d`, draft `true`, prerelease `false`,
+and `published_at: null`. No `refs/tags/v0.1.0` exists. Exact assets are
+`le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip` (627096 bytes, SHA-256
+`bd5fe73636b831e9b685cd20f53704fbe342be60b124f5ae5379dd7969ac9f10`),
+`SHA256SUMS` (117 bytes, SHA-256
+`ea653102fc318d22e0b4b5d3c7b08a05874aa435b73098ea5f65790a913398ff`), and
+`release-provenance.json` (1077 bytes, SHA-256
+`49ca660cc83e99a12e07982f466d5d44f64730e708f162a03582dc60fe157238`).
+Provenance binds version `0.1.0`, NCS `v3.3.0`, run `35429538264` attempt `1`,
+the exact SHA, and the nRF54L15-only factory ZIP. No RH4 or FR4 acceptance has
+run. Exact active nRF54L15 assets must pass FR4 through PB-007 before FR5;
+FR4/FR5 remain blocked and nothing published. Full evidence:
 `docs/development/firmware-release-fr4-results.md`.
 
 ### FR5: first useful release and closeout

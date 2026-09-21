@@ -57,25 +57,41 @@
 > joins `tests` with `firmware` and was SKIPPED on pull_request),
 > and FR4 exact-artifact hardware acceptance **BLOCKED**: historical exact draft
 > `v0.1.0` FAILED mandatory nRF5340 mono acceptance. It served as stable harness
-> baseline, then its GitHub draft and assets were deleted 2026-09-19;
-> `gh release view v0.1.0` now fails, the GitHub release list is empty, and
-> `refs/tags/v0.1.0` is absent. Nothing was published. The local replacement
-> preflight passed both targets but remains historical preflight, not
-> exact-artifact acceptance. The root `VERSION` remains `0.1.0`, and product
-> owner selected it for a fresh replacement candidate because it was never
-> published or tagged. PB-031 has not been human-merged, so no fresh candidate
-> exists. After PB-031 human
-> merge and green hosted gates, trusted-main may create a new immutable
-> nRF54L15-only candidate if no release/tag collision exists. Its exact new
-> assets must pass active nRF54L15 FR4 through
+> baseline, then its GitHub draft and assets were deleted 2026-09-19; historical
+> failure evidence remains immutable and failed assets were not restored or
+> clobbered. Nothing was published. The local replacement preflight passed both
+> targets but remains historical preflight, not exact-artifact acceptance. Root
+> `VERSION` remains `0.1.0`. PR #13 human-merged PB-031 into `main` at
+> `b59e1d8f99b8f4e7435c7086bfe81700007b221d`. Trusted-main workflow run
+> `35429538264` attempt `1` passed `test-unit`, `test-heavy (coverage)`,
+> `test-heavy (bsim)`, aggregate `tests`, `firmware`, and `release`, and created
+> active private draft release `391991202`: tag label `v0.1.0`, title
+> `LE Audio Receiver v0.1.0`, target
+> `b59e1d8f99b8f4e7435c7086bfe81700007b221d`, draft `true`, prerelease `false`,
+> and `published_at: null`. No `refs/tags/v0.1.0` exists. Assets are
+> `le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip` (627096 bytes, SHA-256
+> `bd5fe73636b831e9b685cd20f53704fbe342be60b124f5ae5379dd7969ac9f10`),
+> `SHA256SUMS` (117 bytes, SHA-256
+> `ea653102fc318d22e0b4b5d3c7b08a05874aa435b73098ea5f65790a913398ff`), and
+> `release-provenance.json` (1077 bytes, SHA-256
+> `49ca660cc83e99a12e07982f466d5d44f64730e708f162a03582dc60fe157238`).
+> Provenance binds version `0.1.0`, NCS `v3.3.0`, run `35429538264` attempt `1`,
+> exact SHA, and nRF54L15-only factory ZIP. No RH4 or FR4 acceptance has run.
+> Exact active assets must pass nRF54L15 FR4 through
 > [PB-007](docs/product/backlog/tasks/pb-007%20-%20Accept-exact-candidate-through-RH4-and-FR4.md)
 > before [PB-009](docs/product/backlog/tasks/pb-009%20-%20Publish-first-public-firmware-release.md)
-> can publish anything; FR4/FR5 remain blocked and failed assets must never be
-> restored or clobbered.
+> can publish anything; FR4/FR5 remain blocked and nothing is published.
 > The R0–R10 refactor figures below (gate 55/0/55,
 > population 33, contract 79/79) are the **historical** R10 baseline
 > (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
 > for their own commits.
+
+> **PB-032 current target policy (2026-09-20):** nRF54L15 is the sole supported
+> final receiver. The physical E83 nRF5340 receiver is a best-effort legacy
+> engineering/regression path with no release, product-parity, physical-control,
+> or future-feature obligation. nRF5340BSim, the nRF5340DK HIL source, and the
+> HCI-UART dongle remain required test infrastructure; fixture migration is
+> deferred.
 
 ## PB-031 portable LC3/PCM oracle P4 acceptance (2026-09-18)
 
@@ -254,11 +270,10 @@ write in state: 4`, and `audio_i2s: I2S underrun, restarting DMA`. The
 deterministic failure stopped the matrix before nRF54L15. The exact candidate
 therefore FAILED FR4. It served as stable harness baseline, then its GitHub
 draft and assets were deleted 2026-09-19; historical draft ID, target, hash,
-and failure evidence remain immutable. `gh release view v0.1.0` now fails, the
-GitHub release list is empty, and `refs/tags/v0.1.0` is absent. The deleted
-draft is no longer a candidate; nothing was published. The local replacement
-preflight (pristine builds
-from committed HEAD `5e7f502`) PASSED all six rows on both targets with
+and failure evidence remain immutable. The historical failed assets were not
+restored or clobbered, and the deleted draft is no longer a candidate. Nothing
+was published. The local replacement preflight (pristine builds from committed
+HEAD `5e7f502`) PASSED all six rows on both targets with
 zero decode errors, underruns, stream resets, and cadence RESYNC warnings
 (see `docs/development/firmware-release-fr4-results.md` for row, stack, and
 image-identity tables); it is replacement-candidate preflight only, not FR4
@@ -269,16 +284,25 @@ unchanged), BSim pins byte-identical.  Evidence:
 `docs/development/firmware-release-fr4-results.md`; procedure
 `docs/development/firmware-release-fr4-procedure.md` (historical, executed
 2026-08-10); retained run dirs under `/tmp/opencode/` (exact draft
-`fr4-v0.1.0-OEp9Kh`, cadence local `fr4-cadence-local-*`). Product owner
-selected unreleased, untagged `0.1.0` for a fresh replacement candidate because
-it was never published or tagged; the root `VERSION` remains `0.1.0`. PB-031
-has not been human-merged, so no fresh candidate exists. Only after PB-031 human
-merge and green hosted
-gates may the trusted-main workflow create a fresh immutable nRF54L15-only
-candidate after verifying no release/tag collision. Its exact assets must pass
-active nRF54L15 FR4 through PB-007 before FR5 can publish anything; failed
-assets must never be restored or clobbered. FR4 and FR5 remain blocked; nothing
-published.
+`fr4-v0.1.0-OEp9Kh`, cadence local `fr4-cadence-local-*`). Root `VERSION`
+remains `0.1.0`. PR #13 human-merged PB-031 into `main` at
+`b59e1d8f99b8f4e7435c7086bfe81700007b221d`. Trusted-main workflow run
+`35429538264` attempt `1` passed `test-unit`, `test-heavy (coverage)`,
+`test-heavy (bsim)`, aggregate `tests`, `firmware`, and `release`, then created
+active private draft release `391991202`: tag label `v0.1.0`, title
+`LE Audio Receiver v0.1.0`, exact target
+`b59e1d8f99b8f4e7435c7086bfe81700007b221d`, draft `true`, prerelease `false`,
+and `published_at: null`. No `refs/tags/v0.1.0` exists. Exact assets are
+`le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip` (627096 bytes, SHA-256
+`bd5fe73636b831e9b685cd20f53704fbe342be60b124f5ae5379dd7969ac9f10`),
+`SHA256SUMS` (117 bytes, SHA-256
+`ea653102fc318d22e0b4b5d3c7b08a05874aa435b73098ea5f65790a913398ff`), and
+`release-provenance.json` (1077 bytes, SHA-256
+`49ca660cc83e99a12e07982f466d5d44f64730e708f162a03582dc60fe157238`).
+Provenance binds version `0.1.0`, NCS `v3.3.0`, run `35429538264` attempt `1`,
+the exact SHA, and the nRF54L15-only factory ZIP. No RH4 or FR4 acceptance has
+run. Exact active nRF54L15 assets must pass FR4 through PB-007 before FR5 can
+publish anything. FR4 and FR5 remain blocked; nothing published.
 
 ## System HIL: TRANSPORT_RUNTIME_ACCEPTED (2026-09-09)
 

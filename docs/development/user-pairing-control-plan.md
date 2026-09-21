@@ -311,7 +311,7 @@ that reset indication consists of complete LED half-periods. Enable only in
 ### P0 — contract and evidence lock
 
 - Commit this plan and record related future work as
-  [PB-005](../product/backlog/tasks/pb-005%20-%20Add-nRF5340-physical-pairing-controls.md)
+  [PB-005](../product/backlog/archive/tasks/pb-005%20-%20Add-nRF5340-physical-pairing-controls.md)
   and
   [PB-012](../product/backlog/tasks/pb-012%20-%20Differentiate-NORMAL-and-BONDING-on-air.md).
 - Add behavior-contract identifiers for mode, timing, ordering, failure, and

@@ -40,74 +40,49 @@ LC3 audio to this receiver.
   - **Stereo Mode B** (one stream carrying both channels).
 - Implements **Volume Control Profile (VCP)**: volume and mute are controlled
   from the source device.
-- Keeps playback in sync with the source clock using *clock recovery*. The
-  details differ by chip and are explained in the
-  [technology notes](docs/technology/).
+- Keeps playback in sync with the source clock using nRF54L15 digital *clock
+  recovery / rate matching*, explained in the
+  [nRF54L15 technology note](docs/technology/nrf54l15.md).
 - Provides a developer shell for diagnostics.
 
-## Why two hardware paths exist
+## Supported receiver hardware
 
-Building an LE Audio receiver with hobby hardware means choosing between two
-imperfect options:
+The **Seeed XIAO nRF54L15** is this project's sole supported final receiver
+hardware. It is small, inexpensive, broadly available in hobby shops, and has
+an **onboard debugger** and battery charging. See [Hardware
+wiring](docs/hardware-wiring.md) for its DAC connection and
+[Technology: nRF54L15](docs/technology/nrf54l15.md) for its audio path.
 
-- The **nRF5340** is the chip Nordic Semiconductor targets for LE Audio. It is
-  the basis of Nordic's LE Audio reference applications and qualification
-  work. But Nordic's own development kit is large and expensive. This project
-  instead uses a compact **Ebyte E83** module containing an nRF5340. That
-  module is practical for hobby use, but it has no onboard debugger: flashing
-  requires an **external debug probe** (for example a Raspberry Pi Pico
-  running CMSIS-DAP firmware), and this repository's tested flashing path uses
-  an OpenOCD build from mainline/master. Other nRF5340 dev kits were unable to
-  be found in a hobbyist's price range.
-- The **nRF54L15** (on the small **Seeed Xiao** board) is the opposite choice:
-  tiny, inexpensive, broadly available in hobby shops, with an **onboard
-  debugger** and battery charging. The catch: it has **no dedicated Audio
-  PLL**, and Nordic's official position is that the nRF54L series is therefore
-  **not its ideal/recommended platform for all LE Audio / audio-streaming
-  uses**: Nordic states that a subset of LE Audio use cases can be supported,
-  and recommends the nRF5340 for audio today ([Nordic DevZone](https://devzone.nordicsemi.com/f/nordic-q-a/117778/nrf54l15-support-le-audio)).
-  Bluetooth ISO/BAP streaming is not impossible here: point-to-point LE Audio
-  works on it, while use cases that depend on a tunable audio clock (such as
-  TWS-style synchronised playback between two earbuds) are not covered. This
-  project makes up for the missing hardware clock with a custom digital
-  *clock-recovery / rate-matching* path in firmware.
+### Nordic LE Audio platform caveat
 
-## Choosing a platform
+The nRF54L15 has **no dedicated Audio PLL**. Nordic states that the nRF54L
+series is **not its ideal/recommended platform for all LE Audio /
+audio-streaming uses**, that a subset of LE Audio use cases can be supported,
+and recommends the nRF5340 for audio today ([Nordic DevZone](https://devzone.nordicsemi.com/f/nordic-q-a/117778/nrf54l15-support-le-audio)).
+This is scope context, not a second project hardware choice. Point-to-point
+Bluetooth ISO/BAP streaming works on the XIAO; use cases that need a tunable
+audio clock, such as TWS-style synchronized playback between two earbuds, are
+not covered. Firmware uses a custom digital *clock-recovery / rate-matching*
+path for the fixed hardware clock.
 
-| | nRF5340 build (Ebyte E83) | nRF54L15 build (Seeed Xiao) |
-|---|---|---|
-| **Nordic LE Audio reference platform** | ✔ Yes | ✘ No |
-| **Compact hobby board with onboard debugger** | ✘ No | ✔ Yes |
-
-**Choose the nRF5340 (Ebyte E83) if** you want the chip Nordic recommends for
-LE Audio, and you can supply an external CMSIS-DAP debug probe and follow the
-repository's tested flashing workflow. It is the more "reference-like" path.
-
-**Choose the nRF54L15 (Seeed Xiao) if** you want a compact, low-cost board
-with an onboard debugger and battery charging, and you accept that this is
-not Nordic's LE Audio reference platform. The firmware does its own digital
-clock recovery instead. The nRF54L15 is not "unsupported" here; it is a fully
-supported build target of this project.
-
-See [Hardware wiring](docs/hardware-wiring.md) for what to wire on either
-board, and the [technology notes](docs/technology/) for how each chip's audio
-path works.
+The nRF5340 Ebyte receiver remains in this repository as a **legacy
+engineering/regression path**. It is not supported final hardware, has no
+public release asset, and has no product-parity or future-feature obligation.
 
 ## Feature list
 
 - BAP unicast sink (2 sink ASEs), mono / stereo Mode A / stereo Mode B.
 - LC3 decode (`liblc3`) → 48 kHz stereo I2S → external DAC.
 - VCP volume and mute control from the source device.
-- Clock recovery on both platforms (audio PLL trimming on nRF5340, digital
-  rate matching on nRF54L15).
-- Watchdog, developer shell diagnostics, board-specific pairing control.
+- Digital clock recovery and rate matching on nRF54L15.
+- Watchdog, developer shell diagnostics, XIAO button/LED pairing control.
 
 ## Quick start
 
-1. **Pick a platform**: see [Choosing a platform](#choosing-a-platform).
-2. **Wire a DAC**: both boards use a simple 3-wire I2S connection to a
-   common DAC breakout; see [Hardware wiring](docs/hardware-wiring.md).
-3. **Get firmware on the board**: see the [User guide](docs/user-guide.md).
+1. **Use a Seeed XIAO nRF54L15**: it is the sole supported final receiver.
+2. **Wire a DAC**: use its simple 3-wire I2S connection to a common DAC
+   breakout; see [Hardware wiring](docs/hardware-wiring.md).
+3. **Get firmware on the XIAO**: see the [User guide](docs/user-guide.md).
    Ready-made release binaries are planned but **not yet published**; today
    you build from source using the developer workflow documented there.
 4. **Pair and play**: put the receiver into pairing mode (see the user
@@ -148,11 +123,11 @@ required. This project's priority is the native HCI path.
 | [Supported sources on Linux](docs/supported-sources.md) | Overview/source matrix of researched Linux LE Audio source hardware, with links to the host setup and adapter evaluation guides |
 | [Linux LE Audio host setup](docs/linux-le-audio-host-setup.md) | Host OS setup, configuration, and verification for transmitting BAP unicast audio via BlueZ + PipeWire |
 | [Bluetooth adapter evaluation](docs/bluetooth-adapter-evaluation.md) | Which Bluetooth adapters are supported and how new adapters get accepted (Intel AX210 project-validated) |
-| [Hardware wiring](docs/hardware-wiring.md) | DAC choice and verified I2S pin wiring for both boards |
+| [Hardware wiring](docs/hardware-wiring.md) | DAC choice, supported XIAO wiring, and legacy E83 engineering reference |
 | [Known limitations](docs/known-limitations.md) | Honest list of current gaps and caveats |
-| [Technology: nRF5340](docs/technology/nrf5340.md) | Dual-core architecture, controller, audio PLL, flashing constraints |
-| [Technology: nRF54L15](docs/technology/nrf54l15.md) | Single-core SDC path, fixed clock, rate matching, ASRC |
-| [Flashing (developers)](docs/flashing.md) | Detailed nRF5340 dual-core flashing workflow |
+| [Technology: nRF5340](docs/technology/nrf5340.md) | Legacy engineering background: dual-core architecture, controller, audio PLL |
+| [Technology: nRF54L15](docs/technology/nrf54l15.md) | Sole final receiver: single-core SDC path, fixed clock, rate matching, ASRC |
+| [Legacy nRF5340 flashing](docs/flashing.md) | Legacy E83 developer flashing reference |
 | [Product backlog](docs/product/README.md) | Backlog.md tasks, lifecycle, and current product work |
 
 ## License
