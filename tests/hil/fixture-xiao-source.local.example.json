@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "fixture_id": "local-xiao-nrf54l15-pair",
+  "roles": {
+    "receiver": {
+      "probe": {
+        "backend": "nrf-probes",
+        "family": "nrf54l"
+      },
+      "serial": {
+        "baud": 115200,
+        "dtr": true,
+        "rts": false,
+        "udev": {}
+      }
+    },
+    "source": {
+      "probe": {
+        "backend": "nrf-probes",
+        "family": "nrf54l"
+      },
+      "serial": {
+        "baud": 115200,
+        "dtr": true,
+        "rts": false,
+        "udev": {}
+      }
+    }
+  }
+}

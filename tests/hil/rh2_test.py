@@ -243,28 +243,48 @@ def fake_resolution():
         usb_parent="/sys/devices/pci0000:00/usb1/1-3",
     )
     receiver_probe = discovery.ProbeIdentity(
-        "receiver",
-        "nrf-probes",
-        "nrf54l",
-        hil_fakes.RECEIVER_SERIAL,
-        "nRF54L15",
-        "0x6ba02477",
-        "0x00054b15",
-        "BAAA",
+        role="receiver",
+        backend="nrf-probes",
+        family="nrf54l",
+        serial=hil_fakes.RECEIVER_SERIAL,
+        product="DAPLink",
+        target="nRF54L15",
+        dpidr="0x6ba02477",
+        ap_idrs=MappingProxyType(
+            {
+                "ap0": "0x84770001",
+                "ap1": "0x84770001",
+                "ap2": "0x32880000",
+                "ap3": "0x00000000",
+            }
+        ),
+        part="0x00054b15",
+        variant="BAAA",
+        variant_raw="0x42414141",
     )
     source_probe = discovery.ProbeIdentity(
-        "source",
-        "jlink",
-        "nrf53",
-        hil_fakes.SOURCE_SERIAL,
-        "nRF5340",
-        "0x6ba02477",
-        "0x00005340",
-        "AAAA",
+        role="source",
+        backend="jlink",
+        family="nrf53",
+        serial=hil_fakes.SOURCE_SERIAL,
+        product="J-Link",
+        target="nRF5340",
+        dpidr="0x6ba02477",
+        ap_idrs=MappingProxyType(
+            {
+                "ap0": "0x00000000",
+                "ap1": "0x00000000",
+                "ap2": "0x12880000",
+                "ap3": "0x12880000",
+            }
+        ),
+        part="0x00005340",
+        variant="0x41414141",
+        variant_raw="0x41414141",
     )
     raw = {
         "nrf-probes": {
-            "argv": ["nrf-probes"],
+            "argv": ["nix-nrf", "probes"],
             "stdout": hil_fakes.default_probe_table(),
             "stderr": "",
             "status": 0,
@@ -5042,11 +5062,11 @@ def _script_discovery(
     usb_root = os.path.join(sysfs, "bus", "usb", "devices")
     tty_root = os.path.join(sysfs, "class", "tty")
     runner.script(
-        ["nrf-probes"],
+        ["nix-nrf", "probes"],
         hil_fakes.FakeProc(stdout=hil_fakes.default_probe_table(receiver_rows)),
     )
     runner.script(
-        ["nrf-probes", "--find", "nrf54l"],
+        ["nix-nrf", "probes", "--find", "nrf54l"],
         hil_fakes.FakeProc(stdout=(find_token or hil_fakes.RECEIVER_SERIAL) + "\n"),
     )
     usb_props = usb_props or {
@@ -5105,6 +5125,11 @@ def _script_discovery(
         openocd,
         False,  # prefix match
     )
+    runner.script(
+        ["openocd", "-f", "interface/cmsis-dap.cfg"],
+        hil_fakes.FakeProc(stdout=hil_fakes.cmsis_dap_fingerprint_output()),
+        exact=False,
+    )
     return runner
 
 
@@ -5115,6 +5140,119 @@ def _load_binding(tmpdir):
     fixture = model.load_logical_fixture(fixture_path)
     binding = model.load_physical_binding(binding_path, fixture)
     return binding
+
+
+XIAO_RECEIVER_SERIAL = "XIAO-RECEIVER"
+XIAO_SOURCE_SERIAL = "XIAO-SOURCE"
+
+
+def _load_xiao_binding(tmpdir):
+    cfg = os.path.join(tmpdir, "xiao-cfg")
+    os.makedirs(cfg)
+    fixture = {
+        "schema_version": 1,
+        "fixture_id": "local-xiao-nrf54l15-pair",
+        "capture_capability": "none",
+        "roles": {
+            "receiver": {
+                "kind": "zephyr_dut",
+                "board": "nrf54l15dk/nrf54l15/cpuapp",
+                "images": ["cpuapp", "flpr"],
+            },
+            "source": {
+                "kind": "zephyr_dut",
+                "board": "nrf54l15dk/nrf54l15/cpuapp",
+                "images": ["cpuapp"],
+            },
+        },
+    }
+    binding = {
+        "schema_version": 1,
+        "fixture_id": "local-xiao-nrf54l15-pair",
+        "roles": {
+            role: {
+                "probe": {"backend": "nrf-probes", "family": "nrf54l"},
+                "serial": {"baud": 115200, "dtr": True, "rts": False, "udev": {}},
+            }
+            for role in ("receiver", "source")
+        },
+    }
+    fixture_path, binding_path = hil_fakes.write_fixture_binding(cfg, fixture, binding)
+    logical = model.load_logical_fixture(fixture_path)
+    return model.load_physical_binding(binding_path, logical)
+
+
+def _xiao_tty_props(serial, usb, tty):
+    return {
+        "ID_BUS": "usb",
+        "ID_VENDOR_ID": "2886",
+        "ID_MODEL_ID": "0066",
+        "ID_SERIAL_SHORT": serial,
+        "ID_USB_INTERFACE_NUM": "02",
+        "ID_USB_DRIVER": "cdc_acm",
+        "ID_PATH": "pci-0000:00-usb-0:%s:1.2" % usb,
+        "DEVPATH": hil_fakes.tty_devpath(usb, tty),
+    }
+
+
+def _script_xiao_pair(
+    sysfs,
+    runner,
+    *,
+    rows=None,
+    cmsis_proc=None,
+    tty_props=None,
+):
+    if rows is None:
+        rows = [
+            (
+                XIAO_RECEIVER_SERIAL,
+                "CMSIS-DAP",
+                "nRF54L15",
+                "0x6ba02477",
+                "0x00054b15",
+                "AAC0",
+                "",
+            ),
+            (
+                XIAO_SOURCE_SERIAL,
+                "CMSIS-DAP",
+                "nRF54L15",
+                "0x6ba02477",
+                "0x00054b15",
+                "AAC0",
+                "",
+            ),
+        ]
+    runner.script(
+        ["nix-nrf", "probes", XIAO_RECEIVER_SERIAL, XIAO_SOURCE_SERIAL],
+        hil_fakes.FakeProc(stdout=hil_fakes.default_probe_table(rows)),
+    )
+    runner.script(
+        ["openocd", "-f", "interface/cmsis-dap.cfg"],
+        cmsis_proc
+        or hil_fakes.FakeProc(
+            stdout=hil_fakes.cmsis_dap_fingerprint_output(variant="0x41414330")
+        ),
+        exact=False,
+    )
+    tty_root = os.path.join(sysfs, "class", "tty")
+    tty_props = tty_props or {
+        "ttyACM0": _xiao_tty_props(XIAO_RECEIVER_SERIAL, "1-2", "ttyACM0"),
+        "ttyACM1": _xiao_tty_props(XIAO_SOURCE_SERIAL, "1-3", "ttyACM1"),
+    }
+    for tty, props in sorted(tty_props.items()):
+        runner.script(
+            [
+                "udevadm",
+                "info",
+                "--query=property",
+                "--path",
+                os.path.join(tty_root, tty),
+            ],
+            _udev_proc(props),
+        )
+    return runner
 
 
 class TestStreamTransportLimits(unittest.TestCase):
@@ -5245,6 +5383,43 @@ class TestStreamTransportLimits(unittest.TestCase):
 
 
 class TestDiscovery(unittest.TestCase):
+    def test_fingerprint_cmsis_dap_is_explicit_readonly_and_keeps_ap3_zero(self):
+        command = hil_fakes.ScriptedRunner()
+        command.script(
+            ["openocd", "-f", "interface/cmsis-dap.cfg"],
+            hil_fakes.FakeProc(
+                stdout=hil_fakes.cmsis_dap_fingerprint_output(variant="0x41414330")
+            ),
+            exact=False,
+        )
+        argv, _raw, markers, failures, status = discovery.fingerprint_cmsis_dap(
+            command, XIAO_RECEIVER_SERIAL
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(failures, [])
+        self.assertEqual(markers["ap3"], "0x00000000")
+        self.assertIn("adapter serial %s" % XIAO_RECEIVER_SERIAL, argv)
+        self.assertIn("adapter speed 1000", argv)
+        self.assertIn("gdb port disabled", argv)
+        self.assertIn("tcl port disabled", argv)
+        self.assertIn("telnet port disabled", argv)
+        self.assertIn("swd newdap chip cpu", argv)
+        self.assertIn("dap create chip.dap -chain-position chip.cpu", argv)
+        self.assertIn("target create chip.cpu cortex_m -dap chip.dap", argv)
+        scanner = argv[argv.index(discovery.CMSIS_DAP_FINGERPRINT_TCL)]
+        self.assertIn("chip.dap apcsw 0x01000000 0x01000000", scanner)
+        self.assertIn(discovery.NRF54L15_PART_ADDR, scanner)
+        self.assertIn(discovery.NRF54L15_VARIANT_ADDR, scanner)
+        self.assertIn("init", argv)
+        self.assertIn("shutdown", argv)
+        rendered = "\n".join(argv)
+        self.assertNotIn("reset", rendered)
+        self.assertNotIn("halt", rendered)
+        self.assertNotIn("program", rendered)
+        self.assertNotIn("load_", rendered)
+        self.assertNotIn("write_memory", rendered)
+        self.assertNotIn("recover", rendered)
+
     def test_fingerprint_jlink_uses_current_port_commands_and_valid_markers(self):
         runner = hil_fakes.ScriptedRunner()
         runner.script(
@@ -5281,6 +5456,271 @@ class TestDiscovery(unittest.TestCase):
                 "variant": "0x41414141",
             },
         )
+
+    def test_explicit_xiao_pair_resolves_exact_rows_and_correlated_ttys(self):
+        with tempfile.TemporaryDirectory() as td:
+            sysfs = hil_fakes.build_fake_sysfs(td)
+            binding = _load_xiao_binding(td)
+            command = hil_fakes.ScriptedRunner()
+            _script_xiao_pair(sysfs, command)
+            resolution = discovery.resolve_fixture(
+                binding,
+                run_cmd=command,
+                sysfs_root=sysfs,
+                explicit_probe_serials={
+                    "receiver": XIAO_RECEIVER_SERIAL,
+                    "source": XIAO_SOURCE_SERIAL,
+                },
+            )
+            self.assertEqual(
+                command.ledger[0]["argv"],
+                ["nix-nrf", "probes", XIAO_RECEIVER_SERIAL, XIAO_SOURCE_SERIAL],
+            )
+            self.assertEqual(resolution.roles["receiver"].probe.product, "CMSIS-DAP")
+            self.assertEqual(
+                dict(resolution.roles["source"].probe.ap_idrs)["ap3"], "0x00000000"
+            )
+            self.assertEqual(
+                resolution.roles["receiver"].probe.variant_raw, "0x41414330"
+            )
+            self.assertEqual(resolution.roles["source"].serial.path, "/dev/ttyACM1")
+            self.assertNotEqual(
+                resolution.roles["receiver"].serial.usb_parent,
+                resolution.roles["source"].serial.usb_parent,
+            )
+            self.assertIn("receiver-cmsis-dap-fingerprint", resolution.raw)
+            self.assertIn("source-cmsis-dap-fingerprint", resolution.raw)
+
+    def test_explicit_xiao_pair_failures_are_closed_before_target_actions(self):
+        with tempfile.TemporaryDirectory() as td:
+            sysfs = hil_fakes.build_fake_sysfs(td)
+            binding = _load_xiao_binding(td)
+            duplicate = hil_fakes.ScriptedRunner()
+            with self.assertRaises(HilDiscoveryError):
+                discovery.resolve_fixture(
+                    binding,
+                    run_cmd=duplicate,
+                    sysfs_root=sysfs,
+                    explicit_probe_serials={
+                        "receiver": XIAO_RECEIVER_SERIAL,
+                        "source": XIAO_RECEIVER_SERIAL,
+                    },
+                )
+            self.assertEqual(duplicate.ledger, [])
+
+        def fails(rows=None, cmsis_proc=None, tty_props=None):
+            with tempfile.TemporaryDirectory() as td:
+                sysfs = hil_fakes.build_fake_sysfs(td)
+                binding = _load_xiao_binding(td)
+                command = hil_fakes.ScriptedRunner()
+                _script_xiao_pair(
+                    sysfs,
+                    command,
+                    rows=rows,
+                    cmsis_proc=cmsis_proc,
+                    tty_props=tty_props,
+                )
+                with self.assertRaises(HilDiscoveryError):
+                    discovery.resolve_fixture(
+                        binding,
+                        run_cmd=command,
+                        sysfs_root=sysfs,
+                        explicit_probe_serials={
+                            "receiver": XIAO_RECEIVER_SERIAL,
+                            "source": XIAO_SOURCE_SERIAL,
+                        },
+                    )
+
+        bad_target = [
+            (
+                XIAO_RECEIVER_SERIAL,
+                "CMSIS-DAP",
+                "nRF54L15",
+                "0x6ba02477",
+                "0x00054b15",
+                "AAC0",
+                "",
+            ),
+            (
+                XIAO_SOURCE_SERIAL,
+                "CMSIS-DAP",
+                "nRF53",
+                "0x6ba02477",
+                "0x00054b15",
+                "AAC0",
+                "",
+            ),
+        ]
+        fails(rows=bad_target)
+        fails(rows=bad_target + [bad_target[0]])
+        fails(rows=bad_target[:1])
+        fails(
+            rows=[
+                bad_target[0],
+                (
+                    XIAO_SOURCE_SERIAL,
+                    "CMSIS-DAP",
+                    "nRF54L15",
+                    "0x6ba02478",
+                    "0x00054b15",
+                    "AAC0",
+                    "",
+                ),
+            ]
+        )
+        fails(
+            rows=[
+                bad_target[0],
+                (
+                    XIAO_SOURCE_SERIAL,
+                    "CMSIS-DAP",
+                    "nRF54L15",
+                    "0x6ba02477",
+                    "0x00054b16",
+                    "AAC0",
+                    "",
+                ),
+            ]
+        )
+        fails(
+            rows=[
+                bad_target[0],
+                (
+                    XIAO_SOURCE_SERIAL,
+                    "CMSIS-DAP",
+                    "nRF54L15",
+                    "0x6ba02477",
+                    "0x00054b15",
+                    "BAAA",
+                    "",
+                ),
+            ]
+        )
+        fails(
+            cmsis_proc=hil_fakes.FakeProc(
+                stdout=hil_fakes.cmsis_dap_fingerprint_output(
+                    dpidr="0x6ba02478", variant="0x41414330"
+                )
+            )
+        )
+        fails(
+            cmsis_proc=hil_fakes.FakeProc(
+                stdout=hil_fakes.cmsis_dap_fingerprint_output(
+                    variant="0x41414330", failure="Warning: injected"
+                )
+            )
+        )
+        fails(
+            cmsis_proc=hil_fakes.FakeProc(
+                stdout=hil_fakes.cmsis_dap_fingerprint_output(variant="0x41414330"),
+                returncode=7,
+            )
+        )
+        fails(
+            cmsis_proc=hil_fakes.FakeProc(
+                stdout=hil_fakes.cmsis_dap_fingerprint_output(
+                    variant="0x41414330", failure="Error: injected"
+                )
+            )
+        )
+        fails(
+            cmsis_proc=hil_fakes.FakeProc(
+                stdout="FWC|dpidr|0x6ba02477\nFWC|ap3|not-hex\n"
+            )
+        )
+        fails(
+            tty_props={
+                "ttyACM0": _xiao_tty_props(XIAO_RECEIVER_SERIAL, "1-2", "ttyACM0"),
+                "ttyACM1": _xiao_tty_props("OTHER", "1-3", "ttyACM1"),
+            }
+        )
+        fails(
+            tty_props={
+                "ttyACM0": _xiao_tty_props(XIAO_RECEIVER_SERIAL, "1-2", "ttyACM0"),
+                "ttyACM1": _xiao_tty_props(XIAO_SOURCE_SERIAL, "1-2", "ttyACM1"),
+            }
+        )
+
+    def test_receiver_configured_serial_uses_targeted_nix_nrf_lookup(self):
+        with tempfile.TemporaryDirectory() as td:
+            sysfs = hil_fakes.build_fake_sysfs(td)
+            fixture = model.load_logical_fixture(
+                os.path.join(_REPO, "tests", "hil", "fixture.json")
+            )
+            binding_doc = hil_fakes.binding_json()
+            binding_doc["roles"]["receiver"]["serial"]["udev"] = {
+                "ID_VENDOR_ID": "1234",
+                "ID_MODEL_ID": "5678",
+                "ID_SERIAL_SHORT": hil_fakes.RECEIVER_SERIAL,
+            }
+            binding_path = os.path.join(td, "targeted-binding.json")
+            with open(binding_path, "w", encoding="utf-8") as fh:
+                json.dump(binding_doc, fh)
+            binding = model.load_physical_binding(binding_path, fixture)
+            command = hil_fakes.ScriptedRunner()
+            _script_discovery(
+                sysfs,
+                command,
+                tty_props={
+                    "ttyACM0": {
+                        "ID_VENDOR_ID": "1234",
+                        "ID_MODEL_ID": "5678",
+                        "ID_SERIAL_SHORT": hil_fakes.RECEIVER_SERIAL,
+                        "DEVPATH": hil_fakes.tty_devpath("1-2", "ttyACM0"),
+                    },
+                    "ttyACM1": {
+                        "ID_SERIAL_SHORT": hil_fakes.SOURCE_SERIAL,
+                        "DEVPATH": hil_fakes.tty_devpath("1-3", "ttyACM1"),
+                    },
+                },
+            )
+            command.script(
+                ["nix-nrf", "probes", hil_fakes.RECEIVER_SERIAL],
+                hil_fakes.FakeProc(stdout=hil_fakes.default_probe_table()),
+            )
+            resolution = discovery.resolve_fixture(
+                binding, run_cmd=command, sysfs_root=sysfs
+            )
+            self.assertEqual(
+                resolution.roles["receiver"].probe.serial, hil_fakes.RECEIVER_SERIAL
+            )
+            self.assertIn(
+                ["nix-nrf", "probes", hil_fakes.RECEIVER_SERIAL],
+                [record["argv"] for record in command.ledger],
+            )
+
+    def test_receiver_find_rejects_unsafe_serial_before_cmsis_fingerprint(self):
+        with tempfile.TemporaryDirectory() as td:
+            sysfs = hil_fakes.build_fake_sysfs(td)
+            binding = _load_binding(td)
+            unsafe_serial = "unsafe;reset"
+            command = hil_fakes.ScriptedRunner()
+            _script_discovery(
+                sysfs,
+                command,
+                receiver_rows=[
+                    (
+                        unsafe_serial,
+                        "DAPLink",
+                        "nRF54L15",
+                        "0x6ba02477",
+                        "0x00054b15",
+                        "BAAA",
+                        "",
+                    )
+                ],
+                find_token=unsafe_serial,
+            )
+            with self.assertRaises(HilDiscoveryError) as ctx:
+                discovery.resolve_fixture(binding, run_cmd=command, sysfs_root=sysfs)
+            self.assertIn("unsafe", str(ctx.exception))
+            self.assertIn(
+                ["nix-nrf", "probes", "--find", "nrf54l"],
+                [record["argv"] for record in command.ledger],
+            )
+            self.assertFalse(
+                any(record["argv"][0] == "openocd" for record in command.ledger)
+            )
 
     def test_unique_receiver_and_source_resolve(self):
         with tempfile.TemporaryDirectory() as td:
@@ -5322,7 +5762,7 @@ class TestDiscovery(unittest.TestCase):
                 resolution.roles["source"].probe.serial, hil_fakes.SOURCE_SERIAL
             )
             argv0 = [record["argv"][0] for record in engine.commands]
-            self.assertIn("nrf-probes", argv0)
+            self.assertIn("nix-nrf", argv0)
             self.assertIn("udevadm", argv0)
             self.assertIn("openocd", argv0)
             for record in engine.commands:
@@ -5335,11 +5775,13 @@ class TestDiscovery(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             observed = {}
             command_runner = hil_fakes.ScriptedRunner()
-            command_runner.script(["nrf-probes"], hil_fakes.FakeProc(stdout="probe\n"))
+            command_runner.script(
+                ["nix-nrf", "probes"], hil_fakes.FakeProc(stdout="probe\n")
+            )
 
             def injected(_binding, sysfs_root=None, run_cmd=None):
                 del sysfs_root
-                observed["proc"] = run_cmd(["nrf-probes"], 1)
+                observed["proc"] = run_cmd(["nix-nrf", "probes"], 1)
                 return fake_resolution()
 
             binding = _load_binding(td)
@@ -5348,7 +5790,7 @@ class TestDiscovery(unittest.TestCase):
             engine._run_dir = td
             deps.resolve(binding, run_cmd=engine._discovery_command)
             self.assertEqual(observed["proc"].stdout, "probe\n")
-            self.assertEqual(engine.commands[0]["argv"], ["nrf-probes"])
+            self.assertEqual(engine.commands[0]["argv"], ["nix-nrf", "probes"])
 
     def test_default_environment_probes_are_ledgered(self):
         with tempfile.TemporaryDirectory() as td:
@@ -5372,7 +5814,7 @@ class TestDiscovery(unittest.TestCase):
                     ["pytest", "--version"],
                     ["python3", "-c", "import serial; print(serial.VERSION)"],
                     ["openocd", "--version"],
-                    ["nrf-probes", "--help"],
+                    ["nix-nrf", "probes", "--help"],
                     ["west", "--version"],
                 ):
                     return hil_fakes.FakeProc(stdout="tool 1\n")
@@ -5540,7 +5982,7 @@ class TestDiscovery(unittest.TestCase):
             runner = hil_fakes.ScriptedRunner()
             _script_discovery(sysfs, runner)
             runner.rules[0] = (
-                ["nrf-probes"],
+                ["nix-nrf", "probes"],
                 hil_fakes.FakeProc(stdout="SERIAL  TARGET\nABC  nRF54L15\n"),
                 True,
             )
@@ -5658,11 +6100,11 @@ class TestDiscovery(unittest.TestCase):
             # matches it and source correlation matches it too, so both
             # roles resolve to the same tty and discovery must reject.
             runner.script(
-                ["nrf-probes"],
+                ["nix-nrf", "probes"],
                 hil_fakes.FakeProc(stdout=hil_fakes.default_probe_table()),
             )
             runner.script(
-                ["nrf-probes", "--find", "nrf54l"],
+                ["nix-nrf", "probes", "--find", "nrf54l"],
                 hil_fakes.FakeProc(stdout="%s\n" % hil_fakes.RECEIVER_SERIAL),
             )
             runner.script(
@@ -5702,6 +6144,11 @@ class TestDiscovery(unittest.TestCase):
             runner.script(
                 ["openocd", "-f", "interface/jlink.cfg"],
                 hil_fakes.FakeProc(stdout=hil_fakes.fingerprint_output()),
+                exact=False,
+            )
+            runner.script(
+                ["openocd", "-f", "interface/cmsis-dap.cfg"],
+                hil_fakes.FakeProc(stdout=hil_fakes.cmsis_dap_fingerprint_output()),
                 exact=False,
             )
             both = {
@@ -8612,7 +9059,7 @@ class TestRunnerFailures(unittest.TestCase):
                 exc.raw = MappingProxyType(
                     {
                         "nrf-probes": {
-                            "argv": ["nrf-probes"],
+                            "argv": ["nix-nrf", "probes"],
                             "stdout": "probe table\n",
                             "stderr": "",
                             "status": 0,

@@ -66,12 +66,8 @@ CAPTURE_BACKEND = "alsa"
 CAPTURE_SAMPLE_RATE = 48000
 CAPTURE_SAMPLE_FORMAT = "S16_LE"
 CAPTURE_DEVICE_RE = re.compile(r"^hw:[A-Za-z0-9_.-]+,[0-9]+$")
-#: Physical probe backend per role.  The receiver uses nrf-probes
-#: (CMSIS-DAP); the source nRF5340DK uses its onboard Segger J-Link, which
-#: nrf-probes never enumerates.  Corrected in RH2 from the RH0 assumption
-#: that both were nrf-probes.
-PROBE_BACKENDS = {"receiver": "nrf-probes", "source": "jlink"}
-PROBE_FAMILIES = {"receiver": "nrf54l", "source": "nrf53"}
+NRF54L15_CPUAPP_BOARD = "nrf54l15dk/nrf54l15/cpuapp"
+NRF5340_CPUAPP_BOARD = "nrf5340dk/nrf5340/cpuapp"
 UDEV_REQUIRED = frozenset({"ID_VENDOR_ID", "ID_MODEL_ID"})
 UDEV_OR = ("ID_SERIAL_SHORT", "ID_PATH")
 UDEV_FORBIDDEN = frozenset({"DEVNAME"})
@@ -108,6 +104,31 @@ class LogicalRole:
 
 
 @dataclass(frozen=True)
+class ProbeContract:
+    """Exact physical probe contract for one logical board/role pair."""
+
+    backend: str
+    family: str
+    probe_udev_required: bool
+
+
+#: Physical probe behavior follows the exact logical board target, not a
+#: role-only default. ``nrf-probes`` remains the physical JSON backend name
+#: for CMSIS-DAP fingerprinting; discovery invokes ``nix-nrf probes``.
+PROBE_CONTRACTS = {
+    ("receiver", NRF54L15_CPUAPP_BOARD): ProbeContract(
+        backend="nrf-probes", family="nrf54l", probe_udev_required=False
+    ),
+    ("source", NRF5340_CPUAPP_BOARD): ProbeContract(
+        backend="jlink", family="nrf53", probe_udev_required=True
+    ),
+    ("source", NRF54L15_CPUAPP_BOARD): ProbeContract(
+        backend="nrf-probes", family="nrf54l", probe_udev_required=False
+    ),
+}
+
+
+@dataclass(frozen=True)
 class LogicalFixture:
     """Checked-in logical fixture description."""
 
@@ -137,10 +158,10 @@ class UdevIdentity:
 class ProbeBinding:
     """Probe resolution contract (never a static serial mapping).
 
-    ``udev`` is None when the probe needs no USB identity filtering
-    (receiver CMSIS-DAP is resolved through nrf-probes alone); a jlink
-    source probe always carries one so the onboard J-Link can be located
-    and its current serial read from the matching USB device.
+    ``udev`` is None when the exact board/role contract needs no USB identity
+    filtering (CMSIS-DAP target fingerprinting); a J-Link source probe always
+    carries one so the onboard J-Link can be located and its current serial
+    read from the matching USB device.
     """
 
     backend: str
@@ -538,7 +559,20 @@ def _parse_capture_binding_role(spec, path, fixture_id, capability):
     )
 
 
-def _parse_binding_role(name, spec, path):
+def _probe_contract(name, logical_role, path):
+    """Return exact probe contract for one parsed logical Zephyr role."""
+    if not isinstance(logical_role, LogicalRole) or logical_role.kind != ZEPHYR_KIND:
+        raise HilSchemaError("logical role %r is not a Zephyr DUT in %s" % (name, path))
+    contract = PROBE_CONTRACTS.get((name, logical_role.board))
+    if contract is None:
+        raise HilSchemaError(
+            "unsupported logical board %r for role %r in %s"
+            % (logical_role.board, name, path)
+        )
+    return contract
+
+
+def _parse_binding_role(name, spec, path, logical_role):
     if not isinstance(spec, dict):
         raise HilSchemaError("binding role %r must be an object in %s" % (name, path))
     _reject_unknown(spec, BINDING_ROLE_KEYS, path)
@@ -552,7 +586,8 @@ def _parse_binding_role(name, spec, path):
         raise HilSchemaError("probe serial field is not allowed in %s" % path)
     _reject_unknown(probe, PROBE_KEYS, path)
     backend = probe.get("backend")
-    expected_backend = PROBE_BACKENDS.get(name)
+    contract = _probe_contract(name, logical_role, path)
+    expected_backend = contract.backend
     if (
         expected_backend is None
         or not isinstance(backend, str)
@@ -560,7 +595,7 @@ def _parse_binding_role(name, spec, path):
     ):
         raise HilSchemaError("probe backend mismatch for role %r in %s" % (name, path))
     family = probe.get("family")
-    expected_family = PROBE_FAMILIES.get(name)
+    expected_family = contract.family
     if (
         expected_family is None
         or not isinstance(family, str)
@@ -573,8 +608,8 @@ def _parse_binding_role(name, spec, path):
         if not isinstance(raw_udev, dict) or not raw_udev:
             raise HilSchemaError("probe udev must be a nonempty object in %s" % path)
         probe_udev = _parse_udev_map(raw_udev, path, reject_tty_paths=False)
-    elif expected_backend == "jlink":
-        # A jlink source probe is located by its exact USB identity map;
+    elif contract.probe_udev_required:
+        # A J-Link source probe is located by its exact USB identity map;
         # without it the onboard J-Link cannot be resolved safely.
         raise HilSchemaError("probe udev is required for source in %s" % path)
     _reject_unknown(serial, SERIAL_KEYS, path)
@@ -628,7 +663,9 @@ def load_physical_binding(path, logical_fixture):
                 roles[name], path, fixture_id, logical_fixture.capture_capability
             )
         else:
-            parsed[name] = _parse_binding_role(name, roles[name], path)
+            parsed[name] = _parse_binding_role(
+                name, roles[name], path, logical_fixture.roles[name]
+            )
     return PhysicalBinding(
         schema_version=SCHEMA_VERSION,
         fixture_id=fixture_id,

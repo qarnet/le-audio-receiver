@@ -14,23 +14,35 @@ import contextlib
 import io
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+HIL_TEST_DIR = os.path.join(REPO_ROOT, "tests", "hil")
 sys.path.insert(0, SCRIPT_DIR)
+sys.path.insert(0, HIL_TEST_DIR)
 
 import hil.evidence  # noqa: E402
-from hil import cli, lifecycle, model, protocol  # noqa: E402
+import hil_fakes  # noqa: E402
+from hil import cli, discovery, lifecycle, model, protocol, session  # noqa: E402
 from hil.evidence import EvidenceError, finalize_evidence  # noqa: E402
 
 FIXTURE_JSON = os.path.join(REPO_ROOT, "tests", "hil", "fixture.json")
 BINDING_EXAMPLE = os.path.join(REPO_ROOT, "tests", "hil", "fixture.local.example.json")
+XIAO_FIXTURE_JSON = os.path.join(REPO_ROOT, "tests", "hil", "fixture-xiao-source.json")
+XIAO_BINDING_EXAMPLE = os.path.join(
+    REPO_ROOT, "tests", "hil", "fixture-xiao-source.local.example.json"
+)
 FIXTURE_ID = "local-nrf54l15-receiver"
+XIAO_FIXTURE_ID = "local-xiao-nrf54l15-pair"
+XIAO_RECEIVER_PROBE = "XIAO-RECEIVER"
+XIAO_SOURCE_PROBE = "XIAO-SOURCE"
 
 
 def _write_json(path, obj):
@@ -111,6 +123,133 @@ def _binding_dict(fixture_id=FIXTURE_ID, roles=None, **root_overrides):
     return doc
 
 
+def _xiao_fixture_dict():
+    return {
+        "schema_version": 1,
+        "fixture_id": XIAO_FIXTURE_ID,
+        "capture_capability": "none",
+        "roles": {
+            "receiver": {
+                "kind": "zephyr_dut",
+                "board": "nrf54l15dk/nrf54l15/cpuapp",
+                "images": ["cpuapp", "flpr"],
+            },
+            "source": {
+                "kind": "zephyr_dut",
+                "board": "nrf54l15dk/nrf54l15/cpuapp",
+                "images": ["cpuapp"],
+            },
+        },
+    }
+
+
+def _xiao_binding_dict():
+    serial = {"baud": 115200, "dtr": True, "rts": False, "udev": {}}
+    return {
+        "schema_version": 1,
+        "fixture_id": XIAO_FIXTURE_ID,
+        "roles": {
+            "receiver": {
+                "probe": {"backend": "nrf-probes", "family": "nrf54l"},
+                "serial": dict(serial),
+            },
+            "source": {
+                "probe": {"backend": "nrf-probes", "family": "nrf54l"},
+                "serial": dict(serial),
+            },
+        },
+    }
+
+
+def _write_xiao_fixture_binding(directory):
+    fixture_path = os.path.join(directory, "fixture-xiao.json")
+    binding_path = os.path.join(directory, "fixture-xiao.local.json")
+    _write_json(fixture_path, _xiao_fixture_dict())
+    _write_json(binding_path, _xiao_binding_dict())
+    return fixture_path, binding_path
+
+
+def _xiao_udev(serial, usb, tty):
+    return {
+        "ID_BUS": "usb",
+        "ID_VENDOR_ID": "2886",
+        "ID_MODEL_ID": "0066",
+        "ID_SERIAL_SHORT": serial,
+        "ID_USB_INTERFACE_NUM": "02",
+        "ID_USB_DRIVER": "cdc_acm",
+        "ID_PATH": "pci-0000:00-usb-0:%s:1.2" % usb,
+        "DEVPATH": hil_fakes.tty_devpath(usb, tty),
+    }
+
+
+def _xiao_session_runner(
+    sysfs,
+    *,
+    receiver_tty="ttyACM0",
+    source_tty="ttyACM1",
+    receiver_props=None,
+    source_props=None,
+    rows=None,
+    fingerprint=None,
+):
+    runner = hil_fakes.ScriptedRunner()
+    if rows is None:
+        rows = [
+            (
+                XIAO_RECEIVER_PROBE,
+                "CMSIS-DAP",
+                "nRF54L15",
+                "0x6ba02477",
+                "0x00054b15",
+                "AAC0",
+                "",
+            ),
+            (
+                XIAO_SOURCE_PROBE,
+                "CMSIS-DAP",
+                "nRF54L15",
+                "0x6ba02477",
+                "0x00054b15",
+                "AAC0",
+                "",
+            ),
+        ]
+    runner.script(
+        ["nix-nrf", "probes", XIAO_RECEIVER_PROBE, XIAO_SOURCE_PROBE],
+        hil_fakes.FakeProc(stdout=hil_fakes.default_probe_table(rows)),
+    )
+    runner.script(
+        ["openocd", "-f", "interface/cmsis-dap.cfg"],
+        hil_fakes.FakeProc(
+            stdout=(
+                fingerprint
+                if fingerprint is not None
+                else hil_fakes.cmsis_dap_fingerprint_output(variant="0x41414330")
+            )
+        ),
+        exact=False,
+    )
+    tty_root = os.path.join(sysfs, "class", "tty")
+    receiver_props = receiver_props or _xiao_udev(
+        XIAO_RECEIVER_PROBE, "1-2", receiver_tty
+    )
+    source_props = source_props or _xiao_udev(XIAO_SOURCE_PROBE, "1-3", source_tty)
+    for tty, props in ((receiver_tty, receiver_props), (source_tty, source_props)):
+        runner.script(
+            [
+                "udevadm",
+                "info",
+                "--query=property",
+                "--path",
+                os.path.join(tty_root, tty),
+            ],
+            hil_fakes.FakeProc(
+                stdout="".join("%s=%s\n" % item for item in sorted(props.items()))
+            ),
+        )
+    return runner
+
+
 def _run_cli(argv):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -189,6 +328,20 @@ class TestLogicalFixture(unittest.TestCase):
             ),
         )
         self.assertEqual(fixture.roles["source"].images, ("cpuapp", "cpunet"))
+
+    def test_checked_in_xiao_source_fixture_parses(self):
+        fixture = model.load_logical_fixture(XIAO_FIXTURE_JSON)
+        self.assertEqual(fixture.fixture_id, XIAO_FIXTURE_ID)
+        self.assertEqual(fixture.capture_capability, model.CaptureCapability.NONE)
+        self.assertEqual(
+            fixture.roles["source"],
+            model.LogicalRole(
+                kind="zephyr_dut",
+                board="nrf54l15dk/nrf54l15/cpuapp",
+                images=("cpuapp",),
+                channels=None,
+            ),
+        )
 
     def test_unknown_key_fails_closed(self):
         with tempfile.TemporaryDirectory() as td:
@@ -379,6 +532,30 @@ class TestPhysicalBinding(unittest.TestCase):
         self.assertEqual(set(binding.roles), {"receiver", "source"})
         self.assertEqual(binding.roles["receiver"].probe.family, "nrf54l")
         self.assertEqual(binding.roles["source"].probe.family, "nrf53")
+
+    def test_checked_in_xiao_source_example_cross_validates(self):
+        fixture = model.load_logical_fixture(XIAO_FIXTURE_JSON)
+        binding = model.load_physical_binding(XIAO_BINDING_EXAMPLE, fixture)
+        self.assertEqual(binding.fixture_id, XIAO_FIXTURE_ID)
+        for role in ("receiver", "source"):
+            self.assertEqual(binding.roles[role].probe.backend, "nrf-probes")
+            self.assertEqual(binding.roles[role].probe.family, "nrf54l")
+            self.assertEqual(binding.roles[role].serial.baud, 115200)
+            self.assertTrue(binding.roles[role].serial.dtr)
+            self.assertFalse(binding.roles[role].serial.rts)
+
+    def test_board_aware_probe_contract_rejects_unsupported_pair(self):
+        with tempfile.TemporaryDirectory() as td:
+            fixture_path = os.path.join(td, "fixture.json")
+            binding_path = os.path.join(td, "binding.json")
+            doc = _xiao_fixture_dict()
+            doc["roles"]["source"]["board"] = "nrf52840dk/nrf52840"
+            _write_json(fixture_path, doc)
+            _write_json(binding_path, _xiao_binding_dict())
+            fixture = model.load_logical_fixture(fixture_path)
+            with self.assertRaises(model.HilSchemaError) as ctx:
+                model.load_physical_binding(binding_path, fixture)
+            self.assertIn("unsupported logical board", str(ctx.exception))
 
     def test_valid_temporary_binding_cross_validates(self):
         fixture = model.load_logical_fixture(FIXTURE_JSON)
@@ -1678,6 +1855,595 @@ class TestEvidence(unittest.TestCase):
                 )
 
 
+class TestSessionManifest(unittest.TestCase):
+    @staticmethod
+    def _replace_manifest(path, raw):
+        replacement = path + ".replacement"
+        with open(replacement, "wb") as fh:
+            fh.write(raw)
+        os.chmod(replacement, 0o400)
+        os.replace(replacement, path)
+
+    def _create(self, td, session_id="pb033-proof"):
+        cfg = os.path.join(td, "cfg")
+        root = os.path.join(td, "sessions")
+        os.makedirs(cfg)
+        os.makedirs(root)
+        fixture_path, binding_path = _write_xiao_fixture_binding(cfg)
+        sysfs = hil_fakes.build_fake_sysfs(td)
+        command = _xiao_session_runner(sysfs)
+        manifest = session.create_session(
+            fixture_path,
+            binding_path,
+            session_id,
+            XIAO_RECEIVER_PROBE,
+            XIAO_SOURCE_PROBE,
+            run_cmd=command,
+            session_root=root,
+            sysfs_root=sysfs,
+            utc_now="2026-09-22T03:00:00+00:00",
+        )
+        fixture = model.load_logical_fixture(fixture_path)
+        binding = model.load_physical_binding(binding_path, fixture)
+        return manifest, fixture_path, binding_path, binding, root, sysfs, command
+
+    def test_create_loads_complete_readonly_manifest_and_revalidates_renumbered_ttys(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as td:
+            (
+                manifest,
+                fixture_path,
+                binding_path,
+                binding,
+                root,
+                sysfs,
+                command,
+            ) = self._create(td)
+            path = os.path.join(root, "pb033-proof", "devices.json")
+            self.assertEqual(manifest.path, path)
+            self.assertEqual(
+                stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode), 0o700
+            )
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o400)
+            self.assertEqual(manifest.fixture_id, XIAO_FIXTURE_ID)
+            self.assertEqual(manifest.session_id, "pb033-proof")
+            with open(path, "rb") as fh:
+                raw = fh.read()
+            self.assertTrue(raw.endswith(b"\n"))
+            payload = json.loads(raw)
+            self.assertEqual(payload["fixture"]["fixture_id"], XIAO_FIXTURE_ID)
+            self.assertEqual(payload["fixture"]["sha256"], manifest.fixture_sha256)
+            self.assertEqual(payload["binding"]["sha256"], manifest.binding_sha256)
+            self.assertEqual(
+                payload["roles"]["receiver"]["probe"]["ap_idrs"],
+                {
+                    "ap0": "0x84770001",
+                    "ap1": "0x84770001",
+                    "ap2": "0x32880000",
+                    "ap3": "0x00000000",
+                },
+            )
+            self.assertEqual(
+                payload["roles"]["source"]["expected_firmware"],
+                {
+                    "role": "source",
+                    "firmware_id": "le-audio-hil-source-rh1",
+                    "protocol_version": 1,
+                },
+            )
+            self.assertEqual(
+                payload["roles"]["receiver"]["serial"]["stable_udev"][
+                    "ID_SERIAL_SHORT"
+                ],
+                XIAO_RECEIVER_PROBE,
+            )
+            probe_calls = [
+                record["argv"]
+                for record in command.ledger
+                if record["argv"][:2] == ["nix-nrf", "probes"]
+            ]
+            self.assertEqual(
+                probe_calls,
+                [["nix-nrf", "probes", XIAO_RECEIVER_PROBE, XIAO_SOURCE_PROBE]],
+            )
+            fingerprint_calls = [
+                record["argv"]
+                for record in command.ledger
+                if record["argv"][:2] == ["openocd", "-f"]
+            ]
+            self.assertEqual(len(fingerprint_calls), 2)
+            for argv in fingerprint_calls:
+                self.assertIn("interface/cmsis-dap.cfg", argv)
+                self.assertIn("gdb port disabled", argv)
+                self.assertIn("tcl port disabled", argv)
+                self.assertIn("telnet port disabled", argv)
+                self.assertFalse(
+                    any(
+                        forbidden in " ".join(argv)
+                        for forbidden in (
+                            " reset",
+                            " halt",
+                            "program ",
+                            "load_",
+                            "recover",
+                        )
+                    )
+                )
+
+            tty_root = os.path.join(sysfs, "class", "tty")
+            os.rename(
+                os.path.join(tty_root, "ttyACM0"), os.path.join(tty_root, "ttyACM7")
+            )
+            os.rename(
+                os.path.join(tty_root, "ttyACM1"), os.path.join(tty_root, "ttyACM8")
+            )
+            refreshed = _xiao_session_runner(
+                sysfs, receiver_tty="ttyACM7", source_tty="ttyACM8"
+            )
+            resolution = session.revalidate_session(
+                manifest,
+                fixture_path,
+                binding_path,
+                binding,
+                run_cmd=refreshed,
+                sysfs_root=sysfs,
+            )
+            self.assertEqual(resolution.roles["receiver"].serial.path, "/dev/ttyACM7")
+            self.assertEqual(resolution.roles["source"].serial.path, "/dev/ttyACM8")
+
+    def test_duplicate_probe_serial_fails_before_external_discovery(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = os.path.join(td, "cfg")
+            root = os.path.join(td, "sessions")
+            os.makedirs(cfg)
+            os.makedirs(root)
+            fixture_path, binding_path = _write_xiao_fixture_binding(cfg)
+            command = hil_fakes.ScriptedRunner()
+            with self.assertRaises(session.HilSessionError):
+                session.create_session(
+                    fixture_path,
+                    binding_path,
+                    "pb033-proof",
+                    XIAO_RECEIVER_PROBE,
+                    XIAO_RECEIVER_PROBE,
+                    run_cmd=command,
+                    session_root=root,
+                    sysfs_root=os.path.join(td, "missing-sys"),
+                )
+            self.assertEqual(command.ledger, [])
+
+    def test_invalid_generated_manifest_does_not_consume_session_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = os.path.join(td, "cfg")
+            root = os.path.join(td, "sessions")
+            os.makedirs(cfg)
+            os.makedirs(root)
+            fixture_path, binding_path = _write_xiao_fixture_binding(cfg)
+            invalid_binding = _xiao_binding_dict()
+            invalid_binding["roles"]["source"]["serial"]["dtr"] = False
+            _write_json(binding_path, invalid_binding)
+            sysfs = hil_fakes.build_fake_sysfs(td)
+            with self.assertRaises(session.HilSessionError) as ctx:
+                session.create_session(
+                    fixture_path,
+                    binding_path,
+                    "pb033-invalid",
+                    XIAO_RECEIVER_PROBE,
+                    XIAO_SOURCE_PROBE,
+                    run_cmd=_xiao_session_runner(sysfs),
+                    session_root=root,
+                    sysfs_root=sysfs,
+                )
+            self.assertIn("DTR/RTS", str(ctx.exception))
+            self.assertFalse(os.path.lexists(os.path.join(root, "pb033-invalid")))
+            self.assertEqual(os.listdir(root), [])
+
+    def test_existing_session_and_symlink_root_fail_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as td:
+            (
+                manifest,
+                fixture_path,
+                binding_path,
+                _binding,
+                root,
+                sysfs,
+                _command,
+            ) = self._create(td)
+            with open(manifest.path, "rb") as fh:
+                before = fh.read()
+            again = _xiao_session_runner(sysfs)
+            with self.assertRaises(session.HilSessionError) as ctx:
+                session.create_session(
+                    fixture_path,
+                    binding_path,
+                    manifest.session_id,
+                    XIAO_RECEIVER_PROBE,
+                    XIAO_SOURCE_PROBE,
+                    run_cmd=again,
+                    session_root=root,
+                    sysfs_root=sysfs,
+                )
+            self.assertIn("already exists", str(ctx.exception))
+            with open(manifest.path, "rb") as fh:
+                self.assertEqual(fh.read(), before)
+
+            target = os.path.join(td, "symlink-target")
+            linked_root = os.path.join(td, "linked-root")
+            os.makedirs(target)
+            os.symlink(target, linked_root)
+            symlink_runner = _xiao_session_runner(sysfs)
+            with self.assertRaises(session.HilSessionError):
+                session.create_session(
+                    fixture_path,
+                    binding_path,
+                    "pb033-linked",
+                    XIAO_RECEIVER_PROBE,
+                    XIAO_SOURCE_PROBE,
+                    run_cmd=symlink_runner,
+                    session_root=linked_root,
+                    sysfs_root=sysfs,
+                )
+            self.assertEqual(os.listdir(target), [])
+
+            linked_session = os.path.join(td, "linked-session")
+            os.makedirs(linked_session)
+            linked_manifest = os.path.join(linked_session, "devices.json")
+            os.symlink(manifest.path, linked_manifest)
+            with self.assertRaises(session.HilSessionError):
+                session.load_session(linked_manifest, fixture_path, binding_path)
+            with open(manifest.path, "rb") as fh:
+                self.assertEqual(fh.read(), before)
+
+    def test_manifest_and_input_drift_fail_before_discovery(self):
+        with tempfile.TemporaryDirectory() as td:
+            (
+                manifest,
+                fixture_path,
+                binding_path,
+                binding,
+                _root,
+                sysfs,
+                _command,
+            ) = self._create(td)
+            os.chmod(manifest.path, 0o600)
+            with open(manifest.path, "ab") as fh:
+                fh.write(b" ")
+            os.chmod(manifest.path, 0o400)
+            no_commands = hil_fakes.ScriptedRunner()
+            with self.assertRaises(session.HilSessionError):
+                session.revalidate_session(
+                    manifest,
+                    fixture_path,
+                    binding_path,
+                    binding,
+                    run_cmd=no_commands,
+                    sysfs_root=sysfs,
+                )
+            self.assertEqual(no_commands.ledger, [])
+
+        with tempfile.TemporaryDirectory() as td:
+            (
+                manifest,
+                fixture_path,
+                binding_path,
+                _binding,
+                _root,
+                sysfs,
+                _command,
+            ) = self._create(td)
+            changed = _xiao_binding_dict()
+            changed["roles"]["source"]["serial"]["dtr"] = False
+            _write_json(binding_path, changed)
+            fixture = model.load_logical_fixture(fixture_path)
+            changed_binding = model.load_physical_binding(binding_path, fixture)
+            no_commands = hil_fakes.ScriptedRunner()
+            with self.assertRaises(session.HilSessionError):
+                session.revalidate_session(
+                    manifest,
+                    fixture_path,
+                    binding_path,
+                    changed_binding,
+                    run_cmd=no_commands,
+                    sysfs_root=sysfs,
+                )
+            self.assertEqual(no_commands.ledger, [])
+
+        with tempfile.TemporaryDirectory() as td:
+            (
+                manifest,
+                fixture_path,
+                binding_path,
+                binding,
+                _root,
+                sysfs,
+                _command,
+            ) = self._create(td)
+            self._replace_manifest(manifest.path, manifest.raw_bytes)
+            no_commands = hil_fakes.ScriptedRunner()
+            with self.assertRaises(session.HilSessionError):
+                session.revalidate_session(
+                    manifest,
+                    fixture_path,
+                    binding_path,
+                    binding,
+                    run_cmd=no_commands,
+                    sysfs_root=sysfs,
+                )
+            self.assertEqual(no_commands.ledger, [])
+
+        with tempfile.TemporaryDirectory() as td:
+            (
+                manifest,
+                fixture_path,
+                binding_path,
+                binding,
+                _root,
+                sysfs,
+                _command,
+            ) = self._create(td)
+            os.unlink(manifest.path)
+            no_commands = hil_fakes.ScriptedRunner()
+            with self.assertRaises(session.HilSessionError):
+                session.revalidate_session(
+                    manifest,
+                    fixture_path,
+                    binding_path,
+                    binding,
+                    run_cmd=no_commands,
+                    sysfs_root=sysfs,
+                )
+            self.assertEqual(no_commands.ledger, [])
+
+        with tempfile.TemporaryDirectory() as td:
+            (
+                manifest,
+                fixture_path,
+                binding_path,
+                binding,
+                _root,
+                sysfs,
+                _command,
+            ) = self._create(td)
+            with open(fixture_path, "ab") as fh:
+                fh.write(b"\n")
+            no_commands = hil_fakes.ScriptedRunner()
+            with self.assertRaises(session.HilSessionError):
+                session.revalidate_session(
+                    manifest,
+                    fixture_path,
+                    binding_path,
+                    binding,
+                    run_cmd=no_commands,
+                    sysfs_root=sysfs,
+                )
+            self.assertEqual(no_commands.ledger, [])
+
+    def test_strict_loader_and_hardware_udev_drift_fail_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            (
+                manifest,
+                fixture_path,
+                binding_path,
+                binding,
+                _root,
+                sysfs,
+                _command,
+            ) = self._create(td)
+            replacement = os.path.join(td, "replacement.json")
+            with open(replacement, "wb") as fh:
+                fh.write(b'{"schema_version":1,"schema_version":1}\n')
+            os.chmod(replacement, 0o400)
+            os.replace(replacement, manifest.path)
+            with self.assertRaises(session.HilSessionError) as ctx:
+                session.load_session(manifest.path, fixture_path, binding_path)
+            self.assertIn("duplicate key", str(ctx.exception))
+
+        with tempfile.TemporaryDirectory() as td:
+            (
+                manifest,
+                fixture_path,
+                binding_path,
+                binding,
+                _root,
+                sysfs,
+                _command,
+            ) = self._create(td)
+            ap_drift = _xiao_session_runner(
+                sysfs,
+                fingerprint=hil_fakes.cmsis_dap_fingerprint_output(
+                    ap0="0x84770002", variant="0x41414330"
+                ),
+            )
+            with self.assertRaises(session.HilSessionError) as ctx:
+                session.revalidate_session(
+                    manifest,
+                    fixture_path,
+                    binding_path,
+                    binding,
+                    run_cmd=ap_drift,
+                    sysfs_root=sysfs,
+                )
+            self.assertIn("AP IDR drift", str(ctx.exception))
+
+            source_props = _xiao_udev(XIAO_SOURCE_PROBE, "1-3", "ttyACM1")
+            source_props["ID_PATH"] = "pci-0000:00-usb-0:changed"
+            udev_drift = _xiao_session_runner(sysfs, source_props=source_props)
+            with self.assertRaises(session.HilSessionError) as ctx:
+                session.revalidate_session(
+                    manifest,
+                    fixture_path,
+                    binding_path,
+                    binding,
+                    run_cmd=udev_drift,
+                    sysfs_root=sysfs,
+                )
+            self.assertIn("stable udev drift", str(ctx.exception))
+
+    def test_strict_loader_rejects_invalid_schema_and_unsafe_paths(self):
+        cases = (
+            ("invalid UTF-8", b"\xff\xfe"),
+            ("invalid JSON", b"{not-json}\n"),
+            ("invalid JSON constant", b'{"schema_version":NaN}\n'),
+            ("duplicate key", b'{"schema_version":1,"schema_version":1}\n'),
+        )
+        for label, raw in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as td:
+                (
+                    manifest,
+                    fixture_path,
+                    binding_path,
+                    _binding,
+                    _root,
+                    _sysfs,
+                    _command,
+                ) = self._create(td)
+                self._replace_manifest(manifest.path, raw)
+                with self.assertRaises(session.HilSessionError):
+                    session.load_session(manifest.path, fixture_path, binding_path)
+
+        def payload_case(label, mutate):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as td:
+                (
+                    manifest,
+                    fixture_path,
+                    binding_path,
+                    _binding,
+                    _root,
+                    _sysfs,
+                    _command,
+                ) = self._create(td)
+                payload = json.loads(manifest.raw_bytes)
+                mutate(payload)
+                self._replace_manifest(
+                    manifest.path,
+                    json.dumps(payload, sort_keys=True).encode("utf-8") + b"\n",
+                )
+                with self.assertRaises(session.HilSessionError):
+                    session.load_session(manifest.path, fixture_path, binding_path)
+
+        payload_case("unknown key", lambda payload: payload.update({"unknown": 1}))
+        payload_case(
+            "wrong protocol type",
+            lambda payload: payload["roles"]["source"]["expected_firmware"].update(
+                {"protocol_version": True}
+            ),
+        )
+        payload_case(
+            "unsafe tty path",
+            lambda payload: payload["roles"]["receiver"]["serial"].update(
+                {"path_observed": "/dev/ttyACM0/../ttyACM1"}
+            ),
+        )
+        payload_case(
+            "role-set mismatch",
+            lambda payload: payload["roles"].pop("source"),
+        )
+
+        def duplicate_probe_serial(payload):
+            receiver_serial = payload["roles"]["receiver"]["probe"]["serial"]
+            payload["roles"]["source"]["probe"]["serial"] = receiver_serial
+            payload["roles"]["source"]["serial"]["stable_udev"]["ID_SERIAL_SHORT"] = (
+                receiver_serial
+            )
+
+        payload_case("duplicate role serial", duplicate_probe_serial)
+
+    def test_revalidation_rejects_probe_ficr_and_usb_parent_drift(self):
+        with tempfile.TemporaryDirectory() as td:
+            (
+                manifest,
+                fixture_path,
+                binding_path,
+                binding,
+                _root,
+                sysfs,
+                _command,
+            ) = self._create(td)
+            rows = [
+                (
+                    XIAO_RECEIVER_PROBE,
+                    "replacement CMSIS-DAP",
+                    "nRF54L15",
+                    "0x6ba02477",
+                    "0x00054b15",
+                    "AAC0",
+                    "",
+                ),
+                (
+                    XIAO_SOURCE_PROBE,
+                    "CMSIS-DAP",
+                    "nRF54L15",
+                    "0x6ba02477",
+                    "0x00054b15",
+                    "AAC0",
+                    "",
+                ),
+            ]
+            with self.assertRaises(session.HilSessionError) as ctx:
+                session.revalidate_session(
+                    manifest,
+                    fixture_path,
+                    binding_path,
+                    binding,
+                    run_cmd=_xiao_session_runner(sysfs, rows=rows),
+                    sysfs_root=sysfs,
+                )
+            self.assertIn("probe product drift", str(ctx.exception))
+
+        with tempfile.TemporaryDirectory() as td:
+            (
+                manifest,
+                fixture_path,
+                binding_path,
+                binding,
+                _root,
+                sysfs,
+                _command,
+            ) = self._create(td)
+            with self.assertRaises(discovery.HilDiscoveryError):
+                session.revalidate_session(
+                    manifest,
+                    fixture_path,
+                    binding_path,
+                    binding,
+                    run_cmd=_xiao_session_runner(
+                        sysfs,
+                        fingerprint=hil_fakes.cmsis_dap_fingerprint_output(
+                            part="0x00054b16", variant="0x41414330"
+                        ),
+                    ),
+                    sysfs_root=sysfs,
+                )
+
+        with tempfile.TemporaryDirectory() as td:
+            (
+                manifest,
+                fixture_path,
+                binding_path,
+                binding,
+                _root,
+                sysfs,
+                _command,
+            ) = self._create(td)
+            parent = os.path.join(sysfs, "devices", "pci0000:00", "usb1", "1-4")
+            os.makedirs(os.path.join(parent, "1-1:1.0", "tty", "ttyACM1"))
+            with open(os.path.join(parent, "idVendor"), "w", encoding="utf-8") as fh:
+                fh.write("2886\n")
+            source_props = _xiao_udev(XIAO_SOURCE_PROBE, "1-4", "ttyACM1")
+            source_props["ID_PATH"] = "pci-0000:00-usb-0:1-3:1.2"
+            with self.assertRaises(session.HilSessionError) as ctx:
+                session.revalidate_session(
+                    manifest,
+                    fixture_path,
+                    binding_path,
+                    binding,
+                    run_cmd=_xiao_session_runner(sysfs, source_props=source_props),
+                    sysfs_root=sysfs,
+                )
+            self.assertIn("USB parent drift", str(ctx.exception))
+
+
 class TestCli(unittest.TestCase):
     def test_run_allow_offload_disabled_forwards_and_matrix_rejects(self):
         parser = cli.build_parser()
@@ -1757,6 +2523,64 @@ class TestCli(unittest.TestCase):
             {"fixture_id": FIXTURE_ID, "capture_capability": "none"},
         )
         self.assertEqual(out.rstrip("\n").count("\n"), 0)
+
+    def test_create_session_success_and_one_line_failure_shape(self):
+        manifest = SimpleNamespace(
+            fixture_id=XIAO_FIXTURE_ID,
+            path="/tmp/opencode/hil-sessions/pb033-proof/devices.json",
+            session_id="pb033-proof",
+            roles={
+                "receiver": SimpleNamespace(
+                    probe=SimpleNamespace(serial=XIAO_RECEIVER_PROBE)
+                ),
+                "source": SimpleNamespace(
+                    probe=SimpleNamespace(serial=XIAO_SOURCE_PROBE)
+                ),
+            },
+        )
+        args = [
+            "create-session",
+            "--fixture",
+            "fixture.json",
+            "--binding",
+            "binding.json",
+            "--session-id",
+            "pb033-proof",
+            "--receiver-probe",
+            XIAO_RECEIVER_PROBE,
+            "--source-probe",
+            XIAO_SOURCE_PROBE,
+            "--session-root",
+            "/tmp/opencode/hil-sessions",
+        ]
+        with mock.patch.object(
+            cli.session, "create_session", return_value=manifest
+        ) as create:
+            rc, out, err = _run_cli(args)
+        self.assertEqual(rc, 0)
+        self.assertEqual(err, "")
+        self.assertEqual(
+            json.loads(out),
+            {
+                "fixture_id": XIAO_FIXTURE_ID,
+                "manifest": manifest.path,
+                "roles": {"receiver": XIAO_RECEIVER_PROBE, "source": XIAO_SOURCE_PROBE},
+                "session_id": "pb033-proof",
+            },
+        )
+        self.assertEqual(out.rstrip("\n").count("\n"), 0)
+        self.assertEqual(
+            create.call_args.kwargs["session_root"], "/tmp/opencode/hil-sessions"
+        )
+        with mock.patch.object(
+            cli.session,
+            "create_session",
+            side_effect=session.HilSessionError("bad session"),
+        ):
+            rc, out, err = _run_cli(args)
+        self.assertEqual(rc, 2)
+        self.assertEqual(out, "")
+        self.assertEqual(err, "hil-runner: error: bad session\n")
 
     def test_prepare_success_shape(self):
         with tempfile.TemporaryDirectory() as td:

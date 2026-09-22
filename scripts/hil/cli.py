@@ -5,6 +5,9 @@ Commands:
     hil-runner.py validate --fixture PATH --binding PATH
     hil-runner.py prepare --fixture PATH --binding PATH \
         --output-root PATH --run-id ID
+    hil-runner.py create-session --fixture PATH --binding PATH \
+        --session-id ID --receiver-probe SERIAL --source-probe SERIAL \
+        [--session-root PATH]
     hil-runner.py run --fixture PATH --binding PATH \
         --output-root PATH --run-id ID --junit PATH
     hil-runner.py run-rh3-matrix --fixture PATH --binding PATH \
@@ -34,6 +37,10 @@ fixture lifecycle; matrix evidence aggregates child outcomes.
 or hardware work, then runs same fixed schedule with staged image paths only.
 Exit status: 0 passed, 1 failed, 130 cancelled.
 
+``create-session`` performs only explicit read-only discovery, then creates one
+immutable external XIAO-pair identity manifest. It does not build, flash,
+reset, open a tty, or stream from hardware.
+
 Failures print one line prefixed ``hil-runner: error: `` to stderr with no
 traceback and return 2; success returns 0 with no stderr.
 """
@@ -46,7 +53,7 @@ import sys
 import tempfile
 import threading
 
-from hil import lifecycle, matrix, model, rows, runner
+from hil import lifecycle, matrix, model, rows, runner, session
 import hil.artifacts as artifact_resolver
 from hil.evidence import EvidenceError, finalize_evidence
 
@@ -126,6 +133,34 @@ def cmd_prepare(args):
         )
     sys.stdout.write(
         json.dumps({"run_directory": run_dir, "outcome": "prepared"}, sort_keys=True)
+        + "\n"
+    )
+    return 0
+
+
+def cmd_create_session(args):
+    manifest = session.create_session(
+        args.fixture,
+        args.binding,
+        args.session_id,
+        args.receiver_probe,
+        args.source_probe,
+        run_cmd=runner.default_run_cmd,
+        session_root=args.session_root,
+    )
+    sys.stdout.write(
+        json.dumps(
+            {
+                "fixture_id": manifest.fixture_id,
+                "manifest": manifest.path,
+                "roles": {
+                    "receiver": manifest.roles["receiver"].probe.serial,
+                    "source": manifest.roles["source"].probe.serial,
+                },
+                "session_id": manifest.session_id,
+            },
+            sort_keys=True,
+        )
         + "\n"
     )
     return 0
@@ -333,6 +368,16 @@ def build_parser():
     prepare.add_argument("--output-root", required=True)
     prepare.add_argument("--run-id", required=True)
     prepare.set_defaults(func=cmd_prepare)
+    create_session = sub.add_parser(
+        "create-session", help="create immutable XIAO-pair identity session"
+    )
+    create_session.add_argument("--fixture", required=True)
+    create_session.add_argument("--binding", required=True)
+    create_session.add_argument("--session-id", required=True)
+    create_session.add_argument("--receiver-probe", required=True)
+    create_session.add_argument("--source-probe", required=True)
+    create_session.add_argument("--session-root", default=session.DEFAULT_SESSION_ROOT)
+    create_session.set_defaults(func=cmd_create_session)
     run = sub.add_parser("run", help="run one frozen HIL row (production hardware)")
     run.add_argument("--fixture", required=True)
     run.add_argument("--binding", required=True)

@@ -560,6 +560,9 @@ class Runner:
         )
         self._write("nrf-probes.txt", self._raw_text(raw.get("nrf-probes")))
         self._write("nrf-probes-find.txt", self._raw_text(raw.get("nrf-probes-find")))
+        self._write(
+            "nrf-probes-targeted.txt", self._raw_text(raw.get("nrf-probes-targeted"))
+        )
         for role in ("receiver", "source"):
             udev_records = raw.get("%s-udev" % role, {})
             lines = []
@@ -572,8 +575,15 @@ class Runner:
                         lines.append("%s=%s" % (key, props[key]))
             self._write("%s-udev.txt" % role, "\n".join(lines) + "\n")
         jlink = raw.get("source-jlink-fingerprint")
-        if jlink is not None:
-            self._write("source-jlink.txt", jlink.get("output", ""))
+        self._write(
+            "source-jlink.txt", "" if jlink is None else jlink.get("output", "")
+        )
+        for role in ("receiver", "source"):
+            cmsis = raw.get("%s-cmsis-dap-fingerprint" % role)
+            self._write(
+                "%s-cmsis-dap.txt" % role,
+                "" if cmsis is None else cmsis.get("output", ""),
+            )
         source_usb = raw.get("source-usb-udev", {})
         lines = []
         for node, props in sorted(source_usb.items()):
@@ -593,10 +603,13 @@ class Runner:
                     "backend": role.probe.backend,
                     "family": role.probe.family,
                     "serial": role.probe.serial,
+                    "product": role.probe.product,
                     "target": role.probe.target,
                     "dpidr": role.probe.dpidr,
+                    "ap_idrs": dict(role.probe.ap_idrs),
                     "part": role.probe.part,
                     "variant": role.probe.variant,
+                    "variant_raw": role.probe.variant_raw,
                 },
                 "serial": {
                     "path": role.serial.path,

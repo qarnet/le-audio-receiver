@@ -1079,3 +1079,24 @@ def fingerprint_output(
     if failure:
         lines.append(failure)
     return "\n".join(lines) + "\n"
+
+
+def cmsis_dap_fingerprint_output(
+    dpidr="0x6ba02477",
+    ap0="0x84770001",
+    ap1="0x84770001",
+    ap2="0x32880000",
+    ap3="0x00000000",
+    part="0x00054b15",
+    variant="0x42414141",
+    failure=None,
+):
+    """Read-only nRF54L15 CMSIS-DAP fingerprint marker output."""
+    lines = ["Info : auto-selecting speed 1000 kHz", "FWC|dpidr|%s" % dpidr]
+    for key, value in (("ap0", ap0), ("ap1", ap1), ("ap2", ap2), ("ap3", ap3)):
+        lines.append("FWC|%s|%s" % (key, value))
+    lines.append("FWC|part|%s" % part)
+    lines.append("FWC|variant|%s" % variant)
+    if failure:
+        lines.append(failure)
+    return "\n".join(lines) + "\n"
