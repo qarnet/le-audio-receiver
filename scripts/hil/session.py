@@ -168,12 +168,8 @@ def _require_sha256(value, label):
 
 
 def _require_session_id(value):
-    if not isinstance(value, str):
-        raise HilSessionError("session ID must be a string")
-    try:
-        lifecycle.validate_run_id(value)
-    except lifecycle.HilLifecycleError as exc:
-        raise HilSessionError(str(exc).replace("run id", "session ID")) from None
+    if not isinstance(value, str) or lifecycle.RUN_ID_RE.fullmatch(value) is None:
+        raise HilSessionError("session ID must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
     return value
 
 
@@ -307,7 +303,11 @@ def _parse_role(role, value):
             raise HilSessionError("%s serial stable_udev.%s mismatch" % (role, key))
     if stable_udev["ID_SERIAL_SHORT"] != serial_number:
         raise HilSessionError("%s serial probe correlation mismatch" % role)
-    if serial["baud"] != 115200 or isinstance(serial["baud"], bool):
+    if (
+        not isinstance(serial["baud"], int)
+        or isinstance(serial["baud"], bool)
+        or serial["baud"] != 115200
+    ):
         raise HilSessionError("%s serial baud must be 115200" % role)
     if serial["dtr"] is not True or serial["rts"] is not False:
         raise HilSessionError("%s serial DTR/RTS contract mismatch" % role)
@@ -352,8 +352,10 @@ def _parse_manifest(raw, path):
         ),
         path,
     )
-    if obj["schema_version"] != SESSION_SCHEMA_VERSION or isinstance(
-        obj["schema_version"], bool
+    if (
+        not isinstance(obj["schema_version"], int)
+        or isinstance(obj["schema_version"], bool)
+        or obj["schema_version"] != SESSION_SCHEMA_VERSION
     ):
         raise HilSessionError("schema_version must be %d" % SESSION_SCHEMA_VERSION)
     session_id = _require_session_id(obj["session_id"])
@@ -399,9 +401,13 @@ def _read_bytes(path, label):
 
 
 def _load_xiao_pair(fixture_path, binding_path):
+    fixture_bytes = _read_bytes(fixture_path, "fixture")
+    binding_bytes = _read_bytes(binding_path, "binding")
     try:
-        fixture = model.load_logical_fixture(fixture_path)
-        binding = model.load_physical_binding(binding_path, fixture)
+        fixture = model.parse_logical_fixture_bytes(fixture_bytes, fixture_path)
+        binding = model.parse_physical_binding_bytes(
+            binding_bytes, binding_path, fixture
+        )
     except model.HilSchemaError as exc:
         raise HilSessionError(str(exc)) from None
     if fixture.fixture_id != XIAO_FIXTURE_ID:
@@ -426,9 +432,21 @@ def _load_xiao_pair(fixture_path, binding_path):
     return (
         fixture,
         binding,
-        _read_bytes(fixture_path, "fixture"),
-        _read_bytes(binding_path, "binding"),
+        fixture_bytes,
+        binding_bytes,
     )
+
+
+def _assert_input_bytes_unchanged(
+    fixture_path, binding_path, fixture_bytes, binding_bytes
+):
+    """Reject concurrent input edits before any session-root side effect."""
+    current_fixture_bytes = _read_bytes(fixture_path, "fixture")
+    current_binding_bytes = _read_bytes(binding_path, "binding")
+    if current_fixture_bytes != fixture_bytes:
+        raise HilSessionError("fixture bytes changed during session creation")
+    if current_binding_bytes != binding_bytes:
+        raise HilSessionError("binding bytes changed during session creation")
 
 
 def _canonical_root(path, default_root):
@@ -471,12 +489,11 @@ def _canonical_root(path, default_root):
     canonical = os.path.realpath(path)
     if canonical != path:
         raise HilSessionError("custom session root must be canonical: %s" % path)
+    if canonical == "/":
+        raise HilSessionError("custom session root must not be /")
     repo_root = os.path.realpath(lifecycle.default_repo_root())
-    if (
-        canonical == repo_root
-        or canonical.startswith(repo_root + os.sep)
-        or repo_root.startswith(canonical + os.sep)
-    ):
+    common_root = os.path.commonpath((canonical, repo_root))
+    if common_root == canonical or common_root == repo_root:
         raise HilSessionError("custom session root must be external to repository")
     return canonical
 
@@ -722,10 +739,11 @@ def create_session(
         sysfs_root=sysfs_root,
         explicit_probe_serials={"receiver": receiver_probe, "source": source_probe},
     )
+    created_at_utc = _utc_string(utc_now)
     payload = {
         "schema_version": SESSION_SCHEMA_VERSION,
         "session_id": session_id,
-        "created_at_utc": _utc_string(utc_now),
+        "created_at_utc": created_at_utc,
         "fixture": {"fixture_id": fixture.fixture_id, "sha256": fixture_sha256},
         "binding": {"sha256": binding_sha256},
         "roles": {
@@ -735,7 +753,13 @@ def create_session(
     }
     manifest_bytes = _serialize_manifest_payload(payload)
     _parse_manifest(manifest_bytes, "generated session manifest")
+    _assert_input_bytes_unchanged(
+        fixture_path, binding_path, fixture_bytes, binding_bytes
+    )
     root = _canonical_root(session_root, session_root == DEFAULT_SESSION_ROOT)
+    _assert_input_bytes_unchanged(
+        fixture_path, binding_path, fixture_bytes, binding_bytes
+    )
     session_dir = _create_session_dir(root, session_id)
     manifest_path = _create_manifest_file(session_dir, manifest_bytes)
     return load_session(manifest_path, fixture_path, binding_path)

@@ -235,13 +235,22 @@ class PhysicalBinding:
     roles: MappingProxyType  # role name -> PhysicalRoleBinding/CaptureBinding
 
 
-def _read_text(path):
-    with open(path, "rb") as fh:
-        raw = fh.read()
+def _decode_utf8(raw, path):
+    if not isinstance(raw, bytes):
+        raise HilSchemaError("%s must be bytes" % path)
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise HilSchemaError("%s is not valid UTF-8" % path) from None
+
+
+def _read_bytes(path):
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def _read_text(path):
+    return _decode_utf8(_read_bytes(path), path)
 
 
 def _sha256_file(path):
@@ -373,9 +382,9 @@ def _parse_role(name, spec, capability, path):
     )
 
 
-def load_logical_fixture(path):
-    """Load and strictly validate a logical fixture document."""
-    obj = _parse_object(_read_text(path), path)
+def parse_logical_fixture_bytes(raw, path):
+    """Strictly validate one logical fixture from its exact byte snapshot."""
+    obj = _parse_object(_decode_utf8(raw, path), path)
     _reject_unknown(obj, FIXTURE_ROOT_KEYS, path)
     schema_version = obj.get("schema_version")
     if not _is_int(schema_version) or schema_version != SCHEMA_VERSION:
@@ -419,6 +428,11 @@ def load_logical_fixture(path):
         capture_capability=capability,
         roles=MappingProxyType(parsed),
     )
+
+
+def load_logical_fixture(path):
+    """Load and strictly validate a logical fixture document."""
+    return parse_logical_fixture_bytes(_read_bytes(path), path)
 
 
 def _parse_udev_map(udev, path, reject_tty_paths):
@@ -634,9 +648,9 @@ def _parse_binding_role(name, spec, path, logical_role):
     )
 
 
-def load_physical_binding(path, logical_fixture):
-    """Load and cross-validate a physical binding against a logical fixture."""
-    obj = _parse_object(_read_text(path), path)
+def parse_physical_binding_bytes(raw, path, logical_fixture):
+    """Validate one physical binding from its exact byte snapshot."""
+    obj = _parse_object(_decode_utf8(raw, path), path)
     _reject_unknown(obj, BINDING_ROOT_KEYS, path)
     schema_version = obj.get("schema_version")
     if not _is_int(schema_version) or schema_version != SCHEMA_VERSION:
@@ -671,3 +685,8 @@ def load_physical_binding(path, logical_fixture):
         fixture_id=fixture_id,
         roles=MappingProxyType(parsed),
     )
+
+
+def load_physical_binding(path, logical_fixture):
+    """Load and cross-validate a physical binding against a logical fixture."""
+    return parse_physical_binding_bytes(_read_bytes(path), path, logical_fixture)

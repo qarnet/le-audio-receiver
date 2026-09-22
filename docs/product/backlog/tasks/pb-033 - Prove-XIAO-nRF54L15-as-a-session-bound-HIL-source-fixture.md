@@ -77,7 +77,9 @@ None.
 <!-- SECTION:NOTES:BEGIN -->
 2026-09-22 phase 1 complete: host-only XIAO nRF54L15 session foundation adds board-aware binding validation, explicit nix-nrf probes identity resolution, read-only CMSIS-DAP AP/FICR fingerprints, immutable external devices.json manifests, revalidation, and create-session CLI.
 
-Validation, no hardware actions: `nix develop --option warn-dirty false -c python3 scripts/test_hil_runner.py` ran 96 tests, PASS; `nix develop --option warn-dirty false -c python3 tests/hil/rh2_test.py` ran 251 tests, PASS; compileall PASS; backlog doctor PASS; git diff --check PASS. Phase 2 source firmware/tooling and phase 3 runner/physical proof remain.
+2026-09-22 review repair: fixture and binding parsing now uses retained byte snapshots, input drift fails before session-directory creation, session schema integers and IDs are strict, and custom roots reject filesystem and repository overlap. Manifest permission, type, symlink, path, and parent-ID drift remain fail-closed.
+
+Validation, no hardware actions: `nix develop -c python3 scripts/test_hil_runner.py` ran 105 tests, PASS; `nix develop -c python3 tests/hil/rh2_test.py` ran 251 tests, PASS; `nix develop -c python3 -m compileall -q scripts/hil scripts/hil-runner.py tests/hil` PASS; `nix develop -c backlog doctor` PASS; `git diff --check` PASS. Phase 2 source firmware/tooling and phase 3 runner/physical proof remain.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
