@@ -2333,7 +2333,7 @@
     "docs/testing/pre-refactor-hardware-baseline.md"
    ],
    "stateful": false,
-   "reason": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by production builds and boot logs",
+   "reason": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by final receiver evidence (fw-build-54l15), retained legacy regression evidence (fw-build-5340), and historical boot logs",
    "excluded_from_numeric": true
   },
   {

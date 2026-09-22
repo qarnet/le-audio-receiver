@@ -8,7 +8,8 @@ classification, evidence, outcome-ledger and state-transition semantics.
 Rules enforced (all checked, deterministic sorted output, nonzero exit):
   1. exact source inventory completeness (no missing/duplicate/stale path)
   2. suite names resolve to existing unit directories, accepted bsim:stage1,
-     production build commands, or named hardware scripts
+      recognized build commands, or named hardware scripts. BSim and hardware
+      scripts are fixture roles, not receiver build commands.
   3. direct sources have at least one direct suite
   4. integration/delegated/hardware entries carry an explicit reason and one
      or more concrete acceptance commands/evidence paths
@@ -94,11 +95,16 @@ OUTCOME_RE = re.compile(
     r'[A-Z][A-Z0-9_]*|"[^"]*")$'
 )
 
-BUILD_COMMANDS = {"fw-build-5340", "fw-build-54l15", "fw-build-dongle"}
+FINAL_RECEIVER_BUILD_COMMANDS = {"fw-build-54l15"}
+LEGACY_RECEIVER_BUILD_COMMANDS = {"fw-build-5340"}
+FIXTURE_BUILD_COMMANDS = {"fw-build-dongle"}
+BUILD_COMMANDS = (
+    FINAL_RECEIVER_BUILD_COMMANDS
+    | LEGACY_RECEIVER_BUILD_COMMANDS
+    | FIXTURE_BUILD_COMMANDS
+)
 
 REQUIRED_REASON_CLASSES = {"integration-only", "delegated-glue", "hardware-only"}
-
-PRODUCTION_BUILD_COMMANDS = {"fw-build-5340", "fw-build-54l15", "fw-build-dongle"}
 
 SOURCE_FILE_RE = re.compile(r"\.c$")
 
@@ -222,7 +228,7 @@ class Checker:
             return ("unit", unit)
         if name == "bsim:stage1":
             return ("bsim", os.path.join(self.repo_root, "tests", "bsim"))
-        if name in PRODUCTION_BUILD_COMMANDS:
+        if name in BUILD_COMMANDS:
             return ("build-cmd", None)
         script = os.path.join(self.repo_root, "scripts", name)
         if os.path.isfile(script):

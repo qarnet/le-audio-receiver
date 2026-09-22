@@ -185,6 +185,12 @@ class CheckTestMatrixValid(unittest.TestCase):
         finally:
             fx.cleanup()
 
+    def test_recognized_build_commands_resolve(self):
+        checker = ctm.Checker(REPO_ROOT, CHECKER_PATH)
+        for command in ("fw-build-54l15", "fw-build-5340", "fw-build-dongle"):
+            self.assertEqual(("build-cmd", None), checker.resolve_suite(command))
+        self.assertIsNone(checker.resolve_suite("fw-build-unknown"))
+
     def test_testonly_block_and_static_functions_not_required(self):
         # alpha_test_seam (AUDIO_SHELL_TEST block) and alpha_static must
         # not be demanded as public APIs.

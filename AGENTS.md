@@ -169,17 +169,28 @@ The workers combined to `72 PASS / 0 FAIL / 72 TOTAL`; aggregate `tests` and
 was 26m31s versus 58m02s monolithic. FR4 exact-artifact hardware acceptance is
 **BLOCKED**: historical exact draft `v0.1.0` FAILED mandatory nRF5340 mono
 acceptance. It served as stable harness baseline, then its GitHub draft and
-assets were deleted 2026-09-19; `gh release view v0.1.0` now fails, the GitHub
-release list is empty, and `refs/tags/v0.1.0` is absent. Nothing was published.
-The local replacement preflight passed both targets at `5e7f502` but remains
-historical preflight, not exact-artifact acceptance. The root `VERSION` remains
-`0.1.0`, and product owner selected it for a fresh replacement candidate because
-it was never published or tagged. PB-031 has not been human-merged, so no fresh
-candidate exists.
-After PB-031 human merge and green hosted gates, trusted-main may create a new
-immutable nRF54L15-only candidate if no release/tag collision exists; it must
-never restore or clobber failed assets. FR4/FR5 remain blocked until exact new
-assets pass active nRF54L15 acceptance through PB-007; nothing published.
+assets were deleted 2026-09-19; historical failure evidence remains immutable.
+Failed assets were not restored or clobbered. Nothing was published. The local
+replacement preflight passed both targets at `5e7f502` but remains historical
+preflight, not exact-artifact acceptance. The root `VERSION` remains `0.1.0`.
+PR #13 human-merged PB-031 into `main` at
+`b59e1d8f99b8f4e7435c7086bfe81700007b221d`. Trusted-main workflow run
+`35429538264` attempt `1` passed `test-unit`, `test-heavy (coverage)`,
+`test-heavy (bsim)`, aggregate `tests`, `firmware`, and `release`, then created
+active private replacement draft release ID `391991202`: tag label `v0.1.0`,
+title `LE Audio Receiver v0.1.0`, target
+`b59e1d8f99b8f4e7435c7086bfe81700007b221d`, draft `true`, prerelease `false`,
+and `published_at: null`. No `refs/tags/v0.1.0` exists. Exact assets are
+`le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip` (627096 bytes, SHA-256
+`bd5fe73636b831e9b685cd20f53704fbe342be60b124f5ae5379dd7969ac9f10`),
+`SHA256SUMS` (117 bytes, SHA-256
+`ea653102fc318d22e0b4b5d3c7b08a05874aa435b73098ea5f65790a913398ff`), and
+`release-provenance.json` (1077 bytes, SHA-256
+`49ca660cc83e99a12e07982f466d5d44f64730e708f162a03582dc60fe157238`).
+Provenance binds version `0.1.0`, NCS `v3.3.0`, run `35429538264` attempt `1`,
+the exact SHA, and the nRF54L15-only factory ZIP. No RH4 or FR4 acceptance has
+run. FR4/FR5 remain blocked until exact active nRF54L15 assets pass acceptance
+through PB-007; nothing published.
 Historical PR 11 (`feature/firmware-release-acceptance`) established
 the monolithic 65-child hosted canonical software gate: in that topology,
 `tests` passed before `firmware`, and `release` followed `firmware`. The job ran
@@ -242,10 +253,16 @@ offload.
 
 Consequences for work in this repo today:
 
-- Every change must keep the nRF5340 target building (nRF54L15 is the only
-  production receiver target for the HIL/release line per
-  `docs/development/system-hil-milestones.md`, but nRF5340 receiver code and
-  builds stay in-tree until a separate cleanup decision).
+- nRF54L15 is the sole final receiver target. The physical E83 nRF5340
+  receiver is a best-effort legacy engineering/regression path with no release
+  asset, product-parity, physical-control, or future-feature obligation.
+  PB-032 does not delete it; its code and helpers stay in-tree until a separate
+  cleanup decision.
+- A future product change does not need a physical `fw-build-5340` acceptance
+  result unless it explicitly touches the legacy E83 path. Canonical BSim and
+  fixture gates remain mandatory where currently defined. nRF5340BSim, the
+  nRF5340DK HIL source, and the HCI-UART dongle remain required test
+  infrastructure.
 
 ## Standing lab nRF hardware authority
 

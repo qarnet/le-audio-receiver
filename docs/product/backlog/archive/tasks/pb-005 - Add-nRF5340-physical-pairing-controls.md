@@ -4,6 +4,7 @@ title: Add nRF5340 physical pairing controls
 status: Backlog
 assignee: []
 created_date: '2026-09-13 01:24'
+updated_date: '2026-09-20 20:02'
 labels:
   - 'size:M'
   - 'area:pairing'
@@ -53,17 +54,8 @@ Pin selection after hardware review.
 - [ ] #3 Feature-parity tests and nRF5340 hardware evidence are retained.
 <!-- AC:END -->
 
-## Implementation Plan
-
-<!-- SECTION:PLAN:BEGIN -->
-<!-- SECTION:PLAN:END -->
-
-## Implementation Notes
-
-<!-- SECTION:NOTES:BEGIN -->
-<!-- SECTION:NOTES:END -->
-
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Dropped by product-owner direction on 2026-09-20. The XIAO nRF54L15 is now the sole supported final receiver target, so nRF5340 physical pairing-control parity is no longer product work. Existing nRF5340 Ebyte receiver code and developer/regression build remain temporarily; this item does not authorize their deletion. PB-032 records the target-policy transition, and future work may separately remove the legacy receiver path or migrate nRF5340-based fixtures.
 <!-- SECTION:FINAL_SUMMARY:END -->

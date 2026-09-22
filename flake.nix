@@ -1,5 +1,5 @@
 {
-  description = "LE Audio Receiver — nRF5340 + nRF54L15";
+  description = "LE Audio Receiver: nRF54L15 final receiver target";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";

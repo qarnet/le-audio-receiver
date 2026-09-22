@@ -55,19 +55,7 @@ time. Tracked in
 This bug is distinct from the intentional NORMAL/BONDING advertising-payload
 distinction.
 
-## 6. nRF5340 physical pairing button not wired
-
-The nRF5340 build has **no physical pairing controls**: the button/LED
-pairing controller is feature-off for this build (`CONFIG_USER_PAIRING_CONTROL`
-/ `CONFIG_USER_PAIRING_INPUT` not enabled; the pairing-mode controller is not
-compiled in). There is no user button, no mode LED, and no NORMAL/BONDING/
-RESET behavior on the E83 board. What remains is the **legacy shell reset**:
-the `bt unpair` developer-shell command clears all saved pairings,
-disconnects the active peer, and reopens pairing. The nRF54L15 build has a
-working button. Tracked in
-[PB-005](product/backlog/tasks/pb-005%20-%20Add-nRF5340-physical-pairing-controls.md).
-
-## 7. Source-device availability limits
+## 6. Source-device availability limits
 
 LE Audio source devices are still uncommon, and classic Bluetooth audio
 capability does not imply BAP unicast-source support. Finding a consumer
@@ -76,17 +64,17 @@ using it. See [Supported source devices](user-guide.md#supported-source-devices)
 and the researched Linux source hardware in [Supported LE Audio sources on
 Linux](supported-sources.md).
 
-## 8. Release binaries not yet published
+## 7. Release binaries not yet published
 
 Ready-made firmware binaries are planned but **not yet available**. The
 firmware currently must be built from source with the developer toolchain.
 Release path is tracked in
-[PB-006](product/backlog/tasks/pb-006%20-%20Create-replacement-nRF54L15-release-candidate.md),
+[PB-006](product/backlog/completed/pb-006%20-%20Create-replacement-nRF54L15-release-candidate.md),
 [PB-007](product/backlog/tasks/pb-007%20-%20Accept-exact-candidate-through-RH4-and-FR4.md),
 [PB-008](product/backlog/tasks/pb-008%20-%20Provide-public-friendly-nRF54L15-flashing.md),
 and [PB-009](product/backlog/tasks/pb-009%20-%20Publish-first-public-firmware-release.md).
 
-## 9. nRF54L15 scope and Nordic guidance caveat
+## 8. nRF54L15 scope and Nordic guidance caveat
 
 The nRF54L15 build supports **point-to-point** LE Audio, but the chip has **no
 dedicated Audio PLL**, and Nordic's official position is that the nRF54L

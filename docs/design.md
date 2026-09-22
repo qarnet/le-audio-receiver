@@ -42,17 +42,28 @@ draft-release closeout (2026-08-09, canonical gate **65 PASS / 0 FAIL /
 authoritative release state is FR4 exact-artifact hardware acceptance, which is
 **BLOCKED**: historical exact draft `v0.1.0` failed mandatory nRF5340 mono
 acceptance. It served as stable harness baseline, then its GitHub draft and
-assets were deleted 2026-09-19; `gh release view v0.1.0` now fails, the GitHub
-release list is empty, and `refs/tags/v0.1.0` is absent. Nothing was published.
-The local replacement preflight at `5e7f502` remains historical preflight, not
-exact-artifact acceptance. The root `VERSION` remains `0.1.0`, and product
-owner selected it for a fresh replacement candidate because it was never
-published or tagged. PB-031 has not been human-merged, so no fresh candidate
-exists. After PB-031 human
-merge and green hosted gates, trusted-main may create a new immutable
-nRF54L15-only candidate if no release/tag collision exists; its exact assets
-must pass active nRF54L15 FR4 through PB-007 before FR5 can publish anything.
-The historical 65-child figures in
+assets were deleted 2026-09-19; historical failure evidence remains immutable.
+Failed assets were not restored or clobbered. Nothing was published. The local
+replacement preflight at `5e7f502` remains historical preflight, not
+exact-artifact acceptance. Root `VERSION` remains `0.1.0`. PR #13 human-merged
+PB-031 into `main` at `b59e1d8f99b8f4e7435c7086bfe81700007b221d`.
+Trusted-main workflow run `35429538264` attempt `1` passed `test-unit`,
+`test-heavy (coverage)`, `test-heavy (bsim)`, aggregate `tests`, `firmware`,
+and `release`, then created active private draft release `391991202`: tag label
+`v0.1.0`, title `LE Audio Receiver v0.1.0`, target
+`b59e1d8f99b8f4e7435c7086bfe81700007b221d`, draft `true`, prerelease `false`,
+and `published_at: null`. No `refs/tags/v0.1.0` exists. Exact assets are
+`le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip` (627096 bytes, SHA-256
+`bd5fe73636b831e9b685cd20f53704fbe342be60b124f5ae5379dd7969ac9f10`),
+`SHA256SUMS` (117 bytes, SHA-256
+`ea653102fc318d22e0b4b5d3c7b08a05874aa435b73098ea5f65790a913398ff`), and
+`release-provenance.json` (1077 bytes, SHA-256
+`49ca660cc83e99a12e07982f466d5d44f64730e708f162a03582dc60fe157238`).
+Provenance binds version `0.1.0`, NCS `v3.3.0`, run `35429538264` attempt `1`,
+the exact SHA, and the nRF54L15-only factory ZIP. No RH4 or FR4 acceptance has
+run. Exact active nRF54L15 assets must pass FR4 through PB-007 before FR5 can
+publish anything; FR4/FR5 remain blocked and nothing is published. The
+historical 65-child figures in
 `docs/development/firmware-release-fr4-results.md` are FR4-era evidence, not
 current software figures; see `STATUS.md` for current figures. Failed assets
 must never be restored or clobbered.

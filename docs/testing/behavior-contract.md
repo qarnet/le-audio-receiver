@@ -916,8 +916,11 @@ APIs:
 
 ### BUILD-001 — NCS version
 
-Both production targets (nRF5340 + nRF54L15) and the central dongle build
-against NCS v3.3.0.  Mixing versions is not supported.
+The final nRF54L15 receiver, legacy nRF5340 receiver build, and central dongle
+all use NCS v3.3.0. Mixing versions is not supported.
+
+The nRF5340BSim suite, nRF5340DK HIL source, and HCI-UART central dongle are
+required test fixtures, not receiver targets.
 
 ### BUILD-002 — nRF5340 SW Split overlays
 

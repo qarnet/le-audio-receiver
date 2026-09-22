@@ -1124,7 +1124,7 @@ always last.  Do not combine two high-risk phases into one commit or handoff.
   offload policy as permanent.
 - [PB-001](../product/backlog/tasks/pb-001%20-%20Support-additional-LC3-sample-rates.md):
   multi-rate audio.
-- [PB-005](../product/backlog/tasks/pb-005%20-%20Add-nRF5340-physical-pairing-controls.md):
+- [PB-005](../product/backlog/archive/tasks/pb-005%20-%20Add-nRF5340-physical-pairing-controls.md):
   pairing-reset physical button GPIO and debounce/hold UX.
 - [PB-014](../product/backlog/tasks/pb-014%20-%20Crossfade-emergency-audio-fallback.md):
   emergency-fallback crossfade.
