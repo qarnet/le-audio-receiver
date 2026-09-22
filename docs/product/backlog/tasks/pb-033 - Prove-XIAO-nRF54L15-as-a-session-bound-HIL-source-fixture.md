@@ -1,10 +1,10 @@
 ---
 id: PB-033
 title: Prove XIAO nRF54L15 as a session-bound HIL source fixture
-status: In Progress
+status: Review
 assignee: []
 created_date: '2026-09-22 02:00'
-updated_date: '2026-09-22 03:34'
+updated_date: '2026-09-22 21:36'
 labels:
   - 'size:L'
   - 'area:hil'
@@ -57,11 +57,11 @@ None.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A public HIL session command accepts two explicit, distinct XIAO nRF54L15 probe serials, resolves their correlated USB serial endpoints, creates `/tmp/opencode/hil-sessions/<session-id>/devices.json` exclusively with complete probe/AP/FICR/USB identity, and lets repeated checked-in row invocations reuse the same role assignment without depending on volatile tty numbers.
-- [ ] #2 Before each flash, reset, serial open, and row action, the runner re-reads the selected probe fingerprint and USB/tty correlation and rejects ambiguity, absence, duplicate assignment, manifest mutation, or identity drift before issuing the target action. After flashing, receiver boot markers and source `hello` firmware identity must pass before streaming.
-- [ ] #3 The dedicated source fixture builds and flashes as a warning-clean single-image XIAO nRF54L15 SDC application with GRTC controller time, an exact XIAO UART/RF overlay, explicit CMSIS-DAP serial selection, the existing `le-audio-hil-source-rh1` hello identity, and no nRF5340 RTC/IPC or CPUNET dependency.
-- [ ] #4 Retained physical XIAO-to-XIAO evidence passes `rh3.fresh_mono_48_4_1`, `rh3.fresh_mode_a_48_4_1`, and `rh3.fresh_mode_b_48_4_1` with deterministic HIL records and no unexpected firmware, controller, transport, audio, OpenOCD, or host-tool warnings.
-- [ ] #5 Existing nRF5340 fixture paths remain usable, focused discovery/session/source/artifact tests pass, and the canonical software gate remains green.
+- [x] #1 A public HIL session command accepts two explicit, distinct XIAO nRF54L15 probe serials, resolves their correlated USB serial endpoints, creates `/tmp/opencode/hil-sessions/<session-id>/devices.json` exclusively with complete probe/AP/FICR/USB identity, and lets repeated checked-in row invocations reuse the same role assignment without depending on volatile tty numbers.
+- [x] #2 Before each flash, reset, serial open, and row action, the runner re-reads the selected probe fingerprint and USB/tty correlation and rejects ambiguity, absence, duplicate assignment, manifest mutation, or identity drift before issuing the target action. After flashing, receiver boot markers and source `hello` firmware identity must pass before streaming.
+- [x] #3 The dedicated source fixture builds and flashes as a warning-clean single-image XIAO nRF54L15 SDC application with GRTC controller time, an exact XIAO UART/RF overlay, explicit CMSIS-DAP serial selection, the existing `le-audio-hil-source-rh1` hello identity, and no nRF5340 RTC/IPC or CPUNET dependency.
+- [x] #4 Retained physical XIAO-to-XIAO evidence passes `rh3.fresh_mono_48_4_1`, `rh3.fresh_mode_a_48_4_1`, and `rh3.fresh_mode_b_48_4_1` with deterministic HIL records and no unexpected firmware, controller, transport, audio, OpenOCD, or host-tool warnings.
+- [x] #5 Existing nRF5340 fixture paths remain usable, focused discovery/session/source/artifact tests pass, and the canonical software gate remains green.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -96,6 +96,8 @@ Phase 3A validation, no hardware actions: `nix develop -c python3 scripts/test_h
 The first build-only phase 3B attempt stopped before hardware because generated compile-database symlinks dirtied the source tree and sysbuild derived an unstable root image domain. Immutable stopped-attempt logs remain under `/tmp/opencode/`. Retry repair restored only those generated links, committed the external-APP_DIR handoff, built clean stable-domain images, and restored generated links after each build. An initial mono evidence review also stopped without rerun because it misread `lsof` status 1. Correct runner/test semantics define status 1 with empty output as successful unowned-source-console preflight; each retained ledger has exactly that one expected record and all other commands status 0 with null error. No permanent board serial or console-path mapping was recorded.
 
 Phase 3B focused host validation: `nix develop -c python3 scripts/test_hil_runner.py` ran 106 tests, PASS; `nix develop -c python3 tests/hil/rh2_test.py` ran 266 tests in 151.998 seconds, PASS; `nix develop -c python3 -m compileall -q scripts/hil scripts/hil-runner.py tests/hil` PASS; `nix develop -c backlog doctor` PASS; `git diff --check` PASS. Each Nix shell reported expected dirty-worktree provenance for the two uncommitted documentation changes, not a compiler, Kconfig, firmware-build, or host-test diagnostic.
+
+2026-09-22 canonical gate review: first `nix develop -c ./scripts/test-all.sh` from the linked worktree at `fa0bbca411c804a2a8a080b1d978014f1fdf4992` ended `72 PASS / 2 FAIL / 74 TOTAL`. All unit children and BSim passed; coverage failed only with `FATAL: not a git checkout: /tmp/opencode/le-audio-receiver-pb-fixture` because the linked worktree has a `.git` file rather than a standalone `.git` directory, then matrix failed because coverage JSON was absent. Log: `/tmp/opencode/pb-033-canonical-gate.log`. No software changed between attempts. A clean standalone local clone at the exact same commit reran the full one-command gate and ended `74 PASS / 0 FAIL / 74 TOTAL`, with coverage, matrix, and BSim passing; the clone remained clean. Log: `/tmp/opencode/pb-033-canonical-gate-clone.log`. This satisfies AC #5.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -111,3 +113,15 @@ created: 2026-09-22 02:26
 Phase 1 implementation shape completed in docs/development/pb-033-phase1-session-binding-handoff.md. Phase is host-only: board-aware binding schema, explicit nix-nrf probes discovery, raw AP/FICR fingerprint retention, strict external session manifest, create-session CLI, and fake-lab drift tests. Firmware port, runner action integration, and physical proof remain phases 2 and 3. Execution waits for human merge of green PR #14.
 ---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented session-scoped explicit same-family XIAO role binding with an immutable external manifest, complete AP/FICR/USB identity, and six ordered pre-action revalidations.
+
+Implemented a XIAO nRF54L15 single-image integrated-SDC source using GRTC, an explicit safe build/flash path, and preserved `le-audio-hil-source-rh1` hello identity. Preserved nRF5340 fixtures and artifact contracts.
+
+Integrated public runner support and retained physical mono, Mode A, and Mode B 10 ms PASS evidence. Scope excludes analog output and audibility, 7.5 ms, RH4/FR4, release or publication, and receiver behavior changes.
+
+Validation: warning-audited target builds; 106 runner tests; 266 RH2 tests; compileall; backlog doctor; physical evidence hashes, JUnit, and ledgers; and exact-commit standalone canonical `74 PASS / 0 FAIL / 74 TOTAL`.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -163,3 +163,21 @@ output, audibility, physical channel wiring, 7.5 ms behavior, reconnect or
 fault-injection behavior, RH4/FR4, release acceptance, publication, or broader
 product acceptance. No production, test, runner, fixture, build-helper,
 configuration, protocol, or hardware-control source changed in phase 3B.
+
+## Canonical software gate
+
+The first `nix develop -c ./scripts/test-all.sh` run from the linked worktree
+at commit `fa0bbca411c804a2a8a080b1d978014f1fdf4992` ended
+`72 PASS / 2 FAIL / 74 TOTAL`. All unit children and BSim passed. Coverage
+failed only with `FATAL: not a git checkout: /tmp/opencode/le-audio-receiver-pb-fixture`; matrix then failed because the
+coverage JSON was absent. Log:
+`/tmp/opencode/pb-033-canonical-gate.log`. This was an environment-only
+coverage-runner contract issue: the linked worktree has a `.git` file, not a
+standalone `.git` directory.
+
+No software changed between attempts. A clean standalone local clone at the
+same exact commit reran the full one-command gate and ended exactly
+`74 PASS / 0 FAIL / 74 TOTAL`. Coverage, matrix, and BSim passed, and the
+clone remained clean. Log:
+`/tmp/opencode/pb-033-canonical-gate-clone.log`. This satisfies acceptance
+criterion #5.
