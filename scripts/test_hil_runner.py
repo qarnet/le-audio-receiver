@@ -2806,6 +2806,145 @@ class TestCli(unittest.TestCase):
                     self.assertEqual(cli.cmd_run(direct), 1)
         self.assertTrue(calls[0][1]["allow_offload_disabled"])
 
+    def test_run_session_manifest_is_run_only_and_forwards_exact_path(self):
+        parser = cli.build_parser()
+        manifest = "/tmp/opencode/hil-sessions/pb033/devices.json"
+        direct = parser.parse_args(
+            [
+                "run",
+                "--fixture",
+                "f",
+                "--binding",
+                "b",
+                "--output-root",
+                "o",
+                "--run-id",
+                "r",
+                "--junit",
+                "j",
+                "--session-manifest",
+                manifest,
+            ]
+        )
+        self.assertEqual(direct.session_manifest, manifest)
+        for command, required in (
+            ("validate", ["--fixture", "f", "--binding", "b"]),
+            (
+                "prepare",
+                [
+                    "--fixture",
+                    "f",
+                    "--binding",
+                    "b",
+                    "--output-root",
+                    "o",
+                    "--run-id",
+                    "r",
+                ],
+            ),
+            (
+                "create-session",
+                [
+                    "--fixture",
+                    "f",
+                    "--binding",
+                    "b",
+                    "--session-id",
+                    "s",
+                    "--receiver-probe",
+                    "receiver",
+                    "--source-probe",
+                    "source",
+                ],
+            ),
+            (
+                "run-rh3-matrix",
+                [
+                    "--fixture",
+                    "f",
+                    "--binding",
+                    "b",
+                    "--output-root",
+                    "o",
+                    "--run-id",
+                    "r",
+                    "--junit",
+                    "j",
+                ],
+            ),
+            (
+                "run-ma1-matrix",
+                [
+                    "--fixture",
+                    "f",
+                    "--binding",
+                    "b",
+                    "--qualification",
+                    "q.json",
+                    "--output-root",
+                    "o",
+                    "--run-id",
+                    "r",
+                    "--junit",
+                    "j",
+                ],
+            ),
+            (
+                "run-sa1-matrix",
+                [
+                    "--fixture",
+                    "f",
+                    "--binding",
+                    "b",
+                    "--qualification",
+                    "q.json",
+                    "--output-root",
+                    "o",
+                    "--run-id",
+                    "r",
+                    "--junit",
+                    "j",
+                ],
+            ),
+            (
+                "run-rh4-matrix",
+                [
+                    "--fixture",
+                    "f",
+                    "--binding",
+                    "b",
+                    "--output-root",
+                    "o",
+                    "--run-id",
+                    "r",
+                    "--junit",
+                    "j",
+                    "--receiver-artifact",
+                    "receiver.zip",
+                    "--source-artifact",
+                    "source.zip",
+                ],
+            ),
+        ):
+            with self.subTest(command=command):
+                with self.assertRaises(cli.HilCliError):
+                    parser.parse_args(
+                        [command, *required, "--session-manifest", manifest]
+                    )
+
+        calls = []
+
+        class FakeEngine:
+            def run(self, *args, **kwargs):
+                calls.append((args, kwargs))
+                return ("failed", "boundary", [])
+
+        with mock.patch.object(cli.runner, "RunnerDeps", return_value=object()):
+            with mock.patch.object(cli.runner, "Runner", return_value=FakeEngine()):
+                with mock.patch.object(cli.signal, "signal"):
+                    self.assertEqual(cli.cmd_run(direct), 1)
+        self.assertEqual(calls[0][1]["session_manifest_path"], manifest)
+
     def test_validate_success_shape(self):
         rc, out, err = _run_cli(
             ["validate", "--fixture", FIXTURE_JSON, "--binding", BINDING_EXAMPLE]

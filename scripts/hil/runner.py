@@ -34,6 +34,7 @@ from hil import (
     protocol,
     receiver,
     rows,
+    session,
     serial_io,
     source_client,
 )
@@ -61,13 +62,27 @@ ROW_SCORED_SDU_COUNT = RH2_ROW.scored_sdu_count
 ROW_SIGNAL_SEED = RH2_ROW.signal_seed
 ROW_RECONNECT_POLICY = RH2_ROW.reconnect_policy
 
-#: Exact image inputs hashed before any flash.
-IMAGE_INPUTS = (
-    ("source-app", "build/hil-source/app/zephyr/zephyr.hex"),
-    ("source-cpunet", "build/hil-source/hci_ipc/zephyr/zephyr.hex"),
-    ("receiver-cpuapp", "build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex"),
-    ("receiver-flpr", "build/nrf54l15/flpr/zephyr/zephyr.hex"),
-)
+#: Exact local image inputs, selected by the logical source board before any
+#: flash. Artifact-backed runs retain their established nRF5340-only layout.
+IMAGE_INPUTS_BY_SOURCE_BOARD = {
+    model.NRF5340_CPUAPP_BOARD: (
+        ("source-app", "build/hil-source/app/zephyr/zephyr.hex"),
+        ("source-cpunet", "build/hil-source/hci_ipc/zephyr/zephyr.hex"),
+        (
+            "receiver-cpuapp",
+            "build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex",
+        ),
+        ("receiver-flpr", "build/nrf54l15/flpr/zephyr/zephyr.hex"),
+    ),
+    model.NRF54L15_CPUAPP_BOARD: (
+        ("source-app", "build/hil-source-nrf54l15/zephyr/zephyr.hex"),
+        (
+            "receiver-cpuapp",
+            "build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex",
+        ),
+        ("receiver-flpr", "build/nrf54l15/flpr/zephyr/zephyr.hex"),
+    ),
+}
 
 #: Receiver boot markers, exact (src/main.c, audio_i2s.c,
 #: flpr_handshake.c, audio_offload.c, flpr_runtime.c).
@@ -250,6 +265,8 @@ class RunnerDeps:
         capture_session_factory=None,
         boot_timeout=BOOT_TIMEOUT,
         summary_timeout=SUMMARY_TIMEOUT,
+        session_loader=None,
+        session_revalidator=None,
     ):
         self.run_cmd = run_cmd if run_cmd is not None else default_run_cmd
         self.discover = discover
@@ -269,6 +286,14 @@ class RunnerDeps:
         # Bounded wait budgets (override in fake tests).
         self.boot_timeout = boot_timeout
         self.summary_timeout = summary_timeout
+        self.session_loader = (
+            session_loader if session_loader is not None else session.load_session
+        )
+        self.session_revalidator = (
+            session_revalidator
+            if session_revalidator is not None
+            else session.revalidate_session
+        )
 
     def resolve(self, binding, run_cmd=None):
         command = run_cmd if run_cmd is not None else self.run_cmd
@@ -283,6 +308,24 @@ class RunnerDeps:
             return self.serial_factory(role, path, baud, evidence_path, dtr, rts)
         return serial_io.SerialConsole(
             role, path, baud, evidence_path, dtr=dtr, rts=rts
+        )
+
+    def load_session(self, manifest_path, fixture_path, binding_path):
+        """Load one immutable XIAO-pair manifest through the injected boundary."""
+        return self.session_loader(manifest_path, fixture_path, binding_path)
+
+    def revalidate_session(
+        self, manifest, fixture_path, binding_path, binding, run_cmd=None
+    ):
+        """Revalidate a loaded session through the injected discovery boundary."""
+        command = run_cmd if run_cmd is not None else self.run_cmd
+        return self.session_revalidator(
+            manifest,
+            fixture_path,
+            binding_path,
+            binding,
+            run_cmd=command,
+            sysfs_root=self.sysfs_root,
         )
 
     def capture_session(
@@ -326,6 +369,8 @@ class Runner:
         self._receiver_console = None
         self._source_console = None
         self._artifact_set = None
+        self._session_manifest = None
+        self._session_revalidations = []
 
     # ── command ledger ──────────────────────────────────────────────
 
@@ -488,6 +533,105 @@ class Runner:
         )
         evidence._atomic_write_text(os.path.join(self._run_dir, name), text)
 
+    def _step_session_compatibility(self, fixture, session_manifest_path):
+        """Require the immutable XIAO session only for its source board."""
+        source_board = fixture.roles["source"].board
+        if source_board == model.NRF54L15_CPUAPP_BOARD:
+            if not session_manifest_path:
+                raise HilRunnerError(
+                    "session", "nRF54L15 source fixture requires --session-manifest"
+                )
+            return True
+        if source_board == model.NRF5340_CPUAPP_BOARD:
+            if session_manifest_path:
+                raise HilRunnerError(
+                    "session",
+                    "nRF5340 source fixture forbids --session-manifest",
+                )
+        return False
+
+    def _step_load_session(self, manifest_path, fixture_path, binding_path):
+        """Load immutable session input and retain exact local evidence bytes."""
+        try:
+            manifest = self.deps.load_session(manifest_path, fixture_path, binding_path)
+            evidence._atomic_write_text(
+                os.path.join(self._run_dir, "session-devices.json"),
+                manifest.raw_bytes.decode("utf-8"),
+            )
+            copied_path = os.path.join(self._run_dir, "session-devices.json")
+            if self._sha256(copied_path) != manifest.sha256:
+                raise HilRunnerError("session", "session manifest copy hash mismatch")
+            write_json_evidence(
+                self._run_dir,
+                "session.json",
+                {
+                    "path": manifest.path,
+                    "sha256": manifest.sha256,
+                    "session_id": manifest.session_id,
+                    "created_at_utc": manifest.created_at_utc,
+                    "fixture_id": manifest.fixture_id,
+                    "fixture_sha256": manifest.fixture_sha256,
+                    "binding_sha256": manifest.binding_sha256,
+                    "roles": {
+                        role: manifest.roles[role].probe.serial
+                        for role in ("receiver", "source")
+                    },
+                },
+            )
+        except HilRunnerError:
+            raise
+        except (
+            session.HilSessionError,
+            EvidenceError,
+            OSError,
+            UnicodeDecodeError,
+        ) as exc:
+            raise HilRunnerError("session", str(exc)) from exc
+        self._session_manifest = manifest
+        return manifest
+
+    def _step_session_revalidate(
+        self, before, manifest, fixture_path, binding_path, binding
+    ):
+        """Revalidate immutable session identity and retain each success."""
+        try:
+            resolution = self.deps.revalidate_session(
+                manifest,
+                fixture_path,
+                binding_path,
+                binding,
+                run_cmd=self._discovery_command,
+            )
+        except (session.HilSessionError, HilDiscoveryError) as exc:
+            raise HilRunnerError("session revalidate: %s" % before, str(exc)) from exc
+        snapshot = {
+            "before": before,
+            "sequence": len(self._session_revalidations),
+            "roles": self._identity_dict(resolution)["roles"],
+        }
+        self._session_revalidations.append(snapshot)
+        self._write_jsonl("session-revalidations.jsonl", self._session_revalidations)
+        return resolution
+
+    @staticmethod
+    def _require_session_console_paths(
+        resolution, before, receiver_console=None, source_console=None
+    ):
+        """Reject a fresh session tty that differs from an open descriptor."""
+        for role, console in (
+            ("receiver", receiver_console),
+            ("source", source_console),
+        ):
+            if console is None:
+                continue
+            current_path = resolution.roles[role].serial.path
+            if current_path != console.path:
+                raise HilRunnerError(
+                    "session revalidate: %s" % before,
+                    "%s tty changed after open: %s -> %s"
+                    % (role, console.path, current_path),
+                )
+
     # ── row steps ───────────────────────────────────────────────────
 
     def _step_validate(self, fixture_path, binding_path, output_root, run_id):
@@ -504,7 +648,7 @@ class Runner:
         self._write_bytes("binding.json", binding_bytes)
         return run_dir
 
-    def _step_identities(self, binding, run_dir, argv, status):
+    def _step_identities(self, binding, run_dir, argv, status, resolution=None):
         env_capture = self.deps.environment
         if env_capture is None:
             env_capture = lambda a, s: capture_environment(  # noqa: E731
@@ -519,11 +663,12 @@ class Runner:
             environment = dict(environment)
             environment["artifacts"] = artifact_set.evidence()
         write_json_evidence(run_dir, "environment.json", environment)
-        try:
-            resolution = self.deps.resolve(binding, run_cmd=self._discovery_command)
-        except HilDiscoveryError as exc:
-            self._write_identity_raw(getattr(exc, "raw", {}))
-            raise
+        if resolution is None:
+            try:
+                resolution = self.deps.resolve(binding, run_cmd=self._discovery_command)
+            except HilDiscoveryError as exc:
+                self._write_identity_raw(getattr(exc, "raw", {}))
+                raise
         self._write_identity_raw(resolution.raw)
         write_json_evidence(run_dir, "identity.json", self._identity_dict(resolution))
         return resolution
@@ -637,8 +782,14 @@ class Runner:
             parts.append(record["stderr"])
         return "\n".join(parts) + "\n"
 
-    def _step_images(self, run_dir, repo_root, artifact_set=None):
+    def _step_images(self, run_dir, repo_root, fixture, artifact_set=None):
+        source_board = fixture.roles["source"].board
         if artifact_set is not None:
+            if source_board != model.NRF5340_CPUAPP_BOARD:
+                raise HilRunnerError(
+                    "hash images",
+                    "artifact mode requires nRF5340 source fixture",
+                )
             try:
                 artifact_resolver.revalidate_artifact_set(artifact_set)
             except artifact_resolver.ArtifactError as exc:
@@ -649,9 +800,14 @@ class Runner:
             }
             write_json_evidence(run_dir, "images.json", payload)
             return payload
+        image_inputs = IMAGE_INPUTS_BY_SOURCE_BOARD.get(source_board)
+        if image_inputs is None:
+            raise HilRunnerError(
+                "hash images", "unsupported source board %r" % source_board
+            )
         images = []
         missing = []
-        for logical, rel in IMAGE_INPUTS:
+        for logical, rel in image_inputs:
             path = os.path.join(repo_root, rel)
             if not os.path.isfile(path):
                 missing.append(rel)
@@ -699,32 +855,71 @@ class Runner:
                 "preflight tty", "lsof failed with status %d" % proc.returncode
             )
 
-    def _step_open_consoles(self, resolution, stack):
-        rec = resolution.roles["receiver"]
-        src = resolution.roles["source"]
-        receiver_console = self.deps.console(
-            "receiver",
-            rec.serial.path,
-            rec.serial.baud,
-            os.path.join(self._run_dir, "receiver-console.bin"),
-            rec.serial.dtr,
-            rec.serial.rts,
-        )
-        stack.register("close receiver console", receiver_console.close)
-        source_console = self.deps.console(
-            "source",
-            src.serial.path,
-            src.serial.baud,
-            os.path.join(self._run_dir, "source-console.bin"),
-            src.serial.dtr,
-            src.serial.rts,
-        )
-        stack.register("close source console", source_console.close)
-        try:
-            receiver_console.open()
-            source_console.open()
-        except SerialConsoleError as exc:
-            raise HilRunnerError("open consoles", str(exc)) from exc
+    def _step_open_consoles(self, resolution, stack, session_revalidate=None):
+        if session_revalidate is None:
+            rec = resolution.roles["receiver"]
+            src = resolution.roles["source"]
+            receiver_console = self.deps.console(
+                "receiver",
+                rec.serial.path,
+                rec.serial.baud,
+                os.path.join(self._run_dir, "receiver-console.bin"),
+                rec.serial.dtr,
+                rec.serial.rts,
+            )
+            stack.register("close receiver console", receiver_console.close)
+            source_console = self.deps.console(
+                "source",
+                src.serial.path,
+                src.serial.baud,
+                os.path.join(self._run_dir, "source-console.bin"),
+                src.serial.dtr,
+                src.serial.rts,
+            )
+            stack.register("close source console", source_console.close)
+            try:
+                receiver_console.open()
+                source_console.open()
+            except SerialConsoleError as exc:
+                raise HilRunnerError("open consoles", str(exc)) from exc
+        else:
+            receiver_resolution = session_revalidate("receiver serial open")
+            rec = receiver_resolution.roles["receiver"]
+            receiver_console = self.deps.console(
+                "receiver",
+                rec.serial.path,
+                rec.serial.baud,
+                os.path.join(self._run_dir, "receiver-console.bin"),
+                rec.serial.dtr,
+                rec.serial.rts,
+            )
+            stack.register("close receiver console", receiver_console.close)
+            try:
+                receiver_console.open()
+            except SerialConsoleError as exc:
+                raise HilRunnerError("open consoles", str(exc)) from exc
+
+            source_resolution = session_revalidate("source serial open")
+            self._require_session_console_paths(
+                source_resolution,
+                "source serial open",
+                receiver_console=receiver_console,
+            )
+            self._step_preflight_tty(source_resolution)
+            src = source_resolution.roles["source"]
+            source_console = self.deps.console(
+                "source",
+                src.serial.path,
+                src.serial.baud,
+                os.path.join(self._run_dir, "source-console.bin"),
+                src.serial.dtr,
+                src.serial.rts,
+            )
+            stack.register("close source console", source_console.close)
+            try:
+                source_console.open()
+            except SerialConsoleError as exc:
+                raise HilRunnerError("open consoles", str(exc)) from exc
         deadline = self.deps.clock() + CONSOLE_READY_TIMEOUT
         while not (receiver_console.reader_ready() and source_console.reader_ready()):
             self._check_cancel("cancelled opening consoles")
@@ -734,7 +929,13 @@ class Runner:
         return receiver_console, source_console
 
     def _step_flash(
-        self, resolution, receiver_console, source_console, artifact_set=None
+        self,
+        resolution,
+        receiver_console,
+        source_console,
+        artifact_set=None,
+        source_board=model.NRF5340_CPUAPP_BOARD,
+        session_revalidate=None,
     ):
         # Start parsing each boot at a fresh host-side mark immediately before
         # its own reset. Consoles were opened before flash deliberately, so
@@ -746,28 +947,45 @@ class Runner:
             source_console.mark_rx()
         except SerialConsoleError as exc:
             raise HilRunnerError("mark boot", str(exc)) from exc
+        if session_revalidate is not None:
+            resolution = session_revalidate("source flash")
+            self._require_session_console_paths(
+                resolution,
+                "source flash",
+                receiver_console=receiver_console,
+                source_console=source_console,
+            )
         source_serial = resolution.roles["source"].probe.serial
-        source_env = {"FW_HIL_SOURCE_JLINK_SERIAL": source_serial}
-        if artifact_set is not None:
-            try:
-                artifact_resolver.revalidate_artifact_set(artifact_set)
-                source_env.update(
-                    {
-                        "FW_HIL_SOURCE_CPUAPP_HEX": artifact_resolver.image_by_role(
-                            artifact_set.source_images, "cpuapp"
-                        ).path,
-                        "FW_HIL_SOURCE_CPUNET_HEX": artifact_resolver.image_by_role(
-                            artifact_set.source_images, "cpunet"
-                        ).path,
-                    }
-                )
-            except artifact_resolver.ArtifactError as exc:
-                raise HilRunnerError("flash source", str(exc)) from exc
-        # Artifact hashes were revalidated after both consoles were armed and
-        # immediately before this source flash command.
+        if source_board == model.NRF54L15_CPUAPP_BOARD:
+            source_env = {"FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL": source_serial}
+            source_argv = ["fw-flash-hil-source-54l15"]
+        elif source_board == model.NRF5340_CPUAPP_BOARD:
+            source_env = {"FW_HIL_SOURCE_JLINK_SERIAL": source_serial}
+            if artifact_set is not None:
+                try:
+                    artifact_resolver.revalidate_artifact_set(artifact_set)
+                    source_env.update(
+                        {
+                            "FW_HIL_SOURCE_CPUAPP_HEX": artifact_resolver.image_by_role(
+                                artifact_set.source_images, "cpuapp"
+                            ).path,
+                            "FW_HIL_SOURCE_CPUNET_HEX": artifact_resolver.image_by_role(
+                                artifact_set.source_images, "cpunet"
+                            ).path,
+                        }
+                    )
+                except artifact_resolver.ArtifactError as exc:
+                    raise HilRunnerError("flash source", str(exc)) from exc
+            # Artifact hashes were revalidated after both consoles were armed
+            # and immediately before this source flash command.
+            source_argv = ["fw-flash-hil-source"]
+        else:
+            raise HilRunnerError(
+                "flash source", "unsupported source board %r" % source_board
+            )
         try:
             src_proc = self._command(
-                ["fw-flash-hil-source"],
+                source_argv,
                 FLASH_TIMEOUT,
                 env=source_env,
             )
@@ -781,6 +999,14 @@ class Runner:
         except SerialConsoleError as exc:
             raise HilRunnerError("mark boot", str(exc)) from exc
         try:
+            if session_revalidate is not None:
+                resolution = session_revalidate("receiver flash")
+                self._require_session_console_paths(
+                    resolution,
+                    "receiver flash",
+                    receiver_console=receiver_console,
+                    source_console=source_console,
+                )
             receiver_serial = resolution.roles["receiver"].probe.serial
             receiver_env = {"FW_NRF54L15_PROBE_SERIAL": receiver_serial}
             if artifact_set is not None:
@@ -2031,6 +2257,7 @@ class Runner:
         hci_remove_iso_path_trace=False,
         sdc_hci_remove_iso_path_trace=False,
         allow_offload_disabled=False,
+        session_manifest_path=None,
     ):
         """Run one row and return ``(outcome, first_boundary,
         cleanup_failures)``.  The caller maps the outcome to the process
@@ -2051,13 +2278,17 @@ class Runner:
                 "hci_remove_iso_path_trace and sdc_hci_remove_iso_path_trace "
                 "are mutually exclusive"
             )
-        if artifacts is not None:
-            artifact_resolver.revalidate_artifact_set(artifacts)
         self.commands = []
         self._run_dir = None
         self._artifact_set = artifacts
         self._receiver_console = None
         self._source_console = None
+        self._session_manifest = None
+        self._session_revalidations = []
+        if artifacts is not None:
+            artifact_fixture = model.load_logical_fixture(fixture_path)
+            if artifact_fixture.roles["source"].board != model.NRF54L15_CPUAPP_BOARD:
+                artifact_resolver.revalidate_artifact_set(artifacts)
         fixture_bytes = self._read_bytes(fixture_path)
         binding_bytes = self._read_bytes(binding_path)
         stack = CleanupStack()
@@ -2071,6 +2302,9 @@ class Runner:
         capture_session = None
         qualification_record = None
         artifact_evidence = artifacts.evidence() if artifacts is not None else None
+        session_bound = False
+        session_manifest = None
+        session_revalidate = None
         try:
             fixture, binding, canon = self._step_validate(
                 fixture_path, binding_path, output_root, run_id
@@ -2103,13 +2337,35 @@ class Runner:
             self._run_dir = self._step_run_dir(
                 canon, run_id, fixture_bytes, binding_bytes
             )
+            session_bound = self._step_session_compatibility(
+                fixture, session_manifest_path
+            )
+            if session_bound:
+                session_manifest = self._step_load_session(
+                    session_manifest_path, fixture_path, binding_path
+                )
+
+                def session_revalidate(before):
+                    return self._step_session_revalidate(
+                        before,
+                        session_manifest,
+                        fixture_path,
+                        binding_path,
+                        binding,
+                    )
+
+                resolution = session_revalidate("setup identity")
+            else:
+                resolution = None
             row_evidence = self._row_dict(row)
             if allow_offload_disabled:
                 row_evidence["allow_offload_disabled"] = True
             write_json_evidence(self._run_dir, "row.json", row_evidence)
             if artifact_evidence is not None:
                 write_json_evidence(self._run_dir, "artifacts.json", artifact_evidence)
-            resolution = self._step_identities(binding, self._run_dir, argv, status)
+            resolution = self._step_identities(
+                binding, self._run_dir, argv, status, resolution=resolution
+            )
             capture_resolution = None
             if fixture.capture_capability is not model.CaptureCapability.NONE:
                 try:
@@ -2148,11 +2404,13 @@ class Runner:
             self._step_images(
                 self._run_dir,
                 self.deps.repo_root or os.getcwd(),
+                fixture,
                 artifact_set=artifacts,
             )
-            self._step_preflight_tty(resolution)
+            if not session_bound:
+                self._step_preflight_tty(resolution)
             receiver_console, source_console = self._step_open_consoles(
-                resolution, stack
+                resolution, stack, session_revalidate=session_revalidate
             )
             self._receiver_console = receiver_console
             self._source_console = source_console
@@ -2164,9 +2422,22 @@ class Runner:
                 cancel=self.deps.cancel,
             )
             self._step_flash(
-                resolution, receiver_console, source_console, artifact_set=artifacts
+                resolution,
+                receiver_console,
+                source_console,
+                artifact_set=artifacts,
+                source_board=fixture.roles["source"].board,
+                session_revalidate=session_revalidate,
             )
             self._step_boot(receiver_console, src_client)
+            if session_bound:
+                row_resolution = session_revalidate("row action")
+                self._require_session_console_paths(
+                    row_resolution,
+                    "row action",
+                    receiver_console=receiver_console,
+                    source_console=source_console,
+                )
             identity = self._step_clean_state(receiver_console, src_client, row)
             capture_session = self._start_capture(
                 fixture, binding, capture_resolution, qualification_record, row

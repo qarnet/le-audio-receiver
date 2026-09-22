@@ -14,6 +14,7 @@ Run with:
     nix develop --command pytest -q tests/hil/rh2_test.py
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -23,7 +24,7 @@ import tempfile
 import threading
 import time
 import unittest
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(_REPO, "scripts"))
@@ -39,6 +40,7 @@ from hil import (
     receiver,
     rows,
     runner,
+    session,
     serial_io,
     source_client,
 )  # noqa: E402
@@ -314,6 +316,75 @@ def fake_resolution():
     )
 
 
+def fake_xiao_resolution(receiver_path="/dev/ttyACM7", source_path="/dev/ttyACM8"):
+    """Canned revalidated two-XIAO identity with caller-selected tty names."""
+
+    def role_identity(role, serial, path, usb):
+        properties = {
+            "ID_BUS": "usb",
+            "ID_VENDOR_ID": "2886",
+            "ID_MODEL_ID": "0066",
+            "ID_SERIAL_SHORT": serial,
+            "ID_USB_INTERFACE_NUM": "02",
+            "ID_USB_DRIVER": "cdc_acm",
+            "ID_PATH": "pci-0000:00-usb-0:%s:1.2" % usb,
+            "DEVPATH": hil_fakes.tty_devpath(usb, os.path.basename(path)),
+        }
+        probe = discovery.ProbeIdentity(
+            role=role,
+            backend="nrf-probes",
+            family="nrf54l",
+            serial=serial,
+            product="CMSIS-DAP",
+            target="nRF54L15",
+            dpidr="0x6ba02477",
+            ap_idrs=MappingProxyType(
+                {
+                    "ap0": "0x84770001",
+                    "ap1": "0x84770001",
+                    "ap2": "0x32880000",
+                    "ap3": "0x00000000",
+                }
+            ),
+            part="0x00054b15",
+            variant="AAC0",
+            variant_raw="0x41414330",
+        )
+        serial_identity = discovery.SerialIdentity(
+            role,
+            path,
+            115200,
+            MappingProxyType(properties),
+            usb_parent="/sys/devices/pci0000:00/usb1/%s" % usb,
+            dtr=True,
+            rts=False,
+        )
+        return discovery.RoleIdentity(role, probe, serial_identity), properties
+
+    receiver_role, receiver_props = role_identity(
+        "receiver", "XIAO-RECEIVER", receiver_path, "1-2"
+    )
+    source_role, source_props = role_identity(
+        "source", "XIAO-SOURCE", source_path, "1-3"
+    )
+    raw = {
+        "nrf-probes": {
+            "argv": ["nix-nrf", "probes", "XIAO-RECEIVER", "XIAO-SOURCE"],
+            "stdout": "two XIAO probes\n",
+            "stderr": "",
+            "status": 0,
+        },
+        "receiver-udev": {os.path.basename(receiver_path): receiver_props},
+        "source-udev": {os.path.basename(source_path): source_props},
+        "receiver-cmsis-dap-fingerprint": {"output": "receiver fingerprint\n"},
+        "source-cmsis-dap-fingerprint": {"output": "source fingerprint\n"},
+    }
+    return discovery.FixtureResolution(
+        roles=MappingProxyType({"receiver": receiver_role, "source": source_role}),
+        raw=MappingProxyType(raw),
+    )
+
+
 def make_runner_deps(
     receiver_wire,
     source_wire,
@@ -324,6 +395,9 @@ def make_runner_deps(
     clock=None,
     sleep=None,
     repo_root=None,
+    discover=None,
+    session_loader=None,
+    session_revalidator=None,
 ):
     """RunnerDeps with scripted discovery, serial factory, and runner."""
     scripted = run_cmd if run_cmd is not None else hil_fakes.ScriptedRunner(ledger)
@@ -368,7 +442,11 @@ def make_runner_deps(
 
     return RunnerDeps(
         run_cmd=scripted,
-        discover=lambda binding, sysfs_root=None, run_cmd=None: fake_resolution(),
+        discover=(
+            discover
+            if discover is not None
+            else lambda binding, sysfs_root=None, run_cmd=None: fake_resolution()
+        ),
         serial_factory=factory,
         clock=clock if clock is not None else time.monotonic,
         sleep=sleep if sleep is not None else time.sleep,
@@ -383,6 +461,8 @@ def make_runner_deps(
         repo_root=repo_root,
         boot_timeout=2.0,
         summary_timeout=2.0,
+        session_loader=session_loader,
+        session_revalidator=session_revalidator,
     )
 
 
@@ -760,6 +840,181 @@ def _run_harness(
         allow_offload_disabled=allow_offload_disabled,
     )
     return result, out_root, run_id, junit, fixture_path, binding_path, engine
+
+
+SESSION_CHECKPOINTS = (
+    "setup identity",
+    "receiver serial open",
+    "source serial open",
+    "source flash",
+    "receiver flash",
+    "row action",
+)
+
+
+def _make_xiao_runner_images(repo_root, include_source=True):
+    rels = [
+        "build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex",
+        "build/nrf54l15/flpr/zephyr/zephyr.hex",
+    ]
+    if include_source:
+        rels.insert(0, "build/hil-source-nrf54l15/zephyr/zephyr.hex")
+    for rel in rels:
+        path = os.path.join(repo_root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(b"fake image bytes\n")
+
+
+def _fake_session_manifest(path):
+    raw_bytes = b'{"fake_session":"pb-033"}\n'
+    return SimpleNamespace(
+        path=path,
+        raw_bytes=raw_bytes,
+        sha256=hashlib.sha256(raw_bytes).hexdigest(),
+        session_id="pb033-fake",
+        created_at_utc="2026-09-22T12:00:00+00:00",
+        fixture_id="local-xiao-nrf54l15-pair",
+        fixture_sha256="a" * 64,
+        binding_sha256="b" * 64,
+        roles={
+            "receiver": SimpleNamespace(probe=SimpleNamespace(serial="XIAO-RECEIVER")),
+            "source": SimpleNamespace(probe=SimpleNamespace(serial="XIAO-SOURCE")),
+        },
+    )
+
+
+def _run_xiao_session_harness(
+    td,
+    *,
+    include_source_image=True,
+    resolutions=None,
+    revalidation_failures=None,
+    artifacts=None,
+    receiver_wire=None,
+    source_wire=None,
+    ledger=None,
+):
+    """Run one XIAO row against injected session and hardware boundaries."""
+    out_root = os.path.join(td, "out")
+    os.makedirs(out_root)
+    repo_fake = os.path.join(td, "repo")
+    os.makedirs(repo_fake)
+    _make_xiao_runner_images(repo_fake, include_source=include_source_image)
+    fixture_path = os.path.join(_REPO, "tests", "hil", "fixture-xiao-source.json")
+    binding_path = os.path.join(
+        _REPO, "tests", "hil", "fixture-xiao-source.local.example.json"
+    )
+    run_id = RUN_ID
+    junit = os.path.join(out_root, "%s.junit.xml" % run_id)
+    manifest_path = os.path.join(td, "session", "devices.json")
+    manifest = _fake_session_manifest(manifest_path)
+    default_resolution = fake_xiao_resolution()
+    resolutions = dict(resolutions or {})
+    revalidation_failures = dict(revalidation_failures or {})
+    command = hil_fakes.ScriptedRunner(ledger)
+    for before in SESSION_CHECKPOINTS:
+        command.script(
+            ["session-revalidate", before],
+            hil_fakes.FakeProc(
+                stdout="%s stdout\n" % before,
+                stderr="%s stderr\n" % before,
+            ),
+        )
+    source_open_resolution = resolutions.get("source serial open", default_resolution)
+    command.script_exit(
+        [
+            "lsof",
+            "--",
+            source_open_resolution.roles["source"].serial.path,
+        ],
+        1,
+    )
+    command.script(
+        ["fw-flash-hil-source-54l15"],
+        hil_fakes.FakeProc(stdout="source programmed\n", stderr=""),
+    )
+    command.script(
+        ["fw-flash-54l15"], hil_fakes.FakeProc(stdout="receiver programmed\n")
+    )
+    revalidation_calls = []
+    loader_calls = []
+
+    def loader(path, fixture, binding):
+        loader_calls.append((path, fixture, binding))
+        return manifest
+
+    def revalidator(loaded, fixture, binding_path_arg, binding, *, run_cmd, sysfs_root):
+        del loaded, fixture, binding_path_arg, binding, sysfs_root
+        before = SESSION_CHECKPOINTS[len(revalidation_calls)]
+        revalidation_calls.append(before)
+        failure = revalidation_failures.get(before)
+        if failure is not None:
+            raise failure
+        run_cmd(["session-revalidate", before], 15)
+        return resolutions.get(before, default_resolution)
+
+    if receiver_wire is None:
+        receiver_wire = _receiver_passing_wire(run_id)
+    if source_wire is None:
+        source_transcript = hil_fakes.build_passing_source_wire(run_id)
+        source_chunks, source_writes = source_transcript.build()
+        source_wire = hil_fakes.Wire(
+            "source", chunks=source_chunks, assert_writes=source_writes
+        )
+    if ledger is None:
+        ledger = command.ledger
+    original_receiver_write = receiver_wire.on_write
+
+    def record_receiver_write(data):
+        ledger.append(
+            {
+                "event": "serial-write",
+                "role": "receiver",
+                "data": data.decode("utf-8"),
+            }
+        )
+        return original_receiver_write(data)
+
+    receiver_wire.on_write = record_receiver_write
+
+    def unexpected_discovery(*_args, **_kwargs):
+        raise AssertionError("session-bound runner must not use one-shot discovery")
+
+    deps = make_runner_deps(
+        receiver_wire,
+        source_wire,
+        ledger=ledger,
+        run_cmd=command,
+        repo_root=repo_fake,
+        discover=unexpected_discovery,
+        session_loader=loader,
+        session_revalidator=revalidator,
+    )
+    engine = Runner(deps)
+    result = engine.run(
+        fixture_path,
+        binding_path,
+        out_root,
+        run_id,
+        junit,
+        argv=["hil-runner.py", "run", "--session-manifest", manifest_path],
+        status=0,
+        artifacts=artifacts,
+        session_manifest_path=manifest_path,
+    )
+    return {
+        "result": result,
+        "run_dir": os.path.join(out_root, run_id),
+        "command": command,
+        "engine": engine,
+        "ledger": ledger,
+        "loader_calls": loader_calls,
+        "manifest": manifest,
+        "receiver_wire": receiver_wire,
+        "revalidation_calls": revalidation_calls,
+        "source_wire": source_wire,
+    }
 
 
 # ── serial console ─────────────────────────────────────────────────
@@ -10019,6 +10274,392 @@ class TestRunnerFailures(unittest.TestCase):
             self.assertIn("failure detail: invalid receiver status", junit_text)
 
 
+class TestRunnerSessionBound(unittest.TestCase):
+    def test_source_board_session_compatibility_fails_before_external_action(self):
+        def no_command(argv, timeout, env=None):
+            del timeout, env
+            commands.append(list(argv))
+            raise AssertionError("unexpected command")
+
+        def no_console(*args):
+            console_calls.append(args)
+            raise AssertionError("unexpected console")
+
+        with tempfile.TemporaryDirectory() as td:
+            commands = []
+            console_calls = []
+            out_root = os.path.join(td, "out")
+            os.makedirs(out_root)
+            fixture_path = os.path.join(
+                _REPO, "tests", "hil", "fixture-xiao-source.json"
+            )
+            binding_path = os.path.join(
+                _REPO, "tests", "hil", "fixture-xiao-source.local.example.json"
+            )
+            result = Runner(
+                RunnerDeps(
+                    run_cmd=no_command,
+                    serial_factory=no_console,
+                    environment=lambda argv, status: {"argv": argv, "status": status},
+                )
+            ).run(
+                fixture_path,
+                binding_path,
+                out_root,
+                RUN_ID,
+                os.path.join(out_root, "xiao.junit.xml"),
+                argv=["hil-runner.py", "run"],
+            )
+            self.assertEqual(result[0], "failed")
+            self.assertEqual(result[1], "session")
+            self.assertEqual(commands, [])
+            self.assertEqual(console_calls, [])
+
+        with tempfile.TemporaryDirectory() as td:
+            commands = []
+            console_calls = []
+            loader_calls = []
+            out_root = os.path.join(td, "out")
+            cfg = os.path.join(td, "cfg")
+            os.makedirs(out_root)
+            os.makedirs(cfg)
+            fixture_path, binding_path = hil_fakes.write_fixture_binding(cfg)
+            result = Runner(
+                RunnerDeps(
+                    run_cmd=no_command,
+                    serial_factory=no_console,
+                    session_loader=lambda *args: loader_calls.append(args),
+                    environment=lambda argv, status: {"argv": argv, "status": status},
+                )
+            ).run(
+                fixture_path,
+                binding_path,
+                out_root,
+                RUN_ID,
+                os.path.join(out_root, "nrf5340.junit.xml"),
+                argv=[
+                    "hil-runner.py",
+                    "run",
+                    "--session-manifest",
+                    "/tmp/devices.json",
+                ],
+                session_manifest_path="/tmp/devices.json",
+            )
+            self.assertEqual(result[0], "failed")
+            self.assertEqual(result[1], "session")
+            self.assertEqual(commands, [])
+            self.assertEqual(console_calls, [])
+            self.assertEqual(loader_calls, [])
+
+    def test_session_bound_xiao_row_uses_fresh_ttys_and_retains_evidence(self):
+        stale = fake_xiao_resolution("/dev/ttyACM0", "/dev/ttyACM1")
+        fresh = fake_xiao_resolution("/dev/ttyACM7", "/dev/ttyACM8")
+        resolutions = {"setup identity": stale}
+        resolutions.update({before: fresh for before in SESSION_CHECKPOINTS[1:]})
+        with tempfile.TemporaryDirectory() as td:
+            run = _run_xiao_session_harness(td, resolutions=resolutions, ledger=[])
+            self.assertEqual(run["result"], ("passed", None, []))
+            self.assertEqual(run["revalidation_calls"], list(SESSION_CHECKPOINTS))
+            run_dir = run["run_dir"]
+
+            with open(os.path.join(run_dir, "session-devices.json"), "rb") as fh:
+                self.assertEqual(fh.read(), run["manifest"].raw_bytes)
+            with open(os.path.join(run_dir, "session.json"), encoding="utf-8") as fh:
+                session_json = json.load(fh)
+            self.assertEqual(
+                set(session_json),
+                {
+                    "path",
+                    "sha256",
+                    "session_id",
+                    "created_at_utc",
+                    "fixture_id",
+                    "fixture_sha256",
+                    "binding_sha256",
+                    "roles",
+                },
+            )
+            self.assertEqual(session_json["path"], run["manifest"].path)
+            self.assertEqual(session_json["sha256"], run["manifest"].sha256)
+            self.assertEqual(
+                session_json["roles"],
+                {"receiver": "XIAO-RECEIVER", "source": "XIAO-SOURCE"},
+            )
+            with open(
+                os.path.join(run_dir, "session-revalidations.jsonl"), encoding="utf-8"
+            ) as fh:
+                snapshots = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(
+                [(snapshot["before"], snapshot["sequence"]) for snapshot in snapshots],
+                list(zip(SESSION_CHECKPOINTS, range(len(SESSION_CHECKPOINTS)))),
+            )
+            self.assertTrue(
+                all(
+                    set(snapshot) == {"before", "sequence", "roles"}
+                    for snapshot in snapshots
+                )
+            )
+            self.assertEqual(
+                snapshots[0]["roles"]["receiver"]["serial"]["path"],
+                "/dev/ttyACM0",
+            )
+            self.assertEqual(
+                snapshots[1]["roles"]["receiver"]["serial"]["path"],
+                "/dev/ttyACM7",
+            )
+
+            with open(os.path.join(run_dir, "images.json"), encoding="utf-8") as fh:
+                images = json.load(fh)["images"]
+            self.assertEqual(
+                [image["logical_image"] for image in images],
+                ["source-app", "receiver-cpuapp", "receiver-flpr"],
+            )
+            self.assertEqual(
+                [image["path"] for image in images],
+                [
+                    "build/hil-source-nrf54l15/zephyr/zephyr.hex",
+                    "build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex",
+                    "build/nrf54l15/flpr/zephyr/zephyr.hex",
+                ],
+            )
+            with open(os.path.join(run_dir, "commands.jsonl"), encoding="utf-8") as fh:
+                commands = [json.loads(line) for line in fh if line.strip()]
+            revalidations = [
+                command
+                for command in commands
+                if command["argv"][:1] == ["session-revalidate"]
+            ]
+            self.assertEqual(
+                [command["argv"][1] for command in revalidations],
+                list(SESSION_CHECKPOINTS),
+            )
+            self.assertTrue(all(command["stdout"] for command in revalidations))
+            self.assertTrue(all(command["stderr"] for command in revalidations))
+            source_flash = next(
+                command
+                for command in commands
+                if command["argv"] == ["fw-flash-hil-source-54l15"]
+            )
+            self.assertEqual(
+                source_flash["env"],
+                {"FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL": "XIAO-SOURCE"},
+            )
+            self.assertFalse(
+                any(command["argv"] == ["fw-flash-hil-source"] for command in commands)
+            )
+            receiver_flash = next(
+                command for command in commands if command["argv"] == ["fw-flash-54l15"]
+            )
+            self.assertEqual(
+                receiver_flash["env"],
+                {"FW_NRF54L15_PROBE_SERIAL": "XIAO-RECEIVER"},
+            )
+            with open(os.path.join(run_dir, "SHA256SUMS"), encoding="utf-8") as fh:
+                sums = fh.read()
+            for name in (
+                "session-devices.json",
+                "session.json",
+                "session-revalidations.jsonl",
+            ):
+                self.assertIn("  %s" % name, sums)
+
+            ledger = run["ledger"]
+
+            def event_index(predicate):
+                return next(
+                    index for index, event in enumerate(ledger) if predicate(event)
+                )
+
+            receiver_checkpoint = event_index(
+                lambda event: (
+                    event.get("argv") == ["session-revalidate", "receiver serial open"]
+                )
+            )
+            receiver_open = event_index(
+                lambda event: (
+                    event.get("event") == "console-open"
+                    and event.get("role") == "receiver"
+                )
+            )
+            source_checkpoint = event_index(
+                lambda event: (
+                    event.get("argv") == ["session-revalidate", "source serial open"]
+                )
+            )
+            source_open = event_index(
+                lambda event: (
+                    event.get("event") == "console-open"
+                    and event.get("role") == "source"
+                )
+            )
+            source_flash_checkpoint = event_index(
+                lambda event: (
+                    event.get("argv") == ["session-revalidate", "source flash"]
+                )
+            )
+            source_flash_event = event_index(
+                lambda event: event.get("argv") == ["fw-flash-hil-source-54l15"]
+            )
+            receiver_flash_checkpoint = event_index(
+                lambda event: (
+                    event.get("argv") == ["session-revalidate", "receiver flash"]
+                )
+            )
+            receiver_flash_event = event_index(
+                lambda event: event.get("argv") == ["fw-flash-54l15"]
+            )
+            row_checkpoint = event_index(
+                lambda event: event.get("argv") == ["session-revalidate", "row action"]
+            )
+            first_clean_write = event_index(
+                lambda event: (
+                    event.get("event") == "serial-write"
+                    and event.get("role") == "receiver"
+                )
+            )
+            self.assertLess(receiver_checkpoint, receiver_open)
+            self.assertLess(source_checkpoint, source_open)
+            self.assertLess(source_flash_checkpoint, source_flash_event)
+            self.assertLess(receiver_flash_checkpoint, receiver_flash_event)
+            self.assertLess(row_checkpoint, first_clean_write)
+            self.assertEqual(ledger[receiver_open]["path"], "/dev/ttyACM7")
+            self.assertEqual(ledger[source_open]["path"], "/dev/ttyACM8")
+            lsof = event_index(
+                lambda event: event.get("argv") == ["lsof", "--", "/dev/ttyACM8"]
+            )
+            self.assertLess(source_checkpoint, lsof)
+            self.assertLess(lsof, source_open)
+
+    def test_post_open_tty_drift_blocks_guarded_action_and_closes_consoles(self):
+        blocked = {
+            "source flash": set(),
+            "receiver flash": {"fw-flash-hil-source-54l15"},
+            "row action": {"fw-flash-hil-source-54l15", "fw-flash-54l15"},
+        }
+        for before, expected_helpers in blocked.items():
+            with self.subTest(before=before), tempfile.TemporaryDirectory() as td:
+                run = _run_xiao_session_harness(
+                    td,
+                    resolutions={
+                        before: fake_xiao_resolution(source_path="/dev/ttyACM9")
+                    },
+                )
+                self.assertEqual(run["result"][0], "failed")
+                self.assertEqual(run["result"][1], "session revalidate: %s" % before)
+                helper_argv = {
+                    event["argv"][0]
+                    for event in run["ledger"]
+                    if event.get("argv")
+                    and event["argv"][0]
+                    in ("fw-flash-hil-source-54l15", "fw-flash-54l15")
+                }
+                self.assertEqual(helper_argv, expected_helpers)
+                self.assertTrue(run["receiver_wire"].closed)
+                self.assertTrue(run["source_wire"].closed)
+                with open(
+                    os.path.join(run["run_dir"], "session-revalidations.jsonl"),
+                    encoding="utf-8",
+                ) as fh:
+                    snapshots = [json.loads(line) for line in fh if line.strip()]
+                expected = list(
+                    SESSION_CHECKPOINTS[: SESSION_CHECKPOINTS.index(before) + 1]
+                )
+                self.assertEqual(
+                    [snapshot["before"] for snapshot in snapshots], expected
+                )
+                if before == "row action":
+                    self.assertEqual(run["receiver_wire"].writes, [])
+
+    def test_revalidation_error_preserves_prior_evidence_and_blocks_source_flash(self):
+        for label, error in (
+            ("manifest", session.HilSessionError("manifest bytes changed")),
+            ("fixture", session.HilSessionError("fixture bytes changed")),
+            ("probe", HilDiscoveryError("source probe AP IDR drift")),
+            ("usb", session.HilSessionError("source USB parent drift")),
+            ("udev", session.HilSessionError("source stable udev drift")),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as td:
+                run = _run_xiao_session_harness(
+                    td, revalidation_failures={"source flash": error}
+                )
+                self.assertEqual(run["result"][0], "failed")
+                self.assertEqual(run["result"][1], "session revalidate: source flash")
+                self.assertFalse(
+                    any(
+                        event.get("argv") == ["fw-flash-hil-source-54l15"]
+                        for event in run["ledger"]
+                    )
+                )
+                with open(
+                    os.path.join(run["run_dir"], "session-revalidations.jsonl"),
+                    encoding="utf-8",
+                ) as fh:
+                    snapshots = [json.loads(line) for line in fh if line.strip()]
+                self.assertEqual(
+                    [snapshot["before"] for snapshot in snapshots],
+                    list(SESSION_CHECKPOINTS[:3]),
+                )
+
+    def test_xiao_image_and_artifact_guards_fail_before_serial_open(self):
+        with tempfile.TemporaryDirectory() as td:
+            run = _run_xiao_session_harness(td, include_source_image=False)
+            self.assertEqual(run["result"][0], "failed")
+            self.assertEqual(run["result"][1], "hash images")
+            with open(
+                os.path.join(run["run_dir"], "result.json"), encoding="utf-8"
+            ) as fh:
+                result_json = json.load(fh)
+            self.assertIn(
+                "build/hil-source-nrf54l15/zephyr/zephyr.hex",
+                result_json["failure_detail"],
+            )
+            self.assertEqual(run["revalidation_calls"], ["setup identity"])
+            self.assertFalse(
+                any(event.get("event") == "console-open" for event in run["ledger"])
+            )
+
+        class XIAOArtifacts:
+            def evidence(self):
+                return {"source": "nrf5340 artifact"}
+
+        with tempfile.TemporaryDirectory() as td:
+            run = _run_xiao_session_harness(td, artifacts=XIAOArtifacts())
+            self.assertEqual(run["result"][0], "failed")
+            self.assertEqual(run["result"][1], "hash images")
+            self.assertFalse(
+                any(event.get("event") == "console-open" for event in run["ledger"])
+            )
+            self.assertFalse(
+                any(
+                    event.get("argv", [""])[0].startswith("fw-flash")
+                    for event in run["ledger"]
+                )
+            )
+
+    def test_boot_failure_blocks_session_row_action_checkpoint(self):
+        transcript = hil_fakes.SourceTranscript(RUN_ID)
+        hello_id = transcript._expect("hello")
+        invalid_hello = hil_fakes.source_hello_data()
+        invalid_hello["firmware_id"] = "wrong-firmware"
+        transcript._status(hello_id, invalid_hello)
+        source_chunks, source_writes = transcript.build()
+        source_wire = hil_fakes.Wire(
+            "source", chunks=source_chunks, assert_writes=source_writes
+        )
+        with tempfile.TemporaryDirectory() as td:
+            run = _run_xiao_session_harness(td, source_wire=source_wire)
+            self.assertEqual(run["result"][0], "failed")
+            self.assertEqual(run["result"][1], "boot")
+            self.assertEqual(run["revalidation_calls"], list(SESSION_CHECKPOINTS[:5]))
+            self.assertEqual(run["receiver_wire"].writes, [])
+            self.assertFalse(
+                any(
+                    event.get("argv") == ["session-revalidate", "row action"]
+                    for event in run["ledger"]
+                )
+            )
+
+
 def _map_status(outcome):
     """Public CLI status mapping for one runner outcome."""
     if outcome == "passed":
@@ -10034,6 +10675,7 @@ class _Args:
     output_root = "o"
     run_id = "r"
     junit = "j"
+    session_manifest = None
 
 
 # ── CLI guards ─────────────────────────────────────────────────────

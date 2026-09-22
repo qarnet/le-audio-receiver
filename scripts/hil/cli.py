@@ -10,6 +10,9 @@ Commands:
         [--session-root PATH]
     hil-runner.py run --fixture PATH --binding PATH \
         --output-root PATH --run-id ID --junit PATH
+    hil-runner.py run --fixture PATH --binding PATH \
+        --output-root PATH --run-id ID --junit PATH \
+        --session-manifest /tmp/opencode/hil-sessions/SESSION/devices.json
     hil-runner.py run-rh3-matrix --fixture PATH --binding PATH \
         --output-root PATH --run-id ID --junit PATH
     hil-runner.py run-rh4-matrix --fixture PATH --binding PATH \
@@ -209,6 +212,7 @@ def cmd_run(args):
                 args, "sdc_hci_remove_iso_path_trace", False
             ),
             allow_offload_disabled=getattr(args, "allow_offload_disabled", False),
+            session_manifest_path=args.session_manifest,
         )
     finally:
         signal.signal(signal.SIGINT, old_int)
@@ -384,6 +388,10 @@ def build_parser():
     run.add_argument("--output-root", required=True)
     run.add_argument("--run-id", required=True)
     run.add_argument("--junit", required=True)
+    run.add_argument(
+        "--session-manifest",
+        help="immutable XIAO-pair session manifest for nRF54L15 source fixtures",
+    )
     run.add_argument(
         "--row",
         choices=rows.row_names(),
