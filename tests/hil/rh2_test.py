@@ -6214,16 +6214,36 @@ exit "${FAKE_OPENOCD_STATUS:-0}"
 """
 
 FAKE_WEST = """#!/usr/bin/env bash
-exit 0
+if [ -n "${FAKE_WEST_ARGV_FILE:-}" ]; then
+    printf '%s\\0' "$@" > "$FAKE_WEST_ARGV_FILE"
+fi
+exit "${FAKE_WEST_STATUS:-0}"
 """
 
 FAKE_NRF_PROBES = """#!/usr/bin/env bash
+if [ -n "${FAKE_NRF_PROBES_CALLED_FILE:-}" ]; then
+    : > "$FAKE_NRF_PROBES_CALLED_FILE"
+fi
 printf '%s\\n' "${FAKE_NRF_PROBES_SERIAL:?}"
+"""
+
+FAKE_NIX_NRF = """#!/usr/bin/env bash
+if [ -n "${FAKE_NIX_NRF_CALLED_FILE:-}" ]; then
+    : > "$FAKE_NIX_NRF_CALLED_FILE"
+fi
+exit "${FAKE_NIX_NRF_STATUS:-0}"
 """
 
 
 class FlashHelperHarness:
-    def __init__(self, tmpdir, artifacts=True, serial="J-LINK-0001"):
+    def __init__(
+        self,
+        tmpdir,
+        artifacts=True,
+        serial="J-LINK-0001",
+        source_54l15_artifact=True,
+        source_54l15_serial="CMSIS-DAP-0001",
+    ):
         self.tmpdir = tmpdir
         self.repo = os.path.join(tmpdir, "repo")
         bin_dir = os.path.join(self.repo, "scripts", "bin")
@@ -6240,6 +6260,14 @@ class FlashHelperHarness:
             os.path.join(_REPO, "scripts", "bin", "fw-flash-54l15"),
             os.path.join(bin_dir, "fw-flash-54l15"),
         )
+        shutil.copy(
+            os.path.join(_REPO, "scripts", "bin", "fw-build-hil-source-54l15"),
+            os.path.join(bin_dir, "fw-build-hil-source-54l15"),
+        )
+        shutil.copy(
+            os.path.join(_REPO, "scripts", "bin", "fw-flash-hil-source-54l15"),
+            os.path.join(bin_dir, "fw-flash-hil-source-54l15"),
+        )
         if artifacts:
             for rel in (
                 "build/hil-source/app/zephyr/zephyr.hex",
@@ -6249,6 +6277,17 @@ class FlashHelperHarness:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, "w") as fh:
                     fh.write("hex\n")
+        if source_54l15_artifact:
+            path = os.path.join(
+                self.repo,
+                "build",
+                "hil-source-nrf54l15",
+                "zephyr",
+                "zephyr.hex",
+            )
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("hex\n")
         self.fakebin = os.path.join(tmpdir, "fakebin")
         os.makedirs(self.fakebin)
         with open(os.path.join(self.fakebin, "openocd"), "w") as fh:
@@ -6260,15 +6299,25 @@ class FlashHelperHarness:
         with open(os.path.join(self.fakebin, "nrf-probes"), "w") as fh:
             fh.write(FAKE_NRF_PROBES)
         os.chmod(os.path.join(self.fakebin, "nrf-probes"), 0o755)
+        with open(os.path.join(self.fakebin, "nix-nrf"), "w") as fh:
+            fh.write(FAKE_NIX_NRF)
+        os.chmod(os.path.join(self.fakebin, "nix-nrf"), 0o755)
         self.argv_file = os.path.join(tmpdir, "openocd.argv")
+        self.west_argv_file = os.path.join(tmpdir, "west.argv")
+        self.nrf_probes_called_file = os.path.join(tmpdir, "nrf-probes.called")
+        self.nix_nrf_called_file = os.path.join(tmpdir, "nix-nrf.called")
         self.env = dict(os.environ)
         self.env["PATH"] = self.fakebin + os.pathsep + self.env["PATH"]
         self.env["ZEPHYR_BASE"] = os.path.join(tmpdir, "zephyrbase")
         os.makedirs(self.env["ZEPHYR_BASE"])
         self.env["FAKE_OPENOCD_ARGV_FILE"] = self.argv_file
+        self.env["FAKE_WEST_ARGV_FILE"] = self.west_argv_file
+        self.env["FAKE_NRF_PROBES_CALLED_FILE"] = self.nrf_probes_called_file
+        self.env["FAKE_NIX_NRF_CALLED_FILE"] = self.nix_nrf_called_file
         self.env["FAKE_NRF_PROBES_SERIAL"] = "PROBE-ABC123"
         self.env.pop("FAKE_OPENOCD_STATUS", None)
         self.serial = serial
+        self.source_54l15_serial = source_54l15_serial
 
     def run(self, env_extra=None, status_env=None):
         env = dict(self.env)
@@ -6299,6 +6348,36 @@ class FlashHelperHarness:
             timeout=30,
         )
 
+    def run_source_54l15_build(self, args=(), env_extra=None):
+        env = dict(self.env)
+        if env_extra:
+            env.update(env_extra)
+        return subprocess.run(
+            [
+                os.path.join(self.repo, "scripts", "bin", "fw-build-hil-source-54l15"),
+                *args,
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def run_source_54l15_flash(self, env_extra=None, status_env=None):
+        env = dict(self.env)
+        if env_extra:
+            env.update(env_extra)
+        if status_env is not None:
+            env["FAKE_OPENOCD_STATUS"] = str(status_env)
+        env["FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL"] = self.source_54l15_serial
+        return subprocess.run(
+            [os.path.join(self.repo, "scripts", "bin", "fw-flash-hil-source-54l15")],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
 
 def _nul_args(path):
     if not os.path.exists(path):
@@ -6308,6 +6387,166 @@ def _nul_args(path):
 
 
 class TestFlashHelper(unittest.TestCase):
+    def _assert_no_identity_discovery(self, h):
+        self.assertFalse(os.path.exists(h.nrf_probes_called_file))
+        self.assertFalse(os.path.exists(h.nix_nrf_called_file))
+
+    def test_source_54l15_build_exact_argv_and_cmake_forwarding(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            r = h.run_source_54l15_build(
+                args=("-DCONFIG_HIL_TEST=y", "-DEXTRA_CONF_FILE=source.conf")
+            )
+            self.assertEqual(0, r.returncode, r.stderr)
+            args = _nul_args(h.west_argv_file)
+            expected = [
+                "build",
+                "-b",
+                "nrf54l15dk/nrf54l15/cpuapp",
+                "--no-sysbuild",
+                "--pristine",
+                "-d",
+                os.path.join(h.repo, "build", "hil-source-nrf54l15"),
+                "hil/source/app",
+                "--",
+                "-DCONFIG_HIL_TEST=y",
+                "-DEXTRA_CONF_FILE=source.conf",
+            ]
+            self.assertEqual(args, expected)
+            self.assertNotIn("--sysbuild", args)
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_exact_argv_explicit_serial_and_no_discovery(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            r = h.run_source_54l15_flash()
+            self.assertEqual(0, r.returncode, r.stderr)
+            source_hex = os.path.join(
+                h.repo,
+                "build",
+                "hil-source-nrf54l15",
+                "zephyr",
+                "zephyr.hex",
+            )
+            expected = [
+                "-c",
+                "adapter serial CMSIS-DAP-0001",
+                "-f",
+                os.path.join(
+                    h.env["ZEPHYR_BASE"],
+                    "boards",
+                    "seeed",
+                    "xiao_nrf54l15",
+                    "support",
+                    "openocd.cfg",
+                ),
+                "-c",
+                "init",
+                "-c",
+                "reset halt",
+                "-c",
+                "nrf54l-load %s" % source_hex,
+                "-c",
+                "verify_image %s" % source_hex,
+                "-c",
+                "reset run",
+                "-c",
+                "shutdown",
+            ]
+            self.assertEqual(_nul_args(h.argv_file), expected)
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_missing_serial_rejected_before_openocd(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td, source_54l15_serial="")
+            r = h.run_source_54l15_flash()
+            self.assertNotEqual(0, r.returncode)
+            self.assertIn("FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL is required", r.stderr)
+            self.assertFalse(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_unsafe_serial_rejected_before_openocd(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td, source_54l15_serial="bad serial/with/slashes")
+            r = h.run_source_54l15_flash()
+            self.assertNotEqual(0, r.returncode)
+            self.assertIn("Invalid FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL", r.stderr)
+            self.assertFalse(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_missing_artifact_rejected_before_openocd(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td, source_54l15_artifact=False)
+            r = h.run_source_54l15_flash()
+            self.assertNotEqual(0, r.returncode)
+            self.assertIn("Invalid source build artifact", r.stderr)
+            self.assertFalse(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_empty_artifact_rejected_before_openocd(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            source_hex = os.path.join(
+                h.repo,
+                "build",
+                "hil-source-nrf54l15",
+                "zephyr",
+                "zephyr.hex",
+            )
+            with open(source_hex, "w", encoding="utf-8"):
+                pass
+            r = h.run_source_54l15_flash()
+            self.assertNotEqual(0, r.returncode)
+            self.assertIn("Invalid source build artifact", r.stderr)
+            self.assertFalse(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_symlink_artifact_rejected_before_openocd(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            source_hex = os.path.join(
+                h.repo,
+                "build",
+                "hil-source-nrf54l15",
+                "zephyr",
+                "zephyr.hex",
+            )
+            target_hex = os.path.join(td, "outside.hex")
+            with open(target_hex, "w", encoding="utf-8") as fh:
+                fh.write("hex\n")
+            os.unlink(source_hex)
+            os.symlink(target_hex, source_hex)
+            r = h.run_source_54l15_flash()
+            self.assertNotEqual(0, r.returncode)
+            self.assertIn("Invalid source build artifact", r.stderr)
+            self.assertFalse(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_missing_dev_shell_rejected_before_openocd(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            env = dict(h.env)
+            env.pop("ZEPHYR_BASE", None)
+            r = subprocess.run(
+                [os.path.join(h.repo, "scripts", "bin", "fw-flash-hil-source-54l15")],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertNotEqual(0, r.returncode)
+            self.assertIn("firmware tool error", r.stderr)
+            self.assertFalse(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_openocd_status_propagated(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            r = h.run_source_54l15_flash(status_env=7)
+            self.assertEqual(7, r.returncode)
+            self.assertTrue(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
     def test_exact_argv_cpunet_first_verify_both_reset(self):
         with tempfile.TemporaryDirectory() as td:
             h = FlashHelperHarness(td)

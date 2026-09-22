@@ -4,15 +4,17 @@
  *
  * Dedicated LE Audio source fixture entry point.
  *
- * Initializes output, raises CPUAPP to 128 MHz, and initializes the
- * controller-clock mirror, then the Bluetooth/BAP backend (bt_enable,
+ * Initializes output, raises nRF5340 CPUAPP to 128 MHz, and initializes the
+ * platform controller clock, then the Bluetooth/BAP backend (bt_enable,
  * settings_load, bt_is_ready, callbacks), then the app coordinator (state and
  * shell command), and returns into Zephyr threads.
  * A fatal init error emits one best-effort HIL1 status when possible and returns
  * nonzero; there is no restart loop.
  */
 
+#if defined(CONFIG_SOC_COMPATIBLE_NRF5340_CPUAPP)
 #include <nrfx_clock.h>
+#endif
 
 #include "hil_source_app.h"
 #include "hil_source_bap.h"
@@ -29,6 +31,7 @@ int main(void)
 		return err;
 	}
 
+#if defined(CONFIG_SOC_COMPATIBLE_NRF5340_CPUAPP)
 	/* Mode B encodes two LC3 channels per 10 ms SDU. At the nRF5340's
 	 * 64 MHz reset frequency that work misses alternate controller-clock
 	 * pins. Nordic's Bluetooth audio implementations use DIV_1 for the same
@@ -38,6 +41,7 @@ int main(void)
 		hil_source_app_fatal_status("cpu_clock_init", err);
 		return err;
 	}
+#endif
 
 	err = hil_source_controller_time_init();
 	if (err != 0) {

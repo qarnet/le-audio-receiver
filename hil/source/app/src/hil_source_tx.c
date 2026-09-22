@@ -18,7 +18,6 @@
 #include <zephyr/net_buf.h>
 
 #include <bluetooth/hci_vs_sdc.h>
-#include <sdc_hci.h>
 
 #include "hil_source_tx.h"
 
