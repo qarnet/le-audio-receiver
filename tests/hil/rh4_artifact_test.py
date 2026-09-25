@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(REPO, "scripts"))
 sys.path.insert(0, os.path.dirname(__file__))
 
 import hil_fakes  # noqa: E402
-from hil import artifacts, cli, matrix, rows  # noqa: E402
+from hil import artifacts, cli, matrix, rows, session  # noqa: E402
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 
@@ -155,37 +155,28 @@ def receiver_archive(path):
     )
 
 
-def source_archive(path):
-    cpunet = hex_record(b"\xcc")
+def source_archive(path, *, commit=COMMIT):
     cpuapp = hex_record(b"\xdd")
     manifest = {
-        "board": "nrf5340dk/nrf5340/cpuapp",
+        "board": "nrf54l15dk/nrf54l15/cpuapp",
         "firmware_id": "le-audio-hil-source-rh1",
-        "git_commit": COMMIT,
+        "git_commit": commit,
         "images": [
             {
-                "filename": "cpunet.hex",
-                "flash_order": 0,
-                "role": "cpunet",
-                "sha256": hashlib.sha256(cpunet).hexdigest(),
-                "size": len(cpunet),
-            },
-            {
                 "filename": "cpuapp.hex",
-                "flash_order": 1,
+                "flash_order": 0,
                 "role": "cpuapp",
                 "sha256": hashlib.sha256(cpuapp).hexdigest(),
                 "size": len(cpuapp),
             },
         ],
         "ncs_version": "v3.3.0",
-        "schema_version": 1,
+        "schema_version": 2,
     }
     manifest_data = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(
         "utf-8"
     )
     contents = {
-        "cpunet.hex": cpunet,
         "cpuapp.hex": cpuapp,
         "source-manifest.json": manifest_data,
     }
@@ -194,6 +185,20 @@ def source_archive(path):
         [(name, contents[name]) for name in artifacts.SOURCE_MEMBERS[:-1]]
         + [("SHA256SUMS", sums(contents))],
     )
+
+
+def source_mutation(path, destination, change, *, extra=None):
+    """Write a canonical, checksummed source archive with one changed contract."""
+    with zipfile.ZipFile(path) as zf:
+        contents = {name: zf.read(name) for name in artifacts.SOURCE_MEMBERS[:-1]}
+    manifest = json.loads(contents["source-manifest.json"])
+    change(manifest)
+    contents["source-manifest.json"] = (
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    if extra is not None:
+        contents.update(extra)
+    write_zip(destination, list(contents.items()) + [("SHA256SUMS", sums(contents))])
 
 
 class FakeRows:
@@ -215,8 +220,13 @@ class FakeRows:
         status,
         row,
         artifacts=None,
+        session_manifest_path=None,
+        expected_session_manifest=None,
     ):
-        del fixture, binding, argv, status
+        del argv, status
+        assert expected_session_manifest == session.load_session(
+            session_manifest_path, fixture, binding
+        )
         self.calls.append((row, artifacts))
         artifacts_module = __import__(
             "hil.artifacts", fromlist=["revalidate_artifact_set"]
@@ -256,7 +266,15 @@ class TestResolver(unittest.TestCase):
                     [item.role for item in staged.receiver_images], ["cpuapp", "flpr"]
                 )
                 self.assertEqual(
-                    [item.role for item in staged.source_images], ["cpunet", "cpuapp"]
+                    [
+                        (item.role, item.flash_order, item.filename)
+                        for item in staged.source_images
+                    ],
+                    [("cpuapp", 0, "cpuapp.hex")],
+                )
+                self.assertEqual(staged.source.manifest["schema_version"], 2)
+                self.assertEqual(
+                    staged.source.manifest["board"], "nrf54l15dk/nrf54l15/cpuapp"
                 )
                 self.assertNotIn(REPO + os.sep, staged.staging_root + os.sep)
                 artifacts.revalidate_artifact_set(staged)
@@ -267,6 +285,149 @@ class TestResolver(unittest.TestCase):
                     artifacts.revalidate_artifact_set(staged)
             finally:
                 artifacts.cleanup_artifacts(staged)
+
+    def test_source_commit_independent_of_receiver(self):
+        with tempfile.TemporaryDirectory() as td:
+            receiver, source = self._archives(td)
+            versioned_receiver = os.path.join(
+                td, "le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip"
+            )
+            os.rename(receiver, versioned_receiver)
+            source_archive(source, commit="a" * 40)
+            staged = artifacts.resolve_artifacts(
+                versioned_receiver, source, staging_parent=td
+            )
+            try:
+                self.assertEqual(staged.source.manifest["git_commit"], "a" * 40)
+                self.assertEqual(staged.receiver.manifest["git_commit"], COMMIT)
+                artifacts.revalidate_artifact_set(staged)
+            finally:
+                artifacts.cleanup_artifacts(staged)
+
+    def test_source_archive_drift_rejected_before_evidence_copy_or_flash(self):
+        with tempfile.TemporaryDirectory() as td:
+            receiver, source = self._archives(td)
+            versioned_receiver = os.path.join(
+                td, "le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip"
+            )
+            os.rename(receiver, versioned_receiver)
+            staged = artifacts.resolve_artifacts(
+                versioned_receiver, source, staging_parent=td
+            )
+            try:
+                with open(source, "rb") as fh:
+                    self.assertEqual(
+                        artifacts.read_verified_archive(staged.source), fh.read()
+                    )
+                with open(source, "ab") as fh:
+                    fh.write(b"drift")
+                with self.assertRaises(artifacts.ArtifactError):
+                    artifacts.read_verified_archive(staged.source)
+                with self.assertRaises(artifacts.ArtifactError):
+                    artifacts.revalidate_artifact_set(staged)
+            finally:
+                artifacts.cleanup_artifacts(staged)
+
+    def test_rejects_historical_v1_dual_core_and_source_manifest_mutations(self):
+        with tempfile.TemporaryDirectory() as td:
+            receiver, source = self._archives(td)
+            versioned_receiver = os.path.join(
+                td, "le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip"
+            )
+            os.rename(receiver, versioned_receiver)
+            receiver = versioned_receiver
+            old = os.path.join(td, "old-v1.zip")
+            cpunet = hex_record(b"\xcc")
+            with zipfile.ZipFile(source) as zf:
+                cpuapp = zf.read("cpuapp.hex")
+                old_manifest = json.loads(zf.read("source-manifest.json"))
+            old_manifest.update(board="nrf5340dk/nrf5340/cpuapp", schema_version=1)
+            old_manifest["images"] = [
+                {
+                    "filename": "cpunet.hex",
+                    "flash_order": 0,
+                    "role": "cpunet",
+                    "sha256": hashlib.sha256(cpunet).hexdigest(),
+                    "size": len(cpunet),
+                },
+                {**old_manifest["images"][0], "flash_order": 1},
+            ]
+            old_contents = {
+                "cpunet.hex": cpunet,
+                "cpuapp.hex": cpuapp,
+                "source-manifest.json": (
+                    json.dumps(old_manifest, indent=2, sort_keys=True) + "\n"
+                ).encode("utf-8"),
+            }
+            write_zip(
+                old, list(old_contents.items()) + [("SHA256SUMS", sums(old_contents))]
+            )
+
+            cases = {
+                "wrong-schema": lambda m: m.update(schema_version=1),
+                "wrong-board": lambda m: m.update(board="nrf5340dk/nrf5340/cpuapp"),
+                "wrong-version": lambda m: m.update(ncs_version="v3.2.0"),
+                "wrong-firmware-id": lambda m: m.update(firmware_id="wrong"),
+                "bad-commit": lambda m: m.update(git_commit="dirty"),
+                "missing-key": lambda m: m.pop("git_commit"),
+                "extra-key": lambda m: m.update(build_dirty=False),
+                "wrong-role": lambda m: m["images"][0].update(role="cpunet"),
+                "wrong-order": lambda m: m["images"][0].update(flash_order=1),
+                "wrong-hash": lambda m: m["images"][0].update(sha256="0" * 64),
+                "missing-image-key": lambda m: m["images"][0].pop("size"),
+                "extra-image-key": lambda m: m["images"][0].update(merged=False),
+            }
+            for name, change in cases.items():
+                with self.subTest(name=name):
+                    bad = os.path.join(td, name + ".zip")
+                    source_mutation(source, bad, change)
+                    with self.assertRaises(artifacts.ArtifactError):
+                        artifacts.resolve_artifacts(receiver, bad, staging_parent=td)
+                    self.assertFalse(
+                        any(n.startswith("hil-artifacts-") for n in os.listdir(td))
+                    )
+
+            extra = os.path.join(td, "extra-cpunet.zip")
+            source_mutation(
+                source, extra, lambda _m: None, extra={"cpunet.hex": cpunet}
+            )
+            for bad in (old, extra):
+                with self.subTest(name=os.path.basename(bad)):
+                    with self.assertRaises(artifacts.ArtifactError):
+                        artifacts.resolve_artifacts(receiver, bad, staging_parent=td)
+                    self.assertFalse(
+                        any(n.startswith("hil-artifacts-") for n in os.listdir(td))
+                    )
+
+    def test_rejects_source_missing_member_or_checksum_before_staging(self):
+        with tempfile.TemporaryDirectory() as td:
+            receiver, source = self._archives(td)
+            versioned_receiver = os.path.join(
+                td, "le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip"
+            )
+            os.rename(receiver, versioned_receiver)
+            with zipfile.ZipFile(source) as zf:
+                contents = [(name, zf.read(name)) for name in artifacts.SOURCE_MEMBERS]
+            for name, members in (
+                ("missing", [item for item in contents if item[0] != "cpuapp.hex"]),
+                (
+                    "bad-sums",
+                    [
+                        (member, b"0" * len(data) if member == "SHA256SUMS" else data)
+                        for member, data in contents
+                    ],
+                ),
+            ):
+                with self.subTest(name=name):
+                    bad = os.path.join(td, name + ".zip")
+                    write_zip(bad, members)
+                    with self.assertRaises(artifacts.ArtifactError):
+                        artifacts.resolve_artifacts(
+                            versioned_receiver, bad, staging_parent=td
+                        )
+                    self.assertFalse(
+                        any(n.startswith("hil-artifacts-") for n in os.listdir(td))
+                    )
 
     def test_rejects_archive_contract_violations_before_staging(self):
         with tempfile.TemporaryDirectory() as td:
@@ -359,7 +520,7 @@ class TestResolver(unittest.TestCase):
                 ]
             bad_source = os.path.join(td, "bad-source.zip")
             bad_members = [
-                (name, b"not an Intel HEX image\n" if name == "cpunet.hex" else data)
+                (name, b"not an Intel HEX image\n" if name == "cpuapp.hex" else data)
                 for name, data in members
                 if name != "SHA256SUMS"
             ]
@@ -437,6 +598,10 @@ class TestRh4Matrix(unittest.TestCase):
                 cfg = os.path.join(td, "cfg")
                 os.makedirs(cfg)
                 fixture, binding = hil_fakes.write_fixture_binding(cfg)
+                command = hil_fakes.ScriptedRunner()
+                manifest, _sysfs = hil_fakes.create_fake_session(
+                    td, fixture, binding, command
+                )
                 output = os.path.join(td, "output")
                 os.makedirs(output)
                 fake = FakeRows()
@@ -457,6 +622,7 @@ class TestRh4Matrix(unittest.TestCase):
                     "rh4-artifact",
                     junit,
                     artifacts=staged,
+                    session_manifest_path=manifest.path,
                 )
                 self.assertEqual(result, ("passed", None, []))
                 self.assertEqual(len(fake.calls), len(rows.rh3_schedule()))
@@ -547,6 +713,10 @@ class TestRh4Matrix(unittest.TestCase):
                 os.makedirs(cfg)
                 os.makedirs(output)
                 fixture, binding = hil_fakes.write_fixture_binding(cfg)
+                command = hil_fakes.ScriptedRunner()
+                manifest, _sysfs = hil_fakes.create_fake_session(
+                    td, fixture, binding, command
+                )
                 fake = FakeRows()
                 coordinator = matrix.MatrixCoordinator(
                     matrix.MatrixDeps(row_runner_factory=fake.factory)
@@ -559,6 +729,7 @@ class TestRh4Matrix(unittest.TestCase):
                         "rh4-drift",
                         os.path.join(output, "rh4.xml"),
                         artifacts=staged,
+                        session_manifest_path=manifest.path,
                     )
                 self.assertEqual(fake.calls, [])
             finally:
@@ -580,6 +751,10 @@ class TestRh4Matrix(unittest.TestCase):
                 os.makedirs(cfg)
                 os.makedirs(output)
                 fixture, binding = hil_fakes.write_fixture_binding(cfg)
+                command = hil_fakes.ScriptedRunner()
+                manifest, _sysfs = hil_fakes.create_fake_session(
+                    td, fixture, binding, command
+                )
                 fake = FakeRows()
                 coordinator = matrix.MatrixCoordinator(
                     matrix.MatrixDeps(row_runner_factory=fake.factory)
@@ -598,6 +773,7 @@ class TestRh4Matrix(unittest.TestCase):
                         "rh4-copy-fail",
                         os.path.join(output, "rh4.xml"),
                         artifacts=staged,
+                        session_manifest_path=manifest.path,
                     )
                 finally:
                     artifacts.read_verified_archive = original

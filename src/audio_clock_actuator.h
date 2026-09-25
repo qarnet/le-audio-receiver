@@ -9,7 +9,7 @@
 #include <stdint.h>
 
 /**
- * Initialize the clock actuator (e.g. set APLL to center frequency).
+ * Initialize the clock actuator (production NONE; APLL is test-local history).
  * Returns 0 on success, negative errno on failure.
  */
 int audio_clock_actuator_init(void);

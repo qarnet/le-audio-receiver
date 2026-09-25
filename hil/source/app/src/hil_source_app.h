@@ -48,10 +48,10 @@ extern "C" {
 
 /* ── SDC timestamp-mode timing ─────────────────────────────────────── */
 
-/* Encode first, then submit each pinned SDU when its ISO event is this close
- * on the mirrored controller clock. SDC requires 1000 us processing margin;
- * the nRF53 reference scheduler adds 1000 us for cross-core IPC. One further
- * millisecond covers worker and HCI submission jitter. */
+/* Encode first, then submit each pinned SDU against the direct nRF54L15
+ * GRTC controller clock. The frozen 3000/2000 us margins retain headroom:
+ * historically derived from SDC processing, the nRF53 reference scheduler's
+ * IPC allowance, and worker/HCI jitter. Current XIAO uses no cross-core IPC. */
 #define HIL_SOURCE_TX_TS_LEAD_TARGET_US 3000U
 /* Pins closer than this to controller-now advance by whole intervals and
  * count as "pin_adv" evidence. */

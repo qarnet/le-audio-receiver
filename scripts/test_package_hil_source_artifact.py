@@ -17,7 +17,7 @@ SCRIPT = os.path.join(
 )
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 NCS = "v3.3.0"
-MEMBERS = ["cpunet.hex", "cpuapp.hex", "source-manifest.json", "SHA256SUMS"]
+MEMBERS = ["cpuapp.hex", "source-manifest.json", "SHA256SUMS"]
 
 
 def hex_record(record_type, address=0, data=b""):
@@ -33,8 +33,7 @@ def valid_hex(data=b"\x01\x02"):
 
 def make_build(root):
     paths = {
-        "app/zephyr/zephyr.hex": valid_hex(b"\xaa\xbb"),
-        "hci_ipc/zephyr/zephyr.hex": valid_hex(b"\xcc\xdd"),
+        "zephyr/zephyr.hex": valid_hex(b"\xaa\xbb"),
     }
     for relative, data in paths.items():
         path = os.path.join(root, relative)
@@ -97,31 +96,22 @@ class TestHilSourceArtifact(unittest.TestCase):
                 self.assertEqual(
                     manifest,
                     {
-                        "board": "nrf5340dk/nrf5340/cpuapp",
+                        "board": "nrf54l15dk/nrf54l15/cpuapp",
                         "firmware_id": "le-audio-hil-source-rh1",
                         "git_commit": COMMIT,
                         "images": [
                             {
-                                "filename": "cpunet.hex",
-                                "flash_order": 0,
-                                "role": "cpunet",
-                                "sha256": hashlib.sha256(
-                                    inputs["hci_ipc/zephyr/zephyr.hex"]
-                                ).hexdigest(),
-                                "size": len(inputs["hci_ipc/zephyr/zephyr.hex"]),
-                            },
-                            {
                                 "filename": "cpuapp.hex",
-                                "flash_order": 1,
+                                "flash_order": 0,
                                 "role": "cpuapp",
                                 "sha256": hashlib.sha256(
-                                    inputs["app/zephyr/zephyr.hex"]
+                                    inputs["zephyr/zephyr.hex"]
                                 ).hexdigest(),
-                                "size": len(inputs["app/zephyr/zephyr.hex"]),
+                                "size": len(inputs["zephyr/zephyr.hex"]),
                             },
                         ],
                         "ncs_version": NCS,
-                        "schema_version": 1,
+                        "schema_version": 2,
                     },
                 )
                 self.assertEqual(
@@ -145,6 +135,7 @@ class TestHilSourceArtifact(unittest.TestCase):
             cases = [
                 ("bad commit", {"commit": "BAD"}),
                 ("bad ncs", {"ncs": "3.3.0"}),
+                ("wrong source ncs", {"ncs": "v3.2.0"}),
             ]
             for name, kwargs in cases:
                 with self.subTest(name=name):
@@ -154,27 +145,32 @@ class TestHilSourceArtifact(unittest.TestCase):
                         result.stderr.startswith("package-hil-source-artifact: error: ")
                     )
                     self.assertFalse(os.path.exists(output))
-            os.unlink(os.path.join(build, "app/zephyr/zephyr.hex"))
+                    if name == "wrong source ncs":
+                        self.assertIn("expected v3.3.0", result.stderr)
+            os.unlink(os.path.join(build, "zephyr/zephyr.hex"))
             result = run_cli(build, output)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(os.path.exists(output))
             make_build(build)
-            with open(os.path.join(build, "app/zephyr/zephyr.hex"), "wb") as fh:
+            with open(os.path.join(build, "zephyr/zephyr.hex"), "wb") as fh:
                 fh.write(b":00000001FF\n:00000001FF\n")
             result = run_cli(build, output)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(os.path.exists(output))
             make_build(build)
-            os.unlink(os.path.join(build, "app/zephyr/zephyr.hex"))
+            os.unlink(os.path.join(build, "zephyr/zephyr.hex"))
+            external = os.path.join(td, "external.hex")
+            with open(external, "wb") as fh:
+                fh.write(valid_hex(b"\xcc\xdd"))
             os.symlink(
-                os.path.join(build, "hci_ipc/zephyr/zephyr.hex"),
-                os.path.join(build, "app/zephyr/zephyr.hex"),
+                external,
+                os.path.join(build, "zephyr/zephyr.hex"),
             )
             result = run_cli(build, output)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("symlink", result.stderr)
             self.assertFalse(os.path.exists(output))
-            os.unlink(os.path.join(build, "app/zephyr/zephyr.hex"))
+            os.unlink(os.path.join(build, "zephyr/zephyr.hex"))
             make_build(build)
             with open(output, "wb") as fh:
                 fh.write(b"keep")

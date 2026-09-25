@@ -16,7 +16,7 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
-from hil import evidence, lifecycle, model, rows, runner
+from hil import evidence, lifecycle, model, rows, runner, session
 import hil.artifacts as artifact_resolver
 from hil.evidence import (
     capture_environment,
@@ -299,6 +299,8 @@ class MatrixCoordinator:
         status,
         artifact_set=None,
         qualification_path=None,
+        session_manifest_path=None,
+        expected_session_manifest=None,
     ):
         start_mono = self.deps.clock()
         start_utc = self._timestamp()
@@ -318,6 +320,9 @@ class MatrixCoordinator:
                 # historical public signature. Only capture matrices need this
                 # added public input.
                 call_kwargs["qualification_path"] = qualification_path
+            if session_manifest_path is not None:
+                call_kwargs["session_manifest_path"] = session_manifest_path
+                call_kwargs["expected_session_manifest"] = expected_session_manifest
             result = run_child(
                 fixture_path,
                 binding_path,
@@ -652,6 +657,7 @@ class MatrixCoordinator:
         artifacts=None,
         qualification_path=None,
         capture_verdict="none",
+        session_manifest_path=None,
     ):
         """Run fixed RH3 schedule and return ``(outcome, boundary, cleanup)``.
 
@@ -662,6 +668,11 @@ class MatrixCoordinator:
         """
         fixture = model.load_logical_fixture(fixture_path)
         binding = model.load_physical_binding(binding_path, fixture)
+        source_board = fixture.roles["source"].board
+        if source_board != model.NRF54L15_CPUAPP_BOARD:
+            raise MatrixError("unsupported source board %r" % source_board)
+        if not session_manifest_path:
+            raise MatrixError("nRF54L15 source fixture requires --session-manifest")
         if fixture.capture_capability is model.CaptureCapability.NONE:
             if qualification_path is not None or capture_verdict != "none":
                 raise MatrixError(
@@ -686,6 +697,15 @@ class MatrixCoordinator:
 
             qualification.load_qualification(qualification_path, fixture, binding)
         if artifacts is not None:
+            artifact_resolver.validate_artifact_set(artifacts)
+            if (
+                artifacts.source.manifest["board"] != source_board
+                or tuple(image.role for image in artifacts.source_images)
+                != fixture.roles["source"].images
+            ):
+                raise MatrixError(
+                    "artifact source board/image roles do not match fixture"
+                )
             artifact_resolver.revalidate_artifact_set(artifacts)
         canon_output_root = lifecycle.validate_output_root(output_root)
         lifecycle.validate_run_id(run_id)
@@ -695,6 +715,20 @@ class MatrixCoordinator:
         )
         fixture_bytes = self._read_bytes(fixture_path)
         binding_bytes = self._read_bytes(binding_path)
+        manifest = (
+            session.load_session(session_manifest_path, fixture_path, binding_path)
+            if session_manifest_path is not None
+            else None
+        )
+
+        def assert_inputs_unchanged():
+            if manifest is None:
+                return
+            manifest.assert_unchanged()
+            if self._read_bytes(fixture_path) != fixture_bytes:
+                raise MatrixError("fixture bytes changed between matrix children")
+            if self._read_bytes(binding_path) != binding_bytes:
+                raise MatrixError("binding bytes changed between matrix children")
 
         self._matrix_dir = lifecycle.create_run_dir(canon_output_root, run_id)
         entries = self._schedule(run_id, child_root, artifacts)
@@ -709,6 +743,23 @@ class MatrixCoordinator:
             self._write_bytes(
                 os.path.join(self._matrix_dir, "binding.json"), binding_bytes
             )
+            if manifest is not None:
+                self._write_bytes(
+                    os.path.join(self._matrix_dir, "session-devices.json"),
+                    manifest.raw_bytes,
+                )
+                write_json_evidence(
+                    self._matrix_dir,
+                    "session.json",
+                    {
+                        "path": manifest.path,
+                        "sha256": manifest.sha256,
+                        "session_id": manifest.session_id,
+                        "fixture_id": manifest.fixture_id,
+                        "fixture_sha256": manifest.fixture_sha256,
+                        "binding_sha256": manifest.binding_sha256,
+                    },
+                )
             if artifacts is not None:
                 write_json_evidence(
                     self._matrix_dir, "artifacts.json", artifacts.evidence()
@@ -737,6 +788,7 @@ class MatrixCoordinator:
 
             outcome = "passed"
             for entry in entries:
+                assert_inputs_unchanged()
                 if self.deps.cancel():
                     outcome = "cancelled"
                     boundary = "cancelled before pass%d row%d %s" % (
@@ -754,8 +806,11 @@ class MatrixCoordinator:
                     status,
                     artifacts,
                     qualification_path,
+                    session_manifest_path,
+                    manifest,
                 )
                 records.append(record)
+                assert_inputs_unchanged()
                 try:
                     self._write_jsonl("children.jsonl", records)
                 except Exception as exc:  # noqa: BLE001 - aggregate evidence failure

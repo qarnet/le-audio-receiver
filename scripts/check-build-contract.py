@@ -16,10 +16,6 @@ Invocation:
   python3 scripts/check-build-contract.py \
     --nrf54l15 build/nrf54l15
 
-Optional legacy local validation:
-  python3 scripts/check-build-contract.py \
-    --nrf5340 build/nrf5340 \
-    --nrf54l15 build/nrf54l15
 """
 
 import argparse
@@ -482,7 +478,6 @@ SRAM_CHAIN = [
     ("cpuflpr_sram_code_data", 0x20030000, 0x10000),
 ]
 
-I2S_PSEL_5340 = [(13, 1, 15), (15, 1, 12), (18, 1, 13)]  # SCK_M, LRCK_M, SDOUT
 I2S_PSEL_54L15 = [(13, 1, 4), (15, 1, 5), (18, 1, 6), (19, 1, 7)]  # + MCK
 
 
@@ -639,203 +634,6 @@ def check_memory_ranges(result, labels, tag, prefix):
             tag,
             "%s SRAM chain ends exactly at physical SRAM end" % prefix,
         )
-
-
-def run_nrf5340_checks(
-    app_cfg, app_dts, labels_app, net_cfg, net_dts, labels_net, result
-):
-    """nRF5340 contract assertions (BUILD-002/003)."""
-
-    # ---- app config ----
-    result.add(
-        config_enabled(app_cfg, "CONFIG_AUDIO_RESAMPLER_IDENTITY"),
-        "5340-001",
-        "app CONFIG_AUDIO_RESAMPLER_IDENTITY=y",
-        "got %r" % app_cfg.get("CONFIG_AUDIO_RESAMPLER_IDENTITY"),
-    )
-    result.add(
-        config_enabled(app_cfg, "CONFIG_AUDIO_CLOCK_ACTUATOR_APLL"),
-        "5340-002",
-        "app CONFIG_AUDIO_CLOCK_ACTUATOR_APLL=y",
-        "got %r" % app_cfg.get("CONFIG_AUDIO_CLOCK_ACTUATOR_APLL"),
-    )
-    result.add(
-        config_not_enabled(app_cfg, "CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR"),
-        "5340-003",
-        "app CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR not enabled",
-    )
-    result.add(
-        config_not_enabled(app_cfg, "CONFIG_AUDIO_CLOCK_ACTUATOR_NONE"),
-        "5340-004",
-        "app CONFIG_AUDIO_CLOCK_ACTUATOR_NONE not enabled",
-    )
-    result.add(
-        config_int(app_cfg, "CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ") == 48000,
-        "5340-005",
-        "app output sample rate 48000",
-        "got %r" % config_int(app_cfg, "CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ"),
-    )
-    result.add(
-        config_enabled(app_cfg, "CONFIG_LIBLC3"), "5340-006", "app CONFIG_LIBLC3=y"
-    )
-    result.add(
-        config_int(app_cfg, "CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT") == 2,
-        "5340-007",
-        "app two sink ASEs (ASCS_MAX_ASE_SNK_COUNT=2)",
-        "got %r" % config_int(app_cfg, "CONFIG_BT_ASCS_MAX_ASE_SNK_COUNT"),
-    )
-    result.add(
-        config_enabled(app_cfg, "CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS"),
-        "5340-008",
-        "app CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y",
-    )
-    for key, want, cid in (
-        ("CONFIG_BT_BUF_ACL_TX_COUNT", 7, "5340-009"),
-        ("CONFIG_BT_ISO_TX_BUF_COUNT", 6, "5340-010"),
-        ("CONFIG_BT_ISO_RX_BUF_COUNT", 6, "5340-011"),
-    ):
-        result.add(
-            config_int(app_cfg, key) == want,
-            cid,
-            "app %s=%d" % (key, want),
-            "got %r" % config_int(app_cfg, key),
-        )
-
-    # ---- app dts ----
-    i2s0 = node_by_label(labels_app, "i2s0")
-    result.add(
-        i2s0 is not None and i2s0.status() == "okay", "5340-012", "app i2s0 status okay"
-    )
-    clock = node_by_label(labels_app, "clock")
-    hf = clock.props.get("hfclkaudio-frequency") if clock else None
-    ok_hf = bool(hf) and len(hf[0]) == 1 and hf[0][0] == 12288000
-    result.add(ok_hf, "5340-013", "app HFCLKAUDIO 12.288 MHz (0xbb8000)")
-    check_i2s_pins(result, labels_app, "i2s0_default", I2S_PSEL_5340, "5340-014", "app")
-    qspi = node_by_label(labels_app, "qspi")
-    result.add(
-        qspi is not None and qspi.status() == "disabled",
-        "5340-015",
-        "app qspi status disabled",
-    )
-    wdt0 = node_by_label(labels_app, "wdt0")
-    result.add(
-        wdt0 is not None and wdt0.status() == "okay", "5340-016", "app wdt0 status okay"
-    )
-
-    # ---- netcore config ----
-    result.add(
-        config_enabled(net_cfg, "CONFIG_BT_LL_SW_SPLIT"),
-        "5340-017",
-        "net CONFIG_BT_LL_SW_SPLIT=y",
-        "got %r" % net_cfg.get("CONFIG_BT_LL_SW_SPLIT"),
-    )
-    result.add(
-        config_enabled(net_cfg, "CONFIG_BT_CTLR_PERIPHERAL_ISO"),
-        "5340-018",
-        "net CONFIG_BT_CTLR_PERIPHERAL_ISO=y",
-        "got %r" % net_cfg.get("CONFIG_BT_CTLR_PERIPHERAL_ISO"),
-    )
-    result.add(
-        config_enabled(net_cfg, "CONFIG_BT_CTLR_CONN_ISO"),
-        "5340-019",
-        "net CONFIG_BT_CTLR_CONN_ISO=y",
-        "got %r" % net_cfg.get("CONFIG_BT_CTLR_CONN_ISO"),
-    )
-    net_acl = config_int(net_cfg, "CONFIG_BT_BUF_ACL_TX_COUNT")
-    net_iso = config_int(net_cfg, "CONFIG_BT_ISO_TX_BUF_COUNT")
-    result.add(
-        net_acl == 7, "5340-020", "net ACL TX count 7 (controller)", "got %r" % net_acl
-    )
-    result.add(
-        net_iso == 6, "5340-021", "net ISO TX count 6 (controller)", "got %r" % net_iso
-    )
-    app_acl = config_int(app_cfg, "CONFIG_BT_BUF_ACL_TX_COUNT")
-    app_iso = config_int(app_cfg, "CONFIG_BT_ISO_TX_BUF_COUNT")
-    result.add(
-        net_acl == app_acl,
-        "5340-022",
-        "net ACL TX equals app host ACL TX (%d)" % app_acl,
-        "net %r app %r" % (net_acl, app_acl),
-    )
-    result.add(
-        net_iso == app_iso,
-        "5340-023",
-        "net ISO TX equals app host ISO TX (%d)" % app_iso,
-        "net %r app %r" % (net_iso, app_iso),
-    )
-
-    # ---- netcore dts ----
-    chosen = find_chosen(net_dts)
-    hci_node = chosen_ref(labels_net, chosen, "zephyr,bt-hci")
-    result.add(
-        hci_node is not None,
-        "5340-024",
-        "net chosen zephyr,bt-hci resolves",
-        "chosen %r" % (chosen.props.get("zephyr,bt-hci") if chosen else None),
-    )
-    if hci_node is not None:
-        result.add(
-            hci_node.status() == "okay",
-            "5340-025",
-            "net zephyr,bt-hci node status okay",
-            "status %r" % hci_node.status(),
-        )
-        compat = hci_node.props.get("compatible")
-        ok_compat = bool(compat) and "zephyr,bt-hci-ll-sw-split" in compat[0]
-        result.add(
-            ok_compat,
-            "5340-026",
-            "net zephyr,bt-hci node compatible zephyr,bt-hci-ll-sw-split",
-            "compatible %r" % (compat[0] if compat else None),
-        )
-    sdc = node_by_label(labels_net, "bt_hci_sdc")
-    result.add(
-        sdc is not None and sdc.status() == "disabled",
-        "5340-027",
-        "net bt_hci_sdc status disabled",
-        "status %r" % (sdc.status() if sdc else None),
-    )
-    result.add(
-        config_enabled(app_cfg, "CONFIG_BT_FILTER_ACCEPT_LIST"),
-        "5340-028",
-        "app CONFIG_BT_FILTER_ACCEPT_LIST=y",
-        "got %r" % app_cfg.get("CONFIG_BT_FILTER_ACCEPT_LIST"),
-    )
-
-    # nRF5340 has no FLPR acceptance diagnostics (no FLPR acceptance
-    # shell commands); the parity pair lives on the nRF54L15 checks.
-    result.add(
-        config_not_enabled(app_cfg, "CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS"),
-        "5340-029",
-        "app CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS not enabled",
-        "got %r" % app_cfg.get("CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS"),
-    )
-
-    # User pairing control is nRF54L15-only; the nRF5340 app must stay
-    # feature-off (both the controller and the input/LED adapter).
-    result.add(
-        config_not_enabled(app_cfg, "CONFIG_USER_PAIRING_CONTROL"),
-        "5340-030",
-        "app CONFIG_USER_PAIRING_CONTROL not enabled",
-        "got %r" % app_cfg.get("CONFIG_USER_PAIRING_CONTROL"),
-    )
-    result.add(
-        config_not_enabled(app_cfg, "CONFIG_USER_PAIRING_INPUT"),
-        "5340-031",
-        "app CONFIG_USER_PAIRING_INPUT not enabled",
-        "got %r" % app_cfg.get("CONFIG_USER_PAIRING_INPUT"),
-    )
-
-    # Hardware-validated system-workqueue stack budget: fresh strict-mono
-    # stream establishment faulted with a sysworkq stack overflow at the
-    # 1024-byte resolved size, so the board config pins 2048.
-    result.add(
-        config_int(app_cfg, "CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE") == 2048,
-        "5340-032",
-        "app CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2048 (hardware-validated "
-        "system-workqueue stack budget)",
-        "got %r" % config_int(app_cfg, "CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE"),
-    )
 
 
 def run_nrf54_checks(
@@ -1218,6 +1016,39 @@ def run_nrf54_checks(
         "app CONFIG_INPUT=y (USER_PAIRING_INPUT mandatory dependency)",
         "got %r" % app_cfg.get("CONFIG_INPUT"),
     )
+    result.add(
+        config_enabled(app_cfg, "CONFIG_SOC_NRF54L15_CPUAPP"),
+        "54l15-051",
+        "app CONFIG_SOC_NRF54L15_CPUAPP=y",
+        "got %r" % app_cfg.get("CONFIG_SOC_NRF54L15_CPUAPP"),
+    )
+    result.add(
+        config_enabled(app_cfg, "CONFIG_BT_LL_SOFTDEVICE"),
+        "54l15-052",
+        "app CONFIG_BT_LL_SOFTDEVICE=y",
+        "got %r" % app_cfg.get("CONFIG_BT_LL_SOFTDEVICE"),
+    )
+    chosen_app = find_chosen(app_dts)
+    hci_node = chosen_ref(labels_app, chosen_app, "zephyr,bt-hci")
+    result.add(
+        hci_node is not None,
+        "54l15-053",
+        "app chosen zephyr,bt-hci resolves",
+        "chosen %r" % (chosen_app.prop("zephyr,bt-hci") if chosen_app else None),
+    )
+    result.add(
+        hci_node is not None and hci_node.status() == "okay",
+        "54l15-054",
+        "app zephyr,bt-hci node status okay",
+        "status %r" % (hci_node.status() if hci_node else None),
+    )
+    compat = hci_node.prop("compatible") if hci_node else None
+    result.add(
+        hci_node is not None and compat is not None and ["nordic,bt-hci-sdc"] in compat,
+        "54l15-055",
+        "app zephyr,bt-hci node compatible nordic,bt-hci-sdc",
+        "compatible %r" % compat,
+    )
 
 
 def run_source_checks(bt_bap_path, result):
@@ -1273,9 +1104,8 @@ def _read_required(path, what):
         raise OSError("%s unreadable: %s (%s)" % (what, path, exc))
 
 
-def resolve_inputs(nrf5340_root, nrf54l15_root, bt_bap_path):
-    """Resolve and parse required active inputs and optional legacy nRF5340
-    inputs; hard-fail on any supplied-input problem.
+def resolve_inputs(nrf54l15_root, bt_bap_path):
+    """Resolve and parse required nRF54L15 inputs; hard-fail on input problems.
 
     Returns a dict of parsed inputs.  Raises ConfigError/DtsError/OSError
     for hard failures (missing/duplicate/unreadable/malformed).
@@ -1283,8 +1113,7 @@ def resolve_inputs(nrf5340_root, nrf54l15_root, bt_bap_path):
     The sysbuild app image directory is named after the application
     source directory basename (e.g. `le-audio-receiver` or the checkout
     directory name), so it is resolved from `domains.yaml` — never
-    assumed.  The controller/FLPR image names are fixed sysbuild domain
-    names (hci_ipc, flpr).
+    assumed. The FLPR image name is a fixed sysbuild domain name.
     """
 
     def default_image_name(root):
@@ -1308,25 +1137,10 @@ def resolve_inputs(nrf5340_root, nrf54l15_root, bt_bap_path):
         nodes, labels = parse_dts(dts_text)
         return cfg, nodes, labels
 
-    if nrf5340_root is not None:
-        app5340_name = default_image_name(nrf5340_root)
-        app54_name = default_image_name(nrf54l15_root)
-        app5340 = image(nrf5340_root, app5340_name)
-        net = image(nrf5340_root, "hci_ipc")
-        legacy = {
-            "app5340_cfg": app5340[0],
-            "app5340_dts": app5340[1],
-            "app5340_labels": app5340[2],
-            "net_cfg": net[0],
-            "net_dts": net[1],
-            "net_labels": net[2],
-        }
-    else:
-        app54_name = default_image_name(nrf54l15_root)
-        legacy = {}
+    app54_name = default_image_name(nrf54l15_root)
     app54 = image(nrf54l15_root, app54_name)
     flpr = image(nrf54l15_root, "flpr")
-    parsed = {
+    return {
         "app54_cfg": app54[0],
         "app54_dts": app54[1],
         "app54_labels": app54[2],
@@ -1335,23 +1149,11 @@ def resolve_inputs(nrf5340_root, nrf54l15_root, bt_bap_path):
         "flpr_labels": flpr[2],
         "bt_bap_path": bt_bap_path,
     }
-    parsed.update(legacy)
-    return parsed
 
 
 def run_all(parsed):
     """Run every contract check; returns a ContractResult."""
     result = ContractResult()
-    if "app5340_cfg" in parsed:
-        run_nrf5340_checks(
-            parsed["app5340_cfg"],
-            parsed["app5340_dts"],
-            parsed["app5340_labels"],
-            parsed["net_cfg"],
-            parsed["net_dts"],
-            parsed["net_labels"],
-            result,
-        )
     run_nrf54_checks(
         parsed["app54_cfg"],
         parsed["app54_dts"],
@@ -1380,11 +1182,6 @@ def format_result(result):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Resolved build-contract checker")
     parser.add_argument(
-        "--nrf5340",
-        metavar="BUILD_ROOT",
-        help="optional legacy local nRF5340 sysbuild root (build/nrf5340)",
-    )
-    parser.add_argument(
         "--nrf54l15",
         required=True,
         metavar="BUILD_ROOT",
@@ -1406,7 +1203,7 @@ def main(argv=None):
         )
 
     try:
-        parsed = resolve_inputs(args.nrf5340, args.nrf54l15, args.bt_bap_source)
+        parsed = resolve_inputs(args.nrf54l15, args.bt_bap_source)
     except (OSError, ConfigError, DtsError) as exc:
         print("HARD ERROR: %s" % exc, file=sys.stderr)
         return 2

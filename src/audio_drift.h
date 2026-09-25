@@ -8,20 +8,11 @@
 
 #include <stdint.h>
 
-/*
- * APLL register constants for nRF5340 HFCLKAUDIO (12.288 MHz band).
- * One step ≈ 3.3 ppm. Range spans ≈ ±600 ppm around center.
- * Used by the APLL actuator; kept here for shared definition.
- */
-#define AUDIO_DRIFT_APLL_CENTER 0x9BA6U
-#define AUDIO_DRIFT_APLL_MIN    0x8FD8U
-#define AUDIO_DRIFT_APLL_MAX    0xA774U
-
 /**
  * @brief Feed a measured local audio-clock frequency error.
  *
- * Called from platform timing measurement (nRF54L15: PCLK TIMER20
- * vs GRTC; nRF5340: no-op, stays zero).  Positive local_clock_error_ppm
+ * Called from platform timing measurement (PCLK TIMER20 vs GRTC).
+ * Positive local_clock_error_ppm
  * means the local audio clock / PCLK runs faster than the Bluetooth
  * controller / GRTC clock.
  *

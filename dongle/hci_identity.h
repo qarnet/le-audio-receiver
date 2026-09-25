@@ -1,11 +1,11 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * Compile-time BD_ADDR for nRF5340DK hci_uart dongle.
+ * Lab BD_ADDR for the current XIAO nRF54L15 HCI controller.
  *
- * Lab-only: this DK's FICR DEVICEADDR is unprogrammed (all zeros),
- * so the controller would report 00:00:00:00:00:00 without an
- * explicit bt_ctlr_set_public_addr() call before bt_enable_raw().
+ * Historical nRF5340DK motivation: that DK's FICR DEVICEADDR was
+ * unprogrammed (all zeros), requiring an explicit public address.
+ * This is not a claim about the XIAO's FICR DEVICEADDR.
  *
  * This address is NOT a production-assigned OUI. It is a static
  * lab identity so the dongle can scan and connect without the

@@ -912,7 +912,7 @@ def build_passing_source_wire(run_id):
 FIXTURE_ID = "local-nrf54l15-receiver"
 
 RECEIVER_SERIAL = "PROBE-ABC123"
-SOURCE_SERIAL = "J-LINK-0001"
+SOURCE_SERIAL = "XIAO-SOURCE"
 
 
 def fixture_json():
@@ -928,8 +928,8 @@ def fixture_json():
             },
             "source": {
                 "kind": "zephyr_dut",
-                "board": "nrf5340dk/nrf5340/cpuapp",
-                "images": ["cpuapp", "cpunet"],
+                "board": "nrf54l15dk/nrf54l15/cpuapp",
+                "images": ["cpuapp"],
             },
         },
     }
@@ -942,19 +942,11 @@ def binding_json():
         "roles": {
             "receiver": {
                 "probe": {"backend": "nrf-probes", "family": "nrf54l"},
-                "serial": {"baud": 115200, "dtr": False, "rts": False, "udev": {}},
+                "serial": {"baud": 115200, "dtr": True, "rts": False, "udev": {}},
             },
             "source": {
-                "probe": {
-                    "backend": "jlink",
-                    "family": "nrf53",
-                    "udev": {
-                        "ID_VENDOR_ID": "1366",
-                        "ID_MODEL_ID": "1015",
-                        "ID_SERIAL_SHORT": SOURCE_SERIAL,
-                    },
-                },
-                "serial": {"baud": 115200, "dtr": False, "rts": False, "udev": {}},
+                "probe": {"backend": "nrf-probes", "family": "nrf54l"},
+                "serial": {"baud": 115200, "dtr": True, "rts": False, "udev": {}},
             },
         },
     }
@@ -971,8 +963,7 @@ def write_fixture_binding(directory, fixture=None, binding=None):
 
 
 IMAGE_RELS = (
-    "build/hil-source/app/zephyr/zephyr.hex",
-    "build/hil-source/hci_ipc/zephyr/zephyr.hex",
+    "build/hil-source-nrf54l15/zephyr/zephyr.hex",
     "build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex",
     "build/nrf54l15/flpr/zephyr/zephyr.hex",
 )
@@ -1014,9 +1005,9 @@ def build_fake_sysfs(
         base = os.path.join(sysfs, "devices", "pci0000:00", "usb1", usb_id)
         os.makedirs(os.path.join(base, "1-1:1.0", "tty", tty), exist_ok=True)
         with open(os.path.join(base, "idVendor"), "w") as fh:
-            fh.write("1366\n")
+            fh.write("2886\n")
         with open(os.path.join(base, "idProduct"), "w") as fh:
-            fh.write("1015\n")
+            fh.write("0066\n")
         with open(os.path.join(base, "serial"), "w") as fh:
             fh.write("serial-%s\n" % usb_id)
         os.makedirs(os.path.join(usb_dir, usb_id), exist_ok=True)
@@ -1048,7 +1039,16 @@ def default_probe_table(rows=None):
                 "nRF54L15",
                 "0x6ba02477",
                 "0x00054b15",
-                "BAAA",
+                "AAC0",
+                "",
+            ),
+            (
+                SOURCE_SERIAL,
+                "CMSIS-DAP",
+                "nRF54L15",
+                "0x6ba02477",
+                "0x00054b15",
+                "AAC0",
                 "",
             ),
         ]
@@ -1088,7 +1088,7 @@ def cmsis_dap_fingerprint_output(
     ap2="0x32880000",
     ap3="0x00000000",
     part="0x00054b15",
-    variant="0x42414141",
+    variant="0x41414330",
     failure=None,
 ):
     """Read-only nRF54L15 CMSIS-DAP fingerprint marker output."""
@@ -1100,3 +1100,68 @@ def cmsis_dap_fingerprint_output(
     if failure:
         lines.append(failure)
     return "\n".join(lines) + "\n"
+
+
+def create_fake_session(
+    root, fixture_path, binding_path, command, session_id="fake-session"
+):
+    """Persist actual public session against two synthetic CMSIS-DAP devices.
+
+    Register same read-only commands for later real session revalidation.
+    """
+    from hil import session
+
+    sysfs = build_fake_sysfs(root)
+    command.script(
+        ["nix-nrf", "probes", RECEIVER_SERIAL, SOURCE_SERIAL],
+        FakeProc(stdout=default_probe_table()),
+    )
+    for serial in (RECEIVER_SERIAL, SOURCE_SERIAL):
+        command.script(
+            [
+                "openocd",
+                "-f",
+                "interface/cmsis-dap.cfg",
+                "-c",
+                "adapter serial " + serial,
+            ],
+            FakeProc(stdout=cmsis_dap_fingerprint_output()),
+            exact=False,
+        )
+    for name, usb, serial in (
+        ("ttyACM0", "1-2", RECEIVER_SERIAL),
+        ("ttyACM1", "1-3", SOURCE_SERIAL),
+    ):
+        props = {
+            "ID_BUS": "usb",
+            "ID_VENDOR_ID": "2886",
+            "ID_MODEL_ID": "0066",
+            "ID_SERIAL_SHORT": serial,
+            "ID_USB_INTERFACE_NUM": "02",
+            "ID_USB_DRIVER": "cdc_acm",
+            "ID_PATH": "pci-0000:00-usb-0:%s:1.2" % usb,
+            "DEVPATH": tty_devpath(usb, name),
+        }
+        command.script(
+            [
+                "udevadm",
+                "info",
+                "--query=property",
+                "--path",
+                os.path.join(sysfs, "class", "tty", name),
+            ],
+            FakeProc(stdout="".join("%s=%s\n" % pair for pair in props.items())),
+        )
+    sessions = os.path.join(root, "sessions")
+    os.mkdir(sessions)
+    manifest = session.create_session(
+        fixture_path,
+        binding_path,
+        session_id,
+        RECEIVER_SERIAL,
+        SOURCE_SERIAL,
+        run_cmd=lambda argv, timeout: command(argv, timeout),
+        session_root=sessions,
+        sysfs_root=sysfs,
+    )
+    return manifest, sysfs

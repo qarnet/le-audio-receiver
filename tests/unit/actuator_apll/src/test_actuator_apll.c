@@ -2,13 +2,13 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * Production APLL actuator suite.
+ * Historical APLL actuator suite.
  *
- * Compiles the real src/audio_clock_actuator_apll.c against a
+ * Compiles the test-local historical implementation against a
  * test-owned shadow of the installed <hal/nrf_clock.h> /
  * <nrfx_clock_hfclkaudio.h> and a mock that captures every register
- * write.  The ppm→register conversion is exercised through the
- * production function; no conversion logic is duplicated here.
+ * write. The ppm→register conversion is exercised through the
+ * historical function; no conversion logic is duplicated here.
  */
 
 #include <zephyr/ztest.h>
@@ -16,7 +16,7 @@
 #include <stdint.h>
 
 #include "audio_clock_actuator.h"
-#include "audio_drift.h"
+#include "audio_apll_historical.h"
 #include "mock_clock.h"
 
 static void reset_before_each(void *unused)

@@ -26,7 +26,7 @@
 #define CORPUS_FRAMES         128U
 #define MAX_SAMPLES_PER_FRAME 480U
 #define MAX_FRAME_BYTES       120U
-#define METRIC_RECORD_COUNT   39U
+#define METRIC_RECORD_COUNT   46U
 #define OUTPUT_LINE_SIZE      768U
 
 struct corpus_stream {
@@ -97,6 +97,15 @@ static const uint8_t stateful_48k_10ms_skip20_l_pcm[] = {
 static const uint8_t stateful_48k_10ms_loss48x18_r_pcm[] = {
 #include "stateful_48k_10ms_loss48x18_r_pcm.inc"
 };
+
+static const uint8_t stateful_48k_10ms_skip20_start0_l_pcm[] = {
+#include "stateful_48k_10ms_skip20_start0_l_pcm.inc"
+};
+static const uint8_t stateful_48k_10ms_loss48x18_start0_r_pcm[] = {
+#include "stateful_48k_10ms_loss48x18_start0_r_pcm.inc"
+};
+BUILD_ASSERT(sizeof(stateful_48k_10ms_skip20_start0_l_pcm) == 100U * 480U * 2U);
+BUILD_ASSERT(sizeof(stateful_48k_10ms_loss48x18_start0_r_pcm) == 82U * 480U * 2U);
 
 static const uint8_t stateful_48k_7p5ms_modea_start_r_pcm[] = {
 #include "stateful_48k_7p5ms_modea_start_r_pcm.inc"
@@ -351,7 +360,15 @@ static int reference_for_recipe(const struct lc3_stateful_recipe *recipe,
 	expected_size =
 		(size_t)recipe->valid_frame_count * recipe->samples_per_frame * sizeof(int16_t);
 	if (recipe->reference_kind == LC3_STATEFUL_REFERENCE_GENERATED_PCM) {
-		if (strcmp(recipe->reference_path, "stateful_48k_7p5ms_modea_start_r.pcm") == 0) {
+		if (strcmp(recipe->reference_path, "stateful_48k_10ms_skip20_start0_l.pcm") == 0) {
+			reference->bytes = stateful_48k_10ms_skip20_start0_l_pcm;
+			reference->size = sizeof(stateful_48k_10ms_skip20_start0_l_pcm);
+		} else if (strcmp(recipe->reference_path,
+				  "stateful_48k_10ms_loss48x18_start0_r.pcm") == 0) {
+			reference->bytes = stateful_48k_10ms_loss48x18_start0_r_pcm;
+			reference->size = sizeof(stateful_48k_10ms_loss48x18_start0_r_pcm);
+		} else if (strcmp(recipe->reference_path, "stateful_48k_7p5ms_modea_start_r.pcm") ==
+			   0) {
 			reference->bytes = stateful_48k_7p5ms_modea_start_r_pcm;
 			reference->size = sizeof(stateful_48k_7p5ms_modea_start_r_pcm);
 		} else if (strcmp(recipe->reference_path, "stateful_48k_10ms_skip20_l.pcm") == 0) {
@@ -1117,13 +1134,25 @@ int main(void)
 		}
 	}
 
+	err = run_stateful_comparison(&lc3_stateful_recipes[14], &lc3_stateful_recipes[7], &metrics,
+				      &failure);
+	if (err != 0) {
+		goto fail;
+	}
+	err = emit_record("stateful-startup-history", lc3_stateful_recipes[14].id,
+			  lc3_stateful_recipes[7].reference_path, &metrics, &metric_count,
+			  PCM_ORACLE_RESULT_MAX_ERROR, &failure);
+	if (err != 0) {
+		goto fail;
+	}
+
 	if (metric_count != METRIC_RECORD_COUNT) {
 		(void)set_failure(&failure, "metric-count", "none", -EIO);
 		goto fail;
 	}
 
 	thread_analyzer_print(0U);
-	printk("PB031_ARM_PASS metrics=39\n");
+	printk("PB031_ARM_PASS metrics=%u\n", metric_count);
 	return 0;
 
 fail:

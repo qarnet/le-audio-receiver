@@ -17,10 +17,10 @@ extern "C" {
 /* Initialize platform controller-clock infrastructure. */
 int hil_source_controller_time_init(void);
 
-/* Read platform controller time modulo 2^32 microseconds. Returns -EAGAIN
- * while synchronization or the counter is not ready, -ENODEV when platform
- * clock infrastructure is unavailable, or -EIO when an nRF5340 network-core
- * restart invalidates the mirrored clock epoch. */
+/* Read nRF54L15 controller time from Zephyr-owned GRTC, modulo 2^32 us.
+ * NULL returns -EINVAL; uninitialized GRTC returns -ENODEV; not-ready
+ * GRTC returns -EAGAIN. On success, writes *time_us and returns 0.
+ * No network-core mirror or mirrored clock epoch is used. */
 int hil_source_controller_time_get(uint32_t *time_us);
 
 #ifdef __cplusplus

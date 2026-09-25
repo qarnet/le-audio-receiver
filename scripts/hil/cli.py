@@ -244,6 +244,7 @@ def cmd_run_rh3_matrix(args):
             args.junit,
             argv=argv,
             status=0,
+            session_manifest_path=getattr(args, "session_manifest", None),
         )
     finally:
         signal.signal(signal.SIGINT, old_int)
@@ -284,6 +285,7 @@ def _capture_matrix_command(args, capability, verdict):
             status=0,
             qualification_path=args.qualification,
             capture_verdict=verdict,
+            session_manifest_path=getattr(args, "session_manifest", None),
         )
     finally:
         signal.signal(signal.SIGINT, old_int)
@@ -331,6 +333,7 @@ def cmd_run_rh4_matrix(args):
             argv=argv,
             status=0,
             artifacts=artifact_set,
+            session_manifest_path=getattr(args, "session_manifest", None),
         )
     finally:
         signal.signal(signal.SIGINT, old_int)
@@ -422,6 +425,7 @@ def build_parser():
     matrix_run.add_argument("--output-root", required=True)
     matrix_run.add_argument("--run-id", required=True)
     matrix_run.add_argument("--junit", required=True)
+    matrix_run.add_argument("--session-manifest")
     matrix_run.set_defaults(func=cmd_run_rh3_matrix)
     ma1_matrix_run = sub.add_parser(
         "run-ma1-matrix",
@@ -433,6 +437,7 @@ def build_parser():
     ma1_matrix_run.add_argument("--output-root", required=True)
     ma1_matrix_run.add_argument("--run-id", required=True)
     ma1_matrix_run.add_argument("--junit", required=True)
+    ma1_matrix_run.add_argument("--session-manifest")
     ma1_matrix_run.set_defaults(func=cmd_run_ma1_matrix)
     sa1_matrix_run = sub.add_parser(
         "run-sa1-matrix",
@@ -444,6 +449,7 @@ def build_parser():
     sa1_matrix_run.add_argument("--output-root", required=True)
     sa1_matrix_run.add_argument("--run-id", required=True)
     sa1_matrix_run.add_argument("--junit", required=True)
+    sa1_matrix_run.add_argument("--session-manifest")
     sa1_matrix_run.set_defaults(func=cmd_run_sa1_matrix)
     rh4_matrix_run = sub.add_parser(
         "run-rh4-matrix",
@@ -454,6 +460,7 @@ def build_parser():
     rh4_matrix_run.add_argument("--output-root", required=True)
     rh4_matrix_run.add_argument("--run-id", required=True)
     rh4_matrix_run.add_argument("--junit", required=True)
+    rh4_matrix_run.add_argument("--session-manifest")
     rh4_matrix_run.add_argument("--receiver-artifact", required=True)
     rh4_matrix_run.add_argument("--source-artifact", required=True)
     rh4_matrix_run.set_defaults(func=cmd_run_rh4_matrix)

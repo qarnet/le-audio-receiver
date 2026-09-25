@@ -43,7 +43,7 @@ static const struct modea_half *oldest_c(const struct modea_state *st, enum mode
  * deliver the same ISO SDU reference time per event, but a LOST
  * replacement's reference is synthesized controller-side and can sit a
  * few units off its mate's real reference (observed <=10 units on the
- * nRF5340 SW Split and BSim links; the interval is 10000).  Entries
+ * historical nRF5340 SW Split and BSim links; interval 10000).  Entries
  * whose wrap-safe reference distance is within this tolerance belong to
  * the same CIG event; anything beyond it is a genuinely different
  * event (>= interval apart).  Kept far below the 10000-unit interval.
@@ -169,6 +169,11 @@ static bool emit_event(struct modea_state *st, struct modea_event *ev, bool l_da
 		st->plc_backed_events++;
 	}
 	st->resolved_events++;
+	if ((pop_l && st->count[MODEA_CH_LEFT] && l->has_ts) ||
+	    (pop_r && st->count[MODEA_CH_RIGHT] && r->has_ts)) {
+		st->resolved_ts = ts;
+		st->resolved_has_ts = true;
+	}
 
 	if (pop_l) {
 		pop_half(st, MODEA_CH_LEFT);
@@ -211,8 +216,10 @@ enum modea_action modea_store(struct modea_state *st, enum modea_channel ch, con
 	if (has_ts) {
 		eff_has_ts = true;
 		eff_ts = ts;
-		st->last_ts[ch] = ts;
-		st->last_has_ts[ch] = true;
+		if (!st->last_has_ts[ch] || ts_newer(ts, st->last_ts[ch])) {
+			st->last_ts[ch] = ts;
+			st->last_has_ts[ch] = true;
+		}
 	} else if (st->last_has_ts[ch]) {
 		eff_has_ts = true;
 		eff_ts = st->last_ts[ch] + st->interval_us;
@@ -221,6 +228,27 @@ enum modea_action modea_store(struct modea_state *st, enum modea_channel ch, con
 		/* Positional sentinel: no usable position yet. */
 		eff_has_ts = false;
 		eff_ts = 0U;
+	}
+
+	/* A deadline-concealed event cannot be resurrected by a late real
+	 * half or by a sequence-gap sentinel generated when its CIS resumes.
+	 * Keep the per-CIS position above advancing for subsequent sentinels. */
+	if (eff_has_ts && st->resolved_has_ts && !ts_newer(eff_ts, st->resolved_ts)) {
+		return MODEA_ACTION_NONE;
+	}
+
+	/* Continued delivery bounds how long we can wait for an absent mate.
+	 * Emit, rather than discard, the oldest surviving half at the queue
+	 * limit. This keeps its decoder and the silent channel's PLC moving
+	 * in event order while retaining the same tolerated callback skew. */
+	enum modea_channel other = (ch == MODEA_CH_LEFT) ? MODEA_CH_RIGHT : MODEA_CH_LEFT;
+	if (st->count[ch] >= MODEA_PENDING_DEPTH && st->count[other] == 0U) {
+		uint32_t oldest_ts = oldest_c(st, ch)->ts;
+
+		emit_event(st, ev, ch == MODEA_CH_LEFT, ch == MODEA_CH_RIGHT, ch == MODEA_CH_LEFT,
+			   ch == MODEA_CH_RIGHT, oldest_ts);
+		enqueue_half(st, ch, data, len, src_valid, eff_has_ts, eff_ts, seq);
+		return MODEA_ACTION_EMIT;
 	}
 
 	/* Enqueue, dropping the oldest entry of this channel first on

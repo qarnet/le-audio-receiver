@@ -2,12 +2,12 @@
  * Copyright (c) 2025
  * SPDX-License-Identifier: Apache-2.0
  *
- * No-op audio timing for nRF5340.
+ * No-op audio timing for the nRF54L15BSim receiver.
  *
- * The nRF5340 uses buffer-phase PI drift compensation via
- * audio_drift_controller_update() in audio_i2s.c / audio_sink_push().
- * The GRTC+TIMER20+GPPI PCLK frequency-measurement path is specific
- * to nRF54L15.
+ * The simulator has no hardware PCLK measurement; buffer-phase PI
+ * still runs via audio_drift_controller_update() in audio_sink_push().
+ * Physical nRF54L15 uses GRTC+TIMER20+GPPI for PCLK measurement.
+ * No timing sample is submitted by this backend.
  */
 
 #include "audio_timing.h"

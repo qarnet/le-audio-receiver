@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # BabbleSim official smoke — BAP unicast audio baseline
 #
-# Compiles the official Zephyr BAP unicast audio test for nrf5340bsim,
+# Compiles the official Zephyr BAP unicast audio test for nrf54l15bsim,
 # then runs the full-lifecycle test (unicast_client / unicast_server).
 #
 # The full lifecycle test streams 100 SDUs successfully through ACL,
@@ -56,20 +56,36 @@ eval "$(nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh)" 
     exit 1
 }
 
+# Native-simulator builds use -O0. Keep Nix hardening enabled except for its
+# incompatible fortify modes, which inject _FORTIFY_SOURCE at -O0.
+NIX_HARDENING_ENABLE="${NIX_HARDENING_ENABLE:-}"
+hardening_tokens=()
+for hardening_token in $NIX_HARDENING_ENABLE; do
+    case "$hardening_token" in
+        fortify|fortify3) ;;
+        *) hardening_tokens+=("$hardening_token") ;;
+    esac
+done
+NIX_HARDENING_ENABLE="${hardening_tokens[*]}"
+export NIX_HARDENING_ENABLE
+
 echo "=== Step 1: Compile official BAP unicast audio test ==="
 echo "BOARD=$BOARD  BOARD_TS=$BOARD_TS"
 
-# Compile options as scalar string (compile.source reads ${cmake_args} as scalar).
-# CONFIG_COMPILER_WARNINGS_AS_ERRORS=n avoids glibc _FORTIFY_SOURCE false
-# positive at -O0 (bsim debug default).
+# Compile options as scalar strings (compile.source reads both as scalars).
+# Keep compiler warnings as errors; nonempty cmake_extra_args avoids an empty
+# command-line argument in upstream compile.source.
 export WORK_DIR="${ZEPHYR_BASE}/bsim_out"
 
-cmake_args="-DCONFIG_COVERAGE=y -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCONFIG_ASSERT=y -DCONFIG_COMPILER_WARNINGS_AS_ERRORS=n"
-export cmake_args
+export cmake_args='-DCONFIG_COVERAGE=y -DCONFIG_COMPILER_WARNINGS_AS_ERRORS=y'
+export cmake_extra_args='-DCONFIG_ASSERT=y'
 
 app=tests/bsim/bluetooth/audio
 exe_name="bs_${BOARD_TS}_${app}_prj_conf"
 sysbuild=1
+snippet="bt-ll-sw-split"
+conf_overlay="${ZEPHYR_BASE}/tests/bsim/bluetooth/audio/overlay-bt_ll_sw_split.conf"
+export snippet conf_overlay
 
 # shellcheck source=/dev/null
 source "${ZEPHYR_BASE}/tests/bsim/compile.source"

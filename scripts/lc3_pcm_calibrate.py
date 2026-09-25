@@ -188,6 +188,87 @@ EXPECTED_STATEFUL_RECIPES = (
         (("plc", 0, 7), ("corpus", 0, 100)),
     ),
 )
+# Target-native histories append after the immutable legacy recipe population.
+EXPECTED_STATEFUL_RECIPES += (
+    (
+        "start0_10ms_l",
+        "bsim_48k_10ms_120b_l",
+        "portable-pcm",
+        "bsim_48k_10ms_120b_l.pcm",
+        0,
+        10000,
+        120,
+        480,
+        100,
+        100,
+        (("corpus", 0, 100),),
+    ),
+    (
+        "start0_10ms_r",
+        "bsim_48k_10ms_120b_r",
+        "portable-pcm",
+        "bsim_48k_10ms_120b_r.pcm",
+        0,
+        10000,
+        120,
+        480,
+        100,
+        100,
+        (("corpus", 0, 100),),
+    ),
+    (
+        "start0_7p5ms_l",
+        "bsim_48k_7p5ms_90b_l",
+        "portable-pcm",
+        "bsim_48k_7p5ms_90b_l.pcm",
+        0,
+        7500,
+        90,
+        360,
+        100,
+        100,
+        (("corpus", 0, 100),),
+    ),
+    (
+        "start0_7p5ms_r",
+        "bsim_48k_7p5ms_90b_r",
+        "portable-pcm",
+        "bsim_48k_7p5ms_90b_r.pcm",
+        0,
+        7500,
+        90,
+        360,
+        100,
+        100,
+        (("corpus", 0, 100),),
+    ),
+    (
+        "skip20_start0_10ms_l",
+        "bsim_48k_10ms_120b_l",
+        "generated-pcm",
+        "stateful_48k_10ms_skip20_start0_l.pcm",
+        0,
+        10000,
+        120,
+        480,
+        100,
+        100,
+        (("corpus", 0, 20), ("corpus", 21, 80)),
+    ),
+    (
+        "loss48x18_start0_10ms_r",
+        "bsim_48k_10ms_120b_r",
+        "generated-pcm",
+        "stateful_48k_10ms_loss48x18_start0_r.pcm",
+        0,
+        10000,
+        120,
+        480,
+        100,
+        82,
+        (("corpus", 0, 48), ("plc", 0, 18), ("corpus", 48, 34)),
+    ),
+)
 STATEFUL_MUTATIONS = (
     (
         "stateful-payload-off-by-one",
@@ -219,6 +300,16 @@ STATEFUL_MUTATIONS = (
         "bsim_48k_10ms_120b_l.pcm",
         100,
         48000,
+        "max-error",
+    ),
+)
+STATEFUL_MUTATIONS += (
+    (
+        "stateful-startup-history",
+        "loss48x18_start0_10ms_r",
+        "stateful_48k_10ms_loss48x18_r.pcm",
+        82,
+        39360,
         "max-error",
     ),
 )
@@ -656,7 +747,7 @@ def load_stateful_manifest(portable_manifest):
 
     recipes = manifest["recipes"]
     if not isinstance(recipes, list) or len(recipes) != len(EXPECTED_STATEFUL_RECIPES):
-        raise CalibrationError("stateful manifest must contain exactly nine recipes")
+        raise CalibrationError("stateful manifest must contain exactly fifteen recipes")
     portable_pcm = {
         stream["stem"]: stream["pcm"] for stream in portable_manifest["streams"]
     }

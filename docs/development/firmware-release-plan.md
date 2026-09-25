@@ -1,5 +1,17 @@
 # Firmware release plan
 
+> **Current migration note (2026-09-25):** Active release line remains
+> nRF54L15-only, with CPUAPP + FLPR factory ZIP and FR1 schema unchanged.
+> E83 receiver board/helpers and production APLL have been retired on the
+> uncommitted migration tree; `fw-flash-54l15` is the only normal receiver
+> helper and requires freshly role-resolved `FW_NRF54L15_PROBE_SERIAL`.
+> Current source/HCI fixture roles use the second XIAO sequentially, not the
+> old DK/CPUNET source. Old dual-target recipes and results below are dated
+> historical evidence, not active acceptance requirements. Active draft
+> hashes and hosted workflow facts below are unchanged. Dirty-tree work is
+> diagnostic, not new release, clean-commit, RH4 or FR4 acceptance; nothing
+> is published. See `AGENTS.md` and `docs/development/pb-037-retirement-results.md`.
+
 Status: accepted plan (FR0). Scope: publishing verified, factory-flash firmware
 through GitHub Releases. This plan is documentation only; it does not add CI,
 packaging code, version files, tags, releases, MCUboot, or firmware behavior.
@@ -36,10 +48,9 @@ attachments, and release asset verification are nRF54L15-only. The active
 factory artifact is one nRF54L15 ZIP plus its top-level `SHA256SUMS`.
 
 nRF5340 receiver release artifacts and FR1-FR4 evidence remain historical,
-including failed exact `v0.1.0` FR4 evidence. Local nRF5340 receiver code,
-build and flash helpers, and optional legacy nRF5340 build-contract checks
-remain in tree until the dedicated cleanup branch. This scope update does not
-delete or reinterpret those historical records.
+including failed exact `v0.1.0` FR4 evidence. The 2026-09-12 local-helper
+retention assumption is superseded by the migration note above; this scope
+update does not delete or reinterpret historical records.
 
 Current product-item ownership is
 [PB-006](../product/backlog/completed/pb-006%20-%20Create-replacement-nRF54L15-release-candidate.md)
@@ -68,9 +79,9 @@ artifacts. Factory-flash means the packaged images are flashed directly via
 the probe/OpenOCD paths, replacing the firmware image in its address range,
 with no bootloader update layer.
 
-The current normal flash helpers (`scripts/bin/fw-flash-5340` and
-`scripts/bin/fw-flash-54l15`) program firmware address ranges and preserve
-settings and bonds; they do not perform a clean-state erase. Any destructive
+The current normal receiver helper (`scripts/bin/fw-flash-54l15`) programs
+firmware address ranges and preserves settings and bonds; it does not perform
+a clean-state erase. Any destructive
 clean-state or recovery procedure (for example a full chip erase) is
 separate, target-specific, and must be explicitly documented and tested
 rather than implied by the release package.
@@ -93,9 +104,10 @@ rather than implied by the release package.
   bytes; FLPR 32,668 bytes.
 - Historical nRF5340 image measurements from the accepted build: cpuapp
   375,528 bytes; cpunet 146,780 bytes.
-- `scripts/bin/fw-flash-5340` remains a local legacy helper and requires both
-  nRF5340 core images through the OpenOCD dual-core chain.
-- `scripts/bin/fw-flash-54l15` requires separate cpuapp and FLPR images.
+- Historical `scripts/bin/fw-flash-5340` used both nRF5340 core images;
+  it is no longer a current helper.
+- `scripts/bin/fw-flash-54l15` requires separate cpuapp and FLPR images and
+  explicit fresh receiver probe-role resolution.
 - NCS 3.3.0 supports nRF54L15 MCUboot for cpuapp only; stock FOTA does not
   update this repository's FLPR image.
 - NCS 3.3.0 supports nRF5340 app/net multi-image MCUboot, but an internal-only

@@ -103,7 +103,7 @@ struct bt_bap_iso_link_quality {
  *
  * @retval 0       success
  * @retval -ENOTCONN no active CIS present
- * @retval -ENOTSUP nRF5340/unsupported implementation
+ * @retval -ENOTSUP unsupported implementation
  * @retval <0      exact errno for endpoint/handle/HCI/malformed-response/capacity failures
  */
 int bt_bap_iso_link_quality_get_active(struct bt_bap_iso_link_quality *snapshots, size_t capacity,

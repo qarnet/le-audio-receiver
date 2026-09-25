@@ -1,4 +1,6 @@
 .direnv/
+# Private pause/resume snapshots, including raw lab logs and pairing material.
+/.session-checkpoints/
 build/
 scripts/probe-serial.local
 scripts/probe-serial.local.*

@@ -11,7 +11,6 @@
  */
 
 #include <errno.h>
-#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -46,18 +45,15 @@
 
 /* Wait-for-sends pacing: generous margins keep teardown/reconnect timing
  * deterministic in BSim while never outrunning the receiver. */
-#define SEND_POLL_MS                          50
-#define SEND_WAIT_MS                          15000
-#define TEARDOWN_MARGIN_MS                    500
-#define COMPLETION_WAIT_MS                    10000
-#define MODEA_ONE_CIS_LOSS_COUNT              18U
-#define MODEA_ONE_CIS_REFILL_LEAD_COMPLETIONS 1U
-#define MODEA_ONE_CIS_PRE_GAP_SENDS           48U
+#define SEND_POLL_MS                50
+#define SEND_WAIT_MS                15000
+#define TEARDOWN_MARGIN_MS          500
+#define MODEA_ONE_CIS_LOSS_COUNT    18U
+#define MODEA_ONE_CIS_PRE_GAP_SENDS 48U
 
+BUILD_ASSERT(MODEA_ONE_CIS_LOSS_COUNT > 0U, "loss count must be nonzero");
 BUILD_ASSERT(MODEA_ONE_CIS_PRE_GAP_SENDS > 0U, "pre-gap sends must be nonzero");
 BUILD_ASSERT(MODEA_ONE_CIS_PRE_GAP_SENDS < 110U, "pre-gap sends must be below final send limit");
-BUILD_ASSERT(MODEA_ONE_CIS_LOSS_COUNT > MODEA_ONE_CIS_REFILL_LEAD_COMPLETIONS,
-	     "loss count must exceed refill lead");
 
 /* ── scenario ids (mirror receiver + runner) ─────────────────────── */
 
@@ -88,7 +84,6 @@ static struct bt_bap_unicast_group *unicast_group;
 static struct bt_bap_ep *sink_eps[MAX_SINKS];
 static struct bt_bap_ep *src_eps[MAX_SRCS];
 static struct bt_bap_stream streams[MAX_STREAMS];
-static atomic_uint stream_completion_counts[MAX_STREAMS];
 
 /* ASCS response capture (exact codes/reasons from the listener). */
 static struct bt_bap_ascs_rsp cfg_rsps[24];
@@ -298,16 +293,6 @@ static void stream_released(struct bt_bap_stream *stream)
 	(void)stream;
 }
 
-static void stream_sent(struct bt_bap_stream *stream)
-{
-	for (size_t i = 0U; i < ARRAY_SIZE(streams); i++) {
-		if (stream == &streams[i]) {
-			atomic_fetch_add(&stream_completion_counts[i], 1U);
-			return;
-		}
-	}
-}
-
 static struct bt_bap_stream_ops stream_ops = {
 	.configured = stream_configured,
 	.qos_set = stream_qos_set,
@@ -316,7 +301,6 @@ static struct bt_bap_stream_ops stream_ops = {
 	.connected = stream_connected_cb,
 	.stopped = stream_stopped,
 	.released = stream_released,
-	.sent = stream_sent,
 };
 
 /* ── scanning / connecting ───────────────────────────────────────── */
@@ -454,17 +438,6 @@ static int config_expect(struct bt_bap_stream *stream, struct bt_bap_ep *ep,
 	}
 
 	return 0;
-}
-
-/*
- * Detach a stream from its endpoint.  For an ASE left idle by a rejected
- * Config the client library resets the stream locally (no PDU is sent);
- * for a configured ASE this sends a real Release op.  Both paths make the
- * stream/ep reusable for another Config attempt.
- */
-static int detach_stream(struct bt_bap_stream *stream)
-{
-	return bt_bap_stream_release(stream);
 }
 
 /* ── group + lifecycle helpers ───────────────────────────────────── */
@@ -618,26 +591,6 @@ static int wait_for_sends(size_t stream_idx, uint32_t target)
 	return 0;
 }
 
-static uint32_t stream_completion_count(size_t stream_idx)
-{
-	return atomic_load(&stream_completion_counts[stream_idx]);
-}
-
-static int wait_for_completions(size_t stream_idx, uint32_t target)
-{
-	uint32_t waited_ms = 0U;
-
-	while (stream_completion_count(stream_idx) < target) {
-		if (waited_ms >= COMPLETION_WAIT_MS) {
-			return -ETIMEDOUT;
-		}
-		k_sleep(K_MSEC(1));
-		waited_ms++;
-	}
-
-	return 0;
-}
-
 /* ── scenario plumbing ───────────────────────────────────────────── */
 
 static int bt_init(void)
@@ -669,14 +622,6 @@ static int bt_init(void)
 		return err;
 	}
 
-	return 0;
-}
-
-static int init_streams(size_t stream_cnt)
-{
-	for (size_t i = 0U; i < stream_cnt; i++) {
-		streams[i].ops = &stream_ops;
-	}
 	return 0;
 }
 
@@ -915,6 +860,11 @@ static int scenario_modea_first_stop(void)
 	k_sleep(K_MSEC(100));
 
 	/* Disable first ASE (server closes gate). */
+	/* Both streams have already passed startup synchronization. Keep the
+	 * remaining CIS transmitting after the first ASE leaves STREAMING;
+	 * otherwise the two-stream admission threshold stalls the fixture.
+	 */
+	bsim_tx_set_required_streams(1);
 	err = bt_bap_stream_disable(&streams[0]);
 	if (err != 0) {
 		return err;
@@ -1822,17 +1772,12 @@ static void test_main_normal_modea_reverse_start(void)
 }
 
 /*
- * Scenario 16: Mode A with an exact mid-stream right send cap. The cap places
- * the gap after 48 valid right fixture frames. Draining right controller
- * completions ensures already accepted frames finish. The left stream then
- * advances 17 pause-window controller completions; one measured sender-refill
- * lead completion produces 18 peer-observed missing-right events. .sent
- * synchronizes fixture state, but the receiver remains peer-delivery truth.
- * The receiver's Mode A event assembler must keep output cadence: every lost
- * right event is concealed (PLC) and paired with its left half, so the receiver
- * still produces 100 pushes. The unaffected left channel stays byte-identical
- * to the lossless Mode A oracle (pinned L hash). Both streams send 110 SDUs
- * (the cap only delays the right stream).
+ * Scenario 16: Mode A with one TX-owned right transport-PSN gap. Both streams
+ * send one payload per 10 ms interval. After right logical frame 47 succeeds,
+ * its next 18 intervals omit payloads while PSN advances, then right logical
+ * frame 48 resumes. Receiver Mode A assembly remains peer-delivery truth:
+ * every missing right event is PLC while left stays continuous, producing 100
+ * pushes with the existing lossless left oracle and one explicit right gap.
  */
 static void test_main_normal_modea_one_cis_loss(void)
 {
@@ -1864,44 +1809,16 @@ static void test_main_normal_modea_one_cis_loss(void)
 			if (err != 0) {
 				break;
 			}
-			bsim_tx_set_send_limit(&streams[i],
-					       i == 0U ? 110U : MODEA_ONE_CIS_PRE_GAP_SENDS);
 		}
+	}
+	if (err == 0) {
+		bsim_tx_set_send_limit(&streams[0], 110U);
+		bsim_tx_set_send_limit(&streams[1], 110U);
+		err = bsim_tx_schedule_gap(&streams[1], MODEA_ONE_CIS_PRE_GAP_SENDS,
+					   MODEA_ONE_CIS_LOSS_COUNT);
 	}
 	if (err == 0) {
 		err = stream_up(presets, 2, false);
-	}
-	if (err == 0) {
-		uint32_t right_send_count = 0U;
-		uint32_t left_completion_count = 0U;
-		uint32_t left_completion_target = 0U;
-
-		err = bsim_tx_wait_send_limit(&streams[1], COMPLETION_WAIT_MS);
-		if (err == 0) {
-			right_send_count = bsim_tx_send_count(&streams[1]);
-			if (right_send_count != MODEA_ONE_CIS_PRE_GAP_SENDS) {
-				err = -ESTALE;
-			}
-		}
-		if (err == 0) {
-			printk("CLI right stream paused (loss window), right sends %u completions "
-			       "%u\n",
-			       (unsigned int)right_send_count,
-			       (unsigned int)stream_completion_count(1));
-			err = wait_for_completions(1, right_send_count);
-			if (err == 0) {
-				left_completion_count = stream_completion_count(0);
-				left_completion_target = left_completion_count +
-							 (MODEA_ONE_CIS_LOSS_COUNT -
-							  MODEA_ONE_CIS_REFILL_LEAD_COMPLETIONS);
-				err = wait_for_completions(0, left_completion_target);
-			}
-		}
-		bsim_tx_set_send_limit(&streams[1], 110U);
-		bsim_tx_resume(&streams[1]);
-		printk("CLI right stream resumed, left completions %u target %u\n",
-		       (unsigned int)stream_completion_count(0),
-		       (unsigned int)left_completion_target);
 	}
 	if (err == 0) {
 		err = wait_for_sends(0, 110);

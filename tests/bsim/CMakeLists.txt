@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.20.0)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(le_audio_receiver_bsim)
 
@@ -18,6 +19,8 @@ set(PB031_CORPUS_STEMS
   bsim_48k_7p5ms_90b_r
 )
 set(PB031_STATEFUL_REFERENCE_STEMS
+  stateful_48k_10ms_skip20_start0_l
+  stateful_48k_10ms_loss48x18_start0_r
   stateful_48k_10ms_skip20_l
   stateful_48k_10ms_loss48x18_r
   stateful_48k_7p5ms_modea_start_r

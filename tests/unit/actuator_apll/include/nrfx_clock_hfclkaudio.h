@@ -4,7 +4,7 @@
  *
  * Test-owned shadow of the installed NCS v3.3.0
  * <nrfx_clock_hfclkaudio.h>.  Declares exactly the API surface used by
- * src/audio_clock_actuator_apll.c; the mock implementation lives in
+ * src/audio_clock_actuator_apll_historical.c; the mock implementation lives in
  * src/mock_clock.c.  Never part of a production build.
  */
 

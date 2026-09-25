@@ -13,8 +13,9 @@
  * SDC timestamp mode: hil_source_tx_send_ts() provides one SDU for a
  * controller-clock ISO event via bt_bap_stream_send_ts().
  * hil_source_tx_read_tx_ts() reads the event timestamp assigned to the
- * previously provided SDU through the SDC HCI VS command, following the
- * nrf iso_time_sync and nrf5340_audio pattern. One untimestamped bootstrap SDU
+ * previously provided SDU through the SDC HCI VS command. Nordic SDK
+ * iso_time_sync and nrf5340_audio are external reference patterns, not
+ * required board targets. One untimestamped bootstrap SDU
  * on stream 0 establishes the shared CIG event grid. All regular segment SDUs
  * then use the learned grid.
  */

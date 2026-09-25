@@ -34,10 +34,14 @@
  * up to AUDIO_MODEA_PENDING_DEPTH unresolved events (default 2), which
  * covers the measured <=1-event cross-CIS callback skew plus single-SDU
  * losses and a one-event loss burst on one channel while the other keeps
- * delivering.  A third concurrent unresolved event on one channel (the
- * other channel stalled >=2 events) overflows: the OLDEST entry of that
- * channel is dropped, counted in stats.overflow_drops, and reported to
- * the caller (DROP action) — never silent.  LOST-flag SDUs (no
+ * delivering. When the mate stays absent until this queue limit, the
+ * oldest surviving half is emitted with mate-channel PLC before storing
+ * the incoming half. Thus surviving audio continues with bounded delay
+ * even if the controller delivers no LOST callbacks. Late halves for
+ * already-resolved events are ignored, including sequence-gap sentinels
+ * on resume; no event can be decoded twice. Ambiguous overflow with both
+ * queues populated is still counted and reported, never silent.
+ * LOST-flag SDUs (no
  * timestamp) before the first timestamped delivery of a channel are
  * positional sentinels: two sentinels pair as a full-PLC event (the
  * historical startup behavior), and a sentinel against a timestamped
@@ -92,10 +96,12 @@ struct modea_state {
 	uint32_t last_ts[MODEA_CHANNELS]; /* ts of last delivered event (real/predicted) */
 	bool last_has_ts[MODEA_CHANNELS]; /* channel delivered a timestamped event */
 	uint32_t interval_us;             /* SDU interval for predicted ts */
-	uint32_t resolved_events;         /* events emitted */
-	uint32_t plc_backed_events;       /* events with at least one PLC half */
-	uint32_t overflow_drops;          /* halves dropped on queue overflow */
-	uint32_t rejects;                 /* oversized inputs rejected before mutation */
+	uint32_t resolved_ts;             /* last resolved timestamped event */
+	bool resolved_has_ts;
+	uint32_t resolved_events;   /* events emitted */
+	uint32_t plc_backed_events; /* events with at least one PLC half */
+	uint32_t overflow_drops;    /* halves dropped on queue overflow */
+	uint32_t rejects;           /* oversized inputs rejected before mutation */
 };
 
 /* What the caller must do after modea_store(). */

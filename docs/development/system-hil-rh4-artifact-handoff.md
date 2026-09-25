@@ -1,5 +1,32 @@
 # System HIL RH4 exact-artifact integration handoff
 
+## Current PB-036 source contract (2026-09-25; not RH4 acceptance)
+
+The original handoff below is a **historical nRF5340DK dual-core v1 design**.
+It is retained as dated planning context, not an active source build or flash
+recipe. PB-036 host-side source packager/resolver now use schema **2** for
+`nrf54l15dk/nrf54l15/cpuapp`: XIAO standalone source DK-target plus overlay,
+single CPUAPP input `build/hil-source-nrf54l15/zephyr/zephyr.hex`, ordered ZIP
+members `cpuapp.hex`, `source-manifest.json`, `SHA256SUMS`, image role `cpuapp`,
+flash order 0, NCS `v3.3.0`, caller-supplied canonical lowercase 40-hex
+`git_commit`, and validated byte size/SHA-256. Deterministic ZIP metadata,
+strict HEX/manifest/member/checksum checks, atomic no-clobber creation,
+external staging, and tamper/re-hash checks remain mandatory. Receiver FR1
+archive stays schema **1**, CPUAPP + FLPR; do not change its accepted contract.
+
+Source helper accepts only internal `FW_HIL_SOURCE_CPUAPP_HEX` override and
+fresh role-resolved `FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL`; legacy CPUNET and
+J-Link source inputs are rejected. Receiver requires both CPUAPP and FLPR
+and explicit freshly role-resolved receiver serial. Each run/matrix requires
+the exact external `--session-manifest` with separate bound source/receiver
+capture and identity revalidation. Changed archives or staged images must be
+rejected before stage/flash. See `docs/development/pb-036-source-artifact-results.md`
+for the host-only slice and remaining integration. No active draft was altered,
+downloaded, or accepted here; unchanged physical and analog qualification,
+clean candidate provenance, and no-publication rules still apply.
+
+## Historical original v1 handoff (superseded source inputs only)
+
 Status: host-only implementation handoff. No candidate execution or hardware
 acceptance.
 

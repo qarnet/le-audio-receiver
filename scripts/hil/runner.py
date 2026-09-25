@@ -63,17 +63,8 @@ ROW_SIGNAL_SEED = RH2_ROW.signal_seed
 ROW_RECONNECT_POLICY = RH2_ROW.reconnect_policy
 
 #: Exact local image inputs, selected by the logical source board before any
-#: flash. Artifact-backed runs retain their established nRF5340-only layout.
+#: flash. Both roles use nRF54L15 images.
 IMAGE_INPUTS_BY_SOURCE_BOARD = {
-    model.NRF5340_CPUAPP_BOARD: (
-        ("source-app", "build/hil-source/app/zephyr/zephyr.hex"),
-        ("source-cpunet", "build/hil-source/hci_ipc/zephyr/zephyr.hex"),
-        (
-            "receiver-cpuapp",
-            "build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex",
-        ),
-        ("receiver-flpr", "build/nrf54l15/flpr/zephyr/zephyr.hex"),
-    ),
     model.NRF54L15_CPUAPP_BOARD: (
         ("source-app", "build/hil-source-nrf54l15/zephyr/zephyr.hex"),
         (
@@ -534,26 +525,40 @@ class Runner:
         evidence._atomic_write_text(os.path.join(self._run_dir, name), text)
 
     def _step_session_compatibility(self, fixture, session_manifest_path):
-        """Require the immutable XIAO session only for its source board."""
+        """Require an immutable session for the supported XIAO fixture."""
         source_board = fixture.roles["source"].board
-        if source_board == model.NRF54L15_CPUAPP_BOARD:
-            if not session_manifest_path:
-                raise HilRunnerError(
-                    "session", "nRF54L15 source fixture requires --session-manifest"
-                )
-            return True
-        if source_board == model.NRF5340_CPUAPP_BOARD:
-            if session_manifest_path:
-                raise HilRunnerError(
-                    "session",
-                    "nRF5340 source fixture forbids --session-manifest",
-                )
-        return False
+        if source_board != model.NRF54L15_CPUAPP_BOARD:
+            raise HilRunnerError(
+                "session", "unsupported source board %r" % source_board
+            )
+        if not session_manifest_path:
+            raise HilRunnerError(
+                "session", "nRF54L15 source fixture requires --session-manifest"
+            )
+        return True
 
-    def _step_load_session(self, manifest_path, fixture_path, binding_path):
+    def _step_load_session(
+        self, manifest_path, fixture_path, binding_path, expected=None
+    ):
         """Load immutable session input and retain exact local evidence bytes."""
         try:
+            if expected is not None:
+                if not isinstance(expected, session.SessionManifest):
+                    raise HilRunnerError(
+                        "session", "expected session must be a SessionManifest"
+                    )
+                expected.assert_unchanged()
             manifest = self.deps.load_session(manifest_path, fixture_path, binding_path)
+            if not isinstance(manifest, session.SessionManifest):
+                raise HilRunnerError(
+                    "session", "loaded session must be a SessionManifest"
+                )
+            if expected is not None:
+                if manifest != expected:
+                    raise HilRunnerError(
+                        "session", "loaded session differs from expected session"
+                    )
+                expected.assert_unchanged()
             evidence._atomic_write_text(
                 os.path.join(self._run_dir, "session-devices.json"),
                 manifest.raw_bytes.decode("utf-8"),
@@ -603,6 +608,8 @@ class Runner:
                 run_cmd=self._discovery_command,
             )
         except (session.HilSessionError, HilDiscoveryError) as exc:
+            if isinstance(exc, HilDiscoveryError):
+                self._write_identity_raw(getattr(exc, "raw", {}))
             raise HilRunnerError("session revalidate: %s" % before, str(exc)) from exc
         snapshot = {
             "before": before,
@@ -704,10 +711,6 @@ class Runner:
             {"resolved": False, "raw_keys": sorted(raw)},
         )
         self._write("nrf-probes.txt", self._raw_text(raw.get("nrf-probes")))
-        self._write("nrf-probes-find.txt", self._raw_text(raw.get("nrf-probes-find")))
-        self._write(
-            "nrf-probes-targeted.txt", self._raw_text(raw.get("nrf-probes-targeted"))
-        )
         for role in ("receiver", "source"):
             udev_records = raw.get("%s-udev" % role, {})
             lines = []
@@ -719,26 +722,12 @@ class Runner:
                     for key in sorted(props):
                         lines.append("%s=%s" % (key, props[key]))
             self._write("%s-udev.txt" % role, "\n".join(lines) + "\n")
-        jlink = raw.get("source-jlink-fingerprint")
-        self._write(
-            "source-jlink.txt", "" if jlink is None else jlink.get("output", "")
-        )
         for role in ("receiver", "source"):
             cmsis = raw.get("%s-cmsis-dap-fingerprint" % role)
             self._write(
                 "%s-cmsis-dap.txt" % role,
                 "" if cmsis is None else cmsis.get("output", ""),
             )
-        source_usb = raw.get("source-usb-udev", {})
-        lines = []
-        for node, props in sorted(source_usb.items()):
-            lines.append("## %s" % node)
-            if props is None:
-                lines.append("(no udev record)")
-            else:
-                for key in sorted(props):
-                    lines.append("%s=%s" % (key, props[key]))
-        self._write("source-probe-udev.txt", "\n".join(lines) + "\n")
 
     def _identity_dict(self, resolution):
         out = {"roles": {}}
@@ -785,12 +774,21 @@ class Runner:
     def _step_images(self, run_dir, repo_root, fixture, artifact_set=None):
         source_board = fixture.roles["source"].board
         if artifact_set is not None:
-            if source_board != model.NRF5340_CPUAPP_BOARD:
+            if source_board != model.NRF54L15_CPUAPP_BOARD:
                 raise HilRunnerError(
                     "hash images",
-                    "artifact mode requires nRF5340 source fixture",
+                    "artifact source board does not match fixture",
                 )
             try:
+                artifact_resolver.validate_artifact_set(artifact_set)
+                if (
+                    artifact_set.source.manifest["board"] != source_board
+                    or tuple(image.role for image in artifact_set.source_images)
+                    != fixture.roles["source"].images
+                ):
+                    raise artifact_resolver.ArtifactError(
+                        "artifact source board/image roles do not match fixture"
+                    )
                 artifact_resolver.revalidate_artifact_set(artifact_set)
             except artifact_resolver.ArtifactError as exc:
                 raise HilRunnerError("hash images", str(exc)) from exc
@@ -934,7 +932,7 @@ class Runner:
         receiver_console,
         source_console,
         artifact_set=None,
-        source_board=model.NRF5340_CPUAPP_BOARD,
+        source_board=model.NRF54L15_CPUAPP_BOARD,
         session_revalidate=None,
     ):
         # Start parsing each boot at a fresh host-side mark immediately before
@@ -958,27 +956,17 @@ class Runner:
         source_serial = resolution.roles["source"].probe.serial
         if source_board == model.NRF54L15_CPUAPP_BOARD:
             source_env = {"FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL": source_serial}
-            source_argv = ["fw-flash-hil-source-54l15"]
-        elif source_board == model.NRF5340_CPUAPP_BOARD:
-            source_env = {"FW_HIL_SOURCE_JLINK_SERIAL": source_serial}
             if artifact_set is not None:
                 try:
                     artifact_resolver.revalidate_artifact_set(artifact_set)
-                    source_env.update(
-                        {
-                            "FW_HIL_SOURCE_CPUAPP_HEX": artifact_resolver.image_by_role(
-                                artifact_set.source_images, "cpuapp"
-                            ).path,
-                            "FW_HIL_SOURCE_CPUNET_HEX": artifact_resolver.image_by_role(
-                                artifact_set.source_images, "cpunet"
-                            ).path,
-                        }
+                    source_env["FW_HIL_SOURCE_CPUAPP_HEX"] = (
+                        artifact_resolver.image_by_role(
+                            artifact_set.source_images, "cpuapp"
+                        ).path
                     )
                 except artifact_resolver.ArtifactError as exc:
                     raise HilRunnerError("flash source", str(exc)) from exc
-            # Artifact hashes were revalidated after both consoles were armed
-            # and immediately before this source flash command.
-            source_argv = ["fw-flash-hil-source"]
+            source_argv = ["fw-flash-hil-source-54l15"]
         else:
             raise HilRunnerError(
                 "flash source", "unsupported source board %r" % source_board
@@ -2258,6 +2246,7 @@ class Runner:
         sdc_hci_remove_iso_path_trace=False,
         allow_offload_disabled=False,
         session_manifest_path=None,
+        expected_session_manifest=None,
     ):
         """Run one row and return ``(outcome, first_boundary,
         cleanup_failures)``.  The caller maps the outcome to the process
@@ -2273,6 +2262,10 @@ class Runner:
             raise TypeError("sdc_hci_remove_iso_path_trace must be a bool")
         if not isinstance(allow_offload_disabled, bool):
             raise TypeError("allow_offload_disabled must be a bool")
+        if expected_session_manifest is not None and session_manifest_path is None:
+            raise HilRunnerError(
+                "session", "expected session requires session manifest path"
+            )
         if hci_remove_iso_path_trace and sdc_hci_remove_iso_path_trace:
             raise ValueError(
                 "hci_remove_iso_path_trace and sdc_hci_remove_iso_path_trace "
@@ -2286,9 +2279,7 @@ class Runner:
         self._session_manifest = None
         self._session_revalidations = []
         if artifacts is not None:
-            artifact_fixture = model.load_logical_fixture(fixture_path)
-            if artifact_fixture.roles["source"].board != model.NRF54L15_CPUAPP_BOARD:
-                artifact_resolver.revalidate_artifact_set(artifacts)
+            artifact_resolver.revalidate_artifact_set(artifacts)
         fixture_bytes = self._read_bytes(fixture_path)
         binding_bytes = self._read_bytes(binding_path)
         stack = CleanupStack()
@@ -2340,9 +2331,16 @@ class Runner:
             session_bound = self._step_session_compatibility(
                 fixture, session_manifest_path
             )
+            if expected_session_manifest is not None and not session_bound:
+                raise HilRunnerError(
+                    "session", "expected session requires nRF54L15 source"
+                )
             if session_bound:
                 session_manifest = self._step_load_session(
-                    session_manifest_path, fixture_path, binding_path
+                    session_manifest_path,
+                    fixture_path,
+                    binding_path,
+                    expected_session_manifest,
                 )
 
                 def session_revalidate(before):

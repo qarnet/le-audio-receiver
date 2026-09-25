@@ -52,7 +52,54 @@ Nordic samples are the best learning resource:
 
 ---
 
-# AGENTS.md — LE Audio Receiver (nRF5340 + nRF54L15)
+# AGENTS.md — LE Audio Receiver (nRF54L15 migration)
+
+## Autonomous execution and hard blockers
+
+### Current migration continuation
+
+For the all-nRF54L15 migration, read
+`docs/development/nrf54l15-only-resume-20260924.md` before continuing.
+The primary repository on `feature/nrf54l15-only-continuation` owns the work;
+the former `/tmp` worktree is not the execution location. Preserve the current
+uncommitted changes. Its 2026-09-24 pause tables are a historical checkpoint,
+not today's implementation status. Read
+`docs/development/pb-019-hci-resume-results.md`,
+`pb-034-primary-repair-results.md`, `pb-035-source-matrix-results.md`,
+`pb-036-source-artifact-results.md`, and `pb-037-retirement-results.md` for
+later dirty-tree results. None constitutes final clean-commit acceptance.
+Historical evidence and safety rules remain binding.
+
+Product-owner direction (2026-09-24): carry approved goals through to verified
+completion. Research, diagnosis, grounded software changes, fixture repairs,
+regression tests, and expansion of the technical investigation are part of
+the job. Do not ask for fresh permission for each of these steps.
+
+- A hard blocker is an obstacle the agent cannot resolve with available
+  authority, tools, access, or evidence, or a necessary decision that would
+  substantially change the intended product or what acceptance proves.
+- A failing test, unfamiliar controller behavior, additional research, or a
+  need to fix production code is not by itself a hard blocker. Investigate,
+  identify the faulty boundary, fix it, and rerun the relevant gates.
+- Earlier plans or handoffs that underestimated the necessary work are not
+  permission barriers. Record evidence and necessary technical scope updates
+  transparently, then continue toward the approved product outcome. Do not
+  silently rewrite product requirements or historical evidence.
+- Preserve intended capabilities and meaningful acceptance. Removing audio
+  transmission because it fails, skipping failing scenarios, weakening limits,
+  or substituting a different fault merely to obtain a pass is not a fix.
+  Escalate if completing the goal requires such a material product or
+  acceptance change, rather than a grounded repair.
+- Exhaust reasonable investigation and repair paths before escalating. A
+  blocker report must identify the specific missing capability, access, or
+  consequential decision, with evidence and a recommendation. Do not turn
+  routine engineering work into a request for permission to do more work.
+- When the user requests silence until a hard blocker, continue without
+  routine progress reports or approval requests. Report verified completion
+  or a genuine hard blocker, not ordinary intermediate failures.
+
+This authority does not waive explicit safety boundaries, hardware identity
+checks, immutable evidence, required validation, or commit/PR/merge rules.
 
 ## Policy — never ignore warnings
 
@@ -60,17 +107,13 @@ Compiler warnings and Kconfig "assigned value but got" warnings are hard errors:
 fix the source or suppress with a recorded reason. Boot-time `LOG_WRN` and
 openocd/flashing warnings are treated the same — don't normalize noise.
 
-NCS v3.3.0 emits diagnostics that are NOT actionable at repo level:
-deprecation notices (`PARTITION_MANAGER`, sysbuild), informational config
-messages (`__ASSERT()`), experimental-symbol notices required for ISO on
-nRF5340 (BT_LL_SW_SPLIT, PERIPHERAL_ISO), upstream Kconfig gaps (SW Split
-`CONN_ISO_LOW_LATENCY_POLICY` choice has no NONE fallback), and CMake
-"No SOURCES given" where a subsystem is enabled but no driver exists for
-a particular board (e.g. watchdog on nRF54L15 — wdt30/wdt31 are disabled
-in DT when SDC is active, so `CONFIG_WATCHDOG=y` from prj.conf creates an
-empty library; not fixable without an unsupported DT node or losing
-watchdog on nRF5340). These are documented in `STATUS.md` "Build warning
-diagnostics", not tolerated as warnings.
+NCS v3.3.0 informational `__ASSERT()` and the documented nRF54L15 watchdog
+no-sources diagnostic (wdt30/wdt31 disabled with SDC) are not compiler or
+Kconfig assigned-value warnings; check `STATUS.md` "Build warning
+diagnostics" before classifying them. Historical nRF5340 ISO experimental
+symbols, SW Split low-latency-policy gap, and dual-target watchdog tradeoff
+are not current receiver exceptions. Diagnose new warnings; do not suppress
+them by citing an obsolete target.
 
 ## Style rule: no em dashes in user-facing documentation
 
@@ -135,7 +178,8 @@ refactoring track R0–R10. Read the applicable one before structural changes.
 `docs/design.md` remains the historical architecture and evidence document, not
 an active structural plan.
 
-Current status: **canonical gate 74 PASS / 0 FAIL / 74 TOTAL** on clean
+Historical pre-migration status (not current clean-commit acceptance):
+**canonical gate 74 PASS / 0 FAIL / 74 TOTAL** on clean
 PB-031 P4 commit `d8f2a8e4d5eb0d6a7af2310a2c29e21b08542f22` (41 Twister +
 5 exec-only + 25 Python + coverage + matrix + BSim; the FR2 clean-tree run at
 `75a8093`, the FR1 clean run at
@@ -251,18 +295,22 @@ concrete input is 240); `tests/unit/flpr_ring` MAX_INPUT assertions pin the
 480 contract.  Not a new failure and not permission to implement 360-frame
 offload.
 
-Consequences for work in this repo today:
+Consequences for work in this repo today (2026-09-25):
 
-- nRF54L15 is the sole final receiver target. The physical E83 nRF5340
-  receiver is a best-effort legacy engineering/regression path with no release
-  asset, product-parity, physical-control, or future-feature obligation.
-  PB-032 does not delete it; its code and helpers stay in-tree until a separate
-  cleanup decision.
-- A future product change does not need a physical `fw-build-5340` acceptance
-  result unless it explicitly touches the legacy E83 path. Canonical BSim and
-  fixture gates remain mandatory where currently defined. nRF5340BSim, the
-  nRF5340DK HIL source, and the HCI-UART dongle remain required test
-  infrastructure.
+- PB-032's retained-E83 policy above was superseded by the approved all-nRF54L15
+  migration. XIAO receiver is the only production target. Its DK-target plus
+  XIAO overlay build produces CPUAPP and FLPR; production APLL, E83 board and
+  receiver helpers are removed on the dirty continuation tree. Historical APLL
+  remains test-local; native unit tests remain hardware-independent.
+- Second XIAO alternates standalone source (DK-target, direct GRTC, one
+  CPUAPP image) and Linux HCI controller (XIAO-target, SDC UART H4 1 Mbaud,
+  no flow control). Never treat these roles as simultaneous on one board.
+  Canonical BSim uses two nRF54L15BSim peers with integrated SW Split and
+  client reliability policy. No nRF5340 hardware dependency is an active gate.
+- Fixed-image diagnostics do not complete PB-035/036/037/038, canonical gate,
+  clean coverage baseline, exact-artifact RH4/FR4, analog qualification, or
+  public release. Follow the current backlog and evidence, not the historical
+  gate totals quoted above.
 
 ## Standing lab nRF hardware authority
 
@@ -298,11 +346,14 @@ plan deliberately changes those requirements.
 
 ## Central-only test rule
 
-All agents run the LE Audio stream autonomously via the nRF5340DK `hci_uart`
-central attached to Linux as `hci0` (over `/dev/ttyACM2` at 1 000 000 baud H4
-with flow control). Use `scripts/bap_central.py` to connect to the receiver
-and stream LC3 audio. No human-operated central is allowed in any test
-procedure.
+All agents run the LE Audio stream autonomously via the second XIAO nRF54L15
+as Linux HCI central. This board alternates HCI and standalone HIL source
+firmware; the receiver is the other XIAO. The stock SAMD11 bridge carries
+UART20 P1.9/P1.8 at 1,000,000 baud H4 8N1 without flow control. Select
+the adapter by fresh identity, not a fixed HCI index or tty. Use
+`scripts/bap_central.py` to stream LC3. No human-operated central is allowed.
+For standalone HIL source qualification, use the same second XIAO after
+reflashing its source role, not the Linux HCI role concurrently.
 
 The only allowed user input is a true physical observation that an agent
 cannot make: whether sound is audible from connected speakers/headphones
@@ -310,52 +361,51 @@ after the agent has completed its test run.
 
 ### Central setup (required before every test session)
 
-The nRF5340DK `hci_uart` central attaches to the kernel via `btattach`.
-Run this BEFORE `scripts/bap_central.py`:
+Build the single-image `xiao_nrf54l15/nrf54l15/cpuapp` SDC controller with
+`fw-build-dongle` (`build/dongle/zephyr/zephyr.hex`). Create an external
+session after resolving both live probes with `nix-nrf probes`:
 
 ```bash
-# Attach the HCI UART dongle (nRF5340DK as central) — one-time per boot:
-setsid sudo btattach -B /dev/ttyACM2 -S 1000000 </dev/null >/tmp/btattach.log 2>&1 &
-sleep 5
-sudo btmgmt --index hci0 power off
-sudo btmgmt --index hci0 power on
-sleep 2
-sudo btmgmt --index hci0 io-cap 3
-sudo btmgmt --index hci0 sc on
+python3 scripts/hil-runner.py create-session \
+  --fixture tests/hil/fixture-xiao-source.json \
+  --binding tests/hil/fixture-xiao-source.local.example.json \
+  --session-id UNIQUE_SESSION_ID \
+  --receiver-probe RECEIVER_PROBE_FROM_LIVE_DISCOVERY \
+  --source-probe SOURCE_PROBE_FROM_LIVE_DISCOVERY \
+  --session-root /tmp/opencode/hil-sessions
 ```
 
-Verify with `sudo btmgmt --index hci0 info`. Current settings must include
-`powered le secure-conn cis-central`. The dongle's BD_ADDR must be
-`C0:AA:BB:CC:DD:EE` (compile-time identity — see dongle firmware fix below).
+Verify binding against live hardware. Flash or reset HCI role only with
+`fw-flash-dongle` / `fw-reset-dongle`, passing `--session-manifest` (absolute
+external `devices.json`), `--fixture`, `--binding`, `--output-root` (existing
+external root), and unique `--run-id` each time. These actions recheck raw
+DP/AP/FICR and USB identity. Never guess a probe/tty/HCI mapping.
 
-**Dongle firmware compile-time identity (Stage0)**:
-The nRF5340DK FICR DEVICEADDR is unprogrammed (all zeros). Instead of
-the runtime `btmgmt static-addr` workaround, the hci_ipc netcore firmware
-now calls `bt_ctlr_set_public_addr()` before `bt_enable_raw()` via a
-repo-owned copy of the hci_ipc sample (`dongle/hci_ipc/`). The address
-`C0:AA:BB:CC:DD:EE` is defined in `dongle/hci_identity.h` (lab-only,
-not a production-assigned OUI). Build with `fw-build-dongle`.
-
-### --peer-addr bypass
-
-When the dongle cannot scan, pass the receiver's BLE address directly:
+Attach the session-bound lab adapter and run the child before each streaming
+session (use new run ID; no persistent service):
 
 ```bash
-# Get receiver address from boot log: "Identity: XX:XX:XX:XX:XX:XX (random)"
-python3 scripts/bap_central.py --peer-addr DB:A6:0C:05:A2:AA --duration 30
+fw-attach-dongle --session-manifest /absolute/external/session/devices.json \
+  --fixture tests/hil/fixture-xiao-source.json \
+  --binding tests/hil/fixture-xiao-source.local.example.json \
+  --output-root /existing/external/output --run-id UNIQUE_ATTACH_RUN \
+  --timeout 180 -- python3 scripts/bap_central.py --adapter @HCI@ --duration 120
 ```
 
-This skips BlueZ discovery, creates the device via brief raw-HCI connect,
-and calls `device.Pair()` to establish the bond + encrypted link.
-
-Then run `bap_central.py` **without sudo** — the main script needs
-dbus-python from the nix-shell (Python path stripped by sudo).  Only the
-raw-HCI connect subprocess uses sudo internally.
-
-```bash
-python3 scripts/bap_central.py --duration 30   # Mode A (default)
-python3 scripts/bap_central.py --stereo --duration 30  # --stereo flag
-```
+`fw-attach-dongle` checks lab BD_ADDR `C0:AA:BB:CC:DD:EE` and HCI settings
+`powered le secure-conn cis-central`, substitutes live `@HCI@`, and cleans
+up only its owned adapter after the child. Run BAP child **without sudo**.
+Fresh pairing uses normal BlueZ discovery. Bonded reconnect adds
+`--preserve-bond --peer-addr RECEIVER_ADDRESS_FROM_BOOT_LOG`; raw-HCI
+exact-peer connection is not the default. Optional `--mono` selects mono,
+no mode flag selects Mode A, and `--stereo` selects Mode B. Standard QoS is
+RTN 5 / latency 20 ms at 10 ms interval. Observed loss and PLC are nonzero;
+consult `docs/development/pb-019-hci-resume-results.md` for counts and limits.
+Use a system-manager `systemd-run` transient service with `User=` set to the
+ordinary user, `RuntimeMaxSec=`, `TimeoutStopSec=` and `KillMode=control-group`
+for hard containment of detached root descendants; user-manager services and
+shell timeout are insufficient. No static adapter mapping or persistent
+attachment service.
 
 ## Build
 
@@ -363,25 +413,21 @@ Build **from the repo root**. Enter the dev shell first, then run the build
 helper:
 
 ```bash
-cd <repo>
 direnv allow         # or: nix develop
-fw-build-5340
+fw-build-54l15
+fw-build-hil-source-54l15
+fw-build-dongle
 ```
 
-The build runs `west build -b ebyte_e83_nrf5340/nrf5340/cpuapp --sysbuild --pristine`
-into `build/nrf5340/`. Sysbuild produces images under `build/nrf5340/le-audio-receiver/`
-(app) and `build/nrf5340/hci_ipc/` (net core); top-level merged hexes are
-`build/nrf5340/merged.hex` and `build/nrf5340/merged_CPUNET.hex`. Use
-`--pristine` after any `prj.conf`, overlay, or `sysbuild.cmake` change.
-Pass extra cmake args through:
+Receiver DK target with XIAO overlay builds CPUAPP and FLPR into
+`build/nrf54l15/`; standalone XIAO source uses DK target and direct GRTC,
+building a single CPUAPP image at `build/hil-source-nrf54l15/zephyr/zephyr.hex`.
+The Linux HCI role uses XIAO target, SDC and one CPUAPP image at
+`build/dongle/zephyr/zephyr.hex`. These are separate sequential roles for
+the second XIAO. Rebuild pristine after configuration or overlay changes.
+Never use deleted E83 or nRF5340 receiver helpers as active build gates.
 
-```bash
-fw-build-5340 -- -DCONFIG_FOO=y
-```
-
-The nRF54L15 target builds with `fw-build-54l15` into `build/nrf54l15/`
-(Phase 1) and flashes with `fw-flash-54l15` (OpenOCD via the Xiao's
-built-in CMSIS-DAP; probe auto-detected by target identity). nRF54L15
+nRF54L15
 RRAM needs no flash driver — with RRAMC write-enable (`mww 0x5004b500
 0x101`) it is plain writable memory, so `load_image` + `verify_image`
 suffice. **FLPR firmware flashes the same way**: the FLPR code partition
@@ -390,7 +436,7 @@ write/read-back with both OpenOCD and probe-rs) — relevant for Phase 6
 FLPR offload. The build targets the stock `nrf54l15dk` board + a small
 overlay (`boards/nrf54l15dk_nrf54l15_cpuapp.overlay`) that remaps UART20
 to the Xiao SAMD11 USB CDC bridge (P1.9 TX / P1.8 RX) and I2S20 to Xiao
-D0/D1/D2 (P1.4/P1.5/P1.6). Console works over `/dev/ttyACM0` @ 115200.
+D0/D1/D2 (P1.4/P1.5/P1.6). Resolve console port through the session binding.
 
 ## LSP (clangd) setup
 
@@ -401,7 +447,7 @@ command. Full background: `~/.config/opencode/rules/clangd-zephyr.md`.
 - Links are created two ways: (a) `file(CREATE_LINK)` in each app
   CMakeLists at every configure (root receiver link guarded on
   `CONFIG_SOC_NRF54L15` so only nRF54L15 owns the root; `src/flpr`,
-  `hil/source/app` emits `hil/source/`, `dongle/hci_ipc`,
+  `hil/source/app` emits `hil/source/`, `dongle/hci_uart`,
   `tests/bsim`, `tests/bsim/client`), and (b)
   `scripts/gen-lsp-links.sh` for the links CMake cannot own
   (`tests/unit` and the BSim out-of-tree builds; also repairs dangling
@@ -428,30 +474,24 @@ clangd --query-driver='/nix/store/**,/home/thomas-workstation/ncs/toolchains/*/o
 
 ## Flash
 
-Both app core and hci_ipc network core must be flashed:
-
-```bash
-fw-flash-5340
-```
-
-The OpenOCD runner config in `boards/ebyte/e83_nrf5340/board.cmake` chains the
-dual-core flash TCL (`boards/ebyte/e83_nrf5340/support/flash_nrf5340.tcl`).
-The probe is resolved **at flash time** (see "Probe identification" below) —
-no serial is baked into the build.
+Receiver flash uses `fw-flash-54l15` with
+`FW_NRF54L15_PROBE_SERIAL` set to the **freshly role-resolved receiver probe**.
+It requires the explicit serial, checks identity, and verifies both CPUAPP and
+FLPR; it has no family-wide fallback. Source flash uses
+`fw-flash-hil-source-54l15` with freshly role-resolved
+`FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL`. HCI firmware uses session-bound
+`fw-flash-dongle` as described above. Use the runner's session manifest and
+fresh identity checks for every target-changing action; never choose a probe
+by target family alone when both XIAOs are attached.
 
 ## Serial
 
-App core (E83) console: **`/dev/ttyUSB0`** (CH340X bridge) at **115200 8N1**.
-The picoprobe's own CDC ports (`/dev/ttyACM*`) are NOT the nRF5340 console.
+nRF54L15 XIAO receiver console uses SAMD11 UART20 bridge at 115200 8N1.
+Resolve receiver USB/tty through current bound session and live identity,
+not a fixed `/dev/ttyACM*` index. Capture source console separately before
+reset; see `scripts/hil-runner.py` session and capture workflows.
 
-```bash
-stty -F /dev/ttyUSB0 115200 raw -echo && cat /dev/ttyUSB0
-```
-
-nRF54L15 (Xiao) console: **`/dev/ttyACM0`** @ 115200 8N1 (SAMD11 USB CDC
-bridge of UART20). Use serial-mcp or `scripts/read_acm.py ttyACM0`.
-
-Expected after boot on either target: `BLE ready`, `settings_load() OK`,
+Expected after receiver boot: `BLE ready`, `settings_load() OK`,
 `Advertising as "LE Audio Receiver"`. During streaming,
 `i2s_nrfx: Next buffers not supplied on time` should no longer occur
 in steady-state once the PI clock recovery controller converges
@@ -465,17 +505,14 @@ the [nix-nrf-dev](https://github.com/qarnet/nix-nrf-dev) flake, along with
 openocd-master and the NCS toolchain shell) is the source of truth:
 
 ```bash
-nrf-probes            # table: probe serial → chip behind it (read-only)
-nrf-probes --find nrf53   # serial of the probe wired to an nRF53
+nrf-probes            # enumerate probes and target fingerprints (read-only)
 ```
 
 It fingerprints each CMSIS-DAP probe's target over SWD (DPIDR → AP IDR map →
-FICR INFO.PART/VARIANT) and works even when the chip is APPROTECT-locked
-(identity from the DP/AP signature). `fw-flash-5340` calls it automatically
-to pick the right probe at flash time.
-
-`scripts/probe-serial.local` (gitignored) is now only a manual **override**
-for when auto-detection must be bypassed. Normally it should not exist.
+FICR INFO.PART/VARIANT). Two XIAOs share the same family: compare raw
+fingerprints and USB identity with the bound receiver/source session before
+selecting either probe or tty. The runner revalidates these at six lifecycle
+checkpoints; do not replace role matching with `--find nrf54`.
 
 **Doc hygiene rule:** never write a static probe-serial↔board table into
 docs or handoffs — reference `nrf-probes` instead. Any hardware-identity
@@ -486,25 +523,15 @@ inverted probe mapping without evidence.
 
 ### Capturing boot logs during testing
 
-The console must be captured **before** the device resets. The
-`scripts/read_acm.py` helper (pyserial + auto-reopen) survives USB
-disconnects during reset:
-
-```bash
-# Start the reader first (E83 console = ttyUSB0), THEN reset via OpenOCD
-python3 scripts/read_acm.py ttyUSB0 /tmp/e83.log 30 &
-sleep 2
-openocd -f interface/cmsis-dap.cfg \
-  -c "adapter serial $(nrf-probes --find nrf53)" \
-  -c "transport select swd" -c "adapter speed 1000" \
-  -f target/nordic/nrf53.cfg -c init -c "reset run" -c shutdown
-```
-
-Always reset **after** the reader has opened the port.
+The console must be captured **before** reset. Use a bound external session,
+role-resolved serial, and `scripts/hil-runner.py` for the six-checkpoint
+identity/evidence lifecycle. For direct diagnostics, open the live matched
+receiver or source console before resetting that board. Never reuse an old
+tty or probe index from a log.
 
 ## Gotchas
 
-### SW Split LL requires BOTH a DT overlay AND a Kconfig overlay
+### Historical nRF5340-only SW Split and recovery recipes
 
 `add_overlay_config()` alone sets Kconfig, but the nRF5340 cpunet DTS
 defaults to `bt_hci_sdc` (SoftDevice). Without `add_overlay_dts(...,
@@ -512,7 +539,8 @@ bt-ll-sw-split.overlay)` the net core quietly stays on SoftDevice and
 `bt_enable()` fails with `Bluetooth init failed: -5`
 (`HOST_BUFFER_SIZE` returns `UNSUPPORTED_FEATURE`).
 
-See `sysbuild.cmake` for how both overlays are applied to `hci_ipc`.
+This is a dated nRF5340 CPUNET finding, not an instruction for current
+nRF54L15 receiver, XIAO source or integrated nRF54L15BSim controller.
 
 ### `settings_load()` must run after `bt_enable()` and before `bt_pacs_register()`
 
@@ -521,23 +549,14 @@ See `sysbuild.cmake` for how both overlays are applied to `hci_ipc`.
 The call must be after `bt_enable(NULL)` and before `bt_pacs_register()`.
 **Do NOT skip `settings_load()`** to "clear bonds" — it will break PACS registration.
 
-### `west flash` does NOT erase the settings partition
+### Settings persistence; nRF53 recovery is historical only
 
 `west flash` only erases the firmware address ranges. The ZMS settings
 partition (bonds, PACS registered handles) persists across flashes.
-If you suspect a stale bond or corrupted settings, mass-erase via the
-CTRL-AP with the openocd-master build (no J-Link needed), then reflash:
-
-```bash
-openocd -f interface/cmsis-dap.cfg -c "adapter serial $(nrf-probes --find nrf53)" \
-  -c "transport select swd" -c "adapter speed 1000" -f target/nordic/nrf53.cfg \
-  -c init -c nrf53_recover -c shutdown
-fw-flash-5340
-```
-
-`nrf53_recover` wipes ALL non-volatile memory (both cores, incl. UICR and
-settings). `fw-flash-5340` afterwards re-programs UICR.APPROTECT (see the
-APPROTECT gotcha below), so the chip stays debuggable.
+The old `nrf53_recover` + E83 reflash recipe applied to nRF5340 only.
+Never run it on either XIAO. For nRF54L15 bonding problems, diagnose both
+peers' stored bonds and use supported, identity-checked target-specific
+procedures; do not infer that firmware flashing cleared settings.
 
 ### nRF5340 APPROTECT is a SOFT branch — an erased UICR bricks debug access
 
@@ -549,10 +568,11 @@ boots and runs fine**. Symptoms: `Examination failed` /
 `Failed to read memory at 0xe000ed00` on connect while the board happily
 advertises. The only way back in is a CTRL-AP recovery (= another mass erase).
 
-`flash_nrf5340.tcl` therefore programs `UICR.APPROTECT`,
+Historical `flash_nrf5340.tcl` therefore programmed `UICR.APPROTECT`,
 `UICR.SECUREAPPROTECT` (app, `0x00FF8000`/`0x00FF801C`) and net
 `UICR.APPROTECT` (`0x01FF8000`) to `0x50FA50FA` after every flash
-(`uicr_unprotect_app` / `uicr_unprotect_net`). Do not remove these calls.
+(`uicr_unprotect_app` / `uicr_unprotect_net`). This is not a current XIAO
+flash step; never apply the nRF53 UICR recipe to nRF54L15.
 
 ### Recovery coverage: nRF5340 only — the nRF54L15 has NO recovery path
 
@@ -572,8 +592,9 @@ Known gap (documented 2026-07-05, deliberately not fixed yet):
 
 ### Do NOT use probe-rs — openocd-master is the only flash backend
 
-Project policy: all flashing goes through openocd-master (`fw-flash-5340`,
-`fw-flash-54l15`). probe-rs was evaluated 2026-07-05 (0.31.0) and rejected:
+Project policy: flashing goes through openocd-master (receiver and source
+helpers, and session-bound HCI flash). probe-rs was evaluated 2026-07-05
+(0.31.0) and rejected; the following nRF5340 incident is historical:
 on the nRF5340 its attach sequence reset-catches the core *before*
 SystemInit runs the APPROTECT soft-unlock, concludes the chip is locked,
 and its only remedy is `--allow-erase-all` — a full mass erase that also
@@ -591,8 +612,9 @@ to pair fresh or the firmware version changed security params, pairing
 will fail.  The central then disconnects before it can read the encrypted
 PACS/ASCS services.
 
-**Fix:** Either do a full chip erase (`nrf53_recover` via openocd-master) before
-flashing, or delete the bond on the central (e.g. `bluetoothctl remove`).
+**Fix:** Clear mismatched peer bonds with the supported identity-checked
+procedure (for example remove the bond on the central). The historical
+`nrf53_recover` option is not valid for the XIAOs.
 
 ### printk and LOG output race on the same UART
 
@@ -615,20 +637,16 @@ to `SETTINGS_NONE` (no storage, no bond persistence across reboots).
 
 ### Board-specific Kconfig belongs in board conf, not prj.conf
 
-`prj.conf` applies to ALL targets. A symbol that only one board needs
-(e.g. `CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y`, meaningful only where
-HFCLKAUDIO exists — nRF5340) causes a Kconfig "assigned value but got"
-warning on the other board if left in `prj.conf`. Move board-specific
-symbols to `boards/<board_target>.conf` (app-level, auto-discovered
-from the repo `boards/` dir — NOT inside the board def dir). Example:
-`boards/ebyte_e83_nrf5340_nrf5340_cpuapp.conf` for the nRF5340 target.
+`prj.conf` applies to all targets. Board-specific symbols belong in the
+corresponding app-level `boards/<board_target>.conf`, not `prj.conf`; an
+inapplicable assignment creates a Kconfig "assigned value but got" warning.
+The former E83 bypass example is historical, not a current board recipe.
 
 ### ACL/ISO TX buffer counts must match the controller
 
-The SW Split controller (nRF5340) reports 7 ACL and 6 ISO TX buffers. If the
-app core `CONFIG_BT_BUF_ACL_TX_COUNT` / `CONFIG_BT_ISO_TX_BUF_COUNT`
-don't match, the host emits `bt_hci_core` mismatch warnings that can
-cause connection throttling. See `prj.conf` for the matched values.
+Historically the nRF5340 SW Split controller reported 7 ACL and 6 ISO TX
+buffers; that dual-core configuration is not the receiver's current contract.
+Host/controller buffer mismatches must still be fixed, not normalized.
 
 On nRF54L15 the SDC controller defaults `BT_CTLR_SDC_ISO_TX_HCI_BUFFER_COUNT=3`.
 For sink-only, the board conf sets both `CONFIG_BT_CTLR_SDC_ISO_TX_HCI_BUFFER_COUNT=1`
@@ -700,10 +718,11 @@ so reconnect works without re-calling `audio_sink_init`.
 
 ### Clock recovery actuator must match platform
 
-The `AUDIO_CLOCK_ACTUATOR` Kconfig choice selects the actuator. Two production options:
-- `APLL` (default, nRF5340) — `audio_clock_actuator_apll.c`, trims HFCLKAUDIO APLL.
-- `NONE` — `audio_clock_actuator_none.c`, nRF54L15 production. ASRC consumes
-  controller ppm directly (no physical actuator on nRF54L15).
+The production actuator is `NONE` (`src/audio_clock_actuator_none.c`):
+nRF54L15 ASRC consumes controller ppm directly, without a physical actuator.
+Production APLL was retired. Historical APLL conversion and no-HFCLKAUDIO
+tests use `tests/unit/actuator_apll/src/audio_clock_actuator_apll_historical.c`
+and do not restore an E83 production path.
 
 The production actuator API is init/apply_ppm/reset only (clock steering,
 no data-path adjustment).  The historical SAMPLE_ADJUST actuator — including
@@ -716,7 +735,7 @@ production Kconfig.
 
 Controller has two explicit inputs:
 - `audio_drift_frequency_error_update(local_clock_error_ppm)` — from platform
-  timing (nRF54L15: PCLK TIMER20 vs GRTC; nRF5340: never called, stays zero).
+  timing (nRF54L15: PCLK TIMER20 vs GRTC; BSim uses no-op timing).
   Positive = local PCLK/I2S runs faster than controller. Feedforward correction
   = `-measured` (local fast → negative correction → eventual insert).
 - `audio_drift_controller_update(slab_free)` — called ONCE per rendered stereo
@@ -767,7 +786,6 @@ and disabling `&pdm20`.
 
 | Board | BCK | DIN | LRCK | VIN | GND |
 |-------|-----|-----|------|-----|-----|
-| nRF5340 (Ebyte E83) | P1.15 | P1.13 | P1.12 | 3.3 V | GND + AGND |
 | nRF54L15 (Seeed Xiao) | D0 (P1.4) | D2 (P1.6) | D1 (P1.5) | 3V3 | GND + AGND |
 
 Config pins (SF0/SF1/MUTE): on the Adafruit UDA1334A breakout these are
@@ -784,6 +802,14 @@ inaudible at the 48 kHz/16-bit LC3 floor. PCM5102A cheap breakouts need the
 SCK pad solder-bridged to GND for 3-wire mode or you get silence/hiss.
 
 ## HIL source fixture timing — the pinned lessons (2026-09-09/11)
+
+Historical nRF5340DK source incident below, **not an active XIAO build or
+clock recipe**. Current single-CPUAPP XIAO source uses direct GRTC; the
+CPUNET RTC mirror and nRF53 128 MHz divider are retired. Its Bluetooth TX
+processor stack is 2048 after a measured 900-byte stack overflow during a
+preserved Mode B row (see `docs/development/pb-035-source-matrix-results.md`).
+Keep the incident's telemetry limits and validation discipline, but use the
+current source/receiver image pair for isolation, not an old three-image tuple.
 
 The RH3 "Mode B delivery collapse" investigation (ModeA9–ModeA18, 2026-09,
 evidence immutable under `/tmp/opencode/hil-runs/`, canonical record
@@ -804,8 +830,9 @@ was broken. Pin these before touching the fixture again:
    `nrf/applications/nrf5340_audio/src/modules/audio_clock.c`,
    `nrf/tests/bluetooth/iso/src/main.c`,
    `zephyr/subsys/bluetooth/audio/shell/bap_usb.c`. Any new HIL source
-   feature that adds per-SDU CPU work re-checks the throughput budget at
-   128 MHz first, before inventing controller theories.
+    feature that added per-SDU CPU work had to re-check throughput at
+    128 MHz before inventing controller theories. Do not apply this divider
+    setting to the XIAO source.
 
 2. **Schedule against the controller clock, never a host-derived offset.**
    The working scheduler mirrors the CPUNET MPSL RTC into app-core RTC0
@@ -833,12 +860,13 @@ was broken. Pin these before touching the fixture again:
      collapse was real, but not which side caused it.
 
 4. **Investigation discipline (the part that failed hardest).**
-   - Validate the fixture against the FULL Nordic reference pattern
+    - For this historical nRF53 fixture, validate against the FULL Nordic reference pattern
      (including the RTC mirror and clock setup) before assigning
      controller causation. The ModeA17 draft claimed "exactly the
      iso_time_sync pattern" while omitting its central mechanism.
-   - A variation table is only an isolation if every run used the same
-     source/CPUNET/receiver image tuple; dirty-worktree runs with
+    - A variation table is only an isolation if every run used the same
+      image tuple (historically source/CPUNET/receiver; now XIAO source CPUAPP
+      plus receiver CPUAPP/FLPR); dirty-worktree runs with
      different hashes are diagnostics, not isolation evidence.
    - Cite changelog entries by the header that actually governs the
      line, not by adjacency — the ModeA17 draft confidently placed the
@@ -860,12 +888,11 @@ was broken. Pin these before touching the fixture again:
   the R7 private teardown transition owner (first close wins, per-slot
   release once, universal close→drain→sink-stop→offload-stop→reset)
 - Audio: `audio_sink.h` interface → `audio_i2s.c` (slab/DMA backend)
-- Clock recovery: `audio_drift.c` (PI controller, ppm output) → actuator interface (`audio_clock_actuator.h`) → `audio_clock_actuator_apll.c` (nRF5340 APLL) or `audio_clock_actuator_none.c` (nRF54L15, ASRC consumes ppm)
+- Clock recovery: `audio_drift.c` (PI controller, ppm output) → `audio_clock_actuator_none.c` (nRF54L15, ASRC consumes ppm)
 - ASRC: `audio_asrc.c` (fixed-point linear stereo, cpuapp) + FLPR offload (`src/flpr/`, handshake/runtime/rings)
 - Decode: `audio_decode.c` (LC3 decode + channel routing, unit-testable)
-- Net (nRF5340): `hci_ipc` with `nrf5340_cpunet_iso_peripheral-bt_ll_sw_split.conf`
-- Link Layer: nRF5340 = BT_LL_SW_SPLIT (Zephyr open-source controller, ISO required); nRF54L15 = SDC (SoftDevice Controller, single-core)
-- DAC: CJMCU-1334 (UDA1334A) or PCM5102A, no MCK, `CONFIG_I2S_NRFX_ALLOW_MCK_BYPASS=y`
+- Controller: physical nRF54L15 receiver and source use SDC; two nRF54L15BSim peers use integrated SW Split with client reliability policy
+- DAC: CJMCU-1334 (UDA1334A) or PCM5102A, 3-wire connection with DAC MCK unconnected
 
 ## Key Files
 
@@ -886,16 +913,16 @@ was broken. Pin these before touching the fixture again:
 | `src/flpr_shell.c` | FLPR production diagnostics (`flpr status/offload/runtime/restart`, R4) |
 | `src/flpr_acceptance_shell.c` | FLPR acceptance-harness commands (`flpr ring *`, `flpr stress`, `flpr hang`) — `CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS`-gated (R4) |
 | `src/audio_drift.c` | PI clock recovery controller (dual-term, ppm output) |
-| `src/audio_drift.h` | Controller API + APLL register constants |
+| `src/audio_drift.h` | Controller API |
 | `src/audio_rate_convert.c` | Fixed-rate frame-count/remainder converter (I2S drain-rate matching; init/next_frames only, no resampling/copy API) |
 | `src/audio_rate_convert.h` | Rate converter public API (unit-testable) |
 | `src/audio_timing.h` | Platform timing interface (frequency error, GRTC scheduling) |
 | `src/audio_timing_math.c` | Timing math shared across platforms |
 | `src/audio_timing_nrf54.c` | nRF54L15 TIMER20-vs-GRTC PCLK frequency measurement |
-| `src/audio_timing_none.c` | nRF5340 no-op timing (no GRTC/TIMER20) |
+| `src/audio_timing_none.c` | Simulator timing backend for nRF54L15BSim receiver |
 | `src/stream_lifecycle.c` | Stream start/stop lifecycle (unit-testable) |
 | `src/audio_clock_actuator.h` | Actuator interface (init, apply_ppm, reset) |
-| `src/audio_clock_actuator_apll.c` | nRF5340 HFCLKAUDIO APLL actuator (ppm → register trim) |
+| `tests/unit/actuator_apll/src/audio_clock_actuator_apll_historical.c` | Historical APLL test-local conversion and no-HFCLKAUDIO regression |
 | `tests/unit/actuator_sample_adjust_historical/src/audio_clock_actuator_sample_adjust_historical.c` | Historical sample insert/drop actuator, test-local copy (regression testing only) |
 | `src/audio_clock_actuator_none.c` | nRF54L15 no-op actuator (ASRC consumes ppm directly) |
 | `src/audio_asrc.c` | Fixed-point linear stereo ASRC (cpuapp + FLPR fallback) |
@@ -910,19 +937,20 @@ was broken. Pin these before touching the fixture again:
 | `src/flpr/acceptance.c` | FLPR-image acceptance handlers (R8): RING_TEST/STALL/STRESS/FAULT_HANG + diagnostic hooks — `CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS` |
 | `src/flpr_runtime.c` | FLPR runtime: IPC submit, watchdog, fault detection |
 | `src/flpr_audio_process.c` | FLPR audio block wrapper (metadata + PCM) |
-| `boards/ebyte/e83_nrf5340/` | Custom board definition for Ebyte E83-2G4M03S: I2S0 pins, ACLK 12.288 MHz, QSPI disabled, i2s-audio alias, OpenOCD flash runner |
 | `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` | Xiao nRF54L15 remap: UART20 to SAMD11, I2S20 to D0/D1/D2 (MCK on D3/P1.7 — peripheral-needed routing, DAC does not consume it; 3-wire no-MCK at the DAC), pdm20 disabled, TIMER20 reserved, FLPR IPC SRAM regions |
 | `prj.conf` | App Kconfig (ACL/ISO buffers, SMP, 2 ASEs, liblc3, FPU, ZMS) |
-| `sysbuild.cmake` | Applies SW Split DT overlay + Kconfig overlay to hci_ipc |
-| `Kconfig.sysbuild` | `NRF_DEFAULT_BLUETOOTH=y` conditional on nRF5340, gates netcore |
+| `sysbuild.cmake` | Receiver CPUAPP/FLPR sysbuild integration |
+| `Kconfig.sysbuild` | nRF54L15 sysbuild configuration |
 | `scripts/bap_central.py` | BAP central test driver — thin CLI coordinator (argparse + wiring + flow) plus the `CentralCleanup` idempotent resource owner (fixed teardown order, safe from `finally`; every fatal path raises a module `CentralError` with the message already printed and exit 1 preserved) |
+| `dongle/hci_uart/` | XIAO nRF54L15 single-image SDC Linux HCI central, async UART20 H4 bridge and directly tested H4 parser |
+| `scripts/hci_dongle.py`, `scripts/bin/fw-{build,flash,reset,attach}-dongle` | Session-bound HCI build, identity-checked flash/reset/attach and scoped cleanup |
 | `scripts/bap_central_device.py` | Central device resolution (R9): adapter power, `--peer-addr` exact-peer path, existing Device1 enumeration, bounded `InterfacesAdded` discovery — `DiscoverySession` owns its signal match and StopDiscovery exactly once |
 | `scripts/bap_central_security.py` | Central agent/pairing/connect (R9): JustWorks agent factory, raw-HCI fresh-connect strategy (exact `sudo -n` argv, ready + Connected gates), BlueZ preserve-bond Connect strategy, `wait_for_helper_ready` (READY_PREFIX from `hci_raw_connect.py`), RemoveDevice fresh-only, Pairable/Trusted/async Pair, services-resolved, cleanup Disconnect |
 | `scripts/bap_central_endpoint.py` | Central BAP source endpoint (R9): constants/LC3 blobs, `MediaEndpoint1` class factory, registration, deferred async Acquire, pending/acquired fd ownership, second-ASE grace, all-or-nothing, mode inference |
 | `scripts/bap_central_session.py` | Central LC3 source/writer (R9): lazy liblc3 loader + encoder (stdlib-safe import), sine, per-mode payloads, `StreamSession` writer lifecycle + exact teardown tail |
-| `README.md` | Public LE Audio explainer: what the project does, board tradeoff matrix, supported sources, docs links |
+| `README.md` | Public LE Audio explainer: XIAO receiver, supported sources, docs links |
 | `docs/user-guide.md` | Public user guide: boot, pairing modes (NORMAL/BONDING/RESET), flashing notes, troubleshooting |
-| `docs/hardware-wiring.md` | Public wiring: DAC choice, verified E83/Xiao I2S pin tables, config pins, line-level warning |
+| `docs/hardware-wiring.md` | Public wiring: DAC choice, XIAO I2S pins, config pins, line-level warning |
 | `docs/known-limitations.md` | Public known-limitations list (48 kHz only, 360-frame FLPR fallback, linear volume, pop, duplicate adv, etc.) |
 | `docs/supported-sources.md` | Public researched Linux LE Audio source hardware + software requirements (status labels Project-validated / Vendor-supported / Unverified; Intel AX210 project-validated, dongles unverified) |
-| `docs/technology/nrf5340.md`, `docs/technology/nrf54l15.md` | Public per-platform technology notes (architecture, clock recovery/rate matching) |
+| `docs/technology/nrf54l15.md` | Current platform technology notes; `docs/technology/nrf5340.md` is historical |

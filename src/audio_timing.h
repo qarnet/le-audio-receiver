@@ -6,9 +6,9 @@
  *
  * On nRF54L15 this measures PCLK-derived TIMER20 ticks against
  * Bluetooth controller / GRTC time using hardware GPPI routing
- * (TIMER20 free-running timer + GRTC compare → capture).  On nRF5340
- * the implementation is a no-op — the nRF5340 uses ISO-timestamp-based
- * PI drift compensation via audio_drift_controller_update().
+ * (TIMER20 free-running timer + GRTC compare → capture).  The
+ * nRF54L15BSim receiver uses the no-op timing backend and retains
+ * buffer-phase PI via audio_drift_controller_update().
  *
  * Historical: original design counted I2S20 FRAMESTART edges.
  * HW validation on 2026-07-26 showed FRAMESTART fires at DMA
@@ -44,7 +44,7 @@ int audio_timing_init(void);
  * presentation-time anchor and schedules the first one-second
  * GRTC compare for diagnostic sampling.
  *
- * On nRF5340 this is a no-op.
+ * On the nRF54L15BSim receiver this is a no-op.
  *
  * @param ts_us               ISO timestamp in microseconds (info->ts).
  * @param presentation_delay_us  Negotiated presentation delay (qos->pd).

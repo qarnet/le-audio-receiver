@@ -452,7 +452,7 @@ void flpr_runtime_test_release_mutex(void)
 
 #else /* !CONFIG_SOC_NRF54L15 && !FLPR_RUNTIME_NATIVE_TEST */
 
-/* ── nRF5340 / other targets: compile-time stub ────────────────────── */
+/* ── Non-nRF54L15, non-native-test: compile-time stub ─────────────── */
 
 int flpr_runtime_init(void)
 {

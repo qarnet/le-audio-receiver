@@ -1,10 +1,47 @@
 # Behavior contract — pre-refactor baseline
 
-Version: current, 2026-08-08 (P1–P8 user pairing control closed;
-historical refactor/pre-refactor provenance notes retained per
-contract).  Each
-contract carries a stable ID.  Breaking a contract without a handoff that
-updates this document is a regression.
+Version: pre-refactor/T6 historical baseline (2026-08-08), with PB-034–037
+active-path amendment below. Each contract carries a stable ID; retain
+generic audio/lifecycle limits unless explicitly superseded here. Old target
+descriptions and old-run counts are evidence for their dated commits, not
+current instructions or new behavior requirements.
+
+## PB-034–037 active-path amendment (2026-09-25, dirty-tree diagnostic)
+
+- CODEC-004/Mode A: current bounded queue emits its oldest surviving half
+  with mate PLC when the other CIS supplies no callback, instead of dropping
+  surviving audio at queue fullness. A wrap-safe resolved-event timestamp
+  fence rejects late halves and resumed-CIS sequence sentinels for already
+  emitted events. Equal-TS pairing, per-channel order and concealment remain.
+  Direct witnesses: `tests/unit/modea/src/test_modea.c`
+  (`test_queue_deadline_preserves_oldest`,
+  `test_absent_channel_preserves_survivor_and_recovers`) and
+  `tests/unit/audio_stream_session/src/test_audio_stream_session.c`.
+- I2S/OFFLOAD: 360-frame 7.5 ms input still uses cpuapp ASRC because FLPR
+  accepts 480 frames. No 360-frame FLPR offload or weaker transport limit is
+  implied; `tests/unit/audio_i2s/` and `tests/unit/audio_offload/` retain the
+  fallback and rejection witnesses.
+- CLOCK-001 is historical nRF5340 identity/APLL receiver behavior, not a
+  current target. CLOCK-010 APLL conversion remains test-local historical
+  coverage (`tests/unit/actuator_apll/` and `actuator_apll_nohfclk/`);
+  `src/audio_clock_actuator_apll.c` is retired. Production nRF54L15 uses
+  ASRC + NONE (CLOCK-002). `src/audio_timing_none.c` serves nRF54L15BSim.
+- BUILD-001 current production builds are `fw-build-54l15` (receiver CPUAPP
+  and FLPR), `fw-build-hil-source-54l15` (standalone source CPUAPP) and
+  `fw-build-dongle` (XIAO HCI CPUAPP), all NCS v3.3.0; canonical BSim peers
+  use nRF54L15BSim. The old required DK/CPUNET fixtures no longer apply.
+  BUILD-002 SW Split netcore overlays describe the retired nRF5340 path,
+  not current integrated nRF54L15BSim SW Split. BUILD-003 currently checks
+  receiver host/controller agreement (3 ACL / 1 ISO); old 7/6 and netcore
+  values below are dated historical observations.
+- BUILD-007 current resolved checker accepts nRF54L15 receiver app + FLPR
+  only, rejects `--nrf5340`, and reported **69 assertions, 0 failed** on
+  the dirty diagnostic build (see `docs/development/pb-037-retirement-results.md`
+  and `nrf54l15-only-continuation-20260925.md`). The historical 76/79/95/96
+  dual-target totals, old image domains and mutation inventory below are
+  not current checker requirements. BUILD-006's old `nrf-probes` command is
+  historical; current session-bound roles resolve via `nix-nrf probes` and
+  identity revalidation. This is not clean-commit acceptance.
 
 ## Bluetooth and service contract (`BT-*`)
 
@@ -608,7 +645,7 @@ init.  Re-initialization never resets the negotiated input frame selection.
 
 ## Clock and rate contract (`CLOCK-*`)
 
-### CLOCK-001 — nRF5340 clock path
+### CLOCK-001 — historical nRF5340 clock path (retired)
 
 nRF5340 uses identity rate conversion (`audio_rate_convert.c`, conversion ratio
 1.0) and APLL actuator (`audio_clock_actuator_apll.c`) that steers HFCLKAUDIO
@@ -711,7 +748,11 @@ reset loops with a deterministic final reset; the focused run is clean under
 UBSan.  Tuning, signs, first-update behavior, filter ratio, anti-windup, and
 clamps are unchanged for normal production inputs.
 
-### CLOCK-010 — APLL actuator conversion (T5)
+### CLOCK-010 — historical test-local APLL conversion (T5)
+
+The paragraph below records the original T5 production-source proof. PB-037
+moved that implementation under `tests/unit/actuator_apll/src/` for historical
+regression; no current production APLL source or selector remains.
 
 `audio_clock_actuator_apll.c` converts ppm to APLL register steps with
 `offset = (ppm * 10) / 33` (C truncation toward zero), adds the center, and
@@ -914,7 +955,7 @@ APIs:
 
 ## Board and build contract (`BUILD-*`)
 
-### BUILD-001 — NCS version
+### BUILD-001 — NCS version (historical fixture list below)
 
 The final nRF54L15 receiver, legacy nRF5340 receiver build, and central dongle
 all use NCS v3.3.0. Mixing versions is not supported.
@@ -922,7 +963,7 @@ all use NCS v3.3.0. Mixing versions is not supported.
 The nRF5340BSim suite, nRF5340DK HIL source, and HCI-UART central dongle are
 required test fixtures, not receiver targets.
 
-### BUILD-002 — nRF5340 SW Split overlays
+### BUILD-002 — historical nRF5340 SW Split overlays (retired)
 
 nRF5340 cpunet applies both the SW Split Kconfig overlay and the SW Split
 devicetree overlay through `sysbuild.cmake`.  Without both, the net core stays
@@ -935,7 +976,7 @@ resolving to an okay `bt_hci_controller` node compatible with
 `zephyr,bt-hci-ll-sw-split` while `bt_hci_sdc` is disabled in
 `hci_ipc/zephyr/zephyr.dts`.
 
-### BUILD-003 — ACL/ISO buffer agreement
+### BUILD-003 — ACL/ISO buffer agreement (old dual-target proof below)
 
 Host (`CONFIG_BT_BUF_ACL_TX_COUNT`, `CONFIG_BT_ISO_TX_BUF_COUNT`) and
 controller ACL/ISO buffer counts match per target.  nRF5340: 7 ACL / 6 ISO.
@@ -983,13 +1024,18 @@ cross-checks the FLPR image's resolved memory/chosen/code-partition values
 `CONFIG_FLASH_BASE_ADDRESS`/`CONFIG_FLASH_LOAD_SIZE`) against the
 app-side launcher ranges.
 
-### BUILD-006 — Probe runtime resolution
+### BUILD-006 — historical probe runtime command (replaced)
 
 Probe identity is resolved at runtime via `nrf-probes`.  No static serial↔board
 mapping enters source files or documentation.  Doc hygiene: all hardware-
 identity claims include the raw evidence they rest on.
 
-### BUILD-007 — Resolved build contract checker (T6)
+### BUILD-007 — historical resolved dual-target checker (T6–FR4)
+
+The old checker implementation, image inputs and assertion/test counts below
+are dated evidence, superseded by the current 69-assertion nRF54L15-only
+receiver app/FLPR check described in the amendment. Do not run the old
+`--nrf5340` invocation as a current validation command.
 
 `scripts/check-build-contract.py` (stdlib only, deterministic PASS/FAIL
 report, all failures listed in one run, exit 0 only when every contract

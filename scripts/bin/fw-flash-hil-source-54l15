@@ -24,6 +24,34 @@ BUILD_DIR="$(_fw_repo_dir)/build/hil-source-nrf54l15"
 SOURCE_HEX="$BUILD_DIR/zephyr/zephyr.hex"
 OPENOCD_CFG="$ZEPHYR_BASE/boards/seeed/xiao_nrf54l15/support/openocd.cfg"
 
+if [ "${FW_HIL_SOURCE_CPUNET_HEX+x}" ] || [ "${FW_HIL_SOURCE_JLINK_SERIAL+x}" ]; then
+	printf 'Legacy CPUNET/J-Link source overrides are not supported\n' >&2
+	exit 1
+fi
+
+if [ "${FW_HIL_SOURCE_CPUAPP_HEX+x}" ]; then
+	OVERRIDE="${FW_HIL_SOURCE_CPUAPP_HEX}"
+	REPO="$(realpath "$(_fw_repo_dir)")"
+	if [ -z "$OVERRIDE" ] || [[ "$OVERRIDE" != /* ]] || [[ "$OVERRIDE" != *.hex ]] || \
+		[ -L "$OVERRIDE" ] || [ ! -f "$OVERRIDE" ] || [ ! -s "$OVERRIDE" ]; then
+		printf 'Invalid FW_HIL_SOURCE_CPUAPP_HEX: must be absolute non-symlink nonempty .hex file\n' >&2
+		exit 1
+	fi
+	SOURCE_HEX="$(realpath "$OVERRIDE")"
+	if [ "$SOURCE_HEX" != "$OVERRIDE" ] || [[ "$SOURCE_HEX" == "$REPO" || "$SOURCE_HEX" == "$REPO"/* ]]; then
+		printf 'Invalid FW_HIL_SOURCE_CPUAPP_HEX: path must be canonical and outside repository\n' >&2
+		exit 1
+	fi
+fi
+
+# Tcl braces keep spaces in canonical paths intact. Reject Tcl control syntax
+# and control characters before interpolation into either OpenOCD command.
+if [[ "$SOURCE_HEX" == *'{'* || "$SOURCE_HEX" == *'}'* || "$SOURCE_HEX" == *'\'* ]] || \
+	[[ "$SOURCE_HEX" == *[$'\001'-$'\037'$'\177']* ]]; then
+	printf 'Invalid source hex path: unsafe Tcl characters\n' >&2
+	exit 1
+fi
+
 SERIAL="${FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL:-}"
 if [ -z "$SERIAL" ]; then
 	printf 'FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL is required (no auto-detection)\n' >&2
@@ -48,10 +76,10 @@ OPENOCD_ARGS=(
 	-f "$OPENOCD_CFG"
 	-c init
 	-c "reset halt"
-	-c "nrf54l-load $SOURCE_HEX"
-	-c "verify_image $SOURCE_HEX"
+	-c "nrf54l-load {$SOURCE_HEX}"
+	-c "verify_image {$SOURCE_HEX}"
 	-c "reset run"
 	-c shutdown
 )
 
-exec openocd "${OPENOCD_ARGS[@]}"
+exec env OPENOCD_INTERFACE=cmsis-dap openocd "${OPENOCD_ARGS[@]}"

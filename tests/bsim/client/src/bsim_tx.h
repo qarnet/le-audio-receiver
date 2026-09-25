@@ -6,8 +6,9 @@
  * the upstream repeated-tone stream_tx/stream_lc3 helpers.
  *
  * Keeps the real BAP send API while selecting sequence-indexed, checked-in
- * LC3 corpus frames.  Every successful send contributes its logical sequence
- * and final payload bytes to the retained per-stream FNV-1a audit.
+ * LC3 corpus frames. Logical sequence indexes corpus frames and contributes
+ * to retained FNV-1a audit data. Transport sequence is the packet sequence
+ * number passed to BAP and advances once per live stream on every SDU tick.
  */
 
 #ifndef BSIM_TX_H
@@ -50,10 +51,11 @@ int bsim_tx_init(void);
 /**
  * Register a stream for TX.  The stream must already carry the negotiated
  * codec config (used only for logging; the explicit @p cfg selects fixed
- * corpus frames).  seq_num starts at 0.
+ * corpus frames). Logical and transport sequences start at 0. Simultaneously
+ * registered fixture streams must use one frame duration.
  *
  * @retval 0 success
- * @retval -EINVAL null or unsupported corpus geometry
+ * @retval -EINVAL null, unsupported corpus geometry, or mismatched frame duration
  * @retval -ENOMEM all TX slots in use
  */
 int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_config *cfg);
@@ -61,7 +63,7 @@ int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_conf
 /** Unregister a stream from TX (stops sending on it). */
 int bsim_tx_unregister(struct bt_bap_stream *bap_stream);
 
-/** Pause sending on one stream (keeps registration state). */
+/** Pause payload sending on one stream (transport PSN still advances per tick). */
 void bsim_tx_pause(struct bt_bap_stream *bap_stream);
 
 /** Resume sending on one stream. */
@@ -77,13 +79,26 @@ void bsim_tx_set_required_streams(int n);
 
 /**
  * Inject exactly one malformed one-byte SDU when the next send on
- * @p bap_stream would use @p at_seq, then resume valid LC3 frames.
+ * @p bap_stream would use logical sequence @p at_seq, then resume valid LC3 frames.
  */
 void bsim_tx_schedule_malformed(struct bt_bap_stream *bap_stream, uint16_t at_seq);
 
 /**
- * Cap the number of successful sends on one stream: the stream pauses
- * itself once its send count reaches @p limit.  0 = unlimited (default).
+ * After @p after_sends successful logical sends, omit payloads for exactly
+ * @p intervals active SDU ticks. Transport PSN advances during each omission;
+ * logical corpus sequence resumes unchanged after the gap.
+ *
+ * @retval 0 gap armed
+ * @retval -EINVAL null/zero/invalid arguments or an already-passed send count
+ * @retval -ENODATA stream is not registered
+ * @retval -EALREADY another gap is armed or in progress
+ */
+int bsim_tx_schedule_gap(struct bt_bap_stream *bap_stream, uint32_t after_sends,
+			 uint32_t intervals);
+
+/**
+ * Cap successful payload sends on one stream: payloads pause once send count
+ * reaches @p limit. Transport PSN continues on live stream ticks. 0 = unlimited.
  */
 void bsim_tx_set_send_limit(struct bt_bap_stream *bap_stream, uint32_t limit);
 

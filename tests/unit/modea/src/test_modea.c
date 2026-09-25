@@ -355,6 +355,57 @@ ZTEST(modea, test_no_ts_sentinel_resolves_with_timestamped_mate)
 	assert_stats(2, 1, 0, 0);
 }
 
+ZTEST(modea, test_right_startup_sentinel_preserves_left_payload)
+{
+	/* The right CIS may start with an untimestamped LOST callback before
+	 * either channel has a timestamp. Arrival order must not lose the
+	 * surviving left payload or prevent the next normal event. */
+	for (int lost_first = 0; lost_first < 2; lost_first++) {
+		setup_state();
+		if (lost_first) {
+			zassert_equal(MODEA_ACTION_NONE, STORE_LOST(MODEA_CH_RIGHT, 0));
+			zassert_equal(MODEA_ACTION_EMIT, STORE_VALID(MODEA_CH_LEFT, 10000));
+		} else {
+			zassert_equal(MODEA_ACTION_NONE, STORE_VALID(MODEA_CH_LEFT, 10000));
+			zassert_equal(MODEA_ACTION_EMIT, STORE_LOST(MODEA_CH_RIGHT, 0));
+		}
+		zassert_equal(ev.ts, 10000U);
+		zassert_true(ev.half_valid[MODEA_CH_LEFT]);
+		zassert_true(ev.half_src[MODEA_CH_LEFT]);
+		zassert_mem_equal(ev.data[MODEA_CH_LEFT], l_data, sizeof(l_data));
+		zassert_false(ev.half_valid[MODEA_CH_RIGHT]);
+		zassert_false(ev.half_src[MODEA_CH_RIGHT]);
+		zassert_equal(ev.len[MODEA_CH_RIGHT], 0U);
+		zassert_equal(MODEA_ACTION_NONE, STORE_VALID(MODEA_CH_RIGHT, 20000));
+		zassert_equal(MODEA_ACTION_EMIT, STORE_VALID(MODEA_CH_LEFT, 20000));
+		zassert_mem_equal(ev.data[MODEA_CH_LEFT], l_data, sizeof(l_data));
+		zassert_mem_equal(ev.data[MODEA_CH_RIGHT], r_data, sizeof(r_data));
+		assert_stats(2, 1, 0, 0);
+	}
+}
+
+ZTEST(modea, test_null_inputs_do_not_emit_or_modify_output)
+{
+	setup_state();
+	struct modea_event untouched = ev;
+	struct modea_stats output = {.resolved_events = 123U};
+
+	modea_reset(NULL);
+	modea_config(NULL, INTERVAL);
+	zassert_equal(
+		modea_store(NULL, MODEA_CH_LEFT, l_data, sizeof(l_data), true, true, 10000, 1, &ev),
+		MODEA_ACTION_NONE);
+	zassert_mem_equal(&ev, &untouched, sizeof(ev));
+	modea_get_stats(NULL, &output);
+	zassert_equal(output.resolved_events, 123U);
+	modea_get_stats(&st, NULL);
+
+	/* Invalid calls cannot disturb an independent valid assembler. */
+	zassert_equal(MODEA_ACTION_NONE, STORE_VALID(MODEA_CH_LEFT, 10000));
+	zassert_equal(MODEA_ACTION_EMIT, STORE_VALID(MODEA_CH_RIGHT, 10000));
+	assert_stats(1, 0, 0, 0);
+}
+
 /* ── reset / teardown ─────────────────────────────────────────────── */
 
 ZTEST(modea, test_reset_clears_all)
@@ -375,25 +426,28 @@ ZTEST(modea, test_reset_clears_all)
 
 /* ── queue overflow (bounded state, counted, never silent) ────────── */
 
-ZTEST(modea, test_queue_overflow_drops_oldest)
+ZTEST(modea, test_queue_deadline_preserves_oldest)
 {
 	setup_state();
 
-	/* Right never delivers: left fills to depth 2, then overflows. */
+	/* Right never delivers: the bounded queue sets the waiting limit. */
 	zassert_equal(MODEA_ACTION_NONE, STORE_VALID(MODEA_CH_LEFT, 10000));
 	zassert_equal(MODEA_ACTION_NONE, STORE_VALID(MODEA_CH_LEFT, 20000));
 
-	/* Third concurrent unresolved half on left → overflow drop of the
-	 * oldest (10000), counted. */
-	zassert_equal(MODEA_ACTION_DROP, STORE_VALID(MODEA_CH_LEFT, 30000));
-	assert_stats(0, 0, 1, 0);
+	/* Preserve the oldest left audio with right PLC instead of dropping it. */
+	zassert_equal(MODEA_ACTION_EMIT, STORE_VALID(MODEA_CH_LEFT, 30000));
+	zassert_equal(10000U, ev.ts);
+	zassert_true(ev.half_valid[MODEA_CH_LEFT]);
+	zassert_false(ev.half_valid[MODEA_CH_RIGHT]);
+	assert_stats(1, 1, 0, 0);
+	/* Late real data for an already concealed event cannot reappear. */
+	zassert_equal(MODEA_ACTION_NONE, STORE_VALID(MODEA_CH_RIGHT, 10000));
 
-	/* The dropped half cannot be emitted later (its mate arriving now
-	 * pairs with the next-left instead). */
+	/* The next unresolved event still pairs normally. */
 	zassert_equal(MODEA_ACTION_EMIT, STORE_VALID(MODEA_CH_RIGHT, 20000));
 	zassert_equal(20000U, ev.ts);
 	zassert_true(ev.half_valid[MODEA_CH_RIGHT]);
-	assert_stats(1, 0, 1, 0);
+	assert_stats(2, 1, 0, 0);
 }
 
 ZTEST(modea, test_oversized_reject_no_mutation)
@@ -485,6 +539,62 @@ ZTEST(modea, test_push_plc_accounting)
 	zassert_equal(MODEA_ACTION_EMIT, STORE_VALID(MODEA_CH_RIGHT, 100000));
 
 	assert_stats(10, 2, 0, 0);
+}
+
+ZTEST(modea, test_absent_channel_preserves_survivor_and_recovers)
+{
+	/* Exercise either missing channel, both frame durations, and timestamp
+	 * wrap. Every emitted survivor payload identifies its source event. */
+	for (unsigned int side = 0; side < 2; side++) {
+		for (unsigned int shape = 0; shape < 2; shape++) {
+			uint32_t interval = shape ? 7500U : 10000U;
+			uint32_t base = UINT32_MAX - 5U * interval;
+			enum modea_channel live = (enum modea_channel)side;
+			enum modea_channel missing = (enum modea_channel)(1U - side);
+			uint32_t emitted = 0;
+			uint32_t plc = 0;
+			uint8_t payload[4];
+
+			setup_state();
+			modea_config(&st, interval);
+			for (uint32_t event = 0; event < 30; event++) {
+				uint32_t ts = base + event * interval;
+				payload[0] = (uint8_t)event;
+				enum modea_action action = store(live, payload, sizeof(payload),
+								 true, true, ts, (uint16_t)event);
+				for (unsigned int arrival = 0; arrival < 2; arrival++) {
+					if (arrival == 1) {
+						if (event >= 3 && event < 21) {
+							break; /* No callback: not an empty SDU. */
+						}
+						action = store(missing, payload, sizeof(payload),
+							       true, true, ts,
+							       (uint16_t)(event + 100));
+					}
+					if (action == MODEA_ACTION_EMIT) {
+						zassert_equal(ev.ts, base + emitted * interval);
+						zassert_true(ev.half_valid[live]);
+						zassert_equal(ev.data[live][0], emitted);
+						bool lost = emitted >= 3 && emitted < 21;
+						zassert_equal(ev.half_valid[missing], !lost);
+						if (!lost) {
+							zassert_equal(ev.data[missing][0], emitted);
+						}
+						plc += lost;
+						emitted++;
+					} else {
+						zassert_equal(action, MODEA_ACTION_NONE);
+					}
+				}
+				if (event == 15) {
+					zassert_true(emitted >= 13, "surviving audio stalled");
+				}
+			}
+			zassert_equal(emitted, 30);
+			zassert_equal(plc, 18);
+			assert_stats(30, 18, 0, 0);
+		}
+	}
 }
 
 ZTEST_SUITE(modea, NULL, NULL, NULL, NULL, NULL);

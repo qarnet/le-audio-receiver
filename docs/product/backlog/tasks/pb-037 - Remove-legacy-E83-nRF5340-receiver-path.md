@@ -1,0 +1,72 @@
+---
+id: PB-037
+title: Remove legacy E83 nRF5340 receiver path
+status: In Progress
+assignee: []
+created_date: '2026-09-22 22:50'
+updated_date: '2026-09-25 00:33'
+labels:
+  - 'size:M'
+  - 'area:hardware'
+dependencies: []
+priority: p1
+type: tech-debt
+ordinal: 35000
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+### Problem
+
+Repository still carries Ebyte E83 nRF5340 receiver board definitions, net-core sysbuild, build and flash helpers, release guidance, and compatibility tests despite nRF54L15 being sole production receiver target.
+
+### Desired outcome
+
+Remove legacy E83 receiver implementation and operational paths so production receiver build, flash, packaging, and support surface are nRF54L15-only.
+
+### Scope
+
+- Delete E83 board definition and nRF5340-only receiver Kconfig, devicetree, sysbuild, flash, and helper paths.
+- Remove nRF5340 production actuator selection and code that has no remaining simulation or test owner.
+- Update build contracts, packaging, flashing docs, public support tables, and active developer guidance.
+- Retain shared protocol tests and historical evidence where they remain useful and clearly historical.
+
+### Non-goals
+
+- Remove nRF5340 references from immutable historical results.
+- Delete generic Zephyr or NCS support outside repository.
+- Change nRF54L15 receiver behavior, transport limits, or release assets.
+- Remove nRF54L15BSim or HIL infrastructure.
+
+### Technical context
+
+PB-032 established nRF54L15 as sole final receiver target. Current project policy retains E83 only pending a separate cleanup decision; this item is that decision and execution.
+
+### Open questions
+
+None.
+<!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 E83 board tree, nRF5340 receiver board config, net-core sysbuild overlays, build and flash helpers, and nRF5340 release-flashing path are removed.
+- [ ] #2 Production CMake, Kconfig, devicetree, packaging, and public docs expose only nRF54L15 receiver support; obsolete nRF5340-only actuator code is removed or retained only under explicit test-local historical ownership.
+- [ ] #3 Build-contract and documentation tests reject reintroduction of active E83 or nRF5340 production receiver paths.
+- [ ] #4 nRF54L15 firmware builds, unit suites, coverage, canonical BSim, and applicable HIL smoke remain green with no ignored warnings.
+- [ ] #5 Historical evidence remains intact and every retained nRF5340 mention is classified as historical, compatibility context, or external SDK reference.
+<!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Remove active E83 receiver board, net-core sysbuild, production-only APLL and identity choices, and receiver build/flash helpers. Preserve APLL arithmetic/rail and no-HFCLK regression under test-local historical ownership, plus generic identity and concealment tests.
+2. In later slice, update build-contract checks, packaging, release flashing and public/developer docs; classify active versus historical references without changing immutable evidence.
+3. Validate nRF54L15 firmware build and focused native actuator/I2S tests now; later run contract/documentation tests, unit suite, coverage on clean commit, canonical BSim and applicable HIL smoke. Check warnings and preserve existing transport limits and receiver behavior.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-09-25: diagnostic receiver/source/HCI builds, 75/0/75 unit, 69/0 actual build contract, strict BSim 17/26 and fixed-image RH3 20/20 passed. Coverage report-only population36 (4971/5427 lines, 2203/3008 branches, 377/377 functions), baseline unchanged. Clean enforcement failed before builds on dirty-tree precondition. Exhaustive reference/comment classification and clean exact-commit gates remain; no criterion or Done claim. See docs/development/nrf54l15-only-continuation-20260925.md.
+<!-- SECTION:NOTES:END -->

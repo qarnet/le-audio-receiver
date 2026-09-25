@@ -230,6 +230,18 @@ int main(int argc, char **argv)
 	}
 
 	for (size_t index = 0U; index < lc3_stateful_recipe_count; index++) {
+		for (size_t prior = 0U; prior < index; prior++) {
+			if (lc3_stateful_recipes[index].reference_kind ==
+				    LC3_STATEFUL_REFERENCE_GENERATED_PCM &&
+			    strcmp(lc3_stateful_recipes[index].reference_path,
+				   lc3_stateful_recipes[prior].reference_path) == 0) {
+				fprintf(stderr, "FATAL: generated recipes alias an output path\n");
+				return 1;
+			}
+		}
+	}
+
+	for (size_t index = 0U; index < lc3_stateful_recipe_count; index++) {
 		if (lc3_stateful_recipes[index].reference_kind !=
 		    LC3_STATEFUL_REFERENCE_GENERATED_PCM) {
 			continue;

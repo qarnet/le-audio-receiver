@@ -61,7 +61,11 @@ def _fixture_dict(**root_overrides):
         "capture_capability": "none",
         "roles": {
             "receiver": _zephyr_role("receiver", "nrf54l15dk/nrf54l15/cpuapp"),
-            "source": _zephyr_role("source", "nrf5340dk/nrf5340/cpuapp"),
+            "source": {
+                "kind": "zephyr_dut",
+                "board": "nrf54l15dk/nrf54l15/cpuapp",
+                "images": ["cpuapp"],
+            },
         },
     }
     doc.update(root_overrides)
@@ -90,18 +94,9 @@ def _zephyr_binding(
         if probe_udev is not None:
             probe["udev"] = probe_udev
     else:
-        # Source nRF5340DK: onboard Segger J-Link, located by its exact
-        # USB identity map (RH2 corrected backend).
-        probe = {"backend": "jlink", "family": "nrf53"}
-        probe["udev"] = (
-            probe_udev
-            if probe_udev is not None
-            else {
-                "ID_VENDOR_ID": "1366",
-                "ID_MODEL_ID": "1015",
-                "ID_SERIAL_SHORT": "J-LINK-SERIAL",
-            }
-        )
+        probe = {"backend": "nrf-probes", "family": "nrf54l"}
+        if probe_udev is not None:
+            probe["udev"] = probe_udev
     return {
         "probe": probe,
         "serial": {"baud": baud, "dtr": dtr, "rts": rts, "udev": u},
@@ -327,7 +322,7 @@ class TestLogicalFixture(unittest.TestCase):
                 channels=None,
             ),
         )
-        self.assertEqual(fixture.roles["source"].images, ("cpuapp", "cpunet"))
+        self.assertEqual(fixture.roles["source"].images, ("cpuapp",))
 
     def test_checked_in_xiao_source_fixture_parses(self):
         fixture = model.load_logical_fixture(XIAO_FIXTURE_JSON)
@@ -531,7 +526,7 @@ class TestLogicalFixture(unittest.TestCase):
         self.assertEqual(fixture.roles["receiver"].kind, "zephyr_dut")
         self.assertFalse(hasattr(fixture.roles, "__setitem__"))
         binding = model.load_physical_binding(BINDING_EXAMPLE, fixture)
-        self.assertEqual(binding.roles["source"].probe.family, "nrf53")
+        self.assertEqual(binding.roles["source"].probe.family, "nrf54l")
         self.assertFalse(hasattr(binding.roles, "__setitem__"))
 
 
@@ -543,7 +538,7 @@ class TestPhysicalBinding(unittest.TestCase):
         self.assertEqual(binding.fixture_id, FIXTURE_ID)
         self.assertEqual(set(binding.roles), {"receiver", "source"})
         self.assertEqual(binding.roles["receiver"].probe.family, "nrf54l")
-        self.assertEqual(binding.roles["source"].probe.family, "nrf53")
+        self.assertEqual(binding.roles["source"].probe.family, "nrf54l")
 
     def test_checked_in_xiao_source_example_cross_validates(self):
         fixture = model.load_logical_fixture(XIAO_FIXTURE_JSON)
@@ -693,7 +688,7 @@ class TestPhysicalBinding(unittest.TestCase):
             _write_json(path, _binding_dict(roles=roles))
             with self.assertRaises(model.HilSchemaError) as ctx:
                 model.load_physical_binding(path, fixture)
-            self.assertIn("probe backend", str(ctx.exception))
+            self.assertIn("family mismatch", str(ctx.exception))
 
             # Wrong probe family.
             roles = {
@@ -708,7 +703,7 @@ class TestPhysicalBinding(unittest.TestCase):
                 model.load_physical_binding(path, fixture)
             self.assertIn("family mismatch", str(ctx.exception))
 
-            # A jlink source probe requires its udev map.
+            # Legacy J-Link source bindings fail before any discovery.
             roles = {
                 "receiver": _zephyr_binding("receiver"),
                 "source": {
@@ -719,7 +714,7 @@ class TestPhysicalBinding(unittest.TestCase):
             _write_json(path, _binding_dict(roles=roles))
             with self.assertRaises(model.HilSchemaError) as ctx:
                 model.load_physical_binding(path, fixture)
-            self.assertIn("probe udev is required", str(ctx.exception))
+            self.assertIn("probe backend mismatch", str(ctx.exception))
 
             # Empty or incomplete probe udev map fails closed.
             roles = {
@@ -862,15 +857,7 @@ class TestPhysicalBinding(unittest.TestCase):
                         },
                     },
                     "source": {
-                        "probe": {
-                            "backend": "jlink",
-                            "family": "nrf53",
-                            "udev": {
-                                "ID_VENDOR_ID": "1366",
-                                "ID_MODEL_ID": "1015",
-                                "ID_SERIAL_SHORT": "J-LINK-SERIAL",
-                            },
-                        },
+                        "probe": {"backend": "nrf-probes", "family": "nrf54l"},
                         "serial": {
                             "baud": 115200,
                             "dtr": False,
@@ -885,10 +872,7 @@ class TestPhysicalBinding(unittest.TestCase):
             self.assertEqual(len(binding.roles["receiver"].serial.udev.values), 0)
             self.assertEqual(len(binding.roles["source"].serial.udev.values), 0)
             self.assertIsNone(binding.roles["receiver"].probe.udev)
-            self.assertEqual(
-                binding.roles["source"].probe.udev.get("ID_SERIAL_SHORT"),
-                "J-LINK-SERIAL",
-            )
+            self.assertIsNone(binding.roles["source"].probe.udev)
             # The tty-path check is irrelevant for probe udev: a USB device
             # identity value is accepted even when it looks like a tty path.
             roles = {
@@ -2927,10 +2911,16 @@ class TestCli(unittest.TestCase):
             ),
         ):
             with self.subTest(command=command):
-                with self.assertRaises(cli.HilCliError):
-                    parser.parse_args(
+                if command in ("validate", "prepare", "create-session"):
+                    with self.assertRaises(cli.HilCliError):
+                        parser.parse_args(
+                            [command, *required, "--session-manifest", manifest]
+                        )
+                else:
+                    parsed = parser.parse_args(
                         [command, *required, "--session-manifest", manifest]
                     )
+                    self.assertEqual(parsed.session_manifest, manifest)
 
         calls = []
 

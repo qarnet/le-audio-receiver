@@ -86,6 +86,21 @@ static const struct lc3_stateful_step loss48x18_steps[] = {
 	{LC3_STATEFUL_ACTION_CORPUS, 48U, 34U},
 };
 
+static const struct lc3_stateful_step start0_steps[] = {
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
+};
+
+static const struct lc3_stateful_step skip20_start0_steps[] = {
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 20U},
+	{LC3_STATEFUL_ACTION_CORPUS, 21U, 80U},
+};
+
+static const struct lc3_stateful_step loss48x18_start0_steps[] = {
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 48U},
+	{LC3_STATEFUL_ACTION_PLC, 0U, 18U},
+	{LC3_STATEFUL_ACTION_CORPUS, 48U, 34U},
+};
+
 const struct lc3_stateful_recipe lc3_stateful_recipes[] = {
 	{
 		.id = "start8_10ms_l",
@@ -215,6 +230,90 @@ const struct lc3_stateful_recipe lc3_stateful_recipes[] = {
 		.steps = start7_steps,
 		.step_count = sizeof(start7_steps) / sizeof(start7_steps[0]),
 	},
+	{
+		.id = "start0_10ms_l",
+		.source_stem = "bsim_48k_10ms_120b_l",
+		.reference_path = "bsim_48k_10ms_120b_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 100U,
+		.valid_frame_count = 100U,
+		.steps = start0_steps,
+		.step_count = sizeof(start0_steps) / sizeof(start0_steps[0]),
+	},
+	{
+		.id = "start0_10ms_r",
+		.source_stem = "bsim_48k_10ms_120b_r",
+		.reference_path = "bsim_48k_10ms_120b_r.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 100U,
+		.valid_frame_count = 100U,
+		.steps = start0_steps,
+		.step_count = sizeof(start0_steps) / sizeof(start0_steps[0]),
+	},
+	{
+		.id = "start0_7p5ms_l",
+		.source_stem = "bsim_48k_7p5ms_90b_l",
+		.reference_path = "bsim_48k_7p5ms_90b_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 7500U,
+		.frame_bytes = 90U,
+		.samples_per_frame = 360U,
+		.output_action_count = 100U,
+		.valid_frame_count = 100U,
+		.steps = start0_steps,
+		.step_count = sizeof(start0_steps) / sizeof(start0_steps[0]),
+	},
+	{
+		.id = "start0_7p5ms_r",
+		.source_stem = "bsim_48k_7p5ms_90b_r",
+		.reference_path = "bsim_48k_7p5ms_90b_r.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 7500U,
+		.frame_bytes = 90U,
+		.samples_per_frame = 360U,
+		.output_action_count = 100U,
+		.valid_frame_count = 100U,
+		.steps = start0_steps,
+		.step_count = sizeof(start0_steps) / sizeof(start0_steps[0]),
+	},
+	{
+		.id = "skip20_start0_10ms_l",
+		.source_stem = "bsim_48k_10ms_120b_l",
+		.reference_path = "stateful_48k_10ms_skip20_start0_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_GENERATED_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 100U,
+		.valid_frame_count = 100U,
+		.steps = skip20_start0_steps,
+		.step_count = sizeof(skip20_start0_steps) / sizeof(skip20_start0_steps[0]),
+	},
+	{
+		.id = "loss48x18_start0_10ms_r",
+		.source_stem = "bsim_48k_10ms_120b_r",
+		.reference_path = "stateful_48k_10ms_loss48x18_start0_r.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_GENERATED_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 100U,
+		.valid_frame_count = 82U,
+		.steps = loss48x18_start0_steps,
+		.step_count = sizeof(loss48x18_start0_steps) / sizeof(loss48x18_start0_steps[0]),
+	},
 };
 
 const size_t lc3_stateful_recipe_count =
@@ -270,6 +369,21 @@ static const struct lc3_stateful_step expected_skip20_steps[] = {
 
 static const struct lc3_stateful_step expected_loss48x18_steps[] = {
 	{LC3_STATEFUL_ACTION_PLC, 0U, 8U},
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 48U},
+	{LC3_STATEFUL_ACTION_PLC, 0U, 18U},
+	{LC3_STATEFUL_ACTION_CORPUS, 48U, 34U},
+};
+
+static const struct lc3_stateful_step expected_start0_steps[] = {
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 100U},
+};
+
+static const struct lc3_stateful_step expected_skip20_start0_steps[] = {
+	{LC3_STATEFUL_ACTION_CORPUS, 0U, 20U},
+	{LC3_STATEFUL_ACTION_CORPUS, 21U, 80U},
+};
+
+static const struct lc3_stateful_step expected_loss48x18_start0_steps[] = {
 	{LC3_STATEFUL_ACTION_CORPUS, 0U, 48U},
 	{LC3_STATEFUL_ACTION_PLC, 0U, 18U},
 	{LC3_STATEFUL_ACTION_CORPUS, 48U, 34U},
@@ -404,6 +518,92 @@ static const struct lc3_stateful_expected_recipe expected_recipes[] = {
 		.valid_frame_count = 100U,
 		.steps = expected_start7_steps,
 		.step_count = sizeof(expected_start7_steps) / sizeof(expected_start7_steps[0]),
+	},
+	{
+		.id = "start0_10ms_l",
+		.source_stem = "bsim_48k_10ms_120b_l",
+		.reference_path = "bsim_48k_10ms_120b_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 100U,
+		.valid_frame_count = 100U,
+		.steps = expected_start0_steps,
+		.step_count = sizeof(expected_start0_steps) / sizeof(expected_start0_steps[0]),
+	},
+	{
+		.id = "start0_10ms_r",
+		.source_stem = "bsim_48k_10ms_120b_r",
+		.reference_path = "bsim_48k_10ms_120b_r.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 100U,
+		.valid_frame_count = 100U,
+		.steps = expected_start0_steps,
+		.step_count = sizeof(expected_start0_steps) / sizeof(expected_start0_steps[0]),
+	},
+	{
+		.id = "start0_7p5ms_l",
+		.source_stem = "bsim_48k_7p5ms_90b_l",
+		.reference_path = "bsim_48k_7p5ms_90b_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 7500U,
+		.frame_bytes = 90U,
+		.samples_per_frame = 360U,
+		.output_action_count = 100U,
+		.valid_frame_count = 100U,
+		.steps = expected_start0_steps,
+		.step_count = sizeof(expected_start0_steps) / sizeof(expected_start0_steps[0]),
+	},
+	{
+		.id = "start0_7p5ms_r",
+		.source_stem = "bsim_48k_7p5ms_90b_r",
+		.reference_path = "bsim_48k_7p5ms_90b_r.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 7500U,
+		.frame_bytes = 90U,
+		.samples_per_frame = 360U,
+		.output_action_count = 100U,
+		.valid_frame_count = 100U,
+		.steps = expected_start0_steps,
+		.step_count = sizeof(expected_start0_steps) / sizeof(expected_start0_steps[0]),
+	},
+	{
+		.id = "skip20_start0_10ms_l",
+		.source_stem = "bsim_48k_10ms_120b_l",
+		.reference_path = "stateful_48k_10ms_skip20_start0_l.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_GENERATED_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 100U,
+		.valid_frame_count = 100U,
+		.steps = expected_skip20_start0_steps,
+		.step_count = sizeof(expected_skip20_start0_steps) /
+			      sizeof(expected_skip20_start0_steps[0]),
+	},
+	{
+		.id = "loss48x18_start0_10ms_r",
+		.source_stem = "bsim_48k_10ms_120b_r",
+		.reference_path = "stateful_48k_10ms_loss48x18_start0_r.pcm",
+		.reference_kind = LC3_STATEFUL_REFERENCE_GENERATED_PCM,
+		.reference_first_frame = 0U,
+		.duration_us = 10000U,
+		.frame_bytes = 120U,
+		.samples_per_frame = 480U,
+		.output_action_count = 100U,
+		.valid_frame_count = 82U,
+		.steps = expected_loss48x18_start0_steps,
+		.step_count = sizeof(expected_loss48x18_start0_steps) /
+			      sizeof(expected_loss48x18_start0_steps[0]),
 	},
 };
 

@@ -4,24 +4,25 @@
  *
  * BSIM deterministic multi-channel TX — implementation.
  *
- * One TX thread round-robins over registered streams.  A stream sends
- * only while its endpoint is in the streaming state, and only when the
- * scenario-required stream count is streaming (Mode A holds both).
- * Frames come from fixed, checked-in LC3 corpus files.  The selected corpus
- * frame depends only on validated codec geometry, channel, and logical
- * sequence number.
+ * Once required streams are active, one TX thread first sends three
+ * round-robin prefill SDUs per stream, then emits one shared SDU-interval tick
+ * for all registered streaming streams. Every live stream advances its
+ * transport packet sequence number (PSN) exactly once per steady-state tick;
+ * successful payloads also advance logical corpus sequence. Frames come from
+ * fixed, checked-in LC3 corpus files and depend only on validated codec
+ * geometry, channel, and logical sequence number.
  *
  * Cross-thread ownership protocol (scenario thread vs TX thread):
  *
  *  - One mutex (tx_lock) protects every tx_streams and tx_audits field
  *    access. It is never held across net_buf_alloc or bt_bap_stream_send
  *    (blocking).
- *  - A candidate slot snapshot is taken under the lock and increments
- *    that slot's in_flight counter, recording generation, stream, and
- *    sequence.  Every path after the unlock (encode failure, send
- *    failure, success, stale registration) decrements in_flight; send
- *    counters/sequence/injection are committed only if the generation
- *    and stream still match the snapshot.
+ *  - Each prefill pass and steady-state tick snapshots every live stream under
+ *    the lock and increments each slot's in_flight counter, recording
+ *    generation, stream, logical sequence, transport PSN, and prefill state.
+ *    Every elapsed tick advances transport PSN only when the snapshot still
+ *    matches. Logical sequence, send counters/hash, malformed state, gap
+ *    arming, and prefill state commit only after a successful matching send.
  *  - register() takes the lock and selects only a slot with
  *    bap_stream == NULL and in_flight == 0; the config and retained audit
  *    association are initialized while protected, the generation is bumped to
@@ -32,8 +33,9 @@
  *    lock, then waits (without holding the lock) until in_flight == 0.
  *  - pause() sets paused under the lock then waits for in_flight == 0;
  *    resume() is synchronized under the lock.
- *  - The TX thread is the sole mutator of active sequence/hash state while a
- *    slot is in flight; register() cannot touch a slot with in_flight > 0.
+ *  - The TX thread is the sole mutator of active logical/transport sequence
+ *    and hash state while a slot is in flight; register() cannot touch a slot
+ *    with in_flight > 0.
  *  - Each reusable slot has a process-lifetime condition variable. Send-limit
  *    state changes broadcast under tx_lock. wait_send_limit() atomically
  *    releases/reacquires tx_lock while waiting and fully revalidates
@@ -57,9 +59,13 @@
 
 LOG_MODULE_REGISTER(bsim_tx, LOG_LEVEL_INF);
 
-#define BSIM_TX_CORPUS_FRAMES 128U
-#define BSIM_TX_FNV1A_PRIME   UINT32_C(0x01000193)
-#define BSIM_TX_IDLE_WAIT_MS  1000U
+#define BSIM_TX_CORPUS_FRAMES      128U
+#define BSIM_TX_FNV1A_PRIME        UINT32_C(0x01000193)
+#define BSIM_TX_IDLE_WAIT_MS       1000U
+#define BSIM_TX_PREFILL_PER_STREAM 3U
+
+BUILD_ASSERT(CONFIG_BT_ISO_TX_BUF_COUNT >= BSIM_TX_MAX_STREAMS * BSIM_TX_PREFILL_PER_STREAM,
+	     "ISO TX pool must hold one prefill for every fixture stream");
 
 struct bsim_tx_fixture {
 	const uint8_t *left;
@@ -121,15 +127,42 @@ struct bsim_tx_stream {
 	struct bsim_tx_config cfg;
 	const struct bsim_tx_fixture *fixture;
 	struct bsim_tx_audit *audit;
-	uint16_t seq_num;
+	uint16_t logical_seq;   /* corpus index and FNV logical sequence */
+	uint16_t transport_seq; /* HCI ISO packet sequence number */
 	uint32_t send_count;
 	uint32_t fnv1a_hash;
 	uint32_t send_limit; /* 0 = unlimited */
 	uint32_t generation; /* bumped on register/unregister; 0 = never used */
 	uint32_t in_flight;  /* TX candidates currently past the snapshot */
+	uint32_t gap_after_sends;
+	uint32_t gap_intervals;
+	uint32_t gap_remaining;
+	uint8_t prefill_remaining;
 	bool paused;
 	bool inject_pending;
+	bool gap_armed;
 	uint16_t inject_at_seq;
+};
+
+enum bsim_tx_tick_action {
+	BSIM_TX_TICK_SEND,
+	BSIM_TX_TICK_PAUSED,
+	BSIM_TX_TICK_GAP,
+};
+
+struct bsim_tx_tick_candidate {
+	struct bsim_tx_stream *slot;
+	struct bt_bap_stream *stream;
+	struct bsim_tx_config cfg;
+	const struct bsim_tx_fixture *fixture;
+	uint16_t logical_seq;
+	uint16_t transport_seq;
+	uint32_t generation;
+	uint32_t previous_hash;
+	bool inject;
+	bool prefill;
+	bool exhausted;
+	enum bsim_tx_tick_action action;
 };
 
 static struct bsim_tx_stream tx_streams[BSIM_TX_MAX_STREAMS];
@@ -307,6 +340,211 @@ static int bsim_tx_build_sdu(const struct bsim_tx_config *cfg,
 	return 0;
 }
 
+static bool bsim_tx_candidate_matches_locked(const struct bsim_tx_tick_candidate *candidate)
+{
+	return candidate->slot->generation == candidate->generation &&
+	       candidate->slot->bap_stream == candidate->stream;
+}
+
+/* Caller must hold tx_lock and have met the required streaming threshold. */
+static bool bsim_tx_prefill_pending_locked(void)
+{
+	for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
+		if (tx_streams[i].bap_stream != NULL &&
+		    stream_is_streaming(tx_streams[i].bap_stream) &&
+		    tx_streams[i].prefill_remaining > 0U) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool bsim_tx_prefill_pending(void)
+{
+	bool pending = false;
+
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	if (bsim_tx_streaming_count_locked() >= atomic_load(&required_streaming)) {
+		pending = bsim_tx_prefill_pending_locked();
+	}
+	k_mutex_unlock(&tx_lock);
+
+	return pending;
+}
+
+static bool bsim_tx_prepare_tick(struct bsim_tx_tick_candidate *candidates, size_t *candidate_count,
+				 uint32_t *interval_us, bool *prefill_pass)
+{
+	size_t count = 0U;
+	uint32_t duration_us = 0U;
+	bool prefill_active;
+
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	if (bsim_tx_streaming_count_locked() < atomic_load(&required_streaming)) {
+		k_mutex_unlock(&tx_lock);
+		return false;
+	}
+	prefill_active = bsim_tx_prefill_pending_locked();
+
+	for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
+		struct bsim_tx_stream *s = &tx_streams[i];
+		struct bsim_tx_tick_candidate *candidate;
+
+		if (s->bap_stream == NULL || !stream_is_streaming(s->bap_stream)) {
+			continue;
+		}
+		/* Prefill passes submit only streams that still need controller
+		 * reservations. This keeps each pass round-robin and avoids
+		 * advancing an already primed stream ahead of a new CIS. */
+		if (prefill_active && s->prefill_remaining == 0U) {
+			continue;
+		}
+
+		if (duration_us == 0U) {
+			duration_us = s->cfg.frame_duration_us;
+		}
+
+		candidate = &candidates[count++];
+		candidate->slot = s;
+		candidate->stream = s->bap_stream;
+		candidate->cfg = s->cfg;
+		candidate->fixture = s->fixture;
+		candidate->logical_seq = s->logical_seq;
+		candidate->transport_seq = s->transport_seq;
+		candidate->generation = s->generation;
+		candidate->previous_hash = s->fnv1a_hash;
+		candidate->inject = s->inject_pending && s->logical_seq == s->inject_at_seq;
+		candidate->prefill = prefill_active;
+		candidate->exhausted = false;
+		candidate->action = BSIM_TX_TICK_SEND;
+
+		if (s->gap_remaining > 0U) {
+			candidate->action = BSIM_TX_TICK_GAP;
+		} else if (s->paused) {
+			candidate->action = BSIM_TX_TICK_PAUSED;
+		} else if (s->logical_seq >= BSIM_TX_CORPUS_FRAMES) {
+			s->paused = true;
+			candidate->exhausted = true;
+			candidate->action = BSIM_TX_TICK_PAUSED;
+		}
+		s->in_flight++;
+	}
+	k_mutex_unlock(&tx_lock);
+
+	if (count == 0U) {
+		return false;
+	}
+
+	*candidate_count = count;
+	*interval_us = duration_us;
+	*prefill_pass = prefill_active;
+	return true;
+}
+
+static void bsim_tx_tick_omit(const struct bsim_tx_tick_candidate *candidate)
+{
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	if (bsim_tx_candidate_matches_locked(candidate)) {
+		if (candidate->action == BSIM_TX_TICK_GAP && candidate->slot->gap_remaining > 0U) {
+			candidate->slot->gap_remaining--;
+		}
+		candidate->slot->transport_seq++;
+	}
+	candidate->slot->in_flight--;
+	k_mutex_unlock(&tx_lock);
+}
+
+static bool bsim_tx_tick_commit_send(const struct bsim_tx_tick_candidate *candidate, int err,
+				     uint32_t candidate_hash)
+{
+	const size_t index = (size_t)(candidate->slot - tx_streams);
+	bool sent = false;
+
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	if (bsim_tx_candidate_matches_locked(candidate)) {
+		struct bsim_tx_stream *s = candidate->slot;
+
+		s->transport_seq++;
+		if (err == 0) {
+			s->send_count++;
+			s->fnv1a_hash = candidate_hash;
+			s->logical_seq++;
+			s->audit->send_count = s->send_count;
+			s->audit->fnv1a_hash = candidate_hash;
+			if (candidate->prefill && s->prefill_remaining > 0U) {
+				s->prefill_remaining--;
+			}
+			if (candidate->inject) {
+				s->inject_pending = false;
+			}
+			if (s->gap_armed && s->send_count == s->gap_after_sends) {
+				s->gap_armed = false;
+				s->gap_remaining = s->gap_intervals;
+			}
+			if (s->send_limit > 0U && s->send_count >= s->send_limit) {
+				/* Exact send-count cap: pause payloads at the limit. */
+				s->paused = true;
+				(void)k_condvar_broadcast(&send_limit_changed[index]);
+			}
+			sent = true;
+		}
+	}
+	candidate->slot->in_flight--;
+	k_mutex_unlock(&tx_lock);
+
+	return sent;
+}
+
+static int bsim_tx_tick_send(const struct bsim_tx_tick_candidate *candidate,
+			     struct net_buf_pool *tx_pool)
+{
+	const size_t index = (size_t)(candidate->slot - tx_streams);
+	struct net_buf *buf;
+	uint32_t candidate_hash;
+	bool sent;
+	int err;
+
+	buf = net_buf_alloc(tx_pool, K_NO_WAIT);
+	if (buf == NULL) {
+		LOG_ERR("TX[%zu]: buffer allocation failed at logical %u transport %u", index,
+			candidate->logical_seq, candidate->transport_seq);
+		bsim_tx_tick_commit_send(candidate, -ENOMEM, 0U);
+		return -ENOMEM;
+	}
+
+	net_buf_reserve(buf, BT_ISO_CHAN_SEND_RESERVE);
+	err = bsim_tx_build_sdu(&candidate->cfg, candidate->fixture, candidate->logical_seq,
+				candidate->inject, buf);
+	if (err != 0) {
+		LOG_ERR("TX[%zu]: SDU build failed at logical %u transport %u: %d", index,
+			candidate->logical_seq, candidate->transport_seq, err);
+		bsim_tx_tick_commit_send(candidate, err, 0U);
+		net_buf_unref(buf);
+		return err;
+	}
+
+	if (candidate->inject) {
+		LOG_INF("TX[%zu]: injected malformed %u-byte SDU at logical %u transport %u", index,
+			(unsigned int)buf->len, candidate->logical_seq, candidate->transport_seq);
+	}
+
+	/* Hash the exact final payload while the caller still owns buf. */
+	candidate_hash = bsim_tx_fnv1a_sdu(candidate->previous_hash, candidate->logical_seq, buf);
+	err = bt_bap_stream_send(candidate->stream, buf, candidate->transport_seq);
+	if (err != 0) {
+		LOG_ERR("TX[%zu]: send failed at logical %u transport %u: %d", index,
+			candidate->logical_seq, candidate->transport_seq, err);
+	}
+
+	sent = bsim_tx_tick_commit_send(candidate, err, candidate_hash);
+	if (err != 0) {
+		net_buf_unref(buf);
+	}
+
+	return err != 0 ? err : (sent ? 0 : -ESTALE);
+}
+
 static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 {
 	NET_BUF_POOL_FIXED_DEFINE(tx_pool, CONFIG_BT_ISO_TX_BUF_COUNT,
@@ -314,132 +552,41 @@ static void tx_thread_func(void *arg1, void *arg2, void *arg3)
 				  CONFIG_BT_CONN_TX_USER_DATA_SIZE, NULL);
 
 	while (true) {
-		bool sent_any = false;
+		struct bsim_tx_tick_candidate candidates[ARRAY_SIZE(tx_streams)];
+		size_t candidate_count;
+		uint32_t interval_us;
+		bool prefill_pass;
+		bool prefill_can_continue;
 
-		for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
-			struct bsim_tx_stream *s = &tx_streams[i];
-			struct bt_bap_stream *stream;
-			struct bsim_tx_config cfg;
-			const struct bsim_tx_fixture *fixture;
-			uint16_t seq;
-			bool inject;
-			uint32_t gen;
-			uint32_t previous_hash;
+		if (!bsim_tx_prepare_tick(candidates, &candidate_count, &interval_us,
+					  &prefill_pass)) {
+			k_sleep(K_MSEC(10));
+			continue;
+		}
+		prefill_can_continue = prefill_pass;
 
-			/* Candidate snapshot under the lock: increment
-			 * in_flight and record generation/stream/seq.  The
-			 * lock is never held across alloc/build/send. */
-			k_mutex_lock(&tx_lock, K_FOREVER);
-			if (s->bap_stream == NULL || s->paused) {
-				k_mutex_unlock(&tx_lock);
-				continue;
-			}
-			if (!stream_is_streaming(s->bap_stream)) {
-				k_mutex_unlock(&tx_lock);
-				continue;
-			}
-			/* Hold sending until the scenario-required stream
-			 * count is streaming (Mode A: both). */
-			if (bsim_tx_streaming_count_locked() < atomic_load(&required_streaming)) {
-				k_mutex_unlock(&tx_lock);
-				continue;
-			}
-			if (s->seq_num >= BSIM_TX_CORPUS_FRAMES) {
-				const uint16_t exhausted_seq = s->seq_num;
-
-				s->paused = true;
-				k_mutex_unlock(&tx_lock);
-				LOG_ERR("TX[%zu]: corpus exhausted at seq %u", i, exhausted_seq);
-				continue;
-			}
-			stream = s->bap_stream;
-			cfg = s->cfg;
-			fixture = s->fixture;
-			seq = s->seq_num;
-			inject = s->inject_pending && s->seq_num == s->inject_at_seq;
-			gen = s->generation;
-			previous_hash = s->fnv1a_hash;
-
-			s->in_flight++;
-			k_mutex_unlock(&tx_lock);
-
-			/* Build the SDU without the lock (active TX state is
-			 * TX-thread-owned while in_flight > 0; register
-			 * cannot touch this slot). */
-			struct net_buf *buf = net_buf_alloc(&tx_pool, K_FOREVER);
-			int err;
-
-			if (buf == NULL) {
-				LOG_ERR("TX[%zu]: buffer allocation failed", i);
-				k_mutex_lock(&tx_lock, K_FOREVER);
-				s->in_flight--;
-				k_mutex_unlock(&tx_lock);
-				continue;
-			}
-
-			net_buf_reserve(buf, BT_ISO_CHAN_SEND_RESERVE);
-			err = bsim_tx_build_sdu(&cfg, fixture, seq, inject, buf);
-			if (err != 0) {
-				/* Build failure: decrement in_flight, release the buffer,
-				 * and leave count, sequence, and audit unchanged. */
-				LOG_ERR("TX[%zu]: SDU build failed: %d", i, err);
-				k_mutex_lock(&tx_lock, K_FOREVER);
-				s->in_flight--;
-				k_mutex_unlock(&tx_lock);
-				net_buf_unref(buf);
-				continue;
-			}
-
-			if (inject) {
-				LOG_INF("TX[%zu]: injected malformed %u-byte SDU at seq %u", i,
-					(unsigned int)buf->len, seq);
-			}
-
-			/* Hash the exact final payload while the caller still owns buf. */
-			uint32_t candidate_hash = bsim_tx_fnv1a_sdu(previous_hash, seq, buf);
-
-			err = bt_bap_stream_send(stream, buf, seq);
-
-			if (err == 0) {
-				sent_any = true;
-			} else if (stream_is_streaming(stream)) {
-				LOG_ERR("TX[%zu]: send failed: %d", i, err);
-			}
-
-			/* Commit under the mutex only if the generation and
-			 * stream still match the snapshot; decrement
-			 * in_flight on every path. */
-			k_mutex_lock(&tx_lock, K_FOREVER);
-			if (s->generation == gen && s->bap_stream == stream) {
-				if (err == 0) {
-					s->send_count++;
-					s->fnv1a_hash = candidate_hash;
-					s->seq_num++;
-					s->audit->send_count = s->send_count;
-					s->audit->fnv1a_hash = candidate_hash;
-					if (inject) {
-						s->inject_pending = false;
-					}
-					if (s->send_limit > 0U && s->send_count >= s->send_limit) {
-						/* Exact send-count cap: pause at the limit. */
-						s->paused = true;
-						(void)k_condvar_broadcast(&send_limit_changed[i]);
-					}
+		for (size_t i = 0U; i < candidate_count; i++) {
+			if (candidates[i].action == BSIM_TX_TICK_SEND) {
+				if (bsim_tx_tick_send(&candidates[i], &tx_pool) != 0) {
+					prefill_can_continue = false;
+				}
+			} else {
+				if (candidates[i].exhausted) {
+					LOG_ERR("TX[%zu]: corpus exhausted at logical seq %u", i,
+						candidates[i].logical_seq);
+				}
+				bsim_tx_tick_omit(&candidates[i]);
+				if (prefill_pass) {
+					prefill_can_continue = false;
 				}
 			}
-			s->in_flight--;
-			k_mutex_unlock(&tx_lock);
-
-			if (err != 0) {
-				net_buf_unref(buf);
-			}
 		}
 
-		/* Never spin: sleep whenever no send succeeded this round
-		 * (streams not yet streaming, buffer backpressure, errors). */
-		if (!sent_any) {
-			k_sleep(K_MSEC(10));
+		if (prefill_can_continue && bsim_tx_prefill_pending()) {
+			continue;
 		}
+
+		k_sleep(K_USEC(interval_us));
 	}
 }
 
@@ -483,6 +630,14 @@ int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_conf
 
 	k_mutex_lock(&tx_lock, K_FOREVER);
 	for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
+		if (tx_streams[i].bap_stream != NULL &&
+		    tx_streams[i].cfg.frame_duration_us != cfg->frame_duration_us) {
+			k_mutex_unlock(&tx_lock);
+			return -EINVAL;
+		}
+	}
+
+	for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
 		/* Select only an empty slot with no in-flight TX: the
 		 * memset and retained-audit setup below can never race a TX that
 		 * already passed its candidate snapshot. */
@@ -503,7 +658,9 @@ int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_conf
 			s->cfg = *cfg;
 			s->fixture = fixture;
 			s->audit = audit;
-			s->seq_num = 0U;
+			s->logical_seq = 0U;
+			s->transport_seq = 0U;
+			s->prefill_remaining = BSIM_TX_PREFILL_PER_STREAM;
 			s->fnv1a_hash = BSIM_TX_FNV1A_OFFSET_BASIS;
 			/* Reassign a nonzero generation so any stale TX
 			 * snapshot from a previous registration fails the
@@ -519,7 +676,7 @@ int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_conf
 			(void)k_condvar_broadcast(&send_limit_changed[i]);
 
 			LOG_INF("TX: registered slot %zu stream %p (ch=%u octets=%u "
-				"seq starts at 0)",
+				"logical/transport start at 0)",
 				i, bap_stream, cfg->chan_count, cfg->octets_per_frame);
 			k_mutex_unlock(&tx_lock);
 			return 0;
@@ -616,6 +773,38 @@ void bsim_tx_schedule_malformed(struct bt_bap_stream *bap_stream, uint16_t at_se
 		s->inject_at_seq = at_seq;
 	}
 	k_mutex_unlock(&tx_lock);
+}
+
+int bsim_tx_schedule_gap(struct bt_bap_stream *bap_stream, uint32_t after_sends, uint32_t intervals)
+{
+	struct bsim_tx_stream *s;
+
+	if (bap_stream == NULL || after_sends == 0U || intervals == 0U ||
+	    after_sends >= BSIM_TX_CORPUS_FRAMES) {
+		return -EINVAL;
+	}
+
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	s = tx_lookup_locked(bap_stream);
+	if (s == NULL) {
+		k_mutex_unlock(&tx_lock);
+		return -ENODATA;
+	}
+	if (s->gap_armed || s->gap_remaining > 0U) {
+		k_mutex_unlock(&tx_lock);
+		return -EALREADY;
+	}
+	if (s->send_count >= after_sends) {
+		k_mutex_unlock(&tx_lock);
+		return -EINVAL;
+	}
+
+	s->gap_armed = true;
+	s->gap_after_sends = after_sends;
+	s->gap_intervals = intervals;
+	k_mutex_unlock(&tx_lock);
+
+	return 0;
 }
 
 void bsim_tx_set_send_limit(struct bt_bap_stream *bap_stream, uint32_t limit)

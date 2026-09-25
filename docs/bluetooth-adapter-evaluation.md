@@ -197,9 +197,10 @@ native-HCI contract); do not conflate the two.
 ### Nordic nRF5340 DK (HCI UART controller): Candidate / under evaluation
 
 NCS v3.3.0 supports running the Bluetooth controller on cpunet with H4 UART on
-cpuapp, and this repository's `dongle/` directory is a working
-source-controller implementation. USB caveat: NCS v3.3.0's Zephyr USB device
-HCI class (`subsys/usb/device_next/class/bt_hci.c`) cannot carry LE HCI ISO:
+cpuapp. This repository's former nRF5340 dongle implementation is retired;
+current `dongle/` targets XIAO nRF54L15, not the nRF5340 DK. USB caveat:
+NCS v3.3.0's Zephyr USB device HCI class
+(`subsys/usb/device_next/class/bt_hci.c`) cannot carry LE HCI ISO:
 the controller-to-host TX path handles EVT and ACL only and drops HCI ISO
 packet type `0x05`, and the bulk OUT path is hard-coded to ACL buffers and ACL
 header parsing. (This is not a missing-USB-isochronous-endpoints issue; those
@@ -215,24 +216,36 @@ NCS v3.3.0's `samples/bluetooth/hci_uart` supports
 (ISO). Status: **Candidate / under evaluation** as a native HCI development
 adapter; dynamic Linux and receiver validation remains required.
 
-### Seeed XIAO nRF54L15 hardware: Not an adapter candidate
+### Seeed XIAO nRF54L15: prototype / qualification incomplete
 
 The Seeed XIAO nRF54L15 **board** is distinct from the nRF54L15 DK above and
-is **not** an HCI adapter candidate:
+serves as this repository's session-bound Linux HCI central for development.
+It is a second XIAO, separate from the receiver and its DAC. The single-image
+SDC controller sends H4 command, ACL and ISO traffic through async UART20 on
+P1.9/P1.8 at 1,000,000 baud 8N1 via the stock SAMD11 USB CDC bridge. The
+TIMER-backed RX path and bounded H4 workload passed an earlier six-case
+120-second mono, Mode A and Mode B fresh/bonded diagnostic with
+`scripts/bap_central.py`; receiver loss and PLC were **nonzero** but within
+frozen transport limits. A later final production-image repeat failed during
+Mode A after mono and reconnect passed: HCI hardware error `0x07`, parser
+`-EPROTO`, I2S underrun, stream reset and controller command timeouts. Cause
+remains under investigation. An external RAM-trace six-case pass perturbs
+timing and does not repair or qualify the production image. See the
+[exact qualification record](development/pb-019-hci-resume-results.md) and
+[controlled session helper](../dongle/README.md) for identity-bound operation.
 
 - The nRF54L15 has no USB device peripheral.
 - The XIAO's USB-C D+/D- connect to the onboard SAMD11 CMSIS-DAP, not the
   nRF54L15.
-- The existing SAMD11 CDC UART uses nRF P1.9/P1.8 only; there is no RTS/CTS
-  wiring.
-- Zephyr HCI UART requires hardware flow control; CDC + `btattach` is not
-  robust or plug-and-play.
-- A reliable lab route needs an external four-wire USB-UART plus `btattach`.
-- True single-cable plug-and-play would require replacement SAMD11 firmware
-  implementing USB Bluetooth HCI plus lossless custom UART bridging in 16 KiB
-  flash / 4 KiB RAM, likely sacrificing the factory CMSIS-DAP/CDC and needing
-  external SWD recovery. Prototype feasibility only; not an active adapter
-  candidate.
+- The stock SAMD11 CDC UART uses nRF P1.9/P1.8 only; there is no RTS/CTS
+  wiring. Lab success at this bounded workload does not prove generic
+  no-flow-control reliability or plug-and-play support.
+
+Status: **Prototype / qualification incomplete**, not lab-qualified,
+consumer-recommended or public Supported / project-validated. Earlier passes
+remain scoped evidence, not proof against the later failure. No analog-output
+or desktop PipeWire/WirePlumber UI acceptance is claimed. Intel AX210 remains
+the only publicly accepted native adapter.
 
 ## Adapter requirements and evaluation
 

@@ -1,0 +1,19 @@
+/ {
+	chosen {
+		zephyr,bt-c2h-uart = &uart20;
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+	};
+};
+
+/* The stock SAMD11 bridge connects only TX/RX. No fictitious RTS/CTS. */
+&uart20 {
+	current-speed = <1000000>;
+	/delete-property/ hw-flow-control;
+	timer = <&timer21>;
+};
+
+/* Owned directly by the UART driver, not the counter driver or MPSL. */
+&timer21 {
+	status = "disabled";
+};

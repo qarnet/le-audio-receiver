@@ -1,4 +1,71 @@
-# STATUS: le-audio-receiver, 2026-09-19
+# STATUS: le-audio-receiver, 2026-09-25
+
+## Current implementation snapshot (2026-09-25; not acceptance)
+
+Primary repository `feature/nrf54l15-only-continuation` at `6941c82` has
+substantial uncommitted work. This is a dirty-tree implementation snapshot,
+not a full migration, canonical clean-commit gate, RH4/FR4, or public-release
+verdict. Read `AGENTS.md`, `dongle/README.md`, and current `docs/flashing.md`
+for operational instructions. Later diagnostic records:
+`docs/development/pb-019-hci-resume-results.md`,
+`pb-034-primary-repair-results.md`, `pb-035-source-matrix-results.md`,
+`pb-036-source-artifact-results.md`, `pb-037-retirement-results.md`, and
+`nrf54l15-only-continuation-20260925.md` (latest authority and HCI correction).
+
+- XIAO nRF54L15 receiver is sole production target: DK target plus XIAO overlay,
+  CPUAPP + FLPR. Second XIAO alternates standalone source (DK target, direct
+  GRTC, one CPUAPP image) and Linux HCI central (XIAO target, SDC UART H4 at
+  1 Mbaud without flow control); never operate both source roles simultaneously.
+  BSim has two nRF54L15BSim integrated SW Split peers with client reliability
+  policy. Native unit tests remain hardware-independent. E83 board and receiver
+  helpers and production APLL are removed; historical APLL tests remain local.
+- Unit phase: **75 PASS / 0 FAIL / 75 TOTAL** in
+  `/tmp/opencode/nrf54-only-unit-20260925-r1.log` (41 Twister, five exec-only,
+  29 Python), not full gate. Build contract: 52 unit tests, 69/0 actual;
+  test matrix: 45 unit tests, actual zero errors. HIL fake final 272; last
+  full HIL suite 336 plus one intentional hardware opt-in skip, before three
+  later tests; focused runner 106 passed. Three supported diagnostic builds
+  passed (receiver CPUAPP/FLPR, standalone source, HCI; hashes in continuation
+  record). Strict BSim passed 17 scenarios/26 runs with retained hashes and
+  unchanged PCM limits. Report-only coverage population 36: 4971/5427 lines,
+  2203/3008 branches, 377/377 functions, no zero-hit numeric functions;
+  historical eight APLL plus one no-HFCLK tests remain. Baseline unchanged.
+- **HCI prototype / qualification incomplete:** earlier six-case passes are
+  retained, but final production-image repeat
+  `/tmp/opencode/pb019-final-six-20260925-r1` failed in Mode A after mono
+  and reconnect passed. Mode A sent 8909/12000 CLI frames, received 8900
+  valid per CIS, 18478 decoded and 679 PLC; I2S underrun 1, reset 1,
+  kernel hardware error `0x07` followed by Reset/Remove CIG timeouts.
+  Parser `-EPROTO`, H4 type 0; ring decode found inserted `0xAA` and missing
+  `0x03` in adjacent ISO payloads. Cause unresolved; no SDC or SAMD11
+  attribution. External RAM-trace six-case pass perturbs timing and does not
+  qualify production. PB-019 AC2/AC3 unchecked, AC1/AC4 retained, AC5 audit
+  pending. This is engineering work, not a technical hard blocker.
+- Standalone source: first matrix r1 preserved Mode B exposed 900-byte TX
+  processor stack overflow (PSP = PSPLIM); board-local 2048-byte repair
+  passed. Full RH3 fixed-image matrix r2 passed 20/20 physical children with
+  no failure, cancellation or cleanup failure, including 7.5 ms, reconnect,
+  hang and stall at unchanged limits. Final runner smoke passed under six
+  guarded checks, restored standalone source firmware; service exit 0 and
+  empty cgroup. Matrix imported earlier runtime code while later integration
+  changes landed: not final clean-commit acceptance. PB-036 exact source RH4,
+  analog qualification, FR4 and release remain unaccepted.
+- **Clean-gate authority boundary:** `nix develop -c bash scripts/test-coverage.sh
+  --output /tmp/opencode/nrf54-only-clean-coverage-20260925-r1` exited 1
+  before builds: `FATAL: worktree is dirty — --write-baseline and baseline
+  enforcement require a clean exact commit`. No baseline write or enforcement
+  result. Explicit local commit authorization is required for clean exact
+  commit and source archive provenance; no push/PR/release authority inferred.
+  Exhaustive reference audit/comment classification unfinished; PB-038 remains
+  Backlog. No final migration acceptance claimed.
+
+## Historical snapshots (dated evidence below, not current commands)
+
+All date-specific status, reproduction, known-hardware, probe mappings,
+build recipes, hashes and counts below describe their recorded runs only.
+Do not use them as live identity, current image layout, or active acceptance
+requirements. PB-032 retention policy below was superseded by the all-nRF54L15
+migration; old evidence and release hashes are preserved unchanged.
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
@@ -86,7 +153,7 @@
 > (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
 > for their own commits.
 
-> **PB-032 current target policy (2026-09-20):** nRF54L15 is the sole supported
+> **PB-032 historical target policy (2026-09-20; superseded):** nRF54L15 is the sole supported
 > final receiver. The physical E83 nRF5340 receiver is a best-effort legacy
 > engineering/regression path with no release, product-parity, physical-control,
 > or future-feature obligation. nRF5340BSim, the nRF5340DK HIL source, and the

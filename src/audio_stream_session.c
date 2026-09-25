@@ -257,6 +257,9 @@ static void session_start_clear_locked(void)
 	for (size_t i = 0; i < AUDIO_STREAM_SESSION_MAX_SLOTS; i++) {
 		audio_iso_seq_reset(&s.slots[i].seq);
 		audio_iso_cadence_reset(&s.slots[i].cadence);
+		if (s.slots[i].configured) {
+			modea_config(&s.modea, s.slots[i].shape.frame_dur_us);
+		}
 	}
 #endif /* CONFIG_LIBLC3 */
 }
@@ -543,9 +546,10 @@ static void session_recv_path(size_t idx, struct audio_stream_slot *sl, bool val
 	 * HCI SDU produces both a sequence jump and a timestamp jump for
 	 * the same missing output event (MAX conceals it once); a
 	 * controller-side radio omission produces only a timestamp jump.
-	 * Never add the two sources.  Mode A keeps its sequence-only
-	 * synthetic-sentinel path; timestamp-only Mode A synthesis needs
-	 * event-position/sentinel design beyond this blocker.
+	 * Never add the two sources. Mode A keeps its sequence-derived
+	 * sentinels and bounded assembler deadline: continued delivery on
+	 * the surviving CIS resolves the oldest pending half with mate PLC.
+	 * The assembler ignores sentinels for already-resolved events.
 	 *
 	 * Cadence WRAP (controller timestamp wrap/rebase, expected) never
 	 * warns; cadence RESYNC is unexpected and logs one clear warning

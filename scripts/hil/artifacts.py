@@ -35,7 +35,6 @@ RECEIVER_MEMBERS = (
     "SHA256SUMS",
 )
 SOURCE_MEMBERS = (
-    "cpunet.hex",
     "cpuapp.hex",
     "source-manifest.json",
     "SHA256SUMS",
@@ -355,10 +354,10 @@ def _validate_image_manifest(manifest, expected_images, *, kind):
             raise ArtifactError("source manifest key set mismatch")
         if (
             type(manifest.get("schema_version")) is not int
-            or manifest.get("schema_version") != 1
+            or manifest.get("schema_version") != 2
         ):
             raise ArtifactError("source manifest schema mismatch")
-        if manifest.get("board") != "nrf5340dk/nrf5340/cpuapp":
+        if manifest.get("board") != "nrf54l15dk/nrf54l15/cpuapp":
             raise ArtifactError("source manifest board mismatch")
         if manifest.get("firmware_id") != "le-audio-hil-source-rh1":
             raise ArtifactError("source manifest firmware id mismatch")
@@ -366,6 +365,10 @@ def _validate_image_manifest(manifest, expected_images, *, kind):
             manifest.get("ncs_version")
         ):
             raise ArtifactError("source manifest provenance invalid")
+        if manifest["ncs_version"] != "v3.3.0":
+            raise ArtifactError(
+                "source manifest NCS version mismatch (expected v3.3.0)"
+            )
 
     images = manifest.get("images")
     if not isinstance(images, list) or len(images) != len(expected_images):
@@ -460,11 +463,7 @@ def _resolve_one(path, *, kind):
     except zipfile.BadZipFile as exc:
         raise ArtifactError("invalid ZIP artifact: %s" % exc) from None
 
-    image_names = (
-        ("cpuapp.hex", "flpr.hex")
-        if kind == "receiver"
-        else ("cpunet.hex", "cpuapp.hex")
-    )
+    image_names = ("cpuapp.hex", "flpr.hex") if kind == "receiver" else ("cpuapp.hex",)
     manifest_name = (
         "release-manifest.json" if kind == "receiver" else "source-manifest.json"
     )
@@ -472,11 +471,7 @@ def _resolve_one(path, *, kind):
         _validate_note(data["FLASHING.md"])
     manifest = _load_json(data[manifest_name], manifest_name)
     expected_images = []
-    roles = (
-        (("cpuapp", 0), ("flpr", 1))
-        if kind == "receiver"
-        else (("cpunet", 0), ("cpuapp", 1))
-    )
+    roles = (("cpuapp", 0), ("flpr", 1)) if kind == "receiver" else (("cpuapp", 0),)
     for filename, (role, flash_order) in zip(image_names, roles):
         payload = data[filename]
         _validate_hex_bytes(payload, "%s %s image" % (kind, role))
@@ -714,7 +709,7 @@ def _validate_artifact_set_shape(artifacts):
             artifacts.source,
             artifacts.source_images,
             "source",
-            (("cpunet", "cpunet.hex", 0), ("cpuapp", "cpuapp.hex", 1)),
+            (("cpuapp", "cpuapp.hex", 0),),
         ),
     )
     if not os.path.isabs(artifacts.staging_root) or _is_inside(
@@ -743,7 +738,12 @@ def _validate_artifact_set_shape(artifacts):
                 identity.manifest.get("version"), str
             ) or not _VERSION_RE.fullmatch(identity.manifest["version"]):
                 raise ArtifactError("receiver artifact identity version missing")
-        elif identity.manifest.get("firmware_id") != "le-audio-hil-source-rh1":
+        elif (
+            identity.manifest.get("schema_version") != 2
+            or identity.manifest.get("board") != "nrf54l15dk/nrf54l15/cpuapp"
+            or identity.manifest.get("ncs_version") != "v3.3.0"
+            or identity.manifest.get("firmware_id") != "le-audio-hil-source-rh1"
+        ):
             raise ArtifactError("source artifact identity mismatch")
         if not isinstance(images, tuple) or len(images) != len(expected_images):
             raise ArtifactError("artifact image tuple mismatch")

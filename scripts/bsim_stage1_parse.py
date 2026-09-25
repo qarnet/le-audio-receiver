@@ -84,23 +84,23 @@ EXPECTED_SCENARIO_CONTRACTS = {
 }
 
 EXPECTED_KNOWN_TOTALS = {
-    "mono_10ms": {"total": 108},
-    "mono_7p5ms": {"total": 111},
-    "modea_10ms": {"total": 216},
-    "modea_7p5ms": {"total": 226},
-    "modea_reverse_start_10ms": {"total": 216},
-    "modeb_10ms": {"total": 216},
-    "modeb_7p5ms": {"total": 222},
-    "invalid_sdu_resume_10ms": {"total": 108},
-    "modea_one_cis_loss_10ms": {"total": 216},
-    "modea_first_stop_10ms": {"total": 86},
-    "release_without_disable_10ms": {"total": 56},
-    "disconnect_streaming_10ms": {"total": 63},
-    "reconnect_second_stream_10ms": {"total": 63},
+    "mono_10ms": {"total": 100},
+    "mono_7p5ms": {"total": 100},
+    "modea_10ms": {"total": 200},
+    "modea_7p5ms": {"total": 200},
+    "modea_reverse_start_10ms": {"total": 200},
+    "modeb_10ms": {"total": 200},
+    "modeb_7p5ms": {"total": 200},
+    "invalid_sdu_resume_10ms": {"total": 100},
+    "modea_one_cis_loss_10ms": {"total": 200},
+    "modea_first_stop_10ms": {"total": 68},
+    "release_without_disable_10ms": {"total": 55},
+    "disconnect_streaming_10ms": {"total": 55},
+    "reconnect_second_stream_10ms": {"total": 55},
     "unsupported_source_direction": {},
     "no_free_sink_slot": {},
     "invalid_codec_fields": {},
-    "duplicate_release_10ms": {"total": 56},
+    "duplicate_release_10ms": {"total": 55},
 }
 
 # (stream, layout, fixture stems, malformed index or None). Keep this fixed
@@ -149,26 +149,28 @@ EXPECTED_TRANSPORTS = {
 }
 
 EXPECTED_RECEIVER_ORACLES = {
-    "mono_10ms": (("start8_10ms_l", "start8_10ms_l", "full"),),
-    "mono_7p5ms": (("start11_7p5ms_l", "start11_7p5ms_l", "full"),),
-    "modea_10ms": (("start8_10ms_l", "start8_10ms_r", "full"),),
-    "modea_7p5ms": (("modea_start_7p5ms_l", "modea_start_7p5ms_r", "full"),),
-    "modea_reverse_start_10ms": (("start8_10ms_l", "start8_10ms_r", "full"),),
-    "modeb_10ms": (("start8_10ms_l", "start8_10ms_r", "full"),),
-    "modeb_7p5ms": (("start11_7p5ms_l", "start11_7p5ms_r", "full"),),
-    "invalid_sdu_resume_10ms": (("skip20_10ms_l", "skip20_10ms_l", "full"),),
-    "modea_one_cis_loss_10ms": (("start8_10ms_l", "loss48x18_10ms_r", "full"),),
-    "modea_first_stop_10ms": (("start8_10ms_l", "start8_10ms_r", "prefix"),),
-    "release_without_disable_10ms": (("start8_10ms_l", "start8_10ms_l", "prefix"),),
-    "disconnect_streaming_10ms": (("start8_10ms_l", "start8_10ms_l", "prefix"),),
+    "mono_10ms": (("start0_10ms_l", "start0_10ms_l", "full"),),
+    "mono_7p5ms": (("start0_7p5ms_l", "start0_7p5ms_l", "full"),),
+    "modea_10ms": (("start0_10ms_l", "start0_10ms_r", "full"),),
+    "modea_7p5ms": (("start0_7p5ms_l", "start0_7p5ms_r", "full"),),
+    "modea_reverse_start_10ms": (("start0_10ms_l", "start0_10ms_r", "full"),),
+    "modeb_10ms": (("start0_10ms_l", "start0_10ms_r", "full"),),
+    "modeb_7p5ms": (("start0_7p5ms_l", "start0_7p5ms_r", "full"),),
+    "invalid_sdu_resume_10ms": (
+        ("skip20_start0_10ms_l", "skip20_start0_10ms_l", "full"),
+    ),
+    "modea_one_cis_loss_10ms": (("start0_10ms_l", "loss48x18_start0_10ms_r", "full"),),
+    "modea_first_stop_10ms": (("start0_10ms_l", "start0_10ms_r", "prefix"),),
+    "release_without_disable_10ms": (("start0_10ms_l", "start0_10ms_l", "prefix"),),
+    "disconnect_streaming_10ms": (("start0_10ms_l", "start0_10ms_l", "prefix"),),
     "reconnect_second_stream_10ms": (
-        ("start8_10ms_l", "start8_10ms_l", "prefix"),
-        ("start7_10ms_l", "start7_10ms_l", "full"),
+        ("start0_10ms_l", "start0_10ms_l", "prefix"),
+        ("start0_10ms_l", "start0_10ms_l", "full"),
     ),
     "unsupported_source_direction": (),
     "no_free_sink_slot": (),
     "invalid_codec_fields": (),
-    "duplicate_release_10ms": (("start8_10ms_l", "start8_10ms_l", "prefix"),),
+    "duplicate_release_10ms": (("start0_10ms_l", "start0_10ms_l", "prefix"),),
 }
 
 RECEIVER_ORACLE_COMPLETIONS = ("full", "prefix")
@@ -816,6 +818,13 @@ SCENARIO_ALLOW = {
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _LOG_LEVEL_RE = re.compile(r"<(?:wrn|err)>")
+# NCS v3.3.0 BAP warns on every nonconsecutive send PSN even though its
+# public send contract requires PSN to advance during omitted SDU intervals.
+# This exact, single diagnostic is evidence of the intentional 18-event gap,
+# not an incidental transport warning. Wrong role/count/gap remains fatal.
+_INTENTIONAL_GAP_WARNING = re.compile(
+    r"<wrn>\s+bt_bap_stream: Unexpected seq_num diff between 47 and 66 for 0x[0-9a-fA-F]+\s*$"
+)
 
 
 def _warning_is_allowed(role, scenario, line):
@@ -829,6 +838,7 @@ def _warning_is_allowed(role, scenario, line):
 def scan_faults(receiver_path, client_path, scenario):
     """Reject semantic faults and warning/error records from both app logs."""
     hits = []
+    gap_warnings = 0
 
     for role, path in (("receiver", receiver_path), ("client", client_path)):
         try:
@@ -838,12 +848,23 @@ def scan_faults(receiver_path, client_path, scenario):
                     if any(marker in line for marker in FAULT_MARKERS):
                         hits.append("%s: %s" % (role, line))
                         continue
+                    if (
+                        scenario == "modea_one_cis_loss_10ms"
+                        and role == "client"
+                        and _INTENTIONAL_GAP_WARNING.search(line)
+                    ):
+                        gap_warnings += 1
+                        continue
                     if _LOG_LEVEL_RE.search(line) and not _warning_is_allowed(
                         role, scenario, line
                     ):
                         hits.append("%s: %s" % (role, line))
         except OSError as exc:
             raise ParseError("cannot read %s log %s: %s" % (role, path, exc))
+    if scenario == "modea_one_cis_loss_10ms" and gap_warnings != 1:
+        hits.append(
+            "intentional 47-to-66 PSN gap diagnostic count %d != 1" % gap_warnings
+        )
     if hits:
         raise ParseError("fault markers in app logs: %s" % "; ".join(hits[:5]))
 
@@ -1262,9 +1283,9 @@ def _check_pcm_segment(scenario, record, segment, limits, receiver_oracle):
         errs.append("segment %d stereo differing samples == 0" % segment)
 
     if scenario == "modea_one_cis_loss_10ms" and (
-        values["ract" + suffix] != 108
+        values["ract" + suffix] != 100
         or values["rval" + suffix] != 82
-        or values["rplc" + suffix] != 26
+        or values["rplc" + suffix] != 18
         or values["rex" + suffix] != MODEA_LOSS_COUNT
     ):
         errs.append("one-CIS-loss right recipe progress/exclusion mismatch")

@@ -18,9 +18,8 @@
 # All suite discovery comes from scripts/test_inventory.py (the single
 # filesystem classification source shared with test-coverage.sh and
 # check-test-matrix.py) — adding a suite cannot silently omit it from the
-# gate.  Current inventory (scripts/test_inventory.py): 41 Twister + 5
-# exec-only + 25 Python = 71 unit children; the canonical gate is 74
-# children (71 + coverage + matrix + BSim).
+# gate.  Current diagnostic inventory: 41 Twister + 5 exec-only + 29
+# Python = 75 unit children.  Final clean canonical gate not yet claimed.
 #
 # Logical phase selection:
 #   ./scripts/test-all.sh                 # all phases (historical default)
@@ -46,8 +45,8 @@
 #   ZEPHYR_BASE must be set. BabbleSim dependencies must be provisioned;
 #   scripts/bsim-stage1-run.sh derives BSIM_OUT_PATH via scripts/bsim-env.sh.
 #
-# Production firmware builds and dongle build are NOT included — they are
-# run separately via fw-build-5340, fw-build-54l15, fw-build-dongle.
+# Production receiver, source and HCI builds are NOT included — run
+# separately via fw-build-54l15, fw-build-hil-source-54l15, fw-build-dongle.
 # The resolved build-contract checker also runs separately after those
 # builds (scripts/check-build-contract.py) and does not depend on
 # pre-existing build directories.

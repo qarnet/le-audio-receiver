@@ -137,9 +137,33 @@ class CaptureFactory:
         return self.proc
 
 
+def load_capture_fixture_binding(directory, capability="mono"):
+    """Use real board/image contracts for process and matrix test fixtures."""
+    fixture_doc = capture_model_test.fixture_doc(capability)
+    fixture_doc["roles"]["receiver"].update(
+        board=model.NRF54L15_CPUAPP_BOARD, images=["cpuapp", "flpr"]
+    )
+    fixture_doc["roles"]["source"].update(
+        board=model.NRF54L15_CPUAPP_BOARD, images=["cpuapp"]
+    )
+    metadata = os.path.join(directory, "metadata.json")
+    capture_model_test.write_json(
+        metadata, capture_model_test.metadata_doc(fixture_doc["fixture_id"])
+    )
+    fixture_path = os.path.join(directory, "fixture.json")
+    binding_path = os.path.join(directory, "binding.json")
+    capture_model_test.write_json(fixture_path, fixture_doc)
+    capture_model_test.write_json(
+        binding_path, capture_model_test.binding_doc(capability, metadata)
+    )
+    fixture = model.load_logical_fixture(fixture_path)
+    binding = model.load_physical_binding(binding_path, fixture)
+    return fixture, binding, fixture_path, binding_path
+
+
 def capture_binding(directory):
-    fixture, binding, _fixture_path, _binding_path = (
-        capture_model_test.load_fixture_binding(directory)
+    fixture, binding, _fixture_path, _binding_path = load_capture_fixture_binding(
+        directory
     )
     return fixture, binding.roles["capture"]
 
@@ -637,8 +661,8 @@ class TestCaptureProcess(unittest.TestCase):
         timeline = []
         run_id = "capture-life"
         with tempfile.TemporaryDirectory() as td:
-            fixture, binding, fixture_path, binding_path = (
-                capture_model_test.load_fixture_binding(td)
+            fixture, binding, fixture_path, binding_path = load_capture_fixture_binding(
+                td
             )
             qualification_path, _doc = capture_model_test.make_qualification(
                 td, fixture, binding
@@ -649,8 +673,13 @@ class TestCaptureProcess(unittest.TestCase):
             os.mkdir(repo)
             hil_fakes.make_images(repo)
             command = hil_fakes.ScriptedRunner()
+            manifest, sysfs = hil_fakes.create_fake_session(
+                td, fixture_path, binding_path, command
+            )
             command.script_exit(["lsof", "--", "/dev/ttyACM1"], 1)
-            command.script(["fw-flash-hil-source"], hil_fakes.FakeProc(stdout="ok\n"))
+            command.script(
+                ["fw-flash-hil-source-54l15"], hil_fakes.FakeProc(stdout="ok\n")
+            )
             command.script(["fw-flash-54l15"], hil_fakes.FakeProc(stdout="ok\n"))
             transcript = hil_fakes.SourceTranscript(run_id)
             transcript.hello(bond_count=0)
@@ -673,6 +702,7 @@ class TestCaptureProcess(unittest.TestCase):
                 run_cmd=command,
             )
             deps.repo_root = repo
+            deps.sysfs_root = sysfs
 
             def capture_factory(_binding, output_path, _properties):
                 return TimelineCapture(timeline, output_path)
@@ -715,6 +745,7 @@ class TestCaptureProcess(unittest.TestCase):
                     status=0,
                     row=rows.RH2_ROW,
                     qualification_path=qualification_path,
+                    session_manifest_path=manifest.path,
                 )
             self.assertEqual((outcome, boundary, cleanup), ("passed", None, []))
             self.assertLess(
@@ -758,6 +789,11 @@ class FakeCaptureRows:
     def run(
         self, fixture_path, binding_path, output_root, run_id, junit_path, **kwargs
     ):
+        from hil import session
+
+        assert kwargs["expected_session_manifest"] == session.load_session(
+            kwargs["session_manifest_path"], fixture_path, binding_path
+        )
         self.calls.append(kwargs)
         os.makedirs(os.path.join(output_root, run_id))
         for name, content in (
@@ -784,14 +820,18 @@ class TestCaptureMatrixAndCli(unittest.TestCase):
         self,
     ):
         with tempfile.TemporaryDirectory() as td:
-            fixture, binding, fixture_path, binding_path = (
-                capture_model_test.load_fixture_binding(td)
+            fixture, binding, fixture_path, binding_path = load_capture_fixture_binding(
+                td
             )
             qualification_path, _doc = capture_model_test.make_qualification(
                 td, fixture, binding
             )
             out = os.path.join(td, "out")
             os.mkdir(out)
+            command = hil_fakes.ScriptedRunner()
+            manifest, _sysfs = hil_fakes.create_fake_session(
+                td, fixture_path, binding_path, command
+            )
             fake = FakeCaptureRows()
             engine = matrix.MatrixCoordinator(
                 matrix.MatrixDeps(
@@ -806,6 +846,7 @@ class TestCaptureMatrixAndCli(unittest.TestCase):
                 os.path.join(out, "ma1.xml"),
                 qualification_path=qualification_path,
                 capture_verdict="MONO_OUTPUT_SMOKE_ACCEPTED",
+                session_manifest_path=manifest.path,
             )
             self.assertEqual(result[0], "passed")
             self.assertTrue(fake.calls)
@@ -824,7 +865,7 @@ class TestCaptureMatrixAndCli(unittest.TestCase):
     def test_capture_matrix_rejects_missing_qualification_before_rows(self):
         with tempfile.TemporaryDirectory() as td:
             fixture, _binding, fixture_path, binding_path = (
-                capture_model_test.load_fixture_binding(td)
+                load_capture_fixture_binding(td)
             )
             out = os.path.join(td, "out")
             os.mkdir(out)
@@ -873,14 +914,18 @@ class TestCaptureMatrixAndCli(unittest.TestCase):
                 return "passed", None, []
 
         with tempfile.TemporaryDirectory() as td:
-            fixture, binding, fixture_path, binding_path = (
-                capture_model_test.load_fixture_binding(td)
+            fixture, binding, fixture_path, binding_path = load_capture_fixture_binding(
+                td
             )
             qualification_path, _doc = capture_model_test.make_qualification(
                 td, fixture, binding
             )
             out = os.path.join(td, "out")
             os.mkdir(out)
+            command = hil_fakes.ScriptedRunner()
+            manifest, _sysfs = hil_fakes.create_fake_session(
+                td, fixture_path, binding_path, command
+            )
             fake = IncompleteRows()
             engine = matrix.MatrixCoordinator(
                 matrix.MatrixDeps(
@@ -895,6 +940,7 @@ class TestCaptureMatrixAndCli(unittest.TestCase):
                 os.path.join(out, "ma1.xml"),
                 qualification_path=qualification_path,
                 capture_verdict="MONO_OUTPUT_SMOKE_ACCEPTED",
+                session_manifest_path=manifest.path,
             )
             self.assertEqual(result[0], "failed")
 
@@ -947,6 +993,10 @@ class TestCaptureMatrixAndCli(unittest.TestCase):
             )
             out = os.path.join(td, "out")
             os.mkdir(out)
+            command = hil_fakes.ScriptedRunner()
+            manifest, _sysfs = hil_fakes.create_fake_session(
+                td, fixture_path, binding_path, command
+            )
             fake = FakeCaptureRows()
             engine = matrix.MatrixCoordinator(
                 matrix.MatrixDeps(
@@ -959,6 +1009,7 @@ class TestCaptureMatrixAndCli(unittest.TestCase):
                 out,
                 "rh3",
                 os.path.join(out, "rh3.xml"),
+                session_manifest_path=manifest.path,
             )
             self.assertEqual(result[0], "passed")
             import json

@@ -49,9 +49,6 @@ choice AUDIO_CLOCK_ACTUATOR
 	prompt "Audio clock actuator"
 	default AUDIO_CLOCK_ACTUATOR_NONE
 
-config AUDIO_CLOCK_ACTUATOR_APLL
-	bool "APLL (nRF5340 HFCLKAUDIO)"
-
 config AUDIO_CLOCK_ACTUATOR_NONE
 	bool "None (data-path only)"
 endchoice

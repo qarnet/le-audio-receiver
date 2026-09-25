@@ -15,7 +15,7 @@ _NCS_ROOT="$(realpath "$ZEPHYR_BASE/..")"
 
 BSIM_OUT_PATH="${BSIM_OUT_PATH:-${_NCS_ROOT}/tools/bsim}"
 BSIM_COMPONENTS_PATH="${BSIM_COMPONENTS_PATH:-${BSIM_OUT_PATH}/components}"
-BOARD="${BOARD:-nrf5340bsim/nrf5340/cpuapp}"
+BOARD="${BOARD:-nrf54l15bsim/nrf54l15/cpuapp}"
 
 export BSIM_OUT_PATH
 export BSIM_COMPONENTS_PATH

@@ -1011,7 +1011,7 @@ static int asrc_validate_args(const struct asrc_txn *t)
 static bool asrc_lifecycle_ok_locked(const struct asrc_txn *t)
 {
 	bool ok = lifecycle_check_before_fault(t->captured_state, t->captured_generation,
-						t->captured_epoch, t->sequence);
+					       t->captured_epoch, t->sequence);
 
 	if (!ok) {
 		g_asrc_stats.fallback_count++;
@@ -1321,27 +1321,27 @@ static int asrc_shadow_verify(struct asrc_txn *t, const struct flpr_consume_asrc
 	/* Import must succeed — pre_state was exported by cpuapp.
 	 * Import failure is a fault: do NOT fall through as pass. */
 	if (imp_ret != 0) {
-		return asrc_fault_finalize(t, -EFAULT, NULL,
-					   &g_asrc_stats.verify_fault_count, true);
+		return asrc_fault_finalize(t, -EFAULT, NULL, &g_asrc_stats.verify_fault_count,
+					   true);
 	}
 
 	size_t consumed, produced;
 	int16_t nl, nr;
-	int asrc_ret = audio_asrc_process(
-		&verify_ctx, t->input, OFFLOAD_EXPECTED_FRAMES, g_asrc_shadow,
-		FLPR_RING_PAYLOAD_CAPACITY_FRAMES, t->correction_ppm, verify_prev_l,
-		verify_prev_r, verify_prev_valid, &consumed, &produced, &nl, &nr);
+	int asrc_ret = audio_asrc_process(&verify_ctx, t->input, OFFLOAD_EXPECTED_FRAMES,
+					  g_asrc_shadow, FLPR_RING_PAYLOAD_CAPACITY_FRAMES,
+					  t->correction_ppm, verify_prev_l, verify_prev_r,
+					  verify_prev_valid, &consumed, &produced, &nl, &nr);
 
 	/* Compare return code. */
 	if (asrc_ret != 0) {
-		return asrc_fault_finalize(t, -EFAULT, NULL,
-					   &g_asrc_stats.verify_fault_count, true);
+		return asrc_fault_finalize(t, -EFAULT, NULL, &g_asrc_stats.verify_fault_count,
+					   true);
 	}
 
 	/* Compare frame count. */
 	if (produced != cr->output_frames) {
-		return asrc_fault_finalize(t, -EFAULT, NULL,
-					   &g_asrc_stats.verify_fault_count, true);
+		return asrc_fault_finalize(t, -EFAULT, NULL, &g_asrc_stats.verify_fault_count,
+					   true);
 	}
 
 	/* Compare every sample. */
@@ -1524,7 +1524,6 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 	return 0;
 }
 
-
 void audio_offload_get_asrc_stats(struct audio_offload_asrc_stats *s)
 {
 	if (!s) {
@@ -1535,7 +1534,7 @@ void audio_offload_get_asrc_stats(struct audio_offload_asrc_stats *s)
 	k_spin_unlock(&g_lock, key);
 }
 
-/* ── nRF5340: no-op stubs ────────────────────────────────────────── */
+/* ── Non-nRF54L15: no-op stubs ────────────────────────────────────── */
 
 #else /* !CONFIG_SOC_NRF54L15 */
 

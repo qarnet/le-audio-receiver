@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic HIL source firmware artifact packager (stdlib only).
 
-Packages validated nRF5340 HIL source build outputs into one immutable ZIP.
+Packages validated nRF54L15 HIL source build output into one immutable ZIP.
 The public contract is intentionally independent from FR1 so accepted FR1
 artifact bytes remain unchanged.
 """
@@ -18,9 +18,10 @@ import zipfile
 
 ERROR_PREFIX = "package-hil-source-artifact: error: "
 STAGING_PREFIX = ".hil-source-artifact-"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 FIRMWARE_ID = "le-audio-hil-source-rh1"
-BOARD = "nrf5340dk/nrf5340/cpuapp"
+BOARD = "nrf54l15dk/nrf54l15/cpuapp"
+NCS_VERSION = "v3.3.0"
 
 _VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -28,16 +29,10 @@ _HEX_RE = re.compile(r"[0-9A-Fa-f]*")
 
 IMAGES = (
     {
-        "role": "cpunet",
-        "path": "hci_ipc/zephyr/zephyr.hex",
-        "filename": "cpunet.hex",
-        "flash_order": 0,
-    },
-    {
         "role": "cpuapp",
-        "path": "app/zephyr/zephyr.hex",
+        "path": "zephyr/zephyr.hex",
         "filename": "cpuapp.hex",
-        "flash_order": 1,
+        "flash_order": 0,
     },
 )
 
@@ -64,6 +59,10 @@ def _validate_ncs_version(value):
         raise PackagerError(
             "invalid NCS version %r (expected canonical vMAJOR.MINOR.PATCH, "
             "each part numeric without leading zeros)" % value
+        )
+    if value != NCS_VERSION:
+        raise PackagerError(
+            "unsupported source NCS version %r (expected %s)" % (value, NCS_VERSION)
         )
     return value
 

@@ -67,7 +67,6 @@ CAPTURE_SAMPLE_RATE = 48000
 CAPTURE_SAMPLE_FORMAT = "S16_LE"
 CAPTURE_DEVICE_RE = re.compile(r"^hw:[A-Za-z0-9_.-]+,[0-9]+$")
 NRF54L15_CPUAPP_BOARD = "nrf54l15dk/nrf54l15/cpuapp"
-NRF5340_CPUAPP_BOARD = "nrf5340dk/nrf5340/cpuapp"
 UDEV_REQUIRED = frozenset({"ID_VENDOR_ID", "ID_MODEL_ID"})
 UDEV_OR = ("ID_SERIAL_SHORT", "ID_PATH")
 UDEV_FORBIDDEN = frozenset({"DEVNAME"})
@@ -119,9 +118,6 @@ PROBE_CONTRACTS = {
     ("receiver", NRF54L15_CPUAPP_BOARD): ProbeContract(
         backend="nrf-probes", family="nrf54l", probe_udev_required=False
     ),
-    ("source", NRF5340_CPUAPP_BOARD): ProbeContract(
-        backend="jlink", family="nrf53", probe_udev_required=True
-    ),
     ("source", NRF54L15_CPUAPP_BOARD): ProbeContract(
         backend="nrf-probes", family="nrf54l", probe_udev_required=False
     ),
@@ -158,10 +154,7 @@ class UdevIdentity:
 class ProbeBinding:
     """Probe resolution contract (never a static serial mapping).
 
-    ``udev`` is None when the exact board/role contract needs no USB identity
-    filtering (CMSIS-DAP target fingerprinting); a J-Link source probe always
-    carries one so the onboard J-Link can be located and its current serial
-    read from the matching USB device.
+    ``udev`` is None when CMSIS-DAP target fingerprinting provides identity.
     """
 
     backend: str
@@ -623,8 +616,6 @@ def _parse_binding_role(name, spec, path, logical_role):
             raise HilSchemaError("probe udev must be a nonempty object in %s" % path)
         probe_udev = _parse_udev_map(raw_udev, path, reject_tty_paths=False)
     elif contract.probe_udev_required:
-        # A J-Link source probe is located by its exact USB identity map;
-        # without it the onboard J-Link cannot be resolved safely.
         raise HilSchemaError("probe udev is required for source in %s" % path)
     _reject_unknown(serial, SERIAL_KEYS, path)
     baud = serial.get("baud")

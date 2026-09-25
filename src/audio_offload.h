@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Audio offload interface — routes decoded PCM through FLPR ASRC
- * offload (nRF54L15) or cpuapp ASRC fallback (nRF5340).
+ * offload (nRF54L15) or cpuapp ASRC fallback (no offload).
  *
  * On nRF54L15, produces a stereo PCM block with typed ASRC pre-state
  * and drift correction ppm into the FLPR input ring, waits for FLPR
@@ -23,8 +23,8 @@
  * While recovering, submits return -EAGAIN and caller uses CPUAPP ASRC.
  * Stream stop cancels recovery and resets generation.
  *
- * nRF5340 compile-time bypass: all functions are identity no-ops with
- * zero cost overhead.
+ * Non-nRF54L15 compile-time bypass: lifecycle functions are no-op stubs;
+ * ASRC processing returns -ENOSYS without FLPR work.
  */
 
 #ifndef AUDIO_OFFLOAD_H
@@ -101,7 +101,7 @@ struct audio_offload_status {
  * @brief Initialize the audio offload subsystem.
  *
  * nRF54L15: initialises FLPR ring manager.  Non-blocking.
- * nRF5340: no-op, always returns 0.
+ * Non-nRF54L15: no-op, always returns 0.
  *
  * @return 0 on success, negative errno on failure.
  */
@@ -115,7 +115,7 @@ int audio_offload_init(void);
  * and caller uses CPUAPP ASRC fallback.  When epoch reset completes
  * (via FLPR ACK in IPC callback), state transitions to ACTIVE.
  *
- * nRF5340: no-op.
+ * Non-nRF54L15: no-op.
  */
 void audio_offload_stream_start(void);
 
@@ -125,7 +125,7 @@ void audio_offload_stream_start(void);
  * Cancels any pending recovery work, drains/cancels late output,
  * increments generation so late output from prior epoch is rejected.
  * Sets state to STOPPED.
- * nRF5340: no-op.
+ * Non-nRF54L15: no-op.
  */
 void audio_offload_stream_stop(void);
 
@@ -144,7 +144,7 @@ void audio_offload_remote_unavailable(void);
  * @brief Check whether the offload path is healthy.
  *
  * nRF54L15: true when state == ACTIVE.
- * nRF5340: always true (bypass is always available).
+ * Non-nRF54L15: always true (bypass is always available).
  */
 bool audio_offload_is_healthy(void);
 
@@ -166,7 +166,7 @@ struct audio_offload_asrc_result {
  * @brief Route decoded PCM through FLPR ASRC offload.
  *
  * nRF54L15 only (compile-time guarded by CONFIG_AUDIO_OFFLOAD_ASRC).
- * On nRF5340: compile-time stub returns -ENOSYS.
+ * Otherwise: compile-time stub returns -ENOSYS.
  *
  * Produces 480 stereo frames with typed ASRC pre-state and drift ppm,
  * waits for FLPR to process, consumes typed result including variable

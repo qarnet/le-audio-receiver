@@ -165,6 +165,8 @@ def write_fake_stateful_compiler(path, candidate_mode, new_trace_template=None):
                 "stateful_48k_7p5ms_modea_start_r.pcm",
                 "stateful_48k_10ms_skip20_l.pcm",
                 "stateful_48k_10ms_loss48x18_r.pcm",
+                "stateful_48k_10ms_skip20_start0_l.pcm",
+                "stateful_48k_10ms_loss48x18_start0_r.pcm",
             ):
                 source_path = source / name
                 if source_path.is_file():
@@ -747,7 +749,7 @@ class Lc3PcmCalibrateProvenanceTests(unittest.TestCase):
             [entry["id"] for entry in stateful_manifest["recipes"]],
             [entry[0] for entry in calibrate.EXPECTED_STATEFUL_RECIPES],
         )
-        self.assertEqual(len(reference_hashes), 9)
+        self.assertEqual(len(reference_hashes), 15)
         self.assertEqual(
             [record["kind"] for record in reference_hashes],
             [entry[2] for entry in calibrate.EXPECTED_STATEFUL_RECIPES],
@@ -1141,7 +1143,7 @@ class Lc3PcmCalibrateProtocolTests(unittest.TestCase):
 
         cases = []
         wrong_count = records[:-1]
-        cases.append(("record count", wrong_count, "returned 38 records"))
+        cases.append(("record count", wrong_count, "returned 45 records"))
 
         wrong_order = json.loads(json.dumps(records))
         wrong_order[0], wrong_order[1] = wrong_order[1], wrong_order[0]
@@ -1185,7 +1187,7 @@ class Lc3PcmCalibrateProtocolTests(unittest.TestCase):
     def test_stateful_metric_protocol_is_exact(self):
         records = calibrate.expected_metric_records()
 
-        self.assertEqual(len(records), 39)
+        self.assertEqual(len(records), 46)
         self.assertEqual(
             records[30:32],
             [
@@ -1244,7 +1246,18 @@ class Lc3PcmCalibrateProtocolTests(unittest.TestCase):
                 "pass",
             ),
         )
-        self.assertEqual(records[35:], list(calibrate.STATEFUL_MUTATIONS))
+        self.assertEqual(
+            [r[1] for r in records[35:41]],
+            [
+                "start0_10ms_l",
+                "start0_10ms_r",
+                "start0_7p5ms_l",
+                "start0_7p5ms_r",
+                "skip20_start0_10ms_l",
+                "loss48x18_start0_10ms_r",
+            ],
+        )
+        self.assertEqual(records[41:], list(calibrate.STATEFUL_MUTATIONS))
 
 
 class Lc3FixtureGeneratorTests(unittest.TestCase):

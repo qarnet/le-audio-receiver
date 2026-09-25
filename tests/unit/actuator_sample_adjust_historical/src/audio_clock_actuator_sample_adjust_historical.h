@@ -7,8 +7,8 @@
  * Test-local header for the retired sample-adjust actuator
  * (audio_clock_actuator_sample_adjust_historical.c).  This API is NOT
  * part of the production actuator contract: production clock steering
- * is audio_clock_actuator_apll.c (nRF5340) and
- * audio_clock_actuator_none.c (nRF54L15), whose public interface is
+ * is audio_clock_actuator_none.c (nRF54L15). Historical APLL is test-local;
+ * the production public interface is
  * init/apply_ppm/reset only.  The consume_sample_adjustment() symbol
  * survives solely so the historical regression suite can exercise the
  * retired implementation.  Do not include this header from production

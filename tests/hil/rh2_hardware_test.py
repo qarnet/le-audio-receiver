@@ -4,7 +4,7 @@
 Skipped unless the explicit environment flag ``HIL_RUN_HARDWARE=1`` is
 set.  When enabled it requires every CLI path from the environment
 (``HIL_FIXTURE_PATH``, ``HIL_BINDING_PATH``, ``HIL_OUTPUT_ROOT``,
-    ``HIL_RUN_ID``, ``HIL_JUNIT``), constructs the production runner, and
+    ``HIL_RUN_ID``, ``HIL_JUNIT``, ``HIL_SESSION_MANIFEST``), constructs the production runner, and
 calls public runner once for RH2 by default or explicit frozen RH3 row
 selected through ``HIL_ROW``.
 
@@ -31,6 +31,7 @@ ENV_PATHS = {
     "HIL_OUTPUT_ROOT": "--output-root",
     "HIL_RUN_ID": "--run-id",
     "HIL_JUNIT": "--junit",
+    "HIL_SESSION_MANIFEST": "--session-manifest",
 }
 
 
@@ -64,6 +65,7 @@ def test_hardware_frozen_row():
         argv=["tests/hil/rh2_hardware_test.py"],
         status=0,
         row=row,
+        session_manifest_path=os.environ["HIL_SESSION_MANIFEST"],
     )
     assert outcome == "passed", "hardware row outcome %s (boundary=%s, cleanup=%s)" % (
         outcome,

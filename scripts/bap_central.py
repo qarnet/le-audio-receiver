@@ -2,13 +2,13 @@
 """
 BAP central test driver for LE Audio Receiver.
 
-Prerequisite: nRF5340DK hci_uart central attached via btattach (see AGENTS.md
-"Central setup").  Run this script WITHOUT sudo; only the raw-HCI subprocess
-uses sudo internally.
+Prerequisite: session-bound XIAO nRF54L15 HCI central attached with
+fw-attach-dongle (see AGENTS.md "Central setup"). Run this script WITHOUT sudo;
+only the optional raw-HCI subprocess uses sudo internally.
 
 Usage: python3 scripts/bap_central.py [--mono|--stereo] [--duration N] [--freq FREQ]
 
-Registers a BAP source endpoint on hci0, pairs + connects to the LE Audio
+Registers a BAP source endpoint on the selected adapter, pairs + connects to the LE Audio
 Receiver peripheral, acquires the MediaTransport(s), and streams a 1 kHz sine
 tone as LC3 (48 kHz / 10 ms / 96 kbps per mono channel).
 
@@ -357,6 +357,13 @@ def main():
             # Connection Complete, establishing device->bonding before SMP.
             # Do NOT call RemoveDevice here — the Device1 object must exist
             # (just discovered via scan) for Pair() to work.
+
+            if args.preserve_bond:
+                # Skipping Pair() alone never creates an ACL. Use the same
+                # bonded reconnect boundary as the explicit-address path.
+                bap_central_security.preserve_bond_connect(
+                    device, dev_props, _dbus, _GLib, already_connected
+                )
 
             # 5a. Set Pairable on the adapter so bonding proceeds.
             bap_central_security.set_pairable(adapter_props, _dbus)

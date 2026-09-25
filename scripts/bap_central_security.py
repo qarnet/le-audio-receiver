@@ -28,8 +28,8 @@ class CentralError(Exception):
 
 AGENT_PATH = "/bap_central/agent"
 
-# Raw-HCI direct-connect helper (kernel accept-list scan path is broken on
-# the nRF5340 hci_usb controller; see scripts/hci_raw_connect.py).
+# Optional exact-peer raw-HCI helper (historical nRF5340 hci_usb accept-list
+# scan workaround; current XIAO fresh pairing uses BlueZ discovery).
 RAW_CONNECT_HELPER = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "hci_raw_connect.py"
 )

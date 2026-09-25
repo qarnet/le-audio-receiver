@@ -265,9 +265,9 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
             # rejects a concurrent second per-ASE selection before BlueZ
             # creates a second setup/CIS.
             if self.mono:
-                if (
-                    len(self._pending_transports) + len(self.transports) >= 1
-                    or self._mono_selected_channel is not None
+                if len(self._pending_transports) + len(self.transports) >= 1 or (
+                    self._mono_selected_channel is not None
+                    and self._mono_selected_channel != channels
                 ):
                     print("[endpoint] Mono transport limit reached: rejecting")
                     raise _Rejected(
@@ -332,10 +332,10 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
                             "Interval": dbus_mod.UInt32(10000),
                             # SDU: 120 (mono) or 240 (stereo Mode B) bytes
                             "SDU": dbus_mod.UInt16(sdu),
-                            # Retransmissions: 2 (matches peripheral's pref)
-                            "Retransmissions": dbus_mod.Byte(2),
-                            # Latency: 10 ms (peripheral prefers 10; must be > 0)
-                            "Latency": dbus_mod.UInt16(10),
+                            # Standard 48_4_1 QoS: retain the 40 ms presentation
+                            # delay while allowing recovery across ISO events.
+                            "Retransmissions": dbus_mod.Byte(5),
+                            "Latency": dbus_mod.UInt16(20),
                             # PresentationDelay: 40000 us (within peripheral's
                             # pd_min=10000, pd_max=80000, pref=40000)
                             "PresentationDelay": dbus_mod.UInt32(40000),
@@ -376,6 +376,11 @@ def make_endpoint_class(dbus_mod, dbus_service_mod):
             except Exception as e:  # noqa: BLE001
                 print("[endpoint] Returning config: <log failed: {}>".format(e))
 
+            # Repeated selection of the same reserved channel is idempotent:
+            # BlueZ may abandon negotiation across a disconnect and retry it
+            # without ever issuing SetConfiguration/ClearConfiguration. A
+            # different channel and any second configured transport still
+            # fail closed, so retries cannot turn strict mono into Mode A.
             # Mono: reserve the exact selected channel immediately before
             # returning, so a concurrent second BlueZ selection is rejected
             # pre-configuration. Consumed by the matching SetConfiguration.

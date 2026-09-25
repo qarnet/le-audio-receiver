@@ -164,6 +164,19 @@ eval "$(nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh)" 
     exit 1
 }
 
+# Native-simulator builds use -O0. Keep Nix hardening enabled except for its
+# incompatible fortify modes, which inject _FORTIFY_SOURCE at -O0.
+NIX_HARDENING_ENABLE="${NIX_HARDENING_ENABLE:-}"
+hardening_tokens=()
+for hardening_token in $NIX_HARDENING_ENABLE; do
+    case "$hardening_token" in
+        fortify|fortify3) ;;
+        *) hardening_tokens+=("$hardening_token") ;;
+    esac
+done
+NIX_HARDENING_ENABLE="${hardening_tokens[*]}"
+export NIX_HARDENING_ENABLE
+
 # --- Lock the shared bsim_out tree ---
 BSIM_LOCK="${ZEPHYR_BASE}/bsim_out/.bsim_stage1.lock"
 mkdir -p "$(dirname "$BSIM_LOCK")"
@@ -175,11 +188,10 @@ fi
 echo "bsim_out lock acquired"
 
 # --- Compile options ---
-# Warnings are errors (Zephyr default): the repo compiles warning-free.
-# If the toolchain's glibc _FORTIFY_SOURCE diagnostic recurs it is
-# captured and suppressed with the narrowest flag and a recorded reason —
-# never by disabling warning errors for repo code.
-export cmake_args="-DCONFIG_COVERAGE=y -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCONFIG_ASSERT=y"
+# Warnings are errors. CMakeLists.txt owns compile database export for each
+# application image; compile.source receives no empty cmake_extra_args value.
+export cmake_args='-DCONFIG_COVERAGE=y -DCONFIG_COMPILER_WARNINGS_AS_ERRORS=y'
+export cmake_extra_args='-DCONFIG_ASSERT=y'
 export WORK_DIR="${ZEPHYR_BASE}/bsim_out"
 sysbuild=1
 
@@ -193,7 +205,9 @@ app_root="${REPO_ROOT}"
 BOARD_ROOT="${REPO_ROOT}"
 conf_file="prj.conf"
 exe_name="bs_${BOARD_TS}_le_audio_receiver_bsim_prj_conf"
-export app app_root BOARD_ROOT conf_file exe_name
+snippet="bt-ll-sw-split"
+conf_overlay="${REPO_ROOT}/tests/bsim/overlay-bt_ll_sw_split.conf"
+export app app_root BOARD_ROOT conf_file exe_name snippet conf_overlay
 compile
 wait_for_background_jobs
 
@@ -210,7 +224,9 @@ echo "=== Compile client (tests/bsim/client) ==="
 app="tests/bsim/client"
 BOARD_ROOT="${REPO_ROOT}"
 exe_name="bs_${BOARD_TS}_bsim_client_bsim_prj_conf"
-export app BOARD_ROOT exe_name
+snippet="bt-ll-sw-split"
+conf_overlay="${REPO_ROOT}/tests/bsim/client/overlay-bt_ll_sw_split.conf"
+export app BOARD_ROOT exe_name snippet conf_overlay
 compile
 wait_for_background_jobs
 

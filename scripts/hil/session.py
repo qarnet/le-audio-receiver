@@ -22,7 +22,6 @@ SESSION_SCHEMA_VERSION = 1
 DEFAULT_SESSION_ROOT = "/tmp/opencode/hil-sessions"
 SESSION_FILENAME = "devices.json"
 
-XIAO_FIXTURE_ID = "local-xiao-nrf54l15-pair"
 PROBE_SERIAL_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RAW_HEX_RE = re.compile(r"^0x[0-9a-f]{8}$")
@@ -410,12 +409,11 @@ def _load_xiao_pair(fixture_path, binding_path):
         )
     except model.HilSchemaError as exc:
         raise HilSessionError(str(exc)) from None
-    if fixture.fixture_id != XIAO_FIXTURE_ID:
-        raise HilSessionError("session fixture must be %s" % XIAO_FIXTURE_ID)
+    expected_roles = {"receiver", "source"}
     if fixture.capture_capability is not model.CaptureCapability.NONE:
-        raise HilSessionError("session fixture must have no capture role")
-    if set(fixture.roles) != {"receiver", "source"}:
-        raise HilSessionError("session fixture role set must be receiver/source")
+        expected_roles.add("capture")
+    if set(fixture.roles) != expected_roles or set(binding.roles) != expected_roles:
+        raise HilSessionError("session fixture role set mismatch")
     expected_images = {"receiver": ("cpuapp", "flpr"), "source": ("cpuapp",)}
     for role in ("receiver", "source"):
         logical = fixture.roles[role]

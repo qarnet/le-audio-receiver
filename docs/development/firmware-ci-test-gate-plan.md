@@ -1,5 +1,15 @@
 # Firmware CI canonical test gate plan
 
+> **Current migration note (2026-09-25):** PR 11's dual-target run and
+> 65-child topology below are historical acceptance for that commit, not
+> current migration gates. Hosted workflow/release facts are not changed by
+> dirty-tree diagnostics. Current build-contract CLI supports `--nrf54l15`
+> only; nRF5340 local checks and DK fixture requirements were retired on the
+> uncommitted continuation tree. XIAO standalone source and XIAO HCI roles
+> replace the DK source and prior dongle, sequentially on the second XIAO.
+> Canonical clean-commit coverage/full gate and physical acceptance remain
+> pending. See `AGENTS.md` and `docs/development/pb-037-retirement-results.md`.
+
 Status: accepted implementation and plan of record for PR 11. Date:
 2026-08-10. Corrected after the first hosted runs; every correction was
 validated on the acceptance run below. Historical failed attempts remain
@@ -42,9 +52,9 @@ operations.
 
 The PR 11 hosted two-target firmware run is historical evidence. The current
 firmware workflow builds, contract-checks, packages, uploads, and prepares
-draft releases for nRF54L15 only. Local `scripts/check-build-contract.py`
-keeps optional `--nrf5340` validation for legacy local use pending separate
-cleanup; it is not part of current GitHub workflow execution.
+draft releases for nRF54L15 only. The 2026-09-12 optional `--nrf5340`
+local-validation assumption is superseded by the migration note above;
+historical hosted evidence remains unchanged.
 
 ## Goal
 
@@ -73,9 +83,9 @@ draft-release creation.
   `tools/bsim`; `make -C tools/bsim everything` builds the required simulator
   components.
 - `scripts/check-build-contract.py` against the real nRF54L15 build tree is a
-  post-build contract, not a pre-build test. Its optional `--nrf5340` local
-  legacy validation remains pending cleanup. Its own 56-test Python suite is
-  already one of the 25 canonical Python children.
+  post-build contract, not a pre-build test. Current CLI is `--nrf54l15` only.
+  The 56-test Python suite and 25-child inventory described here are dated
+  pre-migration counts, not current clean-commit acceptance.
 
 ## Scope
 

@@ -1,124 +1,90 @@
-# Dongle firmware — nRF5340DK hci_uart LE Audio central
+# XIAO nRF54L15 Linux HCI central
 
-This directory holds the configuration for the **Bluetooth central** used
-to stream LE Audio from the Linux PC to the receiver: an nRF5340DK
-flashed with Zephyr's `hci_uart` sample, tuned as an LE Audio central.
+Second XIAO nRF54L15 serves two roles **sequentially**, not at once: standalone
+HIL source or Linux HCI central. Flashing HCI firmware replaces source firmware;
+restore standalone source image before source HIL runs. Receiver is separate
+XIAO with I2S DAC. `dongle/hci_uart/` builds one
+`xiao_nrf54l15/nrf54l15/cpuapp` SDC image, not a netcore/sysbuild pair.
 
-The **app-core** firmware is the upstream Zephyr hci_uart sample (a plain
-H:4 pipe over UART0 @ 1 Mbaud with hardware flow control).
+The stock SAMD11 USB CDC bridge carries UART20 on P1.9 TX / P1.8 RX at
+1,000,000 baud, 8N1, **no flow control**. Do not change SAMD11 firmware.
+`hci_uart/src/main.c` owns asynchronous UART/H4-to-SDC transport;
+`hci_uart/src/h4_rx.c` parses command, ACL and ISO traffic. Lab-only public
+address `C0:AA:BB:CC:DD:EE` is in `hci_identity.h`, not a production OUI.
+The adapter is session-scoped; no persistent btattach service or fixed HCI/tty
+index is supported.
 
-The **netcore** (cpunet / hci_ipc) is a **repo-owned copy** of the upstream
-hci_ipc sample, modified to call `bt_ctlr_set_public_addr()` before
-`bt_enable_raw()`. This fixes the zero-FICR DEVICEADDR on this lab
-nRF5340DK. The compiled-in BD_ADDR is `C0:AA:BB:CC:DD:EE` (defined in
-`dongle/hci_identity.h` — lab-only, not a production-assigned OUI).
+## Build and session binding
 
-Prior to this fix (Stage0/blocked), the dongle was built from the
-unmodified upstream hci_ipc sample, which reported `00:00:00:00:00:00`
-and required a runtime `btmgmt static-addr` workaround. That workaround
-is no longer needed.
+From repo root in NCS v3.3.0 dev shell:
 
-## Why hci_uart and not hci_usb
-
-`hci_usb` (Zephyr's USB device_next BT class,
-`subsys/usb/device_next/class/bt_hci.c`) has **no ISO data path** — its
-isochronous USB endpoints are descriptor stubs that exist only so Linux
-`btusb` binds (source comment: "we do not implement isochronous
-endpoints handling"). ISO TX from the host is dropped (and leaks a
-net_buf); ISO RX is never armed. No Kconfig enables it because there is
-no code. The legacy USB BT class (`subsys/usb/device/class/bluetooth.c`)
-has no isochronous endpoints at all either. So **no Zephyr USB BT
-transport can carry LE Audio ISO in v3.3.0.**
-
-`hci_uart` sidesteps this: the app core is a dumb H:4 byte pipe, and ISO
-packets pass through as ordinary H:4 type-0x05 frames. The IPC layer
-(`drivers/bluetooth/hci/ipc.c`) and the SDC netcore are both fully
-ISO-capable, so once the USB wall is removed the whole pipeline works.
-
-Verified: 2× CIS stereo, 3000 ISO Data TX over 15 s, matching Number of
-Completed Packets, zero stalls. See `STATUS.md`.
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `hci_identity.h` | Lab-only BD_ADDR `C0:AA:BB:CC:DD:EE` (on-air byte order) |
-| `hci_ipc/src/main.c` | Repo-owned hci_ipc main — calls `bt_ctlr_set_public_addr()` before `bt_enable_raw()` |
-| `hci_ipc/prj.conf` | Merged hci_ipc + dongle ISO/controller tuning |
-| `hci_ipc/CMakeLists.txt` | Standalone netcore CMake project |
-| `hci_uart/app.conf` | App-core (cpuapp) fragment — re-asserts `BT_ISO_CENTRAL` + ISO buffer counts + ext adv |
-| `hci_uart/netcore.conf` | Reference conf (was EXTRA_CONF_FILE; now baked into hci_ipc/prj.conf) |
-
-## Build + flash
-
-From the repo root, inside the dev shell (`direnv allow` or `nix develop`):
-
-```bash
-fw-build-dongle     # builds into build/dongle/
-fw-flash-dongle     # flashes both cores via the DK's onboard J-Link
+```sh
+fw-build-dongle
+# Image: build/dongle/zephyr/zephyr.hex
+nix-nrf probes
+python3 scripts/hil-runner.py create-session \
+  --fixture tests/hil/fixture-xiao-source.json \
+  --binding tests/hil/fixture-xiao-source.local.example.json \
+  --session-id UNIQUE_SESSION_ID \
+  --receiver-probe RECEIVER_PROBE_FROM_LIVE_DISCOVERY \
+  --source-probe SOURCE_PROBE_FROM_LIVE_DISCOVERY \
+  --session-root /tmp/opencode/hil-sessions
 ```
 
-`fw-flash-dongle` programs over the DK's **onboard Segger J-Link** through
-OpenOCD. By default OpenOCD auto-detects the J-Link (no serial is passed).
-If more than one J-Link is attached, select one explicitly with a
-session-local environment variable:
+Resolve probes and USB roles live; never copy serial, tty or HCI index from a
+prior run. Replace placeholders with observed probe identities. Session manifest
+must be absolute external `devices.json`. Binding file is local example input;
+verify it matches actual attached boards before creating session. Choose an
+existing external output root and a new run ID per action. Every flash/reset/
+attach rechecks DP/AP/FICR and serial identity and retains raw evidence.
 
-```bash
-FW_DONGLE_JLINK_SERIAL=<jlink-serial> fw-flash-dongle
+```sh
+fw-flash-dongle --session-manifest /absolute/external/session/devices.json \
+  --fixture tests/hil/fixture-xiao-source.json \
+  --binding tests/hil/fixture-xiao-source.local.example.json \
+  --output-root /existing/external/output --run-id UNIQUE_FLASH_RUN
+fw-reset-dongle --session-manifest /absolute/external/session/devices.json \
+  --fixture tests/hil/fixture-xiao-source.json \
+  --binding tests/hil/fixture-xiao-source.local.example.json \
+  --output-root /existing/external/output --run-id UNIQUE_RESET_RUN
 ```
 
-The override is validated against `^[[:alnum:]_.:-]+$` before OpenOCD
-starts. Note that `scripts/probe-serial.local` and `nrf-probes` select
-**CMSIS-DAP receiver targets** and are **not** used by the dongle J-Link
-flash — feeding a CMSIS-DAP serial into the J-Link interface fails with
-`No J-Link device found`.
+## Attach and stream
 
-The build compiles two images and merges them:
-1. **hci_ipc netcore**: standalone build (`-b nrf5340dk/nrf5340/cpunet`) from `dongle/hci_ipc/`
-2. **hci_uart app core**: sysbuild with `NETCORE_EMPTY` from upstream sample + `dongle/hci_uart/app.conf`
-3. Hexes merged via `scripts/build/mergehex.py`
+`fw-attach-dongle` attaches only session-bound lab adapter, checks HCI public
+identity and `powered le secure-conn cis-central`, substitutes its live adapter
+for `@HCI@`, and tears down owned attachment after child exits (also on child
+failure/timeout). Do not attach unrelated host adapters. Run BAP child as
+ordinary user, not sudo. Fresh pairing uses normal BlueZ discovery; for bonded
+reconnect pass `--preserve-bond --peer-addr RECEIVER_ADDRESS_FROM_BOOT_LOG`.
+Do not use raw-HCI exact-peer connection as default on this controller.
 
-## Attach to Linux (BlueZ)
-
-The DK's J-Link interface MCU exposes UART0 as a CDC ACM port. On this
-bench it enumerates as **`/dev/ttyACM2`** (USB interface 02 — not
-ttyACM1, which stays silent). Verify by sending an HCI Reset manually if
-in doubt:
-
-```bash
-python3 - <<'EOF'
-import os, termios, time
-fd = os.open("/dev/ttyACM2", os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-a = termios.tcgetattr(fd); a[2] = termios.B1000000 | termios.CS8 | termios.CREAD | termios.CLOCAL
-a[4] = a[5] = termios.B1000000; termios.tcsetattr(fd, termios.TCSANOW, a)
-os.write(fd, bytes([0x01,0x03,0x0c,0x00])); time.sleep(0.5)
-print(os.read(fd, 64).hex() or "<no reply — wrong port>")
-EOF
-# expect: 040e0401030c00
+```sh
+fw-attach-dongle --session-manifest /absolute/external/session/devices.json \
+  --fixture tests/hil/fixture-xiao-source.json \
+  --binding tests/hil/fixture-xiao-source.local.example.json \
+  --output-root /existing/external/output --run-id UNIQUE_ATTACH_RUN \
+  --timeout 180 -- python3 scripts/bap_central.py --adapter @HCI@ --duration 120
+# Optional BAP flags: --mono (mono); no flag (Mode A); --stereo (Mode B).
 ```
 
-Attach + set up the adapter:
+For hard containment of detached sudo/root descendants, run session under a
+**system-manager** transient `systemd-run` service with `User=` set to ordinary
+user, `RuntimeMaxSec=`, `TimeoutStopSec=` and `KillMode=control-group`.
+User-manager service or shell `timeout` alone does **not** contain detached
+root descendants. Supervisor does not replace identity checks, owned adapter
+cleanup, or immutable evidence finalization.
 
-```bash
-setsid sudo btattach -B /dev/ttyACM2 -S 1000000 </dev/null >/tmp/btattach.log 2>&1 &
-sleep 3
-sudo btmgmt --index hci0 power on
-sudo btmgmt --index hci0 io-cap 3     # NoInputNoOutput — required for JustWorks receiver
-sudo btmgmt --index hci0 sc on        # receiver requires Secure Connections
-# verify: settings should include "powered le secure-conn cis-central"
-# BD_ADDR should be C0:AA:BB:CC:DD:EE (compile-time identity — no static-addr needed)
-```
-
-`btattach` is not persistent — it dies with the session. Re-run the
-`btattach` + `btmgmt` lines after any DK re-enumeration or reboot (a
-udev rule / systemd unit would make this automatic).
-
-## Stream
-
-```bash
-python3 scripts/bap_central.py --duration 15
-```
-
-Expected: `ACL link up` → `ServicesResolved` → 2× SelectProperties →
-2× SetConfiguration → 2× Acquired → `Streaming 1000 Hz sine` →
-`Done: 1500 frames in 15.00 s (100.0 fps)`.
+Qualification status: **Prototype / qualification incomplete**. Standard
+10 ms QoS RTN 5 / latency 20 ms, unchanged 40 ms presentation delay.
+Earlier six 120-second mono/Mode A/Mode B fresh and bonded rows met frozen
+90% valid / 5% PLC limits with **nonzero** loss/PLC. Later final production-
+image repeat failed during Mode A after mono/reconnect passed: kernel HCI
+hardware error `0x07`, H4 parser `-EPROTO`, I2S underrun, stream reset and
+controller command timeouts. Root cause unresolved. External RAM-trace six-
+case pass perturbs timing and does not qualify the production image. See
+`docs/development/pb-019-hci-resume-results.md` and
+`docs/development/nrf54l15-only-continuation-20260925.md` for exact evidence.
+No lab-qualification, public adapter recommendation, clean-commit release or
+full migration acceptance is claimed. Continue controlled boundary diagnosis
+before claiming restored qualification.
