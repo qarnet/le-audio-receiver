@@ -2,10 +2,11 @@
 
 ## Current implementation snapshot (2026-09-25; not acceptance)
 
-Primary repository `feature/nrf54l15-only-continuation` at `6941c82` has
-substantial uncommitted work. This is a dirty-tree implementation snapshot,
-not a full migration, canonical clean-commit gate, RH4/FR4, or public-release
-verdict. Read `AGENTS.md`, `dongle/README.md`, and current `docs/flashing.md`
+Primary repository `feature/nrf54l15-only-continuation` has local migration
+commits `21ff2f0`, `0d22829`, `9b99ce5` and latest code `a78f8f4`.
+Unrelated PB-013 edits remain dirty and unstaged. This is not full migration,
+HCI qualification, RH4/FR4 or public-release acceptance. Read `AGENTS.md`,
+`dongle/README.md`, and current `docs/flashing.md`
 for operational instructions. Later diagnostic records:
 `docs/development/pb-019-hci-resume-results.md`,
 `pb-034-primary-repair-results.md`, `pb-035-source-matrix-results.md`,
@@ -19,45 +20,62 @@ for operational instructions. Later diagnostic records:
   BSim has two nRF54L15BSim integrated SW Split peers with client reliability
   policy. Native unit tests remain hardware-independent. E83 board and receiver
   helpers and production APLL are removed; historical APLL tests remain local.
-- Unit phase: **75 PASS / 0 FAIL / 75 TOTAL** in
-  `/tmp/opencode/nrf54-only-unit-20260925-r1.log` (41 Twister, five exec-only,
-  29 Python), not full gate. Build contract: 52 unit tests, 69/0 actual;
-  test matrix: 45 unit tests, actual zero errors. HIL fake final 272; last
-  full HIL suite 336 plus one intentional hardware opt-in skip, before three
-  later tests; focused runner 106 passed. Three supported diagnostic builds
-  passed (receiver CPUAPP/FLPR, standalone source, HCI; hashes in continuation
-  record). Strict BSim passed 17 scenarios/26 runs with retained hashes and
-  unchanged PCM limits. Report-only coverage population 36: 4971/5427 lines,
-  2203/3008 branches, 377/377 functions, no zero-hit numeric functions;
-  historical eight APLL plus one no-HFCLK tests remain. Baseline unchanged.
-- **HCI prototype / qualification incomplete:** earlier six-case passes are
-  retained, but final production-image repeat
-  `/tmp/opencode/pb019-final-six-20260925-r1` failed in Mode A after mono
-  and reconnect passed. Mode A sent 8909/12000 CLI frames, received 8900
-  valid per CIS, 18478 decoded and 679 PLC; I2S underrun 1, reset 1,
-  kernel hardware error `0x07` followed by Reset/Remove CIG timeouts.
-  Parser `-EPROTO`, H4 type 0; ring decode found inserted `0xAA` and missing
-  `0x03` in adjacent ISO payloads. Cause unresolved; no SDC or SAMD11
-  attribution. External RAM-trace six-case pass perturbs timing and does not
-  qualify production. PB-019 AC2/AC3 unchecked, AC1/AC4 retained, AC5 audit
-  pending. This is engineering work, not a technical hard blocker.
+- **Clean software gate:** `9b99ce5` 78/0/78; exact latest code
+  `a78f8f47101a9c040d8b5f735f96632e853c37b6` **79 PASS / 0 FAIL /
+  79 TOTAL** (41 Twister, five exec-only, 30 Python, coverage, matrix,
+  strict BSim 17 scenarios / 26 runs). Clean manifest:
+  `/tmp/opencode/nrf54-a78f8f4-clean-canonical-r1/coverage/run-manifest.json`,
+  `dirty: false`; separate fresh validation clone clean before/after.
+  Adopted 36-file baseline: 4971/5427 lines, 2203/3008 branches,
+  377/377 functions, no zero-hit numeric functions. Clean HCI build produced
+  uninstrumented HEX SHA-256
+  `5377fff7bee0256dd59206f46a187d301450b809e4b1db6a67a749bec434b697`;
+  only generated LSP symlink changed after build. Clean gate does not imply
+  physical acceptance.
+- **HCI prototype / qualification incomplete:** audited full-buffer `0xAA`
+  sentinel repair eliminates old-slot false replacement of legitimate `0xAA`
+  (actual SDK replay original 3/8192 vs generated 0/8192 mismatches across
+  all byte values, exact source hash guarded), not insertion/deletion.
+  Candidate six-case run FAILED Mode A reconnect (7185 sent, RX 7178/7180,
+  underrun/reset 1, hardware error `0x07`, `-EPROTO`). Passive host-monitor
+  variant FAILED Mode A (6970 sent, RX 6955/6962, decoded 14628, PLC 711,
+  underrun/reset 1, hardware error `0x07`); private core parser `-22`, H4
+  type 5, used/expected 128/128. Clean host btsnoop ISO record 76837 differs
+  from RAM ring frame 2526 by inserted `0xAA` and missing `0x0c` 112 ring
+  positions apart; preceding five ISO records match, host recorded no
+  drops/truncation. Fault downstream of Linux monitor before parser; wire,
+  SAMD11, UARTE, DMA and driver-copy boundaries not isolated. No SDC/SAMD11
+  causation. RAM-trace pass perturbs timing. PB-019 AC2/AC3 unchecked,
+  AC1/AC4 checked, AC5 audit pending. Private captures stay outside Git.
 - Standalone source: first matrix r1 preserved Mode B exposed 900-byte TX
   processor stack overflow (PSP = PSPLIM); board-local 2048-byte repair
   passed. Full RH3 fixed-image matrix r2 passed 20/20 physical children with
   no failure, cancellation or cleanup failure, including 7.5 ms, reconnect,
-  hang and stall at unchanged limits. Final runner smoke passed under six
-  guarded checks, restored standalone source firmware; service exit 0 and
-  empty cgroup. Matrix imported earlier runtime code while later integration
-  changes landed: not final clean-commit acceptance. PB-036 exact source RH4,
-  analog qualification, FR4 and release remain unaccepted.
-- **Clean-gate authority boundary:** `nix develop -c bash scripts/test-coverage.sh
-  --output /tmp/opencode/nrf54-only-clean-coverage-20260925-r1` exited 1
-  before builds: `FATAL: worktree is dirty — --write-baseline and baseline
-  enforcement require a clean exact commit`. No baseline write or enforcement
-  result. Explicit local commit authorization is required for clean exact
-  commit and source archive provenance; no push/PR/release authority inferred.
-  Exhaustive reference audit/comment classification unfinished; PB-038 remains
-  Backlog. No final migration acceptance claimed.
+  hang and stall at unchanged limits. Earlier final runner smoke passed, but
+  latest identity-checked standalone restoration
+  `/tmp/opencode/hil-runs/pb035-restored-source-20260925-r2` **FAILED** strict
+  log scan on receiver `bt_conn: conn 0x200051b0 failed to establish. RF noise?`
+  (not proof of RF cause). Flash/boot restoration completed, cleanup empty;
+  RX 765, decoded 776, PLC 11, zero underruns/resets/decode errors do not
+  erase warning. Retained `images.json` confirms standalone source
+  `51477c5a23ab81cc3dac3ea93969165d897f6bef6b8aab92a6cc455b05ea5f59`,
+  receiver `9427913c9595f976cf1644d1ed857b6dc37ad0197fefa29dd4efa35d9e2427bd`
+  and FLPR `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+  No active HCI adapter or nrfdebugservertest owner. Historical 20/20
+  fixed-image result is not fresh acceptance. Revalidate hardware identity
+  before further action. PB-036 exact-source RH4, analog qualification, FR4
+  and release remain unaccepted.
+- **Next boundary:** local-commit authority resolved and clean gate passed;
+  former dirty-tree failure was historical. `sigrok-cli` installed but no
+  USB logic analyzer enumerated (hubs, two ASUS adapters, two XIAO bridges,
+  SEGGER J-Link only). Need connected authorized voltage-compatible
+  high-impedance wire capture at source UART20 RX P1.8 (SAMD11 to nRF),
+  optional TX P1.9 and common GND, sampled for 1 Mbaud 8N1 no flow. Compare
+  host/wire/RAM, make minimal grounded repair, rerun six physical cases and
+  clean gate. No silent resync, disabled audio or relaxed limits. This is
+  specific missing measurement capability, not proof all software debugging
+  is impossible. PB-038 Backlog; no RH4/FR4/final migration acceptance, no
+  push/PR/release.
 
 ## Historical snapshots (dated evidence below, not current commands)
 

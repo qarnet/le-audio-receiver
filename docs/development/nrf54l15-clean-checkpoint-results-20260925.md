@@ -45,8 +45,27 @@ unchanged numeric entries. Two improved:
 `tests/coverage-baseline.json` adopts exact candidate JSON bytes, including
 its updated `src/main.c` exclusion rationale and generated-commit provenance.
 The historical numbers in other records remain historical; baseline adoption
-does not rewrite them. This clean source checkpoint and baseline refresh do
-not complete PB-037, the full migration, canonical clean-gate acceptance,
-HCI qualification, exact-artifact acceptance or physical audio proof. Rerun
-full gate on a clean commit and resolve the HCI production failure before
-claiming those outcomes.
+does not rewrite them. At this checkpoint the full canonical gate, HCI
+qualification, exact-artifact acceptance and physical audio proof were not
+complete. Subsequent clean-gate evidence does not override physical failure.
+
+## Later clean commits and canonical gates, 2026-09-25
+
+Local commits `21ff2f0` (migration checkpoint), `0d22829` (HCI test external
+output-root portability), `9b99ce5` (adopt exact 36-file coverage candidate
+above) and `a78f8f4` (audited UART sentinel preparation) supersede the
+dirty-tree gate precondition, not physical acceptance requirements. Full
+canonical gate at `9b99ce5`: **78 PASS / 0 FAIL / 78 TOTAL**. Full gate on exact
+source `a78f8f47101a9c040d8b5f735f96632e853c37b6`: **79 PASS / 0 FAIL /
+79 TOTAL** (41 Twister, five exec-only, 30 Python, coverage, matrix and strict
+BSim). `/tmp/opencode/nrf54-a78f8f4-clean-canonical-r1/coverage/run-manifest.json`
+records `dirty: false` and exact source; baseline enforcement retains 36
+production files, 4971/5427 lines, 2203/3008 branches, 377/377 functions,
+no zero-hit numeric functions. Strict BSim passed 17 scenarios / 26 runs at
+unchanged limits. Fresh validation clone
+`/tmp/opencode/nrf54-validation-a78f8f4-gates/le-audio-receiver` was clean
+before and after full gate. Primary PB-013 owner edits remained dirty and
+unstaged; checks did not use the primary or former migration worktree. No
+push, PR, release, RH4/FR4, HCI or final physical acceptance follows from
+these software gates. See `pb-019-hci-resume-results.md` for latest contrary
+physical outcome.

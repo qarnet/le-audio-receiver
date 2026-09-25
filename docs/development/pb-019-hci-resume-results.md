@@ -332,3 +332,78 @@ Verification (no hardware actions or commit):
 
 Parent review required before any controlled, uninstrumented physical repeat.
 Neither host replay nor build qualifies HCI or closes PB-019 AC2/AC3.
+
+## 2026-09-25 clean gate and latest candidate: physical qualification still fails
+
+Local `0d22829` fixed the test-only HCI output-root portability; `9b99ce5`
+adopted the audited 36-file coverage baseline. Canonical gates on clean
+commits `9b99ce5` and `a78f8f47101a9c040d8b5f735f96632e853c37b6`
+passed 78/0/78 and **79 PASS / 0 FAIL / 79 TOTAL**, respectively. Latest
+41 Twister + five exec-only + 30 Python tests, coverage, matrix and strict
+BSim 17 scenarios / 26 runs passed. Clean manifest:
+`/tmp/opencode/nrf54-a78f8f4-clean-canonical-r1/coverage/run-manifest.json`
+(`dirty: false`, source `a78f8f4`); full-gate clone
+`/tmp/opencode/nrf54-validation-a78f8f4-gates/le-audio-receiver` clean
+before/after. Coverage: 36 files, 4971/5427 lines, 2203/3008 branches,
+377/377 functions, no zero-hit numeric functions. Primary unrelated PB-013
+dirty edits remained untouched. Separate clean HCI build at
+`/tmp/opencode/nrf54-validation-a78f8f4/le-audio-receiver/build/dongle/zephyr`
+started clean; only generated LSP symlink changed afterward (recorded).
+Uninstrumented HEX SHA-256
+`5377fff7bee0256dd59206f46a187d301450b809e4b1db6a67a749bec434b697`.
+
+Host replay of functions extracted from original SDK driver and generated
+driver reports original **3/8192** emitted-buffer mismatches, generated
+**0/8192**, including all 256 byte values in both destinations. Generated
+driver fills the *entire* bounce buffer with `0xAA` and guards exact SDK
+source hash `6baa5b12680837b2efa47b8b1047284ea2d2d29eb9384895409efee83bcd8066`.
+This is a real old-slot (<112) false-replacement repair, not a demonstrated
+fix for inserted/missing bytes. No installed SDK change, trace, changed baud,
+credits, buffers, limits or silent resynchronization.
+
+Physical `/tmp/opencode/pb019-a78f8f4-six-20260925-r1` **FAILED** Mode A
+reconnect: 7185 sent, RX 7178/7180, underrun 1, reset 1, kernel hardware
+error `0x07`; private `/tmp/opencode/pb019-a78f8f4-fault-core-20260925-r1`
+records `-EPROTO`. Passive host-monitor variant
+`/tmp/opencode/pb019-a78f8f4-monitor-six-20260925-r1` **FAILED** Mode A:
+6970 sent, RX 6955/6962, decoded 14628, PLC 711, underrun 1, reset 1,
+hardware error `0x07`. Private monitor core
+`/tmp/opencode/pb019-a78f8f4-monitor-fault-core-20260925-r1` records parser
+`-22`, type 5, used 128, expected 128: SDC lower path rejects malformed
+ISO length. Raw btsnoop (6986699 bytes, SHA-256
+`c1eeb1d1d888b148bef66d631a0bef74f410fba2e94666192c60b7b65d63857c`)
+was copied to private core. Offline comparison
+`/tmp/opencode/pb019-monitor-host-compare-20260925-r1.txt`: clean host
+record 76837, flags `0x00020012`, ISO TX adapter 2, 128 bytes, header
+`02 20 7c 00 32 1b 78 00` (handle 2, sequence 6962). Matching ring
+frame 2526 follows H4 at 2525; inserted `0xAA` at frame offset 6 / ring
+2532 before SDU length `0x78`, missing `0x0c` at host offset 117 / ring
+2644, 112 positions apart. Previous five ISO records (6960-6962) matched
+ring exactly; zero captured drops/truncations over 76858 host records.
+Fault lies downstream of Linux monitor, before parser. This does not uniquely
+separate SAMD11 bridge, wire, UARTE, DMA or driver copy; no SDC or SAMD11
+causation claim. Passing RAM trace perturbed timing and cannot qualify image.
+Keep all raw btmon/HCI/RAM/core data private and out of Git.
+
+After failures, source was restored to standalone role via runner
+`/tmp/opencode/hil-runs/pb035-restored-source-20260925-r2`; `images.json`
+retains standalone CPUAPP `51477c5a23ab81cc3dac3ea93969165d897f6bef6b8aab92a6cc455b05ea5f59`,
+receiver CPUAPP `9427913c9595f976cf1644d1ed857b6dc37ad0197fefa29dd4efa35d9e2427bd`
+and FLPR `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+Flash/boot restoration completed; cleanup failures empty, no active HCI
+adapter or nrfdebugservertest owner. **Smoke FAILED** strict log scan:
+`bt_conn: conn 0x200051b0 failed to establish. RF noise?` (not RF-cause
+proof), despite RX 765 / decoded 776 / PLC 11 / zero underrun, reset and
+decode error. Historical 20/20 fixed-image matrix remains historical.
+
+Missing measurement capability: `sigrok-cli` exists, but USB enumeration
+found no logic analyzer (only hubs, two ASUS Bluetooth adapters, two XIAO
+debug bridges and SEGGER J-Link); two XIAOs seen via `nix-nrf probes` do not
+establish static role mapping. Need authorized, connected voltage-compatible
+high-impedance UART wire capture on source UART20 RX P1.8 (SAMD11 to nRF),
+optionally TX P1.9, with common GND and sufficient sampling for 1 Mbaud 8N1
+no flow. Compare wire against host and RAM, then make minimal grounded repair
+and rerun full uninstrumented six-case matrix and clean gate. Current evidence
+does not support another cause-specific fix; software investigation remains
+possible. AC2/AC3 stay unchecked, AC1/AC4 checked, AC5 audit pending. No
+qualification, RH4/FR4 or release claim.
