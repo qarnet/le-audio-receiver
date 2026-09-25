@@ -56,7 +56,7 @@ class Attach(unittest.TestCase):
             "--binding",
             "/tmp/missing",
             "--output-root",
-            "/tmp/opencode",
+            str(self.out),
             "--run-id",
             "dry",
         ]
