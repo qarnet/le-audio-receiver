@@ -64,7 +64,8 @@ Nordic samples are the best learning resource:
 ### Current migration continuation
 
 For the all-nRF54L15 migration, read
-`docs/development/nrf54l15-only-resume-20260924.md` before continuing.
+`docs/development/nrf54l15-observability-resume-20260925.md` first, then
+`docs/development/nrf54l15-only-resume-20260924.md` as historical context.
 The primary repository on `feature/nrf54l15-only-continuation` owns the work;
 the former `/tmp` worktree is not the execution location. Preserve the current
 uncommitted changes. Its 2026-09-24 pause tables are a historical checkpoint,

@@ -1,5 +1,10 @@
 # STATUS: le-audio-receiver, 2026-09-25
 
+User-paused observability handoff (RTT or logic analyzer pending):
+`docs/development/nrf54l15-observability-resume-20260925.md`. This is current
+resume entrypoint; software upgrade verification does not qualify HCI hardware
+or complete migration.
+
 ## PB-040 NCS v3.4.1 clean local software verification (2026-09-25)
 
 Active SDK `~/ncs/v3.4.1`: nrf `b20f8619ba9a5530f8c34b0a130d829947cfe55d`,
@@ -48,9 +53,9 @@ was registry-verified, not tested by hosted CI.
   Actual build contract: **69 assertions, 0 failed**. Native suite:
   **76 pass**. HIL Python: **340 pass, 1 intentional hardware skip**.
 - Strict LC3 fixtures preserve original v3.3.0 manifest and reference bytes:
-  **40 tests** and host replay pass. ARM calibration: **296 tests pass at
-  build only**, no execution or flash. Strict BSim with `-Werror` on dependency
-  closure and five source/hash-specific documented upstream exceptions:
+  **40 tests** and host replay pass. ARM calibration: **296 build steps
+  completed**, no ARM test execution or flash. Strict BSim with `-Werror` on
+  dependency closure and five source/hash-specific documented upstream exceptions:
   **17 scenarios / 26 runs pass**; no global warning waiver.
 - Dirty-tree coverage report: all **46 suites pass**; 36-file population and
   every baseline ratio/count unchanged (4971/5427 lines, 2203/3008 branches,

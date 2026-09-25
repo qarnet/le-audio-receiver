@@ -165,7 +165,7 @@ slice. ARM calibration build-only evidence is recorded below.
   not with disabled warning reporting. I2S MASTER-to-CONTROLLER bits are
   equivalent; the DTS-mapped FLPR load-size contract was updated to match
   resolved partitions, not weakened.
-- ARM LC3 calibration image: **296 tests pass at build only**,
+- ARM LC3 calibration image: **296 build steps completed**, no ARM test execution;
   `/tmp/opencode/pb040-arm-calibration-20260925-r1.log`. Neither ARM execution
   nor flash nor physical audio is claimed. Strict manifest regeneration and
   host replay retain original v3.3.0 fixture bytes and provenance; calibration
@@ -224,7 +224,7 @@ slice. Subsequent clean verification follows.
   and stateful manifest SHA-256
   `2c931ef6c3afc81081583c73bf429543c876cebf2e2166e0d43f4b4674b2519a`.
   liblc3 revision `48bbd3eacd36e99a57317a0a4867002e0b09e183` remains
-  unchanged. ARM calibration's 296 tests were build-only, not executed.
+  unchanged. ARM calibration completed 296 build steps; no ARM tests executed.
 - After the canonical pre/post-clean run, three pristine physical-target builds
   passed (receiver CPUAPP + FLPR, standalone source CPUAPP, HCI CPUAPP).
   `/tmp/opencode/pb040-clean-{receiver,source,hci}-daf7cd9-r1.log` and
