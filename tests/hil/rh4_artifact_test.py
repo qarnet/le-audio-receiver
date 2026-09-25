@@ -132,7 +132,7 @@ def receiver_archive(path):
                 "size": len(flpr),
             },
         ],
-        "ncs_version": "v3.3.0",
+        "ncs_version": "v3.4.1",
         "project": "le-audio-receiver",
         "schema_version": 1,
         "target": {"board": "nrf54l15dk/nrf54l15/cpuapp", "id": "nrf54l15-xiao"},
@@ -170,7 +170,7 @@ def source_archive(path, *, commit=COMMIT):
                 "size": len(cpuapp),
             },
         ],
-        "ncs_version": "v3.3.0",
+        "ncs_version": "v3.4.1",
         "schema_version": 2,
     }
     manifest_data = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(
@@ -366,7 +366,7 @@ class TestResolver(unittest.TestCase):
             cases = {
                 "wrong-schema": lambda m: m.update(schema_version=1),
                 "wrong-board": lambda m: m.update(board="nrf5340dk/nrf5340/cpuapp"),
-                "wrong-version": lambda m: m.update(ncs_version="v3.2.0"),
+                "wrong-version": lambda m: m.update(ncs_version="v3.3.0"),
                 "wrong-firmware-id": lambda m: m.update(firmware_id="wrong"),
                 "bad-commit": lambda m: m.update(git_commit="dirty"),
                 "missing-key": lambda m: m.pop("git_commit"),

@@ -200,7 +200,11 @@ def write_fake_liblc3(directory):
         encoding="utf-8",
     )
     (directory / "nrf").mkdir()
-    (directory / "nrf" / "VERSION").write_text("3.3.0\n", encoding="utf-8")
+    (directory / "nrf" / "VERSION").write_text(
+        "VERSION_MAJOR = 3\nVERSION_MINOR = 4\nPATCHLEVEL = 1\n"
+        "VERSION_TWEAK = 0\nEXTRAVERSION =\nVERSION_METADATA = lts\n",
+        encoding="utf-8",
+    )
     (directory / "zephyr").mkdir()
     include.mkdir(parents=True)
     source.mkdir()
@@ -736,6 +740,43 @@ class Lc3PcmCalibrateProvenanceTests(unittest.TestCase):
             self.assertEqual(revision, calibrate.EXPECTED_LIBLC3_REVISION)
             self.assertEqual(run.call_count, 6)
 
+    def test_workspace_version_and_historical_manifest_origins_are_separate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ncs = Path(temp) / "ncs"
+            write_fake_liblc3(ncs)
+            (ncs / "nrf" / "VERSION").write_text("3.3.0\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                calibrate.CalibrationError, "NCS VERSION is not 3.4.1"
+            ):
+                calibrate.verify_ncs_workspace(ncs)
+
+        manifest, _, _ = calibrate.load_manifest()
+        stateful, _, _ = calibrate.load_stateful_manifest(manifest)
+        self.assertEqual(manifest["ncs_version"], "v3.3.0")
+        self.assertEqual(stateful["ncs_version"], "v3.3.0")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script, fixture_dir = copy_calibration_repository(root / "repo")
+            portable_path = fixture_dir / "portable-oracle-manifest.json"
+            portable = json.loads(portable_path.read_text(encoding="utf-8"))
+            portable["ncs_version"] = "v3.4.1"
+            portable_path.write_text(json.dumps(portable), encoding="utf-8")
+            output = root / "rejected.json"
+            result = run_calibrator(script, output, root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("manifest NCS version is not v3.3.0", result.stderr)
+            self.assertFalse(output.exists())
+
+            portable_path.write_bytes((FIXTURES_DIR / portable_path.name).read_bytes())
+            stateful_path = fixture_dir / "stateful-reference-manifest.json"
+            stateful["ncs_version"] = "v3.4.1"
+            stateful_path.write_text(json.dumps(stateful), encoding="utf-8")
+            result = run_calibrator(script, output, root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("stateful manifest NCS version is not v3.3.0", result.stderr)
+            self.assertFalse(output.exists())
+
     def test_stateful_recipe_manifest_and_payload_identity_are_exact(self):
         portable_manifest, _fixture_hashes, _manifest_sha256 = calibrate.load_manifest()
         (
@@ -1127,7 +1168,8 @@ class Lc3PcmCalibrateProtocolTests(unittest.TestCase):
                 report["stateful_reference_hashes"], stateful_reference_hashes
             )
             self.assertEqual(report["payload_identity"], payload_identity)
-            self.assertEqual(report["ncs_version"], manifest["ncs_version"])
+            self.assertEqual(report["ncs_version"], "v3.4.1")
+            self.assertEqual(report["fixture_ncs_version"], manifest["ncs_version"])
             self.assertEqual(
                 report["liblc3"]["semantic_label"],
                 stateful_manifest["liblc3"]["semantic_label"],
@@ -1261,6 +1303,27 @@ class Lc3PcmCalibrateProtocolTests(unittest.TestCase):
 
 
 class Lc3FixtureGeneratorTests(unittest.TestCase):
+    def test_portable_generator_rejects_wrong_liblc3_revision_before_generation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = copy_fixture_generator(root / "fixtures")
+            ncs = root / "ncs"
+            write_fake_liblc3(ncs)
+            fake_git = write_pinned_fake_git(
+                root / "fake-bin", liblc3_revision="0" * 40
+            )
+            result = run_generator(
+                script,
+                [],
+                root,
+                {
+                    "NCS": str(ncs),
+                    "PATH": str(fake_git) + os.pathsep + os.environ["PATH"],
+                },
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("liblc3 Git revision is not pinned revision", result.stderr)
+
     def test_unknown_generator_argument_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             result = run_generator(

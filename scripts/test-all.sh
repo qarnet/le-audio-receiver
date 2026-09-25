@@ -41,7 +41,7 @@
 # $HOME/le-audio-test-results, so the retained output is uploaded as
 # evidence and failures remain diagnosable.
 #
-# Required: NCS v3.3.0 dev shell (nix develop / direnv allow).
+# Required: NCS v3.4.1 dev shell (nix develop / direnv allow).
 #   ZEPHYR_BASE must be set. BabbleSim dependencies must be provisioned;
 #   scripts/bsim-stage1-run.sh derives BSIM_OUT_PATH via scripts/bsim-env.sh.
 #
@@ -150,7 +150,7 @@ resolve_ncs() {
     # Resolve ZEPHYR_BASE if not set — prefer nrfutil toolchain env.
     if [ -z "${ZEPHYR_BASE:-}" ]; then
         if command -v nrfutil &>/dev/null; then
-            eval "$(nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh)" 2>/dev/null || true
+            eval "$(nrfutil sdk-manager toolchain env --toolchain-bundle-id 8285d8ad56 --as-script sh)" 2>/dev/null || true
         fi
     fi
     : "${ZEPHYR_BASE:?ZEPHYR_BASE must be set or nrfutil must be in PATH}"

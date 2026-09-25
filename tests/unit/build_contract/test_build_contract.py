@@ -60,7 +60,9 @@ CONFIG_HEAP_MEM_POOL_SIZE=0
 
 FLPR_CONFIG = """\
 CONFIG_FLASH_BASE_ADDRESS=0x165000
-CONFIG_FLASH_LOAD_SIZE=0x18000
+CONFIG_FLASH_SIZE=96
+CONFIG_USE_DT_CODE_PARTITION=y
+CONFIG_FLASH_USES_MAPPED_PARTITION=y
 CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS=y
 """
 
@@ -556,8 +558,10 @@ class TestHardInputErrors(unittest.TestCase):
     def test_malformed_config_hard_error(self):
         fx = Fixture()
         try:
-            with open(fx.config("54l15", "flpr"), "a") as fh:
-                fh.write("CONFIG_FLASH_LOAD_SIZE=big\n")
+            write(
+                fx.config("54l15", "flpr"),
+                FLPR_CONFIG.replace("CONFIG_FLASH_SIZE=96", "CONFIG_FLASH_SIZE=big"),
+            )
             rc = cbc.main(
                 [
                     "--nrf54l15",
@@ -828,6 +832,41 @@ class TestAssertionFailures(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("SRC-001", fails)
         self.assertIn("SRC-002", fails)
+
+    def test_flpr_mapped_partition_contract(self):
+        for original, replacement in (
+            ("CONFIG_FLASH_SIZE=96\n", ""),
+            ("CONFIG_FLASH_SIZE=96", "CONFIG_FLASH_SIZE=95"),
+            ("CONFIG_USE_DT_CODE_PARTITION=y\n", ""),
+            ("CONFIG_USE_DT_CODE_PARTITION=y", "CONFIG_USE_DT_CODE_PARTITION=n"),
+            ("CONFIG_FLASH_USES_MAPPED_PARTITION=y\n", ""),
+            (
+                "CONFIG_FLASH_USES_MAPPED_PARTITION=y",
+                "CONFIG_FLASH_USES_MAPPED_PARTITION=n",
+            ),
+        ):
+            with self.subTest(replacement=replacement, original=original):
+
+                def mutate(fx):
+                    write(
+                        fx.config("54l15", "flpr"),
+                        FLPR_CONFIG.replace(original, replacement),
+                    )
+
+                rc, fails = self._rc_and_fails(mutate)
+                self.assertEqual(rc, 1)
+                self.assertIn("54l15-033", fails)
+
+    def test_flpr_wrong_partition_size(self):
+        def mutate(fx):
+            write(
+                fx.dts("54l15", "flpr"),
+                FLPR_DTS.replace("reg = < 0x0 0x18000 >", "reg = < 0x0 0x17000 >"),
+            )
+
+        rc, fails = self._rc_and_fails(mutate)
+        self.assertEqual(rc, 1)
+        self.assertIn("54l15-030", fails)
 
     def test_flpr_acceptance_off_parity(self):
         def mutate(fx):

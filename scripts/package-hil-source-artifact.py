@@ -21,7 +21,7 @@ STAGING_PREFIX = ".hil-source-artifact-"
 SCHEMA_VERSION = 2
 FIRMWARE_ID = "le-audio-hil-source-rh1"
 BOARD = "nrf54l15dk/nrf54l15/cpuapp"
-NCS_VERSION = "v3.3.0"
+NCS_VERSION = "v3.4.1"
 
 _VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")

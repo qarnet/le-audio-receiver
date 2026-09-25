@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Generate the audited NCS v3.3.0 UARTE bounce-prepare compatibility source."""
+"""Generate the audited NCS v3.4.1 UARTE bounce-prepare compatibility source."""
 
 import argparse
 import hashlib
 from pathlib import Path
 
-AUDITED_SHA256 = "6baa5b12680837b2efa47b8b1047284ea2d2d29eb9384895409efee83bcd8066"
+AUDITED_SHA256 = "d68f45fbef9da8077efe6c9f94c609393fc3485bd1d486e4f710288f6d808bd3"
 START = b"static void prepare_bounce_buf(const struct device *dev, uint8_t *buf,\n"
 END = b"\n/* This function is responsible for swapping the bounce buffer"
 OLD_BODY = (
@@ -29,7 +29,7 @@ NEW_BODY = (
 
 def transform(source: bytes) -> bytes:
     if hashlib.sha256(source).hexdigest() != AUDITED_SHA256:
-        raise ValueError("UARTE source changed: review audited NCS v3.3.0 source")
+        raise ValueError("UARTE source changed: review audited NCS v3.4.1 source")
     if source.count(START) != 1 or source.count(END) != 1:
         raise ValueError("Missing or duplicate UARTE prepare function anchor")
     start = source.index(START)

@@ -7,7 +7,9 @@ source or Linux HCI central is a different board with the same chip. Never
 select the first nRF54L15 probe or assume a fixed probe, serial port, or HCI
 index identifies the receiver.
 
-From the repository root, enter the NCS v3.3.0 dev shell and build:
+From the repository root, enter the NCS v3.4.1 dev shell and build. If already
+in an old v3.3.0 shell, use `env -u ZEPHYR_BASE nix develop` instead to avoid
+mixing its `ZEPHYR_BASE` with the new toolchain:
 
 ```sh
 nix develop

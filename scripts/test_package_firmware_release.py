@@ -27,7 +27,7 @@ CLI_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), CLI_NAME)
 
 VERSION = "0.1.0"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
-NCS = "v3.3.0"
+NCS = "v3.4.1"
 
 ZIP54L15 = "le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip"
 

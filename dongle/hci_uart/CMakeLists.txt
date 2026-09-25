@@ -8,7 +8,7 @@ target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 file(CREATE_LINK "${CMAKE_BINARY_DIR}/compile_commands.json"
   "${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json" SYMBOLIC)
 
-# NCS v3.3.0 initializes only byte 0 and the tail of the next bounce buffer.
+# NCS v3.4.1 initializes only byte 0 and the tail of the next bounce buffer.
 # A global CC swap can leave the old anomaly slot below swap_len stale: an
 # actual 0xAA in the new buffer then gets replaced by that stale byte. Generate
 # an audited driver copy in the build tree with all bytes initialized. This
@@ -20,7 +20,7 @@ file(CREATE_LINK "${CMAKE_BINARY_DIR}/compile_commands.json"
 set(_uarte_source "${ZEPHYR_BASE}/drivers/serial/uart_nrfx_uarte.c")
 file(SHA256 "${_uarte_source}" _uarte_sha256)
 if(NOT _uarte_sha256 STREQUAL
-    "6baa5b12680837b2efa47b8b1047284ea2d2d29eb9384895409efee83bcd8066")
+    "d68f45fbef9da8077efe6c9f94c609393fc3485bd1d486e4f710288f6d808bd3")
   message(FATAL_ERROR "UARTE source changed: review the HCI compatibility repair")
 endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)

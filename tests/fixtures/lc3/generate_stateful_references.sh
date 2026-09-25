@@ -207,6 +207,7 @@ def validate_portable(manifest, fixture_dir):
     )
     if require_int(manifest["schema_version"], "portable manifest.schema_version") != 2:
         raise ValidationError("unsupported portable manifest schema_version")
+    # Historical fixture origin stays v3.3.0 even when verifying with active v3.4.1.
     if require_string(manifest["ncs_version"], "portable manifest.ncs_version") != "v3.3.0":
         raise ValidationError("portable manifest NCS version is not v3.3.0")
     require_keys(manifest["liblc3"], ("semantic_label", "west_revision"), "portable manifest.liblc3")
@@ -404,10 +405,10 @@ if [ "$REBASE_STATEFUL" -eq 1 ]; then
 fi
 validate_inputs "$HERE" strict "$ALLOW_MISSING_GENERATED_FILE"
 
-NCS="${NCS:-$HOME/ncs/v3.3.0}"
+NCS="${NCS:-$HOME/ncs/v3.4.1}"
 LC3="$NCS/modules/lib/liblc3"
-EXPECTED_NRF_REVISION="ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
-EXPECTED_ZEPHYR_REVISION="fd9204a02d52630660ce8d729945a4dd743feabf"
+EXPECTED_NRF_REVISION="b20f8619ba9a5530f8c34b0a130d829947cfe55d"
+EXPECTED_ZEPHYR_REVISION="33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6"
 EXPECTED_LIBLC3_REVISION="48bbd3eacd36e99a57317a0a4867002e0b09e183"
 
 verify_git_repository() {
@@ -461,16 +462,16 @@ verify_ncs_workspace() {
     fi
     if [ "$manifest_path" != "nrf" ] || [ "$manifest_file" != "west.yml" ] || \
        [ "$zephyr_base" != "zephyr" ]; then
-        echo "FATAL: NCS workspace config is not v3.3.0 layout" >&2
+        echo "FATAL: NCS workspace config is not v3.4.1 layout" >&2
         exit 1
     fi
     if [ ! -f "$NCS/nrf/VERSION" ]; then
         echo "FATAL: NCS VERSION is missing at $NCS/nrf/VERSION" >&2
         exit 1
     fi
-    nrf_version="$(tr -d '\r\n' < "$NCS/nrf/VERSION")"
-    if [ "$nrf_version" != "3.3.0" ]; then
-        echo "FATAL: NCS VERSION is not 3.3.0" >&2
+    nrf_version="$(< "$NCS/nrf/VERSION")"
+    if [ "$nrf_version" != $'VERSION_MAJOR = 3\nVERSION_MINOR = 4\nPATCHLEVEL = 1\nVERSION_TWEAK = 0\nEXTRAVERSION =\nVERSION_METADATA = lts' ]; then
+        echo "FATAL: NCS VERSION is not 3.4.1" >&2
         exit 1
     fi
     verify_git_repository "$NCS/nrf" "$EXPECTED_NRF_REVISION" "NCS nrf" tracked

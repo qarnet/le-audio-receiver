@@ -161,7 +161,7 @@ static int i2s_do_configure(void)
 		.word_size = BIT_WIDTH,
 		.channels = CHANNELS,
 		.format = I2S_FMT_DATA_FORMAT_I2S,
-		.options = I2S_OPT_BIT_CLK_MASTER | I2S_OPT_FRAME_CLK_MASTER,
+		.options = I2S_OPT_BIT_CLK_CONTROLLER | I2S_OPT_FRAME_CLK_CONTROLLER,
 		.frame_clk_freq = SAMPLE_RATE,
 		.mem_slab = &i2s_slab,
 		.block_size = BLOCK_SIZE,

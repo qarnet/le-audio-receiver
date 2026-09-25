@@ -57,8 +57,8 @@ sample = (int16_t)(v & 0xFFFFU);
 `portable-oracle-manifest.json`. Each stream keeps one encoder and one decoder
 alive across all 128 frames, preserving codec history.
 
-The manifest is schema version 2. It records NCS `v3.3.0`, liblc3 semantic
-label `1.1.2`, west revision
+The manifest is schema version 2. It records historical corpus origin NCS
+`v3.3.0`, liblc3 semantic label `1.1.2`, west revision
 `48bbd3eacd36e99a57317a0a4867002e0b09e183`, exact generator flags, geometry,
 binary SHA-256 values, and the sole calibration-policy object: maximum absolute
 error `2048`, maximum RMS error `512`, and minimum correlation Q15 `32750`.
@@ -114,8 +114,10 @@ PCM acceptance for this path.
 
 ## Stateful decoder-history references
 
-`stateful-reference-manifest.json` is schema version 1. It binds exact ordered
-decoder-history recipes to `portable-oracle-manifest.json` schema version 2,
+`stateful-reference-manifest.json` is schema version 1. Its `ncs_version` also
+records historical corpus generation under v3.3.0, not active calibration SDK.
+It binds exact ordered decoder-history recipes to
+`portable-oracle-manifest.json` schema version 2,
 including source-manifest provenance, source geometry, action counts, reference
 kind, backing-file size, and SHA-256. The portable manifest remains sole owner
 of numerical PCM limits.
@@ -206,7 +208,7 @@ the PASS record. `CONFIG_THREAD_ANALYZER_AUTO` remains disabled, so no periodic
 analyzer thread changes the measurement run. Thread names make the report's
 `main` line identify the main-thread `unused` and `usage` values.
 
-Build it from the repository root with the installed NCS v3.3.0 toolchain:
+Build it from the repository root with the installed NCS v3.4.1 toolchain:
 
 ```bash
 nix develop -c west build --no-sysbuild \
@@ -227,7 +229,7 @@ human-readable thread-analyzer report appears after the 39 metric records and
 before PASS:
 
 ```text
-PB031_ARM_BEGIN schema=3 manifest_sha256=<64 lowercase hex> ncs=v3.3.0 liblc3=48bbd3eacd36e99a57317a0a4867002e0b09e183 max_abs_error=2048 max_rms_error=512 min_correlation_q15=32750
+PB031_ARM_BEGIN schema=3 manifest_sha256=<64 lowercase hex> ncs=v3.4.1 liblc3=48bbd3eacd36e99a57317a0a4867002e0b09e183 max_abs_error=2048 max_rms_error=512 min_correlation_q15=32750
 PB031_ARM_SOURCE main_c_sha256=<64 lowercase hex> pcm_oracle_c_sha256=<64 lowercase hex> pcm_oracle_h_sha256=<64 lowercase hex> stateful_manifest_sha256=<64 lowercase hex> stateful_recipe_c_sha256=<64 lowercase hex> stateful_recipe_h_sha256=<64 lowercase hex>
 PB031_METRIC {"record":"metric",...}
 ... exactly 39 PB031_METRIC lines, each ending with an `evaluation` string ...
@@ -339,9 +341,10 @@ reminder to review and update SHA-256 records in this README and
 `portable-oracle-manifest.json`. The script never updates those integrity
 records itself.
 
-Both modes compile `gen_fixtures.c` with the host C compiler and the liblc3
-module sources from NCS v3.3.0 (`~/ncs/v3.3.0/modules/lib/liblc3`), using the
-same relevant flags as the Zephyr liblc3 module build:
+Both modes compile `gen_fixtures.c` with the host C compiler and the pinned
+liblc3 module sources from active NCS v3.4.1
+(`~/ncs/v3.4.1/modules/lib/liblc3`), using the same relevant flags as the
+Zephyr liblc3 module build:
 
 ```text
 -O3 -std=c11 -ffast-math -Wall -Wextra -Wdouble-promotion -Wvla -pedantic -Werror

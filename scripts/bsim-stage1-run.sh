@@ -159,7 +159,7 @@ if ! command -v nrfutil &>/dev/null; then
     exit 1
 fi
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-eval "$(nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh)" || {
+eval "$(nrfutil sdk-manager toolchain env --toolchain-bundle-id 8285d8ad56 --as-script sh)" || {
     echo "ERROR: Failed to source NCS toolchain environment" >&2
     exit 1
 }

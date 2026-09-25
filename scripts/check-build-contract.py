@@ -831,7 +831,7 @@ def run_nrf54_checks(
         "FLPR chosen zephyr,code-partition resolves to cpuflpr_code_partition",
     )
     fb = config_int(flpr_cfg, "CONFIG_FLASH_BASE_ADDRESS")
-    fl = config_int(flpr_cfg, "CONFIG_FLASH_LOAD_SIZE")
+    flash_size = config_int(flpr_cfg, "CONFIG_FLASH_SIZE")
     result.add(
         fb == 0x165000,
         "54l15-032",
@@ -839,7 +839,22 @@ def run_nrf54_checks(
         "got %r" % fb,
     )
     result.add(
-        fl == 0x18000, "54l15-033", "FLPR CONFIG_FLASH_LOAD_SIZE=0x18000", "got %r" % fl
+        config_enabled(flpr_cfg, "CONFIG_USE_DT_CODE_PARTITION")
+        and config_enabled(flpr_cfg, "CONFIG_FLASH_USES_MAPPED_PARTITION")
+        and flash_size == 96
+        and part_ok
+        and code_ref is part_flpr
+        and code_ref is not None,
+        "54l15-033",
+        "FLPR mapped RRAM code partition (0x18000): DT code partition, mapped flash, FLASH_SIZE=96 KiB",
+        "flags %r/%r size %r partition %s chosen %s"
+        % (
+            flpr_cfg.get("CONFIG_USE_DT_CODE_PARTITION"),
+            flpr_cfg.get("CONFIG_FLASH_USES_MAPPED_PARTITION"),
+            flash_size,
+            part_ok,
+            code_ref is part_flpr and code_ref is not None,
+        ),
     )
     result.add(
         config_enabled(app_cfg, "CONFIG_BT_FILTER_ACCEPT_LIST"),

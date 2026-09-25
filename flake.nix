@@ -28,7 +28,8 @@
       {
         devShells.default = nix-nrf-dev.lib.${system}.mkNrfShell {
           name = "le-audio-receiver";
-          ncsVersion = "v3.3.0";
+          ncsVersion = "v3.4.1";
+          toolchainBundleId = "8285d8ad56";
           # Runtime deps for scripts/bap_central.py (BlueZ BAP source endpoint
           # via D-Bus). These land on the shell's nixpkgs python — the NCS
           # toolchain python stays scoped inside the west wrapper, so there is

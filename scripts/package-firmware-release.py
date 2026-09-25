@@ -10,7 +10,7 @@ Public CLI (all five arguments required):
     python3 scripts/package-firmware-release.py \
       --version 0.1.0 \
       --git-commit 0123456789abcdef0123456789abcdef01234567 \
-      --ncs-version v3.3.0 \
+      --ncs-version v3.4.1 \
       --build-root build \
       --output-dir dist
 

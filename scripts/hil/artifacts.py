@@ -365,9 +365,9 @@ def _validate_image_manifest(manifest, expected_images, *, kind):
             manifest.get("ncs_version")
         ):
             raise ArtifactError("source manifest provenance invalid")
-        if manifest["ncs_version"] != "v3.3.0":
+        if manifest["ncs_version"] != "v3.4.1":
             raise ArtifactError(
-                "source manifest NCS version mismatch (expected v3.3.0)"
+                "source manifest NCS version mismatch (expected v3.4.1)"
             )
 
     images = manifest.get("images")
@@ -741,7 +741,7 @@ def _validate_artifact_set_shape(artifacts):
         elif (
             identity.manifest.get("schema_version") != 2
             or identity.manifest.get("board") != "nrf54l15dk/nrf54l15/cpuapp"
-            or identity.manifest.get("ncs_version") != "v3.3.0"
+            or identity.manifest.get("ncs_version") != "v3.4.1"
             or identity.manifest.get("firmware_id") != "le-audio-hil-source-rh1"
         ):
             raise ArtifactError("source artifact identity mismatch")

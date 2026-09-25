@@ -39,7 +39,7 @@ CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
 
 # ZEPHYR_BASE is required to locate bsim_out for the BSim links.
-ZEPHYR_BASE="${ZEPHYR_BASE:-$HOME/ncs/v3.3.0/zephyr}"
+ZEPHYR_BASE="${ZEPHYR_BASE:-$HOME/ncs/v3.4.1/zephyr}"
 
 FIXED=0
 CREATED=0

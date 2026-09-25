@@ -28,7 +28,7 @@ PACKAGER_SCRIPT = os.path.join(REPO_ROOT, "scripts", "package-firmware-release.p
 VERSION = "0.1.0"
 TAG = "v0.1.0"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
-NCS = "v3.3.0"
+NCS = "v3.4.1"
 REPOSITORY = "qarnet/le-audio-receiver"
 WORKFLOW = "Firmware build"
 WORKFLOW_REF = REPOSITORY + "/.github/workflows/firmware-build.yml@refs/heads/main"
@@ -48,9 +48,9 @@ STAGING_PREFIX = ".draft-release-"
 
 TOOLCHAIN_IMAGE = (
     "ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:"
-    "f24d8932ff081ebcd8da9c248f4449bdabe461c0620a7a4ac9e95eb577ba2276"
+    "45b97cad97a9967c52d77d1d1a0f7dd8fe027edd17c05c3eda2eeadc23729418"
 )
-TOOLCHAIN_COMMIT = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
+TOOLCHAIN_COMMIT = "b20f8619ba9a5530f8c34b0a130d829947cfe55d"
 
 
 def hex_record(rec_type, address, data=b""):
@@ -349,7 +349,7 @@ class TestHappyPath(unittest.TestCase):
             self.assertIn("# LE Audio Receiver v0.1.0", notes)
             self.assertIn("draft factory-flash candidate", notes)
             self.assertIn(COMMIT, notes)
-            self.assertIn("v3.3.0", notes)
+            self.assertIn("v3.4.1", notes)
             self.assertIn(
                 "https://github.com/qarnet/le-audio-receiver/actions/runs/123456",
                 notes,
@@ -403,7 +403,7 @@ class TestInvalidInputs(unittest.TestCase):
                 dict(commit="ABCDEF0123456789abcdef0123456789abcdef01234567"),
             ),
             ("commit_short", dict(commit="0123456789abcdef0123456789abcdef0123456")),
-            ("ncs_wrong_minor", dict(ncs="v3.3.1")),
+            ("ncs_wrong_minor", dict(ncs="v3.3.0")),
             ("ncs_no_v", dict(ncs="3.3.0")),
             ("repository_other", dict(repository="someone/else")),
             ("workflow_other", dict(workflow="Other workflow")),

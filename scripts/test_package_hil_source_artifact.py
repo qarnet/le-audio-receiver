@@ -16,7 +16,7 @@ SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "package-hil-source-artifact.py"
 )
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
-NCS = "v3.3.0"
+NCS = "v3.4.1"
 MEMBERS = ["cpuapp.hex", "source-manifest.json", "SHA256SUMS"]
 
 
@@ -135,7 +135,7 @@ class TestHilSourceArtifact(unittest.TestCase):
             cases = [
                 ("bad commit", {"commit": "BAD"}),
                 ("bad ncs", {"ncs": "3.3.0"}),
-                ("wrong source ncs", {"ncs": "v3.2.0"}),
+                ("wrong source ncs", {"ncs": "v3.3.0"}),
             ]
             for name, kwargs in cases:
                 with self.subTest(name=name):
@@ -146,7 +146,7 @@ class TestHilSourceArtifact(unittest.TestCase):
                     )
                     self.assertFalse(os.path.exists(output))
                     if name == "wrong source ncs":
-                        self.assertIn("expected v3.3.0", result.stderr)
+                        self.assertIn("expected v3.4.1", result.stderr)
             os.unlink(os.path.join(build, "zephyr/zephyr.hex"))
             result = run_cli(build, output)
             self.assertNotEqual(result.returncode, 0)

@@ -47,11 +47,11 @@ if ! command -v nrfutil &>/dev/null; then
     echo "ERROR: nrfutil not in PATH — source NCS toolchain environment first" >&2
     exit 1
 fi
-if ! nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh >/dev/null 2>&1; then
+if ! nrfutil sdk-manager toolchain env --toolchain-bundle-id 8285d8ad56 --as-script sh >/dev/null 2>&1; then
     echo "ERROR: nrfutil toolchain env command failed" >&2
     exit 1
 fi
-eval "$(nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh)" || {
+eval "$(nrfutil sdk-manager toolchain env --toolchain-bundle-id 8285d8ad56 --as-script sh)" || {
     echo "ERROR: Failed to source NCS toolchain environment" >&2
     exit 1
 }

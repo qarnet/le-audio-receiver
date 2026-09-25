@@ -14,9 +14,19 @@ address `C0:AA:BB:CC:DD:EE` is in `hci_identity.h`, not a production OUI.
 The adapter is session-scoped; no persistent btattach service or fixed HCI/tty
 index is supported.
 
+NCS v3.4.1 UART compatibility uses a guarded generated build-tree patch, not
+an SDK-on-disk edit. The full sentinel-copy patch was re-audited against
+original SDK source SHA-256
+`d68f45fbef9da8077efe6c9f94c609393fc3485bd1d486e4f710288f6d808bd3`:
+the original path differs in 3/8192 exhaustive byte-value cases, the generated
+path in 0/8192. Driver core functions remain unchanged. This corrects only the
+old-slot `0xAA` false replacement; it does **not** establish physical HCI
+qualification or fix the still-open UART hardware failure described below.
+
 ## Build and session binding
 
-From repo root in NCS v3.3.0 dev shell:
+From repo root in NCS v3.4.1 dev shell (from an old v3.3.0 shell, re-enter
+with `env -u ZEPHYR_BASE nix develop`):
 
 ```sh
 fw-build-dongle

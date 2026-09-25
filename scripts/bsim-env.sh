@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# BabbleSim environment for NCS v3.3.0
+# BabbleSim environment for NCS v3.4.1
 # Derives BSIM paths from ZEPHYR_BASE. Source this script (not execute)
 # to export BSIM_OUT_PATH, BSIM_COMPONENTS_PATH, BOARD.
 #

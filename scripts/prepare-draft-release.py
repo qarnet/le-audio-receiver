@@ -13,7 +13,7 @@ Public CLI (all arguments required):
       --tag v0.1.0 \
       --version 0.1.0 \
       --git-commit 0123456789abcdef0123456789abcdef01234567 \
-      --ncs-version v3.3.0 \
+      --ncs-version v3.4.1 \
       --repository qarnet/le-audio-receiver \
       --workflow "Firmware build" \
       --workflow-ref qarnet/le-audio-receiver/.github/workflows/firmware-build.yml@refs/heads/main \
@@ -73,14 +73,14 @@ ERROR_PREFIX = "prepare-draft-release: error: "
 STAGING_PREFIX = ".draft-release-"
 
 # Immutable FR3 pins for this release track.
-NCS_VERSION = "v3.3.0"
+NCS_VERSION = "v3.4.1"
 REPOSITORY = "qarnet/le-audio-receiver"
 WORKFLOW_NAME = "Firmware build"
 TOOLCHAIN_IMAGE = (
     "ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:"
-    "f24d8932ff081ebcd8da9c248f4449bdabe461c0620a7a4ac9e95eb577ba2276"
+    "45b97cad97a9967c52d77d1d1a0f7dd8fe027edd17c05c3eda2eeadc23729418"
 )
-TOOLCHAIN_SDK_NRF_COMMIT = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
+TOOLCHAIN_SDK_NRF_COMMIT = "b20f8619ba9a5530f8c34b0a130d829947cfe55d"
 
 WORKFLOW_REF_TEMPLATE = "%s/.github/workflows/firmware-build.yml@refs/heads/main"
 
@@ -755,7 +755,7 @@ def _build_parser():
         "--version", required=True, help="project version MAJOR.MINOR.PATCH"
     )
     parser.add_argument("--git-commit", required=True, help="40 lowercase hex commit")
-    parser.add_argument("--ncs-version", required=True, help="exact v3.3.0")
+    parser.add_argument("--ncs-version", required=True, help="exact v3.4.1")
     parser.add_argument("--repository", required=True, help="exact owner/repository")
     parser.add_argument("--workflow", required=True, help="exact workflow name")
     parser.add_argument("--workflow-ref", required=True, help="exact workflow ref")

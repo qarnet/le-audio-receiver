@@ -1,5 +1,45 @@
 # STATUS: le-audio-receiver, 2026-09-25
 
+## PB-040 current NCS v3.4.1 integration (2026-09-25; dirty-tree diagnostic)
+
+Active SDK `~/ncs/v3.4.1`: nrf `b20f8619ba9a5530f8c34b0a130d829947cfe55d`,
+Zephyr `33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6`; toolchain
+`8285d8ad56` (GNU 14.3 ARM/RISC-V, Zephyr SDK 1.0.1). Start a fresh dev
+shell (`env -u ZEPHYR_BASE nix develop` from an old v3.3.0 shell). Historical
+v3.3.0 SDK, evidence and active private draft remain untouched. Root `VERSION`
+is still `0.1.0`. Container digest
+`sha256:45b97cad97a9967c52d77d1d1a0f7dd8fe027edd17c05c3eda2eeadc23729418`
+was registry-verified, not tested by hosted CI.
+
+- Pristine physical builds: receiver CPUAPP/FLPR, standalone source, HCI
+  **3/3 pass**, no compiler/Kconfig warnings. `NRF_PLATFORM_LUMOS=n` disables
+  verified unused deprecated alias on each target; equivalent I2S controller
+  clock bits and mapped FLPR partition-size contract were updated, not weakened.
+  Actual build contract: **69 assertions, 0 failed**. Native suite:
+  **76 pass**. HIL Python: **340 pass, 1 intentional hardware skip**.
+- Strict LC3 fixtures preserve original v3.3.0 manifest and reference bytes:
+  **40 tests** and host replay pass. ARM calibration: **296 tests pass at
+  build only**, no execution or flash. Strict BSim with `-Werror` on dependency
+  closure and five source/hash-specific documented upstream exceptions:
+  **17 scenarios / 26 runs pass**; no global warning waiver.
+- Dirty-tree coverage report: all **46 suites pass**; 36-file population and
+  every baseline ratio/count unchanged (4971/5427 lines, 2203/3008 branches,
+  377/377 functions). Log:
+  `/tmp/opencode/pb040-coverage-20260925-r1/full.log`. Baseline not updated.
+  Native `native_sim` host-only CMake notice `SoC native is not supported by
+  this release.` (`nrf/cmake/device_support.cmake:34`) appears in 46 host
+  builds, not physical builds; retain raw notice, no compiler/Kconfig warning
+  waiver. Fake-entropy banners remain test-only.
+- NCS v3.4.1 HCI generated UART sentinel patch re-audited against original
+  source SHA-256 `d68f45fbef9da8077efe6c9f94c609393fc3485bd1d486e4f710288f6d808bd3`:
+  original 3/8192, generated 0/8192 exhaustive byte-value mismatches. Driver
+  core unchanged; physical HCI failure remains **open**, not fixed by SDK
+  upgrade. No RTT, PB-013 360-frame offload, hardware qualification, RH4/FR4,
+  release, or old-asset provenance claim. Full integration evidence:
+  `docs/development/ncs-3.4.1-upgrade-results.md`. These are dirty-tree
+  diagnostics until parent commits and verifies clean canonical gate; PB-040
+  acceptance criteria remain unchecked.
+
 ## Current implementation snapshot (2026-09-25; not acceptance)
 
 Primary repository `feature/nrf54l15-only-continuation` has local migration

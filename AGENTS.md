@@ -1,7 +1,12 @@
 # nRF Connect SDK — Knowledge Lookup Rules
 
-The nRF Connect SDK is installed at `~/ncs/`. Resolve the exact version with:
-  `ls -d ~/ncs/v*/ | sort -V | tail -1`
+Active development uses NCS v3.4.1 at `~/ncs/v3.4.1` (nrf
+`b20f8619ba9a5530f8c34b0a130d829947cfe55d`, Zephyr
+`33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6`). NCS v3.3.0 remains
+installed for historical evidence; do not select an SDK via directory order.
+Use a fresh shell (`env -u ZEPHYR_BASE nix develop` if an old v3.3.0 shell is
+active) so old `ZEPHYR_BASE` cannot mix with the new toolchain. Active
+toolchain pin: `8285d8ad56` (GNU 14.3 ARM/RISC-V, Zephyr SDK 1.0.1).
 
 Treat the installed source tree as the authoritative reference. Do NOT guess
 at Kconfig symbols, devicetree compatibles, or API signatures — grep the
@@ -107,13 +112,20 @@ Compiler warnings and Kconfig "assigned value but got" warnings are hard errors:
 fix the source or suppress with a recorded reason. Boot-time `LOG_WRN` and
 openocd/flashing warnings are treated the same — don't normalize noise.
 
-NCS v3.3.0 informational `__ASSERT()` and the documented nRF54L15 watchdog
-no-sources diagnostic (wdt30/wdt31 disabled with SDC) are not compiler or
-Kconfig assigned-value warnings; check `STATUS.md` "Build warning
-diagnostics" before classifying them. Historical nRF5340 ISO experimental
-symbols, SW Split low-latency-policy gap, and dual-target watchdog tradeoff
-are not current receiver exceptions. Diagnose new warnings; do not suppress
-them by citing an obsolete target.
+Current NCS v3.4.1 `native_sim` host-only builds emit one CMake product-support
+notice from `nrf/cmake/device_support.cmake:34`: `SoC native is not supported by
+this release.` This does not apply to physical SoC builds and is not a compiler
+or Kconfig warning. Retain the raw notice; never make this a general warning
+waiver. Native fake-entropy banners are test-only, not a reason to change
+production entropy configuration. Physical receiver, standalone source, and
+HCI builds have no compiler or Kconfig warnings after disabling the verified
+unused deprecated `NRF_PLATFORM_LUMOS` alias in each target. Historical NCS
+v3.3.0 informational `__ASSERT()` and documented watchdog no-sources diagnostic
+(wdt30/wdt31 disabled with SDC) remain historical, not current warning
+exceptions; check `STATUS.md` "Build warning diagnostics" for older logs.
+Historical nRF5340 ISO experimental symbols, SW Split low-latency-policy gap,
+and dual-target watchdog tradeoff are not current receiver exceptions.
+Diagnose new warnings; do not suppress them by citing an obsolete target.
 
 ## Style rule: no em dashes in user-facing documentation
 
@@ -409,7 +421,8 @@ attachment service.
 
 ## Build
 
-Build **from the repo root**. Enter the dev shell first, then run the build
+Build **from the repo root** using NCS v3.4.1. Enter a fresh dev shell first
+(`env -u ZEPHYR_BASE nix develop` from an old v3.3.0 shell), then run the build
 helper:
 
 ```bash
