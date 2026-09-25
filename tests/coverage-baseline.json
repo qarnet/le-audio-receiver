@@ -9,7 +9,7 @@
     "reasons": {
       "src/bt_bap.c": "BAP unicast server, ASCS/PACS, pairing, and the R7 private teardown transition owner: integration-only through the accepted T4+R7 BabbleSim 17-scenario matrix (mono 7.5/10 ms, Mode A incl. reverse start, Mode B, malformed-SDU rejection + resume, one-CIS-loss, first-ASE stop, release-without-disable, disconnect-while-streaming, reconnect, source-direction rejection, NO_MEM third sink, nine invalid-codec-field rejections, two successes, duplicate same-slot release rejected + slot reuse) with strict PCM oracle and exact R7 teardown observer assertions (first close wins once, per-slot cleanup exactly once, release sink-stop only on a release-driven first edge, disconnect cleanup once); no native unit suite exists",
       "src/flpr/main.c": "FLPR firmware entry point (RISC-V VPR): no RISC-V simulator infrastructure exists in this repo; hardware-only by design. R8: acceptance message handlers (RING_TEST/STALL/STRESS/FAULT_HANG + diagnostic counters) moved to src/flpr/acceptance.c, which IS direct-tested natively (tests/unit/flpr_acceptance_flpr); main.c retains READY/heartbeat/reset/producer/consumer + production ring processing.",
-      "src/main.c": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by production builds and boot logs",
+      "src/main.c": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by final receiver evidence (fw-build-54l15) and historical boot logs",
       "src/sdc_hci_remove_iso_path_trace.c": "GNU ld interposition against the prebuilt SDC is target-only: the native suite proves exact parameter forwarding and status preservation, fw-build-54l15 proves the nRF54L15 wrappers and original symbols are present in the final image, and hil-runner.py is the physical-console evidence path for the arm, callback, scheduling, and host-completion regions."
     }
   },
@@ -40,20 +40,6 @@
       "lines": [
         112,
         120
-      ]
-    },
-    "src/audio_clock_actuator_apll.c": {
-      "branches": [
-        4,
-        4
-      ],
-      "functions": [
-        3,
-        3
-      ],
-      "lines": [
-        15,
-        15
       ]
     },
     "src/audio_clock_actuator_none.c": {
@@ -128,16 +114,16 @@
     },
     "src/audio_modea.c": {
       "branches": [
-        61,
-        76
+        89,
+        102
       ],
       "functions": [
         11,
         11
       ],
       "lines": [
-        109,
-        115
+        124,
+        128
       ]
     },
     "src/audio_offload.c": {
@@ -212,16 +198,16 @@
     },
     "src/audio_stream_session.c": {
       "branches": [
-        159,
-        222
+        185,
+        248
       ],
       "functions": [
         26,
         26
       ],
       "lines": [
-        323,
-        339
+        332,
+        348
       ]
     },
     "src/audio_timing_math.c": {
@@ -535,11 +521,10 @@
   },
   "gcov_version": "gcov (GCC) 14.3.0",
   "gcovr_version": "gcovr 8.4",
-  "generated_commit": "33b1358e00fd3c240100313bab107bf033e5c1f2",
+  "generated_commit": "21ff2f0fd1dc4e16071dfbc0cad9359d33885018",
   "population": [
     "src/app_lifecycle.c",
     "src/audio_asrc.c",
-    "src/audio_clock_actuator_apll.c",
     "src/audio_clock_actuator_none.c",
     "src/audio_decode.c",
     "src/audio_drift.c",
@@ -578,16 +563,16 @@
   "schema_version": 1,
   "totals": {
     "branches": [
-      2153,
-      2960
+      2203,
+      3008
     ],
     "functions": [
-      380,
-      380
+      377,
+      377
     ],
     "lines": [
-      4962,
-      5420
+      4971,
+      5427
     ]
   }
 }
