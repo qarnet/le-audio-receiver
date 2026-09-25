@@ -1,5 +1,11 @@
 # Firmware CI canonical test gate plan
 
+> **PB-040 SDK override (2026-09-25):** Current repository CI workflow pins
+> NCS v3.4.1, toolchain bundle `8285d8ad56` and the matching verified
+> container digest. [PB-040 results](ncs-3.4.1-upgrade-results.md) record the
+> clean local software gate and workflow contract tests; no hosted v3.4.1 CI
+> execution is claimed. v3.3.0 pins and hosted runs below are historical.
+>
 > **Current migration note (2026-09-25):** PR 11's dual-target run and
 > 65-child topology below are historical acceptance for that commit, not
 > current migration gates. Hosted workflow/release facts are not changed by

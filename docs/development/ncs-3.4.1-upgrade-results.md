@@ -1,9 +1,9 @@
 # PB-040 NCS v3.4.1 upgrade: current integration evidence (2026-09-25)
 
-This records current dirty-tree integration diagnostics, not clean-commit
-acceptance, ARM execution, hosted CI, a canonical gate, or hardware approval.
-The LC3/PCM calibration slice below retains its original evidence. PB-013 edits
-are separate; no acceptance criterion is checked until final clean verification.
+The integration diagnostics below were recorded before the clean verification
+at the end of this document. They are retained as dated evidence, not replaced
+by later local results. PB-013 edits remain separate; no ARM execution, hosted
+CI, hardware qualification, exact-artifact acceptance or release is claimed.
 
 ## SDK and historical corpus boundary
 
@@ -197,7 +197,71 @@ The five source/hash-specific BabbleSim exceptions above describe real upstream
 error-path gaps, not false positives; `-Werror` stays on for the dependency
 closure and no exception leaks into firmware tests.
 
-Current evidence is diagnostic because the integration tree is dirty. Parent
-must commit intended changes and run clean canonical verification before
-checking PB-040 acceptance criteria or marking Done. No hardware operation,
-SDK patch, release operation, or commit was part of this documentation slice.
+The preceding integration evidence was diagnostic because that tree was dirty.
+No hardware operation, SDK patch, release operation, or commit was part of that
+slice. Subsequent clean verification follows.
+
+## Clean local software verification at `daf7cd9` (2026-09-25)
+
+- Separate validation clone was clean before and after the canonical gate at
+  `daf7cd9404e32bacbff4b6431dafccbd28e4a8eb`. Full log
+  `/tmp/opencode/pb040-clean-canonical-daf7cd9-r1.log` ends **80 PASS / 0 FAIL /
+  80 TOTAL**: 41 Twister, five exec-only, 31 Python, coverage, matrix and
+  strict BSim Stage 1 (17 scenarios / 26 runs; unchanged oracle and PCM limits).
+  `/tmp/opencode/pb040-clean-canonical-daf7cd9-r1/coverage/run-manifest.json`
+  records `mode: baseline`, `dirty: false`, exact source commit and all suites
+  OK. Every one of the 36 population baseline pairs is **IDENTICAL**;
+  4971/5427 lines, 2203/3008 branches and 377/377 functions. Committed
+  coverage baseline was not changed.
+- Clean HIL Python result: **340 passed, one intentional hardware-opt-in skip**;
+  `/tmp/opencode/pb040-clean-hil-daf7cd9-r1.log`. Strict regeneration of LC3
+  manifests and reference bytes retained the original v3.3.0 corpus. Actual
+  host LC3 replay report `/tmp/opencode/pb040-clean-lc3-daf7cd9-r1.json`
+  (execution log `/tmp/opencode/pb040-clean-lc3-daf7cd9-r1.log`) records active
+  NCS v3.4.1, original `fixture_ncs_version: v3.3.0`, schema 3, original
+  portable manifest SHA-256
+  `f82c85fed3097b6943b2d75733f7a377d0beb71a0a79fc5566ac8ed76bc7ba11`
+  and stateful manifest SHA-256
+  `2c931ef6c3afc81081583c73bf429543c876cebf2e2166e0d43f4b4674b2519a`.
+  liblc3 revision `48bbd3eacd36e99a57317a0a4867002e0b09e183` remains
+  unchanged. ARM calibration's 296 tests were build-only, not executed.
+- After the canonical pre/post-clean run, three pristine physical-target builds
+  passed (receiver CPUAPP + FLPR, standalone source CPUAPP, HCI CPUAPP).
+  `/tmp/opencode/pb040-clean-{receiver,source,hci}-daf7cd9-r1.log` and
+  `/tmp/opencode/pb040-clean-build-contract-daf7cd9-r1.log` retain the raw
+  builds and resolved checker **69 assertions, 0 failed**. Image `zephyr.hex`
+  SHA-256: receiver CPUAPP
+  `716d43fe57b5af2ed1bc8fec9197c9e07bd81f5cab88673cdc8d4aa5fac700bd`,
+  FLPR `c2197f4c664b11a28d499f527ec6d359ee122e9a9434b0a4e9f46b1e4239aa4a`,
+  source `805f2ed940a6fef965c51fc857bbcd7619b796df4e7f1b753978a2f5d198955c`,
+  HCI `c2108956760a770e45d8bf52f86736c0bc7da3fa881410c6248414446d88a1d9`.
+  Builds produced only generated `compile_commands.json` symlink changes in the
+  clone (root, `src/flpr/`, `hil/source/`, `dongle/hci_uart/`), so no false
+  post-build clean-tree claim; the checker log's Nix dirty-tree notice is from
+  that generated state, not a compiler/Kconfig diagnostic.
+
+### Warning classification and remaining boundaries
+
+- Three physical builds have **zero compiler and Kconfig warnings**. Each
+  retains one CMake message `__ASSERT() statements are globally ENABLED`.
+  Fresh NCS v3.4.1 source inspection of Zephyr `CMakeLists.txt:2356-2359`
+  shows it is intentionally emitted iff `!CONFIG_TEST && CONFIG_ASSERT &&
+  !CONFIG_FORCE_NO_ASSERT`. All three development/acceptance images keep
+  assertions on as fault guards. This exact informational configuration
+  diagnostic also existed in the old SDK's builds; it is not an unexplained
+  new warning, a compiler/Kconfig warning, or a reason to disable assertions.
+  No filtering or general warning waiver; inspect other CMake warnings
+  separately. The host-only `native_sim` notice `SoC native is not supported
+  by this release.` remains separately classified above and present in raw
+  host logs. Five upstream BabbleSim dependency compiler exceptions remain
+  limited to the exact source paths, hashes and classes listed above, with
+  `-Werror` elsewhere; **do not claim zero warnings across every dependency**.
+- SDK v3.3.0 remains installed side by side. Active NCS v3.4.1 nrf and Zephyr
+  revisions are pinned above; sdk-manager 1.16.1 was upgraded for this SDK;
+  toolchain bundle `8285d8ad56` and repository `flake.lock` were not changed.
+  CI workflow contract tests passed (36); the official container digest above
+  was registry-verified only. No hosted CI execution, flash, board test, RTT
+  change, user-owned nix-nrf-dev edit, PB-013 360-frame feature, physical HCI
+  qualification, RH4/FR4 acceptance, draft-asset change or public release.
+  Root `VERSION` remains `0.1.0`. Software upgrade implementation has clean
+  local verification; PB-040 awaits human PR acceptance in Review, not Done.

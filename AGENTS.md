@@ -127,6 +127,17 @@ Historical nRF5340 ISO experimental symbols, SW Split low-latency-policy gap,
 and dual-target watchdog tradeoff are not current receiver exceptions.
 Diagnose new warnings; do not suppress them by citing an obsolete target.
 
+NCS v3.4.1 Zephyr `CMakeLists.txt:2356-2359` intentionally emits
+`__ASSERT() statements are globally ENABLED` when `!CONFIG_TEST &&
+CONFIG_ASSERT && !CONFIG_FORCE_NO_ASSERT`. All three physical development/
+acceptance images intentionally enable assertions for fault guards; their build
+logs retain this exact CMake informational configuration diagnostic. This
+current source-checked condition also occurred in old builds, but is not a
+blanket reuse of a historical waiver. It is neither a compiler/Kconfig warning
+nor the host-only unsupported-SoC notice. Do not disable assertions to quiet it,
+filter the log, or grant a general CMake warning waiver. Inspect and resolve
+any other CMake warning separately.
+
 ## Style rule: no em dashes in user-facing documentation
 
 User-facing documentation must not contain the Unicode em dash (U+2014).

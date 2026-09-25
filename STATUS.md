@@ -1,6 +1,6 @@
 # STATUS: le-audio-receiver, 2026-09-25
 
-## PB-040 current NCS v3.4.1 integration (2026-09-25; dirty-tree diagnostic)
+## PB-040 NCS v3.4.1 clean local software verification (2026-09-25)
 
 Active SDK `~/ncs/v3.4.1`: nrf `b20f8619ba9a5530f8c34b0a130d829947cfe55d`,
 Zephyr `33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6`; toolchain
@@ -10,6 +10,36 @@ v3.3.0 SDK, evidence and active private draft remain untouched. Root `VERSION`
 is still `0.1.0`. Container digest
 `sha256:45b97cad97a9967c52d77d1d1a0f7dd8fe027edd17c05c3eda2eeadc23729418`
 was registry-verified, not tested by hosted CI.
+
+- Separate validation clone at exact committed code
+  `daf7cd9404e32bacbff4b6431dafccbd28e4a8eb` was clean before and after
+  canonical gate: **80 PASS / 0 FAIL / 80 TOTAL** (41 Twister, five exec-only,
+  31 Python, coverage, matrix, strict BSim 17 scenarios / 26 runs).
+  `/tmp/opencode/pb040-clean-canonical-daf7cd9-r1.log`; coverage manifest
+  `/tmp/opencode/pb040-clean-canonical-daf7cd9-r1/coverage/run-manifest.json`
+  has `dirty: false`, all 36 baseline pairs IDENTICAL (4971/5427 lines,
+  2203/3008 branches, 377/377 functions), committed baseline untouched.
+  Separate clean HIL Python **340 passed / one intentional hardware-opt-in
+  skip**, LC3 host replay schema 3 verifies active v3.4.1 with original v3.3.0
+  corpus. Following gate, three pristine builds **3/3** and resolved contract
+  **69/69** passed; generated compile-command symlinks alone changed afterward,
+  not evidence of a post-build clean tree. Logs and image hashes:
+  `docs/development/ncs-3.4.1-upgrade-results.md`.
+- Physical builds emitted **no compiler or Kconfig warnings**. Their exact
+  CMake `__ASSERT() statements are globally ENABLED` message is Zephyr
+  `CMakeLists.txt:2356-2359`'s intentional configuration diagnostic when
+  `!CONFIG_TEST && CONFIG_ASSERT && !CONFIG_FORCE_NO_ASSERT`; fault guards
+  remain enabled. Retain raw logs, never filter this notice or globally waive
+  CMake warnings. Separately, host-only `native_sim` produces the SDK's
+  unsupported-SoC notice, and BabbleSim dependencies carry exactly five
+  source/hash-specific upstream warning exceptions under `-Werror`. No
+  claim of zero warnings across all dependency code.
+- PB-040 software implementation verified locally; **Review**, not Done or
+  human PR acceptance. HCI physical qualification still open. No hosted CI
+  execution, board flash, RTT change, 360-frame FLPR feature, RH4/FR4,
+  publication or active draft-asset change.
+
+### Earlier dirty-tree integration diagnostics (retained, not clean acceptance)
 
 - Pristine physical builds: receiver CPUAPP/FLPR, standalone source, HCI
   **3/3 pass**, no compiler/Kconfig warnings. `NRF_PLATFORM_LUMOS=n` disables
@@ -36,9 +66,8 @@ was registry-verified, not tested by hosted CI.
   core unchanged; physical HCI failure remains **open**, not fixed by SDK
   upgrade. No RTT, PB-013 360-frame offload, hardware qualification, RH4/FR4,
   release, or old-asset provenance claim. Full integration evidence:
-  `docs/development/ncs-3.4.1-upgrade-results.md`. These are dirty-tree
-  diagnostics until parent commits and verifies clean canonical gate; PB-040
-  acceptance criteria remain unchecked.
+  `docs/development/ncs-3.4.1-upgrade-results.md`. These lines describe
+  earlier dirty-tree diagnostics; clean local verification is recorded above.
 
 ## Current implementation snapshot (2026-09-25; not acceptance)
 

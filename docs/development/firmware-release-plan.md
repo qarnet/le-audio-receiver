@@ -1,5 +1,12 @@
 # Firmware release plan
 
+> **PB-040 SDK override (2026-09-25):** Active local software builds and
+> repository workflow pins use NCS v3.4.1 with toolchain bundle `8285d8ad56`;
+> see [PB-040 results](ncs-3.4.1-upgrade-results.md). Earlier v3.3.0
+> provenance, draft-asset hashes and hosted run records below remain dated
+> facts, not evidence of a v3.4.1 hosted run or exact-artifact acceptance.
+> No release or asset was changed by PB-040.
+>
 > **Current migration note (2026-09-25):** Active release line remains
 > nRF54L15-only, with CPUAPP + FLPR factory ZIP and FR1 schema unchanged.
 > E83 receiver board/helpers and production APLL have been retired on the

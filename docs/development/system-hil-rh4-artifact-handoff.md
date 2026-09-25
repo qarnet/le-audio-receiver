@@ -8,8 +8,9 @@ recipe. PB-036 host-side source packager/resolver now use schema **2** for
 `nrf54l15dk/nrf54l15/cpuapp`: XIAO standalone source DK-target plus overlay,
 single CPUAPP input `build/hil-source-nrf54l15/zephyr/zephyr.hex`, ordered ZIP
 members `cpuapp.hex`, `source-manifest.json`, `SHA256SUMS`, image role `cpuapp`,
-flash order 0, NCS `v3.3.0`, caller-supplied canonical lowercase 40-hex
-`git_commit`, and validated byte size/SHA-256. Deterministic ZIP metadata,
+flash order 0, NCS `v3.4.1` for new active candidates (PB-040),
+caller-supplied canonical lowercase 40-hex `git_commit`, and validated byte
+size/SHA-256. Deterministic ZIP metadata,
 strict HEX/manifest/member/checksum checks, atomic no-clobber creation,
 external staging, and tamper/re-hash checks remain mandatory. Receiver FR1
 archive stays schema **1**, CPUAPP + FLPR; do not change its accepted contract.

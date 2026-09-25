@@ -28,7 +28,7 @@ current instructions or new behavior requirements.
   ASRC + NONE (CLOCK-002). `src/audio_timing_none.c` serves nRF54L15BSim.
 - BUILD-001 current production builds are `fw-build-54l15` (receiver CPUAPP
   and FLPR), `fw-build-hil-source-54l15` (standalone source CPUAPP) and
-  `fw-build-dongle` (XIAO HCI CPUAPP), all NCS v3.3.0; canonical BSim peers
+  `fw-build-dongle` (XIAO HCI CPUAPP), all NCS v3.4.1; canonical BSim peers
   use nRF54L15BSim. The old required DK/CPUNET fixtures no longer apply.
   BUILD-002 SW Split netcore overlays describe the retired nRF5340 path,
   not current integrated nRF54L15BSim SW Split. BUILD-003 currently checks

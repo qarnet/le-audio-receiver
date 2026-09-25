@@ -1,10 +1,10 @@
 ---
 id: PB-040
 title: Upgrade nRF Connect SDK to v3.4.1
-status: In Progress
+status: Review
 assignee: []
 created_date: '2026-09-25 16:28'
-updated_date: '2026-09-25 17:57'
+updated_date: '2026-09-25 18:40'
 labels:
   - 'size:M'
   - 'area:build'
@@ -51,11 +51,11 @@ None.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Dev shell and CI use exact NCS v3.4.1 and matching toolchain pins; version guards and artifact provenance report those versions.
-- [ ] #2 Receiver CPUAPP/FLPR, standalone XIAO source, and HCI UART images build without ignored compiler, Kconfig assigned-value, or build warnings.
-- [ ] #3 Native units, coverage, strict BSim, calibration, and packaging/version tests pass with retained codec bytes, existing fixture provenance, and unchanged audio acceptance limits.
-- [ ] #4 HCI UART generated compatibility patch is re-audited against v3.4.1 and guarded by tests; no SDK-on-disk patch is introduced.
-- [ ] #5 Current SDK guidance reflects v3.4.1; v3.3.0 historical evidence and published assets remain unmodified; software gate results make no physical HCI qualification or release-publication claim.
+- [x] #1 Dev shell and CI use exact NCS v3.4.1 and matching toolchain pins; version guards and artifact provenance report those versions.
+- [x] #2 Receiver CPUAPP/FLPR, standalone XIAO source, and HCI UART images build without ignored compiler, Kconfig assigned-value, or build warnings.
+- [x] #3 Native units, coverage, strict BSim, calibration, and packaging/version tests pass with retained codec bytes, existing fixture provenance, and unchanged audio acceptance limits.
+- [x] #4 HCI UART generated compatibility patch is re-audited against v3.4.1 and guarded by tests; no SDK-on-disk patch is introduced.
+- [x] #5 Current SDK guidance reflects v3.4.1; v3.3.0 historical evidence and published assets remain unmodified; software gate results make no physical HCI qualification or release-publication claim.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -78,3 +78,9 @@ None.
 
 2026-09-25 dirty-tree integration diagnostics: pinned NCS v3.4.1/toolchain; three pristine physical builds and 69 resolved contract assertions pass without compiler/Kconfig warnings; native 76 pass, HIL Python 340 pass/one intentional hardware skip, strict LC3 40 pass with original fixture bytes and host replay, strict BSim 17 scenarios/26 runs with scoped audited five-hash dependency -Werror exceptions, report-only coverage 46 suites with unchanged 36-file baseline (4971/5427 lines, 2203/3008 branches, 377/377 functions), ARM calibration build-only 296 pass. Native_sim CMake product-support notice remains raw and host-only. HCI source-hash-guarded UART compatibility proof is original 3/8192 vs generated 0/8192; physical HCI failure remains open. No hosted CI, clean canonical acceptance, flash, release, or commit. See docs/development/ncs-3.4.1-upgrade-results.md for logs and boundaries.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Software upgrade verified locally on committed daf7cd9404e32bacbff4b6431dafccbd28e4a8eb: clean canonical gate 80 PASS / 0 FAIL / 80 TOTAL (41 Twister, five exec-only, 31 Python, baseline coverage, matrix, strict BSim 17/26). Clean coverage manifest dirty=false; all 36 baseline pairs IDENTICAL. HIL Python 340 pass, one intentional hardware-opt-in skip. LC3 host replay uses NCS v3.4.1 and original v3.3.0 fixture corpus; 296 ARM calibration tests build-only. Three pristine physical-target builds pass; resolved build contract 69/69, zero compiler/Kconfig warnings. Exact Zephyr assertion-enabled CMake configuration notice retained with fault guards on; native_sim host-only product-support notice and five source/hash-specific upstream BabbleSim dependency compiler exceptions separately recorded, not globally waived. Workflow contract tests 36 pass; no hosted CI execution. HCI UART generated patch source-hash guarded, exhaustive original 3/8192 vs generated 0/8192; physical qualification remains open. Existing fixture bytes, PCM limits, coverage baseline, v3.3.0 historical evidence, VERSION 0.1.0 and draft assets unchanged. No hardware flash, RTT or 360-frame feature work, RH4/FR4 acceptance or publication. See docs/development/ncs-3.4.1-upgrade-results.md and external /tmp/opencode/pb040-clean-canonical-daf7cd9-r1.log plus coverage/run-manifest.json, clean HIL/LC3/build logs. Implementation ready for human PR review, not Done or accepted.
+<!-- SECTION:FINAL_SUMMARY:END -->
