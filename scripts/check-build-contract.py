@@ -1064,6 +1064,30 @@ def run_nrf54_checks(
         "app zephyr,bt-hci node compatible nordic,bt-hci-sdc",
         "compatible %r" % compat,
     )
+    result.add(
+        config_enabled(app_cfg, "CONFIG_BT_CONN_TX_NOTIFY_WQ"),
+        "54l15-056",
+        "app CONFIG_BT_CONN_TX_NOTIFY_WQ=y (separate connection TX notify workqueue)",
+        "got %r" % app_cfg.get("CONFIG_BT_CONN_TX_NOTIFY_WQ"),
+    )
+    result.add(
+        config_int(app_cfg, "CONFIG_BT_CONN_TX_NOTIFY_WQ_STACK_SIZE") == 1536,
+        "54l15-057",
+        "app CONFIG_BT_CONN_TX_NOTIFY_WQ_STACK_SIZE=1536",
+        "got %r" % config_int(app_cfg, "CONFIG_BT_CONN_TX_NOTIFY_WQ_STACK_SIZE"),
+    )
+    result.add(
+        config_int(app_cfg, "CONFIG_BT_CONN_TX_NOTIFY_WQ_PRIO") == 8,
+        "54l15-058",
+        "app CONFIG_BT_CONN_TX_NOTIFY_WQ_PRIO=8",
+        "got %r" % config_int(app_cfg, "CONFIG_BT_CONN_TX_NOTIFY_WQ_PRIO"),
+    )
+    result.add(
+        config_enabled(app_cfg, "CONFIG_WARN_EXPERIMENTAL"),
+        "54l15-059",
+        "app CONFIG_WARN_EXPERIMENTAL=y (retain visible diagnostic warning)",
+        "got %r" % app_cfg.get("CONFIG_WARN_EXPERIMENTAL"),
+    )
 
 
 def run_source_checks(bt_bap_path, result):

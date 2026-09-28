@@ -139,6 +139,19 @@ nor the host-only unsupported-SoC notice. Do not disable assertions to quiet it,
 filter the log, or grant a general CMake warning waiver. Inspect and resolve
 any other CMake warning separately.
 
+Receiver-only TX-notify workqueue disposition (2026-09-28): the earlier
+"no Kconfig warnings" physical receiver statement above records the
+2026-09-25 SDK checkpoint, not the latest receiver configuration. The
+nRF54L15 board conf deliberately selects NCS v3.4.1's experimental
+`CONFIG_BT_CONN_TX_NOTIFY_WQ=y` with stack 1536 and priority 8 to isolate
+the observed BT RX/sysworkq teardown dependency. Keep
+`CONFIG_WARN_EXPERIMENTAL=y` so the exact
+`warning: Experimental symbol BT_CONN_TX_NOTIFY_WQ is enabled.` remains
+visible in receiver build logs. This is a target-specific, evidence-backed
+experimental configuration choice, not a generic warning waiver; compiler,
+assigned-value, runtime, and unrelated build warnings remain errors. See
+`docs/development/nrf54l15-tx-notify-workqueue-results-20260928.md`.
+
 ## Style rule: no em dashes in user-facing documentation
 
 User-facing documentation must not contain the Unicode em dash (U+2014).

@@ -47,6 +47,10 @@ CONFIG_BT_BUF_ACL_TX_COUNT=3
 CONFIG_BT_ISO_TX_BUF_COUNT=1
 CONFIG_BT_CTLR_SDC_ISO_TX_HCI_BUFFER_COUNT=1
 CONFIG_BT_ISO_RX_BUF_COUNT=3
+CONFIG_BT_CONN_TX_NOTIFY_WQ=y
+CONFIG_BT_CONN_TX_NOTIFY_WQ_STACK_SIZE=1536
+CONFIG_BT_CONN_TX_NOTIFY_WQ_PRIO=8
+CONFIG_WARN_EXPERIMENTAL=y
 CONFIG_BT_FILTER_ACCEPT_LIST=y
 CONFIG_AUDIO_ACCEPTANCE_DIAGNOSTICS=y
 CONFIG_USER_PAIRING_CONTROL=y
@@ -488,6 +492,55 @@ class TestValidFixture(unittest.TestCase):
             )
         finally:
             fx.destroy()
+
+
+class TestTxNotifyWorkqueueConfig(unittest.TestCase):
+    def test_rejects_missing_disabled_and_wrong_config(self):
+        cases = (
+            ("queue missing", "CONFIG_BT_CONN_TX_NOTIFY_WQ=y", "", "54l15-056"),
+            (
+                "queue disabled",
+                "CONFIG_BT_CONN_TX_NOTIFY_WQ=y",
+                "# CONFIG_BT_CONN_TX_NOTIFY_WQ is not set",
+                "54l15-056",
+            ),
+            (
+                "stack too small",
+                "CONFIG_BT_CONN_TX_NOTIFY_WQ_STACK_SIZE=1536",
+                "CONFIG_BT_CONN_TX_NOTIFY_WQ_STACK_SIZE=1024",
+                "54l15-057",
+            ),
+            (
+                "wrong priority",
+                "CONFIG_BT_CONN_TX_NOTIFY_WQ_PRIO=8",
+                "CONFIG_BT_CONN_TX_NOTIFY_WQ_PRIO=9",
+                "54l15-058",
+            ),
+            ("warning missing", "CONFIG_WARN_EXPERIMENTAL=y", "", "54l15-059"),
+            (
+                "warning disabled",
+                "CONFIG_WARN_EXPERIMENTAL=y",
+                "# CONFIG_WARN_EXPERIMENTAL is not set",
+                "54l15-059",
+            ),
+        )
+        for label, before, after, expected_id in cases:
+            with self.subTest(label=label):
+                fx = Fixture()
+                try:
+                    config = APP54_CONFIG.replace(
+                        before + "\n", after + "\n" if after else ""
+                    )
+                    write(fx.config("54l15", "le-audio-receiver"), config)
+                    parsed = cbc.resolve_inputs(fx.nrf54l15, fx.bt_bap)
+                    fails = [entry[1] for entry in cbc.run_all(parsed).failures()]
+                    rc = cbc.main(
+                        ["--nrf54l15", fx.nrf54l15, "--bt-bap-source", fx.bt_bap]
+                    )
+                    self.assertEqual(rc, 1)
+                    self.assertIn(expected_id, fails)
+                finally:
+                    fx.destroy()
 
 
 class TestHardInputErrors(unittest.TestCase):

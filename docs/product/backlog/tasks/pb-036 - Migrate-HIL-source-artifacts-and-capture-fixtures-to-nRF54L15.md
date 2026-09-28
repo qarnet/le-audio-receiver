@@ -4,7 +4,7 @@ title: Migrate HIL source artifacts and capture fixtures to nRF54L15
 status: In Progress
 assignee: []
 created_date: '2026-09-22 22:50'
-updated_date: '2026-09-25 00:33'
+updated_date: '2026-09-28 09:17'
 labels:
   - 'size:M'
   - 'area:hil'
@@ -70,4 +70,6 @@ Integrate PB-035/PB-036 source archive slice: migrate deterministic source packa
 Shared RH4 integration needs coordinated PB-035/PB-036 changes. PB-035 predecessor matrix session propagation implemented/tested; full PB-035 acceptance awaits physical matrix. This approved full-migration dependency overlap changes no product criteria. Current slice does not build/flash firmware or modify active images; dirty state and prior evidence preserved.
 
 2026-09-25: later runner/default/capture changes and host tests are present, but fixed-image RH3 matrix does not prove exact-source-archive physical RH4. No clean-commit source provenance or RH4 artifact flash acceptance; dirty-tree coverage command stopped before builds. All criteria remain unchecked. See docs/development/nrf54l15-only-continuation-20260925.md.
+
+2026-09-28 exact-source-artifact checkpoint: clean 25a5cbf canonical software gate 80 PASS / 0 FAIL / 80 TOTAL and build contract 69/69; source archive SHA-256 cba5ee53d2e452e226c579e076af6b7604f1cbeb0d2a6daebb44cf066687fecc was consumed by the first six passing rows of the local exact-artifact matrix. Fresh Mode B 7.5 ms row 7 failed receiver teardown with 13 later rows skipped; the retained receiver postmortem and a separate receiver-only private TX-notify workqueue local-build replay passed (valid 16860/lost 14/PLC 28, zero decode errors, I2S underruns, resets, runtime warnings) with unchanged source HEX 805f2ed940a6fef965c51fc857bbcd7619b796df4e7f1b753978a2f5d198955c. This local-build diagnostic is not exact-artifact qualification. New clean full RH4 matrix and FR4 draft-artifact acceptance remain pending; no criteria or status changed. See docs/development/nrf54l15-tx-notify-workqueue-results-20260928.md.
 <!-- SECTION:NOTES:END -->
