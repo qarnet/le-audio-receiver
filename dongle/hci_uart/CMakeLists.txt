@@ -9,10 +9,11 @@ file(CREATE_LINK "${CMAKE_BINARY_DIR}/compile_commands.json"
   "${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json" SYMBOLIC)
 
 # NCS v3.4.1 initializes only byte 0 and the tail of the next bounce buffer.
-# A global CC swap can leave the old anomaly slot below swap_len stale: an
-# actual 0xAA in the new buffer then gets replaced by that stale byte. Generate
-# an audited driver copy in the build tree with all bytes initialized. This
-# does not establish whether this addresses separately observed insertion/deletion fault.
+# Generate an audited copy with full sentinel initialization. Defer the old/new
+# boundary for every successful swap until count and DMA pointer agree across
+# a profile-specific 1 us quiet interval; settle first-byte anomaly recovery
+# the same way. The guarded SDK source remains unchanged on disk. Host replay
+# and diagnostic hardware passes do not qualify the HCI transport.
 # The audited source also has an overflowing static swap-threshold initializer.
 # main.c calls uart_configure() before RX, replacing that unused threshold
 # with 112. Keep assertions; suppress -Woverflow only on this generated copy.

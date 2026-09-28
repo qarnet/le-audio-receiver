@@ -18,8 +18,8 @@
 # All suite discovery comes from scripts/test_inventory.py (the single
 # filesystem classification source shared with test-coverage.sh and
 # check-test-matrix.py) — adding a suite cannot silently omit it from the
-# gate.  Current diagnostic inventory: 41 Twister + 5 exec-only + 29
-# Python = 75 unit children.  Final clean canonical gate not yet claimed.
+# gate.  Count the current unit children from that inventory instead of a
+# dated snapshot; new dirty-tree work needs a separate clean canonical gate.
 #
 # Logical phase selection:
 #   ./scripts/test-all.sh                 # all phases (historical default)

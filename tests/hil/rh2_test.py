@@ -10519,7 +10519,7 @@ class TestRunnerSessionBound(unittest.TestCase):
                 binding_path,
                 out_root,
                 RUN_ID,
-                os.path.join(out_root, "nrf5340.junit.xml"),
+                os.path.join(out_root, "nrf54l15.junit.xml"),
                 argv=[
                     "hil-runner.py",
                     "run",

@@ -1061,26 +1061,6 @@ def default_probe_table(rows=None):
     return "\n".join(lines) + "\n"
 
 
-def fingerprint_output(
-    part="0x00005340",
-    variant="0x41414141",
-    ap2="0x12880000",
-    dpidr="0x6ba02477",
-    failure=None,
-):
-    lines = [
-        "Info : auto-selecting speed 1000 kHz",
-        "FWJ|dpidr|%s" % dpidr,
-    ]
-    for i in range(4):
-        lines.append("FWJ|ap%d|%s" % (i, ap2 if i in (2, 3) else "0x00000000"))
-    lines.append("FWJ|part|%s" % part)
-    lines.append("FWJ|variant|%s" % variant)
-    if failure:
-        lines.append(failure)
-    return "\n".join(lines) + "\n"
-
-
 def cmsis_dap_fingerprint_output(
     dpidr="0x6ba02477",
     ap0="0x84770001",

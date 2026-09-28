@@ -5,16 +5,20 @@ Historical rows/counts and old hardware runs remain evidence for dated commits,
 not current acceptance. A test that duplicates production logic, compiles a
 stub, or checks copied constants is NOT proof of production behavior.
 
-## PB-034–037 current-path correction (2026-09-25)
+## PB-034–037 current-path correction (2026-09-28)
 
-Current receiver production numeric coverage population is **36** sources in
-report-only dirty-tree diagnostics (`docs/development/pb-037-retirement-results.md`).
-The committed 37-source baseline still includes retired
-`src/audio_clock_actuator_apll.c`; it was not rewritten or cleanly enforced.
+Current **committed** receiver numeric coverage baseline has **36** production
+sources (4971/5427 lines, 2203/3008 branches, 377/377 functions). The clean
+NCS v3.4.1 verification at `daf7cd9` enforced this unchanged baseline and
+passed **80 PASS / 0 FAIL / 80 TOTAL**. The source population and numeric
+baseline have not been changed today. New HCI UART and Linux central work on
+this dirty tree has **not** rerun the clean canonical gate or established a
+new coverage baseline. See the final clean section of
+`docs/development/ncs-3.4.1-upgrade-results.md` and
+`docs/development/pb-019-uarte-boundary-repair-results-20260928.md`.
 The dated suite inventory and numeric tables below belong to older commits;
-diagnostic unit inventory is 41 Twister + 5 exec-only + 29 Python = 75 unit
-children, not a final clean canonical gate. Historical nRF5340 physical rows
-remain dated evidence, not nRF54L15 acceptance.
+derive current suite counts through `scripts/test_inventory.py`. Historical
+nRF5340 physical rows remain dated evidence, not nRF54L15 acceptance.
 
 Current direct witnesses: `tests/unit/modea/src/test_modea.c` has 16 tests,
 including queue-full survivor plus mate PLC, absent callbacks for either
@@ -31,8 +35,9 @@ historical production; current `audio_i2s_identity` is a host-only identity
 regression with mocked actuator, not APLL selection.
 
 Current build contract: `scripts/check-build-contract.py` checks resolved
-nRF54L15 receiver CPUAPP + FLPR only; dirty diagnostic run reported 69/0
-assertions and rejects `--nrf5340`. The old dual-target `hci_ipc`/APLL/stack
+nRF54L15 receiver CPUAPP + FLPR only and rejects `--nrf5340`. The **69/69**
+assertions passed at the previous clean `daf7cd9` checkpoint; dirty-tree
+diagnostics alone are not new clean proof. Old dual-target `hci_ipc`/APLL/stack
 contracts and their assertions in the historical inventory below are retired.
 
 ## Evidence classification

@@ -72,9 +72,8 @@ static void assert_output_has_line(const char *out, const char *line)
 
 ZTEST_SUITE(audio_shell, NULL, NULL, NULL, NULL, NULL);
 
-/* Feature-off remains explicitly unavailable: RH2's receiver-only bond
- * inventory is enabled by nRF54L15 pairing input, never silently exposed on
- * nRF5340/legacy builds. */
+/* Config-off native shell behavior: bond inventory remains unavailable when
+ * pairing input is disabled.  This does not select a legacy receiver target. */
 ZTEST(audio_shell, test_bt_bonds_feature_off_unavailable)
 {
 	test_shell_reset_counters();
@@ -397,10 +396,9 @@ ZTEST(audio_shell, test_wrapper_seam_matches_dispatch)
 	assert_output_has_line(out, "  PLC frames     : 1 (14%)");
 }
 
-/* This suite compiles only the audio/bt shell TUs (no FLPR shell, no
- * acceptance TU) — the same configuration-off shape as the nRF5340 target
- * and a normal audio diagnostics build.  The FLPR acceptance commands must
- * not exist in the registry: unknown command, never acceptance output. */
+/* Config-off native suite compiles only audio/bt shell TUs (no FLPR shell or
+ * acceptance TU).  FLPR acceptance commands must not exist in the registry:
+ * unknown command, never acceptance output.  No legacy target is implied. */
 ZTEST(audio_shell, test_flpr_acceptance_absent_config_off)
 {
 	test_shell_reset_counters();

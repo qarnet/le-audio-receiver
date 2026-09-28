@@ -318,9 +318,10 @@ config AUDIO_ISO_SEQ_MAX_CONCEAL
 	help
 	  Shared bound for sequence- and timestamp-detected ISO omissions:
 	  maximum SDUs/events concealed as PLC per delivered callback when
-	  the ISO stack omits callbacks for lost events (observed on the
-	  nRF5340 SW Split controller: no VALID and no LOST callback for
-	  some lost events).  audio_iso_seq tracks each CIS's delivered
+	  the ISO stack omits callbacks for lost events (historically observed
+	  on the retired nRF5340 SW Split controller: no VALID and no LOST
+	  callback for some lost events; not the active platform).
+	  audio_iso_seq tracks each CIS's delivered
 	  HCI packet sequence numbers and reports the omitted count when
 	  the next callback's Packet_Sequence_Number jumps; audio_iso_cadence
 	  tracks delivered ISO timestamps and reports the omitted count

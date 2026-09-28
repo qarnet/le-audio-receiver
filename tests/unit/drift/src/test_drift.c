@@ -238,7 +238,7 @@ ZTEST(drift, test_anti_windup_allows_opposite_direction_unwind_at_neg_clamp)
 		     ppm);
 }
 
-/* ── 10. zero feedforward (nRF5340 phase-only) ──────────────────── */
+/* ── 10. zero feedforward (generic phase-only behavior) ──────────── */
 
 ZTEST(drift, test_zero_feedforward_phase_only)
 {

@@ -15,13 +15,27 @@ The adapter is session-scoped; no persistent btattach service or fixed HCI/tty
 index is supported.
 
 NCS v3.4.1 UART compatibility uses a guarded generated build-tree patch, not
-an SDK-on-disk edit. The full sentinel-copy patch was re-audited against
-original SDK source SHA-256
-`d68f45fbef9da8077efe6c9f94c609393fc3485bd1d486e4f710288f6d808bd3`:
-the original path differs in 3/8192 exhaustive byte-value cases, the generated
-path in 0/8192. Driver core functions remain unchanged. This corrects only the
-old-slot `0xAA` false replacement; it does **not** establish physical HCI
-qualification or fix the still-open UART hardware failure described below.
+an SDK-on-disk edit. Audited source SHA-256
+`d68f45fbef9da8077efe6c9f94c609393fc3485bd1d486e4f710288f6d808bd3`
+pins both full bounce-buffer `0xAA` initialization (original 3/8192 exhaustive
+byte-value mismatches, generated 0/8192) and deferred old/new boundary
+resolution. The initial deferred repair passed one six-case diagnostic, then
+failed a monitored repeat. Captured RAM also showed a wrong cut when the
+initial DMA pointer had advanced by seven bytes. The guarded coherent repair
+checks count and DMA pointer across a 1 us quiet interval on **every** swap
+and settles first-byte anomaly recovery before copying. Compiled callback
+replay reproduces captured failures in earlier paths and emits the expected
+bytes with this repair. Three exact-image six-case diagnostics passed 18 cases
+and 216,000 source frames, with nonzero PLC (1,284 aggregate) and no HCI
+hardware error `0x07`. Their normal fresh `Pair()` path recorded nine kernel
+`unexpected SMP command 0x0b` messages. A separate six-case Connect-led fresh
+bonding diagnostic recorded zero such warnings while retaining receiver-requested
+security and successful encrypted streaming. The tracked normal CLI then passed
+two more exact-image six-case runs: **12/12 cases, 144,000 source frames**, PLC
+**1,005**, and zero kernel SMP `0x0b` warnings or HCI hardware errors. Clean-commit
+acceptance remains pending; this 1 Mbaud/no-flow result does not claim generic
+H4 reliability or completed qualification. Evidence chronology and limits:
+[`pb-019-uarte-boundary-repair-results-20260928.md`](../docs/development/pb-019-uarte-boundary-repair-results-20260928.md).
 
 ## Build and session binding
 
@@ -65,9 +79,12 @@ fw-reset-dongle --session-manifest /absolute/external/session/devices.json \
 identity and `powered le secure-conn cis-central`, substitutes its live adapter
 for `@HCI@`, and tears down owned attachment after child exits (also on child
 failure/timeout). Do not attach unrelated host adapters. Run BAP child as
-ordinary user, not sudo. Fresh pairing uses normal BlueZ discovery; for bonded
-reconnect pass `--preserve-bond --peer-addr RECEIVER_ADDRESS_FROM_BOOT_LOG`.
-Do not use raw-HCI exact-peer connection as default on this controller.
+ordinary user, not sudo. Fresh pairing uses BlueZ discovery and `Device1.Connect()`;
+receiver Security Request initiates Just Works via default NINO agent. Fresh mode
+requires confirmed `Paired=True` and `Connected=True` before BAP. Bonded reconnect
+still uses `--preserve-bond --peer-addr RECEIVER_ADDRESS_FROM_BOOT_LOG`, with its
+existing BlueZ connection and bond. Optional raw-HCI exact-peer operation is not
+the default on this controller and remains unchanged.
 
 ```sh
 fw-attach-dongle --session-manifest /absolute/external/session/devices.json \
@@ -86,15 +103,13 @@ root descendants. Supervisor does not replace identity checks, owned adapter
 cleanup, or immutable evidence finalization.
 
 Qualification status: **Prototype / qualification incomplete**. Standard
-10 ms QoS RTN 5 / latency 20 ms, unchanged 40 ms presentation delay.
-Earlier six 120-second mono/Mode A/Mode B fresh and bonded rows met frozen
-90% valid / 5% PLC limits with **nonzero** loss/PLC. Later final production-
-image repeat failed during Mode A after mono/reconnect passed: kernel HCI
-hardware error `0x07`, H4 parser `-EPROTO`, I2S underrun, stream reset and
-controller command timeouts. Root cause unresolved. External RAM-trace six-
-case pass perturbs timing and does not qualify the production image. See
-`docs/development/pb-019-hci-resume-results.md` and
-`docs/development/nrf54l15-only-continuation-20260925.md` for exact evidence.
-No lab-qualification, public adapter recommendation, clean-commit release or
-full migration acceptance is claimed. Continue controlled boundary diagnosis
-before claiming restored qualification.
+10 ms QoS RTN 5 / latency 20 ms and 40 ms presentation delay remain unchanged,
+as do the frozen 90% valid / 5% PLC and zero-error limits. Original-AA and
+earlier trace-image Mode A failures (HCI `0x07`, parser error, I2S reset) are
+**historical failed-image evidence**, not a current coherent-v2 image result.
+The coherent repair plus Connect-led **tracked normal CLI** passed the two
+dirty-tree six-case runs above with nonzero PLC. Clean-commit software and
+hardware acceptance remain pending: no generic no-flow reliability claim,
+public adapter recommendation, analog qualification, release, or final migration
+acceptance follows from those runs. See the linked current evidence and the
+historical `../docs/development/pb-019-hci-resume-results.md` for dated failures.
