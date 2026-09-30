@@ -127,7 +127,9 @@ struct hil_source_backend_ops {
 	/* Timestamp-pinned send (SDC timestamps mode): provide the SDU for the ISO
 	 * event starting at `ts` (controller clock, us). A successful call does not
 	 * prove peer receipt. A single untimestamped bootstrap SDU on stream 0
-	 * establishes the CIG base; all regular segment SDUs use this API. */
+	 * establishes the CIG base; all regular segment SDUs use this API.
+	 * Production backend must not wait for allocation, credits, or completion:
+	 * coordinator holds app ownership and scheduling across a peer batch. */
 	int (*tx_send_ts)(uint8_t stream_idx, uint16_t seq, const uint8_t *sdu, size_t len,
 			  uint32_t ts);
 	/* Read the controller-assigned event timestamp (us) for the previously
@@ -135,7 +137,8 @@ struct hil_source_backend_ops {
 	 * production; scripted in the fake). */
 	int (*tx_read_tx_ts)(uint8_t stream_idx, uint32_t *ts);
 	/* Read controller time modulo 2^32 us. This must share the SDC clock
-	 * domain; host uptime is not interchangeable with controller time. */
+	 * domain; host uptime is not interchangeable with controller time.
+	 * Must be a local nonblocking clock read, not a synchronous HCI command. */
 	int (*tx_time_get)(uint32_t *time_us);
 	/* Read HCI LE_Read_ISO_TX_Sync. Success requires a previously scheduled SDU,
 	 * but repeated polls may return that same SDU. Historical "air" status
