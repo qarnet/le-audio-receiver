@@ -1,10 +1,10 @@
 ---
 id: PB-037
 title: Remove legacy E83 nRF5340 receiver path
-status: In Progress
+status: Review
 assignee: []
 created_date: '2026-09-22 22:50'
-updated_date: '2026-09-25 00:33'
+updated_date: '2026-10-01 08:38'
 labels:
   - 'size:M'
   - 'area:hardware'
@@ -50,11 +50,11 @@ None.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 E83 board tree, nRF5340 receiver board config, net-core sysbuild overlays, build and flash helpers, and nRF5340 release-flashing path are removed.
-- [ ] #2 Production CMake, Kconfig, devicetree, packaging, and public docs expose only nRF54L15 receiver support; obsolete nRF5340-only actuator code is removed or retained only under explicit test-local historical ownership.
-- [ ] #3 Build-contract and documentation tests reject reintroduction of active E83 or nRF5340 production receiver paths.
-- [ ] #4 nRF54L15 firmware builds, unit suites, coverage, canonical BSim, and applicable HIL smoke remain green with no ignored warnings.
-- [ ] #5 Historical evidence remains intact and every retained nRF5340 mention is classified as historical, compatibility context, or external SDK reference.
+- [x] #1 E83 board tree, nRF5340 receiver board config, net-core sysbuild overlays, build and flash helpers, and nRF5340 release-flashing path are removed.
+- [x] #2 Production CMake, Kconfig, devicetree, packaging, and public docs expose only nRF54L15 receiver support; obsolete nRF5340-only actuator code is removed or retained only under explicit test-local historical ownership.
+- [x] #3 Build-contract and documentation tests reject reintroduction of active E83 or nRF5340 production receiver paths.
+- [x] #4 nRF54L15 firmware builds, unit suites, coverage, canonical BSim, and applicable HIL smoke remain green with no ignored warnings.
+- [x] #5 Historical evidence remains intact and every retained nRF5340 mention is classified as historical, compatibility context, or external SDK reference.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -69,4 +69,14 @@ None.
 
 <!-- SECTION:NOTES:BEGIN -->
 2026-09-25: diagnostic receiver/source/HCI builds, 75/0/75 unit, 69/0 actual build contract, strict BSim 17/26 and fixed-image RH3 20/20 passed. Coverage report-only population36 (4971/5427 lines, 2203/3008 branches, 377/377 functions), baseline unchanged. Clean enforcement failed before builds on dirty-tree precondition. Exhaustive reference/comment classification and clean exact-commit gates remain; no criterion or Done claim. See docs/development/nrf54l15-only-continuation-20260925.md.
+
+2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+E83 board/netcore/receiver helper and production APLL paths are deleted. Only explicit portable test-local actuator history remains. Build/package/doc regressions reject active legacy selections; public support is nRF54L15-only. Per-file reference ledger classifies retained history, negative tests and SDK context; 12 generated outputs have no enabled legacy selection.
+
+2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+<!-- SECTION:FINAL_SUMMARY:END -->

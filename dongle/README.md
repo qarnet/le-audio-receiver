@@ -102,14 +102,18 @@ User-manager service or shell `timeout` alone does **not** contain detached
 root descendants. Supervisor does not replace identity checks, owned adapter
 cleanup, or immutable evidence finalization.
 
-Qualification status: **Prototype / qualification incomplete**. Standard
+Qualification status: **Lab-qualified development fixture**. Standard
 10 ms QoS RTN 5 / latency 20 ms and 40 ms presentation delay remain unchanged,
 as do the frozen 90% valid / 5% PLC and zero-error limits. Original-AA and
 earlier trace-image Mode A failures (HCI `0x07`, parser error, I2S reset) are
 **historical failed-image evidence**, not a current coherent-v2 image result.
-The coherent repair plus Connect-led **tracked normal CLI** passed the two
-dirty-tree six-case runs above with nonzero PLC. Clean-commit software and
-hardware acceptance remain pending: no generic no-flow reliability claim,
-public adapter recommendation, analog qualification, release, or final migration
-acceptance follows from those runs. See the linked current evidence and the
+The coherent repair plus Connect-led **tracked normal CLI** passed those
+dirty-tree diagnostics, then clean `104e67a` / NCS v3.4.1 validation passed
+all six 120-second fresh/bonded mono/Mode A/Mode B cases: 72,000 writer frames,
+PLC 428, zero case errors and kernel HCI/SMP alerts, with owned adapter and
+process cleanup. Canonical software passed 80/80 and physical builds/contracts
+passed from exact clean source. This is bounded fixture qualification, not a
+generic no-flow reliability claim, public adapter recommendation, analog,
+draft-release or complete standalone-source matrix acceptance. See current
+[clean integration verification](../docs/development/nrf54l15-migration-verification-results-20261001.md) and the
 historical `../docs/development/pb-019-hci-resume-results.md` for dated failures.

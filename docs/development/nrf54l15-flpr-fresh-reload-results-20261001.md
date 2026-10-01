@@ -174,3 +174,15 @@ This covers the real new rollback boundary, not copied constants. Focused
 handshake suite now passes 38/38 at
 `/tmp/opencode/nrf54-flpr-partial-register-20261001-r1.log`; full clean baseline
 enforcement follows. Production firmware code is unchanged by this test slice.
+
+## Clean integrated follow-up
+
+Exact `104e67a` canonical rerun passed **80 PASS / 0 FAIL / 80 TOTAL**,
+including unchanged per-file baseline enforcement and strict BSim 17 scenarios /
+26 runs. Three physical build shapes and 73/73 resolved build contract passed.
+Normal-image Linux HCI six-case repeat passed 72,000 writer frames, PLC 428,
+zero case/kernel HCI/SMP alerts. Raw canonical log is
+`/tmp/opencode/nrf54-104e67a-canonical-20261001-r1.log`; HCI evidence is
+`/tmp/opencode/nrf54-104e67a-hci-clean-20261001-r1/`.
+The [integrated verification record](nrf54l15-migration-verification-results-20261001.md)
+owns the latest exact-local-artifact matrix verdict and scope boundaries.

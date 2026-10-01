@@ -1,14 +1,23 @@
 # STATUS: le-audio-receiver, 2026-10-01
 
-Current implementation checkpoint: `b21c7a7` guards both timestamped source
-peer enqueues from cooperative BT TX scheduling while retaining 3000/2000 us
-and all frozen row/transport limits. Source suite 84/84, clean canonical
+Current clean validation checkpoint: `104e67a` includes source peer-enqueue
+scheduling guard and fresh FLPR reload, notification, heartbeat and idle-worker
+repairs. Production code is `e478e59`; `104e67a` adds partial IPC registration
+rollback/retry coverage without changing production code. Source margins remain
+3000/2000 us; frozen row/transport limits remain unchanged. Source suite 84/84,
+runtime 25/25, handshake 38/38 and offload 36/36 passed. Clean canonical
 80/0/80, HIL host 340 passed/one hardware-opt-in skip, three physical builds
 and resolved build contract 73/73 passed. Clean normal HCI six-case validation
-passed 72,000 writer frames, PLC 489, zero case/kernel HCI/SMP alerts.
-Full exact-local-artifact matrix is still running; no full migration acceptance
-claimed yet. See `docs/development/nrf54l15-source-batch-guard-results-20261001.md`
-and `docs/development/nrf54l15-final-reference-audit-20261001.md`.
+passed 72,000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts.
+Full exact-local-artifact matrix passed 20/20, zero failed/cancelled/cleanup
+children. Independent review verified archive/image provenance, retained
+child/aggregate checksums and 120 ordered identity checks. Local migration
+verification is complete; human PR acceptance, analog qualification, active
+draft FR4 and publication remain separate. Final evidence:
+`docs/development/nrf54l15-migration-verification-results-20261001.md`.
+See `docs/development/nrf54l15-source-batch-guard-results-20261001.md`
+and `docs/development/nrf54l15-flpr-fresh-reload-results-20261001.md`, plus
+`docs/development/nrf54l15-final-reference-audit-20261001.md`.
 Older unresolved-fault/qualification and board-state statements below are
 dated historical checkpoints, not the latest implementation verdict.
 

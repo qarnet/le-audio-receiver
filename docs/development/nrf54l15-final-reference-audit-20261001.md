@@ -2,7 +2,11 @@
 
 ## Scope and evidence
 
-Source implementation checkpoint: `b21c7a762b35a127708b4c41a8d537a66c5be5e3`.
+Latest clean validation checkpoint: `104e67ade0e361093a88d1832b5dcb41552e8e8d`.
+Production repair checkpoint: `e478e59df4597b6c7a6b4a56a3bb3e9995bdec16`;
+`104e67a` adds a partial-registration rollback/retry regression and results,
+not a further production change. Earlier `b21c7a7` source scheduling repair
+remains integrated; its failed FLPR hang matrix remains immutable.
 Primary tree also contains pending documentation and the preserved, unstaged
 PB-013 user refinement. This record does not recast that dirty documentation
 tree as clean firmware provenance. Physical images and canonical software were
@@ -10,11 +14,11 @@ produced from separate clean exact-commit validation checkouts.
 
 Detailed literal ledger, per-file content hashes, matched line numbers, generated
 output hashes and audit script snapshot:
-`/tmp/opencode/nrf54-migration-audit-20261001-r2/audit.json` and
-`audit-script.py`. It inspected **990 tracked or explicitly intended pending
-documentation files**, found **265 files with retained legacy references**,
+`/tmp/opencode/nrf54-migration-audit-20261001-r5/audit.json` and
+`audit-script.py`. It inspected **994 tracked or explicitly intended pending
+documentation files**, found **267 files with retained legacy references**,
 and left **zero unclassified files**. Initial r1's five script files requiring
-manual review remain in that earlier report; r2 records their resolved classes.
+manual review remain in that earlier report; later reports record their resolved classes.
 New closure documentation may add further references without adding a target.
 
 Search terms: `nrf5340`, standalone `nrf53`, standalone `E83`, `ebyte`,
@@ -48,8 +52,8 @@ all documentation is historical. Important distinctions:
 
 ## Generated and archived outputs
 
-The clean `b21c7a7` physical checkout at
-`/tmp/opencode/nrf54-b21c7a7-clean/le-audio-receiver` supplied **12 resolved
+The clean `104e67a` physical checkout at
+`/tmp/opencode/nrf54-104e67a-physical/le-audio-receiver` supplied **12 resolved
 outputs**: `.config`, `zephyr.dts`, and generated `autoconf.h` for receiver
 CPUAPP, receiver FLPR, standalone source CPUAPP and HCI CPUAPP. Audit found
 **zero enabled/positive legacy selections**. Disabled SDK declarations, where
@@ -69,7 +73,7 @@ outputs and archive inventory are independent of these simulator binaries.
 The strict PCM oracle, source payload hashes and lifecycle cases are unchanged.
 
 New exact local receiver/source archives at
-`/tmp/opencode/nrf54-b21c7a7-artifacts-20261001-r1/validation.json` contain
+`/tmp/opencode/nrf54-104e67a-artifacts-20261001-r1/validation.json` contain
 only the receiver CPUAPP/FLPR and source CPUAPP contracts. Public extraction,
 checksum, metadata and staged-image revalidation passed; legacy multi-image,
 wrong-board/version/provenance and modified members remain rejected in tests.
@@ -100,8 +104,23 @@ analog capture hardware**. PB-023/PB-025 own analog electrical, measurement and
 MA1/SA1 acceptance. `capture_capability` still means ALSA analog capture;
 digital I2S windows never relabel it mono/stereo or stand in for analog proof.
 
+Independent retained fixture snapshots and the real capture model, runner and
+analyzer host-test command are in
+`/tmp/opencode/nrf54-capture-contract-evidence-20261001-r1/result.json`.
+Command exit is zero at clean `104e67a`; all four fixture/binding snapshots and
+the raw test log have SHA-256 provenance. This evidence has the same host-only
+boundary, not a new physical ALSA or ADC qualification claim.
+
 PB-041 nonce identification and PB-013 360-frame FLPR support remain separate
 Backlog work. Native tests are portable host tests, not nRF5340 dependencies.
 Historical release archives and the existing private draft are not rewritten.
 Exact active draft FR4 and publication remain separate from the local-artifact
 matrix used to complete platform migration.
+
+Final clean `104e67a` local matrix passed **20/20** with **120 ordered identity
+checks** and independently rehashed child/aggregate evidence. See
+[final migration verification](nrf54l15-migration-verification-results-20261001.md)
+for exact archive identities, evidence-review report and separate human,
+analog and draft-release acceptance boundaries. Component evidence and Review
+summaries are recorded through Backlog.md; PB-038 product status remains
+unchanged, and no Done transition or human merge is inferred.

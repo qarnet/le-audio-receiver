@@ -1,10 +1,10 @@
 ---
 id: PB-019
 title: Replace Linux HCI UART adapter with XIAO nRF54L15
-status: In Progress
+status: Review
 assignee: []
 created_date: '2026-09-13 01:24'
-updated_date: '2026-09-28 05:20'
+updated_date: '2026-10-01 08:38'
 labels:
   - 'size:M'
   - 'area:interoperability'
@@ -39,10 +39,10 @@ No unresolved product choices. Bridge throughput, transport recovery and control
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 Single-image XIAO nRF54L15 HCI firmware builds with NCS v3.3.0, fixed lab address C0:AA:BB:CC:DD:EE, two-CIS central support and no ignored build warnings.
-- [ ] #2 Retained runtime identity, image hash, UART/baud/flow settings and Linux HCI evidence prove the selected XIAO exposes powered le secure-conn cis-central through its stock bridge without byte corruption.
-- [ ] #3 Autonomous mono, Mode A and Mode B pairing, streaming, disconnect and reconnect pass through the XIAO central with receiver-side delivery and audio metrics meeting existing limits.
+- [x] #2 Retained runtime identity, image hash, UART/baud/flow settings and Linux HCI evidence prove the selected XIAO exposes powered le secure-conn cis-central through its stock bridge without byte corruption.
+- [x] #3 Autonomous mono, Mode A and Mode B pairing, streaming, disconnect and reconnect pass through the XIAO central with receiver-side delivery and audio metrics meeting existing limits.
 - [x] #4 Build/flash/reset/attachment helpers and tests fail closed on wrong or ambiguous identity, missing device, stale attachment and controller startup failure.
-- [ ] #5 After replacement proof, active workflows and docs no longer depend on an nRF5340 HCI adapter; historical evidence remains unchanged.
+- [x] #5 After replacement proof, active workflows and docs no longer depend on an nRF5340 HCI adapter; historical evidence remains unchanged.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -89,4 +89,14 @@ Inventory regression added after earlier note: test-matrix suite now passes 45/4
 2026-09-28 Connect-led fresh-bond diagnostic, not normal CLI behavior or migration acceptance: external entrypoint /tmp/opencode/pb019-connect-bond-run-20260928-r1/connect-led.py SHA-256 3d0b8ef80b4d0c9847055343b581cfb02e3b460055eb3e5d9a3c9127b3df2325 overrides only fresh pair_device call, requests BlueZ Device1.Connect and requires Paired/Connected true; preserve-bond paths delegate to unchanged original. Copied frozen six-case caller changes only actual CLI argv; entry provenance JSON proves AST equivalence. Same normal coherent-v2 image SHA-256 52fca1feed89988a8e2693e3146a18e8810f2e81db17a389e9d0182560e70ea1 flashed with fresh role validation; /tmp/opencode/pb019-connect-bond-run-20260928-r1/audio/result.json passed six unchanged 120-second cases, 72000 source frames, receiver PLC 580, zero case error counters/alerts. Fresh mono/Mode A/Mode B logs confirm Paired=True Connected=True, encrypted ServicesResolved without proactive Pair(). Passive private btmon shows RX Security Request then TX Pairing Request, RX Response and successful Encryption Change plus MGMT New LTK headers; zero capture drops/truncation. Bounded kernel journal records NO unexpected SMP command 0x0b and NO HCI hardware error in this single strategy experiment, not a warning waiver or universal pairing claim. Owned btmon/btattach/BAP/OpenOCD and lab adapter absent after system-managed session; source left HCI role. No product status/AC change. Parent owns whether and how to integrate strategy and repeat validation.
 
 2026-09-28 normal tracked CLI post-integration validation, dirty tree, not clean acceptance: /tmp/opencode/pb019-normal-cli-20260928-r1 passive host btmon and /tmp/opencode/pb019-normal-cli-20260928-r2 unmonitored each passed all six frozen 120-second mono/Mode A/Mode B fresh/reconnect rows, 12 cases / 144000 source frames, nonzero receiver PLC 362 and 643 (1005 total), zero source/receiver case alerts and zero decoder/I2S/stream-reset error counters. Exact coherent-v2 HCI HEX 52fca1feed89988a8e2693e3146a18e8810f2e81db17a389e9d0182560e70ea1 and tracked CLI/security SHA-256 cb61e8aa9a0d870625223b1309eb862047f6fe4d3ceebdf0eaf9ec17a8b3fedf / 7e2b702fd68c6956c6beaf94094e3d3bad3a438f8ec616eff06cadf4bfc17a8d. Both bounded kernel journals have zero unexpected SMP 0x0b, hardware error, and opcode timeout lines. Fresh logs confirm Connect-led Paired=True Connected=True and encrypted ServicesResolved; reconnect logs retain skipped Pair and encrypted services. Host r1 btsnoop private, 194043 records with zero drops/truncation, captured hash d28e40250c3e30515a5702045f8b860214dad2e028de0e42b8b488a807e32fee. /tmp/opencode/pb019-normal-cli-summary-20260928-r1/result.json records metrics and ownership; both system-manager services/owned btattach, btmon, BAP, debugger and lab adapter absent after runs. Source left HCI role. No AC/status transition, clean-commit canonical gate or release qualification claimed; parent owns next acceptance decision.
+
+2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Stock 1 Mbaud H4 8N1 no-flow SAMD11 fixture qualified with normal tracked CLI, fresh Connect-led bonding and preserved-bond reconnect. Earlier NCS v3.3.0 build AC1 remains historical evidence; PB-040 upgrades active SDK to v3.4.1 without rewriting that criterion. Helper fail-closed regressions and current public guidance pass. Raw HCI evidence: /tmp/opencode/nrf54-104e67a-hci-clean-20261001-r1/.
+
+2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+<!-- SECTION:FINAL_SUMMARY:END -->

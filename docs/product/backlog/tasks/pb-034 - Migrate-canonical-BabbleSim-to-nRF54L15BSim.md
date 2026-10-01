@@ -1,10 +1,10 @@
 ---
 id: PB-034
 title: Migrate canonical BabbleSim to nRF54L15BSim
-status: In Progress
+status: Review
 assignee: []
 created_date: '2026-09-22 22:50'
-updated_date: '2026-09-25 00:33'
+updated_date: '2026-10-01 08:38'
 labels:
   - 'size:M'
   - 'area:testing'
@@ -54,7 +54,7 @@ None.
 - [x] #1 Receiver and source BabbleSim builds use nrf54l15bsim/nrf54l15/cpuapp with no active nRF5340BSim target or CPUNET image dependency.
 - [x] #2 All 17 canonical scenarios and 26 runs pass with measured nRF54L15BSim-native startup recipes while existing LC3 fixture bytes, logical-sequence TX hashes, explicit loss and malformed-SDU injections, reconnect behavior, lifecycle checks, PCM oracle limits, run counts, and strict failure handling remain unchanged.
 - [x] #3 Resolved controller configuration and role-specific ISOAL capacity are pinned and documented, and build output contains no ignored compiler, linker, Kconfig, CMake, or runtime warnings.
-- [ ] #4 BSim metadata, helper defaults, executable discovery, LSP links, build-contract tests, STATUS.md, and applicable development documentation describe nRF54L15BSim as canonical Stage 1 target.
+- [x] #4 BSim metadata, helper defaults, executable discovery, LSP links, build-contract tests, STATUS.md, and applicable development documentation describe nRF54L15BSim as canonical Stage 1 target.
 - [x] #5 Legacy nRF5340 startup recipes and historical evidence remain retained, and canonical nRF54L15BSim scenarios contain no artificial startup loss or delay injection.
 <!-- AC:END -->
 
@@ -92,6 +92,8 @@ Post-build evidence on 2026-09-23 corrected receiver ISOAL sinks to 2 and client
 User paused work 2026-09-24. Continue from docs/development/nrf54l15-only-resume-20260924.md in primary repository, not prior temporary worktree. Existing strict BSim26-run PASS and physical red/green module plus46-record calibration evidence remain retained. Current documentation/coverage/final aggregate reruns remain pending; later HCI and QoS changes have not received a complete unit rerun. Do not treat earlier scope-only blocker or earlier source-board calibration-image note as current state.
 
 2026-09-25: strict BSim 17 scenarios/26 runs passed (/tmp/opencode/nrf54-only-bsim-20260925-r1.log), unchanged TX hashes and 2048/512/32750 PCM limits (observed 257/182/32767); unit phase 75/0/75. Coverage report-only 36 sources, baseline unchanged. Clean exact-commit enforcement stopped before builds on dirty-worktree guard; AC4 documentation/integration remains unchecked. See docs/development/nrf54l15-only-continuation-20260925.md.
+
+2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -102,3 +104,11 @@ created: 2026-09-23 17:30
 Refined during PB-034 implementation after controller evidence proved legacy startup PLC counts were nRF5340 HCI-IPC timing artifacts. Product owner selected target-native nRF54L15BSim startup rebaseline; transport payloads, TX hashes, loss injections, lifecycle checks, PCM limits, and strict failures remain frozen.
 ---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Canonical integrated SW Split receiver/client select nrf54l15bsim CPUAPP, with measured native startup recipes and role-specific ISOAL. All 17 scenarios/26 runs pass, preserving TX hashes, PCM limits, absent-transmission/malformed faults and lifecycle semantics. Historical recipes and narrow source/hash-scoped dependency warning dispositions remain retained. Metadata/helpers/LSP/contracts/current docs agree.
+
+2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+<!-- SECTION:FINAL_SUMMARY:END -->

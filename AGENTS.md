@@ -86,10 +86,17 @@ treat the audio research handoff itself as approval for unrelated new features.
 ### Current migration continuation
 
 For the all-nRF54L15 migration, read
-`docs/development/nrf54l15-source-batch-guard-results-20261001.md` and
+`docs/development/nrf54l15-source-batch-guard-results-20261001.md`,
+`docs/development/nrf54l15-flpr-fresh-reload-results-20261001.md` and
 `docs/development/nrf54l15-final-reference-audit-20261001.md` for the latest
-repair and platform audit. Clean `b21c7a7` software, builds and six HCI cases
-passed; the new exact local-artifact matrix remains the final physical gate.
+repairs and platform audit. Clean `104e67a` software (80/0/80), builds,
+73-check build contract and six HCI cases passed. Its exact local-artifact
+matrix passed 20/20, with 120 ordered identity checks and independently
+rehashed child/aggregate evidence. See
+`docs/development/nrf54l15-migration-verification-results-20261001.md` for
+local completion and separate analog, release and human-acceptance boundaries.
+Earlier `b21c7a7` matrix failed FLPR
+hang recovery after eight passing rows; that failure is retained, not acceptance.
 For dated chronology, read
 `docs/development/nrf54l15-observability-resume-20260925.md` first, then
 `docs/development/nrf54l15-only-resume-20260924.md` as historical context.

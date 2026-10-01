@@ -226,12 +226,13 @@ P1.9/P1.8 at 1,000,000 baud 8N1 via the stock SAMD11 USB CDC bridge. The
 TIMER-backed RX path now includes the measured coherent DMA-boundary repair;
 fresh BlueZ connection waits for successful bonding instead of racing a
 proactive Pair request against the receiver's security request. Clean NCS
-v3.4.1 `b21c7a7` images passed six 120-second mono, Mode A and Mode B
+v3.4.1 `104e67a` images passed six 120-second mono, Mode A and Mode B
 fresh/bonded cases with unmodified `scripts/bap_central.py`: 72,000 writer
-frames, PLC 489, no case warnings/errors, underrun, reset or kernel HCI/SMP
+frames, PLC 428, no case warnings/errors, underrun, reset or kernel HCI/SMP
 alerts. Loss and PLC remain **nonzero** and within unchanged frozen limits.
 The old failed runs remain immutable; a trace-image pass was not substituted
-for the repaired normal-image qualification. See the
+for the repaired normal-image qualification. See
+[clean integration verification](development/nrf54l15-migration-verification-results-20261001.md) and the
 [repair and earlier failures](development/pb-019-uarte-boundary-repair-results-20260928.md),
 [source-batch integration record](development/nrf54l15-source-batch-guard-results-20261001.md) and
 [controlled session helper](../dongle/README.md) for identity-bound operation.

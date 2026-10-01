@@ -1,10 +1,18 @@
 # All-nRF54L15 observability pause and resume, 2026-09-25
 
-Latest entry point: [2026-09-30 analyzer continuation](logic-analyzer-continuation-results-20260930.md).
-It reconciles later clean software/HCI records and failed matrix, then records
-one unchanged Mode A row plus passive I2S windows and offline negative controls.
+Latest entry points: [source scheduling repair](nrf54l15-source-batch-guard-results-20261001.md),
+[FLPR reload/lifecycle repair](nrf54l15-flpr-fresh-reload-results-20261001.md)
+and [platform audit](nrf54l15-final-reference-audit-20261001.md).
+Clean `104e67a` canonical 80/0/80, physical builds and six HCI cases passed;
+full exact-local-artifact matrix passed 20/20 with independent checksum and
+120-check identity review. [Final local verification](nrf54l15-migration-verification-results-20261001.md)
+owns completion and the remaining human, analog and release boundaries.
+Prior source timing and FLPR
+hang failures remain immutable evidence, not current unresolved diagnoses.
+Earlier [2026-09-30 analyzer continuation](logic-analyzer-continuation-results-20260930.md)
+records unchanged-image Mode A, passive I2S windows and rejected offline controls.
 Older pause, board-state and unrun-gate statements below remain dated history,
-not current status. Source timing failure and full migration remain open.
+not current status. No analog qualification or release acceptance is claimed.
 
 ## Authority and stop point
 

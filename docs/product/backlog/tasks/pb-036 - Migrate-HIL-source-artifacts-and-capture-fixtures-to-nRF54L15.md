@@ -1,10 +1,10 @@
 ---
 id: PB-036
 title: Migrate HIL source artifacts and capture fixtures to nRF54L15
-status: In Progress
+status: Review
 assignee: []
 created_date: '2026-09-22 22:50'
-updated_date: '2026-09-28 09:17'
+updated_date: '2026-10-01 08:38'
 labels:
   - 'size:M'
   - 'area:hil'
@@ -51,11 +51,11 @@ None.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 RH4 source archives contain exact XIAO nRF54L15 CPUAPP artifact, checksum, board identity, NCS version, source commit, and provenance with no nRF5340 CPUNET or merged-image fields.
-- [ ] #2 RH4 extraction and preflight reject missing, extra, modified, wrong-board, wrong-version, and provenance-mismatched source artifacts before flashing.
-- [ ] #3 Mono and stereo capture fixtures, helper tests, and retained evidence use XIAO nRF54L15 source with unchanged audio recipes and acceptance limits.
-- [ ] #4 Exact source artifact is flashed and revalidated in at least one physical RH4-compatible row, with immutable logs and no ignored warnings.
-- [ ] #5 Artifact schema, capture documentation, release-facing guidance, and build contracts contain no active nRF5340 source assumptions.
+- [x] #1 RH4 source archives contain exact XIAO nRF54L15 CPUAPP artifact, checksum, board identity, NCS version, source commit, and provenance with no nRF5340 CPUNET or merged-image fields.
+- [x] #2 RH4 extraction and preflight reject missing, extra, modified, wrong-board, wrong-version, and provenance-mismatched source artifacts before flashing.
+- [x] #3 Mono and stereo capture fixtures, helper tests, and retained evidence use XIAO nRF54L15 source with unchanged audio recipes and acceptance limits.
+- [x] #4 Exact source artifact is flashed and revalidated in at least one physical RH4-compatible row, with immutable logs and no ignored warnings.
+- [x] #5 Artifact schema, capture documentation, release-facing guidance, and build contracts contain no active nRF5340 source assumptions.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -72,4 +72,14 @@ Shared RH4 integration needs coordinated PB-035/PB-036 changes. PB-035 predecess
 2026-09-25: later runner/default/capture changes and host tests are present, but fixed-image RH3 matrix does not prove exact-source-archive physical RH4. No clean-commit source provenance or RH4 artifact flash acceptance; dirty-tree coverage command stopped before builds. All criteria remain unchecked. See docs/development/nrf54l15-only-continuation-20260925.md.
 
 2026-09-28 exact-source-artifact checkpoint: clean 25a5cbf canonical software gate 80 PASS / 0 FAIL / 80 TOTAL and build contract 69/69; source archive SHA-256 cba5ee53d2e452e226c579e076af6b7604f1cbeb0d2a6daebb44cf066687fecc was consumed by the first six passing rows of the local exact-artifact matrix. Fresh Mode B 7.5 ms row 7 failed receiver teardown with 13 later rows skipped; the retained receiver postmortem and a separate receiver-only private TX-notify workqueue local-build replay passed (valid 16860/lost 14/PLC 28, zero decode errors, I2S underruns, resets, runtime warnings) with unchanged source HEX 805f2ed940a6fef965c51fc857bbcd7619b796df4e7f1b753978a2f5d198955c. This local-build diagnostic is not exact-artifact qualification. New clean full RH4 matrix and FR4 draft-artifact acceptance remain pending; no criteria or status changed. See docs/development/nrf54l15-tx-notify-workqueue-results-20260928.md.
+
+2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Exact source archive SHA-256 1d0004d0c6fb73815e9dbc5d495b85377cb2bd57f94c23d5e34899b7787bc6b0 contains only CPUAPP and v3.4.1/exact-commit/board/checksum provenance; public resolver negatives reject missing/extra/modified/wrong-board/version/provenance inputs. All 20 physical rows consume/revalidate that archive. Mono/stereo migrated fixture snapshots and real model/runner/analyzer host tests retained at /tmp/opencode/nrf54-capture-contract-evidence-20261001-r1/. This proves capture infrastructure migration, not physical ADC/ALSA or analog qualification.
+
+2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+<!-- SECTION:FINAL_SUMMARY:END -->

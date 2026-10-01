@@ -1,10 +1,10 @@
 ---
 id: PB-039
 title: Remove nRF5340 from receiver and test infrastructure
-status: In Progress
+status: Review
 assignee: []
 created_date: '2026-09-24 05:32'
-updated_date: '2026-09-30 23:09'
+updated_date: '2026-10-01 08:38'
 labels:
   - 'size:L'
   - 'area:testing'
@@ -42,12 +42,12 @@ No unresolved product choices. Stock bridge lossless throughput, available debug
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Active build/test/release entry points use only physical nRF54L15, nrf54l15bsim or portable host targets; obsolete nRF5340 receiver paths are removed, with historical evidence preserved.
-- [ ] #2 All 17 BSim scenarios and 26 runs pass on nrf54l15bsim with unchanged TX hashes, PCM limits and lifecycle outcomes.
-- [ ] #3 Two XIAO devices are distinguished by verified runtime identity and explicit roles; ambiguous, duplicated or incorrect bindings fail before changing targets.
-- [ ] #4 The nRF54L15 standalone HIL source passes the existing mandatory transport/runtime matrix against the nRF54L15 receiver with retained image, identity and raw-log provenance.
-- [ ] #5 The nRF54L15 Linux HCI fixture autonomously streams mono, Mode A and Mode B and reconnects through the stock UART bridge without transport corruption or unclassified receiver failures.
-- [ ] #6 Receiver/source/controller builds, focused tests and canonical software gates pass; coverage changes account for retired code and retain surviving behavioral coverage; current docs describe only the migrated workflows.
+- [x] #1 Active build/test/release entry points use only physical nRF54L15, nrf54l15bsim or portable host targets; obsolete nRF5340 receiver paths are removed, with historical evidence preserved.
+- [x] #2 All 17 BSim scenarios and 26 runs pass on nrf54l15bsim with unchanged TX hashes, PCM limits and lifecycle outcomes.
+- [x] #3 Two XIAO devices are distinguished by verified runtime identity and explicit roles; ambiguous, duplicated or incorrect bindings fail before changing targets.
+- [x] #4 The nRF54L15 standalone HIL source passes the existing mandatory transport/runtime matrix against the nRF54L15 receiver with retained image, identity and raw-log provenance.
+- [x] #5 The nRF54L15 Linux HCI fixture autonomously streams mono, Mode A and Mode B and reconnects through the stock UART bridge without transport corruption or unclassified receiver failures.
+- [x] #6 Receiver/source/controller builds, focused tests and canonical software gates pass; coverage changes account for retired code and retain surviving behavioral coverage; current docs describe only the migrated workflows.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -62,4 +62,14 @@ No unresolved product choices. Stock bridge lossless throughput, available debug
 2026-09-24: Product owner explicitly approved full migration and successor refinement. Readiness grounded in existing PB-033 through PB-038 work discovered on the continuation branch. This record tracks approval, not a second implementation. Continue PB-034 first; host native_sim remains platform-neutral. Historical evidence and existing approved startup-recipe refinement remain intact.
 
 User explicitly requests verified migration completion, silent execution, local commits and attached lab hardware actions. Original PB-013 user refinement remains unchanged and unstaged. No push, merge or release operation inferred. Clean b21c7a7 canonical gate 80/0/80, HIL host 340 passed/1 hardware-opt-in skip, physical builds/73-check contract and six HCI cases are retained; full fixed RH4 local-artifact matrix is running under separate system-manager containment. Status/criteria are not yet acceptance.
+
+2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Approved all-nRF54L15 migration verified locally across receiver/source/HCI, simulation, artifacts, identity, software and physical gates. Component PB-019 and PB-034 through PB-037 now have evidence-backed criteria and Review summaries. PB-018 is explicitly superseded, never falsely qualified. PB-038 aggregate product status is not silently promoted; its execution evidence is recorded separately.
+
+2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -1,10 +1,10 @@
 ---
 id: PB-035
 title: Promote XIAO nRF54L15 source across HIL matrices
-status: In Progress
+status: Review
 assignee: []
 created_date: '2026-09-22 22:50'
-updated_date: '2026-09-30 21:22'
+updated_date: '2026-10-01 08:38'
 labels:
   - 'size:M'
   - 'area:hil'
@@ -50,11 +50,11 @@ None.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Every active HIL matrix command accepts and forwards one external session manifest to all child runs, and each child preserves six ordered identity checks with fail-closed same-family binding.
-- [ ] #2 Default active source fixture, build, flash, reset, UART capture, and matrix metadata use XIAO nRF54L15 without nRF5340 source board assumptions.
-- [ ] #3 Runner and matrix tests cover manifest forwarding, duplicate or swapped same-family hardware, stale identity, missing hardware, and no unsafe target-changing action before validation.
-- [ ] #4 Representative mono, Mode A, and Mode B matrix rows pass on physical nRF54L15 source and receiver hardware with immutable evidence and no ignored warnings.
-- [ ] #5 Active HIL docs and STATUS.md describe XIAO nRF54L15 as canonical source while historical evidence remains unchanged.
+- [x] #1 Every active HIL matrix command accepts and forwards one external session manifest to all child runs, and each child preserves six ordered identity checks with fail-closed same-family binding.
+- [x] #2 Default active source fixture, build, flash, reset, UART capture, and matrix metadata use XIAO nRF54L15 without nRF5340 source board assumptions.
+- [x] #3 Runner and matrix tests cover manifest forwarding, duplicate or swapped same-family hardware, stale identity, missing hardware, and no unsafe target-changing action before validation.
+- [x] #4 Representative mono, Mode A, and Mode B matrix rows pass on physical nRF54L15 source and receiver hardware with immutable evidence and no ignored warnings.
+- [x] #5 Active HIL docs and STATUS.md describe XIAO nRF54L15 as canonical source while historical evidence remains unchanged.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -73,4 +73,14 @@ Phase 1: propagate immutable session through matrix CLI/coordinator/Runner; vali
 2026-09-28 clean-commit checkpoint: 25a5cbf canonical software gate 80 PASS / 0 FAIL / 80 TOTAL and build contract 69/69; exact XIAO source archive SHA-256 cba5ee53d2e452e226c579e076af6b7604f1cbeb0d2a6daebb44cf066687fecc. Full local-artifact matrix passed six rows, then stopped on fresh Mode B 7.5 ms row 7 with receiver timeout and no summary; 13 rows skipped. Retained no-reset postmortem and receiver-only private TX-notify workqueue diagnostic show one unchanged-source (HEX 805f2ed940a6fef965c51fc857bbcd7619b796df4e7f1b753978a2f5d198955c) frozen-row replay PASS, receiver valid 16860/lost 14/PLC 28 with zero decode errors, I2S underruns, resets, and runtime warnings. This red/green row does not complete the clean full matrix; no acceptance checkbox or status change. See docs/development/nrf54l15-tx-notify-workqueue-results-20260928.md.
 
 2026-09-30 continuation: recovered clean 2a0e792 software gate 80/0/80 and six-case HCI pass; retained exact-artifact matrix failed Mode A 48_4_1 on source under-lead (-ETIME), with one passed/one failed/18 skipped. New unchanged-image frozen Mode A row /tmp/opencode/hil-runs/nrf54-analyzer-resume-20260930-r2 passed 12000 scored and 12644 submitted per CIS, zero send failures/skips/under-lead, receiver valid 12645/12644 and global PLC 25, zero decode/I2S/reset/push faults. Two passive 100 ms I2S windows and four rejected offline negative controls retained separately. Startup silence is valid geometry, not content acceptance. No timing repair, full matrix or AC/status claim. See docs/development/logic-analyzer-continuation-results-20260930.md.
+
+2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+All active matrix/runner contracts forward paired external sessions and use XIAO source CPUAPP. Public host negatives cover swapped/duplicate/stale/missing identity and pre-action rejection. Full physical matrix verifies 120 ordered checks, identical session snapshots, representative mono/Mode A/Mode B plus reconnect/hang/stall and 7.5-ms rows. Source enqueue guard preserves 3000/2000-us margins and frozen limits.
+
+2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+<!-- SECTION:FINAL_SUMMARY:END -->
