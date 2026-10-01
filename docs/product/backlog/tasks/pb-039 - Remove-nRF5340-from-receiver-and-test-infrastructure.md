@@ -1,10 +1,10 @@
 ---
 id: PB-039
 title: Remove nRF5340 from receiver and test infrastructure
-status: Ready
+status: In Progress
 assignee: []
 created_date: '2026-09-24 05:32'
-updated_date: '2026-09-24 11:34'
+updated_date: '2026-09-30 23:09'
 labels:
   - 'size:L'
   - 'area:testing'
@@ -50,8 +50,16 @@ No unresolved product choices. Stock bridge lossless throughput, available debug
 - [ ] #6 Receiver/source/controller builds, focused tests and canonical software gates pass; coverage changes account for retired code and retain surviving behavioral coverage; current docs describe only the migrated workflows.
 <!-- AC:END -->
 
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+2026-10-01 authorized final continuation: finish existing PB-019/PB-034/PB-035/PB-036/PB-037 components, repair source peer-enqueue scheduling without changing 3000/2000 us or receiver limits, verify clean exact-commit canonical/build/HCI and fixed 20-child artifact matrix, then perform generated-output/reference audit and PB-038 aggregate closure. Physical analog qualification and draft-release publication/FR4 remain separate. Same owner; no competing implementation.
+<!-- SECTION:PLAN:END -->
+
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
 2026-09-24: Product owner explicitly approved full migration and successor refinement. Readiness grounded in existing PB-033 through PB-038 work discovered on the continuation branch. This record tracks approval, not a second implementation. Continue PB-034 first; host native_sim remains platform-neutral. Historical evidence and existing approved startup-recipe refinement remain intact.
+
+User explicitly requests verified migration completion, silent execution, local commits and attached lab hardware actions. Original PB-013 user refinement remains unchanged and unstaged. No push, merge or release operation inferred. Clean b21c7a7 canonical gate 80/0/80, HIL host 340 passed/1 hardware-opt-in skip, physical builds/73-check contract and six HCI cases are retained; full fixed RH4 local-artifact matrix is running under separate system-manager containment. Status/criteria are not yet acceptance.
 <!-- SECTION:NOTES:END -->

@@ -194,7 +194,7 @@ different product from UGREEN's separate USB-C self-contained LE Audio
 transmitter (which runs the stack in dongle firmware and is outside the
 native-HCI contract); do not conflate the two.
 
-### Nordic nRF5340 DK (HCI UART controller): Candidate / under evaluation
+### Nordic nRF5340 DK: retired fixture and historical external context
 
 NCS v3.3.0 supports running the Bluetooth controller on cpunet with H4 UART on
 cpuapp. This repository's former nRF5340 dongle implementation is retired;
@@ -204,10 +204,10 @@ NCS v3.3.0's Zephyr USB device HCI class
 the controller-to-host TX path handles EVT and ACL only and drops HCI ISO
 packet type `0x05`, and the bulk OUT path is hard-coded to ACL buffers and ACL
 header parsing. (This is not a missing-USB-isochronous-endpoints issue; those
-descriptors concern SCO.) HCI UART is the supported route. Status: **Candidate
-/ under evaluation** as a native HCI development adapter; the hardware source
-path is not project-validated; existing public evidence does not establish
-full dynamic acceptance.
+descriptors concern SCO.) HCI UART was the route considered in that historical
+SDK. PB-018 is superseded by the XIAO replacement in PB-019/PB-039. No active
+repository build, fixture, test commitment or support recommendation remains
+for the nRF5340 DK, and no dynamic acceptance of it is claimed.
 
 ### Nordic nRF54L15 DK (HCI UART controller): Candidate / under evaluation
 
@@ -216,22 +216,24 @@ NCS v3.3.0's `samples/bluetooth/hci_uart` supports
 (ISO). Status: **Candidate / under evaluation** as a native HCI development
 adapter; dynamic Linux and receiver validation remains required.
 
-### Seeed XIAO nRF54L15: prototype / qualification incomplete
+### Seeed XIAO nRF54L15: lab-qualified development HCI fixture
 
 The Seeed XIAO nRF54L15 **board** is distinct from the nRF54L15 DK above and
 serves as this repository's session-bound Linux HCI central for development.
 It is a second XIAO, separate from the receiver and its DAC. The single-image
 SDC controller sends H4 command, ACL and ISO traffic through async UART20 on
 P1.9/P1.8 at 1,000,000 baud 8N1 via the stock SAMD11 USB CDC bridge. The
-TIMER-backed RX path and bounded H4 workload passed an earlier six-case
-120-second mono, Mode A and Mode B fresh/bonded diagnostic with
-`scripts/bap_central.py`; receiver loss and PLC were **nonzero** but within
-frozen transport limits. A later final production-image repeat failed during
-Mode A after mono and reconnect passed: HCI hardware error `0x07`, parser
-`-EPROTO`, I2S underrun, stream reset and controller command timeouts. Cause
-remains under investigation. An external RAM-trace six-case pass perturbs
-timing and does not repair or qualify the production image. See the
-[exact qualification record](development/pb-019-hci-resume-results.md) and
+TIMER-backed RX path now includes the measured coherent DMA-boundary repair;
+fresh BlueZ connection waits for successful bonding instead of racing a
+proactive Pair request against the receiver's security request. Clean NCS
+v3.4.1 `b21c7a7` images passed six 120-second mono, Mode A and Mode B
+fresh/bonded cases with unmodified `scripts/bap_central.py`: 72,000 writer
+frames, PLC 489, no case warnings/errors, underrun, reset or kernel HCI/SMP
+alerts. Loss and PLC remain **nonzero** and within unchanged frozen limits.
+The old failed runs remain immutable; a trace-image pass was not substituted
+for the repaired normal-image qualification. See the
+[repair and earlier failures](development/pb-019-uarte-boundary-repair-results-20260928.md),
+[source-batch integration record](development/nrf54l15-source-batch-guard-results-20261001.md) and
 [controlled session helper](../dongle/README.md) for identity-bound operation.
 
 - The nRF54L15 has no USB device peripheral.
@@ -241,9 +243,10 @@ timing and does not repair or qualify the production image. See the
   wiring. Lab success at this bounded workload does not prove generic
   no-flow-control reliability or plug-and-play support.
 
-Status: **Prototype / qualification incomplete**, not lab-qualified,
-consumer-recommended or public Supported / project-validated. Earlier passes
-remain scoped evidence, not proof against the later failure. No analog-output
+Status: **Lab-qualified development fixture**, not consumer-recommended or
+public Supported / project-validated desktop adapter. Qualification applies
+to the recorded stock bridge, firmware and bounded LE Audio workload; it is
+not a generic no-flow-control UART guarantee. No analog-output
 or desktop PipeWire/WirePlumber UI acceptance is claimed. Intel AX210 remains
 the only publicly accepted native adapter.
 

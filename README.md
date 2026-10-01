@@ -78,6 +78,21 @@ Historical design and wiring facts remain documented.
 - Digital clock recovery and rate matching on nRF54L15.
 - Watchdog, developer shell diagnostics, XIAO button/LED pairing control.
 
+## Development and test hardware
+
+Active firmware and lab workflows use **nRF54L15 only**, with **NCS v3.4.1**.
+A second XIAO alternates between standalone LE Audio source firmware and the
+session-bound Linux HCI UART controller; it never runs both roles at once.
+Canonical BabbleSim testing uses two `nrf54l15bsim` peers, while native and
+Python unit tests remain portable host tests. No active build, test, flash or
+release workflow requires nRF5340 hardware.
+
+The XIAO HCI role is a bounded, lab-qualified development fixture, not a
+consumer adapter or a claim of generic no-flow-control UART reliability.
+Analog qualification and publication of release binaries remain separate.
+See [adapter evaluation](docs/bluetooth-adapter-evaluation.md) and
+[platform audit](docs/development/nrf54l15-final-reference-audit-20261001.md).
+
 ## Quick start
 
 1. **Use a Seeed XIAO nRF54L15**: it is the sole supported final receiver.

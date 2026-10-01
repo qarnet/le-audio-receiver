@@ -1,4 +1,36 @@
-# STATUS: le-audio-receiver, 2026-09-25
+# STATUS: le-audio-receiver, 2026-10-01
+
+Current implementation checkpoint: `b21c7a7` guards both timestamped source
+peer enqueues from cooperative BT TX scheduling while retaining 3000/2000 us
+and all frozen row/transport limits. Source suite 84/84, clean canonical
+80/0/80, HIL host 340 passed/one hardware-opt-in skip, three physical builds
+and resolved build contract 73/73 passed. Clean normal HCI six-case validation
+passed 72,000 writer frames, PLC 489, zero case/kernel HCI/SMP alerts.
+Full exact-local-artifact matrix is still running; no full migration acceptance
+claimed yet. See `docs/development/nrf54l15-source-batch-guard-results-20261001.md`
+and `docs/development/nrf54l15-final-reference-audit-20261001.md`.
+Older unresolved-fault/qualification and board-state statements below are
+dated historical checkpoints, not the latest implementation verdict.
+
+Latest continuation (2026-09-30):
+`docs/development/logic-analyzer-continuation-results-20260930.md` reconciles
+retained clean `2a0e792` 80/0/80 software and six-case HCI evidence with the
+failed exact-artifact matrix (one passed, one failed, 18 skipped). New unchanged
+Mode A 120 s diagnostic passed with two passive I2S windows; four offline
+bad-wire/capture controls were rejected. Startup silence passes geometry,
+not audio-content acceptance. Prior source timing failure remains unresolved;
+no firmware change, full matrix acceptance, PB-041 implementation or release.
+Boards last left receiver plus idle standalone source after fresh identity checks.
+
+Latest docs/evidence snapshot (2026-09-27):
+`docs/development/logic-analyzer-i2s-bringup-results-20260927.md` records
+three passed normal standalone-source 120 s HIL rows and six passive I2S
+100 ms captures; original Mode A diagnostic FAILED on decoder-start alignment,
+with separate validated offline analysis. Last known boards carry PRIMARY
+diagnostic receiver/FLPR/standalone-source images, not clean-clone HCI proof.
+PB-019 HCI UART fault remains open; PB-041 nonce identification not implemented.
+No new code, gate rerun, full matrix, analog or release acceptance claimed.
+Older pause and board facts below are dated historical snapshots.
 
 User-paused observability handoff (RTT or logic analyzer pending):
 `docs/development/nrf54l15-observability-resume-20260925.md`. This is current

@@ -61,9 +61,36 @@ Nordic samples are the best learning resource:
 
 ## Autonomous execution and hard blockers
 
+### Audio validation and fixture-identification continuation
+
+For the analyzer/audio-testing track, start with:
+
+1. `docs/testing/logic-analyzer-setup.md`: sole current analyzer wiring declaration,
+   fresh-session identity, capture templates, electrical safety and DAC-presence limits.
+2. `docs/development/audio-validation-handoff-20260925.md`: proposed independent
+   codec/ASRC/transport/presentation tests, timestamp ledger and BLE clock mapping.
+3. PB-041 in `docs/product/backlog/tasks/`: separate fixture-identification work.
+   Backlog owns status/readiness; documentation is not implementation or acceptance.
+
+Project `opencode.json` advertises `le-audio-resources`, `nix-nrf-dev` and active
+`ncs` references. The external resource library's `README.md` indexes authored
+research and searchable vendor extracts. Keep PDFs, archives, vendor tools and
+generated extracts there; do not copy them into this repository without a specific
+need and rights review. Historical research may target v3.3.0; current SDK pin wins.
+Do not bulk-load the library as startup instructions. Read relevant files on demand.
+These documents do not authorize hardware actions beyond existing safety rules.
+The earlier separate PB-019 pause is historical: explicit final-migration
+direction resumed qualification, and clean v3.4.1 HCI evidence now exists. Do not
+treat the audio research handoff itself as approval for unrelated new features.
+
 ### Current migration continuation
 
 For the all-nRF54L15 migration, read
+`docs/development/nrf54l15-source-batch-guard-results-20261001.md` and
+`docs/development/nrf54l15-final-reference-audit-20261001.md` for the latest
+repair and platform audit. Clean `b21c7a7` software, builds and six HCI cases
+passed; the new exact local-artifact matrix remains the final physical gate.
+For dated chronology, read
 `docs/development/nrf54l15-observability-resume-20260925.md` first, then
 `docs/development/nrf54l15-only-resume-20260924.md` as historical context.
 The primary repository on `feature/nrf54l15-only-continuation` owns the work;
@@ -75,6 +102,12 @@ not today's implementation status. Read
 `pb-036-source-artifact-results.md`, and `pb-037-retirement-results.md` for
 later dirty-tree results. None constitutes final clean-commit acceptance.
 Historical evidence and safety rules remain binding.
+
+Latest owner direction (2026-10-01 local date): finish the approved migration,
+use attached lab boards/analyzer and local commits as necessary, and report only
+verified completion or a genuine hard blocker. This does not waive fresh identity,
+immutable evidence, physical safety, frozen acceptance, or the human-only merge
+rule. Preserve user-owned PB-013 edits and private untracked graph/checkpoint data.
 
 Product-owner direction (2026-09-24): carry approved goals through to verified
 completion. Research, diagnosis, grounded software changes, fixture repairs,

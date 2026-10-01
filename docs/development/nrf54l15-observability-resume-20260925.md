@@ -1,5 +1,11 @@
 # All-nRF54L15 observability pause and resume, 2026-09-25
 
+Latest entry point: [2026-09-30 analyzer continuation](logic-analyzer-continuation-results-20260930.md).
+It reconciles later clean software/HCI records and failed matrix, then records
+one unchanged Mode A row plus passive I2S windows and offline negative controls.
+Older pause, board-state and unrun-gate statements below remain dated history,
+not current status. Source timing failure and full migration remain open.
+
 ## Authority and stop point
 
 **User paused work pending either RTT or logic-analyzer tools.** This is a
@@ -189,3 +195,33 @@ qualification and public release **not claimed**.
    artifact and PB-038 tasks without weakening acceptance. Ask only for
    genuine missing capability or consequential product decision, not
    routine investigation or failing diagnostics.
+
+## 2026-09-27 addendum: passive I2S bring-up, not HCI observability
+
+The 2026-09-25 pause, board-state and tool-availability statements above are
+dated historical facts, not a description of current hardware. New passive
+analyzer and three normal 48_4_1 standalone-source HIL rows are documented in
+[I2S bring-up results](logic-analyzer-i2s-bringup-results-20260927.md). Mono,
+Mode A and Mode B 120 s HIL rows passed; six unmodified `.sr` files contain
+two 100 ms 12 MS/s I2S windows per row. Complete halves have 16 BCLK rises,
+aligned decoder zero warnings. Original Mode A diagnostic supervisor FAILED
+on a mid-word decoder start, not a failed HIL row; offline v2 preserves that
+verdict/raw log and validates entire raw geometry before analysis-copy crop.
+No HCI adapter started. These taps are at receiver I2S, **not** source UART
+P1.8; PB-019 fault remains paused and undiagnosed by this work. PB-041 nonce
+fixture identification remains unimplemented. Digital rail-high does not prove
+DAC presence, voltage or analog output.
+
+Last known post-Mode-B images: PRIMARY receiver CPUAPP
+`e02ab5f15213c05038d6e85cbcef585cf1a8db7f41b3653571dfcdb7f3a43aa6`,
+FLPR `c2197f4c664b11a28d499f527ec6d359ee122e9a9434b0a4e9f46b1e4239aa4a`,
+standalone source
+`805f2ed940a6fef965c51fc857bbcd7619b796df4e7f1b753978a2f5d198955c`.
+These are not the clean-clone receiver/HCI tuple listed above. Source idle,
+receiver role unchanged at last check; fresh identity required next session.
+Private ignored evidence mirror:
+`.session-checkpoints/2026-09-27-i2s-bringup/` (944 verified files; never stage
+or use archived identity as fresh authority). Clean 80/0/80 software gate was
+not rerun; no firmware change or new hardware action in this docs-only step.
+Not full matrix, RH4/FR4, analog or public acceptance. Keep older pause facts
+and immutable failed runs intact.

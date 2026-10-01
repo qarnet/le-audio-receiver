@@ -4,7 +4,7 @@ title: Promote XIAO nRF54L15 source across HIL matrices
 status: In Progress
 assignee: []
 created_date: '2026-09-22 22:50'
-updated_date: '2026-09-28 09:17'
+updated_date: '2026-09-30 21:22'
 labels:
   - 'size:M'
   - 'area:hil'
@@ -71,4 +71,6 @@ Phase 1: propagate immutable session through matrix CLI/coordinator/Runner; vali
 2026-09-25: full fixed-image RH3 matrix /tmp/opencode/hil-runs/pb035-xiao-matrix-20260924-r2 passed 20/20, no failed/cancelled/cleanup children, including preserved Mode B, 7.5 ms, reconnect, hang/stall with unchanged limits. Later final runner smoke /tmp/opencode/hil-runs/pb035-final-runner-smoke-20260925-r1 passed under six guarded checks and restored source standalone image. Matrix imported earlier runner code while subsequent defaults/schema/docs landed; no clean-commit final integration or AC claim. See docs/development/pb-035-source-matrix-results.md and nrf54l15-only-continuation-20260925.md.
 
 2026-09-28 clean-commit checkpoint: 25a5cbf canonical software gate 80 PASS / 0 FAIL / 80 TOTAL and build contract 69/69; exact XIAO source archive SHA-256 cba5ee53d2e452e226c579e076af6b7604f1cbeb0d2a6daebb44cf066687fecc. Full local-artifact matrix passed six rows, then stopped on fresh Mode B 7.5 ms row 7 with receiver timeout and no summary; 13 rows skipped. Retained no-reset postmortem and receiver-only private TX-notify workqueue diagnostic show one unchanged-source (HEX 805f2ed940a6fef965c51fc857bbcd7619b796df4e7f1b753978a2f5d198955c) frozen-row replay PASS, receiver valid 16860/lost 14/PLC 28 with zero decode errors, I2S underruns, resets, and runtime warnings. This red/green row does not complete the clean full matrix; no acceptance checkbox or status change. See docs/development/nrf54l15-tx-notify-workqueue-results-20260928.md.
+
+2026-09-30 continuation: recovered clean 2a0e792 software gate 80/0/80 and six-case HCI pass; retained exact-artifact matrix failed Mode A 48_4_1 on source under-lead (-ETIME), with one passed/one failed/18 skipped. New unchanged-image frozen Mode A row /tmp/opencode/hil-runs/nrf54-analyzer-resume-20260930-r2 passed 12000 scored and 12644 submitted per CIS, zero send failures/skips/under-lead, receiver valid 12645/12644 and global PLC 25, zero decode/I2S/reset/push faults. Two passive 100 ms I2S windows and four rejected offline negative controls retained separately. Startup silence is valid geometry, not content acceptance. No timing repair, full matrix or AC/status claim. See docs/development/logic-analyzer-continuation-results-20260930.md.
 <!-- SECTION:NOTES:END -->
