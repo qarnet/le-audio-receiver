@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <zephyr/kernel.h>
 
 #include "flpr_protocol.h" /* struct flpr_msg */
 
@@ -46,6 +47,10 @@ void fake_ipc_set_auto_bound(bool enable);
 /* When true, sends block forever on an internal semaphore (used to park
  * a stress worker mid-send while observing clamped state). */
 void fake_ipc_set_send_block(bool enable);
+void fake_ipc_ready_during_register(uint32_t epoch);
+void fake_ipc_block_heartbeat(bool enable);
+int fake_ipc_wait_heartbeat_entered(k_timeout_t timeout);
+void fake_ipc_release_heartbeat(void);
 
 /* Incoming-message injection: invokes the captured received callback. */
 void fake_ipc_receive(const void *data, size_t len);

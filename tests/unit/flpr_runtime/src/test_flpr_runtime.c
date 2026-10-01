@@ -24,6 +24,7 @@
 #include "mock_nrf_vpr.h"
 #include "mock_state.h"
 #include "flpr_ring.h" /* production CRC for expected values */
+#include <hal/nrf_memconf.h>
 
 /* ── Expected DMCONTROL masks (same field constants as production) ── */
 
@@ -38,8 +39,8 @@
 #define SUCCESS_EVENTS                                                                             \
 	FLPR_RT_EV_SNAPSHOT, FLPR_RT_EV_SRC_CRC, FLPR_RT_EV_DISCONNECT, FLPR_RT_EV_STOP_CPURUN,    \
 		FLPR_RT_EV_ASSERT_RESET, FLPR_RT_EV_COPY, FLPR_RT_EV_CACHE_FLUSH_BARRIERS,         \
-		FLPR_RT_EV_EXEC_CRC, FLPR_RT_EV_INITPC, FLPR_RT_EV_RECONNECT,                      \
-		FLPR_RT_EV_SET_CPURUN, FLPR_RT_EV_RELEASE_RESET, FLPR_RT_EV_WAIT_BOUND,            \
+		FLPR_RT_EV_EXEC_CRC, FLPR_RT_EV_INITPC, FLPR_RT_EV_SET_CPURUN,                     \
+		FLPR_RT_EV_RELEASE_RESET, FLPR_RT_EV_RECONNECT, FLPR_RT_EV_WAIT_BOUND,             \
 		FLPR_RT_EV_WAIT_READY, FLPR_RT_EV_SUCCESS
 
 /* ── Helpers ────────────────────────────────────────────────────── */
@@ -109,6 +110,75 @@ ZTEST(flpr_runtime, test_restart_before_init_enodev)
 }
 
 /* ── Full success path ──────────────────────────────────────────── */
+
+ZTEST(flpr_runtime, test_fresh_reload_rebinds_without_saved_context)
+{
+	rt_success_arrange();
+	uint32_t control0 = flpr_rt_test_memconf.POWER[0].CONTROL;
+	uint32_t retention0 = flpr_rt_test_memconf.POWER[0].RET;
+	uint32_t retention2 = flpr_rt_test_memconf.POWER[0].RET2;
+	uint32_t special_retention = flpr_rt_test_memconf.POWER[1].RET;
+
+	zassert_ok(flpr_runtime_restart(1500U), "fresh boot, bound and READY");
+	struct flpr_runtime_status status;
+	flpr_runtime_get_status(&status);
+	zassert_equal(status.new_epoch, 43U, "fresh remote generation");
+	zassert_equal(status.success_count, 1U, "successful protocol restart");
+	zassert_equal(flpr_rt_test_memconf.POWER[0].CONTROL, control0,
+		      "physical SRAM power unchanged");
+	zassert_equal(flpr_rt_test_memconf.POWER[0].RET, retention0,
+		      "physical SRAM retention unchanged");
+	zassert_equal(flpr_rt_test_memconf.POWER[0].RET2, retention2, "second SRAM bank unchanged");
+	zassert_equal(flpr_rt_test_memconf.POWER[1].RET, special_retention & ~1U,
+		      "only context-restore feature changed");
+
+	/* Another fresh reload must also produce a new generation and binding. */
+	zassert_ok(flpr_runtime_restart(1500U), "repeated restart");
+	flpr_runtime_get_status(&status);
+	zassert_equal(status.new_epoch, 44U, "next remote generation");
+	zassert_equal(status.success_count, 2U, "both restarts complete");
+}
+
+ZTEST(flpr_runtime, test_context_selection_failure_preserves_image_then_recovers)
+{
+	rt_success_arrange();
+	memset(flpr_rt_test_exec, 0xa5, FLPR_RT_TEST_IMAGE_SIZE);
+	mock_vpr_fail_context_selection(true);
+	zassert_equal(flpr_runtime_restart(1500U), -EIO, "cannot select fresh reset");
+	for (uint32_t i = 0U; i < FLPR_RT_TEST_IMAGE_SIZE; i++) {
+		zassert_equal(flpr_rt_test_exec[i], 0xa5, "unsafe reload did not occur");
+	}
+	mock_vpr_fail_context_selection(false);
+	zassert_ok(flpr_runtime_restart(1500U), "valid retry recovers");
+}
+
+ZTEST(flpr_runtime, test_interrupt_rearm_failure_retains_mask_for_retry)
+{
+	rt_success_arrange();
+	mock_vpr_fail_interrupt_rearm(true);
+	zassert_equal(flpr_runtime_restart(1500U), -EIO, "disabled notification cannot pass");
+	zassert_false(mock_vpr_fresh_boot_running(), "failed launched core returned to reset");
+	mock_vpr_fail_interrupt_rearm(false);
+	zassert_ok(flpr_runtime_restart(1500U),
+		   "retry uses prior IRQ mask, not reset readback zero");
+	struct flpr_runtime_status status;
+	flpr_runtime_get_status(&status);
+	zassert_equal(status.fail_count, 1U, "failed attempt retained");
+	zassert_equal(status.success_count, 1U, "retry bound and READY succeed");
+}
+
+ZTEST(flpr_runtime, test_corrupt_reload_recovers_after_reset_held_failure)
+{
+	rt_success_arrange();
+	flpr_rt_test_set_corrupt_after_copy(true);
+	zassert_equal(flpr_runtime_restart(1500U), -EIO, "corrupt execution rejected");
+	flpr_rt_test_set_corrupt_after_copy(false);
+	zassert_ok(flpr_runtime_restart(1500U), "fresh recopy and rebind after held reset");
+	struct flpr_runtime_status status;
+	flpr_runtime_get_status(&status);
+	zassert_equal(status.execution_crc, status.source_crc, "valid replacement image");
+	zassert_equal(status.success_count, 1U, "retry succeeded");
+}
 
 ZTEST(flpr_runtime, test_full_success_event_order)
 {
@@ -291,11 +361,11 @@ ZTEST(flpr_runtime, test_reconnect_failure_reset_held)
 	zassert_equal(s.failed_stage, FLPR_STAGE_RECONNECT, "stage RECONNECT");
 	zassert_equal(s.state, FLPR_RUNTIME_UNAVAILABLE, "state UNAVAILABLE");
 
-	/* CPURUN stopped (1 write: false); reset still asserted. */
-	zassert_equal(mock_vpr.cpurun_set_count, 1, "only the stop write");
+	/* Re-registration is after launch. Failure reasserts reset with CPURUN off. */
+	zassert_equal(mock_vpr.cpurun_set_count, 3, "stop, launch, failure stop");
 	zassert_false(mock_vpr.cpurun, "CPURUN false");
-	zassert_equal(mock_vpr.dmcontrol_write_count, 1, "only the assert write");
-	zassert_equal(mock_vpr.dmcontrol_writes[0], EXPECTED_RESET_ASSERT, "reset held");
+	zassert_equal(mock_vpr.dmcontrol_write_count, 3, "assert, release, safe failure reset");
+	zassert_equal(mock_vpr.dmcontrol_writes[2], EXPECTED_RESET_ASSERT, "reset held on failure");
 	zassert_equal(s.readbacks.dmcontrol_after_assert, EXPECTED_RESET_ASSERT,
 		      "readback shows held reset");
 }
@@ -318,7 +388,7 @@ ZTEST(flpr_runtime, test_wait_bound_failure_stops_cpurun)
 	zassert_false(mock_vpr.cpurun, "CPURUN stopped on failure");
 
 	/* Release happened before waiting. */
-	zassert_equal(mock_vpr.dmcontrol_write_count, 2, "assert + release");
+	zassert_equal(mock_vpr.dmcontrol_write_count, 3, "assert + release + failure reset");
 	zassert_equal(mock_vpr.dmcontrol_writes[1], EXPECTED_RESET_RELEASE, "released");
 
 	/* Events end with failure stop. */
@@ -332,9 +402,9 @@ ZTEST(flpr_runtime, test_wait_bound_failure_stops_cpurun)
 		FLPR_RT_EV_CACHE_FLUSH_BARRIERS,
 		FLPR_RT_EV_EXEC_CRC,
 		FLPR_RT_EV_INITPC,
-		FLPR_RT_EV_RECONNECT,
 		FLPR_RT_EV_SET_CPURUN,
 		FLPR_RT_EV_RELEASE_RESET,
+		FLPR_RT_EV_RECONNECT,
 		FLPR_RT_EV_WAIT_BOUND,
 		FLPR_RT_EV_FAILURE_STOP,
 	};

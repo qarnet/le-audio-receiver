@@ -62,6 +62,9 @@ extern bool mock_runtime_restart_called;
 extern uint32_t mock_runtime_new_epoch;
 extern int mock_remote_restarted_result;
 extern uint32_t mock_remote_restarted_calls;
+void mock_runtime_block(bool block);
+int mock_runtime_wait_entered(k_timeout_t timeout);
+void mock_runtime_release(void);
 
 /* ── Test data ───────────────────────────────────────────────────── */
 
@@ -1046,12 +1049,195 @@ ZTEST(audio_offload, test_stage4b_idle_restart_reinit)
 
 	mock_runtime_restart_result = 0;
 	mock_remote_restarted_result = 0;
-	uint32_t prev_reinit = mock_remote_restarted_calls;
+	uint32_t previous = s.runtime_restart_count;
+	mock_runtime_new_epoch = 777U;
 
 	audio_offload_remote_unavailable();
 
-	zassert_equal(mock_remote_restarted_calls, prev_reinit + 1,
-		      "ring reinit called on idle restart");
+	int64_t deadline = k_uptime_get() + 500;
+	do {
+		audio_offload_get_status(&s);
+		if (s.runtime_restart_count > previous) {
+			break;
+		}
+		k_sleep(K_MSEC(1));
+	} while (k_uptime_get() < deadline);
+	zassert_equal(s.runtime_restart_count, previous + 1U, "queued idle repair completed");
+	zassert_equal(s.remote_epoch, 777U, "actual replacement generation reported");
+	zassert_equal(s.state, AUDIO_OFFLOAD_STOPPED, "idle repair does not open a stream");
+}
+
+static K_SEM_DEFINE(idle_callback_returned, 0, 1);
+static struct k_work idle_callback_work;
+
+static void idle_callback_work_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	audio_offload_remote_unavailable();
+	k_sem_give(&idle_callback_returned);
+}
+
+ZTEST(audio_offload, test_idle_health_callback_does_not_wait_for_restart)
+{
+	audio_offload_stream_stop();
+	struct audio_offload_status status;
+	audio_offload_get_status(&status);
+	uint32_t previous = status.runtime_restart_count;
+	mock_runtime_restart_result = 0;
+	mock_remote_restarted_result = 0;
+	mock_runtime_block(true);
+	k_sem_reset(&idle_callback_returned);
+	k_work_init(&idle_callback_work, idle_callback_work_fn);
+	k_work_submit(&idle_callback_work);
+	zassert_ok(mock_runtime_wait_entered(K_MSEC(500)),
+		   "restart is held at real queue boundary");
+	bool callback_returned = k_sem_take(&idle_callback_returned, K_MSEC(20)) == 0;
+	/* Release on both red and green so the regression cannot strand SYS WQ. */
+	mock_runtime_release();
+	if (!callback_returned) {
+		zassert_ok(k_sem_take(&idle_callback_returned, K_MSEC(500)),
+			   "old blocking callback released");
+	}
+	int64_t deadline = k_uptime_get() + 500;
+	do {
+		audio_offload_get_status(&status);
+		if (status.runtime_restart_count > previous) {
+			break;
+		}
+		k_sleep(K_MSEC(1));
+	} while (k_uptime_get() < deadline);
+	zassert_true(callback_returned, "SYS heartbeat callback stays nonblocking");
+	zassert_equal(status.runtime_restart_count, previous + 1U,
+		      "idle repair completed elsewhere");
+}
+
+static struct audio_offload_status wait_idle_outcome(uint32_t successes, uint32_t failures)
+{
+	struct audio_offload_status status;
+	int64_t deadline = k_uptime_get() + 500;
+	do {
+		audio_offload_get_status(&status);
+		if (status.runtime_restart_count >= successes &&
+		    status.runtime_restart_fail >= failures) {
+			break;
+		}
+		k_sleep(K_MSEC(1));
+	} while (k_uptime_get() < deadline);
+	return status;
+}
+
+ZTEST(audio_offload, test_idle_restart_error_then_valid_retry)
+{
+	audio_offload_stream_stop();
+	struct audio_offload_status before;
+	audio_offload_get_status(&before);
+	mock_runtime_restart_result = -EIO;
+	audio_offload_remote_unavailable();
+	struct audio_offload_status failed =
+		wait_idle_outcome(before.runtime_restart_count, before.runtime_restart_fail + 1U);
+	zassert_equal(failed.runtime_restart_fail, before.runtime_restart_fail + 1U,
+		      "restart failure reported without blocking heartbeat");
+	mock_runtime_restart_result = 0;
+	mock_remote_restarted_result = 0;
+	audio_offload_remote_unavailable();
+	struct audio_offload_status recovered =
+		wait_idle_outcome(before.runtime_restart_count + 1U, failed.runtime_restart_fail);
+	zassert_equal(recovered.runtime_restart_count, before.runtime_restart_count + 1U,
+		      "new idle repair succeeds");
+}
+
+ZTEST(audio_offload, test_idle_ring_reinit_error_allows_next_stream_prep)
+{
+	audio_offload_stream_stop();
+	struct audio_offload_status before;
+	audio_offload_get_status(&before);
+	mock_runtime_restart_result = 0;
+	mock_remote_restarted_result = -EIO;
+	audio_offload_remote_unavailable();
+	struct audio_offload_status repaired =
+		wait_idle_outcome(before.runtime_restart_count + 1U, before.runtime_restart_fail);
+	zassert_equal(repaired.runtime_restart_count, before.runtime_restart_count + 1U,
+		      "runtime succeeded independently of ring reinit");
+	mock_remote_restarted_result = 0;
+	mock_init_fails = false;
+	mock_reset_fails = false;
+	mock_flpr_healthy = true;
+	audio_offload_stream_start();
+	run_prep_work();
+	audio_offload_get_status(&repaired);
+	zassert_equal(repaired.state, AUDIO_OFFLOAD_ACTIVE,
+		      "fresh prep rebuilds unavailable rings");
+}
+
+ZTEST(audio_offload, test_idle_restart_deduplicates_while_backend_blocked)
+{
+	audio_offload_stream_stop();
+	struct audio_offload_status before;
+	audio_offload_get_status(&before);
+	mock_runtime_restart_result = 0;
+	mock_remote_restarted_result = 0;
+	mock_runtime_block(true);
+	audio_offload_remote_unavailable();
+	zassert_ok(mock_runtime_wait_entered(K_MSEC(500)), "idle repair running");
+	audio_offload_remote_unavailable();
+	struct audio_offload_status pending;
+	audio_offload_get_status(&pending);
+	mock_runtime_release();
+	struct audio_offload_status done =
+		wait_idle_outcome(before.runtime_restart_count + 1U, before.runtime_restart_fail);
+	zassert_equal(pending.heartbeat_dedup_count, before.heartbeat_dedup_count + 1U,
+		      "duplicate request accounted");
+	zassert_equal(done.runtime_restart_count, before.runtime_restart_count + 1U,
+		      "one restart for one episode");
+}
+
+ZTEST(audio_offload, test_idle_schedule_failure_rolls_back_for_retry)
+{
+	audio_offload_stream_stop();
+	struct audio_offload_status before;
+	audio_offload_get_status(&before);
+	zassert_true(k_work_queue_drain(&g_offload_wq, true) >= 0, "plug owned queue");
+	audio_offload_remote_unavailable();
+	struct audio_offload_status failed;
+	audio_offload_get_status(&failed);
+	zassert_ok(k_work_queue_unplug(&g_offload_wq), "restore owned queue");
+	zassert_equal(failed.recovery_schedule_fail_count, before.recovery_schedule_fail_count + 1U,
+		      "queue failure surfaced");
+	mock_runtime_restart_result = 0;
+	mock_remote_restarted_result = 0;
+	audio_offload_remote_unavailable();
+	struct audio_offload_status done =
+		wait_idle_outcome(before.runtime_restart_count + 1U, before.runtime_restart_fail);
+	zassert_equal(done.runtime_restart_count, before.runtime_restart_count + 1U,
+		      "not left permanently pending by schedule failure");
+}
+
+ZTEST(audio_offload, test_stream_open_redirects_queued_idle_repair)
+{
+	audio_offload_stream_stop();
+	struct audio_offload_status before;
+	audio_offload_get_status(&before);
+	mock_flpr_healthy = true;
+	mock_reset_fails = false;
+	k_mutex_lock(&g_submit_lock, K_FOREVER);
+	audio_offload_remote_unavailable();
+	audio_offload_stream_start();
+	k_mutex_unlock(&g_submit_lock);
+	struct audio_offload_status status;
+	int64_t deadline = k_uptime_get() + 500;
+	do {
+		audio_offload_get_status(&status);
+		if (status.state == AUDIO_OFFLOAD_RECOVERING ||
+		    status.state == AUDIO_OFFLOAD_ACTIVE) {
+			break;
+		}
+		k_sleep(K_MSEC(1));
+	} while (k_uptime_get() < deadline);
+	run_recovery_work();
+	audio_offload_get_status(&status);
+	zassert_equal(status.state, AUDIO_OFFLOAD_ACTIVE, "ordinary stream recovery completes");
+	zassert_equal(status.runtime_restart_count, before.runtime_restart_count,
+		      "idle job did not reset a newly admitted stream behind its state machine");
 }
 
 ZTEST(audio_offload, test_stage4b_fallback_block)

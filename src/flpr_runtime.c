@@ -25,9 +25,9 @@
  *   6. Flush copied range + full barrier (reset held).
  *   7. CRC-32 execution vs source, require equality (reset held).
  *   8. Set INITPC to execution base (reset held).
- *   9. Re-register CPUAPP IPC endpoint (reset held).
- *  10. Set CPURUN true (reset held).
- *  11. Final launch: release NDMRESET (DMACTIVE still Enabled).
+ *   9. Set CPURUN true (reset held).
+ *  10. Final launch: release NDMRESET (DMACTIVE still Enabled).
+ *  11. After boot settles, restore VEVIF IRQs and re-register CPUAPP IPC.
  *  12. Wait bound, then READY+ACK with epoch different from snapshot.
  *  13. Return success; on failure leave reset asserted/core stopped,
  *      report exact stage/error. Never reboot CPUAPP.
@@ -67,6 +67,7 @@
 #else
 #include <hal/nrf_vpr.h>
 #endif
+#include <hal/nrf_memconf.h>
 
 LOG_MODULE_REGISTER(flpr_rt, LOG_LEVEL_INF);
 
@@ -78,11 +79,12 @@ LOG_MODULE_REGISTER(flpr_rt, LOG_LEVEL_INF);
 
 #if defined(FLPR_RUNTIME_NATIVE_TEST)
 
-#define VPR_REG_PTR   (&flpr_rt_test_vpr)
-#define SRC_BASE_PTR  (flpr_rt_test_source)
-#define EXEC_BASE_PTR (flpr_rt_test_exec)
-#define SRC_SIZE      (FLPR_RT_TEST_IMAGE_SIZE)
-#define EXEC_SIZE     (FLPR_RT_TEST_IMAGE_SIZE)
+#define VPR_REG_PTR       (&flpr_rt_test_vpr)
+#define SRC_BASE_PTR      (flpr_rt_test_source)
+#define EXEC_BASE_PTR     (flpr_rt_test_exec)
+#define SRC_SIZE          (FLPR_RT_TEST_IMAGE_SIZE)
+#define EXEC_SIZE         (FLPR_RT_TEST_IMAGE_SIZE)
+#define VPR_CONTEXT_BLOCK 32U
 
 #else
 
@@ -95,11 +97,15 @@ BUILD_ASSERT(DT_NODE_EXISTS(VPR_NODE), "cpuflpr_vpr node must exist");
 BUILD_ASSERT(DT_NODE_HAS_PROP(VPR_NODE, source_memory), "source-memory required");
 BUILD_ASSERT(DT_NODE_HAS_PROP(VPR_NODE, execution_memory), "execution-memory required");
 
-#define VPR_BASE  DT_REG_ADDR(VPR_NODE)
-#define SRC_BASE  DT_REG_ADDR(SRC_NODE)
-#define SRC_SIZE  DT_REG_SIZE(SRC_NODE)
-#define EXEC_BASE DT_REG_ADDR(EXEC_NODE)
-#define EXEC_SIZE DT_REG_SIZE(EXEC_NODE)
+#define VPR_BASE          DT_REG_ADDR(VPR_NODE)
+#define SRC_BASE          DT_REG_ADDR(SRC_NODE)
+#define SRC_SIZE          DT_REG_SIZE(SRC_NODE)
+#define EXEC_BASE         DT_REG_ADDR(EXEC_NODE)
+#define EXEC_SIZE         DT_REG_SIZE(EXEC_NODE)
+#define VPR_CONTEXT_BLOCK DT_PROP(VPR_NODE, hibernation_ram_block)
+
+BUILD_ASSERT(VPR_CONTEXT_BLOCK == 32U,
+	     "nRF54L15 VPR context restore must be MEMCONF logical feature 32");
 
 BUILD_ASSERT(EXEC_SIZE <= SRC_SIZE, "execution-memory size must be <= source-memory size");
 BUILD_ASSERT(EXEC_BASE == 0x20030000 && EXEC_SIZE == 0x10000,
@@ -131,6 +137,7 @@ static NRF_VPR_Type *const vpr_reg = VPR_REG_PTR;
 static K_MUTEX_DEFINE(runtime_lock);
 static struct flpr_runtime_status g_rt_status;
 static bool g_initialized;
+static uint32_t g_saved_vpr_interrupt_mask;
 
 /* ── Platform hooks ────────────────────────────────────────────────
  * Test mode routes busy wait, sleep, uptime, cache flush, and barrier
@@ -186,6 +193,7 @@ int flpr_runtime_init(void)
 
 	memset(&g_rt_status, 0, sizeof(g_rt_status));
 	g_rt_status.state = FLPR_RUNTIME_IDLE;
+	g_saved_vpr_interrupt_mask = nrf_vpr_int_enable_check(vpr_reg, UINT32_MAX);
 	g_initialized = true;
 
 #if defined(FLPR_RUNTIME_NATIVE_TEST)
@@ -218,6 +226,10 @@ int flpr_runtime_restart(uint32_t timeout_ms)
 	g_rt_status.requests++;
 	int ret = 0;
 	uint32_t start_ms = RT_UPTIME();
+	uint32_t vpr_interrupt_mask = nrf_vpr_int_enable_check(vpr_reg, UINT32_MAX);
+	if (vpr_interrupt_mask != 0U) {
+		g_saved_vpr_interrupt_mask = vpr_interrupt_mask;
+	}
 
 	/* ── Stage 1: Snapshot previous handshake epoch ─────── */
 	struct flpr_status hs_before;
@@ -244,7 +256,8 @@ int flpr_runtime_restart(uint32_t timeout_ms)
 	/* ── Stage 3: Stop VPR ──────────────────────────────── */
 	g_rt_status.failed_stage = FLPR_STAGE_STOP;
 	nrf_vpr_cpurun_set(vpr_reg, false);
-	/* Wait for VPR pipeline to drain and bus activity to settle. */
+	/* CPURUN configures the next reset state, not an immediate halt. The
+	 * following reset assertion establishes quiescence before the copy. */
 	RT_BUSY_WAIT(1000);
 	RT_EMIT(FLPR_RT_EV_STOP_CPURUN);
 
@@ -252,6 +265,17 @@ int flpr_runtime_restart(uint32_t timeout_ms)
 	 * One-variable mask: NDMRESET=Active, DMACTIVE=Enabled.
 	 * Reset is HELD through preparation — not yet released. */
 	g_rt_status.failed_stage = FLPR_STAGE_ASSERT_RESET;
+	/* The v3.4.1 launcher arms context restore even without FLPR hibernate.
+	 * This is a fresh 64 KiB image reload, including the context save area.
+	 * Select cold initialization, not resume from overwritten context. Only
+	 * logical feature 32 is changed; physical SRAM retention is untouched. */
+	nrf_memconf_ramblock_ret_enable_set(NRF_MEMCONF, VPR_CONTEXT_BLOCK / 32U,
+					    VPR_CONTEXT_BLOCK % 32U, false);
+	if (nrf_memconf_ramblock_ret_enable_check(NRF_MEMCONF, VPR_CONTEXT_BLOCK / 32U,
+						  VPR_CONTEXT_BLOCK % 32U)) {
+		ret = -EIO;
+		goto fail_stop;
+	}
 	nrf_vpr_debugif_dmcontrol_mask_set(vpr_reg, DMCONTROL_RESET_ASSERT);
 	RT_BUSY_WAIT(1000);
 	RT_EMIT(FLPR_RT_EV_ASSERT_RESET);
@@ -292,15 +316,6 @@ int flpr_runtime_restart(uint32_t timeout_ms)
 	g_rt_status.readbacks.initpc_after_set = nrf_vpr_initpc_get(vpr_reg);
 	RT_EMIT(FLPR_RT_EV_INITPC);
 
-	/* ── Stage 9: Re-register IPC endpoint (reset held) ── */
-	g_rt_status.failed_stage = FLPR_STAGE_RECONNECT;
-	RT_EMIT(FLPR_RT_EV_RECONNECT);
-	ret = flpr_handshake_reconnect();
-	if (ret < 0) {
-		LOG_ERR("FLPR restart: reconnect failed: %d", ret);
-		goto fail;
-	}
-
 	/* ── Stage 10: Set CPURUN true (reset held) ──────────── */
 	g_rt_status.failed_stage = FLPR_STAGE_START_CPURUN;
 	nrf_vpr_cpurun_set(vpr_reg, true);
@@ -320,6 +335,23 @@ int flpr_runtime_restart(uint32_t timeout_ms)
 
 	/* Give FLPR time to boot before waiting for bound. */
 	RT_SLEEP(200);
+	/* VPR reset also loses the CPUAPP VEVIF enable state. Errata 16 channel
+	 * reenable does not rerun the SDK's one-time INTEN initialization. Rearm
+	 * only the prior configured bits after RTP is up, then notify the live
+	 * remote through normal endpoint registration. No reset-held magic join. */
+	g_rt_status.failed_stage = FLPR_STAGE_RECONNECT;
+	nrf_vpr_int_enable(vpr_reg, g_saved_vpr_interrupt_mask);
+	if (nrf_vpr_int_enable_check(vpr_reg, g_saved_vpr_interrupt_mask) !=
+	    g_saved_vpr_interrupt_mask) {
+		ret = -EIO;
+		goto fail_stop;
+	}
+	RT_EMIT(FLPR_RT_EV_RECONNECT);
+	ret = flpr_handshake_reconnect();
+	if (ret < 0) {
+		LOG_ERR("FLPR restart: reconnect failed: %d", ret);
+		goto fail_stop;
+	}
 
 	/* ── Stage 12: Wait bound ────────────────────────────── */
 	g_rt_status.failed_stage = FLPR_STAGE_WAIT_BOUND;
@@ -366,6 +398,8 @@ int flpr_runtime_restart(uint32_t timeout_ms)
 fail_stop:
 	/* Leave FLPR stopped but available for retry. */
 	nrf_vpr_cpurun_set(vpr_reg, false);
+	nrf_vpr_debugif_dmcontrol_mask_set(vpr_reg, DMCONTROL_RESET_ASSERT);
+	RT_BUSY_WAIT(1000);
 	RT_EMIT(FLPR_RT_EV_FAILURE_STOP);
 fail:
 	g_rt_status.last_errno = ret;
@@ -410,6 +444,7 @@ void flpr_runtime_test_reset(void)
 	}
 
 	g_initialized = false;
+	g_saved_vpr_interrupt_mask = 0U;
 	memset(&g_rt_status, 0, sizeof(g_rt_status));
 	g_rt_status.state = FLPR_RUNTIME_IDLE;
 }
