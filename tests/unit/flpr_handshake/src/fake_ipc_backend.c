@@ -47,6 +47,7 @@ static void fake_ensure_sem(void)
 }
 
 static uint32_t register_ready_epoch;
+static int register_post_callback_error;
 static bool heartbeat_block;
 static K_SEM_DEFINE(heartbeat_entered, 0, 1);
 
@@ -74,6 +75,10 @@ static int fake_register_ept(const struct device *instance, void **token,
 					 .seq = 0,
 					 .data = register_ready_epoch};
 		cfg->cb.received(&ready, sizeof(ready), cfg->priv);
+	}
+	if (register_post_callback_error != 0) {
+		fake_data.cfg = NULL;
+		return register_post_callback_error;
 	}
 	return 0;
 }
@@ -137,6 +142,7 @@ DT_INST_FOREACH_STATUS_OKAY(DEFINE_FAKE_BACKEND)
 void fake_ipc_reset(void)
 {
 	register_ready_epoch = 0U;
+	register_post_callback_error = 0;
 	heartbeat_block = false;
 	k_sem_reset(&heartbeat_entered);
 	fake_ensure_sem();
@@ -155,6 +161,11 @@ void fake_ipc_reset(void)
 void fake_ipc_ready_during_register(uint32_t epoch)
 {
 	register_ready_epoch = epoch;
+}
+
+void fake_ipc_register_error_after_callbacks(int error)
+{
+	register_post_callback_error = error;
 }
 
 void fake_ipc_block_heartbeat(bool enable)

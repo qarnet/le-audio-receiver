@@ -160,3 +160,17 @@ AP2 `0x32880000`, AP3 `0x00000000`, PART `0x00054b15`, VARIANT
 probe-to-role mapping is declared. Private RAM/identity/bond material must not
 be staged or uploaded. No nRF5340, analog, release publication or merge action
 belongs to this repair.
+
+## Clean coverage follow-up
+
+Clean integrated `e478e59` canonical run retained **79 PASS / 1 FAIL / 80
+TOTAL** solely from per-file branch enforcement:
+`src/flpr_handshake.c branches below baseline: current 94/124 vs baseline 92/120`.
+Raw log: `/tmp/opencode/nrf54-e478e59-canonical-20261001-r1.log`.
+No baseline, denominator or threshold was lowered. New encoded partial-register
+failure test delivers bound and READY before registration returns an error,
+then proves rollback discards both semaphore signals and a fresh retry works.
+This covers the real new rollback boundary, not copied constants. Focused
+handshake suite now passes 38/38 at
+`/tmp/opencode/nrf54-flpr-partial-register-20261001-r1.log`; full clean baseline
+enforcement follows. Production firmware code is unchanged by this test slice.

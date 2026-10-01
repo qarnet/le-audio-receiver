@@ -48,6 +48,7 @@ void fake_ipc_set_auto_bound(bool enable);
  * a stress worker mid-send while observing clamped state). */
 void fake_ipc_set_send_block(bool enable);
 void fake_ipc_ready_during_register(uint32_t epoch);
+void fake_ipc_register_error_after_callbacks(int error);
 void fake_ipc_block_heartbeat(bool enable);
 int fake_ipc_wait_heartbeat_entered(k_timeout_t timeout);
 void fake_ipc_release_heartbeat(void);

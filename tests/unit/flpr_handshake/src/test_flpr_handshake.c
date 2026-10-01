@@ -108,6 +108,25 @@ ZTEST(flpr_handshake, test_ready_inside_registration_starts_heartbeat)
 }
 
 static K_THREAD_STACK_DEFINE(disconnect_stack, 2048);
+ZTEST(flpr_handshake, test_partial_register_failure_discards_bound_ready_then_retries)
+{
+	hs_ready_flow(42U);
+	zassert_ok(flpr_handshake_disconnect(), "close");
+	fake_ipc_ready_during_register(99U);
+	fake_ipc_register_error_after_callbacks(-EIO);
+	zassert_equal(flpr_handshake_reconnect(), -EIO,
+		      "registration failed after early callbacks");
+	zassert_equal(flpr_handshake_wait_bound(K_NO_WAIT), -EBUSY, "partial bound discarded");
+	zassert_equal(flpr_handshake_wait_new_ready(42U, K_NO_WAIT), -ECANCELED,
+		      "partial READY is not an admitted session");
+	zassert_false(fake_ipc_endpoint_registered(), "no successful endpoint");
+	fake_ipc_register_error_after_callbacks(0);
+	fake_ipc_ready_during_register(100U);
+	zassert_ok(flpr_handshake_reconnect(), "valid retry");
+	zassert_ok(flpr_handshake_wait_bound(K_NO_WAIT), "fresh bound");
+	zassert_ok(flpr_handshake_wait_new_ready(99U, K_NO_WAIT), "fresh READY after retry");
+	zassert_ok(flpr_handshake_disconnect(), "close retry");
+}
 static struct k_thread disconnect_thread;
 static K_SEM_DEFINE(disconnect_done, 0, 1);
 static int disconnect_result;
