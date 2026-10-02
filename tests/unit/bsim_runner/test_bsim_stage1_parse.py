@@ -1318,9 +1318,9 @@ def test_runner_log_root_ownership_preflight():
             }
         )
         report(
-            "valid caller log root preserved through nrfutil preflight",
+            "valid caller log root preserved through runtime preflight rejection",
             rc != 0
-            and "nrfutil not in PATH" in output
+            and "default PHY model missing or empty" in output
             and os.path.isdir(log_root)
             and not os.listdir(log_root),
         )

@@ -109,3 +109,10 @@ records shared cache-independent preparation, real offline west/Git regression
 tests, unchanged compiler/hash policy and a local 77/0/77 unit gate. Hosted
 acceptance of the repair remains pending its own run; prior reports are not
 rewritten into hosted success.
+
+A separate missing-runtime-plugin defect was then found in retained BSim
+artifacts, not inferred from the unit failure. The precise dynamic model
+closure and real loader readiness check are recorded in
+[runtime-closure repair](nrf54l15-ci-runtime-closure-results-20261002.md).
+Local unchanged Stage 1 passes 17/26; hosted completion remains separately
+gated rather than accepting a unit-only repair.

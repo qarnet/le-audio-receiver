@@ -21,21 +21,11 @@ export BSIM_OUT_PATH
 export BSIM_COMPONENTS_PATH
 export BOARD
 
-# Verify PHY simulator binary (only component actually used by our tests)
-_BSIM_BINARIES=(
-    "${BSIM_OUT_PATH}/bin/bs_2G4_phy_v1"
-)
-
-_MISSING=""
-for _bin in "${_BSIM_BINARIES[@]}"; do
-    if [ ! -x "$_bin" ]; then
-        _MISSING="${_MISSING}  ${_bin}\n"
-    fi
-done
-
-if [ -n "$_MISSING" ]; then
-    printf "ERROR: BabbleSim component binaries missing:\n%b" "$_MISSING"
-    printf "Build them with: make -C %s everything\n" "$BSIM_OUT_PATH"
+# These default models are loaded with dlopen, not linked into the PHY.
+# Check actual loader/model startup before peers can wait on a dead PHY.
+_BSIM_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if ! python3 "$_BSIM_SCRIPT_DIR/check-bsim-runtime.py" --root "$BSIM_OUT_PATH"; then
+    printf "Build the required closure with: bash %s/build-bsim-components.sh\n" "$_BSIM_SCRIPT_DIR"
     return 1 2>/dev/null || exit 1
 fi
 

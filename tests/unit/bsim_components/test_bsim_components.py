@@ -4,15 +4,19 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
 REPO = Path(__file__).resolve().parents[3]
 WRAPPER = REPO / "scripts/bsim-component-cc.py"
 PREPARE = REPO / "scripts/prepare-bsim-sources.sh"
+BUILD = REPO / "scripts/build-bsim-components.sh"
+RUNTIME = REPO / "scripts/check-bsim-runtime.py"
 AUDITED = {
     "libUtilv1/src/bs_oswrap.c": "-Wno-unused-result",
     "libPhyComv1/src/bs_pc_base.c": "-Wno-unused-result",
@@ -288,6 +292,207 @@ class TestSourcePreparation(unittest.TestCase):
         result = self.prepare()
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("sources verified", result.stdout)
+
+
+class TestRuntimeClosure(unittest.TestCase):
+    """Build real pinned components in an isolated, initially empty output."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.tmp.cleanup)
+        cls.workspace = Path(cls.tmp.name) / "sdk"
+        cls.zephyr = cls.workspace / "zephyr"
+        cls.zephyr.mkdir(parents=True)
+        cls.root = cls.workspace / "tools/bsim"
+        components = cls.root / "components"
+        sdk = Path(os.environ["ZEPHYR_BASE"]).resolve().parent / "tools/bsim"
+        for name in (
+            "common",
+            "libUtilv1",
+            "libPhyComv1",
+            "libRandv2",
+            "ext_2G4_libPhyComv1",
+            "ext_2G4_phy_v1",
+            "ext_2G4_channel_NtNcable",
+            "ext_2G4_modem_magic",
+        ):
+            shutil.copytree(
+                sdk / "components" / name,
+                components / name,
+                ignore=shutil.ignore_patterns(".git", "*.o", "*.a", "*.so", "*.d"),
+            )
+        shutil.copyfile(sdk / "Makefile", cls.root / "Makefile")
+        cls.env = {
+            **os.environ,
+            "ZEPHYR_BASE": str(cls.zephyr),
+            "BSIM_OUT_PATH": str(cls.root),
+            "BSIM_COMPONENTS_PATH": str(components),
+            "NIX_HARDENING_ENABLE": "",
+        }
+        before = subprocess.run(
+            [sys.executable, str(RUNTIME), "--root", str(cls.root)],
+            capture_output=True,
+            text=True,
+        )
+        if before.returncode == 0:
+            raise AssertionError("empty runtime must not be ready")
+        build = subprocess.run(
+            ["bash", str(BUILD), "--force"],
+            env=cls.env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if build.returncode != 0:
+            raise AssertionError(build.stdout + build.stderr)
+
+    def runtime(self):
+        return subprocess.run(
+            [sys.executable, str(RUNTIME), "--root", str(self.root), "--timeout", "3"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+
+    def test_cold_build_initializes_actual_default_models(self):
+        result = self.runtime()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("models initialized", result.stdout)
+
+    def test_missing_either_default_plugin_fails_before_peer_launch(self):
+        for name in ("lib_2G4Channel_NtNcable.so", "lib_2G4Modem_Magic.so"):
+            with self.subTest(plugin=name):
+                path = self.root / "lib" / name
+                data = path.read_bytes()
+                try:
+                    path.unlink()
+                    result = self.runtime()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(name, result.stderr)
+                    caller = subprocess.run(
+                        [
+                            "bash",
+                            "-e",
+                            "-c",
+                            'source "$1"; printf "peers-would-start\\n"',
+                            "runtime-test",
+                            str(REPO / "scripts/bsim-env.sh"),
+                        ],
+                        env=self.env,
+                        capture_output=True,
+                        text=True,
+                        timeout=8,
+                    )
+                    self.assertNotEqual(caller.returncode, 0)
+                    self.assertNotIn("peers-would-start", caller.stdout)
+                finally:
+                    path.write_bytes(data)
+        self.assertEqual(self.runtime().returncode, 0)
+
+    def test_nonempty_invalid_plugin_is_rejected_by_actual_phy_loader(self):
+        path = self.root / "lib/lib_2G4Modem_Magic.so"
+        data = path.read_bytes()
+        try:
+            path.write_bytes(b"not an ELF shared library")
+            result = self.runtime()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("PHY model initialization failed", result.stderr)
+        finally:
+            path.write_bytes(data)
+        self.assertEqual(self.runtime().returncode, 0)
+
+    def test_live_process_without_readiness_marker_times_out_as_failure(self):
+        # Controlled process traffic tests the supervisor deadline, not loader
+        # correctness (the other cases use the real compiled PHY and models).
+        path = self.root / "bin/bs_2G4_phy_v1"
+        data = path.read_bytes()
+        try:
+            path.write_bytes(
+                b"#!/usr/bin/env bash\nprintf 'still loading\\n'\nexec sleep 30\n"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(RUNTIME),
+                    "--root",
+                    str(self.root),
+                    "--timeout",
+                    "0.1",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("before deadline", result.stderr)
+            self.assertNotIn("runtime ready", result.stdout)
+        finally:
+            path.write_bytes(data)
+        self.assertEqual(self.runtime().returncode, 0)
+
+    def assert_checker_cancellation(self, cancellation, *, ignore_term=False):
+        path = self.root / "bin/bs_2G4_phy_v1"
+        data = path.read_bytes()
+        pid_file = self.workspace / "preflight-child.pid"
+        pid_file.unlink(missing_ok=True)
+        checker = None
+        child_pid = None
+        try:
+            script = b"#!/usr/bin/env bash\n"
+            if ignore_term:
+                script += b"trap '' TERM\n"
+            script += b'printf \'%s\\n\' "$$" > "$BSIM_TEST_PID_FILE"\n'
+            path.write_bytes(script + b"exec sleep 30\n")
+            checker = subprocess.Popen(
+                [sys.executable, str(RUNTIME), "--root", str(self.root)],
+                env={**os.environ, "BSIM_TEST_PID_FILE": str(pid_file)},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                try:
+                    text = pid_file.read_text().strip()
+                except FileNotFoundError:
+                    text = ""
+                if text.isdecimal():
+                    child_pid = int(text)
+                    break
+                time.sleep(0.01)
+            self.assertIsNotNone(child_pid, "controlled PHY did not start")
+            assert child_pid is not None
+            checker.send_signal(cancellation)
+            _stdout, stderr = checker.communicate(timeout=5)
+            self.assertNotEqual(checker.returncode, 0)
+            self.assertIn("cancelled", stderr)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
+            child_pid = None
+        finally:
+            if checker is not None and checker.poll() is None:
+                checker.terminate()
+                try:
+                    checker.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    checker.kill()
+                    checker.communicate()
+            if child_pid is not None:
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            path.write_bytes(data)
+
+    def test_sigterm_cancels_checker_and_reaps_owned_phy(self):
+        self.assert_checker_cancellation(signal.SIGTERM)
+
+    def test_sigint_cancels_checker_and_reaps_owned_phy(self):
+        self.assert_checker_cancellation(signal.SIGINT)
+
+    def test_cancellation_kills_and_reaps_phy_ignoring_sigterm(self):
+        self.assert_checker_cancellation(signal.SIGTERM, ignore_term=True)
 
 
 if __name__ == "__main__":
