@@ -1,10 +1,10 @@
 ---
 id: PB-033
 title: Prove XIAO nRF54L15 as a session-bound HIL source fixture
-status: Review
+status: Done
 assignee: []
 created_date: '2026-09-22 02:00'
-updated_date: '2026-09-22 21:36'
+updated_date: '2026-10-02 17:17'
 labels:
   - 'size:L'
   - 'area:hil'
@@ -98,6 +98,8 @@ The first build-only phase 3B attempt stopped before hardware because generated 
 Phase 3B focused host validation: `nix develop -c python3 scripts/test_hil_runner.py` ran 106 tests, PASS; `nix develop -c python3 tests/hil/rh2_test.py` ran 266 tests in 151.998 seconds, PASS; `nix develop -c python3 -m compileall -q scripts/hil scripts/hil-runner.py tests/hil` PASS; `nix develop -c backlog doctor` PASS; `git diff --check` PASS. Each Nix shell reported expected dirty-worktree provenance for the two uncommitted documentation changes, not a compiler, Kconfig, firmware-build, or host-test diagnostic.
 
 2026-09-22 canonical gate review: first `nix develop -c ./scripts/test-all.sh` from the linked worktree at `fa0bbca411c804a2a8a080b1d978014f1fdf4992` ended `72 PASS / 2 FAIL / 74 TOTAL`. All unit children and BSim passed; coverage failed only with `FATAL: not a git checkout: /tmp/opencode/le-audio-receiver-pb-fixture` because the linked worktree has a `.git` file rather than a standalone `.git` directory, then matrix failed because coverage JSON was absent. Log: `/tmp/opencode/pb-033-canonical-gate.log`. No software changed between attempts. A clean standalone local clone at the exact same commit reran the full one-command gate and ended `74 PASS / 0 FAIL / 74 TOTAL`, with coverage, matrix, and BSim passing; the clone remained clean. Log: `/tmp/opencode/pb-033-canonical-gate-clone.log`. This satisfies AC #5.
+
+2026-10-02: Product owner requested a combined migration pull request and Done transitions for completed work. All criteria were already checked from recorded implementation evidence. Done is PR-gated and remains pending human product-owner merge; no release or analog acceptance is inferred. This transition ships with the complete implementation in the PB-039-prefixed migration PR. Firmware verification remains exact 104e67a; later closure changes are documentation/backlog only. Fresh PR-preparation host checks are recorded in docs/development/nrf54l15-migration-pr-wrap-up-20261002.md. Prior private raw /tmp/opencode lab run roots are absent in this session; committed result reports retain their recorded outcomes, image/archive hashes and identity evidence. No fresh hardware rerun or independent rehash of those unavailable raw runs is claimed during PR preparation.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -124,4 +126,8 @@ Implemented a XIAO nRF54L15 single-image integrated-SDC source using GRTC, an ex
 Integrated public runner support and retained physical mono, Mode A, and Mode B 10 ms PASS evidence. Scope excludes analog output and audibility, 7.5 ms, RH4/FR4, release or publication, and receiver behavior changes.
 
 Validation: warning-audited target builds; 106 runner tests; 266 RH2 tests; compileall; backlog doctor; physical evidence hashes, JUnit, and ledgers; and exact-commit standalone canonical `74 PASS / 0 FAIL / 74 TOTAL`.
+
+2026-10-02: Product owner requested a combined migration pull request and Done transitions for completed work. All criteria were already checked from recorded implementation evidence. Done is PR-gated and remains pending human product-owner merge; no release or analog acceptance is inferred. This transition ships with the complete implementation in the PB-039-prefixed migration PR. Firmware verification remains exact 104e67a; later closure changes are documentation/backlog only. Fresh PR-preparation host checks are recorded in docs/development/nrf54l15-migration-pr-wrap-up-20261002.md. Prior private raw /tmp/opencode lab run roots are absent in this session; committed result reports retain their recorded outcomes, image/archive hashes and identity evidence. No fresh hardware rerun or independent rehash of those unavailable raw runs is claimed during PR preparation.
+
+PB-033 was completed as a historical additive proof before the approved full migration. Its fc2d1ef physical proof and fa0bbca standalone canonical 74/0/74 satisfied the retained-legacy-path criterion at that checkpoint. Later PB-039 explicitly superseded retention and authorized removal; this does not rewrite PB-033 product criteria or claim legacy paths remain active today.
 <!-- SECTION:FINAL_SUMMARY:END -->

@@ -1,10 +1,10 @@
 ---
 id: PB-035
 title: Promote XIAO nRF54L15 source across HIL matrices
-status: Review
+status: Done
 assignee: []
 created_date: '2026-09-22 22:50'
-updated_date: '2026-10-01 08:38'
+updated_date: '2026-10-02 17:17'
 labels:
   - 'size:M'
   - 'area:hil'
@@ -75,6 +75,8 @@ Phase 1: propagate immutable session through matrix CLI/coordinator/Runner; vali
 2026-09-30 continuation: recovered clean 2a0e792 software gate 80/0/80 and six-case HCI pass; retained exact-artifact matrix failed Mode A 48_4_1 on source under-lead (-ETIME), with one passed/one failed/18 skipped. New unchanged-image frozen Mode A row /tmp/opencode/hil-runs/nrf54-analyzer-resume-20260930-r2 passed 12000 scored and 12644 submitted per CIS, zero send failures/skips/under-lead, receiver valid 12645/12644 and global PLC 25, zero decode/I2S/reset/push faults. Two passive 100 ms I2S windows and four rejected offline negative controls retained separately. Startup silence is valid geometry, not content acceptance. No timing repair, full matrix or AC/status claim. See docs/development/logic-analyzer-continuation-results-20260930.md.
 
 2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+
+2026-10-02: Product owner requested a combined migration pull request and Done transitions for completed work. All criteria were already checked from recorded implementation evidence. Done is PR-gated and remains pending human product-owner merge; no release or analog acceptance is inferred. This transition ships with the complete implementation in the PB-039-prefixed migration PR. Firmware verification remains exact 104e67a; later closure changes are documentation/backlog only. Fresh PR-preparation host checks are recorded in docs/development/nrf54l15-migration-pr-wrap-up-20261002.md. Prior private raw /tmp/opencode lab run roots are absent in this session; committed result reports retain their recorded outcomes, image/archive hashes and identity evidence. No fresh hardware rerun or independent rehash of those unavailable raw runs is claimed during PR preparation.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -83,4 +85,6 @@ Phase 1: propagate immutable session through matrix CLI/coordinator/Runner; vali
 All active matrix/runner contracts forward paired external sessions and use XIAO source CPUAPP. Public host negatives cover swapped/duplicate/stale/missing identity and pre-action rejection. Full physical matrix verifies 120 ordered checks, identical session snapshots, representative mono/Mode A/Mode B plus reconnect/hang/stall and 7.5-ms rows. Source enqueue guard preserves 3000/2000-us margins and frozen limits.
 
 2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+
+2026-10-02: Product owner requested a combined migration pull request and Done transitions for completed work. All criteria were already checked from recorded implementation evidence. Done is PR-gated and remains pending human product-owner merge; no release or analog acceptance is inferred. This transition ships with the complete implementation in the PB-039-prefixed migration PR. Firmware verification remains exact 104e67a; later closure changes are documentation/backlog only. Fresh PR-preparation host checks are recorded in docs/development/nrf54l15-migration-pr-wrap-up-20261002.md. Prior private raw /tmp/opencode lab run roots are absent in this session; committed result reports retain their recorded outcomes, image/archive hashes and identity evidence. No fresh hardware rerun or independent rehash of those unavailable raw runs is claimed during PR preparation.
 <!-- SECTION:FINAL_SUMMARY:END -->

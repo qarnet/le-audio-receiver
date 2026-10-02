@@ -1,10 +1,10 @@
 ---
 id: PB-039
 title: Remove nRF5340 from receiver and test infrastructure
-status: Review
+status: Done
 assignee: []
 created_date: '2026-09-24 05:32'
-updated_date: '2026-10-01 08:38'
+updated_date: '2026-10-02 17:17'
 labels:
   - 'size:L'
   - 'area:testing'
@@ -64,6 +64,8 @@ No unresolved product choices. Stock bridge lossless throughput, available debug
 User explicitly requests verified migration completion, silent execution, local commits and attached lab hardware actions. Original PB-013 user refinement remains unchanged and unstaged. No push, merge or release operation inferred. Clean b21c7a7 canonical gate 80/0/80, HIL host 340 passed/1 hardware-opt-in skip, physical builds/73-check contract and six HCI cases are retained; full fixed RH4 local-artifact matrix is running under separate system-manager containment. Status/criteria are not yet acceptance.
 
 2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+
+2026-10-02: Product owner requested a combined migration pull request and Done transitions for completed work. All criteria were already checked from recorded implementation evidence. Done is PR-gated and remains pending human product-owner merge; no release or analog acceptance is inferred. This transition ships with the complete implementation in the PB-039-prefixed migration PR. Firmware verification remains exact 104e67a; later closure changes are documentation/backlog only. Fresh PR-preparation host checks are recorded in docs/development/nrf54l15-migration-pr-wrap-up-20261002.md. Prior private raw /tmp/opencode lab run roots are absent in this session; committed result reports retain their recorded outcomes, image/archive hashes and identity evidence. No fresh hardware rerun or independent rehash of those unavailable raw runs is claimed during PR preparation.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -72,4 +74,6 @@ User explicitly requests verified migration completion, silent execution, local 
 Approved all-nRF54L15 migration verified locally across receiver/source/HCI, simulation, artifacts, identity, software and physical gates. Component PB-019 and PB-034 through PB-037 now have evidence-backed criteria and Review summaries. PB-018 is explicitly superseded, never falsely qualified. PB-038 aggregate product status is not silently promoted; its execution evidence is recorded separately.
 
 2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+
+2026-10-02: Product owner requested a combined migration pull request and Done transitions for completed work. All criteria were already checked from recorded implementation evidence. Done is PR-gated and remains pending human product-owner merge; no release or analog acceptance is inferred. This transition ships with the complete implementation in the PB-039-prefixed migration PR. Firmware verification remains exact 104e67a; later closure changes are documentation/backlog only. Fresh PR-preparation host checks are recorded in docs/development/nrf54l15-migration-pr-wrap-up-20261002.md. Prior private raw /tmp/opencode lab run roots are absent in this session; committed result reports retain their recorded outcomes, image/archive hashes and identity evidence. No fresh hardware rerun or independent rehash of those unavailable raw runs is claimed during PR preparation.
 <!-- SECTION:FINAL_SUMMARY:END -->

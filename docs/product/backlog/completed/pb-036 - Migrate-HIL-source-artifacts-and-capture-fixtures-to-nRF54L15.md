@@ -1,10 +1,10 @@
 ---
 id: PB-036
 title: Migrate HIL source artifacts and capture fixtures to nRF54L15
-status: Review
+status: Done
 assignee: []
 created_date: '2026-09-22 22:50'
-updated_date: '2026-10-01 08:38'
+updated_date: '2026-10-02 17:17'
 labels:
   - 'size:M'
   - 'area:hil'
@@ -74,6 +74,8 @@ Shared RH4 integration needs coordinated PB-035/PB-036 changes. PB-035 predecess
 2026-09-28 exact-source-artifact checkpoint: clean 25a5cbf canonical software gate 80 PASS / 0 FAIL / 80 TOTAL and build contract 69/69; source archive SHA-256 cba5ee53d2e452e226c579e076af6b7604f1cbeb0d2a6daebb44cf066687fecc was consumed by the first six passing rows of the local exact-artifact matrix. Fresh Mode B 7.5 ms row 7 failed receiver teardown with 13 later rows skipped; the retained receiver postmortem and a separate receiver-only private TX-notify workqueue local-build replay passed (valid 16860/lost 14/PLC 28, zero decode errors, I2S underruns, resets, runtime warnings) with unchanged source HEX 805f2ed940a6fef965c51fc857bbcd7619b796df4e7f1b753978a2f5d198955c. This local-build diagnostic is not exact-artifact qualification. New clean full RH4 matrix and FR4 draft-artifact acceptance remain pending; no criteria or status changed. See docs/development/nrf54l15-tx-notify-workqueue-results-20260928.md.
 
 2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+
+2026-10-02: Product owner requested a combined migration pull request and Done transitions for completed work. All criteria were already checked from recorded implementation evidence. Done is PR-gated and remains pending human product-owner merge; no release or analog acceptance is inferred. This transition ships with the complete implementation in the PB-039-prefixed migration PR. Firmware verification remains exact 104e67a; later closure changes are documentation/backlog only. Fresh PR-preparation host checks are recorded in docs/development/nrf54l15-migration-pr-wrap-up-20261002.md. Prior private raw /tmp/opencode lab run roots are absent in this session; committed result reports retain their recorded outcomes, image/archive hashes and identity evidence. No fresh hardware rerun or independent rehash of those unavailable raw runs is claimed during PR preparation.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -82,4 +84,6 @@ Shared RH4 integration needs coordinated PB-035/PB-036 changes. PB-035 predecess
 Exact source archive SHA-256 1d0004d0c6fb73815e9dbc5d495b85377cb2bd57f94c23d5e34899b7787bc6b0 contains only CPUAPP and v3.4.1/exact-commit/board/checksum provenance; public resolver negatives reject missing/extra/modified/wrong-board/version/provenance inputs. All 20 physical rows consume/revalidate that archive. Mono/stereo migrated fixture snapshots and real model/runner/analyzer host tests retained at /tmp/opencode/nrf54-capture-contract-evidence-20261001-r1/. This proves capture infrastructure migration, not physical ADC/ALSA or analog qualification.
 
 2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+
+2026-10-02: Product owner requested a combined migration pull request and Done transitions for completed work. All criteria were already checked from recorded implementation evidence. Done is PR-gated and remains pending human product-owner merge; no release or analog acceptance is inferred. This transition ships with the complete implementation in the PB-039-prefixed migration PR. Firmware verification remains exact 104e67a; later closure changes are documentation/backlog only. Fresh PR-preparation host checks are recorded in docs/development/nrf54l15-migration-pr-wrap-up-20261002.md. Prior private raw /tmp/opencode lab run roots are absent in this session; committed result reports retain their recorded outcomes, image/archive hashes and identity evidence. No fresh hardware rerun or independent rehash of those unavailable raw runs is claimed during PR preparation.
 <!-- SECTION:FINAL_SUMMARY:END -->

@@ -1,10 +1,10 @@
 ---
 id: PB-034
 title: Migrate canonical BabbleSim to nRF54L15BSim
-status: Review
+status: Done
 assignee: []
 created_date: '2026-09-22 22:50'
-updated_date: '2026-10-01 08:38'
+updated_date: '2026-10-02 17:17'
 labels:
   - 'size:M'
   - 'area:testing'
@@ -94,6 +94,8 @@ User paused work 2026-09-24. Continue from docs/development/nrf54l15-only-resume
 2026-09-25: strict BSim 17 scenarios/26 runs passed (/tmp/opencode/nrf54-only-bsim-20260925-r1.log), unchanged TX hashes and 2048/512/32750 PCM limits (observed 257/182/32767); unit phase 75/0/75. Coverage report-only 36 sources, baseline unchanged. Clean exact-commit enforcement stopped before builds on dirty-worktree guard; AC4 documentation/integration remains unchecked. See docs/development/nrf54l15-only-continuation-20260925.md.
 
 2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+
+2026-10-02: Product owner requested a combined migration pull request and Done transitions for completed work. All criteria were already checked from recorded implementation evidence. Done is PR-gated and remains pending human product-owner merge; no release or analog acceptance is inferred. This transition ships with the complete implementation in the PB-039-prefixed migration PR. Firmware verification remains exact 104e67a; later closure changes are documentation/backlog only. Fresh PR-preparation host checks are recorded in docs/development/nrf54l15-migration-pr-wrap-up-20261002.md. Prior private raw /tmp/opencode lab run roots are absent in this session; committed result reports retain their recorded outcomes, image/archive hashes and identity evidence. No fresh hardware rerun or independent rehash of those unavailable raw runs is claimed during PR preparation.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -111,4 +113,6 @@ Refined during PB-034 implementation after controller evidence proved legacy sta
 Canonical integrated SW Split receiver/client select nrf54l15bsim CPUAPP, with measured native startup recipes and role-specific ISOAL. All 17 scenarios/26 runs pass, preserving TX hashes, PCM limits, absent-transmission/malformed faults and lifecycle semantics. Historical recipes and narrow source/hash-scoped dependency warning dispositions remain retained. Metadata/helpers/LSP/contracts/current docs agree.
 
 2026-10-01 final local verification: exact clean 104e67ade0e361093a88d1832b5dcb41552e8e8d (production e478e59) passed canonical 80/0/80 with unchanged coverage enforcement, 17-scenario/26-run nRF54L15BSim, three physical build shapes, resolved contract 73/73, HIL host 340 passed/one intentional hardware-opt-in skip, six normal-image HCI cases (72000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts), and frozen exact-local-artifact matrix 20/20 with zero failed/cancelled/cleanup children. Independent review rehashed child/aggregate payloads, exact archives and 120 ordered identity checks. See docs/development/nrf54l15-migration-verification-results-20261001.md and docs/development/nrf54l15-final-reference-audit-20261001.md. Historical failures remain immutable. No human PR acceptance, hosted CI, analog MA1/SA1, active-draft FR4, publication, PB-013 offload or PB-041 nonce claim. Local review only; no push, PR, merge or Done transition.
+
+2026-10-02: Product owner requested a combined migration pull request and Done transitions for completed work. All criteria were already checked from recorded implementation evidence. Done is PR-gated and remains pending human product-owner merge; no release or analog acceptance is inferred. This transition ships with the complete implementation in the PB-039-prefixed migration PR. Firmware verification remains exact 104e67a; later closure changes are documentation/backlog only. Fresh PR-preparation host checks are recorded in docs/development/nrf54l15-migration-pr-wrap-up-20261002.md. Prior private raw /tmp/opencode lab run roots are absent in this session; committed result reports retain their recorded outcomes, image/archive hashes and identity evidence. No fresh hardware rerun or independent rehash of those unavailable raw runs is claimed during PR preparation.
 <!-- SECTION:FINAL_SUMMARY:END -->

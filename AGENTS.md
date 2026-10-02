@@ -95,6 +95,12 @@ matrix passed 20/20, with 120 ordered identity checks and independently
 rehashed child/aggregate evidence. See
 `docs/development/nrf54l15-migration-verification-results-20261001.md` for
 local completion and separate analog, release and human-acceptance boundaries.
+PR preparation on 2026-10-02 moves completed PB-019 and PB-033 through PB-040
+to Done in the combined PB-039-prefixed PR. Human merge remains official
+acceptance; no merge or release is performed by agents. See
+`docs/development/nrf54l15-migration-pr-wrap-up-20261002.md` for current
+PR lifecycle and evidence-availability boundaries. Do not treat prior raw
+`/tmp/opencode` runs as currently available without checking their presence.
 Earlier `b21c7a7` matrix failed FLPR
 hang recovery after eight passing rows; that failure is retained, not acceptance.
 For dated chronology, read

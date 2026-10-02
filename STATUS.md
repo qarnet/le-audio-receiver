@@ -1,5 +1,13 @@
 # STATUS: le-audio-receiver, 2026-10-01
 
+PR wrap-up (2026-10-02): PB-019 and PB-033 through PB-040 have PR-gated Done
+transitions in the combined migration PR; official acceptance waits for human
+merge. Prior local firmware verification below remains exact `104e67a`, not
+a fresh hardware rerun at the PR closure commit. Prior external raw lab run
+roots are absent in this session; committed result reports and hashes remain.
+Fresh PR-preparation checks and evidence boundaries:
+`docs/development/nrf54l15-migration-pr-wrap-up-20261002.md`.
+
 Current clean validation checkpoint: `104e67a` includes source peer-enqueue
 scheduling guard and fresh FLPR reload, notification, heartbeat and idle-worker
 repairs. Production code is `e478e59`; `104e67a` adds partial IPC registration

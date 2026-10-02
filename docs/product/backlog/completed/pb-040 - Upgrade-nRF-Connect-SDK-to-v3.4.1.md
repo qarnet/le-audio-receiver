@@ -1,10 +1,10 @@
 ---
 id: PB-040
 title: Upgrade nRF Connect SDK to v3.4.1
-status: Review
+status: Done
 assignee: []
 created_date: '2026-09-25 16:28'
-updated_date: '2026-09-25 18:40'
+updated_date: '2026-10-02 17:17'
 labels:
   - 'size:M'
   - 'area:build'
@@ -77,10 +77,16 @@ None.
 2026-09-25 setup only: product explicitly requested immediate v3.4.1 work. Definition of Ready met: explicit pinned version and observable software behavior, bounded components/gates, non-goals and unchanged thresholds; no remaining product decision. Parent verified SDK installed and matching revisions; verify again during implementation. Existing concurrent migration items PB-019/034/035/036/037 In Progress by explicit parallel work; PB-013 dirty edits preserved. No implementation or hardware operation performed in this setup.
 
 2026-09-25 dirty-tree integration diagnostics: pinned NCS v3.4.1/toolchain; three pristine physical builds and 69 resolved contract assertions pass without compiler/Kconfig warnings; native 76 pass, HIL Python 340 pass/one intentional hardware skip, strict LC3 40 pass with original fixture bytes and host replay, strict BSim 17 scenarios/26 runs with scoped audited five-hash dependency -Werror exceptions, report-only coverage 46 suites with unchanged 36-file baseline (4971/5427 lines, 2203/3008 branches, 377/377 functions), ARM calibration build-only 296 pass. Native_sim CMake product-support notice remains raw and host-only. HCI source-hash-guarded UART compatibility proof is original 3/8192 vs generated 0/8192; physical HCI failure remains open. No hosted CI, clean canonical acceptance, flash, release, or commit. See docs/development/ncs-3.4.1-upgrade-results.md for logs and boundaries.
+
+2026-10-02: Product owner requested a combined migration pull request and Done transitions for completed work. All criteria were already checked from recorded implementation evidence. Done is PR-gated and remains pending human product-owner merge; no release or analog acceptance is inferred. This transition ships with the complete implementation in the PB-039-prefixed migration PR. Firmware verification remains exact 104e67a; later closure changes are documentation/backlog only. Fresh PR-preparation host checks are recorded in docs/development/nrf54l15-migration-pr-wrap-up-20261002.md. Prior private raw /tmp/opencode lab run roots are absent in this session; committed result reports retain their recorded outcomes, image/archive hashes and identity evidence. No fresh hardware rerun or independent rehash of those unavailable raw runs is claimed during PR preparation.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
 Software upgrade verified locally on committed daf7cd9404e32bacbff4b6431dafccbd28e4a8eb: clean canonical gate 80 PASS / 0 FAIL / 80 TOTAL (41 Twister, five exec-only, 31 Python, baseline coverage, matrix, strict BSim 17/26). Clean coverage manifest dirty=false; all 36 baseline pairs IDENTICAL. HIL Python 340 pass, one intentional hardware-opt-in skip. LC3 host replay uses NCS v3.4.1 and original v3.3.0 fixture corpus; 296 ARM calibration tests build-only. Three pristine physical-target builds pass; resolved build contract 69/69, zero compiler/Kconfig warnings. Exact Zephyr assertion-enabled CMake configuration notice retained with fault guards on; native_sim host-only product-support notice and five source/hash-specific upstream BabbleSim dependency compiler exceptions separately recorded, not globally waived. Workflow contract tests 36 pass; no hosted CI execution. HCI UART generated patch source-hash guarded, exhaustive original 3/8192 vs generated 0/8192; physical qualification remains open. Existing fixture bytes, PCM limits, coverage baseline, v3.3.0 historical evidence, VERSION 0.1.0 and draft assets unchanged. No hardware flash, RTT or 360-frame feature work, RH4/FR4 acceptance or publication. See docs/development/ncs-3.4.1-upgrade-results.md and external /tmp/opencode/pb040-clean-canonical-daf7cd9-r1.log plus coverage/run-manifest.json, clean HIL/LC3/build logs. Implementation ready for human PR review, not Done or accepted.
+
+2026-10-02: Product owner requested a combined migration pull request and Done transitions for completed work. All criteria were already checked from recorded implementation evidence. Done is PR-gated and remains pending human product-owner merge; no release or analog acceptance is inferred. This transition ships with the complete implementation in the PB-039-prefixed migration PR. Firmware verification remains exact 104e67a; later closure changes are documentation/backlog only. Fresh PR-preparation host checks are recorded in docs/development/nrf54l15-migration-pr-wrap-up-20261002.md. Prior private raw /tmp/opencode lab run roots are absent in this session; committed result reports retain their recorded outcomes, image/archive hashes and identity evidence. No fresh hardware rerun or independent rehash of those unavailable raw runs is claimed during PR preparation.
+
+PB-040 remains a software-upgrade completion: exact SDK/toolchain and clean daf7cd9 80/0/80 evidence are retained in its result report. Later 104e67a integration passed canonical 80/0/80, build contract 73/73 and physical builds. Separate PB-019/PB-039 work owns later hardware qualification. Hosted CI is pending this PR, not a historical software-upgrade acceptance claim.
 <!-- SECTION:FINAL_SUMMARY:END -->
