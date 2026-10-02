@@ -3,6 +3,7 @@
 
 Invocation: python3 bsim-component-cc.py REAL_GCC COMPONENT_ROOT GCC_ARGS...
 The caller supplies this command as Make's CC, never as a general CC export.
+Source-only preflight: python3 bsim-component-cc.py --check-sources COMPONENT_ROOT
 """
 
 import hashlib
@@ -37,7 +38,53 @@ EXCEPTIONS = {
 }
 
 
+def audited_flag(source, relative):
+    """Check pinned bytes before granting this source's diagnostic exception."""
+    digest, flag = EXCEPTIONS[relative]
+    try:
+        actual = hashlib.sha256(source.read_bytes()).hexdigest()
+    except OSError as exc:
+        print(
+            "bsim-component-cc: re-audit required: %s: %s" % (relative, exc),
+            file=sys.stderr,
+        )
+        return None
+    if actual != digest:
+        print(
+            "bsim-component-cc: re-audit required: %s: SHA-256 %s (expected %s)"
+            % (relative, actual, digest),
+            file=sys.stderr,
+        )
+        return None
+    return flag
+
+
 def main():
+    if sys.argv[1:2] == ["--check-sources"]:
+        if len(sys.argv) != 3:
+            print(
+                "bsim-component-cc: --check-sources requires COMPONENT_ROOT",
+                file=sys.stderr,
+            )
+            return 2
+        root = Path(sys.argv[2]).resolve()
+        for relative in EXCEPTIONS:
+            source = root / relative
+            if source.resolve() != source:
+                print(
+                    "bsim-component-cc: audited source must not be a symlink: %s"
+                    % relative,
+                    file=sys.stderr,
+                )
+                return 1
+            if audited_flag(source, relative) is None:
+                return 1
+        print(
+            "BabbleSim source preflight: %d SHA-256-pinned sources verified"
+            % len(EXCEPTIONS)
+        )
+        return 0
+
     if len(sys.argv) < 4:
         print(
             "bsim-component-cc: expected REAL_GCC COMPONENT_ROOT GCC_ARGS...",
@@ -62,21 +109,8 @@ def main():
         except ValueError:
             relative = None
         if relative in EXCEPTIONS:
-            digest, flag = EXCEPTIONS[relative]
-            try:
-                actual = hashlib.sha256(source.read_bytes()).hexdigest()
-            except OSError as exc:
-                print(
-                    "bsim-component-cc: re-audit required: %s: %s" % (relative, exc),
-                    file=sys.stderr,
-                )
-                return 1
-            if actual != digest:
-                print(
-                    "bsim-component-cc: re-audit required: %s: SHA-256 %s (expected %s)"
-                    % (relative, actual, digest),
-                    file=sys.stderr,
-                )
+            flag = audited_flag(source, relative)
+            if flag is None:
                 return 1
             exceptions.append(flag)
 

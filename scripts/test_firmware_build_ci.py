@@ -753,12 +753,26 @@ class TestParallelTestJobsContract(unittest.TestCase):
         self.assertNotIn("nrfutilPackage =", flake)
         self.assertNotIn("nrfutilWithSdkManager1161", flake)
 
-    def test_only_bsim_matrix_variant_populates_and_builds_bsim(self):
+    def test_unit_always_prepares_bsim_sources_after_sdk_restore(self):
+        unit = self._job("test-unit")
+        match = re.search(
+            r"(?ms)^      - name: Prepare pinned BabbleSim sources\n(.*?)(?=^      - name:)",
+            unit,
+        )
+        self.assertIsNotNone(match, "unit policy suite requires optional SDK sources")
+        assert match is not None
+        step = match.group(1)
+        self.assertNotIn("if:", step)
+        self.assertNotIn("CACHE_HIT", step)
+        self.assertIn("bash scripts/prepare-bsim-sources.sh", step)
+        self.assertLess(unit.index("Install NCS SDK and toolchain"), match.start())
+        self.assertLess(unit.index("Verify canonical test environment"), match.start())
+        self.assertLess(match.start(), unit.index("Run unit test gate"))
+
+    def test_only_bsim_matrix_variant_builds_bsim(self):
         unit = self._job("test-unit")
         heavy = self._job("test-heavy")
         for forbidden in (
-            "Populate NCS workspace projects",
-            "--group-filter +babblesim",
             "Build BabbleSim components",
             "BSIM_BUILD_FAIL_ASAP=1",
             "scripts/build-bsim-components.sh",
@@ -770,9 +784,9 @@ class TestParallelTestJobsContract(unittest.TestCase):
         self.assertEqual(heavy.count("if: matrix.phase == 'bsim'"), 2)
         self.assertRegex(
             heavy,
-            r"(?ms)- name: Populate NCS workspace projects\n"
+            r"(?ms)- name: Prepare pinned BabbleSim sources\n"
             r"        if: matrix\.phase == 'bsim'\n"
-            r"        run: \|.*?west update --narrow -o=--depth=1 --group-filter \+babblesim",
+            r"        run: \|.*?bash scripts/prepare-bsim-sources.sh",
         )
         self.assertRegex(
             heavy,
@@ -788,14 +802,18 @@ class TestParallelTestJobsContract(unittest.TestCase):
         )
         self.assertLess(
             heavy.index("Install NCS SDK and toolchain"),
-            heavy.index("Populate NCS workspace projects"),
-        )
-        self.assertLess(
-            heavy.index("Populate NCS workspace projects"),
-            heavy.index("Verify canonical test environment"),
+            heavy.index("Prepare pinned BabbleSim sources"),
         )
         self.assertLess(
             heavy.index("Verify canonical test environment"),
+            heavy.index("Prepare pinned BabbleSim sources"),
+        )
+        self.assertLess(
+            heavy.index("Verify canonical test environment"),
+            heavy.index("Build BabbleSim components"),
+        )
+        self.assertLess(
+            heavy.index("Prepare pinned BabbleSim sources"),
             heavy.index("Build BabbleSim components"),
         )
 

@@ -97,3 +97,15 @@ diff against current `origin/main`; it found no blocking defect or added
 credential/raw-lab payload. Full canonical/hardware results above are not
 relabeled as fresh runs; hosted CI is pending the new pull request. This closure
 changes documentation/backlog only and preserves exact tested firmware source.
+
+## Subsequent hosted failure and repair
+
+The first hosted unit gate failed in run `37041093569`: optional BabbleSim
+source dependencies were provisioned only in the BSim worker, although unit
+compiler-policy tests also require them. Coverage passed; the skipped firmware
+job was not a firmware-build failure. PB-040 was reopened for correction.
+[Source-provisioning repair](nrf54l15-ci-source-provisioning-results-20261002.md)
+records shared cache-independent preparation, real offline west/Git regression
+tests, unchanged compiler/hash policy and a local 77/0/77 unit gate. Hosted
+acceptance of the repair remains pending its own run; prior reports are not
+rewritten into hosted success.
