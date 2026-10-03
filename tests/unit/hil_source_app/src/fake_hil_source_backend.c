@@ -420,6 +420,46 @@ static int32_t fake_controller_peer_submit_offset_us;
 static bool fake_controller_time_frozen;
 static int fake_controller_time_result;
 static uint32_t fake_controller_time_calls;
+static uint32_t fake_cooperative_delay_us;
+static uint32_t fake_cooperative_delay_pending_us;
+static uint32_t fake_cooperative_delay_start_us;
+static int fake_ts_send_result[2];
+static uint32_t fake_time_error_call;
+static int fake_time_error_result;
+
+static void fake_cooperative_delay_fn(struct k_work *work)
+{
+	uint32_t completed_at = fake_cooperative_delay_start_us + fake_cooperative_delay_pending_us;
+
+	ARG_UNUSED(work);
+
+	/* Successful peer enqueue already advances this event-driven plant to
+	 * the next gate. Do not add the same work interval to that later event. */
+	if ((int32_t)(completed_at - fake_controller_time_base) > 0) {
+		fake_controller_time_base = completed_at;
+	}
+	fake_cooperative_delay_pending_us = 0U;
+}
+
+K_WORK_DEFINE(fake_cooperative_delay_work, fake_cooperative_delay_fn);
+
+void fake_ts_set_cooperative_delay(uint32_t delay_us)
+{
+	fake_cooperative_delay_us = delay_us;
+}
+
+void fake_ts_set_send_result(uint8_t stream_idx, int result)
+{
+	if (stream_idx < 2U) {
+		fake_ts_send_result[stream_idx] = result;
+	}
+}
+
+void fake_ts_set_time_error_on_call(uint32_t call, int result)
+{
+	fake_time_error_call = call;
+	fake_time_error_result = result;
+}
 
 static void fake_controller_time_set(uint32_t time_us)
 {
@@ -429,6 +469,9 @@ static void fake_controller_time_set(uint32_t time_us)
 static int fake_tx_time_get(uint32_t *time_us)
 {
 	fake_controller_time_calls++;
+	if (fake_time_error_call != 0U && fake_controller_time_calls == fake_time_error_call) {
+		return fake_time_error_result;
+	}
 	if (fake_controller_time_result != 0) {
 		return fake_controller_time_result;
 	}
@@ -453,7 +496,9 @@ static int fake_tx_send_ts(uint8_t stream_idx, uint16_t seq, const uint8_t *sdu,
 		ledger[ledger_count - 1U].ts = ts;
 	}
 	if (stream_idx < 2U) {
-		int result = kick_results[FAKE_OP_TX_SEND_TS];
+		int result = fake_ts_send_result[stream_idx] != 0
+				     ? fake_ts_send_result[stream_idx]
+				     : kick_results[FAKE_OP_TX_SEND_TS];
 		bool block = ts_send_block_entered != NULL && ts_send_block_release != NULL &&
 			     stream_idx == ts_send_block_stream &&
 			     fake_ts_send_count_[stream_idx] + 1U == ts_send_block_target;
@@ -473,6 +518,9 @@ static int fake_tx_send_ts(uint8_t stream_idx, uint16_t seq, const uint8_t *sdu,
 			ts_send_block_in_progress = false;
 		}
 
+		if (result != 0) {
+			return result;
+		}
 		send_count[stream_idx]++;
 		fake_ts_send_count_[stream_idx]++;
 		fake_ts_last_[stream_idx] = ts;
@@ -491,6 +539,13 @@ static int fake_tx_send_ts(uint8_t stream_idx, uint16_t seq, const uint8_t *sdu,
 			send_signal = NULL;
 			k_sem_give(sem);
 		}
+		if (result == 0 && run_mode == HIL_SOURCE_MODE_A && stream_idx == 0U &&
+		    fake_cooperative_delay_us != 0U) {
+			fake_cooperative_delay_pending_us = fake_cooperative_delay_us;
+			fake_cooperative_delay_start_us = fake_controller_time_base;
+			fake_cooperative_delay_us = 0U;
+			(void)k_work_submit(&fake_cooperative_delay_work);
+		}
 		if (result == 0 && !fake_controller_time_frozen && run_mode == HIL_SOURCE_MODE_A &&
 		    stream_idx == 0U && fake_controller_peer_submit_offset_us != 0) {
 			fake_controller_time_base +=
@@ -505,7 +560,7 @@ static int fake_tx_send_ts(uint8_t stream_idx, uint16_t seq, const uint8_t *sdu,
 						 HIL_SOURCE_TX_TS_LEAD_TARGET_US);
 		}
 	}
-	return kick_results[FAKE_OP_TX_SEND_TS];
+	return 0;
 }
 
 static int fake_tx_read_sync(uint8_t stream_idx, uint32_t *ts, uint32_t *seq)
@@ -714,6 +769,15 @@ const struct hil_source_backend_ops *fake_backend_ops(void)
 
 void fake_backend_reset(void)
 {
+	struct k_work_sync delay_sync;
+
+	(void)k_work_flush(&fake_cooperative_delay_work, &delay_sync);
+	fake_cooperative_delay_us = 0U;
+	fake_cooperative_delay_pending_us = 0U;
+	fake_cooperative_delay_start_us = 0U;
+	fake_ts_send_result[0] = fake_ts_send_result[1] = 0;
+	fake_time_error_call = 0U;
+	fake_time_error_result = 0;
 	memset(ledger, 0, sizeof(ledger));
 	ledger_count = 0U;
 	send_count[0] = send_count[1] = 0U;

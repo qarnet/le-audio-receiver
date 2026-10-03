@@ -28,8 +28,8 @@ class CentralError(Exception):
 
 AGENT_PATH = "/bap_central/agent"
 
-# Raw-HCI direct-connect helper (kernel accept-list scan path is broken on
-# the nRF5340 hci_usb controller; see scripts/hci_raw_connect.py).
+# Optional exact-peer raw-HCI helper (historical nRF5340 hci_usb accept-list
+# scan workaround; current XIAO fresh pairing uses BlueZ discovery).
 RAW_CONNECT_HELPER = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "hci_raw_connect.py"
 )
@@ -552,6 +552,81 @@ def preserve_bond_connect(
             print("[error] Device1 Connected not true after Connect()")
             raise CentralError("preserve-bond connected gate failed") from None
         print("[main] Device1 Connected confirmed (preserve-bond, BlueZ transport)")
+
+
+# ── Fresh BlueZ Connect-led bond ─────────────────────────────────────────
+
+
+def connect_and_bond(device_iface, dev_props_iface, dbus_mod, GLib, deadline_s=35.0):
+    """Connect fresh Device1; require receiver-initiated bonding to finish.
+
+    The registered default NINO agent handles peer-requested Just Works.
+    Do not issue a proactive Pair(): doing so races the receiver's Security
+    Request against BlueZ's MGMT Pair Device SMP context.
+    """
+    try:
+        paired = bool(dev_props_iface.Get("org.bluez.Device1", "Paired"))
+        connected = bool(dev_props_iface.Get("org.bluez.Device1", "Connected"))
+    except dbus_mod.exceptions.DBusException as exc:
+        print("[error] Connect-led state read failed: {}".format(exc))
+        raise CentralError("Connect-led state read failed: {}".format(exc)) from exc
+    if paired:
+        reason = "Connect-led fresh device already Paired"
+        print("[error] " + reason)
+        raise CentralError(reason)
+
+    deadline = time.monotonic() + deadline_s
+    connect_ok = [connected]
+    connect_error = [None]
+    if not connected:
+
+        def on_ok():
+            connect_ok[0] = True
+            print("[main] Device1.Connect() async reply: OK (Connect-led bond)")
+
+        def on_error(error):
+            connect_error[0] = error
+            print(
+                "[error] Device1.Connect() async error (Connect-led bond): {}".format(
+                    error
+                )
+            )
+
+        try:
+            device_iface.Connect(
+                reply_handler=on_ok, error_handler=on_error, timeout=30000
+            )
+        except dbus_mod.exceptions.DBusException as exc:
+            print(
+                "[error] Device1.Connect() rejected (Connect-led bond): {}".format(exc)
+            )
+            raise CentralError("Connect-led connect failed: {}".format(exc)) from exc
+    else:
+        print("[main] Device1 already Connected; no duplicate Connect()")
+
+    while time.monotonic() < deadline:
+        if connect_error[0] is not None:
+            raise CentralError(
+                "Connect-led connect failed: {}".format(connect_error[0])
+            )
+        try:
+            paired = bool(dev_props_iface.Get("org.bluez.Device1", "Paired"))
+            connected = bool(dev_props_iface.Get("org.bluez.Device1", "Connected"))
+        except dbus_mod.exceptions.DBusException as exc:
+            print("[error] Connect-led state poll failed: {}".format(exc))
+            raise CentralError("Connect-led state poll failed: {}".format(exc)) from exc
+        if connect_ok[0] and paired and connected:
+            print("[main] Connect-led bond confirmed: Paired=True, Connected=True")
+            return (True, True)
+        GLib.MainContext.default().iteration(False)
+        time.sleep(0.05)
+
+    reason = (
+        "Connect-led timed out after {:.0f}s: Connect reply={}, Paired={}, "
+        "Connected={}".format(deadline_s, connect_ok[0], paired, connected)
+    )
+    print("[error] " + reason)
+    raise CentralError(reason)
 
 
 # ── State reads / Pairable / Trusted / Pair / Services ──────────────────

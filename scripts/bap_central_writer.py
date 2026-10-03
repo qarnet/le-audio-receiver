@@ -4,7 +4,7 @@ Paced SDU writer for bap_central.py — owns the paced fd writes so the
 main thread can perform MediaTransport Release / endpoint cleanup while
 audio keeps flowing.
 
-Teardown contract (fixes the E83 teardown starvation defect):
+Teardown contract (preserves fix for historical E83 starvation defect):
   - The writer owns the 10 ms pacing loop and the transport fd writes.
   - It keeps writing until ALL transport fds become invalid (closed by
     the release path) or the main thread sets the stop event — so the

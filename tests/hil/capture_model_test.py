@@ -36,10 +36,14 @@ def fixture_doc(capability="mono"):
         "roles": {
             "receiver": {
                 "kind": "zephyr_dut",
-                "board": "receiver",
+                "board": model.NRF54L15_CPUAPP_BOARD,
+                "images": ["cpuapp", "flpr"],
+            },
+            "source": {
+                "kind": "zephyr_dut",
+                "board": model.NRF54L15_CPUAPP_BOARD,
                 "images": ["cpuapp"],
             },
-            "source": {"kind": "zephyr_dut", "board": "source", "images": ["cpuapp"]},
             "capture": {"kind": "alsa_capture", "channels": channels},
         },
     }
@@ -53,19 +57,11 @@ def binding_doc(capability, metadata_path):
         "roles": {
             "receiver": {
                 "probe": {"backend": "nrf-probes", "family": "nrf54l"},
-                "serial": {"baud": 115200, "dtr": False, "rts": False, "udev": {}},
+                "serial": {"baud": 115200, "dtr": True, "rts": False, "udev": {}},
             },
             "source": {
-                "probe": {
-                    "backend": "jlink",
-                    "family": "nrf53",
-                    "udev": {
-                        "ID_VENDOR_ID": "1366",
-                        "ID_MODEL_ID": "1015",
-                        "ID_SERIAL_SHORT": "source",
-                    },
-                },
-                "serial": {"baud": 115200, "dtr": False, "rts": False, "udev": {}},
+                "probe": {"backend": "nrf-probes", "family": "nrf54l"},
+                "serial": {"baud": 115200, "dtr": True, "rts": False, "udev": {}},
             },
             "capture": {
                 "backend": "alsa",

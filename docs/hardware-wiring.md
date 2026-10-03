@@ -3,8 +3,9 @@
 How to wire an I2S DAC to the **Seeed XIAO nRF54L15**, this project's sole
 supported final receiver. It uses a 3-wire no-MCK topology (BCLK, LRCK,
 SDOUT; the DAC's internal PLL locks to BCLK). The verified nRF5340 Ebyte pin
-data remains below only as a legacy engineering reference. For the supported
-audio path, see [Technology: nRF54L15](technology/nrf54l15.md).
+data remains below only as a historical reference, not active hardware
+support. For the supported audio path, see
+[Technology: nRF54L15](technology/nrf54l15.md).
 
 ## DAC choice: UDA1334A or PCM5102A
 
@@ -63,11 +64,12 @@ routes MCK to **D3 (P1.7)** so the MCK generator can derive SCK/LRCK. D3 is
 occupied by a peripheral-driven MCK; do not use it for other signals. The DAC
 side stays 3-wire: BCK, LRCK, SDOUT only.
 
-## Legacy engineering reference: nRF5340 (Ebyte E83-2G4M03S)
+## Historical wiring reference: nRF5340 (Ebyte E83-2G4M03S)
 
-The physical E83 receiver is retained for legacy engineering and regression
-evidence only. It is not supported final hardware and has no release,
-product-parity, physical-control, or future-feature obligation.
+The E83 receiver implementation is retired. These verified pin assignments
+describe historical hardware, not a currently buildable or supported receiver.
+Its board definition and flashing helper are no longer in the current tree;
+the original implementation remains in Git history.
 
 Verified pin table (from the board's devicetree pinctrl):
 
@@ -121,7 +123,7 @@ The legacy E83 mapping is in the section above.
 
 ## Related documents
 
-- [Technology: nRF5340 legacy engineering background](technology/nrf5340.md)
+- [Technology: nRF5340 historical background](technology/nrf5340.md)
 - [Technology: nRF54L15](technology/nrf54l15.md)
 - [User guide](user-guide.md)
 - [Known limitations](known-limitations.md)

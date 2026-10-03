@@ -782,8 +782,9 @@ ZTEST(iso_seq, test_cadence_backward_wrap_rebase)
 
 	zassert_equal(AUDIO_ISO_CADENCE_RES_FIRST, cadfeed(true, 10000, 10000, &omitted));
 	zassert_equal(AUDIO_ISO_CADENCE_RES_CONTIG, cadfeed(true, 20000, 10000, &omitted));
-	/* Backward timestamp: nRF5340 SW Split wraps ~every 512 s.  WRAP
-	 * rebases with NO synthesis and NO resync increment. */
+	/* Historical nRF5340 SW Split observation: timestamp wraps ~every
+	 * 512 s (not an active platform).  WRAP rebases with NO synthesis and
+	 * NO resync increment. */
 	zassert_equal(AUDIO_ISO_CADENCE_RES_WRAP, cadfeed(true, 3000, 10000, &omitted));
 	zassert_equal(0U, omitted);
 	zassert_equal(0U, audio_iso_cadence_get_concealed(&cad));

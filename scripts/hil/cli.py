@@ -5,8 +5,14 @@ Commands:
     hil-runner.py validate --fixture PATH --binding PATH
     hil-runner.py prepare --fixture PATH --binding PATH \
         --output-root PATH --run-id ID
+    hil-runner.py create-session --fixture PATH --binding PATH \
+        --session-id ID --receiver-probe SERIAL --source-probe SERIAL \
+        [--session-root PATH]
     hil-runner.py run --fixture PATH --binding PATH \
         --output-root PATH --run-id ID --junit PATH
+    hil-runner.py run --fixture PATH --binding PATH \
+        --output-root PATH --run-id ID --junit PATH \
+        --session-manifest /tmp/opencode/hil-sessions/SESSION/devices.json
     hil-runner.py run-rh3-matrix --fixture PATH --binding PATH \
         --output-root PATH --run-id ID --junit PATH
     hil-runner.py run-rh4-matrix --fixture PATH --binding PATH \
@@ -34,6 +40,10 @@ fixture lifecycle; matrix evidence aggregates child outcomes.
 or hardware work, then runs same fixed schedule with staged image paths only.
 Exit status: 0 passed, 1 failed, 130 cancelled.
 
+``create-session`` performs only explicit read-only discovery, then creates one
+immutable external XIAO-pair identity manifest. It does not build, flash,
+reset, open a tty, or stream from hardware.
+
 Failures print one line prefixed ``hil-runner: error: `` to stderr with no
 traceback and return 2; success returns 0 with no stderr.
 """
@@ -46,7 +56,7 @@ import sys
 import tempfile
 import threading
 
-from hil import lifecycle, matrix, model, rows, runner
+from hil import lifecycle, matrix, model, rows, runner, session
 import hil.artifacts as artifact_resolver
 from hil.evidence import EvidenceError, finalize_evidence
 
@@ -131,6 +141,34 @@ def cmd_prepare(args):
     return 0
 
 
+def cmd_create_session(args):
+    manifest = session.create_session(
+        args.fixture,
+        args.binding,
+        args.session_id,
+        args.receiver_probe,
+        args.source_probe,
+        run_cmd=runner.default_run_cmd,
+        session_root=args.session_root,
+    )
+    sys.stdout.write(
+        json.dumps(
+            {
+                "fixture_id": manifest.fixture_id,
+                "manifest": manifest.path,
+                "roles": {
+                    "receiver": manifest.roles["receiver"].probe.serial,
+                    "source": manifest.roles["source"].probe.serial,
+                },
+                "session_id": manifest.session_id,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    return 0
+
+
 def _selected_row(name):
     """Resolve one stable checked-in row name into immutable runner input."""
     if name is None:
@@ -174,6 +212,7 @@ def cmd_run(args):
                 args, "sdc_hci_remove_iso_path_trace", False
             ),
             allow_offload_disabled=getattr(args, "allow_offload_disabled", False),
+            session_manifest_path=args.session_manifest,
         )
     finally:
         signal.signal(signal.SIGINT, old_int)
@@ -205,6 +244,7 @@ def cmd_run_rh3_matrix(args):
             args.junit,
             argv=argv,
             status=0,
+            session_manifest_path=getattr(args, "session_manifest", None),
         )
     finally:
         signal.signal(signal.SIGINT, old_int)
@@ -245,6 +285,7 @@ def _capture_matrix_command(args, capability, verdict):
             status=0,
             qualification_path=args.qualification,
             capture_verdict=verdict,
+            session_manifest_path=getattr(args, "session_manifest", None),
         )
     finally:
         signal.signal(signal.SIGINT, old_int)
@@ -292,6 +333,7 @@ def cmd_run_rh4_matrix(args):
             argv=argv,
             status=0,
             artifacts=artifact_set,
+            session_manifest_path=getattr(args, "session_manifest", None),
         )
     finally:
         signal.signal(signal.SIGINT, old_int)
@@ -333,12 +375,26 @@ def build_parser():
     prepare.add_argument("--output-root", required=True)
     prepare.add_argument("--run-id", required=True)
     prepare.set_defaults(func=cmd_prepare)
+    create_session = sub.add_parser(
+        "create-session", help="create immutable XIAO-pair identity session"
+    )
+    create_session.add_argument("--fixture", required=True)
+    create_session.add_argument("--binding", required=True)
+    create_session.add_argument("--session-id", required=True)
+    create_session.add_argument("--receiver-probe", required=True)
+    create_session.add_argument("--source-probe", required=True)
+    create_session.add_argument("--session-root", default=session.DEFAULT_SESSION_ROOT)
+    create_session.set_defaults(func=cmd_create_session)
     run = sub.add_parser("run", help="run one frozen HIL row (production hardware)")
     run.add_argument("--fixture", required=True)
     run.add_argument("--binding", required=True)
     run.add_argument("--output-root", required=True)
     run.add_argument("--run-id", required=True)
     run.add_argument("--junit", required=True)
+    run.add_argument(
+        "--session-manifest",
+        help="immutable XIAO-pair session manifest for nRF54L15 source fixtures",
+    )
     run.add_argument(
         "--row",
         choices=rows.row_names(),
@@ -369,6 +425,7 @@ def build_parser():
     matrix_run.add_argument("--output-root", required=True)
     matrix_run.add_argument("--run-id", required=True)
     matrix_run.add_argument("--junit", required=True)
+    matrix_run.add_argument("--session-manifest")
     matrix_run.set_defaults(func=cmd_run_rh3_matrix)
     ma1_matrix_run = sub.add_parser(
         "run-ma1-matrix",
@@ -380,6 +437,7 @@ def build_parser():
     ma1_matrix_run.add_argument("--output-root", required=True)
     ma1_matrix_run.add_argument("--run-id", required=True)
     ma1_matrix_run.add_argument("--junit", required=True)
+    ma1_matrix_run.add_argument("--session-manifest")
     ma1_matrix_run.set_defaults(func=cmd_run_ma1_matrix)
     sa1_matrix_run = sub.add_parser(
         "run-sa1-matrix",
@@ -391,6 +449,7 @@ def build_parser():
     sa1_matrix_run.add_argument("--output-root", required=True)
     sa1_matrix_run.add_argument("--run-id", required=True)
     sa1_matrix_run.add_argument("--junit", required=True)
+    sa1_matrix_run.add_argument("--session-manifest")
     sa1_matrix_run.set_defaults(func=cmd_run_sa1_matrix)
     rh4_matrix_run = sub.add_parser(
         "run-rh4-matrix",
@@ -401,6 +460,7 @@ def build_parser():
     rh4_matrix_run.add_argument("--output-root", required=True)
     rh4_matrix_run.add_argument("--run-id", required=True)
     rh4_matrix_run.add_argument("--junit", required=True)
+    rh4_matrix_run.add_argument("--session-manifest")
     rh4_matrix_run.add_argument("--receiver-artifact", required=True)
     rh4_matrix_run.add_argument("--source-artifact", required=True)
     rh4_matrix_run.set_defaults(func=cmd_run_rh4_matrix)

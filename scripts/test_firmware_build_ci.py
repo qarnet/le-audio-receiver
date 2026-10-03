@@ -14,6 +14,7 @@ manual publication), and post-create draft verification.  No third-party
 YAML parser, no private-helper assertions, and no mock of the workflow.
 """
 
+import hashlib
 import os
 import re
 import subprocess
@@ -38,12 +39,14 @@ GOOD_VERSION = (
 
 CONTAINER_IMAGE = (
     "ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:"
-    "f24d8932ff081ebcd8da9c248f4449bdabe461c0620a7a4ac9e95eb577ba2276"
+    "45b97cad97a9967c52d77d1d1a0f7dd8fe027edd17c05c3eda2eeadc23729418"
 )
 CHECKOUT_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 UPLOAD_SHA = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 DOWNLOAD_SHA = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
-NRF_COMMIT = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
+NRF_COMMIT = "b20f8619ba9a5530f8c34b0a130d829947cfe55d"
+ZEPHYR_COMMIT = "33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6"
+NRF_VERSION_SHA256 = "37eaf3af83e09aba188263cedf48d2bc606713193a61df78d532730f3441cfa5"
 
 
 def run_version_script(extra_args=(), cwd=REPO_ROOT):
@@ -321,6 +324,72 @@ class TestWorkflowContract(unittest.TestCase):
             "main runs must never be cancelled by a newer run",
         )
 
+    def test_sdk_version_guards_execute_against_six_field_version(self):
+        # Exercise workflow shell commands themselves, not a copied parser.
+        guards = [
+            line.strip()
+            for line in workflow_lines()
+            if line.strip().startswith('test "$(sha256sum ') and "nrf/VERSION" in line
+        ]
+        host_guard = (
+            'test "$(sha256sum "$HOME/ncs/v3.4.1/nrf/VERSION" | cut -d\' \' -f1)" '
+            '= "%s"' % NRF_VERSION_SHA256
+        )
+        container_guard = (
+            'test "$(sha256sum nrf/VERSION | cut -d\' \' -f1)" = "%s"'
+            % NRF_VERSION_SHA256
+        )
+        self.assertEqual(guards.count(host_guard), 2)
+        self.assertEqual(guards.count(container_guard), 2)
+        self.assertEqual(len(guards), 4)
+        self.assertNotIn("tr -d '\\r\\n'", workflow_text())
+
+        version = (
+            "VERSION_MAJOR = 3\n"
+            "VERSION_MINOR = 4\n"
+            "PATCHLEVEL = 1\n"
+            "VERSION_TWEAK = 0\n"
+            "EXTRAVERSION =\n"
+            "VERSION_METADATA = lts\n"
+        )
+        self.assertEqual(
+            hashlib.sha256(version.encode()).hexdigest(), NRF_VERSION_SHA256
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            home = os.path.join(tmp, "home")
+            workspace = os.path.join(tmp, "workspace")
+            host_nrf = os.path.join(home, "ncs", "v3.4.1", "nrf")
+            container_nrf = os.path.join(workspace, "nrf")
+            os.makedirs(host_nrf)
+            os.makedirs(container_nrf)
+            for name, content, accepted in (
+                ("audited six fields", version, True),
+                ("old single line", "3.3.0\n", False),
+                (
+                    "different patch",
+                    version.replace("PATCHLEVEL = 1", "PATCHLEVEL = 2"),
+                    False,
+                ),
+                ("duplicate metadata", version + "VERSION_METADATA = lts\n", False),
+            ):
+                with self.subTest(name=name):
+                    for directory in (host_nrf, container_nrf):
+                        with open(
+                            os.path.join(directory, "VERSION"), "w", encoding="utf-8"
+                        ) as fh:
+                            fh.write(content)
+                    for guard in guards:
+                        result = subprocess.run(
+                            ["bash", "-e", "-c", guard],
+                            cwd=workspace,
+                            env={**os.environ, "HOME": home},
+                            capture_output=True,
+                            text=True,
+                        )
+                        self.assertEqual(
+                            result.returncode == 0, accepted, (guard, result.stderr)
+                        )
+
     def test_pinned_runner_container_and_actions(self):
         text = workflow_text()
         self.assertIn("runs-on: ubuntu-22.04", text)
@@ -332,7 +401,8 @@ class TestWorkflowContract(unittest.TestCase):
         self.assertIn("actions/download-artifact@%s" % DOWNLOAD_SHA, text)
         self.assertIn("ref: %s" % NRF_COMMIT, text)
         self.assertIn("nrf/VERSION", text)
-        self.assertIn('"3.3.0"', text)
+        self.assertIn(NRF_VERSION_SHA256, text)
+        self.assertIn(ZEPHYR_COMMIT, text)
         for line in workflow_lines():
             stripped = line.strip()
             if stripped.startswith("uses:"):
@@ -442,7 +512,7 @@ class TestWorkflowCommands(unittest.TestCase):
             "version=$version",
             "scripts/package-firmware-release.py",
             "--git-commit",
-            "--ncs-version v3.3.0",
+            "--ncs-version v3.4.1",
             "--build-root build",
             "--output-dir dist",
             '"$version"',
@@ -479,13 +549,13 @@ class TestWorkflowCommands(unittest.TestCase):
     def test_no_hardcoded_project_version_or_package_paths(self):
         """The workflow must carry no project release literal (0.1.0/0.1.1)
         and no fixed ``le-audio-receiver-v<digits>`` package path; the NCS
-        version 3.3.0 is a separate constant and must remain."""
+        version 3.4.1 is a separate constant and must remain."""
         text = workflow_text()
         self.assertNotRegex(text, r"0\.1\.[0-9]", "project release literal present")
         self.assertNotRegex(
             text, r"le-audio-receiver-v[0-9]", "fixed package path present"
         )
-        self.assertIn('"3.3.0"', text, "NCS version constant must remain")
+        self.assertIn(NRF_VERSION_SHA256, text, "NCS VERSION guard must remain")
 
 
 class TestWorkflowArtifactContract(unittest.TestCase):
@@ -599,23 +669,25 @@ class TestParallelTestJobsContract(unittest.TestCase):
             "actions/cache@%s" % self.ACTIONS_CACHE_SHA,
             "id: cache-ncs",
             "path: /home/runner/ncs",
-            "key: ncs-v3.3.0-911f4c5c26",
+            "key: ncs-v3.4.1-8285d8ad56",
             "CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}",
             "nix develop --accept-flake-config --command bash -s <<'EOF'",
             'nrfutil sdk-manager --version | grep -F "1.16.1"',
             'nrfutil sdk-manager config install-dir set "$HOME/ncs"',
-            "nrfutil sdk-manager install v3.3.0",
+            "nix-nrf bootstrap --ncs-version v3.4.1 --toolchain-bundle-id 8285d8ad56 --yes",
             'if [ "$CACHE_HIT" = "true" ]; then',
-            'test -d "$HOME/ncs/v3.3.0/nrf"',
-            'echo "NCS v3.3.0 restored from cache; skipping sdk-manager install"',
+            'test -d "$HOME/ncs/v3.4.1/nrf"',
+            'echo "NCS v3.4.1 restored from cache; skipping sdk-manager install"',
             'test "$gcovr_line" = "gcovr 8.4"',
             'test "$gcov_line" = "gcov (GCC) 14.3.0"',
-            'test "$ZEPHYR_BASE" = "$HOME/ncs/v3.3.0/zephyr"',
-            'git -C "$HOME/ncs/v3.3.0/nrf" rev-parse HEAD',
+            'test "$ZEPHYR_BASE" = "$HOME/ncs/v3.4.1/zephyr"',
+            'git -C "$HOME/ncs/v3.4.1/nrf" rev-parse HEAD',
+            'git -C "$HOME/ncs/v3.4.1/zephyr" rev-parse HEAD',
             NRF_COMMIT,
-            "nrf/VERSION",
-            "nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh",
-            "911f4c5c26",
+            ZEPHYR_COMMIT,
+            NRF_VERSION_SHA256,
+            "nrfutil sdk-manager toolchain env --toolchain-bundle-id 8285d8ad56 --as-script sh",
+            "8285d8ad56",
             "canonical test environment verified",
         ):
             self.assertIn(needle, block, "missing %r in %s" % (needle, name))
@@ -632,7 +704,7 @@ class TestParallelTestJobsContract(unittest.TestCase):
             "$RUNNER_TEMP/nrfutil",
             "$GITHUB_PATH",
             "nrfutil core",
-            'if [ -d "$HOME/ncs/v3.3.0/nrf" ]; then',
+            'if [ -d "$HOME/ncs/v3.4.1/nrf" ]; then',
             "_github_home",
         ):
             self.assertNotIn(forbidden, block, "forbidden %r in %s" % (forbidden, name))
@@ -676,19 +748,34 @@ class TestParallelTestJobsContract(unittest.TestCase):
         flake = flake_text()
         self.assertIn('url = "github:qarnet/nix-nrf-dev";', flake)
         self.assertIn('inputs.nixpkgs.follows = "nixpkgs";', flake)
+        self.assertIn('ncsVersion = "v3.4.1";', flake)
+        self.assertIn('toolchainBundleId = "8285d8ad56";', flake)
         self.assertNotIn("nrfutilPackage =", flake)
         self.assertNotIn("nrfutilWithSdkManager1161", flake)
 
-    def test_only_bsim_matrix_variant_populates_and_builds_bsim(self):
+    def test_unit_always_prepares_bsim_sources_after_sdk_restore(self):
+        unit = self._job("test-unit")
+        match = re.search(
+            r"(?ms)^      - name: Prepare pinned BabbleSim sources\n(.*?)(?=^      - name:)",
+            unit,
+        )
+        self.assertIsNotNone(match, "unit policy suite requires optional SDK sources")
+        assert match is not None
+        step = match.group(1)
+        self.assertNotIn("if:", step)
+        self.assertNotIn("CACHE_HIT", step)
+        self.assertIn("bash scripts/prepare-bsim-sources.sh", step)
+        self.assertLess(unit.index("Install NCS SDK and toolchain"), match.start())
+        self.assertLess(unit.index("Verify canonical test environment"), match.start())
+        self.assertLess(match.start(), unit.index("Run unit test gate"))
+
+    def test_only_bsim_matrix_variant_builds_bsim(self):
         unit = self._job("test-unit")
         heavy = self._job("test-heavy")
         for forbidden in (
-            "Populate NCS workspace projects",
-            "--group-filter +babblesim",
             "Build BabbleSim components",
             "BSIM_BUILD_FAIL_ASAP=1",
-            'make -C "$HOME/ncs/v3.3.0/tools/bsim" everything',
-            'test -x "$HOME/ncs/v3.3.0/tools/bsim/bin/bs_2G4_phy_v1"',
+            "scripts/build-bsim-components.sh",
         ):
             self.assertNotIn(
                 forbidden, unit, "unit worker must not contain %r" % forbidden
@@ -697,27 +784,36 @@ class TestParallelTestJobsContract(unittest.TestCase):
         self.assertEqual(heavy.count("if: matrix.phase == 'bsim'"), 2)
         self.assertRegex(
             heavy,
-            r"(?ms)- name: Populate NCS workspace projects\n"
+            r"(?ms)- name: Prepare pinned BabbleSim sources\n"
             r"        if: matrix\.phase == 'bsim'\n"
-            r"        run: \|.*?west update --narrow -o=--depth=1 --group-filter \+babblesim",
+            r"        run: \|.*?bash scripts/prepare-bsim-sources.sh",
         )
         self.assertRegex(
             heavy,
             r"(?ms)- name: Build BabbleSim components\n"
             r"        if: matrix\.phase == 'bsim'\n"
-            r"        run: \|.*?BSIM_BUILD_FAIL_ASAP=1 make -C "
-            r"\"\$HOME/ncs/v3\.3\.0/tools/bsim\" everything",
+            r"        run: \|.*?bash scripts/build-bsim-components\.sh --force",
+        )
+        self.assertNotIn(
+            "make -C",
+            heavy.split("- name: Build BabbleSim components")[1].split(
+                "- name: Prepare phase"
+            )[0],
         )
         self.assertLess(
             heavy.index("Install NCS SDK and toolchain"),
-            heavy.index("Populate NCS workspace projects"),
-        )
-        self.assertLess(
-            heavy.index("Populate NCS workspace projects"),
-            heavy.index("Verify canonical test environment"),
+            heavy.index("Prepare pinned BabbleSim sources"),
         )
         self.assertLess(
             heavy.index("Verify canonical test environment"),
+            heavy.index("Prepare pinned BabbleSim sources"),
+        )
+        self.assertLess(
+            heavy.index("Verify canonical test environment"),
+            heavy.index("Build BabbleSim components"),
+        )
+        self.assertLess(
+            heavy.index("Prepare pinned BabbleSim sources"),
             heavy.index("Build BabbleSim components"),
         )
 
@@ -918,7 +1014,7 @@ class TestReleaseJobContract(unittest.TestCase):
             "--tag",
             "--version",
             '--git-commit "$GITHUB_SHA"',
-            "--ncs-version v3.3.0",
+            "--ncs-version v3.4.1",
             '--repository "$REPOSITORY"',
             '--workflow "$WORKFLOW"',
             '--workflow-ref "$WORKFLOW_REF"',

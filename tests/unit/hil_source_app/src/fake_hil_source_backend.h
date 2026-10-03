@@ -167,6 +167,11 @@ void fake_ts_set_initial_time_offset(int32_t offset_us);
 /* Advance controller-now once after Mode A stream 0 submits, before stream 1
  * gets its final lead check. */
 void fake_ts_set_peer_submit_offset(int32_t offset_us);
+/* Wake real cooperative work once from the first Mode A enqueue. Its virtual
+ * elapsed time models host TX processing, not a timestamp-read shortcut. */
+void fake_ts_set_cooperative_delay(uint32_t delay_us);
+void fake_ts_set_send_result(uint8_t stream_idx, int result);
+void fake_ts_set_time_error_on_call(uint32_t call, int result);
 /* Hold controller-now constant after bootstrap seeds the mirrored clock. */
 void fake_ts_set_time_frozen(bool frozen);
 void fake_ts_set_time_result(int result);

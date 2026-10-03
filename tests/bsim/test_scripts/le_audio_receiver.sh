@@ -12,7 +12,7 @@ VERBOSITY_LEVEL=2
 # shellcheck source=/dev/null
 source "${ZEPHYR_BASE}/tests/bsim/sh_common.source"
 
-BOARD_TS="nrf5340bsim_nrf5340_cpuapp"
+BOARD_TS="nrf54l15bsim_nrf54l15_cpuapp"
 RECV_BIN="bs_${BOARD_TS}_tests_le_audio_receiver_bsim_prj_conf"
 CLIENT_BIN="bs_${BOARD_TS}_tests_bsim_bluetooth_audio_prj_conf"
 

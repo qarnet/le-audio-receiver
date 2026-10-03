@@ -36,7 +36,7 @@
 #define BSIM_PCM_7P5MS_SAMPLES      360U
 #define BSIM_PCM_VOLUME             195U
 #define BSIM_PCM_MAX_SAMPLES_PER_CH BSIM_PCM_10MS_SAMPLES
-#define BSIM_RECIPE_BINDING_MAX     9U
+#define BSIM_RECIPE_BINDING_MAX     15U
 #define NORMAL_GOAL_PUSHES          100U
 
 static const uint8_t bsim_48k_10ms_120b_l_lc3[] = {
@@ -82,6 +82,15 @@ static const uint8_t stateful_48k_10ms_loss48x18_r_pcm[] = {
 static const uint8_t stateful_48k_7p5ms_modea_start_r_pcm[] = {
 #include "stateful_48k_7p5ms_modea_start_r_pcm.inc"
 };
+
+static const uint8_t stateful_48k_10ms_skip20_start0_l_pcm[] = {
+#include "stateful_48k_10ms_skip20_start0_l_pcm.inc"
+};
+static const uint8_t stateful_48k_10ms_loss48x18_start0_r_pcm[] = {
+#include "stateful_48k_10ms_loss48x18_start0_r_pcm.inc"
+};
+BUILD_ASSERT(sizeof(stateful_48k_10ms_skip20_start0_l_pcm) == 100U * 480U * 2U);
+BUILD_ASSERT(sizeof(stateful_48k_10ms_loss48x18_start0_r_pcm) == 82U * 480U * 2U);
 
 BUILD_ASSERT(sizeof(bsim_48k_10ms_120b_l_lc3) == BSIM_PCM_CORPUS_FRAMES * 120U,
 	     "10 ms left LC3 corpus geometry");
@@ -212,6 +221,22 @@ static const struct bsim_pcm_source sources[] = {
 
 static const struct bsim_pcm_reference references[] = {
 	{
+		.path = "stateful_48k_10ms_skip20_start0_l.pcm",
+		.kind = LC3_STATEFUL_REFERENCE_GENERATED_PCM,
+		.pcm = stateful_48k_10ms_skip20_start0_l_pcm,
+		.pcm_size = sizeof(stateful_48k_10ms_skip20_start0_l_pcm),
+		.frame_count = 100U,
+		.samples_per_frame = BSIM_PCM_10MS_SAMPLES,
+	},
+	{
+		.path = "stateful_48k_10ms_loss48x18_start0_r.pcm",
+		.kind = LC3_STATEFUL_REFERENCE_GENERATED_PCM,
+		.pcm = stateful_48k_10ms_loss48x18_start0_r_pcm,
+		.pcm_size = sizeof(stateful_48k_10ms_loss48x18_start0_r_pcm),
+		.frame_count = 82U,
+		.samples_per_frame = BSIM_PCM_10MS_SAMPLES,
+	},
+	{
 		.path = "bsim_48k_10ms_120b_l.pcm",
 		.kind = LC3_STATEFUL_REFERENCE_PORTABLE_PCM,
 		.pcm = bsim_48k_10ms_120b_l_pcm,
@@ -270,32 +295,29 @@ static const struct bsim_pcm_reference references[] = {
 };
 
 static const struct bsim_scenario_recipe scenario_recipes[] = {
-	{BSIM_SCN_MONO_10MS, 0U, "start8_10ms_l", "start8_10ms_l", BSIM_RECIPE_COMPLETION_FULL},
-	{BSIM_SCN_MONO_7P5MS, 0U, "start11_7p5ms_l", "start11_7p5ms_l",
+	{BSIM_SCN_MONO_10MS, 0U, "start0_10ms_l", "start0_10ms_l", BSIM_RECIPE_COMPLETION_FULL},
+	{BSIM_SCN_MONO_7P5MS, 0U, "start0_7p5ms_l", "start0_7p5ms_l", BSIM_RECIPE_COMPLETION_FULL},
+	{BSIM_SCN_MODEA_10MS, 0U, "start0_10ms_l", "start0_10ms_r", BSIM_RECIPE_COMPLETION_FULL},
+	{BSIM_SCN_MODEA_7P5MS, 0U, "start0_7p5ms_l", "start0_7p5ms_r", BSIM_RECIPE_COMPLETION_FULL},
+	{BSIM_SCN_MODEA_REVERSE_START_10MS, 0U, "start0_10ms_l", "start0_10ms_r",
 	 BSIM_RECIPE_COMPLETION_FULL},
-	{BSIM_SCN_MODEA_10MS, 0U, "start8_10ms_l", "start8_10ms_r", BSIM_RECIPE_COMPLETION_FULL},
-	{BSIM_SCN_MODEA_7P5MS, 0U, "modea_start_7p5ms_l", "modea_start_7p5ms_r",
+	{BSIM_SCN_MODEB_10MS, 0U, "start0_10ms_l", "start0_10ms_r", BSIM_RECIPE_COMPLETION_FULL},
+	{BSIM_SCN_MODEB_7P5MS, 0U, "start0_7p5ms_l", "start0_7p5ms_r", BSIM_RECIPE_COMPLETION_FULL},
+	{BSIM_SCN_INVALID_SDU_RESUME_10MS, 0U, "skip20_start0_10ms_l", "skip20_start0_10ms_l",
 	 BSIM_RECIPE_COMPLETION_FULL},
-	{BSIM_SCN_MODEA_REVERSE_START_10MS, 0U, "start8_10ms_l", "start8_10ms_r",
+	{BSIM_SCN_MODEA_ONE_CIS_LOSS_10MS, 0U, "start0_10ms_l", "loss48x18_start0_10ms_r",
 	 BSIM_RECIPE_COMPLETION_FULL},
-	{BSIM_SCN_MODEB_10MS, 0U, "start8_10ms_l", "start8_10ms_r", BSIM_RECIPE_COMPLETION_FULL},
-	{BSIM_SCN_MODEB_7P5MS, 0U, "start11_7p5ms_l", "start11_7p5ms_r",
-	 BSIM_RECIPE_COMPLETION_FULL},
-	{BSIM_SCN_INVALID_SDU_RESUME_10MS, 0U, "skip20_10ms_l", "skip20_10ms_l",
-	 BSIM_RECIPE_COMPLETION_FULL},
-	{BSIM_SCN_MODEA_ONE_CIS_LOSS_10MS, 0U, "start8_10ms_l", "loss48x18_10ms_r",
-	 BSIM_RECIPE_COMPLETION_FULL},
-	{BSIM_SCN_MODEA_FIRST_STOP_10MS, 0U, "start8_10ms_l", "start8_10ms_r",
+	{BSIM_SCN_MODEA_FIRST_STOP_10MS, 0U, "start0_10ms_l", "start0_10ms_r",
 	 BSIM_RECIPE_COMPLETION_PREFIX},
-	{BSIM_SCN_RELEASE_WITHOUT_DISABLE_10MS, 0U, "start8_10ms_l", "start8_10ms_l",
+	{BSIM_SCN_RELEASE_WITHOUT_DISABLE_10MS, 0U, "start0_10ms_l", "start0_10ms_l",
 	 BSIM_RECIPE_COMPLETION_PREFIX},
-	{BSIM_SCN_DISCONNECT_STREAMING_10MS, 0U, "start8_10ms_l", "start8_10ms_l",
+	{BSIM_SCN_DISCONNECT_STREAMING_10MS, 0U, "start0_10ms_l", "start0_10ms_l",
 	 BSIM_RECIPE_COMPLETION_PREFIX},
-	{BSIM_SCN_RECONNECT_SECOND_STREAM_10MS, 0U, "start8_10ms_l", "start8_10ms_l",
+	{BSIM_SCN_RECONNECT_SECOND_STREAM_10MS, 0U, "start0_10ms_l", "start0_10ms_l",
 	 BSIM_RECIPE_COMPLETION_PREFIX},
-	{BSIM_SCN_RECONNECT_SECOND_STREAM_10MS, 1U, "start7_10ms_l", "start7_10ms_l",
+	{BSIM_SCN_RECONNECT_SECOND_STREAM_10MS, 1U, "start0_10ms_l", "start0_10ms_l",
 	 BSIM_RECIPE_COMPLETION_FULL},
-	{BSIM_SCN_DUPLICATE_RELEASE_10MS, 0U, "start8_10ms_l", "start8_10ms_l",
+	{BSIM_SCN_DUPLICATE_RELEASE_10MS, 0U, "start0_10ms_l", "start0_10ms_l",
 	 BSIM_RECIPE_COMPLETION_PREFIX},
 };
 

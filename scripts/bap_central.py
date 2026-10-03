@@ -2,13 +2,13 @@
 """
 BAP central test driver for LE Audio Receiver.
 
-Prerequisite: nRF5340DK hci_uart central attached via btattach (see AGENTS.md
-"Central setup").  Run this script WITHOUT sudo; only the raw-HCI subprocess
-uses sudo internally.
+Prerequisite: session-bound XIAO nRF54L15 HCI central attached with
+fw-attach-dongle (see AGENTS.md "Central setup"). Run this script WITHOUT sudo;
+only the optional raw-HCI subprocess uses sudo internally.
 
 Usage: python3 scripts/bap_central.py [--mono|--stereo] [--duration N] [--freq FREQ]
 
-Registers a BAP source endpoint on hci0, pairs + connects to the LE Audio
+Registers a BAP source endpoint on the selected adapter, pairs + connects to the LE Audio
 Receiver peripheral, acquires the MediaTransport(s), and streams a 1 kHz sine
 tone as LC3 (48 kHz / 10 ms / 96 kbps per mono channel).
 
@@ -52,10 +52,11 @@ class CentralCleanup:
     """Idempotent ordered cleanup, safe from finally.
 
     Stages are registered in a FIXED ORDER (the successful teardown
-    order); a stage is registered only when its resource was actually
-    acquired.  run() walks the fixed order, executes each registered
-    stage exactly once (pop), and is itself idempotent — double-run is a
-    no-op.  The order preserves the pre-split successful teardown tail:
+    order); a stage is registered when its resource is acquired or an
+    in-flight connection may need cleanup. run() walks the fixed order,
+    executes each registered stage exactly once (pop), and is itself
+    idempotent (double-run is a no-op). The order preserves the pre-split
+    successful teardown tail:
     transports released (fds closed) -> writer bounded join/force ->
     endpoint unregister -> agent unregister -> Device1 Disconnect ->
     raw-HCI helper terminate.
@@ -233,8 +234,8 @@ def main():
             bus, _dbus, _GLib, adapter, om, hci_path, args.peer_addr
         )
 
-        # ── 5. Raw-HCI connect (kernel accept-list scan path is broken
-        # on this hci_usb controller) then Pair over the existing ACL.
+        # ── 5. Resolve the selected BlueZ or optional exact-peer connection.
+        # Current XIAO normal mode discovers through BlueZ, not raw HCI.
         device = _dbus.Interface(
             bus.get_object("org.bluez", dev_path), "org.bluez.Device1"
         )
@@ -261,10 +262,10 @@ def main():
         raw_connect = None
 
         if args.peer_addr is not None:
-            # --peer-addr path: persistent raw HCI direct connect + async
-            # Pair().  BlueZ scanning is broken on this controller, so the
-            # ACL is created directly via raw HCI and the socket stays open
-            # for the lifetime of the stream.
+            # Optional exact-peer path retains the historical persistent
+            # raw-HCI connect + async Pair() workaround.  It is not the
+            # current XIAO normal-discovery path.  The owned socket remains
+            # open for the lifetime of this stream.
 
             # 5a. Clear any stale BlueZ device before connecting — unless
             # --preserve-bond: the cached Device1 record (with its bond)
@@ -351,12 +352,18 @@ def main():
             # loop stays serviceable (Agent1 dispatch during pairing).
             bap_central_security.pair_device(device, dev_props, _dbus, _GLib, pair_skip)
         else:
-            # Normal discovery path: no raw-HCI preconnect.  BlueZ owns
-            # the ACL and bonding transaction.  Async Device.Pair() while
-            # disconnected so BlueZ issues MGMT Pair Device before LE
-            # Connection Complete, establishing device->bonding before SMP.
-            # Do NOT call RemoveDevice here — the Device1 object must exist
-            # (just discovered via scan) for Pair() to work.
+            # Normal discovery path: BlueZ owns the ACL and SMP bonding.
+            # Fresh unpaired devices use Connect() and the receiver's L2
+            # Security Request through the already-registered default agent;
+            # proactive Pair() opens a competing MGMT SMP context. Keep the
+            # discovered Device1 object; do not call RemoveDevice here.
+
+            if args.preserve_bond:
+                # Skipping Pair() alone never creates an ACL. Use the same
+                # bonded reconnect boundary as the explicit-address path.
+                bap_central_security.preserve_bond_connect(
+                    device, dev_props, _dbus, _GLib, already_connected
+                )
 
             # 5a. Set Pairable on the adapter so bonding proceeds.
             bap_central_security.set_pairable(adapter_props, _dbus)
@@ -386,17 +393,30 @@ def main():
             if pair_skip_norm:
                 print("[main] {}".format(detail_norm))
 
-            # 5c. Async Pair() while disconnected — BlueZ creates ACL, runs
-            # SMP, and auto-accepts Just Works without Agent1 callback.
-            bap_central_security.pair_device(
-                device, dev_props, _dbus, _GLib, pair_skip_norm
-            )
+            if not args.preserve_bond and not dev_paired_norm:
+                # Own a possible partial Connect before starting it: failure,
+                # timeout, or cancellation still reaches Device1 Disconnect
+                # after endpoint/agent cleanup via the existing owner stage.
+                cleanup.register(
+                    "disconnect",
+                    lambda: bap_central_security.disconnect_and_wait(
+                        device, dev_props, _dbus, _GLib
+                    ),
+                )
+                bap_central_security.connect_and_bond(device, dev_props, _dbus, _GLib)
+            else:
+                # Preserve-bond and already-paired default paths keep the
+                # established Pair() skip/compatibility behavior.
+                bap_central_security.pair_device(
+                    device, dev_props, _dbus, _GLib, pair_skip_norm
+                )
 
             print("[main] Waiting for GATT service resolution...")
 
         # The link exists on every path reaching here (fresh raw gate 2 /
-        # BlueZ Connect / discovery Pair).  Register the disconnect stage
-        # for the discovery path (peer-addr paths registered it earlier).
+        # BlueZ Connect / discovery pairing). Register the disconnect stage
+        # for the discovery path; fresh unpaired mode already owns its pending
+        # connection, and re-registering the same stage replaces it once.
         cleanup.register(
             "disconnect",
             lambda: bap_central_security.disconnect_and_wait(

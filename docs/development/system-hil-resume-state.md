@@ -1,5 +1,12 @@
 # System HIL resume state
 
+> **Historical 2026-09-11 restart handoff:** Image tuples, probe observations,
+> target recipes and old nRF5340DK fixture requirements below belong to dated
+> runs, not current migration instructions. Preserve all recorded evidence
+> and behavioral safeguards. Current XIAO roles, six-checkpoint identity
+> handling and still-pending matrix acceptance: `AGENTS.md`, `STATUS.md`, and
+> `docs/development/system-hil-milestones.md`.
+
 > [!WARNING]
 > Working restart handoff, not the canonical acceptance record. Read this before
 > resuming physical HIL work. Use the result document cited below for the RH3

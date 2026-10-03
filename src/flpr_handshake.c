@@ -85,10 +85,9 @@ static int send_msg(const struct flpr_msg *msg)
 
 /* ── Heartbeat work scheduling ─────────────────────────────────────
  * Test mode (FLPR_HANDSHAKE_NATIVE_TEST) records the READY-triggered
- * async start instead of submitting it, so the system workqueue never
- * runs the handler concurrently with the single-threaded ztest runner;
- * tests invoke heartbeat iterations synchronously and teardown cancels
- * the reschedule before it fires. */
+ * async start instead of submitting it by default. Encoded lifecycle cases
+ * opt into real kernel work; other tests drive iterations synchronously.
+ * Test teardown drains opt-in work and cancels pending reschedules. */
 
 #if defined(FLPR_HANDSHAKE_NATIVE_TEST)
 #include "flpr_handshake_hooks.h"
@@ -516,6 +515,9 @@ int flpr_handshake_disconnect(void)
 {
 	k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 	session_available = false;
+	/* Local ICMsg deregistration does not invoke unbound. Restart the
+	 * cancelled heartbeat when the next READY is received. */
+	hb_started = false;
 	k_sem_reset(&new_ready_sem);
 	k_spin_unlock(&flpr_lock, key);
 
@@ -523,8 +525,10 @@ int flpr_handshake_disconnect(void)
 	while (k_sem_take(&bound_sem, K_NO_WAIT) == 0) {
 	}
 
-	/* Cancel heartbeat work (no send while disconnected). */
-	(void)k_work_cancel_delayable(&hb_work);
+	/* Runtime restarts run on shell/dedicated work context, never inside the
+	 * heartbeat. Drain its last send before destroying the endpoint. */
+	struct k_work_sync hb_sync;
+	(void)k_work_cancel_delayable_sync(&hb_work, &hb_sync);
 
 	/* Deregister endpoint. */
 	int ret = ipc_service_deregister_endpoint(&flpr_ep);
@@ -549,16 +553,29 @@ int flpr_handshake_reconnect(void)
 	while (k_sem_take(&new_ready_sem, K_NO_WAIT) == 0) {
 	}
 
-	ret = ipc_service_register_endpoint(ipc_dev, &flpr_ep, &flpr_ep_cfg);
-	if (ret < 0) {
-		LOG_ERR("FLPR ipc_service_register_endpoint re-register failed: %d", ret);
-		return ret;
-	}
-
+	/* The live remote can deliver READY before register_endpoint returns.
+	 * Admit the session before installing callbacks, with explicit rollback. */
 	{
 		k_spinlock_key_t key = k_spin_lock(&flpr_lock);
 		session_available = true;
 		k_spin_unlock(&flpr_lock, key);
+	}
+	ret = ipc_service_register_endpoint(ipc_dev, &flpr_ep, &flpr_ep_cfg);
+	if (ret < 0) {
+		{
+			k_spinlock_key_t key = k_spin_lock(&flpr_lock);
+			session_available = false;
+			hb_started = false;
+			k_spin_unlock(&flpr_lock, key);
+		}
+		struct k_work_sync hb_sync;
+		(void)k_work_cancel_delayable_sync(&hb_work, &hb_sync);
+		while (k_sem_take(&bound_sem, K_NO_WAIT) == 0) {
+		}
+		while (k_sem_take(&new_ready_sem, K_NO_WAIT) == 0) {
+		}
+		LOG_ERR("FLPR ipc_service_register_endpoint re-register failed: %d", ret);
+		return ret;
 	}
 
 	LOG_INF("FLPR handshake reconnected");
@@ -668,10 +685,17 @@ void flpr_handshake_register_health_cb(flpr_health_transition_cb_t cb, void *use
 
 static uint32_t test_hb_start_requests;
 static uint32_t test_hb_reschedules;
+static bool test_automatic_hb;
 
 void flpr_handshake_test_reset(void)
 {
-	k_work_cancel_delayable(&hb_work);
+	if (test_automatic_hb) {
+		struct k_work_sync sync;
+		(void)k_work_cancel_delayable_sync(&hb_work, &sync);
+	} else {
+		k_work_cancel_delayable(&hb_work);
+	}
+	test_automatic_hb = false;
 	k_sem_reset(&bound_sem);
 	k_sem_reset(&new_ready_sem);
 
@@ -711,8 +735,22 @@ void flpr_handshake_test_set_peer_state(bool bound, bool ready, bool acked, bool
 
 void flpr_handshake_test_work_start(void)
 {
-	/* Record the READY-triggered async start; do NOT submit it. */
+	/* Default record-only mode; lifecycle tests opt into actual work. */
 	test_hb_start_requests++;
+	if (test_automatic_hb) {
+		(void)k_work_schedule(&hb_work, K_NO_WAIT);
+	}
+}
+
+void flpr_handshake_test_enable_automatic_hb(void)
+{
+	test_automatic_hb = true;
+}
+
+void flpr_handshake_test_finish_hb_iteration(void)
+{
+	struct k_work_sync sync;
+	(void)k_work_cancel_delayable_sync(&hb_work, &sync);
 }
 
 void flpr_handshake_test_work_reschedule(void)

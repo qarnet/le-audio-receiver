@@ -6,6 +6,14 @@
  */
 
 #include <bstests.h>
+#include <zephyr/kernel.h>
+
+void bt_ctlr_assert_handle(char *file, uint32_t line)
+{
+	ARG_UNUSED(file);
+	ARG_UNUSED(line);
+	k_panic();
+}
 
 int main(void)
 {

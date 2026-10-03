@@ -1,243 +1,292 @@
 #!/usr/bin/env python3
-"""
-Unit tests for the fw-flash-dongle probe-selection behavior, tested through
-public script execution with fake west/openocd/nrf-probes.  No hardware
-needed.
+"""Source-only dongle CLI tests with real session validation and synthetic sysfs."""
 
-Moved from the retired tests/unit/gate/ child (R3) unchanged in behavioral
-intent; this file is the canonical home of the five dongle flash tests.
-"""
-
+import argparse
+import hashlib
+import json
 import os
-import shutil
+import pathlib
 import subprocess
 import sys
 import tempfile
+import unittest
+from unittest.mock import patch
 
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-_SCRIPTS_BIN = os.path.join(_REPO_ROOT, "scripts", "bin")
-
-
-def _write_fake(dirpath, name, body):
-    path = os.path.join(dirpath, name)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(body)
-    os.chmod(path, 0o755)
-    return path
+REPO = pathlib.Path(__file__).resolve().parents[3]
+sys.path[:0] = [str(REPO / "scripts"), str(REPO / "tests" / "hil")]
+import hci_dongle  # noqa: E402
+import hil_fakes  # noqa: E402
+from hil import session, lifecycle  # noqa: E402
 
 
-def _make_dongle_harness(tmpdir):
-    """Temp repo layout running the real fw-flash-dongle + fw-common.sh.
-
-    Fakes on PATH: west (env check), openocd (records argv, exit 0),
-    nrf-probes (fails loudly if invoked).  Returns (env, paths).
-    """
-    repo = os.path.join(tmpdir, "repo")
-    bin_dir = os.path.join(repo, "scripts", "bin")
-    os.makedirs(bin_dir)
-    shutil.copy(
-        os.path.join(_SCRIPTS_BIN, "fw-flash-dongle"),
-        os.path.join(bin_dir, "fw-flash-dongle"),
-    )
-    shutil.copy(
-        os.path.join(_SCRIPTS_BIN, "fw-common.sh"),
-        os.path.join(bin_dir, "fw-common.sh"),
-    )
-
-    hex_dirs = [
-        os.path.join(repo, "build", "dongle", "hci_uart", "zephyr"),
-        os.path.join(repo, "build", "dongle", "hci_ipc", "zephyr"),
-    ]
-    for d in hex_dirs:
-        os.makedirs(d)
-        with open(os.path.join(d, "zephyr.hex"), "w", encoding="utf-8"):
-            pass
-
-    fakebin = os.path.join(tmpdir, "fakebin")
-    os.makedirs(fakebin)
-    _write_fake(fakebin, "west", "#!/usr/bin/env bash\nexit 0\n")
-    _write_fake(
-        fakebin,
-        "openocd",
-        "#!/usr/bin/env bash\n"
-        'printf \'%s\\0\' "$@" > "${OPENOCD_ARGV_FILE:?}"\n'
-        "exit 0\n",
-    )
-    _write_fake(
-        fakebin,
-        "nrf-probes",
-        "#!/usr/bin/env bash\n"
-        'touch "${NRF_PROBES_CALLED_FILE:?}"\n'
-        'echo "nrf-probes must not be invoked" >&2\n'
-        "exit 99\n",
-    )
-
-    zephyr_base = os.path.join(tmpdir, "zephyrbase")
-    os.makedirs(zephyr_base)
-
-    argv_file = os.path.join(tmpdir, "openocd.argv")
-    nrf_called = os.path.join(tmpdir, "nrf-probes.called")
-
-    env = dict(os.environ)
-    env["PATH"] = fakebin + os.pathsep + env["PATH"]
-    env["ZEPHYR_BASE"] = zephyr_base
-    env["OPENOCD_ARGV_FILE"] = argv_file
-    env["NRF_PROBES_CALLED_FILE"] = nrf_called
-    env.pop("FW_DONGLE_JLINK_SERIAL", None)
-
-    return env, {
-        "script": os.path.join(bin_dir, "fw-flash-dongle"),
-        "argv_file": argv_file,
-        "nrf_called": nrf_called,
-        "app_hex": os.path.join(hex_dirs[0], "zephyr.hex"),
-        "net_hex": os.path.join(hex_dirs[1], "zephyr.hex"),
-    }
-
-
-def _run_dongle(env, harness, extra_env=None):
-    e = dict(env)
-    if extra_env:
-        e.update(extra_env)
-    return subprocess.run(
-        [harness["script"]], env=e, capture_output=True, text=True, timeout=30
-    )
-
-
-def _read_openocd_argv(path):
-    if not os.path.exists(path):
-        return None
-    with open(path, "rb") as f:
-        return [a.decode("utf-8") for a in f.read().split(b"\0") if a]
-
-
-def _argv_index(args, item):
-    return args.index(item)
-
-
-def test_dongle_flash_default_autodetect():
-    """Default: J-Link auto-detection, no adapter serial, net-first/app-second."""
-    with tempfile.TemporaryDirectory() as tmp:
-        env, h = _make_dongle_harness(tmp)
-        r = _run_dongle(env, h)
-        assert r.returncode == 0, f"exit {r.returncode}: {r.stderr}"
-        assert "J-Link auto-detection" in r.stdout
-        assert not os.path.exists(h["nrf_called"]), "nrf-probes must not be invoked"
-
-        args = _read_openocd_argv(h["argv_file"])
-        assert args is not None, "openocd never invoked"
-        assert "interface/jlink.cfg" in args
-        assert "target/nordic/nrf53.cfg" in args
-        assert not any(a.startswith("adapter serial") for a in args), (
-            "default run must not pass adapter serial"
+class HardwareFixture(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = pathlib.Path(self.temp.name)
+        self.sysfs = hil_fakes.build_fake_sysfs(str(self.root))
+        fixture = json.loads((REPO / "tests/hil/fixture-xiao-source.json").read_text())
+        binding = json.loads(
+            (REPO / "tests/hil/fixture-xiao-source.local.example.json").read_text()
         )
-        # net-first / app-second program + verify, reset, shutdown
-        assert _argv_index(args, "targets nrf53.cpunet") < _argv_index(
-            args, "program %s verify" % h["net_hex"]
+        self.fixture = self.root / "fixture.json"
+        self.binding = self.root / "binding.json"
+        self.fixture.write_text(json.dumps(fixture))
+        self.binding.write_text(json.dumps(binding))
+        self.out = self.root / "out"
+        self.out.mkdir()
+        self.sessions = self.root / "sessions"
+        self.sessions.mkdir()
+        self.sdk = self.root / "sdk"
+        cfg = self.sdk / hci_dongle.BOARD_CFG
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text("# fake config\n")
+        self.repo = self.root / "repo"
+        image_dir = self.repo / "build/dongle/zephyr"
+        image_dir.mkdir(parents=True)
+        (image_dir / ".config").write_text(
+            "CONFIG_SOC_NRF54L15_CPUAPP=y\nCONFIG_BT_HCI_RAW=y\n"
         )
-        assert _argv_index(args, "program %s verify" % h["net_hex"]) < _argv_index(
-            args, "targets nrf53.cpuapp"
+        self.image = image_dir / "zephyr.hex"
+        self.image.write_text(":0400000001020304F2\n:00000001FF\n")
+        self.calls = []
+        self.probe_rows = hil_fakes.default_probe_table(
+            rows=[
+                (s, "DAPLink", "nRF54L15", "0x6ba02477", "0x00054b15", "BAAA", "")
+                for s in ("RECV123", "SRC456")
+            ]
         )
-        assert _argv_index(args, "targets nrf53.cpuapp") < _argv_index(
-            args, "program %s verify" % h["app_hex"]
+        # Both probe fingerprints use same valid variant as table.
+        self.props = {}
+        for role, tty, usb, serial in (
+            ("receiver", "ttyACM0", "1-2", "RECV123"),
+            ("source", "ttyACM1", "1-3", "SRC456"),
+        ):
+            self.props[tty] = {
+                "ID_BUS": "usb",
+                "ID_VENDOR_ID": "2886",
+                "ID_MODEL_ID": "0066",
+                "ID_SERIAL_SHORT": serial,
+                "ID_USB_INTERFACE_NUM": "02",
+                "ID_USB_DRIVER": "cdc_acm",
+                "ID_PATH": "pci-%s" % usb,
+                "DEVPATH": hil_fakes.tty_devpath(usb, tty),
+            }
+        self.manifest = session.create_session(
+            str(self.fixture),
+            str(self.binding),
+            "initial",
+            "RECV123",
+            "SRC456",
+            run_cmd=self.discovery,
+            session_root=str(self.sessions),
+            sysfs_root=self.sysfs,
         )
-        assert "reset run" in args
-        assert "shutdown" in args
-    print("  PASS: dongle default J-Link auto-detection argv")
-
-
-def test_dongle_flash_explicit_serial():
-    """Explicit override: exactly one adapter serial command, order unchanged."""
-    with tempfile.TemporaryDirectory() as tmp:
-        env, h = _make_dongle_harness(tmp)
-        r = _run_dongle(env, h, {"FW_DONGLE_JLINK_SERIAL": "ABC-123.45"})
-        assert r.returncode == 0, f"exit {r.returncode}: {r.stderr}"
-        assert "J-Link override (serial ABC-123.45)" in r.stdout
-        assert not os.path.exists(h["nrf_called"]), "nrf-probes must not be invoked"
-
-        args = _read_openocd_argv(h["argv_file"])
-        assert args is not None, "openocd never invoked"
-        serial_cmds = [a for a in args if a.startswith("adapter serial")]
-        assert serial_cmds == ["adapter serial ABC-123.45"], serial_cmds
-        # override lands after J-Link config, before target init
-        assert _argv_index(args, "interface/jlink.cfg") < _argv_index(
-            args, "adapter serial ABC-123.45"
+        self.args = argparse.Namespace(
+            session_manifest=self.manifest.path,
+            fixture=str(self.fixture),
+            binding=str(self.binding),
+            output_root=str(self.out),
+            run_id="run1",
+            image=None,
+            sha256=None,
         )
-        assert _argv_index(args, "adapter serial ABC-123.45") < _argv_index(
-            args, "target/nordic/nrf53.cfg"
+        self.env = patch.dict(
+            os.environ,
+            {"ZEPHYR_BASE": str(self.sdk), "FW_DONGLE_JLINK_SERIAL": "FOREIGN"},
         )
-        # programming order unchanged
-        assert _argv_index(args, "targets nrf53.cpunet") < _argv_index(
-            args, "program %s verify" % h["net_hex"]
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.lsof_rc = 1
+        self.openocd_rc = 0
+        self.openocd_text = "Info : verified\n"
+        self.timeout = False
+
+    def discovery(self, argv, timeout):
+        if argv[:2] == ["nix-nrf", "probes"]:
+            return subprocess.CompletedProcess(argv, 0, self.probe_rows, "")
+        if argv[0] == "openocd":
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                hil_fakes.cmsis_dap_fingerprint_output(variant="0x42414141"),
+                "",
+            )
+        if argv[0] == "udevadm":
+            props = self.props.get(pathlib.Path(argv[-1]).name, {})
+            return subprocess.CompletedProcess(
+                argv, 0, "".join("%s=%s\n" % pair for pair in props.items()), ""
+            )
+        raise AssertionError(argv)
+
+    def command(self, argv, *, capture_output, text, timeout, env=None):
+        self.calls.append((argv, env))
+        if argv[0] in ("nix-nrf", "udevadm") or (
+            argv[0] == "openocd" and "fwc_scan" in argv
+        ):
+            return self.discovery(argv, timeout)
+        if argv[0] == "sudo":
+            return subprocess.CompletedProcess(
+                argv, self.lsof_rc, "held" if self.lsof_rc == 0 else "", ""
+            )
+        if self.timeout:
+            raise subprocess.TimeoutExpired(argv, timeout, output=b"partial")
+        return subprocess.CompletedProcess(argv, self.openocd_rc, self.openocd_text, "")
+
+    def run_action(self, action="flash"):
+        with patch.object(hci_dongle.subprocess, "run", side_effect=self.command):
+            return hci_dongle.execute(
+                action, self.args, sysfs_root=self.sysfs, repo_root=str(self.repo)
+            )
+
+    def result(self):
+        return json.loads((self.out / self.args.run_id / "result.json").read_text())
+
+    def assert_no_target(self):
+        self.assertFalse(
+            any(c[0][0] == "openocd" and "fwc_scan" not in c[0] for c in self.calls)
         )
-        assert _argv_index(args, "program %s verify" % h["net_hex"]) < _argv_index(
-            args, "targets nrf53.cpuapp"
+
+    def test_flash_source_only_snapshot(self):
+        self.run_action()
+        result = self.result()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["source_identity"]["probe_serial"], "SRC456")
+        self.assertEqual(
+            result["image"]["sha256"],
+            hashlib.sha256(self.image.read_bytes()).hexdigest(),
         )
-        assert _argv_index(args, "targets nrf53.cpuapp") < _argv_index(
-            args, "program %s verify" % h["app_hex"]
+        self.assertEqual(result["image"]["segments"], [[0, 4]])
+        flash, env = self.calls[-1]
+        self.assertEqual(env["OPENOCD_INTERFACE"], "cmsis-dap")
+        self.assertIn("adapter serial SRC456", flash)
+        self.assertNotIn("adapter serial RECV123", flash)
+        self.assertIn("nrf54l-load {%s}" % result["image"]["snapshot"], flash)
+        self.assertIn("verify_image {%s}" % result["image"]["snapshot"], flash)
+        self.assertEqual(
+            (self.out / "run1/image.hex").read_bytes(), self.image.read_bytes()
         )
-    print("  PASS: dongle explicit J-Link serial override argv")
+        self.assertFalse(
+            (
+                self.out
+                / ".locks"
+                / hashlib.sha256(b"local-xiao-nrf54l15-pair").hexdigest()
+            ).exists()
+        )
 
+    def test_missing_unsafe_and_mismatched_image(self):
+        for i in range(3):
+            if i == 0:
+                self.image.unlink()
+            elif i == 1:
+                self.image.write_text(":0200000400FFFB\n:01000000AA55\n:00000001FF\n")
+            else:
+                self.image.write_text(":0400000001020304F2\n:00000001FF\n")
+                self.args.sha256 = "0" * 64
+            self.args.run_id = "bad%d" % i
+            with self.assertRaises(Exception):
+                self.run_action()
+            self.assertEqual(self.result()["status"], "error")
+            self.assert_no_target()
 
-def test_dongle_flash_invalid_serial():
-    """Invalid override: nonzero exit, clear error, openocd/nrf-probes untouched."""
-    with tempfile.TemporaryDirectory() as tmp:
-        env, h = _make_dongle_harness(tmp)
-        r = _run_dongle(env, h, {"FW_DONGLE_JLINK_SERIAL": "bad!serial"})
-        assert r.returncode != 0, "invalid serial must fail"
-        assert "Invalid FW_DONGLE_JLINK_SERIAL" in r.stderr
-        assert "^[[:alnum:]_.:-]+$" in r.stderr
-        assert not os.path.exists(h["argv_file"]), "openocd must not be invoked"
-        assert not os.path.exists(h["nrf_called"]), "nrf-probes must not be invoked"
-    print("  PASS: dongle invalid J-Link serial rejected before openocd")
+    def test_mutated_manifest_and_lock_conflict(self):
+        with lifecycle.CleanupStack() as cleanup:
+            lifecycle.FixtureLock.acquire(
+                str(self.out), self.manifest.fixture_id, cleanup
+            )
+            with self.assertRaises(lifecycle.FixtureBusy):
+                self.run_action()
+        os.chmod(self.manifest.path, 0o600)
+        with open(self.manifest.path, "a") as fh:
+            fh.write("\n")
+        with self.assertRaises(session.HilSessionError):
+            self.run_action()
+        self.assert_no_target()
 
+    def test_wrong_identity_and_ambiguous_tty(self):
+        self.probe_rows = self.probe_rows.replace("nRF54L15", "nRF5340")
+        with self.assertRaises(Exception):
+            self.run_action()
+        self.assertIn("nrf-probes", self.result()["raw_identity"])
+        self.assert_no_target()
+        self.probe_rows = self.probe_rows.replace("nRF5340", "nRF54L15")
+        self.args.run_id = "ambiguous"
+        pathlib.Path(self.sysfs, "class/tty/ttyACM9").mkdir()
+        self.props["ttyACM9"] = dict(self.props["ttyACM1"])
+        with self.assertRaises(Exception):
+            self.run_action()
+        self.assert_no_target()
 
-def test_dongle_flash_missing_artifacts():
-    """Missing build artifacts still fail with the same error (no tools run)."""
-    with tempfile.TemporaryDirectory() as tmp:
-        env, h = _make_dongle_harness(tmp)
-        os.remove(h["app_hex"])
-        r = _run_dongle(env, h)
-        assert r.returncode != 0, "missing artifact must fail"
-        assert "No build artifacts found" in r.stderr
-        assert "fw-build-dongle" in r.stderr
-        assert not os.path.exists(h["argv_file"]), "openocd must not be invoked"
-        assert not os.path.exists(h["nrf_called"]), "nrf-probes must not be invoked"
-    print("  PASS: dongle missing-artifact error unchanged")
+    def test_held_tty_lsof_error_and_failed_flash(self):
+        for i, rc in enumerate((0, 2)):
+            self.lsof_rc = rc
+            self.args.run_id = "held%d" % i
+            with self.assertRaises(hci_dongle.DongleError):
+                self.run_action()
+            self.assert_no_target()
+            self.assertEqual(self.result()["status"], "error")
+        self.lsof_rc = 1
+        self.args.run_id = "flashfail"
+        self.openocd_rc = 1
+        with self.assertRaises(hci_dongle.DongleError):
+            self.run_action()
+        self.assertEqual(self.result()["status"], "error")
+        self.assertIn("recovery_error", self.result())
 
+    def test_custom_image_needs_hash_and_timeout(self):
+        self.args.image = str(self.image)
+        with self.assertRaises(hci_dongle.DongleError):
+            self.run_action()
+        self.assert_no_target()
+        self.args.sha256 = hashlib.sha256(self.image.read_bytes()).hexdigest()
+        self.timeout = True
+        with self.assertRaises(hci_dongle.DongleError):
+            self.run_action()
+        self.assertEqual(self.result()["status"], "error")
+        self.assertTrue(
+            any(c.get("error") == "timeout" for c in self.result()["commands"])
+        )
 
-def test_dongle_flash_missing_dev_shell():
-    """Missing dev shell (no ZEPHYR_BASE) still fails with the same error."""
-    with tempfile.TemporaryDirectory() as tmp:
-        env, h = _make_dongle_harness(tmp)
+    def test_wrapper_requires_dev_shell(self):
+        env = dict(os.environ)
         env.pop("ZEPHYR_BASE", None)
-        r = _run_dongle(env, h)
-        assert r.returncode != 0, "missing dev shell must fail"
-        assert "firmware tool error" in r.stderr
-        assert not os.path.exists(h["argv_file"]), "openocd must not be invoked"
-        assert not os.path.exists(h["nrf_called"]), "nrf-probes must not be invoked"
-    print("  PASS: dongle missing-dev-shell error unchanged")
+        proc = subprocess.run(
+            [str(REPO / "scripts/bin/fw-flash-dongle")],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("firmware tool error", proc.stderr)
+        self.assert_no_target()
 
+    def test_cancelled_flash_revalidates_and_resets(self):
+        def interrupt_flash(argv, *, capture_output, text, timeout, env=None):
+            if argv[0] == "openocd" and any("nrf54l-load" in part for part in argv):
+                self.calls.append((argv, env))
+                raise hci_dongle.Cancelled("controlled interruption")
+            return self.command(
+                argv, capture_output=capture_output, text=text, timeout=timeout, env=env
+            )
 
-def run_tests():
-    tests = [
-        test_dongle_flash_default_autodetect,
-        test_dongle_flash_explicit_serial,
-        test_dongle_flash_invalid_serial,
-        test_dongle_flash_missing_artifacts,
-        test_dongle_flash_missing_dev_shell,
-    ]
-
-    failures = 0
-    for test in tests:
-        try:
-            test()
-        except Exception as e:
-            print(f"  FAIL: {test.__name__}: {e}")
-            failures += 1
-
-    print(f"\n{len(tests) - failures}/{len(tests)} tests passed")
-    return failures
+        with patch.object(hci_dongle.subprocess, "run", side_effect=interrupt_flash):
+            with self.assertRaises(hci_dongle.Cancelled):
+                hci_dongle.execute(
+                    "flash", self.args, sysfs_root=self.sysfs, repo_root=str(self.repo)
+                )
+        result = self.result()
+        self.assertEqual(result["status"], "cancelled")
+        self.assertEqual(result["error"], "controlled interruption")
+        self.assertNotIn("recovery_error", result)
+        self.assertEqual(
+            sum(c["argv"][:2] == ["nix-nrf", "probes"] for c in result["commands"]), 2
+        )
+        self.assertEqual(
+            result["commands"][-1]["argv"][-4:], ["-c", "reset run", "-c", "shutdown"]
+        )
+        self.assertEqual(result["commands"][-1]["returncode"], 0)
 
 
 if __name__ == "__main__":
-    sys.exit(run_tests())
+    unittest.main(verbosity=2)

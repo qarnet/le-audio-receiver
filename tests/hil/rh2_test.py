@@ -14,6 +14,7 @@ Run with:
     nix develop --command pytest -q tests/hil/rh2_test.py
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -23,7 +24,7 @@ import tempfile
 import threading
 import time
 import unittest
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(_REPO, "scripts"))
@@ -39,6 +40,7 @@ from hil import (
     receiver,
     rows,
     runner,
+    session,
     serial_io,
     source_client,
 )  # noqa: E402
@@ -59,6 +61,56 @@ RUN_ID = "rh2-0001"
 HANG_RECOVERY_WARNING = (
     "<wrn> audio_offload: offload: heartbeat supervisor → RECOVERING"
 )
+
+
+class SessionRunner(Runner):
+    """Test-only convenience for direct fake-lab runs on valid XIAO fixtures.
+
+    Keep production Runner.run unchanged and require an actual persisted session
+    for every direct positive path; explicit missing-session tests call
+    ``runner.Runner`` instead.
+    """
+
+    def run(
+        self, fixture_path, binding_path, output_root, run_id, junit_path, **kwargs
+    ):
+        if kwargs.get("session_manifest_path") is None:
+            try:
+                fixture = model.load_logical_fixture(fixture_path)
+                model.load_physical_binding(binding_path, fixture)
+            except (OSError, model.HilSchemaError):
+                pass
+            else:
+                if fixture.roles["source"].board == model.NRF54L15_CPUAPP_BOARD:
+                    root = os.path.dirname(output_root)
+                    original = self.deps.run_cmd
+                    fake = hil_fakes.ScriptedRunner()
+                    manifest, sysfs = hil_fakes.create_fake_session(
+                        root,
+                        fixture_path,
+                        binding_path,
+                        fake,
+                        session_id="session-" + run_id,
+                    )
+
+                    def command(argv, timeout, env=None):
+                        if (
+                            argv[:2] == ["nix-nrf", "probes"]
+                            or argv[0] == "udevadm"
+                            or (
+                                argv[0] == "openocd"
+                                and argv[1:3] == ["-f", "interface/cmsis-dap.cfg"]
+                            )
+                        ):
+                            return fake(argv, timeout, env=env)
+                        return original(argv, timeout, env=env)
+
+                    self.deps.run_cmd = command
+                    self.deps.sysfs_root = sysfs
+                    kwargs["session_manifest_path"] = manifest.path
+        return super().run(
+            fixture_path, binding_path, output_root, run_id, junit_path, **kwargs
+        )
 
 
 # ── tiny fakes ─────────────────────────────────────────────────────
@@ -243,28 +295,31 @@ def fake_resolution():
         usb_parent="/sys/devices/pci0000:00/usb1/1-3",
     )
     receiver_probe = discovery.ProbeIdentity(
-        "receiver",
-        "nrf-probes",
-        "nrf54l",
-        hil_fakes.RECEIVER_SERIAL,
-        "nRF54L15",
-        "0x6ba02477",
-        "0x00054b15",
-        "BAAA",
+        role="receiver",
+        backend="nrf-probes",
+        family="nrf54l",
+        serial=hil_fakes.RECEIVER_SERIAL,
+        product="DAPLink",
+        target="nRF54L15",
+        dpidr="0x6ba02477",
+        ap_idrs=MappingProxyType(
+            {
+                "ap0": "0x84770001",
+                "ap1": "0x84770001",
+                "ap2": "0x32880000",
+                "ap3": "0x00000000",
+            }
+        ),
+        part="0x00054b15",
+        variant="BAAA",
+        variant_raw="0x42414141",
     )
-    source_probe = discovery.ProbeIdentity(
-        "source",
-        "jlink",
-        "nrf53",
-        hil_fakes.SOURCE_SERIAL,
-        "nRF5340",
-        "0x6ba02477",
-        "0x00005340",
-        "AAAA",
+    source_probe = (
+        fake_xiao_resolution("/dev/ttyACM0", "/dev/ttyACM1").roles["source"].probe
     )
     raw = {
         "nrf-probes": {
-            "argv": ["nrf-probes"],
+            "argv": ["nix-nrf", "probes"],
             "stdout": hil_fakes.default_probe_table(),
             "stderr": "",
             "status": 0,
@@ -275,9 +330,9 @@ def fake_resolution():
         "source-udev": {
             "ttyACM1": dict(source_serial.properties),
         },
-        "source-jlink-fingerprint": {
+        "source-cmsis-dap-fingerprint": {
             "argv": ["openocd"],
-            "output": hil_fakes.fingerprint_output(),
+            "output": hil_fakes.cmsis_dap_fingerprint_output(),
             "status": 0,
         },
     }
@@ -294,6 +349,75 @@ def fake_resolution():
     )
 
 
+def fake_xiao_resolution(receiver_path="/dev/ttyACM7", source_path="/dev/ttyACM8"):
+    """Canned revalidated two-XIAO identity with caller-selected tty names."""
+
+    def role_identity(role, serial, path, usb):
+        properties = {
+            "ID_BUS": "usb",
+            "ID_VENDOR_ID": "2886",
+            "ID_MODEL_ID": "0066",
+            "ID_SERIAL_SHORT": serial,
+            "ID_USB_INTERFACE_NUM": "02",
+            "ID_USB_DRIVER": "cdc_acm",
+            "ID_PATH": "pci-0000:00-usb-0:%s:1.2" % usb,
+            "DEVPATH": hil_fakes.tty_devpath(usb, os.path.basename(path)),
+        }
+        probe = discovery.ProbeIdentity(
+            role=role,
+            backend="nrf-probes",
+            family="nrf54l",
+            serial=serial,
+            product="CMSIS-DAP",
+            target="nRF54L15",
+            dpidr="0x6ba02477",
+            ap_idrs=MappingProxyType(
+                {
+                    "ap0": "0x84770001",
+                    "ap1": "0x84770001",
+                    "ap2": "0x32880000",
+                    "ap3": "0x00000000",
+                }
+            ),
+            part="0x00054b15",
+            variant="AAC0",
+            variant_raw="0x41414330",
+        )
+        serial_identity = discovery.SerialIdentity(
+            role,
+            path,
+            115200,
+            MappingProxyType(properties),
+            usb_parent="/sys/devices/pci0000:00/usb1/%s" % usb,
+            dtr=True,
+            rts=False,
+        )
+        return discovery.RoleIdentity(role, probe, serial_identity), properties
+
+    receiver_role, receiver_props = role_identity(
+        "receiver", "XIAO-RECEIVER", receiver_path, "1-2"
+    )
+    source_role, source_props = role_identity(
+        "source", "XIAO-SOURCE", source_path, "1-3"
+    )
+    raw = {
+        "nrf-probes": {
+            "argv": ["nix-nrf", "probes", "XIAO-RECEIVER", "XIAO-SOURCE"],
+            "stdout": "two XIAO probes\n",
+            "stderr": "",
+            "status": 0,
+        },
+        "receiver-udev": {os.path.basename(receiver_path): receiver_props},
+        "source-udev": {os.path.basename(source_path): source_props},
+        "receiver-cmsis-dap-fingerprint": {"output": "receiver fingerprint\n"},
+        "source-cmsis-dap-fingerprint": {"output": "source fingerprint\n"},
+    }
+    return discovery.FixtureResolution(
+        roles=MappingProxyType({"receiver": receiver_role, "source": source_role}),
+        raw=MappingProxyType(raw),
+    )
+
+
 def make_runner_deps(
     receiver_wire,
     source_wire,
@@ -304,6 +428,9 @@ def make_runner_deps(
     clock=None,
     sleep=None,
     repo_root=None,
+    discover=None,
+    session_loader=None,
+    session_revalidator=None,
 ):
     """RunnerDeps with scripted discovery, serial factory, and runner."""
     scripted = run_cmd if run_cmd is not None else hil_fakes.ScriptedRunner(ledger)
@@ -348,7 +475,11 @@ def make_runner_deps(
 
     return RunnerDeps(
         run_cmd=scripted,
-        discover=lambda binding, sysfs_root=None, run_cmd=None: fake_resolution(),
+        discover=(
+            discover
+            if discover is not None
+            else lambda binding, sysfs_root=None, run_cmd=None: fake_resolution()
+        ),
         serial_factory=factory,
         clock=clock if clock is not None else time.monotonic,
         sleep=sleep if sleep is not None else time.sleep,
@@ -363,6 +494,8 @@ def make_runner_deps(
         repo_root=repo_root,
         boot_timeout=2.0,
         summary_timeout=2.0,
+        session_loader=session_loader,
+        session_revalidator=session_revalidator,
     )
 
 
@@ -696,10 +829,8 @@ def _run_harness(
         run_cmd = hil_fakes.ScriptedRunner(ledger)
         run_cmd.script_exit(["lsof", "--", "/dev/ttyACM1"], 1)
         run_cmd.script(
-            ["fw-flash-hil-source"],
-            hil_fakes.FakeProc(
-                stdout="program %s verify\nreset run\n" % "net", stderr=""
-            ),
+            ["fw-flash-hil-source-54l15"],
+            hil_fakes.FakeProc(stdout="program source verify\nreset run\n", stderr=""),
         )
         run_cmd.script(["fw-flash-54l15"], hil_fakes.FakeProc(stdout="ok\n", stderr=""))
     if row is None:
@@ -712,6 +843,31 @@ def _run_harness(
         source_wire = hil_fakes.Wire(
             "source", chunks=src_chunks, assert_writes=src_writes
         )
+    identity_command = (
+        run_cmd
+        if isinstance(run_cmd, hil_fakes.ScriptedRunner)
+        else hil_fakes.ScriptedRunner(ledger)
+    )
+    manifest, sysfs = hil_fakes.create_fake_session(
+        td, fixture_path, binding_path, identity_command
+    )
+    if ledger is not None:
+        ledger.clear()
+    if identity_command is not run_cmd:
+        original_command = run_cmd
+
+        def run_cmd(argv, timeout, env=None):
+            if (
+                argv[:2] == ["nix-nrf", "probes"]
+                or argv[0] == "udevadm"
+                or (
+                    argv[0] == "openocd"
+                    and argv[1:3] == ["-f", "interface/cmsis-dap.cfg"]
+                )
+            ):
+                return identity_command(argv, timeout, env=env)
+            return original_command(argv, timeout, env=env)
+
     deps = make_runner_deps(
         receiver_wire,
         source_wire,
@@ -722,7 +878,9 @@ def _run_harness(
         clock=clock,
         sleep=sleep,
         repo_root=repo_fake,
+        session_revalidator=session.revalidate_session,
     )
+    deps.sysfs_root = sysfs
     engine = Runner(deps)
     if engine_setup is not None:
         engine_setup(engine)
@@ -738,8 +896,190 @@ def _run_harness(
         hci_remove_iso_path_trace=hci_remove_iso_path_trace,
         sdc_hci_remove_iso_path_trace=sdc_hci_remove_iso_path_trace,
         allow_offload_disabled=allow_offload_disabled,
+        session_manifest_path=manifest.path,
     )
     return result, out_root, run_id, junit, fixture_path, binding_path, engine
+
+
+SESSION_CHECKPOINTS = (
+    "setup identity",
+    "receiver serial open",
+    "source serial open",
+    "source flash",
+    "receiver flash",
+    "row action",
+)
+
+
+def _make_xiao_runner_images(repo_root, include_source=True):
+    rels = [
+        "build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex",
+        "build/nrf54l15/flpr/zephyr/zephyr.hex",
+    ]
+    if include_source:
+        rels.insert(0, "build/hil-source-nrf54l15/zephyr/zephyr.hex")
+    for rel in rels:
+        path = os.path.join(repo_root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(b"fake image bytes\n")
+
+
+def _run_xiao_session_harness(
+    td,
+    *,
+    include_source_image=True,
+    resolutions=None,
+    revalidation_failures=None,
+    artifacts=None,
+    receiver_wire=None,
+    source_wire=None,
+    ledger=None,
+):
+    """Run one XIAO row against injected session and hardware boundaries."""
+    out_root = os.path.join(td, "out")
+    os.makedirs(out_root)
+    repo_fake = os.path.join(td, "repo")
+    os.makedirs(repo_fake)
+    _make_xiao_runner_images(repo_fake, include_source=include_source_image)
+    fixture_path = os.path.join(_REPO, "tests", "hil", "fixture-xiao-source.json")
+    binding_path = os.path.join(
+        _REPO, "tests", "hil", "fixture-xiao-source.local.example.json"
+    )
+    run_id = RUN_ID
+    junit = os.path.join(out_root, "%s.junit.xml" % run_id)
+    resolutions = dict(resolutions or {})
+    revalidation_failures = dict(revalidation_failures or {})
+    command = hil_fakes.ScriptedRunner(ledger)
+    manifest, sysfs = hil_fakes.create_fake_session(
+        td, fixture_path, binding_path, command
+    )
+    manifest_path = manifest.path
+    if ledger is not None:
+        ledger.clear()
+    for before in SESSION_CHECKPOINTS:
+        command.script(
+            ["session-revalidate", before],
+            hil_fakes.FakeProc(
+                stdout="%s stdout\n" % before,
+                stderr="%s stderr\n" % before,
+            ),
+        )
+    source_open_resolution = resolutions.get(
+        "source serial open",
+        discovery.resolve_fixture(
+            model.load_physical_binding(
+                binding_path, model.load_logical_fixture(fixture_path)
+            ),
+            run_cmd=lambda argv, timeout: command(argv, timeout),
+            sysfs_root=sysfs,
+            explicit_probe_serials={
+                "receiver": hil_fakes.RECEIVER_SERIAL,
+                "source": hil_fakes.SOURCE_SERIAL,
+            },
+        ),
+    )
+    command.script_exit(
+        [
+            "lsof",
+            "--",
+            source_open_resolution.roles["source"].serial.path,
+        ],
+        1,
+    )
+    command.script(
+        ["fw-flash-hil-source-54l15"],
+        hil_fakes.FakeProc(stdout="source programmed\n", stderr=""),
+    )
+    command.script(
+        ["fw-flash-54l15"], hil_fakes.FakeProc(stdout="receiver programmed\n")
+    )
+    revalidation_calls = []
+    loader_calls = []
+
+    def loader(path, fixture, binding):
+        loader_calls.append((path, fixture, binding))
+        return session.load_session(path, fixture, binding)
+
+    def revalidator(loaded, fixture, binding_path_arg, binding, *, run_cmd, sysfs_root):
+        before = SESSION_CHECKPOINTS[len(revalidation_calls)]
+        revalidation_calls.append(before)
+        failure = revalidation_failures.get(before)
+        if failure is not None:
+            raise failure
+        run_cmd(["session-revalidate", before], 15)
+        fresh = session.revalidate_session(
+            loaded,
+            fixture,
+            binding_path_arg,
+            binding,
+            run_cmd=run_cmd,
+            sysfs_root=sysfs_root,
+        )
+        return resolutions.get(before, fresh)
+
+    if receiver_wire is None:
+        receiver_wire = _receiver_passing_wire(run_id)
+    if source_wire is None:
+        source_transcript = hil_fakes.build_passing_source_wire(run_id)
+        source_chunks, source_writes = source_transcript.build()
+        source_wire = hil_fakes.Wire(
+            "source", chunks=source_chunks, assert_writes=source_writes
+        )
+    if ledger is None:
+        ledger = command.ledger
+    original_receiver_write = receiver_wire.on_write
+
+    def record_receiver_write(data):
+        ledger.append(
+            {
+                "event": "serial-write",
+                "role": "receiver",
+                "data": data.decode("utf-8"),
+            }
+        )
+        return original_receiver_write(data)
+
+    receiver_wire.on_write = record_receiver_write
+
+    def unexpected_discovery(*_args, **_kwargs):
+        raise AssertionError("session-bound runner must not use one-shot discovery")
+
+    deps = make_runner_deps(
+        receiver_wire,
+        source_wire,
+        ledger=ledger,
+        run_cmd=command,
+        repo_root=repo_fake,
+        discover=unexpected_discovery,
+        session_loader=loader,
+        session_revalidator=revalidator,
+    )
+    deps.sysfs_root = sysfs
+    engine = Runner(deps)
+    result = engine.run(
+        fixture_path,
+        binding_path,
+        out_root,
+        run_id,
+        junit,
+        argv=["hil-runner.py", "run", "--session-manifest", manifest_path],
+        status=0,
+        artifacts=artifacts,
+        session_manifest_path=manifest_path,
+    )
+    return {
+        "result": result,
+        "run_dir": os.path.join(out_root, run_id),
+        "command": command,
+        "engine": engine,
+        "ledger": ledger,
+        "loader_calls": loader_calls,
+        "manifest": manifest,
+        "receiver_wire": receiver_wire,
+        "revalidation_calls": revalidation_calls,
+        "source_wire": source_wire,
+    }
 
 
 # ── serial console ─────────────────────────────────────────────────
@@ -5039,47 +5379,22 @@ def _script_discovery(
     """Script every discovery boundary; udevadm node paths are the real
     (absolute) paths under the fake sysfs root."""
     sysfs = os.path.abspath(fake_sysfs)
-    usb_root = os.path.join(sysfs, "bus", "usb", "devices")
     tty_root = os.path.join(sysfs, "class", "tty")
     runner.script(
-        ["nrf-probes"],
+        ["nix-nrf", "probes", hil_fakes.RECEIVER_SERIAL, hil_fakes.SOURCE_SERIAL],
         hil_fakes.FakeProc(stdout=hil_fakes.default_probe_table(receiver_rows)),
     )
-    runner.script(
-        ["nrf-probes", "--find", "nrf54l"],
-        hil_fakes.FakeProc(stdout=(find_token or hil_fakes.RECEIVER_SERIAL) + "\n"),
-    )
-    usb_props = usb_props or {
-        "1-2": {
-            "ID_VENDOR_ID": "1234",
-            "ID_MODEL_ID": "5678",
-            "ID_SERIAL_SHORT": "SOME-OTHER",
-            "DEVPATH": "/devices/pci0000:00/usb1/1-2",
-        },
-        "1-3": {
-            "ID_VENDOR_ID": "1366",
-            "ID_MODEL_ID": "1015",
-            "ID_SERIAL_SHORT": hil_fakes.SOURCE_SERIAL,
-            "DEVPATH": "/devices/pci0000:00/usb1/1-3",
-        },
-    }
-    for usb_id, props in sorted(usb_props.items()):
-        runner.script(
-            [
-                "udevadm",
-                "info",
-                "--query=property",
-                "--path",
-                os.path.join(usb_root, usb_id),
-            ],
-            _udev_proc(props),
-        )
+    del find_token, usb_props
     tty_props = tty_props or {
         "ttyACM0": {
+            "ID_VENDOR_ID": "2886",
+            "ID_MODEL_ID": "0066",
             "ID_SERIAL_SHORT": hil_fakes.RECEIVER_SERIAL,
             "DEVPATH": hil_fakes.tty_devpath("1-2", "ttyACM0"),
         },
         "ttyACM1": {
+            "ID_VENDOR_ID": "2886",
+            "ID_MODEL_ID": "0066",
             "ID_SERIAL_SHORT": hil_fakes.SOURCE_SERIAL,
             "DEVPATH": hil_fakes.tty_devpath("1-3", "ttyACM1"),
         },
@@ -5095,17 +5410,39 @@ def _script_discovery(
             ],
             _udev_proc(props),
         )
-    runner.script(
-        [hil_fakes.SOURCE_SERIAL, "jlink", "1-3"],
-        hil_fakes.FakeProc(stdout="placeholder"),  # replaced below
-    )
-    openocd = openocd_proc or hil_fakes.FakeProc(stdout=hil_fakes.fingerprint_output())
-    runner.rules[-1] = (
-        ["openocd", "-f", "interface/jlink.cfg"],
-        openocd,
-        False,  # prefix match
-    )
+    for role, serial in (
+        ("receiver", hil_fakes.RECEIVER_SERIAL),
+        ("source", hil_fakes.SOURCE_SERIAL),
+    ):
+        proc = (
+            openocd_proc
+            if role == "source" and openocd_proc is not None
+            else hil_fakes.FakeProc(stdout=hil_fakes.cmsis_dap_fingerprint_output())
+        )
+        runner.script(
+            [
+                "openocd",
+                "-f",
+                "interface/cmsis-dap.cfg",
+                "-c",
+                "adapter serial %s" % serial,
+            ],
+            proc,
+            exact=False,
+        )
     return runner
+
+
+def _resolve_test_pair(binding, command, sysfs):
+    return discovery.resolve_fixture(
+        binding,
+        run_cmd=command,
+        sysfs_root=sysfs,
+        explicit_probe_serials={
+            "receiver": hil_fakes.RECEIVER_SERIAL,
+            "source": hil_fakes.SOURCE_SERIAL,
+        },
+    )
 
 
 def _load_binding(tmpdir):
@@ -5115,6 +5452,119 @@ def _load_binding(tmpdir):
     fixture = model.load_logical_fixture(fixture_path)
     binding = model.load_physical_binding(binding_path, fixture)
     return binding
+
+
+XIAO_RECEIVER_SERIAL = "XIAO-RECEIVER"
+XIAO_SOURCE_SERIAL = "XIAO-SOURCE"
+
+
+def _load_xiao_binding(tmpdir):
+    cfg = os.path.join(tmpdir, "xiao-cfg")
+    os.makedirs(cfg)
+    fixture = {
+        "schema_version": 1,
+        "fixture_id": "local-xiao-nrf54l15-pair",
+        "capture_capability": "none",
+        "roles": {
+            "receiver": {
+                "kind": "zephyr_dut",
+                "board": "nrf54l15dk/nrf54l15/cpuapp",
+                "images": ["cpuapp", "flpr"],
+            },
+            "source": {
+                "kind": "zephyr_dut",
+                "board": "nrf54l15dk/nrf54l15/cpuapp",
+                "images": ["cpuapp"],
+            },
+        },
+    }
+    binding = {
+        "schema_version": 1,
+        "fixture_id": "local-xiao-nrf54l15-pair",
+        "roles": {
+            role: {
+                "probe": {"backend": "nrf-probes", "family": "nrf54l"},
+                "serial": {"baud": 115200, "dtr": True, "rts": False, "udev": {}},
+            }
+            for role in ("receiver", "source")
+        },
+    }
+    fixture_path, binding_path = hil_fakes.write_fixture_binding(cfg, fixture, binding)
+    logical = model.load_logical_fixture(fixture_path)
+    return model.load_physical_binding(binding_path, logical)
+
+
+def _xiao_tty_props(serial, usb, tty):
+    return {
+        "ID_BUS": "usb",
+        "ID_VENDOR_ID": "2886",
+        "ID_MODEL_ID": "0066",
+        "ID_SERIAL_SHORT": serial,
+        "ID_USB_INTERFACE_NUM": "02",
+        "ID_USB_DRIVER": "cdc_acm",
+        "ID_PATH": "pci-0000:00-usb-0:%s:1.2" % usb,
+        "DEVPATH": hil_fakes.tty_devpath(usb, tty),
+    }
+
+
+def _script_xiao_pair(
+    sysfs,
+    runner,
+    *,
+    rows=None,
+    cmsis_proc=None,
+    tty_props=None,
+):
+    if rows is None:
+        rows = [
+            (
+                XIAO_RECEIVER_SERIAL,
+                "CMSIS-DAP",
+                "nRF54L15",
+                "0x6ba02477",
+                "0x00054b15",
+                "AAC0",
+                "",
+            ),
+            (
+                XIAO_SOURCE_SERIAL,
+                "CMSIS-DAP",
+                "nRF54L15",
+                "0x6ba02477",
+                "0x00054b15",
+                "AAC0",
+                "",
+            ),
+        ]
+    runner.script(
+        ["nix-nrf", "probes", XIAO_RECEIVER_SERIAL, XIAO_SOURCE_SERIAL],
+        hil_fakes.FakeProc(stdout=hil_fakes.default_probe_table(rows)),
+    )
+    runner.script(
+        ["openocd", "-f", "interface/cmsis-dap.cfg"],
+        cmsis_proc
+        or hil_fakes.FakeProc(
+            stdout=hil_fakes.cmsis_dap_fingerprint_output(variant="0x41414330")
+        ),
+        exact=False,
+    )
+    tty_root = os.path.join(sysfs, "class", "tty")
+    tty_props = tty_props or {
+        "ttyACM0": _xiao_tty_props(XIAO_RECEIVER_SERIAL, "1-2", "ttyACM0"),
+        "ttyACM1": _xiao_tty_props(XIAO_SOURCE_SERIAL, "1-3", "ttyACM1"),
+    }
+    for tty, props in sorted(tty_props.items()):
+        runner.script(
+            [
+                "udevadm",
+                "info",
+                "--query=property",
+                "--path",
+                os.path.join(tty_root, tty),
+            ],
+            _udev_proc(props),
+        )
+    return runner
 
 
 class TestStreamTransportLimits(unittest.TestCase):
@@ -5245,42 +5695,337 @@ class TestStreamTransportLimits(unittest.TestCase):
 
 
 class TestDiscovery(unittest.TestCase):
-    def test_fingerprint_jlink_uses_current_port_commands_and_valid_markers(self):
-        runner = hil_fakes.ScriptedRunner()
-        runner.script(
-            ["openocd", "-f", "interface/jlink.cfg"],
-            hil_fakes.FakeProc(stdout=hil_fakes.fingerprint_output()),
+    def test_fingerprint_cmsis_dap_is_explicit_readonly_and_keeps_ap3_zero(self):
+        command = hil_fakes.ScriptedRunner()
+        command.script(
+            ["openocd", "-f", "interface/cmsis-dap.cfg"],
+            hil_fakes.FakeProc(
+                stdout=hil_fakes.cmsis_dap_fingerprint_output(variant="0x41414330")
+            ),
             exact=False,
         )
-
-        argv, _raw, markers, failures, status = discovery.fingerprint_jlink(
-            runner, hil_fakes.SOURCE_SERIAL
-        )
-
-        self.assertEqual(argv[10], "gdb port disabled")
-        self.assertEqual(argv[12], "tcl port disabled")
-        self.assertEqual(argv[14], "telnet port disabled")
-        self.assertFalse(
-            any(
-                legacy in element
-                for element in argv
-                for legacy in ("gdb_port", "tcl_port", "telnet_port")
-            )
+        argv, _raw, markers, failures, status = discovery.fingerprint_cmsis_dap(
+            command, XIAO_RECEIVER_SERIAL
         )
         self.assertEqual(status, 0)
         self.assertEqual(failures, [])
-        self.assertEqual(
-            markers,
-            {
-                "dpidr": "0x6ba02477",
-                "ap0": "0x00000000",
-                "ap1": "0x00000000",
-                "ap2": "0x12880000",
-                "ap3": "0x12880000",
-                "part": "0x00005340",
-                "variant": "0x41414141",
-            },
+        self.assertEqual(markers["ap3"], "0x00000000")
+        self.assertIn("adapter serial %s" % XIAO_RECEIVER_SERIAL, argv)
+        self.assertIn("adapter speed 1000", argv)
+        self.assertIn("gdb port disabled", argv)
+        self.assertIn("tcl port disabled", argv)
+        self.assertIn("telnet port disabled", argv)
+        self.assertIn("swd newdap chip cpu", argv)
+        self.assertIn("dap create chip.dap -chain-position chip.cpu", argv)
+        self.assertIn("target create chip.cpu cortex_m -dap chip.dap", argv)
+        scanner = argv[argv.index(discovery.CMSIS_DAP_FINGERPRINT_TCL)]
+        self.assertIn("chip.dap apcsw 0x01000000 0x01000000", scanner)
+        self.assertIn(discovery.NRF54L15_PART_ADDR, scanner)
+        self.assertIn(discovery.NRF54L15_VARIANT_ADDR, scanner)
+        self.assertIn("init", argv)
+        self.assertIn("shutdown", argv)
+        rendered = "\n".join(argv)
+        self.assertNotIn("reset", rendered)
+        self.assertNotIn("halt", rendered)
+        self.assertNotIn("program", rendered)
+        self.assertNotIn("load_", rendered)
+        self.assertNotIn("write_memory", rendered)
+        self.assertNotIn("recover", rendered)
+
+    def test_legacy_jlink_binding_rejected_before_any_command(self):
+        with tempfile.TemporaryDirectory() as td:
+            fixture_path = os.path.join(td, "fixture.json")
+            binding_path = os.path.join(td, "binding.json")
+            fixture = hil_fakes.fixture_json()
+            fixture["roles"]["source"]["board"] = "nrf5340dk/nrf5340/cpuapp"
+            fixture["roles"]["source"]["images"] = ["cpuapp", "cpunet"]
+            binding = hil_fakes.binding_json()
+            binding["roles"]["source"]["probe"] = {
+                "backend": "jlink",
+                "family": "nrf53",
+            }
+            for path, payload in ((fixture_path, fixture), (binding_path, binding)):
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh)
+            with self.assertRaisesRegex(
+                model.HilSchemaError, "unsupported logical board"
+            ):
+                model.load_physical_binding(
+                    binding_path, model.load_logical_fixture(fixture_path)
+                )
+
+    def test_explicit_xiao_pair_resolves_exact_rows_and_correlated_ttys(self):
+        with tempfile.TemporaryDirectory() as td:
+            sysfs = hil_fakes.build_fake_sysfs(td)
+            binding = _load_xiao_binding(td)
+            command = hil_fakes.ScriptedRunner()
+            _script_xiao_pair(sysfs, command)
+            resolution = discovery.resolve_fixture(
+                binding,
+                run_cmd=command,
+                sysfs_root=sysfs,
+                explicit_probe_serials={
+                    "receiver": XIAO_RECEIVER_SERIAL,
+                    "source": XIAO_SOURCE_SERIAL,
+                },
+            )
+            self.assertEqual(
+                command.ledger[0]["argv"],
+                ["nix-nrf", "probes", XIAO_RECEIVER_SERIAL, XIAO_SOURCE_SERIAL],
+            )
+            self.assertEqual(resolution.roles["receiver"].probe.product, "CMSIS-DAP")
+            self.assertEqual(
+                dict(resolution.roles["source"].probe.ap_idrs)["ap3"], "0x00000000"
+            )
+            self.assertEqual(
+                resolution.roles["receiver"].probe.variant_raw, "0x41414330"
+            )
+            self.assertEqual(resolution.roles["source"].serial.path, "/dev/ttyACM1")
+            self.assertNotEqual(
+                resolution.roles["receiver"].serial.usb_parent,
+                resolution.roles["source"].serial.usb_parent,
+            )
+            self.assertIn("receiver-cmsis-dap-fingerprint", resolution.raw)
+            self.assertIn("source-cmsis-dap-fingerprint", resolution.raw)
+
+    def test_explicit_xiao_pair_failures_are_closed_before_target_actions(self):
+        with tempfile.TemporaryDirectory() as td:
+            sysfs = hil_fakes.build_fake_sysfs(td)
+            binding = _load_xiao_binding(td)
+            duplicate = hil_fakes.ScriptedRunner()
+            with self.assertRaises(HilDiscoveryError):
+                discovery.resolve_fixture(
+                    binding,
+                    run_cmd=duplicate,
+                    sysfs_root=sysfs,
+                    explicit_probe_serials={
+                        "receiver": XIAO_RECEIVER_SERIAL,
+                        "source": XIAO_RECEIVER_SERIAL,
+                    },
+                )
+            self.assertEqual(duplicate.ledger, [])
+
+        def fails(rows=None, cmsis_proc=None, tty_props=None):
+            with tempfile.TemporaryDirectory() as td:
+                sysfs = hil_fakes.build_fake_sysfs(td)
+                binding = _load_xiao_binding(td)
+                command = hil_fakes.ScriptedRunner()
+                _script_xiao_pair(
+                    sysfs,
+                    command,
+                    rows=rows,
+                    cmsis_proc=cmsis_proc,
+                    tty_props=tty_props,
+                )
+                with self.assertRaises(HilDiscoveryError):
+                    discovery.resolve_fixture(
+                        binding,
+                        run_cmd=command,
+                        sysfs_root=sysfs,
+                        explicit_probe_serials={
+                            "receiver": XIAO_RECEIVER_SERIAL,
+                            "source": XIAO_SOURCE_SERIAL,
+                        },
+                    )
+
+        bad_target = [
+            (
+                XIAO_RECEIVER_SERIAL,
+                "CMSIS-DAP",
+                "nRF54L15",
+                "0x6ba02477",
+                "0x00054b15",
+                "AAC0",
+                "",
+            ),
+            (
+                XIAO_SOURCE_SERIAL,
+                "CMSIS-DAP",
+                "nRF53",
+                "0x6ba02477",
+                "0x00054b15",
+                "AAC0",
+                "",
+            ),
+        ]
+        fails(rows=bad_target)
+        fails(rows=bad_target + [bad_target[0]])
+        fails(rows=bad_target[:1])
+        fails(
+            rows=[
+                bad_target[0],
+                (
+                    XIAO_SOURCE_SERIAL,
+                    "CMSIS-DAP",
+                    "nRF54L15",
+                    "0x6ba02478",
+                    "0x00054b15",
+                    "AAC0",
+                    "",
+                ),
+            ]
         )
+        fails(
+            rows=[
+                bad_target[0],
+                (
+                    XIAO_SOURCE_SERIAL,
+                    "CMSIS-DAP",
+                    "nRF54L15",
+                    "0x6ba02477",
+                    "0x00054b16",
+                    "AAC0",
+                    "",
+                ),
+            ]
+        )
+        fails(
+            rows=[
+                bad_target[0],
+                (
+                    XIAO_SOURCE_SERIAL,
+                    "CMSIS-DAP",
+                    "nRF54L15",
+                    "0x6ba02477",
+                    "0x00054b15",
+                    "BAAA",
+                    "",
+                ),
+            ]
+        )
+        fails(
+            cmsis_proc=hil_fakes.FakeProc(
+                stdout=hil_fakes.cmsis_dap_fingerprint_output(
+                    dpidr="0x6ba02478", variant="0x41414330"
+                )
+            )
+        )
+        fails(
+            cmsis_proc=hil_fakes.FakeProc(
+                stdout=hil_fakes.cmsis_dap_fingerprint_output(
+                    variant="0x41414330", failure="Warning: injected"
+                )
+            )
+        )
+        fails(
+            cmsis_proc=hil_fakes.FakeProc(
+                stdout=hil_fakes.cmsis_dap_fingerprint_output(variant="0x41414330"),
+                returncode=7,
+            )
+        )
+        fails(
+            cmsis_proc=hil_fakes.FakeProc(
+                stdout=hil_fakes.cmsis_dap_fingerprint_output(
+                    variant="0x41414330", failure="Error: injected"
+                )
+            )
+        )
+        fails(
+            cmsis_proc=hil_fakes.FakeProc(
+                stdout="FWC|dpidr|0x6ba02477\nFWC|ap3|not-hex\n"
+            )
+        )
+        fails(
+            tty_props={
+                "ttyACM0": _xiao_tty_props(XIAO_RECEIVER_SERIAL, "1-2", "ttyACM0"),
+                "ttyACM1": _xiao_tty_props("OTHER", "1-3", "ttyACM1"),
+            }
+        )
+        fails(
+            tty_props={
+                "ttyACM0": _xiao_tty_props(XIAO_RECEIVER_SERIAL, "1-2", "ttyACM0"),
+                "ttyACM1": _xiao_tty_props(XIAO_SOURCE_SERIAL, "1-2", "ttyACM1"),
+            }
+        )
+
+    def test_receiver_configured_serial_uses_targeted_nix_nrf_lookup(self):
+        with tempfile.TemporaryDirectory() as td:
+            sysfs = hil_fakes.build_fake_sysfs(td)
+            fixture = model.load_logical_fixture(
+                os.path.join(_REPO, "tests", "hil", "fixture.json")
+            )
+            binding_doc = hil_fakes.binding_json()
+            binding_doc["roles"]["receiver"]["serial"]["udev"] = {
+                "ID_VENDOR_ID": "1234",
+                "ID_MODEL_ID": "5678",
+                "ID_SERIAL_SHORT": hil_fakes.RECEIVER_SERIAL,
+            }
+            binding_path = os.path.join(td, "targeted-binding.json")
+            with open(binding_path, "w", encoding="utf-8") as fh:
+                json.dump(binding_doc, fh)
+            binding = model.load_physical_binding(binding_path, fixture)
+            command = hil_fakes.ScriptedRunner()
+            _script_discovery(
+                sysfs,
+                command,
+                tty_props={
+                    "ttyACM0": {
+                        "ID_VENDOR_ID": "1234",
+                        "ID_MODEL_ID": "5678",
+                        "ID_SERIAL_SHORT": hil_fakes.RECEIVER_SERIAL,
+                        "DEVPATH": hil_fakes.tty_devpath("1-2", "ttyACM0"),
+                    },
+                    "ttyACM1": {
+                        "ID_SERIAL_SHORT": hil_fakes.SOURCE_SERIAL,
+                        "DEVPATH": hil_fakes.tty_devpath("1-3", "ttyACM1"),
+                    },
+                },
+            )
+            command.script(
+                ["nix-nrf", "probes", hil_fakes.RECEIVER_SERIAL],
+                hil_fakes.FakeProc(stdout=hil_fakes.default_probe_table()),
+            )
+            resolution = _resolve_test_pair(binding, command, sysfs)
+            self.assertEqual(
+                resolution.roles["receiver"].probe.serial, hil_fakes.RECEIVER_SERIAL
+            )
+            self.assertIn(
+                [
+                    "nix-nrf",
+                    "probes",
+                    hil_fakes.RECEIVER_SERIAL,
+                    hil_fakes.SOURCE_SERIAL,
+                ],
+                [record["argv"] for record in command.ledger],
+            )
+
+    def test_receiver_find_rejects_unsafe_serial_before_cmsis_fingerprint(self):
+        with tempfile.TemporaryDirectory() as td:
+            sysfs = hil_fakes.build_fake_sysfs(td)
+            binding = _load_binding(td)
+            unsafe_serial = "unsafe;reset"
+            command = hil_fakes.ScriptedRunner()
+            _script_discovery(
+                sysfs,
+                command,
+                receiver_rows=[
+                    (
+                        unsafe_serial,
+                        "DAPLink",
+                        "nRF54L15",
+                        "0x6ba02477",
+                        "0x00054b15",
+                        "BAAA",
+                        "",
+                    )
+                ],
+                find_token=unsafe_serial,
+            )
+            with self.assertRaises(HilDiscoveryError) as ctx:
+                discovery.resolve_fixture(
+                    binding,
+                    run_cmd=command,
+                    sysfs_root=sysfs,
+                    explicit_probe_serials={
+                        "receiver": unsafe_serial,
+                        "source": hil_fakes.SOURCE_SERIAL,
+                    },
+                )
+            self.assertIn("unsafe", str(ctx.exception))
+            self.assertEqual(command.ledger, [])
+            self.assertFalse(
+                any(record["argv"][0] == "openocd" for record in command.ledger)
+            )
 
     def test_unique_receiver_and_source_resolve(self):
         with tempfile.TemporaryDirectory() as td:
@@ -5288,23 +6033,21 @@ class TestDiscovery(unittest.TestCase):
             binding = _load_binding(td)
             runner = hil_fakes.ScriptedRunner()
             _script_discovery(sysfs, runner)
-            resolution = discovery.resolve_fixture(
-                binding, run_cmd=runner, sysfs_root=sysfs
-            )
+            resolution = _resolve_test_pair(binding, runner, sysfs)
             rec = resolution.roles["receiver"]
             src = resolution.roles["source"]
             self.assertEqual(rec.probe.serial, hil_fakes.RECEIVER_SERIAL)
             self.assertEqual(rec.probe.part, "0x00054b15")
             self.assertEqual(rec.probe.target, "nRF54L15")
             self.assertEqual(rec.serial.path, "/dev/ttyACM0")
-            self.assertEqual(src.probe.backend, "jlink")
+            self.assertEqual(src.probe.backend, "nrf-probes")
             self.assertEqual(src.probe.serial, hil_fakes.SOURCE_SERIAL)
-            self.assertEqual(src.probe.part, "0x00005340")
+            self.assertEqual(src.probe.part, "0x00054b15")
             self.assertEqual(src.serial.path, "/dev/ttyACM1")
             self.assertNotEqual(rec.serial.usb_parent, src.serial.usb_parent)
             # Raw identity evidence retained.
             self.assertIn("nrf-probes", resolution.raw)
-            self.assertIn("source-jlink-fingerprint", resolution.raw)
+            self.assertIn("source-cmsis-dap-fingerprint", resolution.raw)
 
     def test_runner_records_discovery_commands_in_ledger(self):
         # Production discovery is routed through Runner._command so identity
@@ -5317,12 +6060,20 @@ class TestDiscovery(unittest.TestCase):
             deps = RunnerDeps(run_cmd=command_runner, sysfs_root=sysfs)
             engine = Runner(deps)
             engine._run_dir = td
-            resolution = deps.resolve(binding, run_cmd=engine._discovery_command)
+            resolution = discovery.resolve_fixture(
+                binding,
+                run_cmd=engine._discovery_command,
+                sysfs_root=sysfs,
+                explicit_probe_serials={
+                    "receiver": hil_fakes.RECEIVER_SERIAL,
+                    "source": hil_fakes.SOURCE_SERIAL,
+                },
+            )
             self.assertEqual(
                 resolution.roles["source"].probe.serial, hil_fakes.SOURCE_SERIAL
             )
             argv0 = [record["argv"][0] for record in engine.commands]
-            self.assertIn("nrf-probes", argv0)
+            self.assertIn("nix-nrf", argv0)
             self.assertIn("udevadm", argv0)
             self.assertIn("openocd", argv0)
             for record in engine.commands:
@@ -5335,11 +6086,13 @@ class TestDiscovery(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             observed = {}
             command_runner = hil_fakes.ScriptedRunner()
-            command_runner.script(["nrf-probes"], hil_fakes.FakeProc(stdout="probe\n"))
+            command_runner.script(
+                ["nix-nrf", "probes"], hil_fakes.FakeProc(stdout="probe\n")
+            )
 
             def injected(_binding, sysfs_root=None, run_cmd=None):
                 del sysfs_root
-                observed["proc"] = run_cmd(["nrf-probes"], 1)
+                observed["proc"] = run_cmd(["nix-nrf", "probes"], 1)
                 return fake_resolution()
 
             binding = _load_binding(td)
@@ -5348,7 +6101,7 @@ class TestDiscovery(unittest.TestCase):
             engine._run_dir = td
             deps.resolve(binding, run_cmd=engine._discovery_command)
             self.assertEqual(observed["proc"].stdout, "probe\n")
-            self.assertEqual(engine.commands[0]["argv"], ["nrf-probes"])
+            self.assertEqual(engine.commands[0]["argv"], ["nix-nrf", "probes"])
 
     def test_default_environment_probes_are_ledgered(self):
         with tempfile.TemporaryDirectory() as td:
@@ -5359,7 +6112,7 @@ class TestDiscovery(unittest.TestCase):
                 calls.append(list(argv))
                 if argv == ["lsof", "--", "/dev/ttyACM1"]:
                     return hil_fakes.FakeProc(returncode=1)
-                if argv == ["fw-flash-hil-source"]:
+                if argv == ["fw-flash-hil-source-54l15"]:
                     return hil_fakes.FakeProc(stdout="ok\n")
                 if argv == ["fw-flash-54l15"]:
                     return hil_fakes.FakeProc(stdout="ok\n")
@@ -5372,7 +6125,7 @@ class TestDiscovery(unittest.TestCase):
                     ["pytest", "--version"],
                     ["python3", "-c", "import serial; print(serial.VERSION)"],
                     ["openocd", "--version"],
-                    ["nrf-probes", "--help"],
+                    ["nix-nrf", "probes", "--help"],
                     ["west", "--version"],
                 ):
                     return hil_fakes.FakeProc(stdout="tool 1\n")
@@ -5403,7 +6156,7 @@ class TestDiscovery(unittest.TestCase):
             )
             self.assertIn(["west", "--version"], argv_records)
 
-    def test_source_probe_udev_property_drift_fails(self):
+    def test_source_tty_udev_property_drift_fails(self):
         with tempfile.TemporaryDirectory() as td:
             sysfs = hil_fakes.build_fake_sysfs(td)
             binding = _load_binding(td)
@@ -5411,26 +6164,37 @@ class TestDiscovery(unittest.TestCase):
             _script_discovery(
                 sysfs,
                 command_runner,
-                usb_props={
-                    "1-2": {
-                        "ID_VENDOR_ID": "1234",
-                        "ID_MODEL_ID": "5678",
-                        "ID_SERIAL_SHORT": "SOME-OTHER",
-                        "DEVPATH": "/devices/pci0000:00/usb1/1-2",
+                tty_props={
+                    "ttyACM0": {
+                        "ID_VENDOR_ID": "2886",
+                        "ID_MODEL_ID": "0066",
+                        "ID_SERIAL_SHORT": hil_fakes.RECEIVER_SERIAL,
+                        "DEVPATH": hil_fakes.tty_devpath("1-2", "ttyACM0"),
                     },
-                    "1-3": {
-                        "ID_VENDOR_ID": "1366",
+                    "ttyACM1": {
+                        "ID_VENDOR_ID": "2886",
                         "ID_MODEL_ID": "DIFFERENT",
                         "ID_SERIAL_SHORT": hil_fakes.SOURCE_SERIAL,
-                        "DEVPATH": "/devices/pci0000:00/usb1/1-3",
+                        "DEVPATH": hil_fakes.tty_devpath("1-3", "ttyACM1"),
                     },
                 },
             )
+            doc = hil_fakes.binding_json()
+            doc["roles"]["source"]["serial"]["udev"] = {
+                "ID_VENDOR_ID": "2886",
+                "ID_MODEL_ID": "0066",
+                "ID_SERIAL_SHORT": hil_fakes.SOURCE_SERIAL,
+            }
+            path = os.path.join(td, "source-binding.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+            binding = model.load_physical_binding(
+                path,
+                model.load_logical_fixture(os.path.join(td, "cfg", "fixture.json")),
+            )
             with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(
-                    binding, run_cmd=command_runner, sysfs_root=sysfs
-                )
-            self.assertIn("source J-Link ambiguity", str(ctx.exception))
+                _resolve_test_pair(binding, command_runner, sysfs)
+            self.assertIn("source serial ambiguity", str(ctx.exception))
 
     def test_missing_tty_fails(self):
         with tempfile.TemporaryDirectory() as td:
@@ -5453,7 +6217,7 @@ class TestDiscovery(unittest.TestCase):
                 },
             )
             with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(binding, run_cmd=runner, sysfs_root=sysfs)
+                _resolve_test_pair(binding, runner, sysfs)
             self.assertIn("serial", str(ctx.exception))
 
     def test_duplicate_tty_fails(self):
@@ -5482,7 +6246,7 @@ class TestDiscovery(unittest.TestCase):
                 },
             )
             with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(binding, run_cmd=runner, sysfs_root=sysfs)
+                _resolve_test_pair(binding, runner, sysfs)
             self.assertIn("exactly one tty", str(ctx.exception))
 
     def test_wrong_receiver_part_fails(self):
@@ -5500,13 +6264,22 @@ class TestDiscovery(unittest.TestCase):
                         "nRF54L15",
                         "0x6ba02477",
                         "0x00005415",
-                        "BAAA",
+                        "AAC0",
+                        "",
+                    ),
+                    (
+                        hil_fakes.SOURCE_SERIAL,
+                        "CMSIS-DAP",
+                        "nRF54L15",
+                        "0x6ba02477",
+                        "0x00054b15",
+                        "AAC0",
                         "",
                     ),
                 ],
             )
             with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(binding, run_cmd=runner, sysfs_root=sysfs)
+                _resolve_test_pair(binding, runner, sysfs)
             self.assertIn("PART drift", str(ctx.exception))
 
     def test_receiver_variant_missing_fails(self):
@@ -5527,10 +6300,19 @@ class TestDiscovery(unittest.TestCase):
                         "-",
                         "",
                     ),
+                    (
+                        hil_fakes.SOURCE_SERIAL,
+                        "CMSIS-DAP",
+                        "nRF54L15",
+                        "0x6ba02477",
+                        "0x00054b15",
+                        "AAC0",
+                        "",
+                    ),
                 ],
             )
             with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(binding, run_cmd=runner, sysfs_root=sysfs)
+                _resolve_test_pair(binding, runner, sysfs)
             self.assertIn("VARIANT", str(ctx.exception))
 
     def test_malformed_nrf_probes_table_fails(self):
@@ -5540,15 +6322,20 @@ class TestDiscovery(unittest.TestCase):
             runner = hil_fakes.ScriptedRunner()
             _script_discovery(sysfs, runner)
             runner.rules[0] = (
-                ["nrf-probes"],
+                [
+                    "nix-nrf",
+                    "probes",
+                    hil_fakes.RECEIVER_SERIAL,
+                    hil_fakes.SOURCE_SERIAL,
+                ],
                 hil_fakes.FakeProc(stdout="SERIAL  TARGET\nABC  nRF54L15\n"),
                 True,
             )
             with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(binding, run_cmd=runner, sysfs_root=sysfs)
+                _resolve_test_pair(binding, runner, sysfs)
             self.assertIn("malformed nrf-probes header", str(ctx.exception))
 
-    def test_source_jlink_ambiguity_fails(self):
+    def test_duplicate_source_cmsis_probe_row_fails(self):
         with tempfile.TemporaryDirectory() as td:
             sysfs = hil_fakes.build_fake_sysfs(td)
             binding = _load_binding(td)
@@ -5556,26 +6343,41 @@ class TestDiscovery(unittest.TestCase):
             _script_discovery(
                 sysfs,
                 runner,
-                usb_props={
-                    "1-2": {
-                        "ID_VENDOR_ID": "1366",
-                        "ID_MODEL_ID": "1015",
-                        "ID_SERIAL_SHORT": hil_fakes.SOURCE_SERIAL,
-                        "DEVPATH": "/devices/pci0000:00/usb1/1-2",
-                    },
-                    "1-3": {
-                        "ID_VENDOR_ID": "1366",
-                        "ID_MODEL_ID": "1015",
-                        "ID_SERIAL_SHORT": hil_fakes.SOURCE_SERIAL,
-                        "DEVPATH": "/devices/pci0000:00/usb1/1-3",
-                    },
-                },
+                receiver_rows=[
+                    (
+                        hil_fakes.RECEIVER_SERIAL,
+                        "DAPLink",
+                        "nRF54L15",
+                        "0x6ba02477",
+                        "0x00054b15",
+                        "AAC0",
+                        "",
+                    ),
+                    (
+                        hil_fakes.SOURCE_SERIAL,
+                        "CMSIS-DAP",
+                        "nRF54L15",
+                        "0x6ba02477",
+                        "0x00054b15",
+                        "AAC0",
+                        "",
+                    ),
+                    (
+                        hil_fakes.SOURCE_SERIAL,
+                        "CMSIS-DAP",
+                        "nRF54L15",
+                        "0x6ba02477",
+                        "0x00054b15",
+                        "AAC0",
+                        "",
+                    ),
+                ],
             )
             with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(binding, run_cmd=runner, sysfs_root=sysfs)
-            self.assertIn("ambiguity", str(ctx.exception))
+                _resolve_test_pair(binding, runner, sysfs)
+            self.assertIn("exactly two rows", str(ctx.exception))
 
-    def test_source_jlink_wrong_part_fails(self):
+    def test_source_cmsis_wrong_part_fails(self):
         with tempfile.TemporaryDirectory() as td:
             sysfs = hil_fakes.build_fake_sysfs(td)
             binding = _load_binding(td)
@@ -5584,14 +6386,14 @@ class TestDiscovery(unittest.TestCase):
                 sysfs,
                 runner,
                 openocd_proc=hil_fakes.FakeProc(
-                    stdout=hil_fakes.fingerprint_output(part="0x00005415")
+                    stdout=hil_fakes.cmsis_dap_fingerprint_output(part="0x00005415")
                 ),
             )
             with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(binding, run_cmd=runner, sysfs_root=sysfs)
-            self.assertIn("PART drift", str(ctx.exception))
+                _resolve_test_pair(binding, runner, sysfs)
+            self.assertIn("PART disagrees", str(ctx.exception))
 
-    def test_source_jlink_openocd_warning_fails(self):
+    def test_source_cmsis_openocd_warning_fails(self):
         with tempfile.TemporaryDirectory() as td:
             sysfs = hil_fakes.build_fake_sysfs(td)
             binding = _load_binding(td)
@@ -5600,16 +6402,16 @@ class TestDiscovery(unittest.TestCase):
                 sysfs,
                 runner,
                 openocd_proc=hil_fakes.FakeProc(
-                    stdout=hil_fakes.fingerprint_output(
+                    stdout=hil_fakes.cmsis_dap_fingerprint_output(
                         failure="Error: target not halted"
                     )
                 ),
             )
             with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(binding, run_cmd=runner, sysfs_root=sysfs)
+                _resolve_test_pair(binding, runner, sysfs)
             self.assertIn("OpenOCD failure", str(ctx.exception))
 
-    def test_source_jlink_openocd_nonzero_fails(self):
+    def test_source_cmsis_openocd_nonzero_fails(self):
         with tempfile.TemporaryDirectory() as td:
             sysfs = hil_fakes.build_fake_sysfs(td)
             binding = _load_binding(td)
@@ -5618,11 +6420,11 @@ class TestDiscovery(unittest.TestCase):
                 sysfs,
                 runner,
                 openocd_proc=hil_fakes.FakeProc(
-                    stdout=hil_fakes.fingerprint_output(), returncode=7
+                    stdout=hil_fakes.cmsis_dap_fingerprint_output(), returncode=7
                 ),
             )
             with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(binding, run_cmd=runner, sysfs_root=sysfs)
+                _resolve_test_pair(binding, runner, sysfs)
             self.assertIn("OpenOCD failure", str(ctx.exception))
 
     def test_discovery_failure_retains_partial_raw_evidence(self):
@@ -5634,103 +6436,43 @@ class TestDiscovery(unittest.TestCase):
                 sysfs,
                 command_runner,
                 openocd_proc=hil_fakes.FakeProc(
-                    stdout=hil_fakes.fingerprint_output(), returncode=7
+                    stdout=hil_fakes.cmsis_dap_fingerprint_output(), returncode=7
                 ),
             )
             with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(
-                    binding, run_cmd=command_runner, sysfs_root=sysfs
-                )
+                _resolve_test_pair(binding, command_runner, sysfs)
             self.assertIn("nrf-probes", ctx.exception.raw)
-            self.assertIn("nrf-probes-find", ctx.exception.raw)
-            self.assertIn("source-jlink-fingerprint", ctx.exception.raw)
-            self.assertEqual(ctx.exception.raw["source-jlink-fingerprint"]["status"], 7)
+            self.assertIn("source-cmsis-dap-fingerprint", ctx.exception.raw)
+            self.assertEqual(
+                ctx.exception.raw["source-cmsis-dap-fingerprint"]["status"], 7
+            )
 
-    def test_shared_tty_rejected(self):
+    def test_duplicate_source_tty_probe_correlation_rejected(self):
         with tempfile.TemporaryDirectory() as td:
             sysfs = hil_fakes.build_fake_sysfs(td)
-            sysfs = os.path.abspath(sysfs)
-            usb_root = os.path.join(sysfs, "bus", "usb", "devices")
-            tty_root = os.path.join(sysfs, "class", "tty")
+            os.mkdir(os.path.join(sysfs, "class", "tty", "ttyACM2"))
             binding = _load_binding(td)
-            runner = hil_fakes.ScriptedRunner()
-            # ttyACM0 carries BOTH probe serials: receiver correlation
-            # matches it and source correlation matches it too, so both
-            # roles resolve to the same tty and discovery must reject.
-            runner.script(
-                ["nrf-probes"],
-                hil_fakes.FakeProc(stdout=hil_fakes.default_probe_table()),
-            )
-            runner.script(
-                ["nrf-probes", "--find", "nrf54l"],
-                hil_fakes.FakeProc(stdout="%s\n" % hil_fakes.RECEIVER_SERIAL),
-            )
-            runner.script(
-                [
-                    "udevadm",
-                    "info",
-                    "--query=property",
-                    "--path",
-                    os.path.join(usb_root, "1-2"),
-                ],
-                _udev_proc(
-                    {
-                        "ID_VENDOR_ID": "1234",
-                        "ID_MODEL_ID": "5678",
-                        "ID_SERIAL_SHORT": "OTHER",
-                        "DEVPATH": "/devices/pci0000:00/usb1/1-2",
-                    }
-                ),
-            )
-            runner.script(
-                [
-                    "udevadm",
-                    "info",
-                    "--query=property",
-                    "--path",
-                    os.path.join(usb_root, "1-3"),
-                ],
-                _udev_proc(
-                    {
-                        "ID_VENDOR_ID": "1366",
-                        "ID_MODEL_ID": "1015",
+            command = hil_fakes.ScriptedRunner()
+            _script_discovery(
+                sysfs,
+                command,
+                tty_props={
+                    "ttyACM0": {
+                        "ID_SERIAL_SHORT": hil_fakes.RECEIVER_SERIAL,
+                        "DEVPATH": hil_fakes.tty_devpath("1-2", "ttyACM0"),
+                    },
+                    "ttyACM1": {
                         "ID_SERIAL_SHORT": hil_fakes.SOURCE_SERIAL,
-                        "DEVPATH": "/devices/pci0000:00/usb1/1-3",
-                    }
-                ),
+                        "DEVPATH": hil_fakes.tty_devpath("1-3", "ttyACM1"),
+                    },
+                    "ttyACM2": {
+                        "ID_SERIAL_SHORT": hil_fakes.SOURCE_SERIAL,
+                        "DEVPATH": hil_fakes.tty_devpath("1-4", "ttyACM2"),
+                    },
+                },
             )
-            runner.script(
-                ["openocd", "-f", "interface/jlink.cfg"],
-                hil_fakes.FakeProc(stdout=hil_fakes.fingerprint_output()),
-                exact=False,
-            )
-            both = {
-                "ID_SERIAL_SHORT": hil_fakes.RECEIVER_SERIAL,
-                "DEVPATH": hil_fakes.tty_devpath("1-2", "ttyACM0"),
-            }
-            runner.script(
-                [
-                    "udevadm",
-                    "info",
-                    "--query=property",
-                    "--path",
-                    os.path.join(tty_root, "ttyACM0"),
-                ],
-                _udev_proc(both),
-            )
-            runner.script(
-                [
-                    "udevadm",
-                    "info",
-                    "--query=property",
-                    "--path",
-                    os.path.join(tty_root, "ttyACM1"),
-                ],
-                _udev_proc({**both, "ID_SERIAL_SHORT": hil_fakes.SOURCE_SERIAL}),
-            )
-            with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(binding, run_cmd=runner, sysfs_root=sysfs)
-            self.assertIn("same", str(ctx.exception))
+            with self.assertRaisesRegex(HilDiscoveryError, "serial ambiguity"):
+                _resolve_test_pair(binding, command, sysfs)
 
     def test_shared_usb_parent_rejected(self):
         with tempfile.TemporaryDirectory() as td:
@@ -5753,7 +6495,7 @@ class TestDiscovery(unittest.TestCase):
                 },
             )
             with self.assertRaises(HilDiscoveryError) as ctx:
-                discovery.resolve_fixture(binding, run_cmd=runner, sysfs_root=sysfs)
+                _resolve_test_pair(binding, runner, sysfs)
             self.assertIn("USB parent", str(ctx.exception))
 
 
@@ -5761,22 +6503,45 @@ class TestDiscovery(unittest.TestCase):
 
 FAKE_OPENOCD = """#!/usr/bin/env bash
 printf '%s\\0' "$@" > "${FAKE_OPENOCD_ARGV_FILE:?}"
+if [ -n "${FAKE_OPENOCD_INTERFACE_FILE:-}" ]; then
+    printf '%s' "${OPENOCD_INTERFACE:-}" > "$FAKE_OPENOCD_INTERFACE_FILE"
+fi
 printf 'openocd stdout\\n'
 printf 'openocd stderr\\n' >&2
 exit "${FAKE_OPENOCD_STATUS:-0}"
 """
 
 FAKE_WEST = """#!/usr/bin/env bash
-exit 0
+if [ -n "${FAKE_WEST_ARGV_FILE:-}" ]; then
+    printf '%s\\0' "$@" > "$FAKE_WEST_ARGV_FILE"
+fi
+exit "${FAKE_WEST_STATUS:-0}"
 """
 
 FAKE_NRF_PROBES = """#!/usr/bin/env bash
+if [ -n "${FAKE_NRF_PROBES_CALLED_FILE:-}" ]; then
+    : > "$FAKE_NRF_PROBES_CALLED_FILE"
+fi
 printf '%s\\n' "${FAKE_NRF_PROBES_SERIAL:?}"
+"""
+
+FAKE_NIX_NRF = """#!/usr/bin/env bash
+if [ -n "${FAKE_NIX_NRF_CALLED_FILE:-}" ]; then
+    : > "$FAKE_NIX_NRF_CALLED_FILE"
+fi
+exit "${FAKE_NIX_NRF_STATUS:-0}"
 """
 
 
 class FlashHelperHarness:
-    def __init__(self, tmpdir, artifacts=True, serial="J-LINK-0001"):
+    def __init__(
+        self,
+        tmpdir,
+        artifacts=True,
+        serial="CMSIS-DAP-0001",
+        source_54l15_artifact=True,
+        source_54l15_serial="CMSIS-DAP-0001",
+    ):
         self.tmpdir = tmpdir
         self.repo = os.path.join(tmpdir, "repo")
         bin_dir = os.path.join(self.repo, "scripts", "bin")
@@ -5793,15 +6558,27 @@ class FlashHelperHarness:
             os.path.join(_REPO, "scripts", "bin", "fw-flash-54l15"),
             os.path.join(bin_dir, "fw-flash-54l15"),
         )
-        if artifacts:
-            for rel in (
-                "build/hil-source/app/zephyr/zephyr.hex",
-                "build/hil-source/hci_ipc/zephyr/zephyr.hex",
-            ):
-                path = os.path.join(self.repo, rel)
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, "w") as fh:
-                    fh.write("hex\n")
+        shutil.copy(
+            os.path.join(_REPO, "scripts", "bin", "fw-build-hil-source-54l15"),
+            os.path.join(bin_dir, "fw-build-hil-source-54l15"),
+        )
+        shutil.copy(
+            os.path.join(_REPO, "scripts", "bin", "fw-flash-hil-source-54l15"),
+            os.path.join(bin_dir, "fw-flash-hil-source-54l15"),
+        )
+        if not artifacts:
+            source_54l15_artifact = False
+        if source_54l15_artifact:
+            path = os.path.join(
+                self.repo,
+                "build",
+                "hil-source-nrf54l15",
+                "zephyr",
+                "zephyr.hex",
+            )
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("hex\n")
         self.fakebin = os.path.join(tmpdir, "fakebin")
         os.makedirs(self.fakebin)
         with open(os.path.join(self.fakebin, "openocd"), "w") as fh:
@@ -5813,15 +6590,25 @@ class FlashHelperHarness:
         with open(os.path.join(self.fakebin, "nrf-probes"), "w") as fh:
             fh.write(FAKE_NRF_PROBES)
         os.chmod(os.path.join(self.fakebin, "nrf-probes"), 0o755)
+        with open(os.path.join(self.fakebin, "nix-nrf"), "w") as fh:
+            fh.write(FAKE_NIX_NRF)
+        os.chmod(os.path.join(self.fakebin, "nix-nrf"), 0o755)
         self.argv_file = os.path.join(tmpdir, "openocd.argv")
+        self.west_argv_file = os.path.join(tmpdir, "west.argv")
+        self.nrf_probes_called_file = os.path.join(tmpdir, "nrf-probes.called")
+        self.nix_nrf_called_file = os.path.join(tmpdir, "nix-nrf.called")
         self.env = dict(os.environ)
         self.env["PATH"] = self.fakebin + os.pathsep + self.env["PATH"]
         self.env["ZEPHYR_BASE"] = os.path.join(tmpdir, "zephyrbase")
         os.makedirs(self.env["ZEPHYR_BASE"])
         self.env["FAKE_OPENOCD_ARGV_FILE"] = self.argv_file
+        self.env["FAKE_WEST_ARGV_FILE"] = self.west_argv_file
+        self.env["FAKE_NRF_PROBES_CALLED_FILE"] = self.nrf_probes_called_file
+        self.env["FAKE_NIX_NRF_CALLED_FILE"] = self.nix_nrf_called_file
         self.env["FAKE_NRF_PROBES_SERIAL"] = "PROBE-ABC123"
         self.env.pop("FAKE_OPENOCD_STATUS", None)
         self.serial = serial
+        self.source_54l15_serial = source_54l15_serial
 
     def run(self, env_extra=None, status_env=None):
         env = dict(self.env)
@@ -5829,7 +6616,7 @@ class FlashHelperHarness:
             env.update(env_extra)
         if status_env is not None:
             env["FAKE_OPENOCD_STATUS"] = str(status_env)
-        env["FW_HIL_SOURCE_JLINK_SERIAL"] = self.serial
+        env["FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL"] = self.serial
         return subprocess.run(
             [os.path.join(self.repo, "scripts", "bin", "fw-flash-hil-source")],
             env=env,
@@ -5840,12 +6627,43 @@ class FlashHelperHarness:
 
     def run_receiver_flash(self, env_extra=None, status_env=None):
         env = dict(self.env)
+        env.pop("FW_NRF54L15_PROBE_SERIAL", None)
         if env_extra:
             env.update(env_extra)
         if status_env is not None:
             env["FAKE_OPENOCD_STATUS"] = str(status_env)
         return subprocess.run(
             [os.path.join(self.repo, "scripts", "bin", "fw-flash-54l15")],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def run_source_54l15_build(self, args=(), env_extra=None):
+        env = dict(self.env)
+        if env_extra:
+            env.update(env_extra)
+        return subprocess.run(
+            [
+                os.path.join(self.repo, "scripts", "bin", "fw-build-hil-source-54l15"),
+                *args,
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def run_source_54l15_flash(self, env_extra=None, status_env=None):
+        env = dict(self.env)
+        if env_extra:
+            env.update(env_extra)
+        if status_env is not None:
+            env["FAKE_OPENOCD_STATUS"] = str(status_env)
+        env["FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL"] = self.source_54l15_serial
+        return subprocess.run(
+            [os.path.join(self.repo, "scripts", "bin", "fw-flash-hil-source-54l15")],
             env=env,
             capture_output=True,
             text=True,
@@ -5861,59 +6679,213 @@ def _nul_args(path):
 
 
 class TestFlashHelper(unittest.TestCase):
-    def test_exact_argv_cpunet_first_verify_both_reset(self):
+    def _assert_no_identity_discovery(self, h):
+        self.assertFalse(os.path.exists(h.nrf_probes_called_file))
+        self.assertFalse(os.path.exists(h.nix_nrf_called_file))
+
+    def test_source_54l15_build_exact_argv_and_cmake_forwarding(self):
         with tempfile.TemporaryDirectory() as td:
             h = FlashHelperHarness(td)
-            r = h.run()
-            self.assertEqual(0, r.returncode, r.stderr)
-            args = _nul_args(h.argv_file)
-            net_hex = os.path.join(
-                h.repo, "build", "hil-source", "hci_ipc", "zephyr", "zephyr.hex"
+            r = h.run_source_54l15_build(
+                args=("-DCONFIG_HIL_TEST=y", "-DEXTRA_CONF_FILE=source.conf")
             )
-            app_hex = os.path.join(
-                h.repo, "build", "hil-source", "app", "zephyr", "zephyr.hex"
+            self.assertEqual(0, r.returncode, r.stderr)
+            args = _nul_args(h.west_argv_file)
+            expected = [
+                "build",
+                "-b",
+                "nrf54l15dk/nrf54l15/cpuapp",
+                "--no-sysbuild",
+                "--pristine",
+                "-d",
+                os.path.join(h.repo, "build", "hil-source-nrf54l15"),
+                "hil/source/app",
+                "--",
+                "-DCONFIG_HIL_TEST=y",
+                "-DEXTRA_CONF_FILE=source.conf",
+            ]
+            self.assertEqual(args, expected)
+            self.assertNotIn("--sysbuild", args)
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_exact_argv_explicit_serial_and_no_discovery(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            r = h.run_source_54l15_flash()
+            self.assertEqual(0, r.returncode, r.stderr)
+            source_hex = os.path.join(
+                h.repo,
+                "build",
+                "hil-source-nrf54l15",
+                "zephyr",
+                "zephyr.hex",
             )
             expected = [
+                "-c",
+                "adapter serial CMSIS-DAP-0001",
                 "-f",
-                "interface/jlink.cfg",
-                "-c",
-                "transport select swd",
-                "-c",
-                "adapter speed 2000",
-                "-c",
-                "adapter serial J-LINK-0001",
-                "-f",
-                "target/nordic/nrf53.cfg",
+                os.path.join(
+                    h.env["ZEPHYR_BASE"],
+                    "boards",
+                    "seeed",
+                    "xiao_nrf54l15",
+                    "support",
+                    "openocd.cfg",
+                ),
                 "-c",
                 "init",
                 "-c",
-                "targets nrf53.cpunet",
+                "reset halt",
                 "-c",
-                "program %s verify" % net_hex,
+                "nrf54l-load {%s}" % source_hex,
                 "-c",
-                "targets nrf53.cpuapp",
-                "-c",
-                "program %s verify" % app_hex,
+                "verify_image {%s}" % source_hex,
                 "-c",
                 "reset run",
                 "-c",
                 "shutdown",
             ]
-            self.assertEqual(args, expected)
-            self.assertLess(
-                args.index("targets nrf53.cpunet"),
-                args.index("targets nrf53.cpuapp"),
-                "cpunet programmed before cpuapp",
+            self.assertEqual(_nul_args(h.argv_file), expected)
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_forces_cmsis_dap_over_inherited_jlink(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            interface_file = os.path.join(td, "openocd.interface")
+            r = h.run_source_54l15_flash(
+                env_extra={
+                    "OPENOCD_INTERFACE": "jlink",
+                    "FAKE_OPENOCD_INTERFACE_FILE": interface_file,
+                }
             )
-            self.assertIn("adapter serial J-LINK-0001", args)
-            self.assertNotIn("nrf-probes", args)
+            self.assertEqual(0, r.returncode, r.stderr)
+            with open(interface_file, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "cmsis-dap")
+            self.assertIn("nrf54l-load", " ".join(_nul_args(h.argv_file)))
+            self.assertEqual(
+                os.environ.get("OPENOCD_INTERFACE"), h.env.get("OPENOCD_INTERFACE")
+            )
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_missing_serial_rejected_before_openocd(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td, source_54l15_serial="")
+            r = h.run_source_54l15_flash()
+            self.assertNotEqual(0, r.returncode)
+            self.assertIn("FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL is required", r.stderr)
+            self.assertFalse(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_unsafe_serial_rejected_before_openocd(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td, source_54l15_serial="bad serial/with/slashes")
+            r = h.run_source_54l15_flash()
+            self.assertNotEqual(0, r.returncode)
+            self.assertIn("Invalid FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL", r.stderr)
+            self.assertFalse(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_missing_artifact_rejected_before_openocd(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td, source_54l15_artifact=False)
+            r = h.run_source_54l15_flash()
+            self.assertNotEqual(0, r.returncode)
+            self.assertIn("Invalid source build artifact", r.stderr)
+            self.assertFalse(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_empty_artifact_rejected_before_openocd(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            source_hex = os.path.join(
+                h.repo,
+                "build",
+                "hil-source-nrf54l15",
+                "zephyr",
+                "zephyr.hex",
+            )
+            with open(source_hex, "w", encoding="utf-8"):
+                pass
+            r = h.run_source_54l15_flash()
+            self.assertNotEqual(0, r.returncode)
+            self.assertIn("Invalid source build artifact", r.stderr)
+            self.assertFalse(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_symlink_artifact_rejected_before_openocd(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            source_hex = os.path.join(
+                h.repo,
+                "build",
+                "hil-source-nrf54l15",
+                "zephyr",
+                "zephyr.hex",
+            )
+            target_hex = os.path.join(td, "outside.hex")
+            with open(target_hex, "w", encoding="utf-8") as fh:
+                fh.write("hex\n")
+            os.unlink(source_hex)
+            os.symlink(target_hex, source_hex)
+            r = h.run_source_54l15_flash()
+            self.assertNotEqual(0, r.returncode)
+            self.assertIn("Invalid source build artifact", r.stderr)
+            self.assertFalse(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_missing_dev_shell_rejected_before_openocd(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            env = dict(h.env)
+            env.pop("ZEPHYR_BASE", None)
+            r = subprocess.run(
+                [os.path.join(h.repo, "scripts", "bin", "fw-flash-hil-source-54l15")],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertNotEqual(0, r.returncode)
+            self.assertIn("firmware tool error", r.stderr)
+            self.assertFalse(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_source_54l15_flash_openocd_status_propagated(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            r = h.run_source_54l15_flash(status_env=7)
+            self.assertEqual(7, r.returncode)
+            self.assertTrue(os.path.exists(h.argv_file))
+            self._assert_no_identity_discovery(h)
+
+    def test_alias_flashes_one_cpuapp_with_verify_and_reset(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            r = h.run()
+            self.assertEqual(0, r.returncode, r.stderr)
+            args = _nul_args(h.argv_file)
+            app_hex = os.path.join(
+                h.repo, "build", "hil-source-nrf54l15", "zephyr", "zephyr.hex"
+            )
+            self.assertIn("adapter serial CMSIS-DAP-0001", args)
+            self.assertIn("nrf54l-load {%s}" % app_hex, args)
+            self.assertIn("verify_image {%s}" % app_hex, args)
+            self.assertLess(
+                args.index("nrf54l-load {%s}" % app_hex),
+                args.index("verify_image {%s}" % app_hex),
+            )
+            self.assertLess(
+                args.index("verify_image {%s}" % app_hex), args.index("reset run")
+            )
+            self.assertFalse(any("cpunet" in arg or "jlink" in arg for arg in args))
+            self._assert_no_identity_discovery(h)
 
     def test_invalid_serial_rejected(self):
         with tempfile.TemporaryDirectory() as td:
             h = FlashHelperHarness(td, serial="bad serial/with/slashes")
             r = h.run()
             self.assertNotEqual(0, r.returncode)
-            self.assertIn("Invalid FW_HIL_SOURCE_JLINK_SERIAL", r.stderr)
+            self.assertIn("Invalid FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL", r.stderr)
             self.assertFalse(
                 os.path.exists(h.argv_file), "openocd must not run on invalid serial"
             )
@@ -5936,6 +6908,62 @@ class TestFlashHelper(unittest.TestCase):
             args = _nul_args(h.argv_file)
             self.assertIn("adapter serial RECEIVER-0001", args)
             self.assertIn("runner-resolved nRF54L15 identity", r.stdout)
+            self.assertIn(
+                "nrf54l-load {%s}"
+                % os.path.join(
+                    h.repo, "build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex"
+                ),
+                args,
+            )
+            self._assert_no_identity_discovery(h)
+
+    def test_receiver_missing_serial_rejected_before_openocd_or_discovery(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            for rel in (
+                "build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex",
+                "build/nrf54l15/flpr/zephyr/zephyr.hex",
+            ):
+                path = os.path.join(h.repo, rel)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write("hex\n")
+            for value in (None, ""):
+                with self.subTest(value=value):
+                    env = (
+                        {"FW_NRF54L15_PROBE_SERIAL": value} if value is not None else {}
+                    )
+                    r = h.run_receiver_flash(env_extra=env)
+                    self.assertNotEqual(0, r.returncode)
+                    self.assertIn("FW_NRF54L15_PROBE_SERIAL is required", r.stderr)
+                    self.assertFalse(os.path.exists(h.argv_file))
+                    self._assert_no_identity_discovery(h)
+
+    def test_receiver_flash_forces_cmsis_dap_over_inherited_jlink(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            stage = os.path.join(td, "stage")
+            os.mkdir(stage)
+            cpu = os.path.join(stage, "cpuapp.hex")
+            flpr = os.path.join(stage, "flpr.hex")
+            for path in (cpu, flpr):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write("hex\n")
+            interface_file = os.path.join(td, "openocd.interface")
+            r = h.run_receiver_flash(
+                env_extra={
+                    "FW_NRF54L15_PROBE_SERIAL": "RECEIVER-0001",
+                    "FW_NRF54L15_CPUAPP_HEX": cpu,
+                    "FW_NRF54L15_FLPR_HEX": flpr,
+                    "OPENOCD_INTERFACE": "jlink",
+                    "FAKE_OPENOCD_INTERFACE_FILE": interface_file,
+                }
+            )
+            self.assertEqual(0, r.returncode, r.stderr)
+            with open(interface_file, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "cmsis-dap")
+            self.assertIn("adapter serial RECEIVER-0001", _nul_args(h.argv_file))
+            self._assert_no_identity_discovery(h)
 
     def test_receiver_invalid_resolved_serial_rejected(self):
         with tempfile.TemporaryDirectory() as td:
@@ -5975,10 +7003,11 @@ class TestFlashHelper(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             args = _nul_args(h.argv_file)
             self.assertLess(
-                args.index("nrf54l-load %s" % cpu), args.index("nrf54l-load %s" % flpr)
+                args.index("nrf54l-load {%s}" % cpu),
+                args.index("nrf54l-load {%s}" % flpr),
             )
-            self.assertIn("verify_image %s" % cpu, args)
-            self.assertIn("verify_image %s" % flpr, args)
+            self.assertIn("verify_image {%s}" % cpu, args)
+            self.assertIn("verify_image {%s}" % flpr, args)
 
             os.unlink(h.argv_file)
             r = h.run_receiver_flash(env_extra={"FW_NRF54L15_CPUAPP_HEX": cpu})
@@ -6000,34 +7029,99 @@ class TestFlashHelper(unittest.TestCase):
             self.assertIn("outside repository", r.stderr)
             self.assertFalse(os.path.exists(h.argv_file))
 
-    def test_source_artifact_overrides_are_pairwise_safe_and_preserve_order(self):
+    def test_receiver_override_quotes_spaces_and_rejects_unsafe_tcl_paths(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            stage = os.path.join(td, "stage")
+            os.mkdir(stage)
+            cpu = os.path.join(stage, "cpu app.hex")
+            flpr = os.path.join(stage, "flpr image.hex")
+            for path in (cpu, flpr):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write("hex\n")
+            env = {
+                "FW_NRF54L15_PROBE_SERIAL": "RECEIVER-0001",
+                "FW_NRF54L15_CPUAPP_HEX": cpu,
+                "FW_NRF54L15_FLPR_HEX": flpr,
+            }
+            r = h.run_receiver_flash(env_extra=env)
+            self.assertEqual(0, r.returncode, r.stderr)
+            args = _nul_args(h.argv_file)
+            for path in (cpu, flpr):
+                self.assertIn("nrf54l-load {%s}" % path, args)
+                self.assertIn("verify_image {%s}" % path, args)
+            os.unlink(h.argv_file)
+            for bad_name in ("bad{tcl}.hex", "bad\\tcl.hex", "bad\nline.hex"):
+                bad = os.path.join(stage, bad_name)
+                with open(bad, "w", encoding="utf-8") as fh:
+                    fh.write("hex\n")
+                for role in ("CPUAPP", "FLPR"):
+                    with self.subTest(bad_name=bad_name, role=role):
+                        r = h.run_receiver_flash(
+                            env_extra={**env, "FW_NRF54L15_%s_HEX" % role: bad}
+                        )
+                        self.assertNotEqual(0, r.returncode)
+                        self.assertIn("unsafe Tcl characters", r.stderr)
+                        self.assertFalse(os.path.exists(h.argv_file))
+
+    def test_source_artifact_override_and_legacy_cpunet_rejection(self):
         with tempfile.TemporaryDirectory() as td:
             h = FlashHelperHarness(td)
             stage = os.path.join(td, "stage")
             os.makedirs(stage)
             app = os.path.join(stage, "cpuapp.hex")
-            net = os.path.join(stage, "cpunet.hex")
-            for path, contents in ((app, "app\n"), (net, "net\n")):
-                with open(path, "w", encoding="utf-8") as fh:
-                    fh.write(contents)
-            r = h.run(
-                env_extra={
-                    "FW_HIL_SOURCE_CPUAPP_HEX": app,
-                    "FW_HIL_SOURCE_CPUNET_HEX": net,
-                }
-            )
+            with open(app, "w", encoding="utf-8") as fh:
+                fh.write("app\n")
+            r = h.run(env_extra={"FW_HIL_SOURCE_CPUAPP_HEX": app})
             self.assertEqual(r.returncode, 0, r.stderr)
             args = _nul_args(h.argv_file)
-            self.assertLess(
-                args.index("program %s verify" % net),
-                args.index("program %s verify" % app),
-            )
+            self.assertIn("nrf54l-load {%s}" % app, args)
+            self.assertIn("verify_image {%s}" % app, args)
 
             os.unlink(h.argv_file)
-            r = h.run(env_extra={"FW_HIL_SOURCE_CPUAPP_HEX": app})
+            r = h.run(env_extra={"FW_HIL_SOURCE_CPUNET_HEX": app})
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("must be supplied together", r.stderr)
+            self.assertIn("Legacy CPUNET", r.stderr)
             self.assertFalse(os.path.exists(h.argv_file))
+
+            for invalid in ("relative.hex", os.path.join(h.repo, "bad.hex")):
+                if invalid.startswith(h.repo):
+                    with open(invalid, "w", encoding="utf-8") as fh:
+                        fh.write("bad\n")
+                r = h.run(env_extra={"FW_HIL_SOURCE_CPUAPP_HEX": invalid})
+                self.assertNotEqual(r.returncode, 0)
+                self.assertFalse(os.path.exists(h.argv_file))
+
+    def test_source_override_rejects_empty_symlink_and_tcl_unsafe_paths(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            stage = os.path.join(td, "stage")
+            os.mkdir(stage)
+            image = os.path.join(stage, "cpuapp.hex")
+            with open(image, "w", encoding="utf-8") as fh:
+                fh.write("hex\n")
+            link = os.path.join(stage, "link.hex")
+            os.symlink(image, link)
+            unsafe = os.path.join(stage, "bad{tcl}.hex")
+            with open(unsafe, "w", encoding="utf-8") as fh:
+                fh.write("hex\n")
+            for path in ("", link, unsafe, os.path.join(stage, "missing.hex")):
+                with self.subTest(path=path):
+                    result = h.run(env_extra={"FW_HIL_SOURCE_CPUAPP_HEX": path})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(os.path.exists(h.argv_file))
+
+    def test_source_override_tcl_braces_quote_spaces(self):
+        with tempfile.TemporaryDirectory() as td:
+            h = FlashHelperHarness(td)
+            image = os.path.join(td, "source image.hex")
+            with open(image, "w", encoding="utf-8") as fh:
+                fh.write("hex\n")
+            result = h.run(env_extra={"FW_HIL_SOURCE_CPUAPP_HEX": image})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = _nul_args(h.argv_file)
+            self.assertIn("nrf54l-load {%s}" % image, args)
+            self.assertIn("verify_image {%s}" % image, args)
 
     def test_missing_serial_rejected(self):
         with tempfile.TemporaryDirectory() as td:
@@ -6041,7 +7135,7 @@ class TestFlashHelper(unittest.TestCase):
             h = FlashHelperHarness(td, artifacts=False)
             r = h.run()
             self.assertNotEqual(0, r.returncode)
-            self.assertIn("No build artifacts", r.stderr)
+            self.assertIn("Invalid source build artifact", r.stderr)
             self.assertFalse(os.path.exists(h.argv_file))
 
     def test_missing_dev_shell_rejected(self):
@@ -6052,7 +7146,7 @@ class TestFlashHelper(unittest.TestCase):
             # Prepend an empty bin dir (no west) but keep bash resolvable.
             env["PATH"] = os.path.join(td, "emptybin") + os.pathsep + env["PATH"]
             os.makedirs(os.path.join(td, "emptybin"), exist_ok=True)
-            env["FW_HIL_SOURCE_JLINK_SERIAL"] = h.serial
+            env["FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL"] = h.serial
             r = subprocess.run(
                 [os.path.join(h.repo, "scripts", "bin", "fw-flash-hil-source")],
                 env=env,
@@ -6645,11 +7739,12 @@ class TestRunnerPassingRow(unittest.TestCase):
                 "environment.json",
                 "identity.json",
                 "nrf-probes.txt",
-                "nrf-probes-find.txt",
+                "receiver-cmsis-dap.txt",
+                "source-cmsis-dap.txt",
                 "receiver-udev.txt",
                 "source-udev.txt",
-                "source-probe-udev.txt",
-                "source-jlink.txt",
+                "session-devices.json",
+                "session-revalidations.jsonl",
                 "images.json",
                 "source-flash.log",
                 "receiver-flash.log",
@@ -6695,10 +7790,10 @@ class TestRunnerPassingRow(unittest.TestCase):
             self.assertIn("  receiver-console-tx.bin", sums)
             with open(os.path.join(run_dir, "images.json")) as fh:
                 images = json.load(fh)["images"]
-            self.assertEqual(len(images), 4)
+            self.assertEqual(len(images), 3)
             self.assertEqual(
                 [img["logical_image"] for img in images],
-                ["source-app", "source-cpunet", "receiver-cpuapp", "receiver-flpr"],
+                ["source-app", "receiver-cpuapp", "receiver-flpr"],
             )
             # Lock released, console threads joined, no lingering state.
             self.assertEqual(os.listdir(os.path.join(out_root, ".locks")), [])
@@ -6708,19 +7803,19 @@ class TestRunnerPassingRow(unittest.TestCase):
                 commands = [json.loads(line) for line in fh if line.strip()]
             argv0 = [c["argv"][0] for c in commands]
             self.assertIn("lsof", argv0)
-            self.assertIn("fw-flash-hil-source", argv0)
+            self.assertIn("fw-flash-hil-source-54l15", argv0)
             self.assertIn("fw-flash-54l15", argv0)
             source_flash = next(
                 command
                 for command in commands
-                if command["argv"] == ["fw-flash-hil-source"]
+                if command["argv"] == ["fw-flash-hil-source-54l15"]
             )
             receiver_flash = next(
                 command for command in commands if command["argv"] == ["fw-flash-54l15"]
             )
             self.assertEqual(
                 source_flash["env"],
-                {"FW_HIL_SOURCE_JLINK_SERIAL": hil_fakes.SOURCE_SERIAL},
+                {"FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL": hil_fakes.SOURCE_SERIAL},
             )
             self.assertEqual(
                 receiver_flash["env"],
@@ -7316,9 +8411,9 @@ class TestRunnerPassingRow(unittest.TestCase):
             self.assertEqual(result[0], "failed")
             with open(os.path.join(out_root, run_id, "commands.jsonl")) as fh:
                 commands = [json.loads(line) for line in fh if line.strip()]
-            self.assertEqual(commands[0]["argv"], ["lsof", "--", "/dev/ttyACM1"])
-            self.assertIsNone(commands[0]["status"])
-            self.assertIn("injected process launch failure", commands[0]["error"])
+            self.assertEqual(commands[-1]["argv"], ["lsof", "--", "/dev/ttyACM1"])
+            self.assertIsNone(commands[-1]["status"])
+            self.assertIn("injected process launch failure", commands[-1]["error"])
 
     def test_commands_ledger_failure_releases_fixture_and_consoles(self):
         # commands.jsonl comes after CleanupStack.close(). A failed evidence
@@ -7403,7 +8498,7 @@ class TestRunnerPassingRow(unittest.TestCase):
                 for e in ledger
                 if "argv" in e
                 and e["argv"]
-                and e["argv"][0] in ("fw-flash-hil-source", "fw-flash-54l15")
+                and e["argv"][0] in ("fw-flash-hil-source-54l15", "fw-flash-54l15")
             ]
             self.assertEqual(len(opens), 2)
             self.assertEqual(len(readies), 2)
@@ -8551,7 +9646,7 @@ class TestRunnerFailures(unittest.TestCase):
         run_cmd = hil_fakes.ScriptedRunner()
         run_cmd.script_exit(["lsof", "--", "/dev/ttyACM1"], 1)
         run_cmd.script(
-            ["fw-flash-hil-source"],
+            ["fw-flash-hil-source-54l15"],
             hil_fakes.FakeProc(stdout="program verify\nreset run\n"),
         )
         run_cmd.script(["fw-flash-54l15"], hil_fakes.FakeProc(stdout="ok\n"))
@@ -8568,7 +9663,7 @@ class TestRunnerFailures(unittest.TestCase):
             run_cmd=run_cmd,
             repo_root=repo_fake,
         )
-        engine = Runner(deps)
+        engine = SessionRunner(deps)
         result = engine.run(
             fixture_path,
             binding_path,
@@ -8583,7 +9678,7 @@ class TestRunnerFailures(unittest.TestCase):
     def test_flash_nonzero_fails_with_evidence(self):
         def mutate(run_cmd):
             run_cmd.rules[1] = (
-                ["fw-flash-hil-source"],
+                ["fw-flash-hil-source-54l15"],
                 hil_fakes.FakeProc(stdout="", stderr="flash boom", returncode=1),
                 True,
             )
@@ -8606,26 +9701,51 @@ class TestRunnerFailures(unittest.TestCase):
             fixture_path, binding_path = hil_fakes.write_fixture_binding(cfg)
             junit = os.path.join(out_root, "%s.junit.xml" % RUN_ID)
 
-            def fail_discovery(_binding, sysfs_root=None, run_cmd=None):
-                del sysfs_root, run_cmd
-                exc = HilDiscoveryError("injected identity drift")
-                exc.raw = MappingProxyType(
-                    {
-                        "nrf-probes": {
-                            "argv": ["nrf-probes"],
-                            "stdout": "probe table\n",
-                            "stderr": "",
-                            "status": 0,
-                        }
-                    }
+            def fail_session_identity(
+                manifest, fixture, binding_path_arg, binding, *, run_cmd, sysfs_root
+            ):
+                def wrong_target(argv, timeout):
+                    if argv[:2] == ["nix-nrf", "probes"]:
+                        return hil_fakes.FakeProc(
+                            stdout=hil_fakes.default_probe_table(
+                                rows=[
+                                    (
+                                        hil_fakes.RECEIVER_SERIAL,
+                                        "DAPLink",
+                                        "nRF54L15",
+                                        "0x6ba02477",
+                                        "0x00054b15",
+                                        "AAC0",
+                                        "",
+                                    ),
+                                    (
+                                        hil_fakes.SOURCE_SERIAL,
+                                        "CMSIS-DAP",
+                                        "nRF54L15",
+                                        "0x6ba02477",
+                                        "0x00005340",
+                                        "AAC0",
+                                        "",
+                                    ),
+                                ]
+                            )
+                        )
+                    return run_cmd(argv, timeout)
+
+                return session.revalidate_session(
+                    manifest,
+                    fixture,
+                    binding_path_arg,
+                    binding,
+                    run_cmd=wrong_target,
+                    sysfs_root=sysfs_root,
                 )
-                raise exc
 
             deps = RunnerDeps(
-                discover=fail_discovery,
+                session_revalidator=fail_session_identity,
                 environment=lambda argv, status: {"argv": argv, "status": status},
             )
-            result = Runner(deps).run(
+            result = SessionRunner(deps).run(
                 fixture_path,
                 binding_path,
                 out_root,
@@ -8634,13 +9754,13 @@ class TestRunnerFailures(unittest.TestCase):
                 argv=["hil-runner.py", "run"],
             )
             self.assertEqual(result[0], "failed")
-            self.assertEqual(result[1], "setup")
+            self.assertEqual(result[1], "session revalidate: setup identity")
             run_dir = os.path.join(out_root, RUN_ID)
             with open(os.path.join(run_dir, "identity.json")) as fh:
                 identity = json.load(fh)
             self.assertFalse(identity["resolved"])
             with open(os.path.join(run_dir, "nrf-probes.txt")) as fh:
-                self.assertIn("probe table", fh.read())
+                self.assertIn("0x00005340", fh.read())
             with open(os.path.join(run_dir, "MANIFEST.md")) as fh:
                 self.assertIn("outcome: failed", fh.read())
 
@@ -8660,7 +9780,7 @@ class TestRunnerFailures(unittest.TestCase):
                 del timeout, env
                 if argv == ["lsof", "--", "/dev/ttyACM1"]:
                     return hil_fakes.FakeProc(returncode=1)
-                if argv == ["fw-flash-hil-source"]:
+                if argv == ["fw-flash-hil-source-54l15"]:
                     raise CommandCancelled(
                         "cancelled during command",
                         subprocess.CompletedProcess(
@@ -8677,7 +9797,7 @@ class TestRunnerFailures(unittest.TestCase):
                 run_cmd=cancel_flash,
                 repo_root=repo_fake,
             )
-            result = Runner(deps).run(
+            result = SessionRunner(deps).run(
                 fixture_path,
                 binding_path,
                 out_root,
@@ -8700,7 +9820,7 @@ class TestRunnerFailures(unittest.TestCase):
             flash = next(
                 record
                 for record in commands
-                if record["argv"] == ["fw-flash-hil-source"]
+                if record["argv"] == ["fw-flash-hil-source-54l15"]
             )
             self.assertEqual(flash["status"], -15)
             self.assertIn("partial flash", flash["stdout"])
@@ -8716,8 +9836,10 @@ class TestRunnerFailures(unittest.TestCase):
         result, run_dir = self._fail_harness(mutate)
         self.assertEqual(result[0], "failed")
         self.assertIn("preflight tty", result[1])
-        # No serial console evidence: preflight fails before open.
-        self.assertFalse(os.path.isfile(os.path.join(run_dir, "receiver-console.bin")))
+        # Receiver opened first in session-bound order; source preflight blocks
+        # source console and both flashes, while cleanup closes receiver.
+        self.assertTrue(os.path.isfile(os.path.join(run_dir, "receiver-console.bin")))
+        self.assertFalse(os.path.isfile(os.path.join(run_dir, "source-console.bin")))
 
     def test_boot_marker_timeout_fails(self):
         def mutate(run_cmd):
@@ -8736,7 +9858,7 @@ class TestRunnerFailures(unittest.TestCase):
             run_cmd = hil_fakes.ScriptedRunner()
             run_cmd.script_exit(["lsof", "--", "/dev/ttyACM1"], 1)
             run_cmd.script(
-                ["fw-flash-hil-source"],
+                ["fw-flash-hil-source-54l15"],
                 hil_fakes.FakeProc(stdout="ok\n"),
             )
             run_cmd.script(["fw-flash-54l15"], hil_fakes.FakeProc(stdout="ok\n"))
@@ -8755,7 +9877,7 @@ class TestRunnerFailures(unittest.TestCase):
                 run_cmd=run_cmd,
                 repo_root=repo_fake,
             )
-            engine = Runner(deps)
+            engine = SessionRunner(deps)
             result = engine.run(
                 fixture_path,
                 binding_path,
@@ -8787,7 +9909,7 @@ class TestRunnerFailures(unittest.TestCase):
             run_cmd = hil_fakes.ScriptedRunner()
             run_cmd.script_exit(["lsof", "--", "/dev/ttyACM1"], 1)
             run_cmd.script(
-                ["fw-flash-hil-source"],
+                ["fw-flash-hil-source-54l15"],
                 hil_fakes.FakeProc(stdout="ok\n"),
             )
             run_cmd.script(["fw-flash-54l15"], hil_fakes.FakeProc(stdout="ok\n"))
@@ -8807,7 +9929,7 @@ class TestRunnerFailures(unittest.TestCase):
                 clock=lambda: time.monotonic() + 1000.0,
                 repo_root=repo_fake,
             )
-            engine = Runner(deps)
+            engine = SessionRunner(deps)
             result = engine.run(
                 fixture_path,
                 binding_path,
@@ -8844,7 +9966,9 @@ class TestRunnerFailures(unittest.TestCase):
             junit = os.path.join(out_root, "%s.junit.xml" % RUN_ID)
             run_cmd = hil_fakes.ScriptedRunner()
             run_cmd.script_exit(["lsof", "--", "/dev/ttyACM1"], 1)
-            run_cmd.script(["fw-flash-hil-source"], hil_fakes.FakeProc(stdout="ok\n"))
+            run_cmd.script(
+                ["fw-flash-hil-source-54l15"], hil_fakes.FakeProc(stdout="ok\n")
+            )
             run_cmd.script(["fw-flash-54l15"], hil_fakes.FakeProc(stdout="ok\n"))
             receiver_wire = _receiver_passing_wire(RUN_ID)
             source_t = hil_fakes.SourceTranscript(RUN_ID)
@@ -8877,7 +10001,7 @@ class TestRunnerFailures(unittest.TestCase):
                 run_cmd=run_cmd,
                 repo_root=repo_fake,
             )
-            outcome, boundary, cleanup = Runner(deps).run(
+            outcome, boundary, cleanup = SessionRunner(deps).run(
                 fixture_path,
                 binding_path,
                 out_root,
@@ -8912,7 +10036,7 @@ class TestRunnerFailures(unittest.TestCase):
             run_cmd = hil_fakes.ScriptedRunner()
             run_cmd.script_exit(["lsof", "--", "/dev/ttyACM1"], 1)
             run_cmd.script(
-                ["fw-flash-hil-source"],
+                ["fw-flash-hil-source-54l15"],
                 hil_fakes.FakeProc(stdout="ok\n"),
             )
             run_cmd.script(["fw-flash-54l15"], hil_fakes.FakeProc(stdout="ok\n"))
@@ -8940,7 +10064,7 @@ class TestRunnerFailures(unittest.TestCase):
                 clock=lambda: time.monotonic() + 1000.0,
                 repo_root=repo_fake,
             )
-            engine = Runner(deps)
+            engine = SessionRunner(deps)
             result = engine.run(
                 fixture_path,
                 binding_path,
@@ -8978,7 +10102,7 @@ class TestRunnerFailures(unittest.TestCase):
             run_cmd = hil_fakes.ScriptedRunner()
             run_cmd.script_exit(["lsof", "--", "/dev/ttyACM1"], 1)
             run_cmd.script(
-                ["fw-flash-hil-source"],
+                ["fw-flash-hil-source-54l15"],
                 hil_fakes.FakeProc(stdout="ok\n"),
             )
             run_cmd.script(["fw-flash-54l15"], hil_fakes.FakeProc(stdout="ok\n"))
@@ -9014,7 +10138,7 @@ class TestRunnerFailures(unittest.TestCase):
                 return console
 
             deps.serial_factory = failing_factory
-            engine = Runner(deps)
+            engine = SessionRunner(deps)
             result = engine.run(
                 fixture_path,
                 binding_path,
@@ -9253,7 +10377,7 @@ class TestRunnerFailures(unittest.TestCase):
             run_cmd = hil_fakes.ScriptedRunner()
             run_cmd.script_exit(["lsof", "--", "/dev/ttyACM1"], 1)
             run_cmd.script(
-                ["fw-flash-hil-source"],
+                ["fw-flash-hil-source-54l15"],
                 hil_fakes.FakeProc(stdout="ok\n"),
             )
             run_cmd.script(["fw-flash-54l15"], hil_fakes.FakeProc(stdout="ok\n"))
@@ -9303,7 +10427,7 @@ class TestRunnerFailures(unittest.TestCase):
                 run_cmd=run_cmd,
                 repo_root=repo_fake,
             )
-            engine = Runner(deps)
+            engine = SessionRunner(deps)
             result = engine.run(
                 fixture_path,
                 binding_path,
@@ -9333,6 +10457,408 @@ class TestRunnerFailures(unittest.TestCase):
             self.assertIn("failure detail: invalid receiver status", junit_text)
 
 
+class TestRunnerSessionBound(unittest.TestCase):
+    def test_source_board_session_compatibility_fails_before_external_action(self):
+        def no_command(argv, timeout, env=None):
+            del timeout, env
+            commands.append(list(argv))
+            raise AssertionError("unexpected command")
+
+        def no_console(*args):
+            console_calls.append(args)
+            raise AssertionError("unexpected console")
+
+        with tempfile.TemporaryDirectory() as td:
+            commands = []
+            console_calls = []
+            out_root = os.path.join(td, "out")
+            os.makedirs(out_root)
+            fixture_path = os.path.join(
+                _REPO, "tests", "hil", "fixture-xiao-source.json"
+            )
+            binding_path = os.path.join(
+                _REPO, "tests", "hil", "fixture-xiao-source.local.example.json"
+            )
+            result = Runner(
+                RunnerDeps(
+                    run_cmd=no_command,
+                    serial_factory=no_console,
+                    environment=lambda argv, status: {"argv": argv, "status": status},
+                )
+            ).run(
+                fixture_path,
+                binding_path,
+                out_root,
+                RUN_ID,
+                os.path.join(out_root, "xiao.junit.xml"),
+                argv=["hil-runner.py", "run"],
+            )
+            self.assertEqual(result[0], "failed")
+            self.assertEqual(result[1], "session")
+            self.assertEqual(commands, [])
+            self.assertEqual(console_calls, [])
+
+        with tempfile.TemporaryDirectory() as td:
+            commands = []
+            console_calls = []
+            loader_calls = []
+            out_root = os.path.join(td, "out")
+            cfg = os.path.join(td, "cfg")
+            os.makedirs(out_root)
+            os.makedirs(cfg)
+            fixture_path, binding_path = hil_fakes.write_fixture_binding(cfg)
+            result = Runner(
+                RunnerDeps(
+                    run_cmd=no_command,
+                    serial_factory=no_console,
+                    session_loader=lambda *args: loader_calls.append(args),
+                    environment=lambda argv, status: {"argv": argv, "status": status},
+                )
+            ).run(
+                fixture_path,
+                binding_path,
+                out_root,
+                RUN_ID,
+                os.path.join(out_root, "nrf54l15.junit.xml"),
+                argv=[
+                    "hil-runner.py",
+                    "run",
+                    "--session-manifest",
+                    "/tmp/devices.json",
+                ],
+                session_manifest_path="/tmp/devices.json",
+            )
+            self.assertEqual(result[0], "failed")
+            self.assertEqual(result[1], "session")
+            self.assertEqual(commands, [])
+            self.assertEqual(console_calls, [])
+            self.assertEqual(len(loader_calls), 1)
+
+    def test_session_bound_xiao_row_uses_fresh_ttys_and_retains_evidence(self):
+        stale = fake_xiao_resolution("/dev/ttyACM0", "/dev/ttyACM1")
+        fresh = fake_xiao_resolution("/dev/ttyACM7", "/dev/ttyACM8")
+        resolutions = {"setup identity": stale}
+        resolutions.update({before: fresh for before in SESSION_CHECKPOINTS[1:]})
+        with tempfile.TemporaryDirectory() as td:
+            run = _run_xiao_session_harness(td, resolutions=resolutions, ledger=[])
+            self.assertEqual(run["result"], ("passed", None, []))
+            self.assertEqual(run["revalidation_calls"], list(SESSION_CHECKPOINTS))
+            run_dir = run["run_dir"]
+
+            with open(os.path.join(run_dir, "session-devices.json"), "rb") as fh:
+                self.assertEqual(fh.read(), run["manifest"].raw_bytes)
+            with open(os.path.join(run_dir, "session.json"), encoding="utf-8") as fh:
+                session_json = json.load(fh)
+            self.assertEqual(
+                set(session_json),
+                {
+                    "path",
+                    "sha256",
+                    "session_id",
+                    "created_at_utc",
+                    "fixture_id",
+                    "fixture_sha256",
+                    "binding_sha256",
+                    "roles",
+                },
+            )
+            self.assertEqual(session_json["path"], run["manifest"].path)
+            self.assertEqual(session_json["sha256"], run["manifest"].sha256)
+            self.assertEqual(
+                session_json["roles"],
+                {
+                    "receiver": hil_fakes.RECEIVER_SERIAL,
+                    "source": hil_fakes.SOURCE_SERIAL,
+                },
+            )
+            with open(
+                os.path.join(run_dir, "session-revalidations.jsonl"), encoding="utf-8"
+            ) as fh:
+                snapshots = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual(
+                [(snapshot["before"], snapshot["sequence"]) for snapshot in snapshots],
+                list(zip(SESSION_CHECKPOINTS, range(len(SESSION_CHECKPOINTS)))),
+            )
+            self.assertTrue(
+                all(
+                    set(snapshot) == {"before", "sequence", "roles"}
+                    for snapshot in snapshots
+                )
+            )
+            self.assertEqual(
+                snapshots[0]["roles"]["receiver"]["serial"]["path"],
+                "/dev/ttyACM0",
+            )
+            self.assertEqual(
+                snapshots[1]["roles"]["receiver"]["serial"]["path"],
+                "/dev/ttyACM7",
+            )
+
+            with open(os.path.join(run_dir, "images.json"), encoding="utf-8") as fh:
+                images = json.load(fh)["images"]
+            self.assertEqual(
+                [image["logical_image"] for image in images],
+                ["source-app", "receiver-cpuapp", "receiver-flpr"],
+            )
+            self.assertEqual(
+                [image["path"] for image in images],
+                [
+                    "build/hil-source-nrf54l15/zephyr/zephyr.hex",
+                    "build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex",
+                    "build/nrf54l15/flpr/zephyr/zephyr.hex",
+                ],
+            )
+            with open(os.path.join(run_dir, "commands.jsonl"), encoding="utf-8") as fh:
+                commands = [json.loads(line) for line in fh if line.strip()]
+            revalidations = [
+                command
+                for command in commands
+                if command["argv"][:1] == ["session-revalidate"]
+            ]
+            self.assertEqual(
+                [command["argv"][1] for command in revalidations],
+                list(SESSION_CHECKPOINTS),
+            )
+            self.assertTrue(all(command["stdout"] for command in revalidations))
+            self.assertTrue(all(command["stderr"] for command in revalidations))
+            source_flash = next(
+                command
+                for command in commands
+                if command["argv"] == ["fw-flash-hil-source-54l15"]
+            )
+            self.assertEqual(
+                source_flash["env"],
+                {"FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL": "XIAO-SOURCE"},
+            )
+            self.assertFalse(
+                any(command["argv"] == ["fw-flash-hil-source"] for command in commands)
+            )
+            receiver_flash = next(
+                command for command in commands if command["argv"] == ["fw-flash-54l15"]
+            )
+            self.assertEqual(
+                receiver_flash["env"],
+                {"FW_NRF54L15_PROBE_SERIAL": "XIAO-RECEIVER"},
+            )
+            with open(os.path.join(run_dir, "SHA256SUMS"), encoding="utf-8") as fh:
+                sums = fh.read()
+            for name in (
+                "session-devices.json",
+                "session.json",
+                "session-revalidations.jsonl",
+            ):
+                self.assertIn("  %s" % name, sums)
+
+            ledger = run["ledger"]
+
+            def event_index(predicate):
+                return next(
+                    index for index, event in enumerate(ledger) if predicate(event)
+                )
+
+            receiver_checkpoint = event_index(
+                lambda event: (
+                    event.get("argv") == ["session-revalidate", "receiver serial open"]
+                )
+            )
+            receiver_open = event_index(
+                lambda event: (
+                    event.get("event") == "console-open"
+                    and event.get("role") == "receiver"
+                )
+            )
+            source_checkpoint = event_index(
+                lambda event: (
+                    event.get("argv") == ["session-revalidate", "source serial open"]
+                )
+            )
+            source_open = event_index(
+                lambda event: (
+                    event.get("event") == "console-open"
+                    and event.get("role") == "source"
+                )
+            )
+            source_flash_checkpoint = event_index(
+                lambda event: (
+                    event.get("argv") == ["session-revalidate", "source flash"]
+                )
+            )
+            source_flash_event = event_index(
+                lambda event: event.get("argv") == ["fw-flash-hil-source-54l15"]
+            )
+            receiver_flash_checkpoint = event_index(
+                lambda event: (
+                    event.get("argv") == ["session-revalidate", "receiver flash"]
+                )
+            )
+            receiver_flash_event = event_index(
+                lambda event: event.get("argv") == ["fw-flash-54l15"]
+            )
+            row_checkpoint = event_index(
+                lambda event: event.get("argv") == ["session-revalidate", "row action"]
+            )
+            first_clean_write = event_index(
+                lambda event: (
+                    event.get("event") == "serial-write"
+                    and event.get("role") == "receiver"
+                )
+            )
+            self.assertLess(receiver_checkpoint, receiver_open)
+            self.assertLess(source_checkpoint, source_open)
+            self.assertLess(source_flash_checkpoint, source_flash_event)
+            self.assertLess(receiver_flash_checkpoint, receiver_flash_event)
+            self.assertLess(row_checkpoint, first_clean_write)
+            self.assertEqual(ledger[receiver_open]["path"], "/dev/ttyACM7")
+            self.assertEqual(ledger[source_open]["path"], "/dev/ttyACM8")
+            lsof = event_index(
+                lambda event: event.get("argv") == ["lsof", "--", "/dev/ttyACM8"]
+            )
+            self.assertLess(source_checkpoint, lsof)
+            self.assertLess(lsof, source_open)
+
+    def test_post_open_tty_drift_blocks_guarded_action_and_closes_consoles(self):
+        blocked = {
+            "source flash": set(),
+            "receiver flash": {"fw-flash-hil-source-54l15"},
+            "row action": {"fw-flash-hil-source-54l15", "fw-flash-54l15"},
+        }
+        for before, expected_helpers in blocked.items():
+            with self.subTest(before=before), tempfile.TemporaryDirectory() as td:
+                run = _run_xiao_session_harness(
+                    td,
+                    resolutions={
+                        before: fake_xiao_resolution(source_path="/dev/ttyACM9")
+                    },
+                )
+                self.assertEqual(run["result"][0], "failed")
+                self.assertEqual(run["result"][1], "session revalidate: %s" % before)
+                helper_argv = {
+                    event["argv"][0]
+                    for event in run["ledger"]
+                    if event.get("argv")
+                    and event["argv"][0]
+                    in ("fw-flash-hil-source-54l15", "fw-flash-54l15")
+                }
+                self.assertEqual(helper_argv, expected_helpers)
+                self.assertTrue(run["receiver_wire"].closed)
+                self.assertTrue(run["source_wire"].closed)
+                with open(
+                    os.path.join(run["run_dir"], "session-revalidations.jsonl"),
+                    encoding="utf-8",
+                ) as fh:
+                    snapshots = [json.loads(line) for line in fh if line.strip()]
+                expected = list(
+                    SESSION_CHECKPOINTS[: SESSION_CHECKPOINTS.index(before) + 1]
+                )
+                self.assertEqual(
+                    [snapshot["before"] for snapshot in snapshots], expected
+                )
+                if before == "row action":
+                    self.assertEqual(run["receiver_wire"].writes, [])
+
+    def test_revalidation_error_preserves_prior_evidence_and_blocks_source_flash(self):
+        for label, error in (
+            ("manifest", session.HilSessionError("manifest bytes changed")),
+            ("fixture", session.HilSessionError("fixture bytes changed")),
+            ("probe", HilDiscoveryError("source probe AP IDR drift")),
+            ("usb", session.HilSessionError("source USB parent drift")),
+            ("udev", session.HilSessionError("source stable udev drift")),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as td:
+                run = _run_xiao_session_harness(
+                    td, revalidation_failures={"source flash": error}
+                )
+                self.assertEqual(run["result"][0], "failed")
+                self.assertEqual(run["result"][1], "session revalidate: source flash")
+                self.assertFalse(
+                    any(
+                        event.get("argv") == ["fw-flash-hil-source-54l15"]
+                        for event in run["ledger"]
+                    )
+                )
+                with open(
+                    os.path.join(run["run_dir"], "session-revalidations.jsonl"),
+                    encoding="utf-8",
+                ) as fh:
+                    snapshots = [json.loads(line) for line in fh if line.strip()]
+                self.assertEqual(
+                    [snapshot["before"] for snapshot in snapshots],
+                    list(SESSION_CHECKPOINTS[:3]),
+                )
+
+    def test_xiao_image_and_artifact_guards_fail_before_serial_open(self):
+        with tempfile.TemporaryDirectory() as td:
+            run = _run_xiao_session_harness(td, include_source_image=False)
+            self.assertEqual(run["result"][0], "failed")
+            self.assertEqual(run["result"][1], "hash images")
+            with open(
+                os.path.join(run["run_dir"], "result.json"), encoding="utf-8"
+            ) as fh:
+                result_json = json.load(fh)
+            self.assertIn(
+                "build/hil-source-nrf54l15/zephyr/zephyr.hex",
+                result_json["failure_detail"],
+            )
+            self.assertEqual(run["revalidation_calls"], ["setup identity"])
+            self.assertFalse(
+                any(event.get("event") == "console-open" for event in run["ledger"])
+            )
+
+        with tempfile.TemporaryDirectory() as td:
+            import rh4_artifact_test
+            from hil import artifacts as artifact_resolver
+
+            receiver_archive = os.path.join(
+                td, "le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip"
+            )
+            source_archive = os.path.join(td, "source.zip")
+            rh4_artifact_test.receiver_archive(receiver_archive)
+            rh4_artifact_test.source_archive(source_archive)
+            artifact_set = artifact_resolver.resolve_artifacts(
+                receiver_archive, source_archive, staging_parent=td
+            )
+            try:
+                run = _run_xiao_session_harness(td, artifacts=artifact_set)
+                self.assertEqual(run["result"], ("passed", None, []))
+                flashes = [
+                    event
+                    for event in run["ledger"]
+                    if event.get("argv") == ["fw-flash-hil-source-54l15"]
+                ]
+                self.assertEqual(len(flashes), 1)
+                self.assertEqual(
+                    flashes[0]["env"]["FW_HIL_SOURCE_CPUAPP_HEX"],
+                    artifact_resolver.image_by_role(
+                        artifact_set.source_images, "cpuapp"
+                    ).path,
+                )
+            finally:
+                artifact_resolver.cleanup_artifacts(artifact_set)
+
+    def test_boot_failure_blocks_session_row_action_checkpoint(self):
+        transcript = hil_fakes.SourceTranscript(RUN_ID)
+        hello_id = transcript._expect("hello")
+        invalid_hello = hil_fakes.source_hello_data()
+        invalid_hello["firmware_id"] = "wrong-firmware"
+        transcript._status(hello_id, invalid_hello)
+        source_chunks, source_writes = transcript.build()
+        source_wire = hil_fakes.Wire(
+            "source", chunks=source_chunks, assert_writes=source_writes
+        )
+        with tempfile.TemporaryDirectory() as td:
+            run = _run_xiao_session_harness(td, source_wire=source_wire)
+            self.assertEqual(run["result"][0], "failed")
+            self.assertEqual(run["result"][1], "boot")
+            self.assertEqual(run["revalidation_calls"], list(SESSION_CHECKPOINTS[:5]))
+            self.assertEqual(run["receiver_wire"].writes, [])
+            self.assertFalse(
+                any(
+                    event.get("argv") == ["session-revalidate", "row action"]
+                    for event in run["ledger"]
+                )
+            )
+
+
 def _map_status(outcome):
     """Public CLI status mapping for one runner outcome."""
     if outcome == "passed":
@@ -9348,6 +10874,7 @@ class _Args:
     output_root = "o"
     run_id = "r"
     junit = "j"
+    session_manifest = None
 
 
 # ── CLI guards ─────────────────────────────────────────────────────

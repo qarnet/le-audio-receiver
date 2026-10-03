@@ -9,7 +9,7 @@
  *   - audio_iso_seq: HCI packet sequence numbers;
  *   - audio_iso_cadence: delivered ISO timestamps (mono / Mode B).
  *
- * Production BAP audio on the nRF5340 SW Split controller usually
+ * Historical nRF5340 SW Split BAP audio usually
  * delivers either a VALID-flag callback or a LOST-flag callback for every
  * CIG event.  Observed on hardware (E83, Mode B and bonded rows): the
  * controller SOMETIMES delivers NO callback at all for a lost SDU — no
@@ -64,7 +64,7 @@
  * reported as omitted.
  *
  * IMPORTANT: HCI packet sequence continuity does NOT prove delivery
- * continuity.  The nRF5340 SW Split controller advances its per-session
+ * continuity.  Historically nRF5340 SW Split advances its per-session
  * sequence number only when an SDU is emitted to the host (see
  * isoal.c: isoal_rx_buffered_emit_sdu()/isoal_rx_try_emit_sdu()); a
  * radio event with no received PDU emits no HCI SDU and consumes no
@@ -113,7 +113,7 @@
  *     initialization state untouched;
  *   - first timestamp            -> FIRST (last_ts stored, base set);
  *   - ts < last_ts               -> WRAP: controller timestamp wrap or
- *     baseline rebase (nRF5340 SW Split wraps ~every 512 s, nRF54L15
+ *     baseline rebase (historical nRF5340 SW Split wraps ~512 s; nRF54L15
  *     SDC uses a 32-bit GRTC microsecond view).  Rebased, no synthesis,
  *     no resync increment;
  *   - forward delta -> the delivered callback positions since the last

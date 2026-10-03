@@ -2,21 +2,12 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
-# Expose project's boards/ dir to Zephyr for custom board discovery.
-list(APPEND BOARD_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
-
-# Probe selection happens at flash time (fw-flash-5340 → nrf-probes), not at
-# configure time — a serial baked into runners.yaml goes stale when probes
-# are replugged.
-
-# Net core hex path: sysbuild top-level merged_CPUNET.hex.
-# CMAKE_BINARY_DIR at this point is the app domain build dir
-# (build/<target>/le-audio-receiver), so ../merged_CPUNET.hex resolves to
-# build/<target>/merged_CPUNET.hex.
-get_filename_component(_NET_CORE_HEX "${CMAKE_BINARY_DIR}/../merged_CPUNET.hex" ABSOLUTE)
-
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(le_audio_receiver)
+
+if(NOT CONFIG_SOC_NRF54L15_CPUAPP)
+  message(FATAL_ERROR "LE Audio Receiver supports only nRF54L15 cpuapp")
+endif()
 
 target_sources(app PRIVATE
   src/main.c
@@ -95,10 +86,8 @@ if(CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE)
 endif()
 
 zephyr_sources_ifdef(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR src/audio_asrc.c)
-zephyr_sources_ifdef(CONFIG_AUDIO_CLOCK_ACTUATOR_APLL src/audio_clock_actuator_apll.c)
 zephyr_sources_ifdef(CONFIG_AUDIO_CLOCK_ACTUATOR_NONE src/audio_clock_actuator_none.c)
 zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/audio_timing_nrf54.c)
-zephyr_sources_ifndef(CONFIG_SOC_NRF54L15 src/audio_timing_none.c)
 zephyr_sources_ifdef(CONFIG_SHELL src/audio_shell.c)
 zephyr_sources_ifdef(CONFIG_SHELL src/bt_shell.c)
 zephyr_sources_ifdef(CONFIG_USER_PAIRING_CONTROL src/pairing_mode.c)
@@ -127,8 +116,7 @@ zephyr_sources_ifdef(CONFIG_SOC_NRF54L15 src/flpr_runtime.c)
 # LSP compile-database link (R8/R9 clangd work): expose this image's
 # compile_commands.json at the repo root for clangd's closest-ancestor
 # discovery.  Guarded on CONFIG_SOC_NRF54L15 so only the production
-# receiver target (nRF54L15) owns the root link — building nRF5340
-# must not flip the root flavor.  file(CREATE_LINK) is idempotent; a
+# receiver target owns the root link.  file(CREATE_LINK) is idempotent; a
 # reconfigure (--pristine included) re-creates it.  Other images create
 # their own links in their app CMakeLists; BSim and tests/unit links
 # are maintained by scripts/gen-lsp-links.sh (builds live outside the

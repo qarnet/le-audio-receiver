@@ -7,7 +7,7 @@
  * Two explicit inputs:
  *   1. audio_drift_frequency_error_update(local_clock_error_ppm)
  *      — measured PCLK-vs-GRTC ppm from platform timing (nRF54L15).
- *        Zero on nRF5340 (no hardware PCLK measurement).
+ *        Zero with the simulator no-op timing backend.
  *   2. audio_drift_controller_update(slab_free_count)
  *      — called once per rendered stereo block; reads slab free
  *        count, runs phase PI, and returns combined ppm.

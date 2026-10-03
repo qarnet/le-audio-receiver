@@ -1,47 +1,7 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: MIT
-#
-# Reset the nRF5340DK "dongle" (hci_uart central) to clear zombie SDC
-# connection slots. Repeated raw-HCI connects without a clean disconnect
-# can exhaust the netcore's 2 connection slots
-# ("Connection Rejected due to Limited Resources (0x0d)"). A full reset
-# of both cores is the reliable recovery.
-#
-# After resetting, re-attach btattach and re-apply btmgmt settings:
-#   setsid sudo btattach -B /dev/ttyACM2 -S 1000000 </dev/null >/tmp/btattach.log 2>&1 &
-#   sleep 3; sudo btmgmt --index hci0 power on; sudo btmgmt --index hci0 io-cap 3; sudo btmgmt --index hci0 sc on
-
 set -euo pipefail
-
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/bin/fw-common.sh
 source "$SCRIPT_DIR/fw-common.sh"
-
 _fw_require_env
-
-# Probe selection: the dongle is an nRF5340DK and is reset over its onboard
-# Segger J-Link (interface/jlink.cfg), exactly like fw-flash-dongle.
-# scripts/probe-serial.local and nrf-probes identify CMSIS-DAP receiver
-# targets and are NEVER consulted here — a receiver probe serial must not be
-# passed to a J-Link invocation.  Default is OpenOCD J-Link auto-detection;
-# an explicit session-local override (FW_DONGLE_JLINK_SERIAL) selects one
-# J-Link by serial and is validated before OpenOCD starts.
-JLINK_SERIAL="${FW_DONGLE_JLINK_SERIAL:-}"
-if [ -n "$JLINK_SERIAL" ]; then
-	if ! [[ "$JLINK_SERIAL" =~ ^[[:alnum:]_.:-]+$ ]]; then
-		printf 'Invalid FW_DONGLE_JLINK_SERIAL %q: must match ^[[:alnum:]_.:-]+$\n' \
-			"$JLINK_SERIAL" >&2
-		exit 1
-	fi
-	printf 'Resetting nRF5340DK dongle (J-Link override, serial %s)...\n' "$JLINK_SERIAL"
-else
-	printf 'Resetting nRF5340DK dongle (J-Link auto-detection)...\n'
-fi
-
-OPENOCD_ARGS=(-f interface/jlink.cfg -c "transport select swd" -c "adapter speed 2000")
-if [ -n "$JLINK_SERIAL" ]; then
-	OPENOCD_ARGS+=(-c "adapter serial $JLINK_SERIAL")
-fi
-OPENOCD_ARGS+=(-f target/nordic/nrf53.cfg -c init -c "reset run" -c shutdown)
-
-exec openocd "${OPENOCD_ARGS[@]}"
+exec python3 "$(_fw_repo_dir)/scripts/hci_dongle.py" reset "$@"

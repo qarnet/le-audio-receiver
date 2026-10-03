@@ -361,7 +361,12 @@ def client_values(scenario, **overrides):
 
 def client_pass(scenario, **overrides):
     values = client_values(scenario, **overrides)
-    return (
+    gap_warning = (
+        "<wrn> bt_bap_stream: Unexpected seq_num diff between 47 and 66 for 0x1234\n"
+        if scenario == "modea_one_cis_loss_10ms"
+        else ""
+    )
+    return gap_warning + (
         "d_01: @00:00:06.400000 INFO: bsim_client: "
         "scenario=%s sends0=%d sends1=%d cfgrsps=%d relrsps=%d disrsps=%d "
         "txc0=%d txh0=0x%08X txc1=%d txh1=0x%08X\n"
@@ -422,10 +427,15 @@ def test_complete_production_scenario_records():
     root = tempfile.mkdtemp()
     rejected = []
     for scenario in SCENARIOS:
-        if not run_check(
-            root, scenario, receiver_pass(scenario), client_pass(scenario)
-        ):
-            rejected.append(scenario)
+        try:
+            check(
+                scenario,
+                write_log(root, "receiver.log", receiver_pass(scenario)),
+                write_log(root, "client.log", client_pass(scenario)),
+                known_for(scenario),
+            )
+        except ParseError as exc:
+            rejected.append("%s: %s" % (scenario, exc))
     report(
         "complete records pass all 17 scenario contracts", not rejected, repr(rejected)
     )
@@ -576,7 +586,7 @@ def test_stateful_recipe_progress_fail_closed():
     reconnect = "reconnect_second_stream_10ms"
     reconnect_values = receiver_values(reconnect)
     report(
-        "reconnect segment-2 start7 recipe accepted",
+        "reconnect segment-2 fresh start0 recipe accepted",
         (
             reconnect_values["lrid1"],
             reconnect_values["rrid1"],
@@ -590,16 +600,16 @@ def test_stateful_recipe_progress_fail_closed():
             reconnect_values["rplc2"],
         )
         == (
-            "start8_10ms_l",
-            "start8_10ms_l",
-            "start7_10ms_l",
-            "start7_10ms_l",
-            107,
-            107,
+            "start0_10ms_l",
+            "start0_10ms_l",
+            "start0_10ms_l",
+            "start0_10ms_l",
             100,
             100,
-            7,
-            7,
+            100,
+            100,
+            0,
+            0,
         )
         and run_check(
             root, reconnect, receiver_pass(reconnect), client_pass(reconnect)
@@ -634,25 +644,25 @@ def test_stateful_recipe_progress_fail_closed():
     )
 
 
-def test_modea_7p5ms_asymmetric_startup_accounting():
+def test_modea_7p5ms_native_startup_accounting():
     root = tempfile.mkdtemp()
     scenario = "modea_7p5ms"
     values = receiver_values(scenario)
-    left_pre = _recipe_prefix_counts("modea_start_7p5ms_l", values["trans1"])
-    right_pre = _recipe_prefix_counts("modea_start_7p5ms_r", values["trans1"])
+    left_pre = _recipe_prefix_counts("start0_7p5ms_l", values["trans1"])
+    right_pre = _recipe_prefix_counts("start0_7p5ms_r", values["trans1"])
     expected = (
         values["pushes1"] == 100
-        and values["trans1"] == 13
-        and values["lact1"] == values["ract1"] == 113
-        and values["lval1"] == values["rval1"] == 101
-        and values["lplc1"] == values["rplc1"] == 12
-        and values["lfr1"] == values["rfr1"] == 101
+        and values["trans1"] == 0
+        and values["lact1"] == values["ract1"] == 100
+        and values["lval1"] == values["rval1"] == 100
+        and values["lplc1"] == values["rplc1"] == 0
+        and values["lfr1"] == values["rfr1"] == 100
         and values["lex1"] == values["rex1"] == 0
-        and values["lsm1"] == values["rsm1"] == 101 * 360
-        and left_pre == right_pre == (1, 12)
+        and values["lsm1"] == values["rsm1"] == 100 * 360
+        and left_pre == right_pre == (0, 0)
     )
     report(
-        "Mode A 7.5 ms asymmetric startup accounting accepted",
+        "Mode A 7.5 ms target-native startup accounting accepted",
         expected
         and run_check(root, scenario, receiver_pass(scenario), client_pass(scenario)),
     )
@@ -660,12 +670,12 @@ def test_modea_7p5ms_asymmetric_startup_accounting():
     for label, overrides in (
         ("action count", {"lact1": 112}),
         ("startup transient count", {"trans1": 12}),
-        ("left startup valid frame", {"lval1": 100}),
+        ("left startup valid frame", {"lval1": 99}),
         ("right startup PLC frame", {"rplc1": 11}),
         ("left post-boundary exclusion", {"lex1": 1}),
         ("right post-boundary exclusion", {"rex1": 1}),
-        ("right compared frame", {"rfr1": 100}),
-        ("right compared sample", {"rsm1": 100 * 360}),
+        ("right compared frame", {"rfr1": 99}),
+        ("right compared sample", {"rsm1": 99 * 360}),
     ):
         report(
             "Mode A 7.5 ms %s rejected" % label,
@@ -1042,8 +1052,8 @@ def test_schema_three_and_matrix_contract():
             for entry in reconnect["receiver_oracle"]
         ]
         == [
-            ("start8_10ms_l", "start8_10ms_l", "prefix"),
-            ("start7_10ms_l", "start7_10ms_l", "full"),
+            ("start0_10ms_l", "start0_10ms_l", "prefix"),
+            ("start0_10ms_l", "start0_10ms_l", "full"),
         ],
     )
 
@@ -1308,11 +1318,50 @@ def test_runner_log_root_ownership_preflight():
             }
         )
         report(
-            "valid caller log root preserved through nrfutil preflight",
+            "valid caller log root preserved through runtime preflight rejection",
             rc != 0
-            and "nrfutil not in PATH" in output
+            and "required simulator runtime library missing or empty" in output
             and os.path.isdir(log_root)
             and not os.listdir(log_root),
+        )
+
+
+def test_intentional_gap_diagnostic_is_exact():
+    with tempfile.TemporaryDirectory() as root:
+        scenario = "modea_one_cis_loss_10ms"
+        good = client_pass(scenario)
+        warning = good.splitlines(keepends=True)[0]
+        for label, receiver, client in (
+            ("missing", receiver_pass(scenario), good.replace(warning, "")),
+            ("duplicate", receiver_pass(scenario), warning + good),
+            (
+                "wrong gap",
+                receiver_pass(scenario),
+                good.replace("47 and 66", "47 and 65"),
+            ),
+            (
+                "wrong role",
+                warning + receiver_pass(scenario),
+                good.replace(warning, ""),
+            ),
+            (
+                "other warning",
+                receiver_pass(scenario),
+                good + "<wrn> bt_bap_stream: unrelated\n",
+            ),
+        ):
+            report(
+                "intentional-gap %s rejected" % label,
+                not run_check(root, scenario, receiver, client),
+            )
+        report(
+            "gap warning rejected outside loss scenario",
+            not run_check(
+                root,
+                "mono_10ms",
+                receiver_pass("mono_10ms"),
+                warning + client_pass("mono_10ms"),
+            ),
         )
 
 
@@ -1323,7 +1372,7 @@ def main():
     test_required_receiver_fields_fail_closed()
     test_recipe_pass_fields_and_accounting_fail_closed()
     test_stateful_recipe_progress_fail_closed()
-    test_modea_7p5ms_asymmetric_startup_accounting()
+    test_modea_7p5ms_native_startup_accounting()
     test_pcm_limits_and_metrics_fail_closed()
     test_routing_and_loss_coverage_fail_closed()
     test_invalid_sdu_and_reconnect_contracts()
@@ -1331,6 +1380,7 @@ def main():
     test_transport_hash_contracts()
     test_transport_byte_mutations_fail_closed()
     test_fault_scan_allowlist()
+    test_intentional_gap_diagnostic_is_exact()
     test_schema_three_and_matrix_contract()
     test_cli_only_exposes_known_total_and_numerical_metrics()
     test_runner_preflight_contracts()

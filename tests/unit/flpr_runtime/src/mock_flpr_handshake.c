@@ -11,6 +11,8 @@
 #include <errno.h>
 
 #include "flpr_handshake.h" /* real production header */
+#include "mock_nrf_vpr.h"
+#include "flpr_runtime_hooks.h"
 
 /* ── Mock state ─────────────────────────────────────────────── */
 
@@ -65,6 +67,10 @@ int flpr_handshake_wait_bound(k_timeout_t timeout)
 	(void)timeout;
 	if (mock_wait_bound_override) {
 		return mock_wait_bound_ret;
+	}
+	if (!mock_vpr_fresh_boot_running() ||
+	    nrf_vpr_int_enable_check(&flpr_rt_test_vpr, 1U << 20) == 0U) {
+		return -EAGAIN;
 	}
 	return 0;
 }

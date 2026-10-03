@@ -96,13 +96,8 @@ OUTCOME_RE = re.compile(
 )
 
 FINAL_RECEIVER_BUILD_COMMANDS = {"fw-build-54l15"}
-LEGACY_RECEIVER_BUILD_COMMANDS = {"fw-build-5340"}
 FIXTURE_BUILD_COMMANDS = {"fw-build-dongle"}
-BUILD_COMMANDS = (
-    FINAL_RECEIVER_BUILD_COMMANDS
-    | LEGACY_RECEIVER_BUILD_COMMANDS
-    | FIXTURE_BUILD_COMMANDS
-)
+BUILD_COMMANDS = FINAL_RECEIVER_BUILD_COMMANDS | FIXTURE_BUILD_COMMANDS
 
 REQUIRED_REASON_CLASSES = {"integration-only", "delegated-glue", "hardware-only"}
 
@@ -212,7 +207,11 @@ class Checker:
                 rel = os.path.relpath(full, self.repo_root).replace(os.sep, "/")
                 if SOURCE_FILE_RE.search(rel):
                     paths.append(rel)
-        for extra in ("src/flpr_protocol.h", "dongle/hci_ipc/src/main.c"):
+        for extra in (
+            "src/flpr_protocol.h",
+            "dongle/hci_uart/src/main.c",
+            "dongle/hci_uart/src/h4_rx.c",
+        ):
             full = os.path.join(self.repo_root, extra)
             if os.path.isfile(full):
                 paths.append(extra)

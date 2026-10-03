@@ -1,5 +1,29 @@
 # System HIL milestones
 
+## Current platform amendment (2026-09-25; migration pending)
+
+The approved PB-035/PB-036/PB-038 all-nRF54L15 migration supersedes only
+the 2026-09-03 decision to retain the nRF5340DK fixture and any forward-looking
+nRF53 source image/build/flash requirements below. Current receiver is the
+XIAO DK-target plus overlay, CPUAPP + FLPR; current standalone source is the
+second XIAO DK-target plus overlay, direct GRTC, **one CPUAPP image**.
+That same second XIAO runs the XIAO-target SDC UART HCI role only after
+sequential reflash, never at the same time as standalone source. Each run
+uses an exact external `--session-manifest` binding both live roles, with
+six identity revalidations and capture before reset. Current image tuple is
+three images: receiver CPUAPP + FLPR and source CPUAPP. See `AGENTS.md`,
+`docs/development/nrf54l15-only-resume-20260924.md`, and PB-035/PB-036
+results for current diagnostic status; full migration and matrix acceptance
+are not yet proven.
+
+This amendment does **not** alter the frozen 20-row two-pass matrix, 7.5 ms
+support decision, receiver transport limits, lifecycle and fault cases,
+scored/preamble/tail accounting, analog qualification boundaries or clean
+exact-artifact RH4/FR4 rules. The 2026-09-11 clean source-tuple matrix remains
+historical acceptance for its own nRF5340DK source image, not proof for XIAO
+source or analog capture. Historical SDK sample, 128 MHz, CPUNET/RTC mirror,
+and four-image examples below are not current XIAO source instructions.
+
 Status: **plan of record for the System HIL track, revised 2026-09-11**. RH0,
 RH1, RH2, and the 10 ms RH3 transport/runtime matrix are accepted with retained
 evidence. RH3-7p5 is CLOSED by its three-stage re-baseline (2026-09-11: mono,
@@ -21,7 +45,7 @@ Current product-item status, priority, and dependencies are owned by
 Relevant future work is linked at RH4, MA0/MA1, SA0/SA1, Milestone 2, and the
 optional `48_5_1` discussion below.
 
-## Standing decisions (2026-09-03)
+## Standing decisions (2026-09-03; fixture retention superseded above)
 
 1. nRF54L15 is the only production receiver target for this plan. All nRF5340
    receiver testing and its factory release ZIP are eliminated here; the
@@ -72,8 +96,9 @@ analog endpoint for transmitter interoperability claims.
 - One nRF54L15 receiver DUT at a time.
 - One dedicated hardware LE Audio source fixture.
 - Autonomous pairing, connection, streaming, teardown, and reconnect.
-- Mono, Mode A, and Mode B at 48 kHz with 10 ms frames. 7.5 ms is
-  diagnostic-only until RH3-7p5 closes it (see standing decisions).
+- Mono, Mode A, and Mode B at 48 kHz with 10 ms frames. 7.5 ms was
+  diagnostic-only until RH3-7p5 closed it on 2026-09-11; its three rows
+  are now mandatory (see standing decisions and amendment).
 - Receiver and source serial diagnostics as mandatory evidence.
 - Exact device, firmware, command, log, and evidence provenance.
 - Fail-closed warning and error handling.
@@ -110,8 +135,9 @@ analog endpoint for transmitter interoperability claims.
 - Simultaneous testing of multiple receiver targets; nRF54L15 is the only
   production receiver target in this plan.
 - Replacing current unit, coverage, build-contract, or BabbleSim gates.
-- Treating cpuapp plus FLPR, or cpuapp plus cpunet, as multiple DUTs. Those are
-  companion images inside one physical DUT.
+- Treating receiver cpuapp plus FLPR as multiple DUTs. The historical
+  cpuapp plus cpunet source tuple likewise represented one physical board,
+  but is not part of the current source build.
 - NCS migration as part of receiver HIL work.
 - Targeting unknown or non-Nordic hardware.
 - nRF54L15 recovery-tool development.
@@ -122,7 +148,8 @@ analog endpoint for transmitter interoperability claims.
   codecs unless later requirements add them.
 - nRF5340 receiver testing or release publishing; that target and its release
   track are eliminated from this plan (see final section).
-- 7.5 ms (`48_3_1`) as a supported release shape until RH3-7p5 closes it.
+- Historical pre-2026-09-11 exclusion of 7.5 ms (`48_3_1`) as a supported
+  release shape; RH3-7p5 subsequently closed it and reinstated mandatory rows.
 
 ## Grounding
 
@@ -143,7 +170,7 @@ analog endpoint for transmitter interoperability claims.
 - Existing hardware evidence does not include an automated analog capture
   oracle. Audibility has remained optional human observation.
 
-### Dedicated source starting point
+### Historical dedicated nRF5340DK source starting point (not current build guidance)
 
 Installed NCS v3.3.0 contains
 `zephyr/samples/bluetooth/bap_unicast_client/`. It scans for an ASCS server,
@@ -319,7 +346,7 @@ Each run starts from a checked-in logical fixture description plus a local,
 gitignored physical binding. Logical roles:
 
 - `receiver`: nRF54L15 CPUAPP plus FLPR, console, probe, and DAC.
-- `source`: dedicated nRF5340 BAP client, console, probe, CPUAPP plus CPUNET.
+- `source`: second XIAO standalone BAP client, console, probe, CPUAPP only.
 - optional `capture_mono`: existing qualified mono endpoint plus electrical
   summing/attenuation/DC-blocking fixture.
 - future optional `capture_stereo`: qualified stereo line endpoint.
@@ -339,11 +366,11 @@ board after identity resolution and raw evidence capture. Never target unknown
 or non-Nordic hardware. The runner may own fixture-tuple execution when used,
 but direct debugger, serial, and board testing are also permitted.
 
-Dedicated source firmware replaces nRF5340DK's current Linux `hci_uart` role.
-Milestone runner does not use `btattach`, BlueZ, or `scripts/bap_central.py` for
-source traffic. Preflight must reject any `btattach` or other process holding
-source serial endpoint. If lab still needs HCI dongle after a run, restoration
-is a separate explicit maintenance action, not hidden test cleanup.
+Standalone source firmware replaces the second XIAO's Linux HCI role for HIL
+source traffic. Milestone runner does not use `btattach`, BlueZ, or
+`scripts/bap_central.py` for standalone source traffic. Preflight must reject
+any process holding the source serial endpoint. Returning to HCI role requires
+separate identity-checked flashing; it is not hidden test cleanup.
 
 ## Clean-state policy
 

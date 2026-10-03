@@ -257,11 +257,39 @@ int flpr_runtime_init(void)
 	return 0;
 }
 
+static bool mock_runtime_blocked;
+static K_SEM_DEFINE(mock_runtime_entered, 0, 1);
+static K_SEM_DEFINE(mock_runtime_unblock, 0, 1);
+
+void mock_runtime_block(bool block)
+{
+	mock_runtime_blocked = block;
+	if (block) {
+		k_sem_reset(&mock_runtime_entered);
+		k_sem_reset(&mock_runtime_unblock);
+	}
+}
+
+int mock_runtime_wait_entered(k_timeout_t timeout)
+{
+	return k_sem_take(&mock_runtime_entered, timeout);
+}
+
+void mock_runtime_release(void)
+{
+	mock_runtime_blocked = false;
+	k_sem_give(&mock_runtime_unblock);
+}
+
 int flpr_runtime_restart(uint32_t timeout_ms)
 {
 	(void)timeout_ms;
 	mock_runtime_restart_calls++;
 	mock_runtime_restart_called = true;
+	if (mock_runtime_blocked) {
+		k_sem_give(&mock_runtime_entered);
+		k_sem_take(&mock_runtime_unblock, K_FOREVER);
+	}
 	return mock_runtime_restart_result;
 }
 

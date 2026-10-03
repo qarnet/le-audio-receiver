@@ -1069,6 +1069,18 @@ int main(int argc, char **argv)
 		}
 	}
 
+	/* Startup PLC changes the persistent PRNG seed even after good frames.
+	 * Reusing the old loss golden must fail, despite identical later SDUs. */
+	if (run_stateful_comparison(argv[1], decoded, sizeof(decoded) / sizeof(decoded[0]),
+				    &lc3_stateful_recipes[14], &lc3_stateful_recipes[7],
+				    &metrics) != 0 ||
+	    print_metrics("stateful-startup-history", lc3_stateful_recipes[14].id,
+			  lc3_stateful_recipes[7].reference_path, &metrics, &policy,
+			  PCM_ORACLE_RESULT_MAX_ERROR) != 0) {
+		fprintf(stderr, "FATAL: wrong startup-history reference was not rejected\n");
+		goto out;
+	}
+
 	if (fflush(stdout) != 0) {
 		fprintf(stderr, "FATAL: stdout flush failed\n");
 		goto out;

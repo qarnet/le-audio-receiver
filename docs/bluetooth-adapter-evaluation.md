@@ -18,7 +18,7 @@ Current candidate and revalidation work is tracked in
 [PB-016](product/backlog/tasks/pb-016%20-%20Complete-ASUS-USB-BT540-qualification.md),
 [PB-017](product/backlog/tasks/pb-017%20-%20Evaluate-ASUS-USB-BT600.md),
 [PB-018](product/backlog/tasks/pb-018%20-%20Validate-nRF5340-DK-as-Linux-HCI-UART-adapter.md),
-[PB-019](product/backlog/tasks/pb-019%20-%20Validate-nRF54L15-DK-as-Linux-HCI-UART-adapter.md),
+[PB-019](product/backlog/completed/pb-019%20-%20Validate-nRF54L15-DK-as-Linux-HCI-UART-adapter.md),
 [PB-020](product/backlog/tasks/pb-020%20-%20Evaluate-self-contained-USB-LE-Audio-transmitters.md),
 and [PB-021](product/backlog/tasks/pb-021%20-%20Revalidate-AX210-with-complete-evidence-record.md).
 This document retains adapter evidence and evaluation contract, not task state.
@@ -194,19 +194,20 @@ different product from UGREEN's separate USB-C self-contained LE Audio
 transmitter (which runs the stack in dongle firmware and is outside the
 native-HCI contract); do not conflate the two.
 
-### Nordic nRF5340 DK (HCI UART controller): Candidate / under evaluation
+### Nordic nRF5340 DK: retired fixture and historical external context
 
 NCS v3.3.0 supports running the Bluetooth controller on cpunet with H4 UART on
-cpuapp, and this repository's `dongle/` directory is a working
-source-controller implementation. USB caveat: NCS v3.3.0's Zephyr USB device
-HCI class (`subsys/usb/device_next/class/bt_hci.c`) cannot carry LE HCI ISO:
+cpuapp. This repository's former nRF5340 dongle implementation is retired;
+current `dongle/` targets XIAO nRF54L15, not the nRF5340 DK. USB caveat:
+NCS v3.3.0's Zephyr USB device HCI class
+(`subsys/usb/device_next/class/bt_hci.c`) cannot carry LE HCI ISO:
 the controller-to-host TX path handles EVT and ACL only and drops HCI ISO
 packet type `0x05`, and the bulk OUT path is hard-coded to ACL buffers and ACL
 header parsing. (This is not a missing-USB-isochronous-endpoints issue; those
-descriptors concern SCO.) HCI UART is the supported route. Status: **Candidate
-/ under evaluation** as a native HCI development adapter; the hardware source
-path is not project-validated; existing public evidence does not establish
-full dynamic acceptance.
+descriptors concern SCO.) HCI UART was the route considered in that historical
+SDK. PB-018 is superseded by the XIAO replacement in PB-019/PB-039. No active
+repository build, fixture, test commitment or support recommendation remains
+for the nRF5340 DK, and no dynamic acceptance of it is claimed.
 
 ### Nordic nRF54L15 DK (HCI UART controller): Candidate / under evaluation
 
@@ -215,24 +216,40 @@ NCS v3.3.0's `samples/bluetooth/hci_uart` supports
 (ISO). Status: **Candidate / under evaluation** as a native HCI development
 adapter; dynamic Linux and receiver validation remains required.
 
-### Seeed XIAO nRF54L15 hardware: Not an adapter candidate
+### Seeed XIAO nRF54L15: lab-qualified development HCI fixture
 
 The Seeed XIAO nRF54L15 **board** is distinct from the nRF54L15 DK above and
-is **not** an HCI adapter candidate:
+serves as this repository's session-bound Linux HCI central for development.
+It is a second XIAO, separate from the receiver and its DAC. The single-image
+SDC controller sends H4 command, ACL and ISO traffic through async UART20 on
+P1.9/P1.8 at 1,000,000 baud 8N1 via the stock SAMD11 USB CDC bridge. The
+TIMER-backed RX path now includes the measured coherent DMA-boundary repair;
+fresh BlueZ connection waits for successful bonding instead of racing a
+proactive Pair request against the receiver's security request. Clean NCS
+v3.4.1 `104e67a` images passed six 120-second mono, Mode A and Mode B
+fresh/bonded cases with unmodified `scripts/bap_central.py`: 72,000 writer
+frames, PLC 428, no case warnings/errors, underrun, reset or kernel HCI/SMP
+alerts. Loss and PLC remain **nonzero** and within unchanged frozen limits.
+The old failed runs remain immutable; a trace-image pass was not substituted
+for the repaired normal-image qualification. See
+[clean integration verification](development/nrf54l15-migration-verification-results-20261001.md) and the
+[repair and earlier failures](development/pb-019-uarte-boundary-repair-results-20260928.md),
+[source-batch integration record](development/nrf54l15-source-batch-guard-results-20261001.md) and
+[controlled session helper](../dongle/README.md) for identity-bound operation.
 
 - The nRF54L15 has no USB device peripheral.
 - The XIAO's USB-C D+/D- connect to the onboard SAMD11 CMSIS-DAP, not the
   nRF54L15.
-- The existing SAMD11 CDC UART uses nRF P1.9/P1.8 only; there is no RTS/CTS
-  wiring.
-- Zephyr HCI UART requires hardware flow control; CDC + `btattach` is not
-  robust or plug-and-play.
-- A reliable lab route needs an external four-wire USB-UART plus `btattach`.
-- True single-cable plug-and-play would require replacement SAMD11 firmware
-  implementing USB Bluetooth HCI plus lossless custom UART bridging in 16 KiB
-  flash / 4 KiB RAM, likely sacrificing the factory CMSIS-DAP/CDC and needing
-  external SWD recovery. Prototype feasibility only; not an active adapter
-  candidate.
+- The stock SAMD11 CDC UART uses nRF P1.9/P1.8 only; there is no RTS/CTS
+  wiring. Lab success at this bounded workload does not prove generic
+  no-flow-control reliability or plug-and-play support.
+
+Status: **Lab-qualified development fixture**, not consumer-recommended or
+public Supported / project-validated desktop adapter. Qualification applies
+to the recorded stock bridge, firmware and bounded LE Audio workload; it is
+not a generic no-flow-control UART guarantee. No analog-output
+or desktop PipeWire/WirePlumber UI acceptance is claimed. Intel AX210 remains
+the only publicly accepted native adapter.
 
 ## Adapter requirements and evaluation
 

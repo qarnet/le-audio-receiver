@@ -34,8 +34,7 @@ LOG_MODULE_REGISTER(audio_i2s, LOG_LEVEL_INF);
 /* ── resampler ↔ actuator build-time verification ────────────────── */
 
 #if defined(CONFIG_AUDIO_RESAMPLER_IDENTITY)
-BUILD_ASSERT(IS_ENABLED(CONFIG_AUDIO_CLOCK_ACTUATOR_APLL),
-	     "IDENTITY resampler requires APLL actuator");
+BUILD_ASSERT(IS_ENABLED(AUDIO_I2S_NATIVE_TEST), "IDENTITY resampler is test-only");
 #elif defined(CONFIG_AUDIO_RESAMPLER_ASRC_LINEAR)
 BUILD_ASSERT(IS_ENABLED(CONFIG_AUDIO_CLOCK_ACTUATOR_NONE),
 	     "ASRC_LINEAR resampler requires NONE actuator");
@@ -162,12 +161,12 @@ static int i2s_do_configure(void)
 		.word_size = BIT_WIDTH,
 		.channels = CHANNELS,
 		.format = I2S_FMT_DATA_FORMAT_I2S,
-		.options = I2S_OPT_BIT_CLK_MASTER | I2S_OPT_FRAME_CLK_MASTER,
+		.options = I2S_OPT_BIT_CLK_CONTROLLER | I2S_OPT_FRAME_CLK_CONTROLLER,
 		.frame_clk_freq = SAMPLE_RATE,
 		.mem_slab = &i2s_slab,
 		.block_size = BLOCK_SIZE,
-		/* Board-selected bounded wait for a full TX queue.  The default
-		 * stays nonblocking for nRF5340; nRF54L15 uses a finite wait. */
+		/* Board-selected bounded wait for a full TX queue.  The generic
+		 * default is nonblocking; nRF54L15 uses a finite wait. */
 		.timeout = CONFIG_AUDIO_I2S_WRITE_TIMEOUT_MS,
 	};
 

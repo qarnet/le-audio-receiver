@@ -401,7 +401,7 @@ def capture_environment(repo_root, argv, status, run_cmd=None):
     """Read-only environment provenance for one run.
 
     Records repo HEAD and dirty status, NCS version/path, west, Python,
-    pytest, pyserial, OpenOCD, nrf-probes, host/kernel, UTC timestamps,
+    pytest, pyserial, OpenOCD, nix-nrf probes, host/kernel, UTC timestamps,
     and the exact command argv/status.  A dirty tree is recorded, never
     accepted as exact release provenance.  Version probing is best
     effort; a missing tool is recorded as None, never raised."""
@@ -478,7 +478,7 @@ def capture_environment(repo_root, argv, status, run_cmd=None):
             ["python3", "-c", "import serial; print(serial.VERSION)"], run_cmd=run_cmd
         ),
         "openocd": _tool_version(["openocd", "--version"], run_cmd=run_cmd),
-        "nrf-probes": _tool_version(["nrf-probes", "--help"], run_cmd=run_cmd)
+        "nrf-probes": _tool_version(["nix-nrf", "probes", "--help"], run_cmd=run_cmd)
         or "present",
         "west": _tool_version(["west", "--version"], run_cmd=run_cmd),
         "arecord": _tool_version(["arecord", "--version"], run_cmd=run_cmd),

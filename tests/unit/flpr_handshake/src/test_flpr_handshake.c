@@ -52,6 +52,129 @@ static void hs_ready_flow(uint32_t epoch)
 
 /* ── Initialization ──────────────────────────────────────────────── */
 
+static bool wait_automatic_heartbeat(uint32_t epoch, uint32_t previous_tx)
+{
+	int64_t deadline = k_uptime_get() + 500;
+	struct flpr_status status;
+
+	do {
+		flpr_handshake_get_status(&status);
+		if (status.epoch == epoch && status.tx_seq > previous_tx) {
+			flpr_handshake_test_finish_hb_iteration();
+			return true;
+		}
+		k_sleep(K_MSEC(1));
+	} while (k_uptime_get() < deadline);
+	return false;
+}
+
+ZTEST(flpr_handshake, test_local_close_reopen_resumes_automatic_heartbeat)
+{
+	zassert_ok(flpr_handshake_init(), "init");
+	flpr_handshake_test_enable_automatic_hb();
+	struct flpr_msg ready = {
+		.type = FLPR_MSG_READY, .version = FLPR_PROTOCOL_VERSION, .seq = 0, .data = 42U};
+	fake_ipc_receive(&ready, sizeof(ready));
+	zassert_true(wait_automatic_heartbeat(42U, 0U), "first generation emits heartbeat");
+	zassert_ok(flpr_handshake_disconnect(), "local close, no unbound callback");
+	zassert_ok(flpr_handshake_reconnect(), "reopen");
+	struct flpr_status previous;
+	flpr_handshake_get_status(&previous);
+	ready.data = 99U;
+	fake_ipc_receive(&ready, sizeof(ready));
+	zassert_true(wait_automatic_heartbeat(99U, previous.tx_seq),
+		     "new generation emits heartbeat without manual drive");
+	const struct flpr_msg *message = fake_ipc_sent_at(fake_ipc_sent_count() - 1U);
+	zassert_not_null(message, "encoded traffic captured");
+	zassert_equal(message->type, FLPR_MSG_HEARTBEAT, "automatic traffic, not READY ACK alone");
+	zassert_equal(message->version, FLPR_PROTOCOL_VERSION, "wire version");
+	zassert_ok(flpr_handshake_disconnect(), "clean close");
+}
+
+ZTEST(flpr_handshake, test_ready_inside_registration_starts_heartbeat)
+{
+	hs_ready_flow(42U);
+	zassert_ok(flpr_handshake_disconnect(), "close old session");
+	flpr_handshake_test_enable_automatic_hb();
+	fake_ipc_ready_during_register(99U);
+	zassert_ok(flpr_handshake_reconnect(), "READY is delivered before this call returns");
+	zassert_ok(flpr_handshake_wait_new_ready(42U, K_NO_WAIT), "new READY acknowledged");
+	zassert_true(wait_automatic_heartbeat(99U, 0U),
+		     "callback-safe admission starts real heartbeat");
+	const struct flpr_msg *message = fake_ipc_sent_at(fake_ipc_sent_count() - 1U);
+	zassert_not_null(message, "encoded traffic");
+	zassert_equal(message->type, FLPR_MSG_HEARTBEAT, "not ACK-only restart");
+	zassert_ok(flpr_handshake_disconnect(), "close");
+}
+
+static K_THREAD_STACK_DEFINE(disconnect_stack, 2048);
+ZTEST(flpr_handshake, test_partial_register_failure_discards_bound_ready_then_retries)
+{
+	hs_ready_flow(42U);
+	zassert_ok(flpr_handshake_disconnect(), "close");
+	fake_ipc_ready_during_register(99U);
+	fake_ipc_register_error_after_callbacks(-EIO);
+	zassert_equal(flpr_handshake_reconnect(), -EIO,
+		      "registration failed after early callbacks");
+	zassert_equal(flpr_handshake_wait_bound(K_NO_WAIT), -EBUSY, "partial bound discarded");
+	zassert_equal(flpr_handshake_wait_new_ready(42U, K_NO_WAIT), -ECANCELED,
+		      "partial READY is not an admitted session");
+	zassert_false(fake_ipc_endpoint_registered(), "no successful endpoint");
+	fake_ipc_register_error_after_callbacks(0);
+	fake_ipc_ready_during_register(100U);
+	zassert_ok(flpr_handshake_reconnect(), "valid retry");
+	zassert_ok(flpr_handshake_wait_bound(K_NO_WAIT), "fresh bound");
+	zassert_ok(flpr_handshake_wait_new_ready(99U, K_NO_WAIT), "fresh READY after retry");
+	zassert_ok(flpr_handshake_disconnect(), "close retry");
+}
+static struct k_thread disconnect_thread;
+static K_SEM_DEFINE(disconnect_done, 0, 1);
+static int disconnect_result;
+
+static void disconnect_thread_fn(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a);
+	ARG_UNUSED(b);
+	ARG_UNUSED(c);
+	disconnect_result = flpr_handshake_disconnect();
+	k_sem_give(&disconnect_done);
+}
+
+ZTEST(flpr_handshake, test_disconnect_drains_inflight_automatic_send)
+{
+	zassert_ok(flpr_handshake_init(), "init");
+	fake_ipc_block_heartbeat(true);
+	flpr_handshake_test_enable_automatic_hb();
+	struct flpr_msg ready = {
+		.type = FLPR_MSG_READY, .version = FLPR_PROTOCOL_VERSION, .seq = 0, .data = 42U};
+	fake_ipc_receive(&ready, sizeof(ready));
+	zassert_ok(fake_ipc_wait_heartbeat_entered(K_MSEC(500)),
+		   "real kernel heartbeat is inside send");
+	k_sem_reset(&disconnect_done);
+	k_thread_create(&disconnect_thread, disconnect_stack,
+			K_THREAD_STACK_SIZEOF(disconnect_stack), disconnect_thread_fn, NULL, NULL,
+			NULL, K_PRIO_PREEMPT(1), 0, K_NO_WAIT);
+	k_sleep(K_MSEC(10));
+	bool returned_early = k_sem_take(&disconnect_done, K_NO_WAIT) == 0;
+	fake_ipc_release_heartbeat();
+	if (!returned_early) {
+		zassert_ok(k_sem_take(&disconnect_done, K_MSEC(500)),
+			   "disconnect finishes after send");
+	}
+	zassert_ok(k_thread_join(&disconnect_thread, K_MSEC(500)), "owned worker exits");
+	zassert_false(returned_early, "endpoint lifetime extends through in-flight send");
+	zassert_ok(disconnect_result, "close succeeds");
+	zassert_false(fake_ipc_endpoint_registered(), "closed endpoint");
+	struct flpr_status previous;
+	flpr_handshake_get_status(&previous);
+	zassert_ok(flpr_handshake_reconnect(), "fresh endpoint");
+	ready.data = 99U;
+	fake_ipc_receive(&ready, sizeof(ready));
+	zassert_true(wait_automatic_heartbeat(99U, previous.tx_seq),
+		     "new heartbeat after drained close");
+	zassert_ok(flpr_handshake_disconnect(), "final close");
+}
+
 ZTEST(flpr_handshake, test_init_open_register_success)
 {
 	zassert_ok(flpr_handshake_init(), "init");
@@ -937,8 +1060,8 @@ ZTEST(flpr_handshake, test_validation_counters_consistent_under_concurrent_statu
 	rd_stop = false;
 	rd_monotonic_violation = false;
 	rd_last_sum = 0;
-	k_thread_create(&rd_thread, rd_stack, K_THREAD_STACK_SIZEOF(rd_stack),
-			status_reader_worker, NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
+	k_thread_create(&rd_thread, rd_stack, K_THREAD_STACK_SIZEOF(rd_stack), status_reader_worker,
+			NULL, NULL, NULL, K_PRIO_PREEMPT(8), 0, K_NO_WAIT);
 
 	/* Inject a bounded mix of short/oversized/wrong-version messages
 	 * while the reader polls. */

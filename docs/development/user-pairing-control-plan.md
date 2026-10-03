@@ -1,5 +1,10 @@
 # User pairing control plan — button, LED, and access-mode state machine
 
+> **Historical P1-P8 implementation plan:** Retain accepted XIAO pairing
+> behavior and design guidance below. Its nRF5340 feature-off parity and old
+> dual-target build recipes are not active migration requirements. Current
+> receiver target and evidence boundaries: `AGENTS.md` and `STATUS.md`.
+
 Status: accepted design; implementation complete (P1–P8 accepted 2026-08-08, hardware acceptance on XIAO nRF54L15).
 Scope: first production integration targets the Seeed XIAO nRF54L15 hardware,
 but behavior and control logic must be portable to another Zephyr board by

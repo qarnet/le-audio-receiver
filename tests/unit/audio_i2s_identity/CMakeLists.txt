@@ -32,14 +32,13 @@ target_include_directories(app PRIVATE
   ${SRC_DIR}
 )
 
-# Test-only compile definitions: variant selection (IDENTITY + APLL
-# actuator, 48000 Hz output) and the narrow production test hooks.
+# Test-only compile definitions: generic IDENTITY passthrough
+# (48000 Hz output) and the narrow production test hooks.
 # The variant Kconfig symbols do not exist in this app's Kconfig, so
 # these are plain compile definitions — no invalid Kconfig assignments
 # (same pattern as tests/unit/volume).
 target_compile_definitions(app PRIVATE
   CONFIG_AUDIO_RESAMPLER_IDENTITY=1
-  CONFIG_AUDIO_CLOCK_ACTUATOR_APLL=1
   CONFIG_AUDIO_I2S_OUTPUT_SAMPLE_RATE_HZ=48000
   CONFIG_AUDIO_I2S_WRITE_TIMEOUT_MS=0
   AUDIO_I2S_NATIVE_TEST=1

@@ -43,7 +43,7 @@ ZTEST(audio_i2s, test_exact_i2s_config)
 	zassert_equal(cfg->cfg.channels, 2, "2 channels");
 	zassert_equal(cfg->cfg.format, I2S_FMT_DATA_FORMAT_I2S, "I2S format");
 	zassert_equal(cfg->cfg.options,
-		      (i2s_opt_t)(I2S_OPT_BIT_CLK_MASTER | I2S_OPT_FRAME_CLK_MASTER),
+		      (i2s_opt_t)(I2S_OPT_BIT_CLK_CONTROLLER | I2S_OPT_FRAME_CLK_CONTROLLER),
 		      "bit/frame master");
 	zassert_equal(cfg->cfg.frame_clk_freq, 48000, "nominal 48 kHz");
 	zassert_equal(cfg->cfg.mem_slab, audio_i2s_test_get_slab(), "internal slab");

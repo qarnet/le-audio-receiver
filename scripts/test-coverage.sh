@@ -7,7 +7,7 @@
 # CONFIG_COVERAGE=y, runs each native executable to normal exit so host
 # libgcov writes .gcda, then produces gcovr 8.x reports.
 #
-# Native coverage semantics (NCS v3.3.0): CONFIG_COVERAGE on a NATIVE_BUILD
+# Native coverage semantics (NCS v3.4.1): CONFIG_COVERAGE on a NATIVE_BUILD
 # selects COVERAGE_NATIVE_GCOV (host compiler --coverage).  COVERAGE_GCOV /
 # COVERAGE_DUMP are hardware-platform options (depend on !NATIVE_BUILD) and
 # are deliberately never set here.
@@ -115,7 +115,7 @@ command -v python3 >/dev/null 2>&1 || die "python3 not found in dev shell"
 # Resolve ZEPHYR_BASE if not set — same policy as test-all.sh.
 if [ -z "${ZEPHYR_BASE:-}" ]; then
     if command -v nrfutil &>/dev/null; then
-        eval "$(nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh)" 2>/dev/null || true
+        eval "$(nrfutil sdk-manager toolchain env --toolchain-bundle-id 8285d8ad56 --as-script sh)" 2>/dev/null || true
     fi
 fi
 : "${ZEPHYR_BASE:?ZEPHYR_BASE must be set or nrfutil must be in PATH}"

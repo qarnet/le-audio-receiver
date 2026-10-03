@@ -15,8 +15,8 @@
 # address).  There is no merged.hex path — the partition-manager fallback
 # was removed; require both images.
 #
-# The probe is auto-detected by target identity (nrf-probes --find nrf54l)
-# unless FW_NRF54L15_PROBE_SERIAL supplies a runner-resolved exact serial.
+# Require FW_NRF54L15_PROBE_SERIAL from session-bound identity resolution.
+# Family-only probe discovery cannot distinguish two nRF54L15 boards.
 #
 # Build dir:  build/nrf54l15
 
@@ -87,28 +87,37 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 
-HEX_ARGS=(
-  -c "nrf54l-load $CPUAPP_HEX"
-  -c "verify_image $CPUAPP_HEX"
-  -c "nrf54l-load $FLPR_HEX"
-  -c "verify_image $FLPR_HEX"
-)
-printf 'Loading cpuapp + flpr hex images\n'
-
-SERIAL="${FW_NRF54L15_PROBE_SERIAL:-}"
-if [ -n "$SERIAL" ]; then
-  if ! [[ "$SERIAL" =~ ^[[:alnum:]_.:-]+$ ]]; then
-    printf 'Invalid FW_NRF54L15_PROBE_SERIAL %q: must match ^[[:alnum:]_.:-]+$\n' \
-      "$SERIAL" >&2
+# Tcl braces keep spaces in canonical paths intact. Reject Tcl control syntax
+# and control characters before interpolation into either OpenOCD command.
+for HEX_PATH in "$CPUAPP_HEX" "$FLPR_HEX"; do
+  if [[ "$HEX_PATH" == *'{'* || "$HEX_PATH" == *'}'* || "$HEX_PATH" == *'\'* ]] || \
+    [[ "$HEX_PATH" == *[$'\001'-$'\037'$'\177']* ]]; then
+    printf 'Invalid hex path: unsafe Tcl characters\n' >&2
     exit 1
   fi
-  printf 'Probe %s (runner-resolved nRF54L15 identity)\n' "$SERIAL"
-else
-  SERIAL="$(nrf-probes --find nrf54l)"
-  printf 'Probe %s (auto-detected: target identifies as nRF54L15)\n' "$SERIAL"
-fi
+done
 
-exec openocd \
+HEX_ARGS=(
+  -c "nrf54l-load {$CPUAPP_HEX}"
+  -c "verify_image {$CPUAPP_HEX}"
+  -c "nrf54l-load {$FLPR_HEX}"
+  -c "verify_image {$FLPR_HEX}"
+)
+
+SERIAL="${FW_NRF54L15_PROBE_SERIAL:-}"
+if [ -z "$SERIAL" ]; then
+  printf 'FW_NRF54L15_PROBE_SERIAL is required (no auto-detection)\n' >&2
+  exit 1
+fi
+if ! [[ "$SERIAL" =~ ^[[:alnum:]_.:-]+$ ]]; then
+  printf 'Invalid FW_NRF54L15_PROBE_SERIAL %q: must match ^[[:alnum:]_.:-]+$\n' \
+    "$SERIAL" >&2
+  exit 1
+fi
+printf 'Loading cpuapp + flpr hex images\n'
+printf 'Probe %s (runner-resolved nRF54L15 identity)\n' "$SERIAL"
+
+exec env OPENOCD_INTERFACE=cmsis-dap openocd \
   -c "adapter serial $SERIAL" \
   -f "$OPENOCD_CFG" \
   -c "init" \

@@ -65,9 +65,10 @@ audio clock, such as TWS-style synchronized playback between two earbuds, are
 not covered. Firmware uses a custom digital *clock-recovery / rate-matching*
 path for the fixed hardware clock.
 
-The nRF5340 Ebyte receiver remains in this repository as a **legacy
-engineering/regression path**. It is not supported final hardware, has no
-public release asset, and has no product-parity or future-feature obligation.
+The nRF5340 Ebyte receiver is a **retired historical implementation**. Its
+former build and flashing helpers are not runnable in the current tree; it is
+not supported hardware and has no current build, helper, or release asset.
+Historical design and wiring facts remain documented.
 
 ## Feature list
 
@@ -76,6 +77,21 @@ public release asset, and has no product-parity or future-feature obligation.
 - VCP volume and mute control from the source device.
 - Digital clock recovery and rate matching on nRF54L15.
 - Watchdog, developer shell diagnostics, XIAO button/LED pairing control.
+
+## Development and test hardware
+
+Active firmware and lab workflows use **nRF54L15 only**, with **NCS v3.4.1**.
+A second XIAO alternates between standalone LE Audio source firmware and the
+session-bound Linux HCI UART controller; it never runs both roles at once.
+Canonical BabbleSim testing uses two `nrf54l15bsim` peers, while native and
+Python unit tests remain portable host tests. No active build, test, flash or
+release workflow requires nRF5340 hardware.
+
+The XIAO HCI role is a bounded, lab-qualified development fixture, not a
+consumer adapter or a claim of generic no-flow-control UART reliability.
+Analog qualification and publication of release binaries remain separate.
+See [adapter evaluation](docs/bluetooth-adapter-evaluation.md) and
+[platform audit](docs/development/nrf54l15-final-reference-audit-20261001.md).
 
 ## Quick start
 
@@ -123,11 +139,11 @@ required. This project's priority is the native HCI path.
 | [Supported sources on Linux](docs/supported-sources.md) | Overview/source matrix of researched Linux LE Audio source hardware, with links to the host setup and adapter evaluation guides |
 | [Linux LE Audio host setup](docs/linux-le-audio-host-setup.md) | Host OS setup, configuration, and verification for transmitting BAP unicast audio via BlueZ + PipeWire |
 | [Bluetooth adapter evaluation](docs/bluetooth-adapter-evaluation.md) | Which Bluetooth adapters are supported and how new adapters get accepted (Intel AX210 project-validated) |
-| [Hardware wiring](docs/hardware-wiring.md) | DAC choice, supported XIAO wiring, and legacy E83 engineering reference |
+| [Hardware wiring](docs/hardware-wiring.md) | DAC choice, supported XIAO wiring, and historical E83 pin reference |
 | [Known limitations](docs/known-limitations.md) | Honest list of current gaps and caveats |
-| [Technology: nRF5340](docs/technology/nrf5340.md) | Legacy engineering background: dual-core architecture, controller, audio PLL |
+| [Technology: nRF5340](docs/technology/nrf5340.md) | Historical dual-core architecture, controller, audio PLL |
 | [Technology: nRF54L15](docs/technology/nrf54l15.md) | Sole final receiver: single-core SDC path, fixed clock, rate matching, ASRC |
-| [Legacy nRF5340 flashing](docs/flashing.md) | Legacy E83 developer flashing reference |
+| [Developer flashing](docs/flashing.md) | Current XIAO developer workflow with historical nRF5340 appendix |
 | [Product backlog](docs/product/README.md) | Backlog.md tasks, lifecycle, and current product work |
 
 ## License

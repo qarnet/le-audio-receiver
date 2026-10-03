@@ -1,16 +1,12 @@
 """Probe, serial, and capture identity discovery for system HIL runner.
 
-Resolves each physical role from stable identity, never from volatile
-``/dev/tty*`` numbers: the receiver through ``nrf-probes`` (CMSIS-DAP
-target fingerprint) plus its matching CDC tty, the source through its
-onboard Segger J-Link located by the exact probe udev map, a read-only
-J-Link target fingerprint, and the J-Link VCOM tty that shares the same
-``ID_SERIAL_SHORT``.
+Resolves both physical roles through explicit ``nix-nrf probes`` CMSIS-DAP
+target fingerprints and matching CDC ttys, never volatile tty numbers.
 
 All command execution goes through one injectable runner so the fake test
 suites script every boundary; the sysfs root is injectable for the fake
 tty/USB trees.  ``resolve_fixture`` never mutates the target: only
-read-only ``nrf-probes``, ``udevadm info``, and OpenOCD J-Link
+read-only ``nix-nrf probes``, ``udevadm info``, and OpenOCD CMSIS-DAP
 fingerprinting are issued. Capture identity additionally resolves one ALSA
 sound-card sysfs node from its stable udev properties. Capture startup later
 correlates that card index with ``arecord --list-devices`` before opening the
@@ -19,6 +15,7 @@ direct ``hw:`` endpoint.
 
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Optional
@@ -32,15 +29,18 @@ NRF_PROBES_HEADER_RE = re.compile(
 )
 NRF_PROBES_HEADER = ("SERIAL", "PROBE", "TARGET", "DPIDR", "PART", "VARIANT", "NOTE")
 
-#: Receiver target identity, exact (nrf-probes formats PART as 0x%08x).
+#: CMSIS-DAP nRF54L15 target identity, exact (the table formats PART as
+#: ``0x%08x``).
 RECEIVER_TARGET = "nRF54L15"
 RECEIVER_PART = "0x00054b15"
+RECEIVER_DPIDR = "0x6ba02477"
+NIX_NRF_PROBES = ("nix-nrf", "probes")
+PROBE_SERIAL_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+RAW_HEX_RE = re.compile(r"^0x[0-9a-f]{8}$")
 
-#: nRF53 CTRL-AP IDR (AP2/AP3) and FICR INFO PART/VARIANT addresses.
-NRF53_CTRL_AP_IDR = "0x12880000"
-NRF53_PART_ADDR = "0x00FF020C"
-NRF53_VARIANT_ADDR = "0x00FF0210"
-SOURCE_PART = "0x00005340"
+#: nRF54L15 FICR INFO fields, read after the explicit AP CSW setup below.
+NRF54L15_PART_ADDR = "0x00FFC31C"
+NRF54L15_VARIANT_ADDR = "0x00FFC320"
 
 #: OpenOCD warning/error/recovery/verify-failure signature for boundary
 #: scanning (fingerprint and flash output).  Informational OpenOCD output
@@ -50,24 +50,27 @@ OPENOCD_FAILURE_RE = re.compile(
     r"(?i)\b(warning|error)\b|recovery|verify\s+(fail(?:ure)?|ed)"
 )
 
-J_LINK_FINGERPRINT_TCL = r"""
-proc fwj_scan {} {
+CMSIS_DAP_FINGERPRINT_TCL = r"""
+proc fwc_scan {} {
     set dpidr ""
-    catch {set dpidr [format 0x%08x [nrf53.dap dpreg 0]]}
-    puts "FWJ|dpidr|$dpidr"
+    catch {set dpidr [format 0x%08x [chip.dap dpreg 0]]}
+    puts "FWC|dpidr|$dpidr"
     for {set i 0} {$i < 4} {incr i} {
         set idr ""
-        catch {set idr [format 0x%08x [nrf53.dap apreg $i 0xfc]]}
-        puts "FWJ|ap$i|$idr"
+        catch {set idr [format 0x%08x [chip.dap apreg $i 0xfc]]}
+        puts "FWC|ap$i|$idr"
     }
+    chip.dap apcsw 0x01000000 0x01000000
     set part ""
-    catch {set part [format 0x%08x [nrf53.cpuapp read_memory 0x00FF020C 32 1]]}
+    catch {set part [format 0x%08x [chip.cpu read_memory __NRF54L15_PART_ADDR__ 32 1]]}
     set variant ""
-    catch {set variant [format 0x%08x [nrf53.cpuapp read_memory 0x00FF0210 32 1]]}
-    puts "FWJ|part|$part"
-    puts "FWJ|variant|$variant"
+    catch {set variant [format 0x%08x [chip.cpu read_memory __NRF54L15_VARIANT_ADDR__ 32 1]]}
+    puts "FWC|part|$part"
+    puts "FWC|variant|$variant"
 }
-"""
+""".replace("__NRF54L15_PART_ADDR__", NRF54L15_PART_ADDR).replace(
+    "__NRF54L15_VARIANT_ADDR__", NRF54L15_VARIANT_ADDR
+)
 
 
 class HilDiscoveryError(Exception):
@@ -92,10 +95,13 @@ class ProbeIdentity:
     backend: str
     family: str
     serial: str
-    target: str  # human target name (nRF54L15 / nRF5340)
+    product: str
+    target: str  # human target name (nRF54L15)
     dpidr: str
+    ap_idrs: MappingProxyType  # exact immutable ap0 through ap3 raw IDRs
     part: str
     variant: str
+    variant_raw: str
 
 
 @dataclass(frozen=True)
@@ -293,145 +299,152 @@ def _usb_parent(sysfs_root, props):
         candidate = parent
 
 
-# ── J-Link fingerprint ─────────────────────────────────────────────
+# ── OpenOCD fingerprints ───────────────────────────────────────────
 
 
-def fingerprint_jlink(run_cmd, serial, timeout=60):
-    """Run one read-only OpenOCD J-Link fingerprint with the explicit
-    serial and return the parsed marker map plus raw output.
+def _openocd_failures(proc):
+    raw_out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    failures = [ln for ln in raw_out.splitlines() if OPENOCD_FAILURE_RE.search(ln)]
+    if proc.returncode != 0:
+        failures.append("OpenOCD exited with status %d" % proc.returncode)
+    return raw_out, failures
 
-    Marker lines ``FWJ|key|value`` are retained for DPIDR, AP0..AP3 IDRs,
-    FICR INFO.PART at 0x00FF020C, and VARIANT at 0x00FF0210.  Any OpenOCD
-    warning/error/recovery/verify-failure line fails the fingerprint.
+
+def _parse_cmsis_dap_markers(stdout):
+    """Parse exact FWC markers and reject incomplete or malformed output."""
+    expected = ("dpidr", "ap0", "ap1", "ap2", "ap3", "part", "variant")
+    markers = {}
+    failures = []
+    for line in (stdout or "").splitlines():
+        if not line.startswith("FWC"):
+            continue
+        fields = line.split("|")
+        if len(fields) != 3 or fields[0] != "FWC" or fields[1] not in expected:
+            failures.append("malformed CMSIS-DAP marker: %s" % line)
+            continue
+        key, value = fields[1:]
+        if key in markers or not RAW_HEX_RE.fullmatch(value):
+            failures.append("malformed CMSIS-DAP marker: %s" % line)
+            continue
+        markers[key] = value
+    for key in expected:
+        if key not in markers:
+            failures.append("CMSIS-DAP marker missing: %s" % key)
+    return markers, failures
+
+
+def fingerprint_cmsis_dap(run_cmd, serial, timeout=60):
+    """Run one explicit, read-only CMSIS-DAP nRF54L15 fingerprint.
+
+    The scanner creates a generic SWD DAP and Cortex-M target only to read
+    DPIDR, AP0 through AP3, and FICR INFO.PART/INFO.VARIANT. It never resets,
+    halts, writes memory, recovers, or changes modem control lines.
     """
     argv = [
         "openocd",
         "-f",
-        "interface/jlink.cfg",
+        "interface/cmsis-dap.cfg",
         "-c",
         "adapter serial %s" % serial,
         "-c",
         "transport select swd",
         "-c",
-        "adapter speed 2000",
+        "adapter speed 1000",
         "-c",
         "gdb port disabled",
         "-c",
         "tcl port disabled",
         "-c",
         "telnet port disabled",
-        "-f",
-        "target/nordic/nrf53.cfg",
         "-c",
-        J_LINK_FINGERPRINT_TCL,
+        "swd newdap chip cpu",
+        "-c",
+        "dap create chip.dap -chain-position chip.cpu",
+        "-c",
+        "target create chip.cpu cortex_m -dap chip.dap",
+        "-c",
+        CMSIS_DAP_FINGERPRINT_TCL,
         "-c",
         "init",
         "-c",
-        "fwj_scan",
+        "fwc_scan",
         "-c",
         "shutdown",
     ]
     proc = run_cmd(argv, timeout)
-    raw_out = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    markers = {}
-    for line in (proc.stdout or "").splitlines():
-        if line.startswith("FWJ|"):
-            _, key, value = line.split("|", 2)
-            markers[key] = value
-    failures = [ln for ln in raw_out.splitlines() if OPENOCD_FAILURE_RE.search(ln)]
-    if proc.returncode != 0:
-        failures.append("OpenOCD exited with status %d" % proc.returncode)
+    raw_out, failures = _openocd_failures(proc)
+    markers, marker_failures = _parse_cmsis_dap_markers(proc.stdout or "")
+    failures.extend(marker_failures)
     return argv, raw_out, markers, failures, proc.returncode
+
+
+def _ap_idr_map(markers, label):
+    values = {}
+    for index in range(4):
+        key = "ap%d" % index
+        value = markers.get(key, "")
+        if not RAW_HEX_RE.fullmatch(value):
+            raise HilDiscoveryError("%s %s missing or malformed" % (label, key))
+        values[key] = value
+    return MappingProxyType(values)
+
+
+def _variant_display(raw_variant):
+    if not RAW_HEX_RE.fullmatch(raw_variant):
+        raise HilDiscoveryError("CMSIS-DAP VARIANT marker malformed")
+    try:
+        value = int(raw_variant[2:], 16).to_bytes(4, byteorder="big").decode("ascii")
+    except UnicodeDecodeError:
+        raise HilDiscoveryError("CMSIS-DAP VARIANT marker is not ASCII") from None
+    if not value or not value.isprintable():
+        raise HilDiscoveryError("CMSIS-DAP VARIANT marker is not printable")
+    return value
 
 
 # ── resolution ─────────────────────────────────────────────────────
 
 
-def _resolve_receiver(run_cmd, raw):
-    """Receiver: nrf-probes --find nrf54l plus the matching plain-table
-    row, requiring the exact nRF54L15 target identity."""
-    find_proc = run_cmd(["nrf-probes", "--find", "nrf54l"], 60)
-    raw["nrf-probes-find"] = {
-        "argv": ["nrf-probes", "--find", "nrf54l"],
-        "stdout": find_proc.stdout or "",
-        "stderr": find_proc.stderr or "",
-        "status": find_proc.returncode,
+def _record_probe_output(raw, key, argv, proc):
+    raw[key] = {
+        "argv": list(argv),
+        "stdout": proc.stdout or "",
+        "stderr": proc.stderr or "",
+        "status": proc.returncode,
     }
-    tokens = (find_proc.stdout or "").strip().split()
-    if find_proc.returncode != 0 or len(tokens) != 1:
+
+
+def _require_cmsis_table_row(row, role, serial):
+    if row.get("SERIAL") != serial:
+        raise HilDiscoveryError("%s probe serial mismatch in probe table" % role)
+    product = row.get("PROBE", "")
+    if not product or product == "-":
+        raise HilDiscoveryError("%s probe product missing" % role)
+    if row.get("TARGET", "") != RECEIVER_TARGET:
         raise HilDiscoveryError(
-            "receiver probe unresolved: nrf-probes --find nrf54l must return "
-            "exactly one serial"
+            "%s target drift: expected %r, got %r"
+            % (role, RECEIVER_TARGET, row.get("TARGET", ""))
         )
-    serial = tokens[0]
-    rows = parse_nrf_probes_table(raw["nrf-probes"]["stdout"] or "")
-    matches = [row for row in rows if row.get("SERIAL") == serial]
-    if len(matches) != 1:
-        raise HilDiscoveryError("receiver probe serial missing from nrf-probes table")
-    row = matches[0]
-    target = row.get("TARGET", "")
-    if target != RECEIVER_TARGET:
+    if row.get("DPIDR", "") != RECEIVER_DPIDR:
         raise HilDiscoveryError(
-            "receiver target drift: expected %r, got %r" % (RECEIVER_TARGET, target)
+            "%s DPIDR drift: expected %s, got %r"
+            % (role, RECEIVER_DPIDR, row.get("DPIDR", ""))
         )
     if row.get("PART", "") != RECEIVER_PART:
         raise HilDiscoveryError(
-            "receiver PART drift: expected %s, got %r"
-            % (RECEIVER_PART, row.get("PART", ""))
+            "%s PART drift: expected %s, got %r"
+            % (role, RECEIVER_PART, row.get("PART", ""))
         )
-    for field, label in (("DPIDR", "DPIDR"), ("VARIANT", "VARIANT")):
-        value = row.get(field, "")
-        if not value or value == "-":
-            raise HilDiscoveryError("receiver %s missing" % label)
-    return (
-        ProbeIdentity(
-            role="receiver",
-            backend="nrf-probes",
-            family="nrf54l",
-            serial=serial,
-            target=target,
-            dpidr=row["DPIDR"],
-            part=row["PART"],
-            variant=row["VARIANT"],
-        ),
-        row,
-    )
+    variant = row.get("VARIANT", "")
+    if not variant or variant == "-":
+        raise HilDiscoveryError("%s VARIANT missing" % role)
+    return product, variant
 
 
-def _resolve_source_probe(run_cmd, sysfs_root, binding, raw):
-    """Source probe: exact probe udev map against current USB devices,
-    then a read-only J-Link fingerprint with the current USB serial."""
-    probe_binding = binding.roles["source"].probe
-    probe_udev = probe_binding.udev
-    if probe_udev is None:
-        raise HilDiscoveryError("source probe udev map is missing")
-    configured = dict(probe_udev.values)
-    matches = []
-    usb_dir = os.path.join(sysfs_root, "bus", "usb", "devices")
-    if not os.path.isdir(usb_dir):
-        raise HilDiscoveryError("usb device tree not found: %s" % usb_dir)
-    for dev in sorted(os.listdir(usb_dir)):
-        node = os.path.join(usb_dir, dev)
-        if not os.path.isdir(node):
-            continue
-        props = _udev_properties(run_cmd, node)
-        if props is None:
-            raw.setdefault("source-usb-udev", {})[dev] = None
-            continue
-        raw.setdefault("source-usb-udev", {})[dev] = dict(props)
-        if _match_udev(props, configured):
-            matches.append((dev, node, props))
-    if len(matches) != 1:
-        raise HilDiscoveryError(
-            "source J-Link ambiguity: exactly one USB device must match the "
-            "probe udev map, found %d" % len(matches)
-        )
-    _dev, node, props = matches[0]
-    serial = props.get("ID_SERIAL_SHORT", "")
-    if not serial:
-        raise HilDiscoveryError("source J-Link USB device has no ID_SERIAL_SHORT")
-    argv, raw_out, markers, failures, status = fingerprint_jlink(run_cmd, serial)
-    raw["source-jlink-fingerprint"] = {
+def _resolve_cmsis_probe(run_cmd, role, serial, row, raw):
+    """Cross-check table identity with one explicit read-only fingerprint."""
+    product, table_variant = _require_cmsis_table_row(row, role, serial)
+    argv, raw_out, markers, failures, status = fingerprint_cmsis_dap(run_cmd, serial)
+    raw["%s-cmsis-dap-fingerprint" % role] = {
         "argv": argv,
         "output": raw_out,
         "status": status,
@@ -439,37 +452,34 @@ def _resolve_source_probe(run_cmd, sysfs_root, binding, raw):
         "failure_lines": failures,
     }
     if failures:
-        raise HilDiscoveryError("source J-Link fingerprint OpenOCD failure")
-    ap_idrs = [markers.get("ap%d" % i, "") for i in range(4)]
-    if NRF53_CTRL_AP_IDR not in ap_idrs:
-        raise HilDiscoveryError("source target is not an nRF53 (CTRL-AP missing)")
-    if markers.get("part", "") != SOURCE_PART:
+        raise HilDiscoveryError("%s CMSIS-DAP fingerprint OpenOCD failure" % role)
+    for key, table_key in (("dpidr", "DPIDR"), ("part", "PART")):
+        if markers[key] != row[table_key]:
+            raise HilDiscoveryError(
+                "%s CMSIS-DAP %s disagrees with probe table" % (role, table_key)
+            )
+    variant = _variant_display(markers["variant"])
+    if variant != table_variant:
         raise HilDiscoveryError(
-            "source PART drift: expected %s, got %r"
-            % (SOURCE_PART, markers.get("part", ""))
+            "%s CMSIS-DAP VARIANT disagrees with probe table" % role
         )
-    for field, label in (("dpidr", "DPIDR"), ("variant", "VARIANT")):
-        value = markers.get(field, "")
-        if not value or value == "0x00000000":
-            raise HilDiscoveryError("source %s missing" % label)
-    return (
-        ProbeIdentity(
-            role="source",
-            backend="jlink",
-            family="nrf53",
-            serial=serial,
-            target="nRF5340",
-            dpidr=markers["dpidr"],
-            part=markers["part"],
-            variant=markers["variant"],
-        ),
-        node,
+    return ProbeIdentity(
+        role=role,
+        backend="nrf-probes",
+        family="nrf54l",
+        serial=serial,
+        product=product,
+        target=row["TARGET"],
+        dpidr=markers["dpidr"],
+        ap_idrs=_ap_idr_map(markers, "%s CMSIS-DAP" % role),
+        part=markers["part"],
+        variant=variant,
+        variant_raw=markers["variant"],
     )
 
 
 def _resolve_serial(run_cmd, sysfs_root, role_name, binding, probe, raw):
-    """One role's tty: candidates under /sys/class/tty matched by every
-    configured serial udev key plus exact probe-serial correlation."""
+    """Resolve one tty by configured udev keys and exact probe correlation."""
     role = binding.roles[role_name]
     configured = dict(role.serial.udev.values)
     tty_dir = os.path.join(sysfs_root, "class", "tty")
@@ -481,8 +491,9 @@ def _resolve_serial(run_cmd, sysfs_root, role_name, binding, probe, raw):
         if not os.path.isdir(node):
             continue
         props = _udev_properties(run_cmd, node)
-        if props is None:
-            continue
+        raw.setdefault("%s-udev" % role_name, {})[name] = (
+            None if props is None else dict(props)
+        )
         if not _match_udev(props, configured):
             continue
         serial = props.get("ID_SERIAL_SHORT", "")
@@ -495,58 +506,24 @@ def _resolve_serial(run_cmd, sysfs_root, role_name, binding, probe, raw):
             "probe serial %s, found %d" % (role_name, probe.serial, len(matches))
         )
     name, props = matches[0]
-    usb_parent = _usb_parent(sysfs_root, props)
-    raw.setdefault("%s-udev" % role_name, {})[name] = dict(props)
     return SerialIdentity(
         role=role_name,
         path=os.path.join("/dev", name),
         baud=role.serial.baud,
         properties=MappingProxyType(dict(props)),
-        usb_parent=usb_parent,
+        usb_parent=_usb_parent(sysfs_root, props),
         dtr=role.serial.dtr,
         rts=role.serial.rts,
     )
 
 
-def _resolve_fixture_impl(binding, *, run_cmd, sysfs_root, raw):
-    """Resolve every role in one physical binding.
-
-    ``run_cmd(argv, timeout)`` returns a process-like object with
-    ``stdout``, ``stderr``, and ``returncode`` (production: subprocess;
-    fakes: scripted).  Returns a ``FixtureResolution`` with raw identity
-    evidence retained for the run directory.
-    """
-    if not isinstance(binding, model.PhysicalBinding):
-        raise HilDiscoveryError("binding must be a validated PhysicalBinding")
-    plain_proc = run_cmd(["nrf-probes"], 90)
-    raw["nrf-probes"] = {
-        "argv": ["nrf-probes"],
-        "stdout": plain_proc.stdout or "",
-        "stderr": plain_proc.stderr or "",
-        "status": plain_proc.returncode,
-    }
-    if plain_proc.returncode != 0:
-        raise HilDiscoveryError(
-            "nrf-probes failed with status %d" % plain_proc.returncode
-        )
-
-    receiver_probe, receiver_row = _resolve_receiver(run_cmd, raw)
-    raw["receiver-probe"] = dict(receiver_row)
-    source_probe, source_node = _resolve_source_probe(run_cmd, sysfs_root, binding, raw)
-    raw["source-probe-node"] = source_node
-
-    # Source probe and source serial must share the exact nonempty
-    # ID_SERIAL_SHORT: both interfaces belong to one J-Link composite
-    # device.  The serial resolution enforces this correlation directly
-    # (the tty must carry the probe serial).
+def _resolved_roles(binding, receiver_probe, source_probe, run_cmd, sysfs_root, raw):
     receiver_serial = _resolve_serial(
         run_cmd, sysfs_root, "receiver", binding, receiver_probe, raw
     )
     source_serial = _resolve_serial(
         run_cmd, sysfs_root, "source", binding, source_probe, raw
     )
-
-    # Cross-wiring rejection: distinct ttys from distinct USB parents.
     if receiver_serial.path == source_serial.path:
         raise HilDiscoveryError("receiver and source share the same tty")
     if (
@@ -554,26 +531,105 @@ def _resolve_fixture_impl(binding, *, run_cmd, sysfs_root, raw):
         and receiver_serial.usb_parent == source_serial.usb_parent
     ):
         raise HilDiscoveryError("receiver and source share the same USB parent")
-
-    roles = {
+    return {
         "receiver": RoleIdentity("receiver", receiver_probe, receiver_serial),
         "source": RoleIdentity("source", source_probe, source_serial),
     }
+
+
+def _validate_explicit_probe_serials(binding, explicit_probe_serials):
+    if explicit_probe_serials is None:
+        raise HilDiscoveryError("CMSIS-DAP fixture requires explicit probe serials")
+    if not isinstance(explicit_probe_serials, Mapping) or set(
+        explicit_probe_serials
+    ) != {
+        "receiver",
+        "source",
+    }:
+        raise HilDiscoveryError(
+            "explicit probe serials must contain receiver and source"
+        )
+    serials = {}
+    for role in ("receiver", "source"):
+        serial = explicit_probe_serials[role]
+        if not isinstance(serial, str) or not PROBE_SERIAL_RE.fullmatch(serial):
+            raise HilDiscoveryError("explicit %s probe serial is unsafe" % role)
+        serials[role] = serial
+        probe = binding.roles[role].probe
+        if probe.backend != "nrf-probes" or probe.family != "nrf54l":
+            raise HilDiscoveryError(
+                "explicit probe serials require nRF54L15 CMSIS-DAP roles"
+            )
+    if serials["receiver"] == serials["source"]:
+        raise HilDiscoveryError("receiver and source probe serials must be distinct")
+    if set(binding.roles) not in (
+        {"receiver", "source"},
+        {"receiver", "source", "capture"},
+    ):
+        raise HilDiscoveryError(
+            "explicit probe serials require receiver/source with optional capture"
+        )
+    return serials
+
+
+def _resolve_explicit_pair(binding, serials, run_cmd, sysfs_root, raw):
+    argv = [*NIX_NRF_PROBES, serials["receiver"], serials["source"]]
+    proc = run_cmd(argv, 90)
+    _record_probe_output(raw, "nrf-probes", argv, proc)
+    if proc.returncode != 0:
+        raise HilDiscoveryError(
+            "nix-nrf probes failed with status %d" % proc.returncode
+        )
+    rows = parse_nrf_probes_table(proc.stdout or "")
+    if len(rows) != 2:
+        raise HilDiscoveryError("explicit probe table must contain exactly two rows")
+    probes = {}
+    for role in ("receiver", "source"):
+        serial = serials[role]
+        matches = [row for row in rows if row.get("SERIAL") == serial]
+        if len(matches) != 1:
+            raise HilDiscoveryError("explicit %s probe table row mismatch" % role)
+        raw["%s-probe" % role] = dict(matches[0])
+        probes[role] = _resolve_cmsis_probe(run_cmd, role, serial, matches[0], raw)
+    roles = _resolved_roles(
+        binding, probes["receiver"], probes["source"], run_cmd, sysfs_root, raw
+    )
+    receiver_parent = roles["receiver"].serial.usb_parent
+    source_parent = roles["source"].serial.usb_parent
+    if (
+        receiver_parent is None
+        or source_parent is None
+        or receiver_parent == source_parent
+    ):
+        raise HilDiscoveryError(
+            "explicit receiver and source need distinct USB parents"
+        )
     return FixtureResolution(roles=MappingProxyType(roles), raw=MappingProxyType(raw))
 
 
-def resolve_fixture(binding, *, run_cmd, sysfs_root="/sys"):
+def _resolve_fixture_impl(binding, *, run_cmd, sysfs_root, raw, explicit_probe_serials):
+    """Resolve every role without mutating target or line-control state."""
+    if not isinstance(binding, model.PhysicalBinding):
+        raise HilDiscoveryError("binding must be a validated PhysicalBinding")
+    serials = _validate_explicit_probe_serials(binding, explicit_probe_serials)
+    return _resolve_explicit_pair(binding, serials, run_cmd, sysfs_root, raw)
+
+
+def resolve_fixture(
+    binding, *, run_cmd, sysfs_root="/sys", explicit_probe_serials=None
+):
     """Resolve every role and retain partial raw evidence on failure.
 
-    Discovery is intentionally fail-closed, but a failure after the runner
-    created its evidence directory must not discard the probe/udev/OpenOCD
-    observations that explain it. Attach an immutable snapshot to the raised
-    ``HilDiscoveryError`` for that runner-side retention path.
+    ``explicit_probe_serials`` must name both distinct nRF54L15 boards.
     """
     raw = {}
     try:
         return _resolve_fixture_impl(
-            binding, run_cmd=run_cmd, sysfs_root=sysfs_root, raw=raw
+            binding,
+            run_cmd=run_cmd,
+            sysfs_root=sysfs_root,
+            raw=raw,
+            explicit_probe_serials=explicit_probe_serials,
         )
     except HilDiscoveryError as exc:
         exc.raw = MappingProxyType(dict(raw))

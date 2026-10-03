@@ -1,5 +1,11 @@
 # Current-state refactoring plan
 
+> **Historical plan (2026-08-04):** R0-R10 work and its nRF53 parity/build
+> recipes are dated evidence, not active requirements for the all-nRF54L15
+> migration. Preserve its behavioral and lifecycle guidance. For current
+> implementation and pending clean-commit validation, use `AGENTS.md`,
+> `STATUS.md`, and `docs/development/nrf54l15-only-resume-20260924.md`.
+
 Status: **accepted plan of record, 2026-08-04**.  Ready for phased execution.
 This plan replaces any refactoring assumptions made before the T0–T8
 behavior-lock track.  It does not replace `docs/design.md` as historical

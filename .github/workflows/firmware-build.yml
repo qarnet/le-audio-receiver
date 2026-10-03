@@ -52,7 +52,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: /home/runner/ncs
-          key: ncs-v3.3.0-911f4c5c26
+          key: ncs-v3.4.1-8285d8ad56
       - name: Install NCS SDK and toolchain
         env:
           CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}
@@ -62,10 +62,10 @@ jobs:
           nrfutil sdk-manager --version | grep -F "1.16.1"
           nrfutil sdk-manager config install-dir set "$HOME/ncs"
           if [ "$CACHE_HIT" = "true" ]; then
-            test -d "$HOME/ncs/v3.3.0/nrf"
-            echo "NCS v3.3.0 restored from cache; skipping sdk-manager install"
+            test -d "$HOME/ncs/v3.4.1/nrf"
+            echo "NCS v3.4.1 restored from cache; skipping sdk-manager install"
           else
-            nrfutil sdk-manager install v3.3.0
+            nix-nrf bootstrap --ncs-version v3.4.1 --toolchain-bundle-id 8285d8ad56 --yes
           fi
           EOF
       - name: Verify canonical test environment
@@ -78,12 +78,23 @@ jobs:
           echo "gcov: $gcov_line"
           test "$gcovr_line" = "gcovr 8.4"
           test "$gcov_line" = "gcov (GCC) 14.3.0"
-          test "$ZEPHYR_BASE" = "$HOME/ncs/v3.3.0/zephyr"
+          test "$ZEPHYR_BASE" = "$HOME/ncs/v3.4.1/zephyr"
           test -d "$ZEPHYR_BASE"
-          test "$(git -C "$HOME/ncs/v3.3.0/nrf" rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
-          test "$(tr -d '\r\n' < "$HOME/ncs/v3.3.0/nrf/VERSION")" = "3.3.0"
-          nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh | grep -q "911f4c5c26"
+          test "$(git -C "$HOME/ncs/v3.4.1/nrf" rev-parse HEAD)" = "b20f8619ba9a5530f8c34b0a130d829947cfe55d"
+          test "$(git -C "$HOME/ncs/v3.4.1/zephyr" rev-parse HEAD)" = "33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6"
+          # sdk-nrf VERSION is six-field Zephyr format, not a single version line.
+          test "$(sha256sum "$HOME/ncs/v3.4.1/nrf/VERSION" | cut -d' ' -f1)" = "37eaf3af83e09aba188263cedf48d2bc606713193a61df78d532730f3441cfa5"
+          nrfutil sdk-manager toolchain env --toolchain-bundle-id 8285d8ad56 --as-script sh | grep -q "8285d8ad56"
           echo "canonical test environment verified"
+          EOF
+      - name: Prepare pinned BabbleSim sources
+        run: |
+          nix develop --accept-flake-config --command bash -s <<'EOF'
+          set -euo pipefail
+          # Unit policy tests read real pinned component sources. Run after
+          # install/cache restore unconditionally; source presence is not cached
+          # readiness. Compilation still belongs only to the BSim worker.
+          bash scripts/prepare-bsim-sources.sh
           EOF
       - name: Prepare unit test output root
         run: |
@@ -149,7 +160,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: /home/runner/ncs
-          key: ncs-v3.3.0-911f4c5c26
+          key: ncs-v3.4.1-8285d8ad56
       - name: Install NCS SDK and toolchain
         env:
           CACHE_HIT: ${{ steps.cache-ncs.outputs.cache-hit }}
@@ -159,28 +170,11 @@ jobs:
           nrfutil sdk-manager --version | grep -F "1.16.1"
           nrfutil sdk-manager config install-dir set "$HOME/ncs"
           if [ "$CACHE_HIT" = "true" ]; then
-            test -d "$HOME/ncs/v3.3.0/nrf"
-            echo "NCS v3.3.0 restored from cache; skipping sdk-manager install"
+            test -d "$HOME/ncs/v3.4.1/nrf"
+            echo "NCS v3.4.1 restored from cache; skipping sdk-manager install"
           else
-            nrfutil sdk-manager install v3.3.0
+            nix-nrf bootstrap --ncs-version v3.4.1 --toolchain-bundle-id 8285d8ad56 --yes
           fi
-          EOF
-      - name: Populate NCS workspace projects
-        if: matrix.phase == 'bsim'
-        run: |
-          nix develop --accept-flake-config --command bash -s <<'EOF'
-          set -euo pipefail
-          cd "$HOME/ncs/v3.3.0"
-          test "$(west topdir)" = "$HOME/ncs/v3.3.0"
-          # The sdk-manager bundle carries the bsim_west checkout, but the
-          # root group-filter excludes the babblesim-group components,
-          # leaving tools/bsim/Makefile a dangling symlink to
-          # components/common/Makefile. Re-enable that group so west
-          # fetches every component at its pinned revision; the revisions
-          # come from the pinned imported bsim manifest, never floating
-          # clones or ad hoc BSim URLs.
-          west update --narrow -o=--depth=1 --group-filter +babblesim
-          test -f "$HOME/ncs/v3.3.0/tools/bsim/Makefile"
           EOF
       - name: Verify canonical test environment
         run: |
@@ -192,20 +186,28 @@ jobs:
           echo "gcov: $gcov_line"
           test "$gcovr_line" = "gcovr 8.4"
           test "$gcov_line" = "gcov (GCC) 14.3.0"
-          test "$ZEPHYR_BASE" = "$HOME/ncs/v3.3.0/zephyr"
+          test "$ZEPHYR_BASE" = "$HOME/ncs/v3.4.1/zephyr"
           test -d "$ZEPHYR_BASE"
-          test "$(git -C "$HOME/ncs/v3.3.0/nrf" rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
-          test "$(tr -d '\r\n' < "$HOME/ncs/v3.3.0/nrf/VERSION")" = "3.3.0"
-          nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh | grep -q "911f4c5c26"
+          test "$(git -C "$HOME/ncs/v3.4.1/nrf" rev-parse HEAD)" = "b20f8619ba9a5530f8c34b0a130d829947cfe55d"
+          test "$(git -C "$HOME/ncs/v3.4.1/zephyr" rev-parse HEAD)" = "33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6"
+          # sdk-nrf VERSION is six-field Zephyr format, not a single version line.
+          test "$(sha256sum "$HOME/ncs/v3.4.1/nrf/VERSION" | cut -d' ' -f1)" = "37eaf3af83e09aba188263cedf48d2bc606713193a61df78d532730f3441cfa5"
+          nrfutil sdk-manager toolchain env --toolchain-bundle-id 8285d8ad56 --as-script sh | grep -q "8285d8ad56"
           echo "canonical test environment verified"
+          EOF
+      - name: Prepare pinned BabbleSim sources
+        if: matrix.phase == 'bsim'
+        run: |
+          nix develop --accept-flake-config --command bash -s <<'EOF'
+          set -euo pipefail
+          bash scripts/prepare-bsim-sources.sh
           EOF
       - name: Build BabbleSim components
         if: matrix.phase == 'bsim'
         run: |
           nix develop --accept-flake-config --command bash -s <<'EOF'
           set -euo pipefail
-          BSIM_BUILD_FAIL_ASAP=1 make -C "$HOME/ncs/v3.3.0/tools/bsim" everything
-          test -x "$HOME/ncs/v3.3.0/tools/bsim/bin/bs_2G4_phy_v1"
+          bash scripts/build-bsim-components.sh --force
           EOF
       - name: Prepare phase test output root
         run: |
@@ -260,7 +262,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     container:
-      image: ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:f24d8932ff081ebcd8da9c248f4449bdabe461c0620a7a4ac9e95eb577ba2276
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:45b97cad97a9967c52d77d1d1a0f7dd8fe027edd17c05c3eda2eeadc23729418
     defaults:
       run:
         shell: bash
@@ -278,19 +280,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: nrfconnect/sdk-nrf
-          ref: ba167d9f3db4abbdc9b67887ca3ea66c64f2d956
+          ref: b20f8619ba9a5530f8c34b0a130d829947cfe55d
           path: workspace/nrf
           persist-credentials: false
       - name: Initialize NCS workspace
         working-directory: ${{ github.workspace }}/workspace
         run: |
-          test "$(git -C nrf rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
-          test "$(tr -d '\r\n' < nrf/VERSION)" = "3.3.0"
+          test "$(git -C nrf rev-parse HEAD)" = "b20f8619ba9a5530f8c34b0a130d829947cfe55d"
+          # sdk-nrf VERSION is six-field Zephyr format, not a single version line.
+          test "$(sha256sum nrf/VERSION | cut -d' ' -f1)" = "37eaf3af83e09aba188263cedf48d2bc606713193a61df78d532730f3441cfa5"
           west init -l nrf
           west update --narrow -o=--depth=1
           west zephyr-export
-          test "$(git -C nrf rev-parse HEAD)" = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
-          test "$(tr -d '\r\n' < nrf/VERSION)" = "3.3.0"
+          test "$(git -C nrf rev-parse HEAD)" = "b20f8619ba9a5530f8c34b0a130d829947cfe55d"
+          test "$(sha256sum nrf/VERSION | cut -d' ' -f1)" = "37eaf3af83e09aba188263cedf48d2bc606713193a61df78d532730f3441cfa5"
+          test "$(git -C zephyr rev-parse HEAD)" = "33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6"
           test "$(west topdir)" = "$GITHUB_WORKSPACE/workspace"
           zephyr_base="$GITHUB_WORKSPACE/workspace/zephyr"
           test -d "$zephyr_base"
@@ -364,7 +368,7 @@ jobs:
           python3 scripts/package-firmware-release.py \
             --version "$version" \
             --git-commit "$GITHUB_SHA" \
-            --ncs-version v3.3.0 \
+            --ncs-version v3.4.1 \
             --build-root build \
             --output-dir dist
       - name: Verify package
@@ -446,7 +450,7 @@ jobs:
             --tag "$tag" \
             --version "$version" \
             --git-commit "$GITHUB_SHA" \
-            --ncs-version v3.3.0 \
+            --ncs-version v3.4.1 \
             --repository "$REPOSITORY" \
             --workflow "$WORKFLOW" \
             --workflow-ref "$WORKFLOW_REF" \

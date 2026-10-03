@@ -1,13 +1,14 @@
 {
   "schema_version": 3,
-  "baselined": "2026-09-16",
+  "baselined": "2026-09-24",
   "description": "BabbleSim Stage 1 T4 BAP scenario matrix, versioned data consumed by scripts/bsim-stage1-run.sh and scripts/bsim_stage1_parse.py. Numerical PCM limits come only from tests/fixtures/lc3/portable-oracle-manifest.json. Exact client TX FNV ownership remains parser-side.",
   "notes": [
     "Schema 3 removes CPU-specific decoded-PCM FNV pins. known.total remains an exact receiver decoder-count contract.",
     "Receiver numerical PCM comparison identifies exact compressed payload bytes, advances per-channel stateful recipe cursors for every PLC or valid decode action, scales references with BSim volume 195, and enforces frozen manifest limits. Controller sequence never identifies a fixture frame.",
     "Client TX FNV remains exact parser-owned evidence over logical sequence and final transmitted corpus bytes. It is unrelated to decoded PCM comparison.",
     "reconnect_second_stream_10ms pins its first segment total. The parser derives its second segment total from fresh mono decoder accounting.",
-    "invalid_sdu_resume_10ms retains malformed_at 20 and known.total 108. The malformed frame creates no receiver recipe action; skip20_10ms_l resumes at corpus frame 21.",
+    "nRF54L15BSim uses integrated SW Split with reliability policy. Legacy startup recipes remain calibration history; canonical recipes start at corpus frame zero.",
+    "invalid_sdu_resume_10ms retains malformed_at 20. The malformed frame creates no receiver recipe action; skip20_start0_10ms_l resumes at corpus frame 21.",
     "duplicate_release_10ms runs once. First Release from streaming closes gate and cleans slot once. Duplicate same-slot Release remains transport-visible and may emit the sole scenario-17 receiver warning Invalid operation in state: releasing. Slot reuse then proves second first-time cleanup."
   ],
   "scenarios": [
@@ -16,137 +17,137 @@
       "runs": 2,
       "dec_calls": 1,
       "channel_mode": "mono",
-      "known": {"total": 108},
+      "known": {"total": 100},
       "transport": [{"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_l"]}],
-      "receiver_oracle": [{"left_recipe": "start8_10ms_l", "right_recipe": "start8_10ms_l", "completion": "full"}]
+      "receiver_oracle": [{"left_recipe": "start0_10ms_l", "right_recipe": "start0_10ms_l", "completion": "full"}]
     },
     {
       "name": "mono_7p5ms",
       "runs": 2,
       "dec_calls": 1,
       "channel_mode": "mono",
-      "known": {"total": 111},
+      "known": {"total": 100},
       "transport": [{"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_7p5ms_90b_l"]}],
-      "receiver_oracle": [{"left_recipe": "start11_7p5ms_l", "right_recipe": "start11_7p5ms_l", "completion": "full"}]
+      "receiver_oracle": [{"left_recipe": "start0_7p5ms_l", "right_recipe": "start0_7p5ms_l", "completion": "full"}]
     },
     {
       "name": "modea_10ms",
       "runs": 2,
       "dec_calls": 2,
       "channel_mode": "stereo",
-      "known": {"total": 216},
+      "known": {"total": 200},
       "transport": [
         {"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_l"]},
         {"stream": 1, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_r"]}
       ],
-      "receiver_oracle": [{"left_recipe": "start8_10ms_l", "right_recipe": "start8_10ms_r", "completion": "full"}]
+      "receiver_oracle": [{"left_recipe": "start0_10ms_l", "right_recipe": "start0_10ms_r", "completion": "full"}]
     },
     {
       "name": "modea_7p5ms",
       "runs": 2,
       "dec_calls": 2,
       "channel_mode": "stereo",
-      "known": {"total": 226},
+      "known": {"total": 200},
       "transport": [
         {"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_7p5ms_90b_l"]},
         {"stream": 1, "layout": "mono", "fixtures": ["bsim_48k_7p5ms_90b_r"]}
       ],
-      "receiver_oracle": [{"left_recipe": "modea_start_7p5ms_l", "right_recipe": "modea_start_7p5ms_r", "completion": "full"}]
+      "receiver_oracle": [{"left_recipe": "start0_7p5ms_l", "right_recipe": "start0_7p5ms_r", "completion": "full"}]
     },
     {
       "name": "modea_reverse_start_10ms",
       "runs": 2,
       "dec_calls": 2,
       "channel_mode": "stereo",
-      "known": {"total": 216},
+      "known": {"total": 200},
       "transport": [
         {"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_l"]},
         {"stream": 1, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_r"]}
       ],
-      "receiver_oracle": [{"left_recipe": "start8_10ms_l", "right_recipe": "start8_10ms_r", "completion": "full"}]
+      "receiver_oracle": [{"left_recipe": "start0_10ms_l", "right_recipe": "start0_10ms_r", "completion": "full"}]
     },
     {
       "name": "modeb_10ms",
       "runs": 2,
       "dec_calls": 2,
       "channel_mode": "stereo",
-      "known": {"total": 216},
+      "known": {"total": 200},
       "transport": [{"stream": 0, "layout": "stereo-concat", "fixtures": ["bsim_48k_10ms_120b_l", "bsim_48k_10ms_120b_r"]}],
-      "receiver_oracle": [{"left_recipe": "start8_10ms_l", "right_recipe": "start8_10ms_r", "completion": "full"}]
+      "receiver_oracle": [{"left_recipe": "start0_10ms_l", "right_recipe": "start0_10ms_r", "completion": "full"}]
     },
     {
       "name": "modeb_7p5ms",
       "runs": 2,
       "dec_calls": 2,
       "channel_mode": "stereo",
-      "known": {"total": 222},
+      "known": {"total": 200},
       "transport": [{"stream": 0, "layout": "stereo-concat", "fixtures": ["bsim_48k_7p5ms_90b_l", "bsim_48k_7p5ms_90b_r"]}],
-      "receiver_oracle": [{"left_recipe": "start11_7p5ms_l", "right_recipe": "start11_7p5ms_r", "completion": "full"}]
+      "receiver_oracle": [{"left_recipe": "start0_7p5ms_l", "right_recipe": "start0_7p5ms_r", "completion": "full"}]
     },
     {
       "name": "invalid_sdu_resume_10ms",
       "runs": 2,
       "dec_calls": 1,
       "channel_mode": "mono",
-      "known": {"total": 108},
+      "known": {"total": 100},
       "transport": [{"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_l"], "malformed_at": 20}],
-      "receiver_oracle": [{"left_recipe": "skip20_10ms_l", "right_recipe": "skip20_10ms_l", "completion": "full"}]
+      "receiver_oracle": [{"left_recipe": "skip20_start0_10ms_l", "right_recipe": "skip20_start0_10ms_l", "completion": "full"}]
     },
     {
       "name": "modea_one_cis_loss_10ms",
       "runs": 2,
       "dec_calls": 2,
       "channel_mode": "stereo",
-      "known": {"total": 216},
+      "known": {"total": 200},
       "transport": [
         {"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_l"]},
         {"stream": 1, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_r"]}
       ],
-      "receiver_oracle": [{"left_recipe": "start8_10ms_l", "right_recipe": "loss48x18_10ms_r", "completion": "full"}]
+      "receiver_oracle": [{"left_recipe": "start0_10ms_l", "right_recipe": "loss48x18_start0_10ms_r", "completion": "full"}]
     },
     {
       "name": "modea_first_stop_10ms",
       "runs": 1,
       "dec_calls": 2,
       "channel_mode": "stereo",
-      "known": {"total": 86},
+      "known": {"total": 68},
       "transport": [
         {"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_l"]},
         {"stream": 1, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_r"]}
       ],
-      "receiver_oracle": [{"left_recipe": "start8_10ms_l", "right_recipe": "start8_10ms_r", "completion": "prefix"}]
+      "receiver_oracle": [{"left_recipe": "start0_10ms_l", "right_recipe": "start0_10ms_r", "completion": "prefix"}]
     },
     {
       "name": "release_without_disable_10ms",
       "runs": 1,
       "dec_calls": 1,
       "channel_mode": "mono",
-      "known": {"total": 56},
+      "known": {"total": 55},
       "transport": [{"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_l"]}],
-      "receiver_oracle": [{"left_recipe": "start8_10ms_l", "right_recipe": "start8_10ms_l", "completion": "prefix"}]
+      "receiver_oracle": [{"left_recipe": "start0_10ms_l", "right_recipe": "start0_10ms_l", "completion": "prefix"}]
     },
     {
       "name": "disconnect_streaming_10ms",
       "runs": 1,
       "dec_calls": 1,
       "channel_mode": "mono",
-      "known": {"total": 63},
+      "known": {"total": 55},
       "transport": [{"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_l"]}],
-      "receiver_oracle": [{"left_recipe": "start8_10ms_l", "right_recipe": "start8_10ms_l", "completion": "prefix"}]
+      "receiver_oracle": [{"left_recipe": "start0_10ms_l", "right_recipe": "start0_10ms_l", "completion": "prefix"}]
     },
     {
       "name": "reconnect_second_stream_10ms",
       "runs": 1,
       "dec_calls": 1,
       "channel_mode": "mono",
-      "known": {"total": 63},
+      "known": {"total": 55},
       "transport": [
         {"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_l"]},
         {"stream": 1, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_l"]}
       ],
       "receiver_oracle": [
-        {"left_recipe": "start8_10ms_l", "right_recipe": "start8_10ms_l", "completion": "prefix"},
-        {"left_recipe": "start7_10ms_l", "right_recipe": "start7_10ms_l", "completion": "full"}
+        {"left_recipe": "start0_10ms_l", "right_recipe": "start0_10ms_l", "completion": "prefix"},
+        {"left_recipe": "start0_10ms_l", "right_recipe": "start0_10ms_l", "completion": "full"}
       ]
     },
     {
@@ -178,9 +179,9 @@
       "runs": 1,
       "dec_calls": 1,
       "channel_mode": "mono",
-      "known": {"total": 56},
+      "known": {"total": 55},
       "transport": [{"stream": 0, "layout": "mono", "fixtures": ["bsim_48k_10ms_120b_l"]}],
-      "receiver_oracle": [{"left_recipe": "start8_10ms_l", "right_recipe": "start8_10ms_l", "completion": "prefix"}]
+      "receiver_oracle": [{"left_recipe": "start0_10ms_l", "right_recipe": "start0_10ms_l", "completion": "prefix"}]
     }
   ]
 }

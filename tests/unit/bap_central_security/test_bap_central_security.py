@@ -28,6 +28,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(
     0,
@@ -792,6 +793,150 @@ class TestPreserveBondConnect(unittest.TestCase):
         self.assertEqual(len(device.calls_for("Connect")), 1)
 
 
+class _FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, duration):
+        self.now += duration
+
+
+class _ActionContext(fakes.FakeMainContext):
+    def __init__(self):
+        super().__init__()
+        self.actions = {}
+
+    def iteration(self, may_block=False):
+        super().iteration(may_block)
+        for action in self.actions.pop(self.iterations, []):
+            action()
+        return False
+
+
+class TestConnectAndBond(unittest.TestCase):
+    def setUp(self):
+        self.bus = fakes.FakeBus()
+        self.device = self.bus.iface(DEV_PATH, "org.bluez.Device1")
+        self.props = self.bus.iface(DEV_PATH, "org.freedesktop.DBus.Properties")
+        self.dbus = fakes.FakeDbusModule()
+        self.clock = _FakeClock()
+        self.context = _ActionContext()
+        fakes.set_fake_context(self.context)
+        self.state = {"Paired": False, "Connected": False}
+        self.props.script("Get", lambda iface, name: self.state[name])
+        self.device.script("Pair", lambda *a, **k: self.fail("unexpected Pair()"))
+
+    def tearDown(self):
+        fakes.reset_fake_glib()
+
+    def run_connect(self, deadline=0.25):
+        with (
+            patch.object(sec.time, "monotonic", self.clock.monotonic),
+            patch.object(sec.time, "sleep", self.clock.sleep),
+        ):
+            return sec.connect_and_bond(
+                self.device, self.props, self.dbus, fakes.FakeGLib, deadline_s=deadline
+            )
+
+    def test_connect_reply_before_receiver_bond(self):
+        def connect(**kwargs):
+            self.state["Connected"] = True
+            kwargs["reply_handler"]()
+            self.context.actions[2] = [lambda: self.state.update(Paired=True)]
+
+        self.device.script("Connect", connect)
+        result, log = capture(self.run_connect)
+        self.assertEqual(result, (True, True))
+        self.assertGreaterEqual(self.context.iterations, 2)
+        self.assertIn("Connect-led bond confirmed: Paired=True, Connected=True", log)
+        self.assertEqual(self.device.calls_for("Pair"), [])
+
+    def test_receiver_bond_before_connect_reply(self):
+        def connect(**kwargs):
+            self.state.update(Paired=True, Connected=True)
+            self.context.actions[2] = [kwargs["reply_handler"]]
+
+        self.device.script("Connect", connect)
+        result, _ = capture(self.run_connect)
+        self.assertEqual(result, (True, True))
+        self.assertGreaterEqual(self.context.iterations, 2)
+        self.assertEqual(self.device.calls_for("Pair"), [])
+
+    def test_already_connected_unpaired_waits_for_bond_without_connect(self):
+        self.state["Connected"] = True
+        self.context.actions[1] = [lambda: self.state.update(Paired=True)]
+        result, _ = capture(self.run_connect)
+        self.assertEqual(result, (True, True))
+        self.assertEqual(self.device.calls_for("Connect"), [])
+
+    def test_reject_already_paired(self):
+        self.state["Paired"] = True
+        with self.assertRaisesRegex(sec.CentralError, "already Paired"):
+            capture(self.run_connect)
+        self.assertEqual(self.device.calls_for("Connect"), [])
+
+    def test_async_connect_error_fails_closed(self):
+        self.device.script(
+            "Connect", lambda **k: k["error_handler"]("connection rejected")
+        )
+        with self.assertRaisesRegex(sec.CentralError, "connection rejected"):
+            capture(self.run_connect)
+        self.assertEqual(self.state, {"Paired": False, "Connected": False})
+
+    def test_connect_without_reply_fails_even_if_bond_appears(self):
+        def connect(**kwargs):
+            self.state.update(Paired=True, Connected=True)
+
+        self.device.script("Connect", connect)
+        with self.assertRaisesRegex(sec.CentralError, "Connect reply=False"):
+            capture(self.run_connect)
+
+    def test_no_bond_after_connect_reply_fails_closed(self):
+        self.device.script(
+            "Connect",
+            lambda **k: (self.state.update(Connected=True), k["reply_handler"]()),
+        )
+        with self.assertRaisesRegex(sec.CentralError, "Paired=False"):
+            capture(self.run_connect)
+
+    def test_disconnected_after_bond_fails_closed(self):
+        self.device.script(
+            "Connect",
+            lambda **k: (self.state.update(Connected=True), k["reply_handler"]()),
+        )
+        self.context.actions[1] = [
+            lambda: self.state.update(Paired=True, Connected=False)
+        ]
+        with self.assertRaisesRegex(sec.CentralError, "Connected=False"):
+            capture(self.run_connect)
+
+    def test_property_error_initial_and_during_poll(self):
+        def fail_get(iface, name):
+            raise fakes.DBusException("device disappeared")
+
+        self.props.script("Get", fail_get)
+        with self.assertRaisesRegex(sec.CentralError, "state read failed"):
+            capture(self.run_connect)
+        self.assertEqual(self.device.calls_for("Connect"), [])
+        self.props.script("Get", lambda iface, name: self.state[name])
+        self.device.script(
+            "Connect",
+            lambda **k: (self.state.update(Connected=True), k["reply_handler"]()),
+        )
+        self.context.actions[1] = [lambda: self.props.script("Get", fail_get)]
+        with self.assertRaisesRegex(sec.CentralError, "state poll failed"):
+            capture(self.run_connect)
+
+    def test_keyboard_interrupt_propagates(self):
+        self.device.script("Connect", lambda **k: k["reply_handler"]())
+        self.context.actions[1] = [lambda: (_ for _ in ()).throw(KeyboardInterrupt())]
+        with self.assertRaises(KeyboardInterrupt):
+            capture(self.run_connect)
+
+
 # ── State reads / Pairable / Trusted / Pair / Services ──────────────────
 
 
@@ -1049,6 +1194,120 @@ class TestDisconnectAndWait(unittest.TestCase):
 
 
 # ── Resource cleanup ordering through the CLI owner ─────────────────────
+
+
+class TestConnectLedMainCleanup(unittest.TestCase):
+    def setUp(self):
+        import bap_central  # noqa: E402
+
+        self.cli = bap_central
+        self.bus = fakes.FakeBus()
+        self.device = self.bus.iface(DEV_PATH, "org.bluez.Device1")
+        self.props = self.bus.iface(DEV_PATH, "org.freedesktop.DBus.Properties")
+        self.state = {"Paired": False, "Connected": False, "Trusted": False}
+        self.owned = {"agent": False, "endpoint": False}
+        self.props.script("Get", lambda iface, name: self.state[name])
+        self.props.script(
+            "Set", lambda iface, name, value: self.state.update({name: bool(value)})
+        )
+        self.device.script("Disconnect", lambda: self.state.update(Connected=False))
+        self.device.script(
+            "Pair", lambda **kw: self.fail("proactive Pair() on fresh peer")
+        )
+        self.bus.iface("/", "org.freedesktop.DBus.ObjectManager").script(
+            "GetManagedObjects",
+            lambda: {
+                DEV_PATH: {
+                    "org.bluez.Device1": {
+                        "Name": "LE Audio Receiver",
+                        "Address": PEER,
+                        "Paired": False,
+                        "Connected": False,
+                    }
+                }
+            },
+        )
+        adapter_props = self.bus.iface(
+            "/org/bluez/hci0", "org.freedesktop.DBus.Properties"
+        )
+        adapter_state = {"Powered": False, "Pairable": False}
+        adapter_props.script(
+            "Set", lambda iface, name, value: adapter_state.update({name: bool(value)})
+        )
+        adapter_props.script("Get", lambda iface, name: adapter_state[name])
+        agent = self.bus.iface("/org/bluez", "org.bluez.AgentManager1")
+        agent.script("RegisterAgent", lambda *a: self.owned.update(agent=True))
+        agent.script("UnregisterAgent", lambda *a: self.owned.update(agent=False))
+        media = self.bus.iface("/org/bluez/hci0", "org.bluez.Media1")
+        media.script("RegisterEndpoint", lambda *a: self.owned.update(endpoint=True))
+        media.script("UnregisterEndpoint", lambda *a: self.owned.update(endpoint=False))
+        self.clock = _FakeClock()
+        self.context = _ActionContext()
+        fakes.set_fake_context(self.context)
+
+        class OneBus(fakes.FakeDbusModule):
+            def SystemBus(inner):
+                return self.bus
+
+        self.dbus = OneBus()
+
+    def tearDown(self):
+        fakes.reset_fake_glib()
+
+    def run_main(self):
+        with (
+            patch.object(
+                self.cli,
+                "_import_dbus",
+                return_value=(self.dbus, fakes.FakeServiceModule, fakes.FakeGLib),
+            ),
+            patch.object(
+                sys, "argv", ["bap_central.py", "--adapter", "hci0", "--mono"]
+            ),
+            patch.object(sec.time, "monotonic", self.clock.monotonic),
+            patch.object(sec.time, "sleep", self.clock.sleep),
+        ):
+            with self.assertRaises(SystemExit) as exit_status:
+                self.cli.main()
+        self.assertEqual(exit_status.exception.code, 1)
+
+    def test_bond_timeout_after_connected_releases_real_owned_resources(self):
+        def connect(**kwargs):
+            self.state["Connected"] = True
+            kwargs["reply_handler"]()
+            # Receiver never completes bond: no Paired=True.
+
+        self.device.script("Connect", connect)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.run_main()
+        self.assertIn("Connect-led timed out", output.getvalue())
+        self.assertFalse(self.state["Connected"])
+        self.assertEqual(self.owned, {"agent": False, "endpoint": False})
+
+    def test_cancel_after_connected_releases_real_owned_resources(self):
+        self.device.script(
+            "Connect",
+            lambda **kw: (self.state.update(Connected=True), kw["reply_handler"]()),
+        )
+        self.context.actions[1] = [lambda: (_ for _ in ()).throw(KeyboardInterrupt())]
+        with (
+            patch.object(
+                self.cli,
+                "_import_dbus",
+                return_value=(self.dbus, fakes.FakeServiceModule, fakes.FakeGLib),
+            ),
+            patch.object(
+                sys, "argv", ["bap_central.py", "--adapter", "hci0", "--mono"]
+            ),
+            patch.object(sec.time, "monotonic", self.clock.monotonic),
+            patch.object(sec.time, "sleep", self.clock.sleep),
+        ):
+            with contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(KeyboardInterrupt):
+                    self.cli.main()
+        self.assertFalse(self.state["Connected"])
+        self.assertEqual(self.owned, {"agent": False, "endpoint": False})
 
 
 class TestCleanupOrdering(unittest.TestCase):

@@ -1,5 +1,19 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "references": {
+    "le-audio-resources": {
+      "path": "~/Nextcloud/Development-Resources/le-audio/Bluetooth",
+      "description": "External Bluetooth/LC3 reference library. Start with README.md; ASSESSMENT.md covers independent codec tests, AUDIO-TESTING-RESEARCH.md covers test boundaries, FLPR-OFFLOAD-RESEARCH.md covers offload measurement, and agent-reference/ contains searchable extracts. Treat vendor materials as read-only; older reports are versioned research snapshots, not current acceptance."
+    },
+    "nix-nrf-dev": {
+      "path": "../nix-nrf-dev",
+      "description": "Local Nordic tooling implementation and docs. Consult for current nix-nrf probes, identity, flashing and debug helper contracts; inspect read-only unless changes are explicitly requested."
+    },
+    "ncs": {
+      "path": "~/ncs/v3.4.1",
+      "description": "Active receiver SDK: nRF Connect SDK v3.4.1. Authoritative installed source for APIs, Kconfig, devicetree, ISO/ACL time-sync samples and controller contracts. Overrides older global SDK reference; do not modify SDK source or mix versions."
+    }
+  },
   "permission": {
     "skill": {
       "*": "allow"

@@ -6,7 +6,7 @@
 # the fixture files next to this script and removes its temporary
 # executable (mktemp + EXIT trap) afterwards.
 #
-# Prerequisite: NCS v3.3.0 installed at $HOME/ncs/v3.3.0 (override with
+# Prerequisite: NCS v3.4.1 installed at $HOME/ncs/v3.4.1 (override with
 # NCS=/path/to/ncs).  Uses the host C compiler with the SAME relevant
 # flags as the Zephyr liblc3 module build (-O3 -std=c11 -ffast-math) so
 # the golden PCM is bit-exact against the native_sim production decoder.
@@ -213,6 +213,7 @@ def main():
     )
     if require_int(manifest["schema_version"], "manifest.schema_version") != 2:
         raise ValidationError("unsupported manifest schema_version")
+    # Historical fixture origin stays v3.3.0 even when verifying with active v3.4.1.
     if require_string(manifest["ncs_version"], "manifest.ncs_version") != "v3.3.0":
         raise ValidationError("manifest NCS version is not v3.3.0")
     require_keys(manifest["liblc3"], ("semantic_label", "west_revision"), "manifest.liblc3")
@@ -333,11 +334,29 @@ PY
 
 validate_portable_corpus "$HERE" strict
 
-NCS="${NCS:-$HOME/ncs/v3.3.0}"
+NCS="${NCS:-$HOME/ncs/v3.4.1}"
 LC3="$NCS/modules/lib/liblc3"
 
 if [ ! -f "$LC3/include/lc3.h" ]; then
     echo "FATAL: liblc3 module not found at $LC3" >&2
+    exit 1
+fi
+
+EXPECTED_LIBLC3_REVISION="48bbd3eacd36e99a57317a0a4867002e0b09e183"
+if ! revision="$(git -C "$LC3" rev-parse HEAD 2>/dev/null)"; then
+    echo "FATAL: cannot verify liblc3 Git revision at $LC3" >&2
+    exit 1
+fi
+if [ "$revision" != "$EXPECTED_LIBLC3_REVISION" ]; then
+    echo "FATAL: liblc3 Git revision is not pinned revision" >&2
+    exit 1
+fi
+if ! status="$(git -C "$LC3" status --porcelain --untracked-files=all --ignored 2>/dev/null)"; then
+    echo "FATAL: cannot verify liblc3 Git working tree at $LC3" >&2
+    exit 1
+fi
+if [ -n "$status" ]; then
+    echo "FATAL: liblc3 Git working tree is dirty at $LC3" >&2
     exit 1
 fi
 

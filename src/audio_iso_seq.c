@@ -194,7 +194,7 @@ audio_iso_cadence_update(struct audio_iso_cadence *st, bool has_ts, uint32_t ts,
 	}
 
 	if (ts < st->last_ts) {
-		/* Controller timestamp wrap/rebase (nRF5340 SW Split wraps
+		/* Controller timestamp wrap/rebase (historical nRF5340 SW Split wraps
 		 * ~every 512 s; nRF54L15 SDC is a 32-bit GRTC microsecond
 		 * view).  Expected: rebase without synthesis and without a
 		 * resync increment.  Missing one event across a wrap is

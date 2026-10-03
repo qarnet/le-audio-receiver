@@ -2,7 +2,7 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * nRF5340 application-core view of the SoftDevice Controller clock.
+ * Platform view of the SoftDevice Controller clock.
  */
 
 #ifndef HIL_SOURCE_CONTROLLER_TIME_H
@@ -14,14 +14,13 @@
 extern "C" {
 #endif
 
-/* Arm RTC0 and IPC4 synchronization before Bluetooth starts network core. */
+/* Initialize platform controller-clock infrastructure. */
 int hil_source_controller_time_init(void);
 
-/* Read controller time modulo 2^32 microseconds. The application RTC is
- * cleared from the network core when MPSL starts its RTC, so this value and
- * SDC ISO timestamps share one clock domain. Returns -EAGAIN until that
- * synchronization pulse has been observed, or -EIO after a network-core
- * restart invalidates the mirrored clock epoch. */
+/* Read nRF54L15 controller time from Zephyr-owned GRTC, modulo 2^32 us.
+ * NULL returns -EINVAL; uninitialized GRTC returns -ENODEV; not-ready
+ * GRTC returns -EAGAIN. On success, writes *time_us and returns 0.
+ * No network-core mirror or mirrored clock epoch is used. */
 int hil_source_controller_time_get(uint32_t *time_us);
 
 #ifdef __cplusplus

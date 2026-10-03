@@ -11,7 +11,7 @@
 #     <repo>/compile_commands.json                (receiver, nRF54L15 only)
 #     src/flpr/compile_commands.json              (FLPR RISC-V image)
 #     hil/source/compile_commands.json            (HIL source fixture app)
-#     dongle/hci_ipc/compile_commands.json        (dongle net core)
+#     dongle/hci_uart/compile_commands.json       (XIAO HCI image)
 #     tests/bsim{,/client}/compile_commands.json  (BSim receiver + client)
 #
 # This script covers what CMake cannot:
@@ -39,7 +39,7 @@ CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
 
 # ZEPHYR_BASE is required to locate bsim_out for the BSim links.
-ZEPHYR_BASE="${ZEPHYR_BASE:-$HOME/ncs/v3.3.0/zephyr}"
+ZEPHYR_BASE="${ZEPHYR_BASE:-$HOME/ncs/v3.4.1/zephyr}"
 
 FIXED=0
 CREATED=0
@@ -117,8 +117,8 @@ fi
 # here: it is owned by the root CMakeLists and must be created only by an
 # nRF54L15 receiver configure (never by a 5340 build or this script).
 BSIM_OUT="${BSIM_OUT_PATH:-$ZEPHYR_BASE/bsim_out}"
-BSIM_RCV_DB="$BSIM_OUT/tests/bsim/bs_nrf5340bsim_nrf5340_cpuapp_le_audio_receiver_bsim_prj_conf/bsim/compile_commands.json"
-BSIM_CLI_DB="$BSIM_OUT/tests/bsim/client/bs_nrf5340bsim_nrf5340_cpuapp_bsim_client_bsim_prj_conf/client/compile_commands.json"
+BSIM_RCV_DB="$BSIM_OUT/tests/bsim/bs_nrf54l15bsim_nrf54l15_cpuapp_le_audio_receiver_bsim_prj_conf/bsim/compile_commands.json"
+BSIM_CLI_DB="$BSIM_OUT/tests/bsim/client/bs_nrf54l15bsim_nrf54l15_cpuapp_bsim_client_bsim_prj_conf/client/compile_commands.json"
 
 FAIL=0
 fix_link "$REPO_ROOT/tests/unit/compile_commands.json"   "$UNIT_DB_DIR/compile_commands.json" || FAIL=1
@@ -130,7 +130,7 @@ for l in \
   "$REPO_ROOT/compile_commands.json" \
   "$REPO_ROOT/src/flpr/compile_commands.json" \
   "$REPO_ROOT/hil/source/compile_commands.json" \
-  "$REPO_ROOT/dongle/hci_ipc/compile_commands.json" \
+  "$REPO_ROOT/dongle/hci_uart/compile_commands.json" \
 ; do
   if [ -L "$l" ] && [ -e "$l" ]; then
     printf '  ok       %s (CMake-owned)\n' "$l"

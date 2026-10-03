@@ -23,14 +23,17 @@ set(PB031_PORTABLE_LC3_REFERENCES
   ${FIXTURES}/bsim_48k_7p5ms_90b_r.lc3
 )
 set(PB031_STATEFUL_GENERATED_REFERENCES
+  ${FIXTURES}/stateful_48k_10ms_skip20_start0_l.pcm
+  ${FIXTURES}/stateful_48k_10ms_loss48x18_start0_r.pcm
   ${FIXTURES}/stateful_48k_7p5ms_modea_start_r.pcm
   ${FIXTURES}/stateful_48k_10ms_skip20_l.pcm
   ${FIXTURES}/stateful_48k_10ms_loss48x18_r.pcm
 )
 
-set(PB031_NCS_VERSION "v3.3.0")
-set(PB031_NRF_REVISION "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956")
-set(PB031_ZEPHYR_REVISION "fd9204a02d52630660ce8d729945a4dd743feabf")
+set(PB031_NCS_VERSION "v3.4.1")
+set(PB031_FIXTURE_NCS_VERSION "v3.3.0") # Historical corpus provenance, not active SDK.
+set(PB031_NRF_REVISION "b20f8619ba9a5530f8c34b0a130d829947cfe55d")
+set(PB031_ZEPHYR_REVISION "33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6")
 set(PB031_LIBLC3_REVISION "48bbd3eacd36e99a57317a0a4867002e0b09e183")
 
 find_package(Git REQUIRED)
@@ -98,9 +101,16 @@ endif()
 pb031_require_west_config("${PB031_WEST_CONFIG}" manifest.path nrf)
 pb031_require_west_config("${PB031_WEST_CONFIG}" manifest.file west.yml)
 pb031_require_west_config("${PB031_WEST_CONFIG}" zephyr.base zephyr)
-file(STRINGS "${PB031_NCS_WORKSPACE}/nrf/VERSION" PB031_NRF_VERSION LIMIT_COUNT 1)
-if(NOT "${PB031_NRF_VERSION}" STREQUAL "3.3.0")
-  message(FATAL_ERROR "PB-031 NCS VERSION is not 3.3.0")
+file(STRINGS "${PB031_NCS_WORKSPACE}/nrf/VERSION" PB031_NRF_VERSION)
+set(PB031_EXPECTED_NRF_VERSION
+  "VERSION_MAJOR = 3"
+  "VERSION_MINOR = 4"
+  "PATCHLEVEL = 1"
+  "VERSION_TWEAK = 0"
+  "EXTRAVERSION ="
+  "VERSION_METADATA = lts")
+if(NOT "${PB031_NRF_VERSION}" STREQUAL "${PB031_EXPECTED_NRF_VERSION}")
+  message(FATAL_ERROR "PB-031 NCS VERSION is not 3.4.1")
 endif()
 pb031_require_git_repository("${PB031_NCS_WORKSPACE}/nrf" "${PB031_NRF_REVISION}"
   "NCS nrf" tracked)
@@ -312,7 +322,7 @@ pb031_json_require_object_keys("${PB031_MANIFEST_JSON}" "PB-031 portable manifes
 pb031_json_require_integer("${PB031_MANIFEST_JSON}"
   "PB-031 portable manifest.schema_version" "2" schema_version)
 pb031_json_require_string("${PB031_MANIFEST_JSON}"
-  "PB-031 portable manifest.ncs_version" "${PB031_NCS_VERSION}" ncs_version)
+  "PB-031 portable manifest.ncs_version" "${PB031_FIXTURE_NCS_VERSION}" ncs_version)
 pb031_json_require_string("${PB031_MANIFEST_JSON}"
   "PB-031 portable manifest.source_formula_identifier" "bsim_tx_hash_mix_seq_i_ch_v1"
   source_formula_identifier)
@@ -448,7 +458,7 @@ pb031_json_require_object_keys("${PB031_STATEFUL_MANIFEST_JSON}" "PB-031 statefu
 pb031_json_require_integer("${PB031_STATEFUL_MANIFEST_JSON}"
   "PB-031 stateful manifest.schema_version" "1" schema_version)
 pb031_json_require_string("${PB031_STATEFUL_MANIFEST_JSON}"
-  "PB-031 stateful manifest.ncs_version" "${PB031_NCS_VERSION}" ncs_version)
+  "PB-031 stateful manifest.ncs_version" "${PB031_FIXTURE_NCS_VERSION}" ncs_version)
 
 string(JSON _stateful_liblc3 ERROR_VARIABLE _stateful_liblc3_error GET
   "${PB031_STATEFUL_MANIFEST_JSON}" liblc3)
@@ -511,6 +521,12 @@ set(PB031_EXPECTED_STATEFUL_RECIPES
   "skip20_10ms_l|bsim_48k_10ms_120b_l|generated-pcm|stateful_48k_10ms_skip20_l.pcm|0|10000|120|480|108|100|plc:0:8,corpus:0:20,corpus:21:80"
   "loss48x18_10ms_r|bsim_48k_10ms_120b_r|generated-pcm|stateful_48k_10ms_loss48x18_r.pcm|0|10000|120|480|108|82|plc:0:8,corpus:0:48,plc:0:18,corpus:48:34"
   "start7_10ms_l|bsim_48k_10ms_120b_l|portable-pcm|bsim_48k_10ms_120b_l.pcm|0|10000|120|480|107|100|plc:0:7,corpus:0:100"
+  "start0_10ms_l|bsim_48k_10ms_120b_l|portable-pcm|bsim_48k_10ms_120b_l.pcm|0|10000|120|480|100|100|corpus:0:100"
+  "start0_10ms_r|bsim_48k_10ms_120b_r|portable-pcm|bsim_48k_10ms_120b_r.pcm|0|10000|120|480|100|100|corpus:0:100"
+  "start0_7p5ms_l|bsim_48k_7p5ms_90b_l|portable-pcm|bsim_48k_7p5ms_90b_l.pcm|0|7500|90|360|100|100|corpus:0:100"
+  "start0_7p5ms_r|bsim_48k_7p5ms_90b_r|portable-pcm|bsim_48k_7p5ms_90b_r.pcm|0|7500|90|360|100|100|corpus:0:100"
+  "skip20_start0_10ms_l|bsim_48k_10ms_120b_l|generated-pcm|stateful_48k_10ms_skip20_start0_l.pcm|0|10000|120|480|100|100|corpus:0:20,corpus:21:80"
+  "loss48x18_start0_10ms_r|bsim_48k_10ms_120b_r|generated-pcm|stateful_48k_10ms_loss48x18_start0_r.pcm|0|10000|120|480|100|82|corpus:0:48,plc:0:18,corpus:48:34"
 )
 list(LENGTH PB031_EXPECTED_STATEFUL_RECIPES _expected_recipes_length)
 if(NOT "${_stateful_recipes_type_error}" STREQUAL "NOTFOUND" OR
@@ -679,6 +695,8 @@ foreach(stem
 endforeach()
 
 foreach(reference
+    stateful_48k_10ms_skip20_start0_l
+    stateful_48k_10ms_loss48x18_start0_r
     stateful_48k_7p5ms_modea_start_r
     stateful_48k_10ms_skip20_l
     stateful_48k_10ms_loss48x18_r)

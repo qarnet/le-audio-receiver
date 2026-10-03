@@ -1730,6 +1730,49 @@ ZTEST(hil_source_app, test_tsmode_frozen_controller_time_times_out)
 	dispatch_idle();
 }
 
+ZTEST(hil_source_app, test_tsmode_modea_cooperative_tx_work_keeps_shared_event)
+{
+	uint32_t seq0, sub0, seq1, sub1;
+
+	scenario_setup(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	/* The real host enqueue wakes cooperative TX work. It must not split a
+	 * runnable two-CIS batch; injected time still advances after the batch. */
+	fake_ts_set_cooperative_delay(1500U);
+	dispatch_configure(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until_terminal(), "terminal");
+	dispatch_status();
+	zassert_true(cap_terminal("pass"), "cooperative work must not strand peer");
+	zassert_true(cap_modea_status_counters(&seq0, &sub0, &seq1, &sub1), "status");
+	zassert_equal(sub0, sub1, "both peers complete the same media events");
+	zassert_true(cap_find("\"under\":[0,0]"), "minimum lead remains enforced");
+	{
+		const struct fake_record *traffic = fake_ledger();
+		uint32_t pin = 0U;
+		uint32_t pairs = 0U;
+		bool awaiting_peer = false;
+
+		for (uint32_t i = 0U; i < fake_ledger_count(); i++) {
+			if (traffic[i].op != FAKE_OP_TX_SEND_TS) {
+				continue;
+			}
+			if (traffic[i].stream_idx == 0U) {
+				zassert_false(awaiting_peer, "no unpaired left event");
+				pin = traffic[i].ts;
+				awaiting_peer = true;
+			} else {
+				zassert_true(awaiting_peer, "left event before right");
+				zassert_equal(traffic[i].ts, pin, "same timestamp for both CISes");
+				awaiting_peer = false;
+				pairs++;
+			}
+		}
+		zassert_false(awaiting_peer, "no stranded final peer");
+		zassert_equal(pairs, sub0, "complete pinned traffic matches public counts");
+	}
+	dispatch_idle();
+}
+
 ZTEST(hil_source_app, test_tsmode_modea_late_peer_fails_closed)
 {
 	char needle[48];
@@ -1746,6 +1789,82 @@ ZTEST(hil_source_app, test_tsmode_modea_late_peer_fails_closed)
 	snprintf(needle, sizeof(needle), "\"first_errno\":%d", -ETIME);
 	zassert_true(cap_find(needle), "late-peer errno preserved");
 	zassert_true(cap_find("\"under\":[0,1]"), "late peer counted");
+	dispatch_idle();
+}
+
+static void exercise_guarded_failure(int failed_stream, uint32_t failed_clock_call)
+{
+	char expected[64];
+	uint32_t seq0, sub0, seq1, sub1;
+
+	scenario_setup(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	if (failed_stream >= 0) {
+		fake_ts_set_send_result((uint8_t)failed_stream, -ENOMEM);
+	} else {
+		fake_ts_set_time_error_on_call(failed_clock_call, -ENOMEM);
+	}
+	/* Cleanup must not replace the first guarded failure. */
+	fake_set_kick_result(FAKE_OP_DISABLE, -EIO);
+	dispatch_configure(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until_terminal(), "guarded error terminates");
+	dispatch_status();
+	zassert_true(cap_terminal("fail"), "guarded failure verdict");
+	snprintf(expected, sizeof(expected), "\"first_errno\":%d", -ENOMEM);
+	zassert_true(cap_find(expected), "first error survives cleanup failure");
+	zassert_true(cap_modea_status_counters(&seq0, &sub0, &seq1, &sub1),
+		     "status remains usable");
+	zassert_equal(sub0, failed_stream == 1 || failed_clock_call == 3U ? 1U : 0U,
+		      "only accepted stream 0 is counted");
+	zassert_equal(sub1, 0U, "failed peer was not accepted");
+	dispatch_idle();
+
+	/* New public run proves both mutex and scheduler ownership were released. */
+	scenario_setup(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_configure(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until_terminal(), "next run terminates");
+	zassert_true(cap_terminal("pass"), "next valid run succeeds");
+	dispatch_idle();
+}
+
+ZTEST(hil_source_app, test_tsmode_guard_first_send_failure_recovers)
+{
+	exercise_guarded_failure(0, 0U);
+}
+
+ZTEST(hil_source_app, test_tsmode_guard_peer_send_failure_recovers)
+{
+	exercise_guarded_failure(1, 0U);
+}
+
+ZTEST(hil_source_app, test_tsmode_guard_final_clock_failure_recovers)
+{
+	exercise_guarded_failure(-1, 2U);
+}
+
+ZTEST(hil_source_app, test_tsmode_guard_peer_clock_failure_recovers)
+{
+	exercise_guarded_failure(-1, 3U);
+}
+
+ZTEST(hil_source_app, test_tsmode_aborted_delay_does_not_leak_to_next_run)
+{
+	scenario_setup(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	fake_ts_set_cooperative_delay(500000U);
+	fake_ts_set_time_result(-EIO);
+	dispatch_configure(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until_terminal(), "initial clock failure terminates");
+	zassert_true(cap_terminal("fail"), "initial error visible");
+	dispatch_idle();
+	scenario_setup(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_configure(HIL_SOURCE_MODE_A, HIL_SOURCE_PROFILE_48_4_1, 10U, "none");
+	dispatch_start();
+	zassert_true(pump_until_terminal(), "next run terminates");
+	zassert_true(cap_terminal("pass"), "aborted injection does not affect next run");
+	dispatch_status();
+	zassert_true(cap_find("\"skip\":0"), "next stream timeline is untouched");
 	dispatch_idle();
 }
 

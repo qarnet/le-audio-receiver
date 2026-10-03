@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Dedicated nRF5340DK LE Audio source fixture (RH1B): BAP unicast client
-# that boots with persistent identity/bonds, accepts strict RH1A JSON via
-# one quiet serial shell command, and runs a bounded connect/stream/teardown
-# lifecycle with deterministic HIL1 records.
+# Dedicated nRF54L15 LE Audio source fixture (RH1B): BAP
+# unicast client that boots with persistent identity/bonds, accepts strict RH1A
+# JSON via one quiet serial shell command, and runs a bounded
+# connect/stream/teardown lifecycle with deterministic HIL1 records.
 #
 # Compiles the exact RH1A core modules (protocol, record, signal, state)
 # plus the app coordinator, output queue/writer, TX send driver, and the
@@ -13,10 +13,14 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(hil_source_app)
 
+if(NOT CONFIG_SOC_NRF54L15_CPUAPP)
+  message(FATAL_ERROR "HIL source requires nRF54L15 CPUAPP")
+endif()
+
 target_sources(app PRIVATE
   src/main.c
   src/hil_source_app.c
-  src/hil_source_controller_time.c
+  src/hil_source_controller_time_nrf54.c
   src/hil_source_output.c
   src/hil_source_tx.c
   src/hil_source_bap.c

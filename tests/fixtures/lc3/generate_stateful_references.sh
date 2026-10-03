@@ -95,6 +95,18 @@ EXPECTED_RECIPES = (
      (("plc", 0, 8), ("corpus", 0, 48), ("plc", 0, 18), ("corpus", 48, 34))),
     ("start7_10ms_l", "bsim_48k_10ms_120b_l", "portable-pcm", "bsim_48k_10ms_120b_l.pcm", 0, 10000, 120, 480, 107, 100,
      (("plc", 0, 7), ("corpus", 0, 100))),
+    ("start0_10ms_l", "bsim_48k_10ms_120b_l", "portable-pcm", "bsim_48k_10ms_120b_l.pcm", 0, 10000, 120, 480, 100, 100,
+     (("corpus", 0, 100),)),
+    ("start0_10ms_r", "bsim_48k_10ms_120b_r", "portable-pcm", "bsim_48k_10ms_120b_r.pcm", 0, 10000, 120, 480, 100, 100,
+     (("corpus", 0, 100),)),
+    ("start0_7p5ms_l", "bsim_48k_7p5ms_90b_l", "portable-pcm", "bsim_48k_7p5ms_90b_l.pcm", 0, 7500, 90, 360, 100, 100,
+     (("corpus", 0, 100),)),
+    ("start0_7p5ms_r", "bsim_48k_7p5ms_90b_r", "portable-pcm", "bsim_48k_7p5ms_90b_r.pcm", 0, 7500, 90, 360, 100, 100,
+     (("corpus", 0, 100),)),
+    ("skip20_start0_10ms_l", "bsim_48k_10ms_120b_l", "generated-pcm", "stateful_48k_10ms_skip20_start0_l.pcm", 0, 10000, 120, 480, 100, 100,
+     (("corpus", 0, 20), ("corpus", 21, 80))),
+    ("loss48x18_start0_10ms_r", "bsim_48k_10ms_120b_r", "generated-pcm", "stateful_48k_10ms_loss48x18_start0_r.pcm", 0, 10000, 120, 480, 100, 82,
+     (("corpus", 0, 48), ("plc", 0, 18), ("corpus", 48, 34))),
 )
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -195,6 +207,7 @@ def validate_portable(manifest, fixture_dir):
     )
     if require_int(manifest["schema_version"], "portable manifest.schema_version") != 2:
         raise ValidationError("unsupported portable manifest schema_version")
+    # Historical fixture origin stays v3.3.0 even when verifying with active v3.4.1.
     if require_string(manifest["ncs_version"], "portable manifest.ncs_version") != "v3.3.0":
         raise ValidationError("portable manifest NCS version is not v3.3.0")
     require_keys(manifest["liblc3"], ("semantic_label", "west_revision"), "portable manifest.liblc3")
@@ -330,7 +343,7 @@ def validate_stateful(manifest, portable_raw, fixture_dir, generated_dir, hash_m
     if SHA256_RE.fullmatch(source_hash) is None or source_hash != hashlib.sha256(portable_raw).hexdigest():
         raise ValidationError("stateful manifest source portable manifest SHA-256 mismatch")
     if type(manifest["recipes"]) is not list or len(manifest["recipes"]) != len(EXPECTED_RECIPES):
-        raise ValidationError("stateful manifest must contain exactly nine recipes")
+        raise ValidationError("stateful manifest must contain exactly fifteen recipes")
     mismatches = []
     for index, (entry, expected) in enumerate(zip(manifest["recipes"], EXPECTED_RECIPES)):
         (recipe_id, source_stem, reference_kind, reference_path, reference_first_frame,
@@ -392,10 +405,10 @@ if [ "$REBASE_STATEFUL" -eq 1 ]; then
 fi
 validate_inputs "$HERE" strict "$ALLOW_MISSING_GENERATED_FILE"
 
-NCS="${NCS:-$HOME/ncs/v3.3.0}"
+NCS="${NCS:-$HOME/ncs/v3.4.1}"
 LC3="$NCS/modules/lib/liblc3"
-EXPECTED_NRF_REVISION="ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
-EXPECTED_ZEPHYR_REVISION="fd9204a02d52630660ce8d729945a4dd743feabf"
+EXPECTED_NRF_REVISION="b20f8619ba9a5530f8c34b0a130d829947cfe55d"
+EXPECTED_ZEPHYR_REVISION="33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6"
 EXPECTED_LIBLC3_REVISION="48bbd3eacd36e99a57317a0a4867002e0b09e183"
 
 verify_git_repository() {
@@ -449,16 +462,16 @@ verify_ncs_workspace() {
     fi
     if [ "$manifest_path" != "nrf" ] || [ "$manifest_file" != "west.yml" ] || \
        [ "$zephyr_base" != "zephyr" ]; then
-        echo "FATAL: NCS workspace config is not v3.3.0 layout" >&2
+        echo "FATAL: NCS workspace config is not v3.4.1 layout" >&2
         exit 1
     fi
     if [ ! -f "$NCS/nrf/VERSION" ]; then
         echo "FATAL: NCS VERSION is missing at $NCS/nrf/VERSION" >&2
         exit 1
     fi
-    nrf_version="$(tr -d '\r\n' < "$NCS/nrf/VERSION")"
-    if [ "$nrf_version" != "3.3.0" ]; then
-        echo "FATAL: NCS VERSION is not 3.3.0" >&2
+    nrf_version="$(< "$NCS/nrf/VERSION")"
+    if [ "$nrf_version" != $'VERSION_MAJOR = 3\nVERSION_MINOR = 4\nPATCHLEVEL = 1\nVERSION_TWEAK = 0\nEXTRAVERSION =\nVERSION_METADATA = lts' ]; then
+        echo "FATAL: NCS VERSION is not 3.4.1" >&2
         exit 1
     fi
     verify_git_repository "$NCS/nrf" "$EXPECTED_NRF_REVISION" "NCS nrf" tracked
@@ -542,6 +555,8 @@ fi
 validate_inputs "$TMP_OUTPUT_DIR" "$GENERATED_HASH_MODE" ""
 
 STATEFUL_FILES=(
+    stateful_48k_10ms_skip20_start0_l.pcm
+    stateful_48k_10ms_loss48x18_start0_r.pcm
     stateful_48k_7p5ms_modea_start_r.pcm
     stateful_48k_10ms_skip20_l.pcm
     stateful_48k_10ms_loss48x18_r.pcm

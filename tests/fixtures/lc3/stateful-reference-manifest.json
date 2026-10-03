@@ -215,6 +215,85 @@
         "size": 122880,
         "sha256": "b42fd31158d24d255214580a63261087d57322266563cec778abc1d9f7f830a7"
       }
+    },
+    {
+      "id": "start0_10ms_l",
+      "source_stem": "bsim_48k_10ms_120b_l",
+      "duration_us": 10000, "frame_bytes": 120, "samples_per_frame": 480,
+      "output_action_count": 100, "valid_frame_count": 100,
+      "steps": [{"action": "corpus", "first_sequence": 0, "count": 100}],
+      "reference": {
+        "kind": "portable-pcm", "path": "bsim_48k_10ms_120b_l.pcm",
+        "first_frame": 0, "frame_count": 100, "size": 122880,
+        "sha256": "b42fd31158d24d255214580a63261087d57322266563cec778abc1d9f7f830a7"
+      }
+    },
+    {
+      "id": "start0_10ms_r",
+      "source_stem": "bsim_48k_10ms_120b_r",
+      "duration_us": 10000, "frame_bytes": 120, "samples_per_frame": 480,
+      "output_action_count": 100, "valid_frame_count": 100,
+      "steps": [{"action": "corpus", "first_sequence": 0, "count": 100}],
+      "reference": {
+        "kind": "portable-pcm", "path": "bsim_48k_10ms_120b_r.pcm",
+        "first_frame": 0, "frame_count": 100, "size": 122880,
+        "sha256": "7383216bd256165633da98a8a3e8af31bd2e1c4903001cf7ad749f87db18c8ca"
+      }
+    },
+    {
+      "id": "start0_7p5ms_l",
+      "source_stem": "bsim_48k_7p5ms_90b_l",
+      "duration_us": 7500, "frame_bytes": 90, "samples_per_frame": 360,
+      "output_action_count": 100, "valid_frame_count": 100,
+      "steps": [{"action": "corpus", "first_sequence": 0, "count": 100}],
+      "reference": {
+        "kind": "portable-pcm", "path": "bsim_48k_7p5ms_90b_l.pcm",
+        "first_frame": 0, "frame_count": 100, "size": 92160,
+        "sha256": "1e720b1f4f782f50b16b1e173a3fde0ba0bcd972a550d5a8b2a70282a37ffac6"
+      }
+    },
+    {
+      "id": "start0_7p5ms_r",
+      "source_stem": "bsim_48k_7p5ms_90b_r",
+      "duration_us": 7500, "frame_bytes": 90, "samples_per_frame": 360,
+      "output_action_count": 100, "valid_frame_count": 100,
+      "steps": [{"action": "corpus", "first_sequence": 0, "count": 100}],
+      "reference": {
+        "kind": "portable-pcm", "path": "bsim_48k_7p5ms_90b_r.pcm",
+        "first_frame": 0, "frame_count": 100, "size": 92160,
+        "sha256": "112a32ac37ab26ae50b7dfc3db082d06f3d0c5c866532306112e2d94a45914dd"
+      }
+    },
+    {
+      "id": "skip20_start0_10ms_l",
+      "source_stem": "bsim_48k_10ms_120b_l",
+      "duration_us": 10000, "frame_bytes": 120, "samples_per_frame": 480,
+      "output_action_count": 100, "valid_frame_count": 100,
+      "steps": [
+        {"action": "corpus", "first_sequence": 0, "count": 20},
+        {"action": "corpus", "first_sequence": 21, "count": 80}
+      ],
+      "reference": {
+        "kind": "generated-pcm", "path": "stateful_48k_10ms_skip20_start0_l.pcm",
+        "first_frame": 0, "frame_count": 100, "size": 96000,
+        "sha256": "cead2e59efb32c78cb87818c710ca727082fd9bb9137bb8255b4f1e37d9be024"
+      }
+    },
+    {
+      "id": "loss48x18_start0_10ms_r",
+      "source_stem": "bsim_48k_10ms_120b_r",
+      "duration_us": 10000, "frame_bytes": 120, "samples_per_frame": 480,
+      "output_action_count": 100, "valid_frame_count": 82,
+      "steps": [
+        {"action": "corpus", "first_sequence": 0, "count": 48},
+        {"action": "plc", "first_sequence": 0, "count": 18},
+        {"action": "corpus", "first_sequence": 48, "count": 34}
+      ],
+      "reference": {
+        "kind": "generated-pcm", "path": "stateful_48k_10ms_loss48x18_start0_r.pcm",
+        "first_frame": 0, "frame_count": 82, "size": 78720,
+        "sha256": "40204f38b2a359c3d4348131b5900bc1d065fda4423173c6eee5839c1ddf3fbd"
+      }
     }
   ]
 }

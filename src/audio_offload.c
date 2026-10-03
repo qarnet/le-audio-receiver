@@ -93,6 +93,8 @@ static K_THREAD_STACK_DEFINE(g_offload_stack, OFFLOAD_THREAD_STACK_SIZE);
 struct k_work_q g_offload_wq;
 struct k_work_delayable g_prep_work;
 struct k_work_delayable g_recovery_work;
+static struct k_work g_idle_restart_work;
+static bool g_idle_restart_pending;
 
 /* ── Internal state ──────────────────────────────────────────────── */
 
@@ -332,6 +334,54 @@ static void schedule_prep(k_timeout_t delay)
  * If offload is STOPPED, FLPR crash is treated as idle restart.
  */
 
+static void idle_restart_work_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	k_mutex_lock(&g_submit_lock, K_FOREVER);
+	k_spinlock_key_t key = k_spin_lock(&g_lock);
+	bool stopped = g_state == AUDIO_OFFLOAD_STOPPED;
+	k_spin_unlock(&g_lock, key);
+	if (!stopped) {
+		/* A stream opened before this queued idle repair. Use its ordinary
+		 * recovery path instead of resetting an ACTIVE data path behind it. */
+		k_mutex_unlock(&g_submit_lock);
+		key = k_spin_lock(&g_lock);
+		g_idle_restart_pending = false;
+		k_spin_unlock(&g_lock, key);
+		audio_offload_remote_unavailable();
+		return;
+	}
+
+	uint32_t restart_start = k_uptime_get_32();
+	int rr = flpr_runtime_restart(1500);
+	uint32_t restart_ms = k_uptime_get_32() - restart_start;
+	int ri = 0;
+	struct flpr_runtime_status runtime;
+	flpr_runtime_get_status(&runtime);
+	if (rr == 0) {
+		ri = flpr_ring_mgr_remote_restarted();
+	}
+	key = k_spin_lock(&g_lock);
+	if (rr == 0) {
+		g_runtime_restart_count++;
+		g_runtime_restart_ms = restart_ms;
+		g_remote_epoch = runtime.new_epoch;
+	} else {
+		g_runtime_restart_fail++;
+	}
+	if (ri != 0) {
+		g_rings_ready = false;
+	}
+	g_idle_restart_pending = false;
+	k_spin_unlock(&g_lock, key);
+	k_mutex_unlock(&g_submit_lock);
+	if (rr != 0) {
+		LOG_ERR("offload: idle runtime restart failed: %d", rr);
+	} else if (ri != 0) {
+		LOG_ERR("offload: idle ring reinit failed: %d", ri);
+	}
+}
+
 static void offload_health_transition_cb(void *user_data)
 {
 	(void)user_data;
@@ -356,21 +406,24 @@ static void offload_health_transition_cb(void *user_data)
 		k_spin_unlock(&g_lock, key);
 		return;
 	case AUDIO_OFFLOAD_STOPPED:
-		/* Stopped: FLPR hung while idle — restart directly.
-		 * Blocks heartbeat work (~300ms) — acceptable for rare fault.
-		 * After restart, reinit ring manager so stale epoch/semaphores
-		 * cannot enter next stream. */
+		/* Never restart while running the heartbeat being drained by runtime
+		 * teardown. Use the dedicated offload queue, not the system queue. */
+		if (g_idle_restart_pending) {
+			g_heartbeat_dedup_count++;
+			k_spin_unlock(&g_lock, key);
+			return;
+		}
+		g_idle_restart_pending = true;
 		LOG_WRN("offload: heartbeat supervisor → idle restart");
 		k_spin_unlock(&g_lock, key);
 		{
-			int rr = flpr_runtime_restart(1500);
-			if (rr == 0) {
-				int ri = flpr_ring_mgr_remote_restarted();
-				if (ri != 0) {
-					LOG_ERR("offload: idle ring reinit failed: %d", ri);
-				}
-			} else {
-				LOG_ERR("offload: idle runtime restart failed: %d", rr);
+			int ret = k_work_submit_to_queue(&g_offload_wq, &g_idle_restart_work);
+			if (ret < 0) {
+				key = k_spin_lock(&g_lock);
+				g_idle_restart_pending = false;
+				g_status.recovery_schedule_fail_count++;
+				k_spin_unlock(&g_lock, key);
+				LOG_ERR("offload: idle restart schedule failed: %d", ret);
 			}
 		}
 		return;
@@ -781,6 +834,7 @@ int audio_offload_init(void)
 	/* Initialise work items — they run on the dedicated offload WQ. */
 	k_work_init_delayable(&g_prep_work, prep_work_fn);
 	k_work_init_delayable(&g_recovery_work, recovery_work_fn);
+	k_work_init(&g_idle_restart_work, idle_restart_work_fn);
 
 	/* Start the dedicated work queue thread directly — no K_THREAD_DEFINE
 	 * wrapper.  This creates ONE thread with its own stack and TCB. */
@@ -1011,7 +1065,7 @@ static int asrc_validate_args(const struct asrc_txn *t)
 static bool asrc_lifecycle_ok_locked(const struct asrc_txn *t)
 {
 	bool ok = lifecycle_check_before_fault(t->captured_state, t->captured_generation,
-						t->captured_epoch, t->sequence);
+					       t->captured_epoch, t->sequence);
 
 	if (!ok) {
 		g_asrc_stats.fallback_count++;
@@ -1321,27 +1375,27 @@ static int asrc_shadow_verify(struct asrc_txn *t, const struct flpr_consume_asrc
 	/* Import must succeed — pre_state was exported by cpuapp.
 	 * Import failure is a fault: do NOT fall through as pass. */
 	if (imp_ret != 0) {
-		return asrc_fault_finalize(t, -EFAULT, NULL,
-					   &g_asrc_stats.verify_fault_count, true);
+		return asrc_fault_finalize(t, -EFAULT, NULL, &g_asrc_stats.verify_fault_count,
+					   true);
 	}
 
 	size_t consumed, produced;
 	int16_t nl, nr;
-	int asrc_ret = audio_asrc_process(
-		&verify_ctx, t->input, OFFLOAD_EXPECTED_FRAMES, g_asrc_shadow,
-		FLPR_RING_PAYLOAD_CAPACITY_FRAMES, t->correction_ppm, verify_prev_l,
-		verify_prev_r, verify_prev_valid, &consumed, &produced, &nl, &nr);
+	int asrc_ret = audio_asrc_process(&verify_ctx, t->input, OFFLOAD_EXPECTED_FRAMES,
+					  g_asrc_shadow, FLPR_RING_PAYLOAD_CAPACITY_FRAMES,
+					  t->correction_ppm, verify_prev_l, verify_prev_r,
+					  verify_prev_valid, &consumed, &produced, &nl, &nr);
 
 	/* Compare return code. */
 	if (asrc_ret != 0) {
-		return asrc_fault_finalize(t, -EFAULT, NULL,
-					   &g_asrc_stats.verify_fault_count, true);
+		return asrc_fault_finalize(t, -EFAULT, NULL, &g_asrc_stats.verify_fault_count,
+					   true);
 	}
 
 	/* Compare frame count. */
 	if (produced != cr->output_frames) {
-		return asrc_fault_finalize(t, -EFAULT, NULL,
-					   &g_asrc_stats.verify_fault_count, true);
+		return asrc_fault_finalize(t, -EFAULT, NULL, &g_asrc_stats.verify_fault_count,
+					   true);
 	}
 
 	/* Compare every sample. */
@@ -1524,7 +1578,6 @@ int audio_offload_process_asrc(const int16_t *input, uint16_t input_frames, uint
 	return 0;
 }
 
-
 void audio_offload_get_asrc_stats(struct audio_offload_asrc_stats *s)
 {
 	if (!s) {
@@ -1535,7 +1588,7 @@ void audio_offload_get_asrc_stats(struct audio_offload_asrc_stats *s)
 	k_spin_unlock(&g_lock, key);
 }
 
-/* ── nRF5340: no-op stubs ────────────────────────────────────────── */
+/* ── Non-nRF54L15: no-op stubs ────────────────────────────────────── */
 
 #else /* !CONFIG_SOC_NRF54L15 */
 

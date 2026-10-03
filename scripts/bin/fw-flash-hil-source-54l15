@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# Flash the dedicated LE Audio source fixture for the XIAO nRF54L15 via its
+# built-in CMSIS-DAP probe.
+#
+# Build dir:  build/hil-source-nrf54l15
+# Build with: fw-build-hil-source-54l15
+#
+# Required override (validated before OpenOCD starts):
+#   FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL=<cmsis-dap-serial>
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/bin/fw-common.sh
+source "$SCRIPT_DIR/fw-common.sh"
+
+_fw_require_env
+
+cd "$(_fw_repo_dir)"
+
+BUILD_DIR="$(_fw_repo_dir)/build/hil-source-nrf54l15"
+SOURCE_HEX="$BUILD_DIR/zephyr/zephyr.hex"
+OPENOCD_CFG="$ZEPHYR_BASE/boards/seeed/xiao_nrf54l15/support/openocd.cfg"
+
+if [ "${FW_HIL_SOURCE_CPUNET_HEX+x}" ] || [ "${FW_HIL_SOURCE_JLINK_SERIAL+x}" ]; then
+	printf 'Legacy CPUNET/J-Link source overrides are not supported\n' >&2
+	exit 1
+fi
+
+if [ "${FW_HIL_SOURCE_CPUAPP_HEX+x}" ]; then
+	OVERRIDE="${FW_HIL_SOURCE_CPUAPP_HEX}"
+	REPO="$(realpath "$(_fw_repo_dir)")"
+	if [ -z "$OVERRIDE" ] || [[ "$OVERRIDE" != /* ]] || [[ "$OVERRIDE" != *.hex ]] || \
+		[ -L "$OVERRIDE" ] || [ ! -f "$OVERRIDE" ] || [ ! -s "$OVERRIDE" ]; then
+		printf 'Invalid FW_HIL_SOURCE_CPUAPP_HEX: must be absolute non-symlink nonempty .hex file\n' >&2
+		exit 1
+	fi
+	SOURCE_HEX="$(realpath "$OVERRIDE")"
+	if [ "$SOURCE_HEX" != "$OVERRIDE" ] || [[ "$SOURCE_HEX" == "$REPO" || "$SOURCE_HEX" == "$REPO"/* ]]; then
+		printf 'Invalid FW_HIL_SOURCE_CPUAPP_HEX: path must be canonical and outside repository\n' >&2
+		exit 1
+	fi
+fi
+
+# Tcl braces keep spaces in canonical paths intact. Reject Tcl control syntax
+# and control characters before interpolation into either OpenOCD command.
+if [[ "$SOURCE_HEX" == *'{'* || "$SOURCE_HEX" == *'}'* || "$SOURCE_HEX" == *'\'* ]] || \
+	[[ "$SOURCE_HEX" == *[$'\001'-$'\037'$'\177']* ]]; then
+	printf 'Invalid source hex path: unsafe Tcl characters\n' >&2
+	exit 1
+fi
+
+SERIAL="${FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL:-}"
+if [ -z "$SERIAL" ]; then
+	printf 'FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL is required (no auto-detection)\n' >&2
+	exit 1
+fi
+if ! [[ "$SERIAL" =~ ^[[:alnum:]_.:-]+$ ]]; then
+	printf 'Invalid FW_HIL_SOURCE_NRF54L15_PROBE_SERIAL %q: must match ^[[:alnum:]_.:-]+$\n' \
+		"$SERIAL" >&2
+	exit 1
+fi
+if [ -L "$SOURCE_HEX" ] || [ ! -f "$SOURCE_HEX" ] || [ ! -s "$SOURCE_HEX" ]; then
+	printf 'Invalid source build artifact: must be a non-symlink nonempty regular file: %s\n' \
+		"$SOURCE_HEX" >&2
+	printf 'Build first: fw-build-hil-source-54l15\n' >&2
+	exit 1
+fi
+
+printf 'Using CMSIS-DAP serial %s\n' "$SERIAL"
+
+OPENOCD_ARGS=(
+	-c "adapter serial $SERIAL"
+	-f "$OPENOCD_CFG"
+	-c init
+	-c "reset halt"
+	-c "nrf54l-load {$SOURCE_HEX}"
+	-c "verify_image {$SOURCE_HEX}"
+	-c "reset run"
+	-c shutdown
+)
+
+exec env OPENOCD_INTERFACE=cmsis-dap openocd "${OPENOCD_ARGS[@]}"

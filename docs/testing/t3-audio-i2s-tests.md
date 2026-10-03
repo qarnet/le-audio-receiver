@@ -1,5 +1,14 @@
 # T3 — I2S sink state-machine tests
 
+> **Historical T3 record (2026-08).** Counts (67/65), variant table,
+> nRF5340/APLL measurements and `fw-build-5340` commands below describe the
+> completed T3-era source, not runnable current receiver acceptance. Current
+> `tests/unit/audio_i2s_identity/` is a generic host-only identity passthrough
+> regression with fake actuator and `AUDIO_I2S_NATIVE_TEST`, **no production
+> APLL selection** (see its `CMakeLists.txt`). Current nRF54L15 production
+> uses ASRC + NONE; historical APLL conversion lives only in test-local
+> `tests/unit/actuator_apll/`. The frozen old measurements remain unchanged.
+
 Phase T3 of the pre-refactor testing track: compile and execute the **real
 `src/audio_i2s.c`** under native_sim with a controllable fake I2S driver and
 mocked platform dependencies, locking slab ownership, startup, steady-state

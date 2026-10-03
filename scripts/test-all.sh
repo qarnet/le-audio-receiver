@@ -18,9 +18,8 @@
 # All suite discovery comes from scripts/test_inventory.py (the single
 # filesystem classification source shared with test-coverage.sh and
 # check-test-matrix.py) — adding a suite cannot silently omit it from the
-# gate.  Current inventory (scripts/test_inventory.py): 41 Twister + 5
-# exec-only + 25 Python = 71 unit children; the canonical gate is 74
-# children (71 + coverage + matrix + BSim).
+# gate.  Count the current unit children from that inventory instead of a
+# dated snapshot; new dirty-tree work needs a separate clean canonical gate.
 #
 # Logical phase selection:
 #   ./scripts/test-all.sh                 # all phases (historical default)
@@ -42,12 +41,12 @@
 # $HOME/le-audio-test-results, so the retained output is uploaded as
 # evidence and failures remain diagnosable.
 #
-# Required: NCS v3.3.0 dev shell (nix develop / direnv allow).
+# Required: NCS v3.4.1 dev shell (nix develop / direnv allow).
 #   ZEPHYR_BASE must be set. BabbleSim dependencies must be provisioned;
 #   scripts/bsim-stage1-run.sh derives BSIM_OUT_PATH via scripts/bsim-env.sh.
 #
-# Production firmware builds and dongle build are NOT included — they are
-# run separately via fw-build-5340, fw-build-54l15, fw-build-dongle.
+# Production receiver, source and HCI builds are NOT included — run
+# separately via fw-build-54l15, fw-build-hil-source-54l15, fw-build-dongle.
 # The resolved build-contract checker also runs separately after those
 # builds (scripts/check-build-contract.py) and does not depend on
 # pre-existing build directories.
@@ -151,7 +150,7 @@ resolve_ncs() {
     # Resolve ZEPHYR_BASE if not set — prefer nrfutil toolchain env.
     if [ -z "${ZEPHYR_BASE:-}" ]; then
         if command -v nrfutil &>/dev/null; then
-            eval "$(nrfutil sdk-manager toolchain env --ncs-version v3.3.0 --as-script sh)" 2>/dev/null || true
+            eval "$(nrfutil sdk-manager toolchain env --toolchain-bundle-id 8285d8ad56 --as-script sh)" 2>/dev/null || true
         fi
     fi
     : "${ZEPHYR_BASE:?ZEPHYR_BASE must be set or nrfutil must be in PATH}"

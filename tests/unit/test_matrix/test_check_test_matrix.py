@@ -28,7 +28,7 @@ _spec.loader.exec_module(ctm)
 
 
 class Fixture:
-    """Tiny repo fixture: src/alpha.c + src/beta.c + dongle main + header,
+    """Tiny repo fixture: src/alpha.c + src/beta.c + HCI main + header,
     one direct unit suite (alpha_suite), one structural suite (proto_suite),
     one hardware script."""
 
@@ -50,7 +50,7 @@ class Fixture:
         )
         self._write("src/beta.c", "int beta_init(void) { return 0; }\n")
         self._write(
-            "dongle/hci_ipc/src/main.c", "int dongle_main(void) { return 0; }\n"
+            "dongle/hci_uart/src/main.c", "int dongle_main(void) { return 0; }\n"
         )
         self._write("src/flpr_protocol.h", "#ifndef P_H\n#define P_H\n#endif\n")
         self._write(
@@ -136,7 +136,7 @@ def beta_direct():
 
 def dongle_entry():
     return {
-        "source": "dongle/hci_ipc/src/main.c",
+        "source": "dongle/hci_uart/src/main.c",
         "classification": "hardware-only",
         "reason": "dongle firmware, hardware-only",
         "excluded_from_numeric": True,
@@ -176,6 +176,23 @@ def write_coverage(root, files):
 
 
 class CheckTestMatrixValid(unittest.TestCase):
+    def test_real_hci_inventory_is_current(self):
+        checker = ctm.Checker(
+            REPO_ROOT, os.path.join(REPO_ROOT, "tests/test-matrix.json")
+        )
+        sources = set(checker.inventory())
+        with open(checker.manifest_path, encoding="utf-8") as fh:
+            entries = {entry["source"]: entry for entry in json.load(fh)["entries"]}
+        for source in ("dongle/hci_uart/src/main.c", "dongle/hci_uart/src/h4_rx.c"):
+            self.assertIn(source, sources)
+            self.assertIn(source, entries)
+            self.assertTrue(entries[source]["excluded_from_numeric"])
+        self.assertNotIn("dongle/hci_ipc/src/main.c", sources)
+        self.assertNotIn("dongle/hci_ipc/src/main.c", entries)
+        self.assertEqual(
+            "direct", entries["dongle/hci_uart/src/h4_rx.c"]["classification"]
+        )
+
     def test_valid_manifest_passes(self):
         fx = Fixture(valid_entries())
         try:
@@ -187,8 +204,9 @@ class CheckTestMatrixValid(unittest.TestCase):
 
     def test_recognized_build_commands_resolve(self):
         checker = ctm.Checker(REPO_ROOT, CHECKER_PATH)
-        for command in ("fw-build-54l15", "fw-build-5340", "fw-build-dongle"):
+        for command in ("fw-build-54l15", "fw-build-dongle"):
             self.assertEqual(("build-cmd", None), checker.resolve_suite(command))
+        self.assertIsNone(checker.resolve_suite("fw-build-5340"))
         self.assertIsNone(checker.resolve_suite("fw-build-unknown"))
 
     def test_testonly_block_and_static_functions_not_required(self):
@@ -205,6 +223,29 @@ class CheckTestMatrixValid(unittest.TestCase):
 
 
 class CheckTestMatrixInventory(unittest.TestCase):
+    def test_hci_source_inventory_rejects_missing_and_retired_entries(self):
+        fx = Fixture([alpha_direct(), beta_direct(), proto_entry()])
+        try:
+            code, out = fx.run_checker()
+            self.assertNotEqual(0, code)
+            self.assertIn("missing inventory entry: dongle/hci_uart/src/main.c", out)
+            fx._write(
+                "dongle/hci_uart/src/h4_rx.c", "int h4_rx_feed(void) { return 0; }\n"
+            )
+            code, out = fx.run_checker()
+            self.assertNotEqual(0, code)
+            self.assertIn("missing inventory entry: dongle/hci_uart/src/h4_rx.c", out)
+            retired = {**dongle_entry(), "source": "dongle/hci_ipc/src/main.c"}
+            fx._write(
+                "tests/test-matrix.json",
+                json.dumps({"entries": valid_entries() + [retired]}),
+            )
+            code, out = fx.run_checker()
+            self.assertNotEqual(0, code)
+            self.assertIn("stale manifest entry: dongle/hci_ipc/src/main.c", out)
+        finally:
+            fx.cleanup()
+
     def test_missing_entry(self):
         entries = [e for e in valid_entries() if e["source"] != "src/beta.c"]
         fx = Fixture(entries)
@@ -314,7 +355,7 @@ class CheckTestMatrixSchema(unittest.TestCase):
             code, out = fx.run_checker()
             self.assertNotEqual(0, code)
             self.assertIn(
-                "error: unresolvable acceptance: dongle/hci_ipc/src/main.c: no-such-command.sh",
+                "error: unresolvable acceptance: dongle/hci_uart/src/main.c: no-such-command.sh",
                 out,
             )
         finally:
@@ -352,7 +393,7 @@ class CheckTestMatrixSchema(unittest.TestCase):
             code, out = fx.run_checker()
             self.assertNotEqual(0, code)
             self.assertIn(
-                "error: missing acceptance: dongle/hci_ipc/src/main.c (classification hardware-only)",
+                "error: missing acceptance: dongle/hci_uart/src/main.c (classification hardware-only)",
                 out,
             )
         finally:
@@ -736,13 +777,13 @@ class CheckTestMatrixWitnessesAndApis(unittest.TestCase):
                     "reason": "glue only",
                     "excluded_from_numeric": True,
                     "stateful": False,
-                    "suites": [{"name": "fw-build-5340", "evidence": "build"}],
+                    "suites": [{"name": "fw-build-54l15", "evidence": "build"}],
                     "public_outcomes": [
                         {"api": "alpha_run", "outcome": "0", "witness": "some_name"}
                     ],
                     "state_transitions": [],
                     "function_exclusions": [],
-                    "hardware_acceptance": ["fw-build-5340"],
+                    "hardware_acceptance": ["fw-build-54l15"],
                 },
                 beta_direct(),
                 dongle_entry(),
@@ -1024,7 +1065,7 @@ class CheckTestMatrixDeterminism(unittest.TestCase):
             self.assertEqual(out1, out2)
             for needle in (
                 "error: bad classification: src/alpha.c",
-                "error: unresolvable acceptance: dongle/hci_ipc/src/main.c: no-such.sh",
+                "error: unresolvable acceptance: dongle/hci_uart/src/main.c: no-such.sh",
             ):
                 self.assertIn(needle, out1)
         finally:

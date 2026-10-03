@@ -1,4 +1,212 @@
-# STATUS: le-audio-receiver, 2026-09-19
+# STATUS: le-audio-receiver, 2026-10-01
+
+PR wrap-up (2026-10-02): PB-019 and PB-033 through PB-040 have PR-gated Done
+transitions in the combined migration PR; official acceptance waits for human
+merge. Prior local firmware verification below remains exact `104e67a`, not
+a fresh hardware rerun at the PR closure commit. Prior external raw lab run
+roots are absent in this session; committed result reports and hashes remain.
+Fresh PR-preparation checks and evidence boundaries:
+`docs/development/nrf54l15-migration-pr-wrap-up-20261002.md`.
+
+Current clean validation checkpoint: `104e67a` includes source peer-enqueue
+scheduling guard and fresh FLPR reload, notification, heartbeat and idle-worker
+repairs. Production code is `e478e59`; `104e67a` adds partial IPC registration
+rollback/retry coverage without changing production code. Source margins remain
+3000/2000 us; frozen row/transport limits remain unchanged. Source suite 84/84,
+runtime 25/25, handshake 38/38 and offload 36/36 passed. Clean canonical
+80/0/80, HIL host 340 passed/one hardware-opt-in skip, three physical builds
+and resolved build contract 73/73 passed. Clean normal HCI six-case validation
+passed 72,000 writer frames, PLC 428, zero case/kernel HCI/SMP alerts.
+Full exact-local-artifact matrix passed 20/20, zero failed/cancelled/cleanup
+children. Independent review verified archive/image provenance, retained
+child/aggregate checksums and 120 ordered identity checks. Local migration
+verification is complete; human PR acceptance, analog qualification, active
+draft FR4 and publication remain separate. Final evidence:
+`docs/development/nrf54l15-migration-verification-results-20261001.md`.
+See `docs/development/nrf54l15-source-batch-guard-results-20261001.md`
+and `docs/development/nrf54l15-flpr-fresh-reload-results-20261001.md`, plus
+`docs/development/nrf54l15-final-reference-audit-20261001.md`.
+Older unresolved-fault/qualification and board-state statements below are
+dated historical checkpoints, not the latest implementation verdict.
+
+Latest continuation (2026-09-30):
+`docs/development/logic-analyzer-continuation-results-20260930.md` reconciles
+retained clean `2a0e792` 80/0/80 software and six-case HCI evidence with the
+failed exact-artifact matrix (one passed, one failed, 18 skipped). New unchanged
+Mode A 120 s diagnostic passed with two passive I2S windows; four offline
+bad-wire/capture controls were rejected. Startup silence passes geometry,
+not audio-content acceptance. Prior source timing failure remains unresolved;
+no firmware change, full matrix acceptance, PB-041 implementation or release.
+Boards last left receiver plus idle standalone source after fresh identity checks.
+
+Latest docs/evidence snapshot (2026-09-27):
+`docs/development/logic-analyzer-i2s-bringup-results-20260927.md` records
+three passed normal standalone-source 120 s HIL rows and six passive I2S
+100 ms captures; original Mode A diagnostic FAILED on decoder-start alignment,
+with separate validated offline analysis. Last known boards carry PRIMARY
+diagnostic receiver/FLPR/standalone-source images, not clean-clone HCI proof.
+PB-019 HCI UART fault remains open; PB-041 nonce identification not implemented.
+No new code, gate rerun, full matrix, analog or release acceptance claimed.
+Older pause and board facts below are dated historical snapshots.
+
+User-paused observability handoff (RTT or logic analyzer pending):
+`docs/development/nrf54l15-observability-resume-20260925.md`. This is current
+resume entrypoint; software upgrade verification does not qualify HCI hardware
+or complete migration.
+
+## PB-040 NCS v3.4.1 clean local software verification (2026-09-25)
+
+Active SDK `~/ncs/v3.4.1`: nrf `b20f8619ba9a5530f8c34b0a130d829947cfe55d`,
+Zephyr `33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6`; toolchain
+`8285d8ad56` (GNU 14.3 ARM/RISC-V, Zephyr SDK 1.0.1). Start a fresh dev
+shell (`env -u ZEPHYR_BASE nix develop` from an old v3.3.0 shell). Historical
+v3.3.0 SDK, evidence and active private draft remain untouched. Root `VERSION`
+is still `0.1.0`. Container digest
+`sha256:45b97cad97a9967c52d77d1d1a0f7dd8fe027edd17c05c3eda2eeadc23729418`
+was registry-verified, not tested by hosted CI.
+
+- Separate validation clone at exact committed code
+  `daf7cd9404e32bacbff4b6431dafccbd28e4a8eb` was clean before and after
+  canonical gate: **80 PASS / 0 FAIL / 80 TOTAL** (41 Twister, five exec-only,
+  31 Python, coverage, matrix, strict BSim 17 scenarios / 26 runs).
+  `/tmp/opencode/pb040-clean-canonical-daf7cd9-r1.log`; coverage manifest
+  `/tmp/opencode/pb040-clean-canonical-daf7cd9-r1/coverage/run-manifest.json`
+  has `dirty: false`, all 36 baseline pairs IDENTICAL (4971/5427 lines,
+  2203/3008 branches, 377/377 functions), committed baseline untouched.
+  Separate clean HIL Python **340 passed / one intentional hardware-opt-in
+  skip**, LC3 host replay schema 3 verifies active v3.4.1 with original v3.3.0
+  corpus. Following gate, three pristine builds **3/3** and resolved contract
+  **69/69** passed; generated compile-command symlinks alone changed afterward,
+  not evidence of a post-build clean tree. Logs and image hashes:
+  `docs/development/ncs-3.4.1-upgrade-results.md`.
+- Physical builds emitted **no compiler or Kconfig warnings**. Their exact
+  CMake `__ASSERT() statements are globally ENABLED` message is Zephyr
+  `CMakeLists.txt:2356-2359`'s intentional configuration diagnostic when
+  `!CONFIG_TEST && CONFIG_ASSERT && !CONFIG_FORCE_NO_ASSERT`; fault guards
+  remain enabled. Retain raw logs, never filter this notice or globally waive
+  CMake warnings. Separately, host-only `native_sim` produces the SDK's
+  unsupported-SoC notice, and BabbleSim dependencies carry exactly five
+  source/hash-specific upstream warning exceptions under `-Werror`. No
+  claim of zero warnings across all dependency code.
+- PB-040 software implementation verified locally; **Review**, not Done or
+  human PR acceptance. HCI physical qualification still open. No hosted CI
+  execution, board flash, RTT change, 360-frame FLPR feature, RH4/FR4,
+  publication or active draft-asset change.
+
+### Earlier dirty-tree integration diagnostics (retained, not clean acceptance)
+
+- Pristine physical builds: receiver CPUAPP/FLPR, standalone source, HCI
+  **3/3 pass**, no compiler/Kconfig warnings. `NRF_PLATFORM_LUMOS=n` disables
+  verified unused deprecated alias on each target; equivalent I2S controller
+  clock bits and mapped FLPR partition-size contract were updated, not weakened.
+  Actual build contract: **69 assertions, 0 failed**. Native suite:
+  **76 pass**. HIL Python: **340 pass, 1 intentional hardware skip**.
+- Strict LC3 fixtures preserve original v3.3.0 manifest and reference bytes:
+  **40 tests** and host replay pass. ARM calibration: **296 build steps
+  completed**, no ARM test execution or flash. Strict BSim with `-Werror` on
+  dependency closure and five source/hash-specific documented upstream exceptions:
+  **17 scenarios / 26 runs pass**; no global warning waiver.
+- Dirty-tree coverage report: all **46 suites pass**; 36-file population and
+  every baseline ratio/count unchanged (4971/5427 lines, 2203/3008 branches,
+  377/377 functions). Log:
+  `/tmp/opencode/pb040-coverage-20260925-r1/full.log`. Baseline not updated.
+  Native `native_sim` host-only CMake notice `SoC native is not supported by
+  this release.` (`nrf/cmake/device_support.cmake:34`) appears in 46 host
+  builds, not physical builds; retain raw notice, no compiler/Kconfig warning
+  waiver. Fake-entropy banners remain test-only.
+- NCS v3.4.1 HCI generated UART sentinel patch re-audited against original
+  source SHA-256 `d68f45fbef9da8077efe6c9f94c609393fc3485bd1d486e4f710288f6d808bd3`:
+  original 3/8192, generated 0/8192 exhaustive byte-value mismatches. Driver
+  core unchanged; physical HCI failure remains **open**, not fixed by SDK
+  upgrade. No RTT, PB-013 360-frame offload, hardware qualification, RH4/FR4,
+  release, or old-asset provenance claim. Full integration evidence:
+  `docs/development/ncs-3.4.1-upgrade-results.md`. These lines describe
+  earlier dirty-tree diagnostics; clean local verification is recorded above.
+
+## Current implementation snapshot (2026-09-25; not acceptance)
+
+Primary repository `feature/nrf54l15-only-continuation` has local migration
+commits `21ff2f0`, `0d22829`, `9b99ce5` and latest code `a78f8f4`.
+Unrelated PB-013 edits remain dirty and unstaged. This is not full migration,
+HCI qualification, RH4/FR4 or public-release acceptance. Read `AGENTS.md`,
+`dongle/README.md`, and current `docs/flashing.md`
+for operational instructions. Later diagnostic records:
+`docs/development/pb-019-hci-resume-results.md`,
+`pb-034-primary-repair-results.md`, `pb-035-source-matrix-results.md`,
+`pb-036-source-artifact-results.md`, `pb-037-retirement-results.md`, and
+`nrf54l15-only-continuation-20260925.md` (latest authority and HCI correction).
+
+- XIAO nRF54L15 receiver is sole production target: DK target plus XIAO overlay,
+  CPUAPP + FLPR. Second XIAO alternates standalone source (DK target, direct
+  GRTC, one CPUAPP image) and Linux HCI central (XIAO target, SDC UART H4 at
+  1 Mbaud without flow control); never operate both source roles simultaneously.
+  BSim has two nRF54L15BSim integrated SW Split peers with client reliability
+  policy. Native unit tests remain hardware-independent. E83 board and receiver
+  helpers and production APLL are removed; historical APLL tests remain local.
+- **Clean software gate:** `9b99ce5` 78/0/78; exact latest code
+  `a78f8f47101a9c040d8b5f735f96632e853c37b6` **79 PASS / 0 FAIL /
+  79 TOTAL** (41 Twister, five exec-only, 30 Python, coverage, matrix,
+  strict BSim 17 scenarios / 26 runs). Clean manifest:
+  `/tmp/opencode/nrf54-a78f8f4-clean-canonical-r1/coverage/run-manifest.json`,
+  `dirty: false`; separate fresh validation clone clean before/after.
+  Adopted 36-file baseline: 4971/5427 lines, 2203/3008 branches,
+  377/377 functions, no zero-hit numeric functions. Clean HCI build produced
+  uninstrumented HEX SHA-256
+  `5377fff7bee0256dd59206f46a187d301450b809e4b1db6a67a749bec434b697`;
+  only generated LSP symlink changed after build. Clean gate does not imply
+  physical acceptance.
+- **HCI prototype / qualification incomplete:** audited full-buffer `0xAA`
+  sentinel repair eliminates old-slot false replacement of legitimate `0xAA`
+  (actual SDK replay original 3/8192 vs generated 0/8192 mismatches across
+  all byte values, exact source hash guarded), not insertion/deletion.
+  Candidate six-case run FAILED Mode A reconnect (7185 sent, RX 7178/7180,
+  underrun/reset 1, hardware error `0x07`, `-EPROTO`). Passive host-monitor
+  variant FAILED Mode A (6970 sent, RX 6955/6962, decoded 14628, PLC 711,
+  underrun/reset 1, hardware error `0x07`); private core parser `-22`, H4
+  type 5, used/expected 128/128. Clean host btsnoop ISO record 76837 differs
+  from RAM ring frame 2526 by inserted `0xAA` and missing `0x0c` 112 ring
+  positions apart; preceding five ISO records match, host recorded no
+  drops/truncation. Fault downstream of Linux monitor before parser; wire,
+  SAMD11, UARTE, DMA and driver-copy boundaries not isolated. No SDC/SAMD11
+  causation. RAM-trace pass perturbs timing. PB-019 AC2/AC3 unchecked,
+  AC1/AC4 checked, AC5 audit pending. Private captures stay outside Git.
+- Standalone source: first matrix r1 preserved Mode B exposed 900-byte TX
+  processor stack overflow (PSP = PSPLIM); board-local 2048-byte repair
+  passed. Full RH3 fixed-image matrix r2 passed 20/20 physical children with
+  no failure, cancellation or cleanup failure, including 7.5 ms, reconnect,
+  hang and stall at unchanged limits. Earlier final runner smoke passed, but
+  latest identity-checked standalone restoration
+  `/tmp/opencode/hil-runs/pb035-restored-source-20260925-r2` **FAILED** strict
+  log scan on receiver `bt_conn: conn 0x200051b0 failed to establish. RF noise?`
+  (not proof of RF cause). Flash/boot restoration completed, cleanup empty;
+  RX 765, decoded 776, PLC 11, zero underruns/resets/decode errors do not
+  erase warning. Retained `images.json` confirms standalone source
+  `51477c5a23ab81cc3dac3ea93969165d897f6bef6b8aab92a6cc455b05ea5f59`,
+  receiver `9427913c9595f976cf1644d1ed857b6dc37ad0197fefa29dd4efa35d9e2427bd`
+  and FLPR `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+  No active HCI adapter or nrfdebugservertest owner. Historical 20/20
+  fixed-image result is not fresh acceptance. Revalidate hardware identity
+  before further action. PB-036 exact-source RH4, analog qualification, FR4
+  and release remain unaccepted.
+- **Next boundary:** local-commit authority resolved and clean gate passed;
+  former dirty-tree failure was historical. `sigrok-cli` installed but no
+  USB logic analyzer enumerated (hubs, two ASUS adapters, two XIAO bridges,
+  SEGGER J-Link only). Need connected authorized voltage-compatible
+  high-impedance wire capture at source UART20 RX P1.8 (SAMD11 to nRF),
+  optional TX P1.9 and common GND, sampled for 1 Mbaud 8N1 no flow. Compare
+  host/wire/RAM, make minimal grounded repair, rerun six physical cases and
+  clean gate. No silent resync, disabled audio or relaxed limits. This is
+  specific missing measurement capability, not proof all software debugging
+  is impossible. PB-038 Backlog; no RH4/FR4/final migration acceptance, no
+  push/PR/release.
+
+## Historical snapshots (dated evidence below, not current commands)
+
+All date-specific status, reproduction, known-hardware, probe mappings,
+build recipes, hashes and counts below describe their recorded runs only.
+Do not use them as live identity, current image layout, or active acceptance
+requirements. PB-032 retention policy below was superseded by the all-nRF54L15
+migration; old evidence and release hashes are preserved unchanged.
 
 > Probe identities are resolved at runtime via `nrf-probes`. Never assume a
 > serial↔board mapping from docs — run `nrf-probes`.
@@ -86,7 +294,7 @@
 > (2026-08-06); the pre-refactor T0–T8 figures are historical evidence
 > for their own commits.
 
-> **PB-032 current target policy (2026-09-20):** nRF54L15 is the sole supported
+> **PB-032 historical target policy (2026-09-20; superseded):** nRF54L15 is the sole supported
 > final receiver. The physical E83 nRF5340 receiver is a best-effort legacy
 > engineering/regression path with no release, product-parity, physical-control,
 > or future-feature obligation. nRF5340BSim, the nRF5340DK HIL source, and the

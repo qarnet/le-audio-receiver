@@ -32,9 +32,10 @@ ORACLE_HEADER = SUPPORT_DIR / "pcm_oracle.h"
 STATEFUL_RECIPE_SOURCE = SUPPORT_DIR / "lc3_stateful_recipes.c"
 STATEFUL_RECIPE_HEADER = SUPPORT_DIR / "lc3_stateful_recipes.h"
 
-EXPECTED_NCS_VERSION = "v3.3.0"
-EXPECTED_NRF_REVISION = "ba167d9f3db4abbdc9b67887ca3ea66c64f2d956"
-EXPECTED_ZEPHYR_REVISION = "fd9204a02d52630660ce8d729945a4dd743feabf"
+EXPECTED_NCS_VERSION = "v3.4.1"
+EXPECTED_FIXTURE_NCS_VERSION = "v3.3.0"
+EXPECTED_NRF_REVISION = "b20f8619ba9a5530f8c34b0a130d829947cfe55d"
+EXPECTED_ZEPHYR_REVISION = "33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6"
 EXPECTED_LIBLC3_LABEL = "1.1.2"
 EXPECTED_LIBLC3_REVISION = "48bbd3eacd36e99a57317a0a4867002e0b09e183"
 EXPECTED_SOURCE_FORMULA = "bsim_tx_hash_mix_seq_i_ch_v1"
@@ -188,6 +189,87 @@ EXPECTED_STATEFUL_RECIPES = (
         (("plc", 0, 7), ("corpus", 0, 100)),
     ),
 )
+# Target-native histories append after the immutable legacy recipe population.
+EXPECTED_STATEFUL_RECIPES += (
+    (
+        "start0_10ms_l",
+        "bsim_48k_10ms_120b_l",
+        "portable-pcm",
+        "bsim_48k_10ms_120b_l.pcm",
+        0,
+        10000,
+        120,
+        480,
+        100,
+        100,
+        (("corpus", 0, 100),),
+    ),
+    (
+        "start0_10ms_r",
+        "bsim_48k_10ms_120b_r",
+        "portable-pcm",
+        "bsim_48k_10ms_120b_r.pcm",
+        0,
+        10000,
+        120,
+        480,
+        100,
+        100,
+        (("corpus", 0, 100),),
+    ),
+    (
+        "start0_7p5ms_l",
+        "bsim_48k_7p5ms_90b_l",
+        "portable-pcm",
+        "bsim_48k_7p5ms_90b_l.pcm",
+        0,
+        7500,
+        90,
+        360,
+        100,
+        100,
+        (("corpus", 0, 100),),
+    ),
+    (
+        "start0_7p5ms_r",
+        "bsim_48k_7p5ms_90b_r",
+        "portable-pcm",
+        "bsim_48k_7p5ms_90b_r.pcm",
+        0,
+        7500,
+        90,
+        360,
+        100,
+        100,
+        (("corpus", 0, 100),),
+    ),
+    (
+        "skip20_start0_10ms_l",
+        "bsim_48k_10ms_120b_l",
+        "generated-pcm",
+        "stateful_48k_10ms_skip20_start0_l.pcm",
+        0,
+        10000,
+        120,
+        480,
+        100,
+        100,
+        (("corpus", 0, 20), ("corpus", 21, 80)),
+    ),
+    (
+        "loss48x18_start0_10ms_r",
+        "bsim_48k_10ms_120b_r",
+        "generated-pcm",
+        "stateful_48k_10ms_loss48x18_start0_r.pcm",
+        0,
+        10000,
+        120,
+        480,
+        100,
+        82,
+        (("corpus", 0, 48), ("plc", 0, 18), ("corpus", 48, 34)),
+    ),
+)
 STATEFUL_MUTATIONS = (
     (
         "stateful-payload-off-by-one",
@@ -219,6 +301,16 @@ STATEFUL_MUTATIONS = (
         "bsim_48k_10ms_120b_l.pcm",
         100,
         48000,
+        "max-error",
+    ),
+)
+STATEFUL_MUTATIONS += (
+    (
+        "stateful-startup-history",
+        "loss48x18_start0_10ms_r",
+        "stateful_48k_10ms_loss48x18_r.pcm",
+        82,
+        39360,
         "max-error",
     ),
 )
@@ -394,8 +486,13 @@ def load_manifest():
     )
     if _require_int(manifest["schema_version"], "schema_version") != 2:
         raise CalibrationError("unsupported manifest schema_version")
-    if _require_string(manifest["ncs_version"], "ncs_version") != EXPECTED_NCS_VERSION:
-        raise CalibrationError("manifest NCS version is not %s" % EXPECTED_NCS_VERSION)
+    if (
+        _require_string(manifest["ncs_version"], "ncs_version")
+        != EXPECTED_FIXTURE_NCS_VERSION
+    ):
+        raise CalibrationError(
+            "manifest NCS version is not %s" % EXPECTED_FIXTURE_NCS_VERSION
+        )
     _require_keys(manifest["liblc3"], ("semantic_label", "west_revision"), "liblc3")
     if (
         _require_string(manifest["liblc3"]["semantic_label"], "liblc3.semantic_label")
@@ -579,10 +676,10 @@ def load_stateful_manifest(portable_manifest):
         raise CalibrationError("unsupported stateful manifest schema_version")
     if (
         _require_string(manifest["ncs_version"], "stateful manifest.ncs_version")
-        != EXPECTED_NCS_VERSION
+        != EXPECTED_FIXTURE_NCS_VERSION
     ):
         raise CalibrationError(
-            "stateful manifest NCS version is not %s" % EXPECTED_NCS_VERSION
+            "stateful manifest NCS version is not %s" % EXPECTED_FIXTURE_NCS_VERSION
         )
     _require_keys(
         manifest["liblc3"],
@@ -656,7 +753,7 @@ def load_stateful_manifest(portable_manifest):
 
     recipes = manifest["recipes"]
     if not isinstance(recipes, list) or len(recipes) != len(EXPECTED_STATEFUL_RECIPES):
-        raise CalibrationError("stateful manifest must contain exactly nine recipes")
+        raise CalibrationError("stateful manifest must contain exactly fifteen recipes")
     portable_pcm = {
         stream["stem"]: stream["pcm"] for stream in portable_manifest["streams"]
     }
@@ -926,15 +1023,23 @@ def verify_ncs_workspace(ncs):
     except (OSError, configparser.Error) as exc:
         raise CalibrationError("cannot verify NCS workspace config: %s" % exc) from exc
     if workspace_layout != ("nrf", "west.yml", "zephyr"):
-        raise CalibrationError("NCS workspace config is not v3.3.0 layout")
+        raise CalibrationError("NCS workspace config is not v3.4.1 layout")
 
     version_path = ncs / "nrf" / "VERSION"
     try:
         nrf_version = version_path.read_text(encoding="utf-8").strip()
     except OSError as exc:
         raise CalibrationError("cannot verify NCS VERSION: %s" % exc) from exc
-    if nrf_version != "3.3.0":
-        raise CalibrationError("NCS VERSION is not 3.3.0")
+    # NCS 3.4.1 uses Zephyr-style VERSION fields, unlike 3.3.0's single line.
+    if nrf_version.splitlines() != [
+        "VERSION_MAJOR = 3",
+        "VERSION_MINOR = 4",
+        "PATCHLEVEL = 1",
+        "VERSION_TWEAK = 0",
+        "EXTRAVERSION =",
+        "VERSION_METADATA = lts",
+    ]:
+        raise CalibrationError("NCS VERSION is not 3.4.1")
 
     _require_git_revision(ncs / "nrf", EXPECTED_NRF_REVISION, "NCS nrf")
     _require_clean_git_tree(ncs / "nrf", "NCS nrf", include_untracked=False)
@@ -945,7 +1050,9 @@ def verify_ncs_workspace(ncs):
 def resolve_ncs(manifest):
     configured = os.environ.get("NCS")
     ncs = (
-        Path(configured).expanduser() if configured else Path.home() / "ncs" / "v3.3.0"
+        Path(configured).expanduser()
+        if configured
+        else Path.home() / "ncs" / EXPECTED_NCS_VERSION
     )
     ncs = ncs.resolve(strict=False)
     liblc3 = ncs / "modules" / "lib" / "liblc3"
@@ -1327,7 +1434,8 @@ def main(argv=None):
             "schema_version": 3,
             "captured_at_utc": captured_at_utc,
             "repository": repository,
-            "ncs_version": manifest["ncs_version"],
+            "ncs_version": EXPECTED_NCS_VERSION,
+            "fixture_ncs_version": manifest["ncs_version"],
             "ncs_path": str(ncs),
             "architecture": platform.machine(),
             "lscpu_raw": lscpu_raw,

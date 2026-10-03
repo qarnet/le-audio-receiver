@@ -1,4 +1,59 @@
-# Legacy nRF5340 developer flashing reference
+# Developer flashing: Seeed XIAO nRF54L15
+
+This is a **developer workflow**, not a published release or a public-friendly
+flashing method. No ready-made release binaries are published. The receiver
+is the XIAO nRF54L15 with the I2S DAC; the second XIAO used for standalone
+source or Linux HCI central is a different board with the same chip. Never
+select the first nRF54L15 probe or assume a fixed probe, serial port, or HCI
+index identifies the receiver.
+
+From the repository root, enter the NCS v3.4.1 dev shell and build. If already
+in an old v3.3.0 shell, use `env -u ZEPHYR_BASE nix develop` instead to avoid
+mixing its `ZEPHYR_BASE` with the new toolchain:
+
+```sh
+nix develop
+fw-build-54l15
+```
+
+The build produces `build/nrf54l15/le-audio-receiver/zephyr/zephyr.hex`
+(cpuapp) and `build/nrf54l15/flpr/zephyr/zephyr.hex` (FLPR). Both images are
+required; `fw-flash-54l15` loads and verifies each before resetting the
+receiver. Do not flash a receiver image onto the source/HCI XIAO.
+
+Before flashing, run `nix-nrf probes` and compare the live raw DP/AP/FICR
+identity and stable USB identity against the **receiver** role in the external
+two-XIAO session manifest. Resolve the receiver serial explicitly from that
+live session, not from family-only discovery. After confirming the role:
+
+```sh
+FW_NRF54L15_PROBE_SERIAL=RECEIVER_PROBE_FROM_LIVE_SESSION fw-flash-54l15
+```
+
+Replace the placeholder with the freshly verified receiver probe serial.
+The helper requires this variable; it has no family-based fallback. Capture
+the receiver console **before** reset so the boot log is retained. Resolve
+its live session-bound USB CDC port (115200 8N1, DTR asserted, RTS deasserted)
+instead of assuming a tty number. The [HIL session runner](../scripts/hil-runner.py)
+revalidates role identity for its owned actions. For source/HCI board flashing
+and controlled attachment, follow the separate [dongle workflow](../dongle/README.md).
+
+Normal flashing does not clear stored settings or bonds. The supported
+`bt unpair` receiver shell command clears **all receiver bonds** and returns
+to open pairing mode when a pairing reset is needed; it does not selectively
+remove one peer. Keep `settings_load()` in firmware. No nRF54L15 recovery guarantee or erase
+procedure is provided here.
+
+## Historical nRF5340 procedure (not runnable in current tree)
+
+The following is an archived description of the retired E83 implementation,
+not an operative prerequisite for XIAO flashing. Original implementation,
+board files, helper, and TCL remain in Git history, not the current tree.
+These commands and nRF53 APPROTECT/recovery behavior apply only to that old
+nRF5340 setup. **Never apply nRF53 erase, recover, or APPROTECT commands to
+an nRF54L15.**
+
+### Legacy nRF5340 developer flashing reference
 
 > **Status: legacy engineering only.** This guide is not general user flashing
 > guidance and does not describe a supported final receiver or current release

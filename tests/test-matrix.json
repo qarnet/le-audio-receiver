@@ -134,46 +134,6 @@
    "stateful": true
   },
   {
-   "source": "src/audio_clock_actuator_apll.c",
-   "classification": "direct",
-   "suites": [
-    {
-     "name": "actuator_apll",
-     "evidence": "direct"
-    },
-    {
-     "name": "actuator_apll_nohfclk",
-     "evidence": "direct"
-    }
-   ],
-   "public_outcomes": [
-    {
-     "api": "audio_clock_actuator_init",
-     "outcome": "0",
-     "witness": "test_init_writes_center"
-    },
-    {
-     "api": "audio_clock_actuator_apply_ppm",
-     "outcome": "0",
-     "witness": "test_exact_positive_conversion"
-    },
-    {
-     "api": "audio_clock_actuator_reset",
-     "outcome": "void",
-     "witness": "test_reset_writes_center"
-    }
-   ],
-   "state_transitions": [
-    {
-     "transition": "trimmed->center",
-     "witness": "test_reset_writes_center"
-    }
-   ],
-   "function_exclusions": [],
-   "hardware_acceptance": [],
-   "stateful": true
-  },
-  {
    "source": "src/audio_clock_actuator_none.c",
    "classification": "direct",
    "suites": [
@@ -200,10 +160,10 @@
     }
    ],
    "state_transitions": [],
-   "function_exclusions": [],
-   "hardware_acceptance": [],
-   "stateful": false
-  },
+    "function_exclusions": [],
+    "hardware_acceptance": [],
+    "stateful": false
+   },
   {
    "source": "src/audio_decode.c",
    "classification": "direct",
@@ -600,7 +560,7 @@
     {
      "api": "modea_store",
      "outcome": "MODEA_ACTION_DROP",
-     "witness": "test_queue_overflow_drops_oldest"
+      "witness": "test_oversized_reject_no_mutation"
     },
     {
      "api": "modea_get_stats",
@@ -618,8 +578,8 @@
      "witness": "test_right_missing_lost_callback"
     },
     {
-     "transition": "queue-full->overflow-drop-counted",
-     "witness": "test_queue_overflow_drops_oldest"
+      "transition": "queue-full->survivor-emitted-with-mate-plc",
+      "witness": "test_absent_channel_preserves_survivor_and_recovers"
     }
    ],
    "function_exclusions": [],
@@ -1318,7 +1278,8 @@
    "state_transitions": [],
    "function_exclusions": [],
    "hardware_acceptance": [],
-   "stateful": false
+    "stateful": false,
+    "reason": "nRF54L15BSim simulator timing backend, linked by tests/bsim/CMakeLists.txt; not a production receiver compatibility backend"
   },
   {
    "source": "src/audio_timing_nrf54.c",
@@ -2311,10 +2272,6 @@
    "classification": "delegated-glue",
    "suites": [
     {
-     "name": "fw-build-5340",
-     "evidence": "build"
-    },
-    {
      "name": "fw-build-54l15",
      "evidence": "build"
     },
@@ -2327,13 +2284,12 @@
    "state_transitions": [],
    "function_exclusions": [],
    "hardware_acceptance": [
-    "fw-build-5340",
     "fw-build-54l15",
     "scripts/read_acm.py",
     "docs/testing/pre-refactor-hardware-baseline.md"
    ],
    "stateful": false,
-   "reason": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by final receiver evidence (fw-build-54l15), retained legacy regression evidence (fw-build-5340), and historical boot logs",
+    "reason": "boot wiring adapter: fatal-init order, reboot and advertising-restart semantics are delegated to app_lifecycle.c direct suite (T6); main.c itself is not compiled into any unit suite and is proven by final receiver evidence (fw-build-54l15) and historical boot logs",
    "excluded_from_numeric": true
   },
   {
@@ -2769,7 +2725,7 @@
    "excluded_from_numeric": true
   },
   {
-   "source": "dongle/hci_ipc/src/main.c",
+    "source": "dongle/hci_uart/src/main.c",
    "classification": "hardware-only",
    "suites": [
     {
@@ -2787,10 +2743,71 @@
    "hardware_acceptance": [
     "fw-build-dongle",
     "bap_central.py",
-    "docs/testing/pre-refactor-hardware-baseline.md"
+     "docs/development/pb-019-hci-resume-results.md"
    ],
    "stateful": false,
-   "reason": "hci_uart dongle firmware entry with compile-time identity C0:AA:BB:CC:DD:EE; lab dongle used for all central/hardware testing; outside src/ numeric population",
+    "reason": "Single-image XIAO nRF54L15 SDC HCI entry and UART bridge with lab address C0:AA:BB:CC:DD:EE; physical build, H4 traffic and receiver metrics recorded in PB-019 results; outside src/ numeric population",
+    "excluded_from_numeric": true
+  },
+  {
+   "source": "dongle/hci_uart/src/h4_rx.c",
+   "classification": "direct",
+   "suites": [
+     {
+      "name": "hci_h4",
+      "evidence": "direct"
+     }
+   ],
+   "public_outcomes": [
+     {
+      "api": "h4_rx_init",
+      "outcome": "void",
+      "witness": "explicit reset"
+     },
+     {
+      "api": "h4_rx_feed",
+      "outcome": "0",
+      "witness": "Every possible chunk size"
+     },
+     {
+      "api": "h4_rx_feed",
+      "outcome": "-EINVAL",
+      "witness": "-EINVAL"
+     },
+     {
+      "api": "h4_rx_feed",
+      "outcome": "-EPROTO",
+      "witness": "-EPROTO"
+     },
+     {
+      "api": "h4_rx_feed",
+      "outcome": "-EMSGSIZE",
+      "witness": "-EMSGSIZE"
+     },
+     {
+      "api": "h4_rx_feed",
+      "outcome": "-ENOMEM",
+      "witness": "Delivery failure is terminal"
+     }
+   ],
+   "state_transitions": [
+     {
+      "transition": "idle->partial->complete",
+      "witness": "No partial packet reaches"
+     },
+     {
+      "transition": "invalid->error-latched",
+      "witness": "unknown, sizeof(unknown)"
+     },
+     {
+      "transition": "error-latched->idle",
+      "witness": "explicit reset"
+     }
+   ],
+   "function_exclusions": [],
+   "hardware_acceptance": [],
+   "stateful": true,
+   "reason": "Encoded H4 command/ACL/ISO traffic and error latching tested at parser boundary; outside src/ numeric population",
    "excluded_from_numeric": true
   },
   {

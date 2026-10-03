@@ -46,6 +46,11 @@ static void fake_ensure_sem(void)
 	}
 }
 
+static uint32_t register_ready_epoch;
+static int register_post_callback_error;
+static bool heartbeat_block;
+static K_SEM_DEFINE(heartbeat_entered, 0, 1);
+
 static int fake_open_instance(const struct device *instance)
 {
 	(void)instance;
@@ -63,6 +68,17 @@ static int fake_register_ept(const struct device *instance, void **token,
 	fake_data.cfg = cfg;
 	if (fake_auto_bound && cfg && cfg->cb.bound) {
 		cfg->cb.bound(cfg->priv);
+	}
+	if (register_ready_epoch && cfg && cfg->cb.received) {
+		struct flpr_msg ready = {.type = FLPR_MSG_READY,
+					 .version = FLPR_PROTOCOL_VERSION,
+					 .seq = 0,
+					 .data = register_ready_epoch};
+		cfg->cb.received(&ready, sizeof(ready), cfg->priv);
+	}
+	if (register_post_callback_error != 0) {
+		fake_data.cfg = NULL;
+		return register_post_callback_error;
 	}
 	return 0;
 }
@@ -85,6 +101,11 @@ static int fake_send(const struct device *instance, void *token, const void *dat
 	(void)len;
 
 	fake_send_calls++;
+	if (heartbeat_block && len >= sizeof(struct flpr_msg) &&
+	    ((const struct flpr_msg *)data)->type == FLPR_MSG_HEARTBEAT) {
+		k_sem_give(&heartbeat_entered);
+		k_sem_take(&fake_send_block_sem, K_FOREVER);
+	}
 
 	if (fake_send_block) {
 		/* Park the caller until the test releases the worker. */
@@ -120,6 +141,10 @@ DT_INST_FOREACH_STATUS_OKAY(DEFINE_FAKE_BACKEND)
 
 void fake_ipc_reset(void)
 {
+	register_ready_epoch = 0U;
+	register_post_callback_error = 0;
+	heartbeat_block = false;
+	k_sem_reset(&heartbeat_entered);
 	fake_ensure_sem();
 	fake_open_ret = 0;
 	fake_register_ret = 0;
@@ -131,6 +156,37 @@ void fake_ipc_reset(void)
 	fake_sent_count = 0;
 	memset(fake_sent, 0, sizeof(fake_sent));
 	fake_data.cfg = NULL;
+}
+
+void fake_ipc_ready_during_register(uint32_t epoch)
+{
+	register_ready_epoch = epoch;
+}
+
+void fake_ipc_register_error_after_callbacks(int error)
+{
+	register_post_callback_error = error;
+}
+
+void fake_ipc_block_heartbeat(bool enable)
+{
+	fake_ensure_sem();
+	heartbeat_block = enable;
+	if (enable) {
+		k_sem_reset(&fake_send_block_sem);
+		k_sem_reset(&heartbeat_entered);
+	}
+}
+
+int fake_ipc_wait_heartbeat_entered(k_timeout_t timeout)
+{
+	return k_sem_take(&heartbeat_entered, timeout);
+}
+
+void fake_ipc_release_heartbeat(void)
+{
+	heartbeat_block = false;
+	k_sem_give(&fake_send_block_sem);
 }
 
 void fake_ipc_set_open_result(int ret)

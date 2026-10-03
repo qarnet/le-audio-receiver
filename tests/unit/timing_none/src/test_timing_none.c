@@ -4,7 +4,7 @@
  *
  * Direct no-op timing suite for src/audio_timing_none.c.
  *
- * The nRF5340 timing implementation is intentionally side-effect free.
+ * The nRF54L15BSim platform timing backend is intentionally a no-op.
  * These tests prove the API contract (init returns 0, all calls safe at
  * zero/extreme/typical values, arbitrary call order, repeated use) and
  * give gcovr a real TU to measure — every production function executes.

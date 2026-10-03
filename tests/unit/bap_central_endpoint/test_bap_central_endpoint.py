@@ -160,11 +160,34 @@ class TestSelectProperties(unittest.TestCase):
         self.assertEqual(int(qos["PHY"]), 0x02)
         self.assertEqual(int(qos["Interval"]), 10000)
         self.assertEqual(int(qos["SDU"]), 240)
-        self.assertEqual(int(qos["Retransmissions"]), 2)
-        self.assertEqual(int(qos["Latency"]), 10)
+        self.assertEqual(int(qos["Retransmissions"]), 5)
+        self.assertEqual(int(qos["Latency"]), 20)
         self.assertEqual(int(qos["PresentationDelay"]), 40000)
         self.assertEqual(int(qos["TargetLatency"]), 0x02)
         self.assertIn("ChannelAllocation=0x0003", out)
+
+    def test_all_channel_shapes_negotiate_standard_48_4_1_timing(self):
+        # Verify the public D-Bus response, not private configuration wiring.
+        # NCS v3.3.0 bap_lc3_preset.h defines 48_4_1 as 10 ms, RTN 5,
+        # 20 ms maximum transport latency and 40 ms presentation delay.
+        # Stereo changes SDU size, not the per-channel codec or timing.
+        for allocation, sdu in ((0x01, 120), (0x02, 120), (0x03, 240)):
+            with self.subTest(allocation=allocation):
+                result, _, _ = self._select(allocation, stereo_caps=True)
+                qos = result["QoS"]
+                self.assertEqual(
+                    tuple(
+                        int(qos[key])
+                        for key in (
+                            "Interval",
+                            "Retransmissions",
+                            "Latency",
+                            "PresentationDelay",
+                            "SDU",
+                        )
+                    ),
+                    (10000, 5, 20, 40000, sdu),
+                )
 
     def test_mono_fl_exact_bytes(self):
         ret, out, _ = self._select(0x01)
@@ -1025,6 +1048,21 @@ class TestMonoSelectionReservation(unittest.TestCase):
         self.assertEqual(len(endpoint._pending_transports), 1)
         self.assertTrue(endpoint.config_done)
         self.assertIsNone(endpoint._mono_selected_channel)
+
+    def test_same_channel_selection_retry_keeps_one_transport_limit(self):
+        bus, dbus, endpoint = make_endpoint(mono=True)
+        first = self._select(endpoint, 0x01)
+        self.assertEqual(first, self._select(endpoint, 0x01))
+        self._select_rejected(endpoint, 0x02)
+        endpoint.SetConfiguration(TP1, {"Configuration": list(ltv_config(0x01))})
+        # A retry is not permission for a second configured ASE, even if
+        # it carries the same allocation as the first one.
+        with self.assertRaises(dbus.exceptions.DBusException):
+            endpoint.SetConfiguration(TP2, {"Configuration": list(ltv_config(0x01))})
+        (transports, stream_mode, sdu_size), _ = self._acquire_mono(bus, dbus, endpoint)
+        self.assertEqual(stream_mode, "mono")
+        self.assertEqual(sdu_size, 120)
+        self.assertEqual(len(transports), 1)
 
     def test_mismatched_setconfiguration_rejected_atomic_then_retry(self):
         bus, dbus, endpoint = make_endpoint(mono=True)

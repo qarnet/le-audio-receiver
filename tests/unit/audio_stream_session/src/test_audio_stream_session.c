@@ -117,6 +117,56 @@ static void assert_rx_stats_zero(size_t idx)
 	zassert_equal(0U, stats.no_ts, "missing timestamp counter not zero");
 }
 
+ZTEST(audio_stream_session, test_modea_absent_callbacks_progress_without_double_plc)
+{
+	for (unsigned int sequence_gap = 0; sequence_gap < 2; sequence_gap++) {
+		uint16_t right_seq = 100;
+		uint32_t gap = sequence_gap ? 6U : 18U;
+		setup_modea();
+		audio_stream_session_start_clear();
+		for (uint32_t event = 0; event < 30; event++) {
+			uint32_t ts = (event + 1U) * 10000U;
+			zassert_ok(audio_stream_session_recv(0, true, true, ts, (uint16_t)event,
+							     mono10_lc3, MONO_LC3_LEN));
+			if (event < 3U || event >= 3U + gap) {
+				if (sequence_gap && event == 3U + gap) {
+					right_seq += gap;
+				}
+				zassert_ok(audio_stream_session_recv(1, true, true, ts, right_seq++,
+								     mono10_lc3, MONO_LC3_LEN));
+			}
+			if (event == 7U) {
+				zassert_true(
+					fake_sink_push_count() >= 6U,
+					"surviving channel stalled before absent CIS returned");
+			}
+		}
+		zassert_equal(fake_sink_push_count(), 30U);
+		struct audio_stats stats = audio_stats_get();
+		zassert_equal(stats.plc_frames, gap, "sequence gap concealed twice");
+		zassert_equal(stats.decode_errors, 0U);
+		audio_stream_session_rx_close();
+		uint32_t before = fake_sink_push_count();
+		zassert_not_equal(audio_stream_session_recv(0, true, true, 310000U, 30, mono10_lc3,
+							    MONO_LC3_LEN),
+				  0);
+		zassert_equal(fake_sink_push_count(), before);
+	}
+}
+
+ZTEST(audio_stream_session, test_start_clear_preserves_lost_timestamp_interval)
+{
+	setup_modea();
+	audio_stream_session_start_clear();
+	zassert_ok(audio_stream_session_recv(0, true, true, 10000, 0, mono10_lc3, MONO_LC3_LEN));
+	zassert_ok(audio_stream_session_recv(1, true, true, 10000, 0, mono10_lc3, MONO_LC3_LEN));
+	zassert_ok(audio_stream_session_recv(0, true, true, 20000, 1, mono10_lc3, MONO_LC3_LEN));
+	zassert_ok(audio_stream_session_recv(1, false, false, 0, 1, NULL, 0));
+	zassert_equal(fake_sink_push_count(), 2U);
+	zassert_true(fake_observer_last_push_l_valid());
+	zassert_false(fake_observer_last_push_r_valid());
+}
+
 /* FNV-1a over one int16 value (host byte order, matches the fake sink). */
 static uint32_t fnv_u16(uint32_t hash, int16_t v)
 {

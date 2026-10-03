@@ -40,18 +40,10 @@ config AUDIO_I2S_WRITE_TIMEOUT_MS
 
 choice AUDIO_RESAMPLER
 	prompt "Audio resampler"
-	default AUDIO_RESAMPLER_IDENTITY
+	default AUDIO_RESAMPLER_ASRC_LINEAR
 	help
 	  Data-path resampler between decoder output (48 kHz) and I2S
-	  drain.  Must be paired with a compatible AUDIO_CLOCK_ACTUATOR:
-	    IDENTITY     → APLL  (nRF5340 production)
-	    ASRC_LINEAR  → NONE  (nRF54L15 production, ASRC consumes ppm)
-
-config AUDIO_RESAMPLER_IDENTITY
-	bool "Identity (memcpy passthrough)"
-	help
-	  memcpy pass-through.  On nRF5340 the APLL steers the audio
-	  clock so no data-path resampling is needed.
+	  drain. ASRC_LINEAR pairs with AUDIO_CLOCK_ACTUATOR_NONE.
 
 config AUDIO_RESAMPLER_ASRC_LINEAR
 	bool "Linear ASRC"
@@ -65,13 +57,7 @@ endchoice
 
 choice AUDIO_CLOCK_ACTUATOR
 	prompt "Audio clock actuator"
-	default AUDIO_CLOCK_ACTUATOR_APLL
-
-config AUDIO_CLOCK_ACTUATOR_APLL
-	bool "APLL (nRF5340 HFCLKAUDIO)"
-	help
-	  HFCLKAUDIO APLL register trim.  ppm → register write.
-	  Pair with AUDIO_RESAMPLER_IDENTITY (nRF5340 production).
+	default AUDIO_CLOCK_ACTUATOR_NONE
 
 config AUDIO_CLOCK_ACTUATOR_NONE
 	bool "None (data-path only)"
@@ -82,24 +68,21 @@ endchoice
 
 config AUDIO_DRIFT_OUTPUT_CLAMP
 	int "Controller output clamp (±ppm)"
-	default 500
+	default 2000
 	range 1 3000
 	help
 	  Maximum absolute ppm output from the PI clock recovery controller.
-	  Default 500 ppm for nRF5340 APLL (steps ≈3.3 ppm, range
-	  ≈±600 ppm around centre).  Set to 2000 on nRF54L15 (ASRC or
-	  SAMPLE_ADJUST; paired with AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
-	  for headroom around the measured PCLK offset).
+	  Default 2000 ppm for nRF54L15 ASRC, paired with the phase
+	  integral clamp for headroom around the measured PCLK offset.
 
 config AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
 	int "Phase integral clamp (±ppm)"
-	default 500
+	default 150
 	range 1 2000
 	help
 	  Maximum absolute ppm the phase integral term can contribute.
-	  Default 500 ppm preserves existing nRF5340 behaviour.
-	  Recommended 150–200 ppm on nRF54L15 so phase authority does not
-	  consume all headroom around the measured PCLK offset.
+	  Default 150 ppm so phase authority does not consume all
+	  headroom around the measured PCLK offset.
 
 config AUDIO_PERF_MEASUREMENT
 	bool "Audio performance instrumentation"
@@ -126,8 +109,7 @@ config AUDIO_ACCEPTANCE_DIAGNOSTICS
 	  Gate the FLPR acceptance-harness shell commands (flpr ring *,
 	  flpr stress, flpr hang) behind an explicit diagnostics option so
 	  normal audio diagnostics never compile the acceptance harness.
-	  Enabled only in boards/nrf54l15dk_nrf54l15_cpuapp.conf; the
-	  nRF5340 target has no FLPR acceptance commands.  The FLPR-image
+	  Enabled in boards/nrf54l15dk_nrf54l15_cpuapp.conf. The FLPR-image
 	  fault-handler gating is the separate
 	  CONFIG_FLPR_ACCEPTANCE_DIAGNOSTICS option.
 
@@ -284,7 +266,6 @@ config AUDIO_OFFLOAD_ASRC
 	  the cpuapp ASRC runs as fallback with no audio drop.
 
 	  Requires CONFIG_SOC_NRF54L15 + AUDIO_RESAMPLER_ASRC_LINEAR.
-	  Compiles out on nRF5340.
 
 config AUDIO_OFFLOAD_ASRC_VERIFY
 	bool "Shadow-verify FLPR ASRC against cpuapp ASRC"
@@ -337,9 +318,10 @@ config AUDIO_ISO_SEQ_MAX_CONCEAL
 	help
 	  Shared bound for sequence- and timestamp-detected ISO omissions:
 	  maximum SDUs/events concealed as PLC per delivered callback when
-	  the ISO stack omits callbacks for lost events (observed on the
-	  nRF5340 SW Split controller: no VALID and no LOST callback for
-	  some lost events).  audio_iso_seq tracks each CIS's delivered
+	  the ISO stack omits callbacks for lost events (historically observed
+	  on the retired nRF5340 SW Split controller: no VALID and no LOST
+	  callback for some lost events; not the active platform).
+	  audio_iso_seq tracks each CIS's delivered
 	  HCI packet sequence numbers and reports the omitted count when
 	  the next callback's Packet_Sequence_Number jumps; audio_iso_cadence
 	  tracks delivered ISO timestamps and reports the omitted count

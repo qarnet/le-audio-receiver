@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Raw-HCI direct LE connect helper with confirmed-connect retry.
 
-The kernel's LE auto-connect path (accept-list filtered background scan)
-does not work with some hci_usb controllers (no advertising reports are
-delivered when the accept-list filter is active), so BlueZ Pair/Connect
-hangs forever.
+Historically, the kernel's LE auto-connect path (accept-list filtered
+background scan) failed with the nRF5340 hci_usb controller (no advertising
+reports with the filter active), so BlueZ Pair/Connect hung. This optional
+exact-peer workaround is not the current HCI fresh-pairing path: use BlueZ
+discovery for the XIAO nRF54L15 controller.
 
 This helper issues LE Extended Create Connection (0x2043) to the exact
 peer, watches HCI events for the connection-complete event (legacy LE
@@ -34,7 +35,7 @@ Address type selection:
 
   --addr-type random  — sets a random address via HCI LE Set Random
      Address before connect. Use for controllers with all-zero FICR
-     DEVICEADDR (e.g. nRF5340 SW Split without identity fix).
+     DEVICEADDR (historical nRF5340 SW Split without identity fix).
 
 Usage (as root):
     python3 scripts/hci_raw_connect.py <peer-addr> [hold_seconds] \\

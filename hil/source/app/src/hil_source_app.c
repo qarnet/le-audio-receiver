@@ -658,6 +658,7 @@ static int hil_app_tx_submit_batch(uint8_t streams, uint32_t pin_ts, uint32_t in
 {
 	uint32_t submit_now = 0U;
 	uint32_t i;
+	bool enqueue_guard = false;
 	int err = 0;
 
 	k_mutex_lock(&tx_batch_mutex, K_FOREVER);
@@ -671,6 +672,15 @@ static int hil_app_tx_submit_batch(uint8_t streams, uint32_t pin_ts, uint32_t in
 		if (err != 0) {
 			goto out;
 		}
+		/* Both real sends allocate with K_NO_WAIT and enqueue without waiting
+		 * for controller credits. Their enqueue wakes cooperative BT TX work.
+		 * Keep that work out of the runnable peer-enqueue window, not out of
+		 * encoding or controller-clock waits. Interrupts remain enabled.
+		 * Acquire app ownership before locking scheduling so accounting cannot
+		 * block behind a callback during this window. */
+		k_mutex_lock(&app_mutex, K_FOREVER);
+		k_sched_lock();
+		enqueue_guard = true;
 		err = g_backend_ops->tx_time_get(&submit_now);
 		if (err != 0) {
 			goto out;
@@ -679,6 +689,9 @@ static int hil_app_tx_submit_batch(uint8_t streams, uint32_t pin_ts, uint32_t in
 		if (skipped == 0U) {
 			break;
 		}
+		k_mutex_unlock(&app_mutex);
+		k_sched_unlock();
+		enqueue_guard = false;
 		hil_app_tx_apply_pin_advance(pin_ts, skipped, streams);
 	}
 
@@ -700,14 +713,11 @@ static int hil_app_tx_submit_batch(uint8_t streams, uint32_t pin_ts, uint32_t in
 		if (lead_us < (int32_t)HIL_SOURCE_TX_TS_MIN_AHEAD_US) {
 			/* Stream 0 already committed this shared event. Sending a
 			 * late peer would invalidate Mode A synchronization. */
-			k_mutex_lock(&app_mutex, K_FOREVER);
 			tx_lead_under[i]++;
-			k_mutex_unlock(&app_mutex);
 			err = -ETIME;
 			goto out;
 		}
 
-		k_mutex_lock(&app_mutex, K_FOREVER);
 		sent_index = tx_submitted[i];
 		sent_stage = hil_app_frame_stage(sent_index, preamble, scored);
 		seq = tx_seq[i];
@@ -715,21 +725,16 @@ static int hil_app_tx_submit_batch(uint8_t streams, uint32_t pin_ts, uint32_t in
 		 * before handing the SDU to Bluetooth. */
 		tx_outstanding[i]++;
 		tx_last_activity[i] = k_uptime_get();
-		k_mutex_unlock(&app_mutex);
-
 		ret = g_backend_ops->tx_send_ts(i, seq, batch_sdu[i], batch_len[i], pin_ts);
 		if (ret != 0) {
-			k_mutex_lock(&app_mutex, K_FOREVER);
 			(void)hil_source_state_counter_send_failure(&run_state, i);
 			if (tx_outstanding[i] != 0U) {
 				tx_outstanding[i]--;
 			}
-			k_mutex_unlock(&app_mutex);
 			err = ret;
 			goto out;
 		}
 
-		k_mutex_lock(&app_mutex, K_FOREVER);
 		tx_seq[i] = (uint16_t)(tx_seq[i] + 1U);
 		tx_submitted[i]++;
 		tx_pin_last[i] = pin_ts;
@@ -739,19 +744,22 @@ static int hil_app_tx_submit_batch(uint8_t streams, uint32_t pin_ts, uint32_t in
 		} else {
 			err = hil_source_state_counter_submit(&run_state, i);
 		}
-		k_mutex_unlock(&app_mutex);
 		if (err != 0) {
 			goto out;
 		}
 	}
 
-	k_mutex_lock(&app_mutex, K_FOREVER);
 	for (i = 0U; i < streams; i++) {
 		tx_ts_next[i] = pin_ts + interval_us;
 	}
-	k_mutex_unlock(&app_mutex);
 
 out:
+	if (enqueue_guard) {
+		/* Publish complete counters and release callback ownership before BT
+		 * TX work can run. Every error path also releases this narrow guard. */
+		k_mutex_unlock(&app_mutex);
+		k_sched_unlock();
+	}
 	k_mutex_unlock(&tx_batch_mutex);
 	return err;
 }

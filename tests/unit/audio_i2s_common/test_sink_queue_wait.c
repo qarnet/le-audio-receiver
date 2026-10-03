@@ -2,9 +2,9 @@
  * Copyright (c) 2026
  * SPDX-License-Identifier: Apache-2.0
  *
- * Native proof of target-specific I2S TX queue-full behavior.  The ASRC
- * variant models nRF54L15's finite configured wait; the identity variant
- * preserves nRF5340's nonblocking queue-full error boundary.
+ * Native proof of I2S TX queue-full behavior.  The ASRC variant models
+ * nRF54L15's finite configured wait; the identity variant is a host-only
+ * historical regression for nonblocking queue-full failure.
  */
 
 #include <zephyr/ztest.h>
@@ -113,8 +113,9 @@ ZTEST(audio_i2s, test_full_tx_queue_uses_variant_timeout)
 	zassert_equal(audio_i2s_test_active_pushes(), 0, "push admission drained");
 	test_assert_no_duplicate_writes();
 #else
-	/* nRF5340 keeps timeout 0: nrfx returns -ENOMSG immediately and the
-	 * caller retains ownership of the failed write block. */
+	/* Host-only historical identity regression: timeout 0 returns -ENOMSG
+	 * immediately and the caller retains the failed block.  Current
+	 * nRF54L15 ASRC instead uses the finite configured wait above. */
 	zassert_equal(audio_sink_push(test_input_480(), TEST_FRAMES_480 * 2), -ENOMSG,
 		      "full TX queue returns ENOMSG without waiting");
 	zassert_equal(fake_i2s_write_calls(), STARTUP_FIRST_STEADY_WRITE_IDX + 1,

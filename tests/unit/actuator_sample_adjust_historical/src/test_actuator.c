@@ -7,9 +7,9 @@
  * These tests exercise audio_clock_actuator_sample_adjust_historical.c
  * (test-local copy of the retired sample insert/drop actuator, retained
  * for regression comparison only).  It is NOT a production actuator:
- * production clock steering is audio_clock_actuator_apll.c (nRF5340)
- * and audio_clock_actuator_none.c (nRF54L15), tested in
- * tests/unit/actuator_apll and tests/unit/actuator_none.  This suite
+ * production clock steering is audio_clock_actuator_none.c (nRF54L15),
+ * tested in tests/unit/actuator_none. Historical APLL remains test-local
+ * in tests/unit/actuator_apll.  This suite
  * stays to preserve the historical behavior contract.
  */
 

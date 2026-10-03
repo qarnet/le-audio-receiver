@@ -1,8 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 
-config NRF_DEFAULT_BLUETOOTH
-	default y if SOC_NRF5340_CPUAPP
-
 # Disable partition manager — sysbuild multi-image domains use DTS-defined
 # memory regions independently (cpuapp_sram, cpuflpr_sram, etc.).
 config PARTITION_MANAGER

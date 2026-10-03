@@ -38,11 +38,14 @@ void flpr_handshake_test_set_peer_state(bool bound, bool ready, bool acked, bool
 					uint32_t rx_last_ms);
 
 /* Heartbeat scheduling hooks (invoked by production code in test mode):
- * the READY-triggered async start is recorded but never submitted; the
+ * the READY-triggered async start is record-only unless explicitly enabled; the
  * per-iteration reschedule is submitted for real and canceled at
  * teardown. */
 void flpr_handshake_test_work_start(void);
 void flpr_handshake_test_work_reschedule(void);
+/* Real kernel work for encoded local-close/reopen lifecycle verification. */
+void flpr_handshake_test_enable_automatic_hb(void);
+void flpr_handshake_test_finish_hb_iteration(void);
 
 uint32_t flpr_handshake_test_hb_start_requests(void);
 uint32_t flpr_handshake_test_hb_reschedules(void);
