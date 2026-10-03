@@ -65,3 +65,18 @@ suite; 64-bit model timestamps and per-case horizons are authoritative.
 Clean-candidate repository gates and hosted PR checks are still pending at this
 checkpoint. PB-046 remains In Progress until they pass. External evidence paths
 were available in this session and must be checked before later reuse.
+
+## First clean-gate finding
+
+Candidate `3b6f708` passed all 81 unit children and unchanged canonical BSim, but
+full gate ended **82 PASS / 2 FAIL / 84 TOTAL**: the new per-suite LSP configure
+link appeared as untracked `tests/unit/clock_loop/compile_commands.json`, so
+coverage correctly refused the now-dirty worktree and matrix had no coverage
+JSON. Hosted coverage also failed. This is retained failed evidence, not a
+baseline or skip waiver. Raw canonical log SHA-256:
+`5830d3fdb74a188bf950f1e51ad7bbdb981835fe3ad317f2ae7236318ea2fd17`.
+
+The exact new generated CDB path is now ignored. Compilation databases remain
+available for correct per-image clangd discovery but are not portable source
+evidence. No source/data path, failing test, warning, or coverage requirement is
+hidden. Rerun from a new clean exact candidate is mandatory.

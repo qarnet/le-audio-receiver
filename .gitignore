@@ -12,6 +12,8 @@ __pycache__/
 
 # clangd index caches (scripts/gen-lsp-links.sh / per-tree CMake CREATE_LINK)
 .cache/
+# New per-suite native CDB is generated at configure, not portable evidence.
+/tests/unit/clock_loop/compile_commands.json
 
 # Twister output
 twister-out*/
