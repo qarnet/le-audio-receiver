@@ -259,6 +259,45 @@ class RunnerArgs(unittest.TestCase):
 
 
 class RunnerDirtyWorktree(unittest.TestCase):
+    def linked_fixture(self):
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        linked = os.path.join(fx.root, "linked")
+        subprocess.run(
+            ["git", "-C", fx.repo, "worktree", "add", "--detach", linked, "HEAD"],
+            check=True,
+            capture_output=True,
+        )
+        fx.repo = linked
+        return fx
+
+    def test_clean_linked_worktree_enforces_baseline(self):
+        fx = self.linked_fixture()
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(rc, 0, out)
+        rc, out, output = fx.run(
+            "--baseline", baseline, output=os.path.join(fx.root, "enforced")
+        )
+        self.assertEqual(rc, 0, out)
+        with open(os.path.join(output, "run-manifest.json")) as stream:
+            manifest = json.load(stream)
+        self.assertFalse(manifest["dirty"])
+        self.assertEqual(
+            manifest["source_commit"],
+            subprocess.check_output(
+                ["git", "-C", fx.repo, "rev-parse", "HEAD"], text=True
+            ).strip(),
+        )
+
+    def test_dirty_linked_worktree_still_rejected(self):
+        fx = self.linked_fixture()
+        with open(os.path.join(fx.repo, "owner-edit.txt"), "w") as stream:
+            stream.write("Owner change must remain protected\n")
+        rc, out, _ = fx.run()
+        self.assertNotEqual(rc, 0)
+        self.assertIn("worktree is dirty", out)
+
     def test_report_only_allows_dirty(self):
         fx = RunnerFixture(dirty=True)
         self.addCleanup(fx.cleanup)

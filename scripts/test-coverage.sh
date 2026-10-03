@@ -122,7 +122,9 @@ fi
 echo "ZEPHYR_BASE=${ZEPHYR_BASE}"
 
 cd "$REPO_ROOT"
-[ -d .git ] || die "not a git checkout: $REPO_ROOT"
+# Linked worktrees have a .git file, not a directory. Ask Git instead of
+# rejecting valid clean exact-commit worktrees used to preserve owner edits.
+[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ] || die "not a git checkout: $REPO_ROOT"
 
 # ---------- clean worktree / provenance ----------
 WORKTREE_DIRTY=0

@@ -131,3 +131,21 @@ local arrays; no production stack setting changed.
 Full logs retain the scoped native unsupported-SoC notice and receiver
 experimental TX-notify-workqueue notice under existing recorded dispositions;
 no new warning waiver, baseline change or skipped failing scenario is introduced.
+
+## Clean-worktree runner repair
+
+The first detached clean candidate at `9bb642e` again produced 80 PASS / 2 FAIL /
+82 TOTAL, this time because `test-coverage.sh` required `.git` to be a directory
+and rejected a valid linked worktree's `.git` file as "not a git checkout".
+Raw failure log `/tmp/opencode/pb045-clean-canonical-r1.log` has SHA-256
+`8623230f08c2593cbca8aa5f3d3f3ff2b34a16bdcd8c4546752499992fbddb92`.
+
+The runner now asks `git rev-parse --is-inside-work-tree` rather than inferring
+checkout validity from filesystem shape. Exact commit provenance and dirty-tree
+rejection remain unchanged. Public CLI tests use real detached linked worktrees:
+clean baseline write/enforcement records the real source SHA; dirty linked
+worktrees still fail. The focused runner suite passes, raw log
+`/tmp/opencode/pb045-linked-coverage-focused.log`, SHA-256
+`021316fb62933ad07c106fa910aeb2a2fbdcfda566953d48a84e6979cb7ea0e0`.
+This is a necessary validation-boundary repair, not permission to bypass clean
+acceptance or replace the committed coverage baseline.
