@@ -13,15 +13,69 @@ import time
 import uuid
 
 
-def check(root, timeout, cancelled=lambda: False):
+def check(root, timeout, cancelled=lambda: False, peers=()):
     root = root.resolve()
     phy = root / "bin/bs_2G4_phy_v1"
     if not phy.is_file() or not os.access(phy, os.X_OK):
         raise RuntimeError("PHY executable missing: %s" % phy)
-    for name in ("lib_2G4Channel_NtNcable.so", "lib_2G4Modem_Magic.so"):
+    for name in (
+        "lib_2G4Channel_NtNcable.so",
+        "lib_2G4Modem_Magic.so",
+        "libCryptov1.so",
+    ):
         plugin = root / "lib" / name
         if not plugin.is_file() or not plugin.stat().st_size:
-            raise RuntimeError("default PHY model missing or empty: %s" % plugin)
+            raise RuntimeError(
+                "required simulator runtime library missing or empty: %s" % plugin
+            )
+    probe = root / "bin/bs_crypto_probe"
+
+    def elf_abi(path):
+        with path.open("rb") as stream:
+            header = stream.read(20)
+        if len(header) < 20 or header[:4] != b"\x7fELF":
+            raise RuntimeError("not an ELF runtime artifact: %s" % path)
+        return header[4:6], header[18:20]
+
+    crypto_abi = elf_abi(root / "lib/libCryptov1.so")
+    if elf_abi(probe) != crypto_abi:
+        raise RuntimeError("crypto probe/library ELF ABI mismatch")
+    for peer in peers:
+        if elf_abi(peer) != crypto_abi:
+            raise RuntimeError("encrypted peer/library ELF ABI mismatch: %s" % peer)
+    crypto = subprocess.Popen(
+        [str(probe)],
+        cwd=root / "bin",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + min(timeout, 10)
+        while crypto.poll() is None:
+            if cancelled():
+                raise RuntimeError("runtime preflight cancelled")
+            if time.monotonic() >= deadline:
+                raise RuntimeError("crypto probe did not complete before deadline")
+            time.sleep(0.01)
+        output, _ = crypto.communicate()
+        if crypto.returncode != 0:
+            raise RuntimeError(
+                "encrypted-peer runtime failed: " + output.decode(errors="replace")
+            )
+    finally:
+        if crypto.poll() is None:
+            crypto.terminate()
+            try:
+                crypto.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                crypto.kill()
+        if crypto.stdout is not None and not crypto.stdout.closed:
+            crypto.communicate()
+        else:
+            crypto.wait()
+    if cancelled():
+        raise RuntimeError("runtime preflight cancelled")
     # A terminal gives C stdout line buffering without LD_PRELOAD ABI assumptions.
     master, slave = pty.openpty()
     try:
@@ -95,6 +149,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=10)
+    parser.add_argument("--peer", type=Path, action="append", default=[])
     args = parser.parse_args()
     if not 0 < args.timeout <= 60:
         parser.error("--timeout must be > 0 and <= 60 seconds")
@@ -110,7 +165,7 @@ def main():
         sig: signal.signal(sig, cancel) for sig in (signal.SIGTERM, signal.SIGINT)
     }
     try:
-        check(args.root, args.timeout, cancelled=lambda: bool(pending))
+        check(args.root, args.timeout, cancelled=lambda: bool(pending), peers=args.peer)
     except (OSError, RuntimeError) as exc:
         print("BabbleSim runtime preflight FAILED: %s" % exc, file=sys.stderr)
         return 1

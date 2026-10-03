@@ -4,7 +4,7 @@ title: Migrate canonical BabbleSim to nRF54L15BSim
 status: Done
 assignee: []
 created_date: '2026-09-22 22:50'
-updated_date: '2026-10-02 19:39'
+updated_date: '2026-10-03 00:14'
 labels:
   - 'size:M'
   - 'area:testing'
@@ -99,6 +99,8 @@ User paused work 2026-09-24. Continue from docs/development/nrf54l15-only-resume
 
 2026-10-02 PR15 runtime repair: reopened after retained hosted artifacts showed PHY255 for missing default NtNcable dlopen library, then peer300s timeouts. Prior local cached plugins masked incomplete build closure. Public builder now compiles exact PHY/NtNcable/Magic static and runtime closure with unchanged strict policy; actual-PHY loader readiness runs before peers. Real isolated cold builds and missing/corrupt-plugin/deadline/SIGTERM cleanup cases pass; unchanged local Stage1 passes17scenarios/26runs. No recipe, model, seed, PCM, transport or lifecycle limit changed. Hosted final verification pending.
 Final runtime lifecycle validation expanded to SIGINT and kill escalation for a SIGTERM-ignoring owned PHY: focused 62 tests OK, explicit child-disappearance assertions. Exact PHY/NtNcable/Magic closure remains strict and no installed SDK source was modified.
+
+2026-10-03 encrypted-peer closure: hosted37056518050 passedPHYready/unit/coverage/firmware butmissinglibCryptov1 disabled realencryption andsecuritytimedout. FullSDKruntime-loaderaudit addedthe precise ext_libCryptov1 target, visible hash-pinned bundledOpenSSLbuild with Werror and three exact source/hash diagnostic exceptions, and an ELF32 real-library probe requiring six APIs plus independent AES/CCM knownanswers and invalid-MIC rejection. Peer/probe/library ELF ABIs are checked before matrixlaunch. RealEncryption=1 unchanged. Cold/invalidABI/missingsymbol/source-drift/unrelated-warning tests pass; localunit77/0/77 and strictStage1 17/26 pass. See docs/development/nrf54l15-ci-crypto-closure-results-20261003.md. Hostedfullclosure verification pending newpush; no SDKsourcepatch, hostOpenSSLsubstitution, hardware or releaseclaim.
 <!-- SECTION:NOTES:END -->
 
 ## Comments

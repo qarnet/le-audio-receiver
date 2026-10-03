@@ -40,6 +40,7 @@
           packages = [
             pkgs.gcovr
             pkgs.alsa-utils
+            pkgs.perl # Pinned BabbleSim bundled OpenSSL build, not host OpenSSL.
           ]
           ++ (with pkgs.python3Packages; [
             dbus-python

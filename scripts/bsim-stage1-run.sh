@@ -236,6 +236,8 @@ if [ ! -x "$CLIENT_BIN" ]; then
     exit 1
 fi
 echo "Client: $CLIENT_BIN"
+python3 "$SCRIPT_DIR/check-bsim-runtime.py" --root "$BSIM_OUT_PATH" \
+    --peer "$RECV_BIN" --peer "$CLIENT_BIN"
 
 # ---- Private log root ----
 if [ -n "$BSIM_LOG_ROOT" ]; then

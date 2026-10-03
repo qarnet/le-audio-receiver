@@ -116,3 +116,11 @@ closure and real loader readiness check are recorded in
 [runtime-closure repair](nrf54l15-ci-runtime-closure-results-20261002.md).
 Local unchanged Stage 1 passes 17/26; hosted completion remains separately
 gated rather than accepting a unit-only repair.
+
+The next hosted wave initialized PHY models successfully but exposed the
+remaining encrypted-peer `libCryptov1.so` dependency and security timeout.
+[Encrypted runtime closure](nrf54l15-ci-crypto-closure-results-20261003.md)
+records the full dynamic-load audit, visible pinned archive build and
+ABI-matched AES/CCM/MIC readiness proof. Encryption and test limits are not
+disabled to obtain a pass; complete hosted verification remains separately
+required.

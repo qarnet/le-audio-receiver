@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import tarfile
 import time
 import unittest
 
@@ -316,6 +317,7 @@ class TestRuntimeClosure(unittest.TestCase):
             "ext_2G4_phy_v1",
             "ext_2G4_channel_NtNcable",
             "ext_2G4_modem_magic",
+            "ext_libCryptov1",
         ):
             shutil.copytree(
                 sdk / "components" / name,
@@ -342,7 +344,7 @@ class TestRuntimeClosure(unittest.TestCase):
             env=cls.env,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=300,
         )
         if build.returncode != 0:
             raise AssertionError(build.stdout + build.stderr)
@@ -361,7 +363,11 @@ class TestRuntimeClosure(unittest.TestCase):
         self.assertIn("models initialized", result.stdout)
 
     def test_missing_either_default_plugin_fails_before_peer_launch(self):
-        for name in ("lib_2G4Channel_NtNcable.so", "lib_2G4Modem_Magic.so"):
+        for name in (
+            "lib_2G4Channel_NtNcable.so",
+            "lib_2G4Modem_Magic.so",
+            "libCryptov1.so",
+        ):
             with self.subTest(plugin=name):
                 path = self.root / "lib" / name
                 data = path.read_bytes()
@@ -401,6 +407,110 @@ class TestRuntimeClosure(unittest.TestCase):
         finally:
             path.write_bytes(data)
         self.assertEqual(self.runtime().returncode, 0)
+
+    def test_crypto_wrong_elf_class_and_missing_symbols_fail_before_peers(self):
+        library = self.root / "lib/libCryptov1.so"
+        original = library.read_bytes()
+        dummy = self.workspace / "dummy_crypto.c"
+        dummy.write_text("int unrelated_symbol(void) { return 0; }\n")
+        try:
+            for architecture, diagnostic in (
+                ("-m64", "ELF ABI mismatch"),
+                ("-m32", "blecrypt_aes_128"),
+            ):
+                with self.subTest(architecture=architecture):
+                    compile_result = subprocess.run(
+                        [
+                            "gcc",
+                            architecture,
+                            "-shared",
+                            "-fPIC",
+                            "-Werror",
+                            str(dummy),
+                            "-o",
+                            str(library),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        env=self.env,
+                    )
+                    self.assertEqual(
+                        compile_result.returncode, 0, compile_result.stderr
+                    )
+                    result = self.runtime()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(diagnostic, result.stderr)
+        finally:
+            library.write_bytes(original)
+        self.assertEqual(self.runtime().returncode, 0)
+        peer = self.workspace / "wrong_peer.so"
+        subprocess.run(
+            ["gcc", "-m64", "-shared", "-fPIC", str(dummy), "-o", str(peer)],
+            env=self.env,
+            check=True,
+            capture_output=True,
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(RUNTIME),
+                "--root",
+                str(self.root),
+                "--peer",
+                str(peer),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("peer/library ELF ABI mismatch", result.stderr)
+
+    def test_openssl_source_drift_and_unrelated_warnings_remain_errors(self):
+        policy = REPO / "scripts/openssl-component-cc.py"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "crypto/bio/bss_log.c"
+            source.parent.mkdir(parents=True)
+            archive = self.root / "components/ext_libCryptov1/source-1.0.2g.tar.gz"
+            with tarfile.open(archive) as packed:
+                stream = packed.extractfile("source-1.0.2g/crypto/bio/bss_log.c")
+                assert stream is not None
+                source.write_bytes(stream.read() + b"\n")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(policy),
+                    "gcc",
+                    str(root),
+                    "-c",
+                    str(source),
+                    "-o",
+                    str(root / "bad.o"),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("re-audit required", result.stderr)
+            unknown = root / "bss_log.c"
+            unknown.write_text("int f(void) { int unused; return 0; }\n")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(policy),
+                    "gcc",
+                    str(root),
+                    "-Wall",
+                    "-c",
+                    str(unknown),
+                    "-o",
+                    str(root / "unknown.o"),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unused", result.stderr)
 
     def test_live_process_without_readiness_marker_times_out_as_failure(self):
         # Controlled process traffic tests the supervisor deadline, not loader

@@ -1320,7 +1320,7 @@ def test_runner_log_root_ownership_preflight():
         report(
             "valid caller log root preserved through runtime preflight rejection",
             rc != 0
-            and "default PHY model missing or empty" in output
+            and "required simulator runtime library missing or empty" in output
             and os.path.isdir(log_root)
             and not os.listdir(log_root),
         )

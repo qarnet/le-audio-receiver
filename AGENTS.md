@@ -397,6 +397,18 @@ Consequences for work in this repo today (2026-09-25):
 
 ## Standing lab nRF hardware authority
 
+### Simulator crypto build warning disposition (2026-10-03)
+
+Cold hosted BSim requires the PHY's NtNcable/Magic models and the ELF32
+`libCryptov1.so` peer library, not only static PHY dependencies. Shared source
+and real loader/API readiness helpers enforce this before simulation. The
+vendor-modified OpenSSL archive is hash-pinned and built with visible output
+and `-Werror`; three exact file/hash diagnostic exceptions are recorded in
+`docs/development/nrf54l15-ci-crypto-closure-results-20261003.md`. They are
+separate from the original five BabbleSim component exceptions, not a general
+warning waiver or production crypto qualification. SDK source/archive files
+remain unpatched. RealEncryption remains enabled and strict oracles unchanged.
+
 The user grants standing permission for agents working in this repository to use
 any attached Nordic nRF development board. Permitted actions include read/debug
 access, serial interaction, reset, flash, full erase/recovery, DTR/RTS control,
