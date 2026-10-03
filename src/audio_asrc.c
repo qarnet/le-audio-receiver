@@ -10,8 +10,8 @@
  *
  * Phase (Q32.32) indexes into ext[].  First block seeded at
  * phase = 1·2³² so the first output is ext[1] = input[0].
- * Subsequent blocks start at the carry-over phase (0 ≤ phase < 2³²
- * for fractional boundaries, or exactly 2³² for identity).
+ * Subsequent blocks start at the carry-over phase, which can exceed
+ * one frame when downsampling across tiny blocks.
  *
  * Interpolation:
  *   pos = 0          → lerp(prev, input[0])      (carry-over only)
@@ -79,7 +79,8 @@ static uint64_t compute_step(uint64_t step_base, int32_t ppm)
 	/* Round the delta to nearest (ties away from zero for
 	 * negative values via truncation toward zero in C99).
 	 */
-	int64_t delta = (base_signed * (int64_t)ppm + 500000) / 1000000LL;
+	int64_t product = base_signed * (int64_t)ppm;
+	int64_t delta = (product + ((product < 0) ? -500000 : 500000)) / 1000000LL;
 
 	int64_t step_signed = base_signed + delta;
 

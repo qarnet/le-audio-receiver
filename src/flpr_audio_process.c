@@ -81,6 +81,7 @@ static int process_identity(const struct flpr_ring_slot_meta *input_meta,
 			    struct flpr_ring_slot_meta *output_meta, uint8_t *output_payload,
 			    size_t output_payload_bytes)
 {
+	(void)input_payload_bytes;
 	uint16_t valid_frames = input_meta->valid_frames;
 	size_t copy_bytes = (size_t)valid_frames * 4U;
 

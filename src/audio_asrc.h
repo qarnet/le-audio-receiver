@@ -10,8 +10,8 @@
  *
  * Phase (Q32.32) is the source position within ext[].  The first
  * block starts at phase = 1·2³² (ext[1] = input[0]); every
- * subsequent block inherits the carry-over phase (0 ≤ phase < 2³²
- * for fractional boundaries, or exactly 2³² for identity).
+ * subsequent block inherits the carry-over phase. Downsampling across
+ * tiny blocks can carry more than one frame; identity carries one frame.
  *
  * source_step = input_rate / output_rate · (1 + ppm / 10⁶)
  * Positive ppm → consume faster → fewer output frames.
@@ -31,7 +31,7 @@
 #define ASRC_RATE_MIN 1
 #define ASRC_RATE_MAX 192000
 
-/** Q32.32 one (2³²).  Phase identity boundary; phase > Q32_ONE is invalid. */
+/** Q32.32 one (2³²). Phase identity boundary, not a maximum carry phase. */
 #define ASRC_Q32_ONE (1ULL << 32)
 
 struct audio_asrc {
@@ -58,8 +58,11 @@ int audio_asrc_init(struct audio_asrc *ctx, uint32_t input_rate_hz, uint32_t out
 /**
  * @brief Process one block through the resampler.
  *
- * On success all @p input_frames are consumed and @p output_produced > 0.
- * State is updated only on full success (transactional).
+ * With sufficient output capacity all @p input_frames are consumed.
+ * Tiny downsampling blocks may succeed without producing an output frame.
+ * Context/history state is updated only on success (transactional); an
+ * unsuccessful capacity-limited call may write a partial output prefix.
+ * Discard that prefix and retry the same complete input block.
  *
  * @param ctx             ASRC context.
  * @param input           Interleaved stereo input [L,R,…].
@@ -72,10 +75,10 @@ int audio_asrc_init(struct audio_asrc *ctx, uint32_t input_rate_hz, uint32_t out
  * @param prev_valid      true after the first block has been processed.
  * @param input_consumed  [out] Stereo frames consumed.
  * @param output_produced [out] Stereo frames written.
- * @param next_prev_l     [out] Next-block prev L (= input[consumed−1]).
+ * @param next_prev_l     [out] Next-block prev L (= input[input_frames−1]).
  * @param next_prev_r     [out] Next-block prev R.
  *
- * @retval  0   All input consumed, output_produced > 0.
+ * @retval  0   Success (zero input or tiny blocks may produce zero frames).
  * @retval  1   Output capacity exhausted (state unchanged).
  * @retval  −EINVAL  Invalid argument.
  */
