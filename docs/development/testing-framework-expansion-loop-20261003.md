@@ -19,6 +19,23 @@ PB-041 is a prerequisite where fresh physical harness identity is necessary.
 Existing analog fixture/matrix work, release acceptance/publication and unrelated
 product features are not silently absorbed into this framework track.
 
+### Continuation direction (2026-10-03)
+
+The owner requested continuous execution through the entire selected scope, not
+a report or permission round-trip after each item or push. Individual commits,
+pushes and hosted CI checks are internal verification steps. Continue to the
+next eligible item after the current item's verification passes. Report the
+combined completion or a genuine consequential blocker; finish independent work
+before treating a blocked dependency chain as a reason to stop the whole track.
+
+Compaction/restart must recover scope from the explicit PB-042 through PB-053
+selection above and PB-041 where required, not from a transient todo list or an
+unqualified query for all repository In Progress items. The backlog remains the
+sole owner of current status and dependencies. Preserve Ready-before-start and
+record actual missing prerequisites rather than marking unready dependent items
+In Progress merely as a memory aid. No unrelated backlog item is selected by
+this continuation direction.
+
 Research records:
 
 - [Independent validation boundaries and LC3-only reference architecture](independent-firmware-validation-research-20261003.md).

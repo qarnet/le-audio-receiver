@@ -61,6 +61,72 @@ Nordic samples are the best learning resource:
 
 ## Autonomous execution and hard blockers
 
+### Persistent independent-validation todo scope (owner direction 2026-10-03)
+
+Treat this selected scope as a persistent todo list across compactions and
+restarts: **PB-042 through PB-053, plus prerequisite PB-041**. Continue until
+every selected item is implemented and verified, or its genuine remaining
+blocker is recorded. Do not stop after each item or push to request continuation.
+Commits, pushes and hosted CI checks on the existing PR are internal verification
+steps; report combined completion or consequential blockers needing owner input.
+The owner may explicitly pause execution for scope or prerequisite discussion.
+
+On every restart or compaction:
+
+1. Read `docs/development/testing-framework-expansion-loop-20261003.md`, then
+   relevant item files under `docs/product/backlog/{tasks,completed}/` using
+   `backlog task <id> --plain`. Recover the complete selected set, not only items
+   currently marked In Progress. Backlog owns status, priority and dependencies;
+   this section is scope and execution policy, not a second status ledger.
+2. Inspect branch, worktree and PR state. This track uses
+   `feature/independent-firmware-validation` and PR #16. Preserve user-owned
+   PB-013 edits, private graph data and immutable external evidence. Do not pull
+   unrelated items into scope through an unqualified In Progress query.
+3. Rebuild session todos from the backlog. Refine before Ready, then move actual
+   work to In Progress and write its Implementation Plan before substantive
+   implementation. Do not mark unready/dependency-held work In Progress as a
+   memory aid. Record plans, progress, blockers and evidence in each item through
+   Backlog.md. A transient tool todo list is only a view of this persistent state.
+4. Execute in dependency order. Verify public behavior and negative controls,
+   run applicable repository gates, push to the active PR and confirm hosted CI
+   before accepting an iteration. Repair ordinary failures without weakening
+   acceptance. Record genuine blockers and continue independent work.
+5. Take Done only through the existing PR gate; human merge is official
+   acceptance. Never merge or publish a release. Recheck external evidence
+   availability rather than assuming old `/tmp/opencode` artifacts remain.
+
+Selected todo inventory (current status must be read from the backlog):
+
+- PB-041: fresh DUT/analyzer wiring identity and truthful DAC-presence evidence.
+- PB-042: independent Bluetooth LC3 tooling, versions, rights and execution.
+- PB-043: independent LC3 vectors and strict container/frame adapter.
+- PB-044: real production decode versus independent reference PCM.
+- PB-045: independent ASRC arithmetic, full-waveform and caller continuity oracle.
+- PB-046: closed-loop clock recovery with independent timed output.
+- PB-047: fresh exact LC3 SDU content and per-stream physical delivery.
+- PB-048: fresh I2S words versus independent post-ASRC expectations.
+- PB-049: delivery headroom and I2S presentation-phase measurement.
+- PB-050: complete applicable independent Bluetooth LC3 decoder conformance.
+- PB-051: encoded public ASCS rejection and lifecycle integration matrix.
+- PB-052: strict external-test execution/result accounting.
+- PB-053: isolated Linux/BlueZ host regression lane.
+
+Recommended independent entry order after refinement: PB-052, PB-051, PB-046,
+then PB-053 as its execution prerequisites permit. Resolve PB-042 and PB-041
+alongside independent technical work; their unfinished dependency chains do not
+justify stopping the whole track. Numeric/timing envelopes and protocol response
+expectations need grounded refinement, not invented limits or skip exceptions.
+PB-045's initial verified checkpoint is recorded in
+`docs/development/pb-045-independent-asrc-results-20261003.md`; read the backlog
+and live PR for subsequent lifecycle changes.
+
+LC3plus remains excluded. Preserve frozen HIL/PCM limits, canonical BSim 17/26,
+coverage baseline, hardware identity/electrical safety and separate analog,
+presentation, physical FLPR and release proof boundaries. A supplied Windows
+machine does not authorize accepting vendor terms or publishing restricted
+reference tools, corpus or derived artifacts. PB-042 owns the execution/rights
+decision; keep its owner-machine options and access readiness in its notes.
+
 ### Audio validation and fixture-identification continuation
 
 For the analyzer/audio-testing track, start with:
