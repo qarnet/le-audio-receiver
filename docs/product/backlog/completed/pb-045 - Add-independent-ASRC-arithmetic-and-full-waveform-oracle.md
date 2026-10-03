@@ -1,10 +1,10 @@
 ---
 id: PB-045
 title: Add independent ASRC arithmetic and full-waveform oracle
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-10-03 02:33'
-updated_date: '2026-10-03 13:27'
+updated_date: '2026-10-03 14:29'
 labels:
   - 'size:M'
   - 'area:testing'
@@ -63,3 +63,9 @@ Refinement: use independently derived rational global source coordinates, quanti
 
 Independent oracle and native real sink/offload/processor integration now pass. Eight compiled arithmetic/count/guard mutations are rejected. Physical CPUAPP isolation reproduced the old signed-ppm defect (20 pass/1 fail) and verified repair (21 pass/0 fail) with five fresh raw DP/AP/FICR+USB identity checkpoints; see docs/development/pb-045-independent-asrc-results-20261003.md. Actual physical FLPR transport/execution, spectral/analog/presentation claims remain excluded from these arithmetic verdicts. Primary dirty-tree canonical run had 80 pass/2 fail/82 total solely because coverage requires a clean exact commit, then matrix lacked coverage JSON. Next clean detached candidate verification preserves PB-013. Done and final acceptance remain pending clean gates and hosted checks.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented independent Fraction global-coordinate oracle with exact full stereo PCM/consumed/produced counts, 192 regular/irregular matrix cases, fixed global control changes, live/cold rejection-retry, reset and guarded buffers. Eight compiled rounding/sign/history/routing/count/capacity defects fail public comparisons. Added real production sink/offload/FLPR-processor native integration for supported 480-frame remote success, timeout, rejected post-state, CPU fallback and recovery; fixed 360-frame CPU fallback remains unchanged. Oracle exposed negative-ppm delta rounding bias; repaired symmetric nearest/ties-away arithmetic, proved native failure before/pass after and physical CPUAPP 20/1/21 before versus 21/0/21 after with retained raw identities/images/UART. Fixed linked-worktree coverage discovery without weakening dirty-tree rejection or baseline. Clean candidate 4a7c93b86c365cf00d7f53afbda669b51c9f1d40 passed canonical82/0/82, coverage baseline unchanged, matrix0errors, BSim17/26; receiver/source/HCI builds3/3 and build contract73/73 passed. Hosted run37127346573 passed unit,coverage,BSim,tests,firmware;release skipped. Results: docs/development/pb-045-independent-asrc-results-20261003.md. No LC3plus, spectral quality, real PI-loop, physical FLPR/mailbox/I2S timing, DAC, presentation or release claim. Done transition ships in existing PB-045-prefixed PR16; human merge is official acceptance.
+<!-- SECTION:FINAL_SUMMARY:END -->

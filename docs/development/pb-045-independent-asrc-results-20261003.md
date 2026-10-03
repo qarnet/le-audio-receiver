@@ -4,8 +4,9 @@
 
 This iteration adds an independent rational, full-waveform arithmetic oracle and
 a native production sink/offload/processor integration lane. It repairs the
-negative-ppm quantization defect exposed by that oracle. The item remains In
-Progress until clean-commit repository gates and hosted PR checks pass.
+negative-ppm quantization defect exposed by that oracle. Clean candidate gates
+and hosted PR checks have passed as recorded below. The Done transition ships
+in PR #16; human product-owner merge remains official acceptance.
 
 No LC3 reference tooling or LC3plus is used. No 360-frame FLPR feature is added.
 Spectral quality, closed-loop PI control, physical FLPR execution, mailbox
@@ -149,3 +150,38 @@ worktrees still fail. The focused runner suite passes, raw log
 `021316fb62933ad07c106fa910aeb2a2fbdcfda566953d48a84e6979cb7ea0e0`.
 This is a necessary validation-boundary repair, not permission to bypass clean
 acceptance or replace the committed coverage baseline.
+
+## Verified clean candidate and PR gate
+
+Clean candidate `4a7c93b86c365cf00d7f53afbda669b51c9f1d40`, detached worktree
+`/tmp/opencode/pb045-clean-r2`, passed canonical **82 PASS / 0 FAIL / 82 TOTAL**:
+41 Twister children, 6 exec-only children, 32 Python children, coverage, matrix
+and canonical BSim. BSim remains 17 scenarios / 26 runs. No required child was
+skipped. Command:
+
+```sh
+env -u ZEPHYR_BASE TEST_OUTPUT_DIR=/tmp/opencode/pb045-clean-gate-r2 \
+  nix develop -c bash scripts/test-all.sh
+```
+
+Raw log `/tmp/opencode/pb045-clean-canonical-r2.log`, SHA-256
+`ec6a9ccd2707b33552d872c19c8937f3b32abd5597e9328e6f6cd6f3fe6c984b`.
+Coverage manifest records `dirty: false`, exact candidate SHA, gcovr 8.4 and
+gcov (GCC) 14.3.0. Its SHA-256 is
+`3e312a501e7685692845b48b03ac3259cdb7db57b92c12669039e6313dccb3ac`.
+Numeric coverage: 5049/5491 lines, 2245/3036 branches, 378/378 functions;
+committed baseline remains unchanged, SHA-256
+`5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed76de7a`.
+Matrix reports zero errors/notes. Detached source tree remains clean after gates.
+
+Hosted [run 37127346573](https://github.com/qarnet/le-audio-receiver/actions/runs/37127346573)
+on the same candidate passed `test-unit`, `test-heavy (coverage)`,
+`test-heavy (bsim)`, aggregate `tests` and `firmware`; `release` was skipped on
+the PR. Firmware job's build contract and archive verification passed. Watch log
+`/tmp/opencode/pb045-hosted-candidate-watch.log`, SHA-256
+`a1734e8ee43aea3f123847d2af4b53763f2beaa644159e4ac8e626a3824502f8`.
+
+This closes PB-045's refined arithmetic/caller contract. It does not complete
+PB-042 through PB-044, PB-046 through PB-053, physical FLPR arithmetic acceptance
+or release/analog/presentation boundaries. Evidence directories were present and
+checked in this session; later readers must verify availability before reuse.
