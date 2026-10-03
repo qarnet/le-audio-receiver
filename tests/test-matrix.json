@@ -66,6 +66,10 @@
    "classification": "direct",
    "suites": [
     {
+     "name": "clock_loop",
+     "evidence": "direct"
+    },
+    {
      "name": "asrc_oracle",
      "evidence": "direct"
     },
@@ -237,6 +241,10 @@
    "classification": "direct",
    "suites": [
     {
+     "name": "clock_loop",
+     "evidence": "direct"
+    },
+    {
      "name": "drift",
      "evidence": "direct"
     },
@@ -291,6 +299,10 @@
    "source": "src/audio_i2s.c",
    "classification": "direct",
    "suites": [
+    {
+     "name": "clock_loop",
+     "evidence": "direct"
+    },
     {
      "name": "audio_i2s_asrc_oracle",
      "evidence": "direct"
@@ -602,6 +614,10 @@
    "source": "src/audio_offload.c",
    "classification": "direct",
    "suites": [
+    {
+     "name": "clock_loop",
+     "evidence": "direct"
+    },
     {
      "name": "audio_i2s_asrc_oracle",
      "evidence": "direct"
@@ -1854,6 +1870,10 @@
    "source": "src/flpr_audio_process.c",
    "classification": "direct",
    "suites": [
+    {
+     "name": "clock_loop",
+     "evidence": "direct"
+    },
     {
      "name": "audio_i2s_asrc_oracle",
      "evidence": "direct"
