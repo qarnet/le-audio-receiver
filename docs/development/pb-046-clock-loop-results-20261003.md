@@ -80,3 +80,30 @@ The exact new generated CDB path is now ignored. Compilation databases remain
 available for correct per-image clangd discovery but are not portable source
 evidence. No source/data path, failing test, warning, or coverage requirement is
 hidden. Rerun from a new clean exact candidate is mandatory.
+
+## Native variant coverage finding
+
+The next candidate's full gate ended **83 PASS / 1 FAIL / 84 TOTAL**. All unit
+children, matrix and BSim passed. Coverage included an extra sink compile variant
+without the established native-test define, increasing `audio_i2s.c` branch
+population from baseline 194 to 208; 158/208 did not meet frozen 153/194 ratio.
+Raw log SHA-256:
+`4f9e391e91b44303894a3a1f71afbade387786271d5a7710d2c691d5b9c95c51`.
+Baseline enforcement correctly rejected this; no ratio or population exception
+was introduced.
+
+The clock suite now uses the same `AUDIO_I2S_NATIVE_TEST` compile variant as
+existing native sink suites. It does not invoke module-private resets or read
+private ASRC/stream state. Real DT-device readiness is explicitly checked before
+sink initialization rather than trusting the native readiness hook. Real timers,
+FIFO, slab ownership, drift/ASRC, full consumed-word comparisons, matched causal
+controls and all scenarios remain unchanged. This avoids an incidental extra
+coverage variant without substituting mocked arithmetic or weakening behavior.
+
+The aligned native-variant complete focused rerun r6 passed all six methods. Its
+raw output SHA-256 is byte-identical to r4:
+`b0bdc44ef29ba72406778d1ee54f111305823165dee76bdbada8dc6a25c769e9`.
+Build log SHA-256:
+`29355dcc72f1fad3b23d32285c11713225629b67bb35f636d6de164d280ca422`.
+This confirms unchanged scenario, timing, waveform, causal and lifecycle results;
+full clean baseline and hosted verification still must pass.

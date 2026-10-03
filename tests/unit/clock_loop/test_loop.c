@@ -140,6 +140,10 @@ static void begin(int pclk, unsigned frames, bool disabled)
 	correction_disabled = disabled;
 	applied_ppm = 0;
 	observed_underruns = 0;
+	/* Use the established native sink compile variant for coverage union,
+	 * but independently check the actual device instead of relying on its
+	 * test readiness hook. No module-private reset/state oracle is used. */
+	zassert_true(device_is_ready(DEVICE_DT_GET(DT_ALIAS(i2s_audio))));
 	zassert_equal(audio_sink_init(), 0);
 	zassert_equal(audio_offload_init(), 0);
 	audio_offload_stream_start();
