@@ -63,7 +63,7 @@ guarantee. 32-bit cycle-based ztest summary time can wrap over the aggregate
 suite; 64-bit model timestamps and per-case horizons are authoritative.
 
 Clean-candidate repository gates and hosted PR checks are still pending at this
-checkpoint. PB-046 remains In Progress until they pass. External evidence paths
+focused checkpoint; subsequent accepted candidate is recorded below. External evidence paths
 were available in this session and must be checked before later reuse.
 
 ## First clean-gate finding
@@ -107,3 +107,34 @@ Build log SHA-256:
 `29355dcc72f1fad3b23d32285c11713225629b67bb35f636d6de164d280ca422`.
 This confirms unchanged scenario, timing, waveform, causal and lifecycle results;
 full clean baseline and hosted verification still must pass.
+
+## Verified clean candidate and PR gate
+
+Candidate `f5d05c8958dd020c5bba59d6c354ce057993c0c3` passed canonical
+**84 PASS / 0 FAIL / 84 TOTAL** in clean detached worktree
+`/tmp/opencode/pb046-clean-r3`: 41 Twister, 7 exec-only and 33 Python children,
+coverage, matrix and unchanged canonical BSim 17 scenarios / 26 runs.
+
+```sh
+env -u ZEPHYR_BASE TEST_OUTPUT_DIR=/tmp/opencode/pb046-clean-gate-r3 \
+  nix develop -c bash scripts/test-all.sh
+```
+
+Canonical log SHA-256:
+`8d65b1ffa14b50daedc9f82c4f3d80c4486edeaf687cd102dbefe969c5a9baf2`.
+The coverage manifest records exact candidate and `dirty: false`; SHA-256
+`894230701899203fe55269776e98e4d040e34635c90ee8d38fb6f58bf0974482`.
+Numeric coverage remains 5049/5491 lines, 2245/3036 branches and 378/378 functions;
+committed baseline SHA-256 remains
+`5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed76de7a`.
+Matrix reports zero errors/notes. Candidate worktree remained clean after gates.
+
+Hosted [run 37157141418](https://github.com/qarnet/le-audio-receiver/actions/runs/37157141418)
+on the same candidate passed unit, coverage, BSim, aggregate `tests` and
+`firmware`; `release` was skipped. Firmware build contract/package verification
+passed. Watch log SHA-256:
+`83f6462624d1eec879fd745ec71ee04dc480a2b1900c4bc054a15f4684e36183`.
+
+The Done transition ships in existing PR #16; human merge is official acceptance.
+This closes the declared software-model clock/caller contract, not physical
+frequency, IPC/FLPR, source ADC, RF, analog, presentation or release acceptance.
