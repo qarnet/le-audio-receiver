@@ -1,10 +1,10 @@
 ---
 id: PB-052
 title: Enforce complete execution of external Bluetooth test results
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-10-03 04:40'
-updated_date: '2026-10-03 17:21'
+updated_date: '2026-10-03 18:00'
 labels:
   - 'size:M'
   - 'area:testing'
@@ -56,3 +56,9 @@ Refinement frozen: schema-v1 accounting CLI accepts pinned BlueZ tester summary 
 
 Implemented public stdlib accounting CLI and schema contract; eight focused process-boundary methods passed, including actual pytest8.4.2 emitted reports and honest XPASS argument-terminator bypass negative/positive. Read-only review exposed and verified repair of --runxfail-as-path false acceptance and non-specific XML controls; follow-up found no new substantive issue. Exact report/input hashes and rejection reasons are returned; accounting trust remains caller-owned, not execution authenticity/freshness. New Python child discovered automatically; matrix0errors and diffcheck pass. Results/proof boundaries: docs/development/pb-052-external-result-accounting-results-20261003.md. Clean canonical and hostedCI acceptance pending; keep In Progress.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented fail-closed public result-accounting CLI for pinned BlueZ tester and pytest8.4.2 native xunit2 reports, independently anchored required-case inventory, exact discovered/required/excluded partition, child/prerequisite outcomes and same-bytes report size/SHA256 parsing. Exclusions are unselected/absent, never skip waivers. Eight process-boundary test methods include actual pytest pass/failure/skip/xfail/teardown/double-failure/collection/empty reports, missing/duplicate/count/hash/child/prerequisite/schema controls and valid unsafe XML. Review exposed honest XPASS acceptance through positional --runxfail path; explicit launcher/effective-option validation repaired it and real negative/positive tests prove regression rejection. CLI validates consistent reported evidence, not authenticity/freshness; PB-053 owns real execution, isolation, discovery and sealing. Contract: docs/testing/external-test-result-accounting.md. Clean candidate08b85230e0d53281a0316e8d2f9a7c351c4a8f04 passed canonical83/0/83, matrix0errors/notes, unchanged coverage baseline and BSim17/26. Hosted run37140245411 passed unit,coverage,BSim,tests,firmware;release skipped. Production code, board configs,toolchain pins/workflow unchanged. Full evidence: docs/development/pb-052-external-result-accounting-results-20261003.md. Done through existing PR16; human merge official acceptance. No external Bluetooth/firmware/codec/physical or release acceptance claimed.
+<!-- SECTION:FINAL_SUMMARY:END -->
