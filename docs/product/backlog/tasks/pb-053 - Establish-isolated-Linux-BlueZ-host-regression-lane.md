@@ -1,10 +1,10 @@
 ---
 id: PB-053
 title: Establish isolated Linux BlueZ host regression lane
-status: Blocked
+status: In Progress
 assignee: []
 created_date: '2026-10-03 04:40'
-updated_date: '2026-10-04 06:25'
+updated_date: '2026-10-04 10:58'
 labels:
   - 'size:M'
   - 'area:testing'
@@ -106,4 +106,10 @@ Correction: previous note contains accidental ANSI color delimiters around Suppo
 2026-10-04 scope recovery: see docs/development/pb-053-preparation-results-20261004.md for retained preparation results. Guest r16/r17 retained-state Disconnect returned, but both Device1 Connected properties stayed true through the 10-second deadline; BlueZ/kernel management AddDevice Failed (0x03) remains undiagnosed and fresh2 never ran. Unstaged guest runner has signal, ownership and result-accounting review defects; do not stage or ship it. Existing Blocked status stands; no guest lifecycle acceptance or waiver.
 
 2026-10-04 clean preparation checkpoint: scoped commit 16e69844774a5e4fc0771448dfc00ee142d64417, clean detached /tmp/opencode/pb053-preparation-candidate-r1 full NCS3.4.1 canonical 85 PASS/0 FAIL/85 TOTAL. Raw /tmp/opencode/pb053-preparation-canonical-r1.log SHA256 4a8f046c5f45e0171ed7c1ada9b3dc9096e4ff2cccbfe051696bc0556ca4a3e2; baseline unchanged SHA256 5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed76de7a, numeric 5049/5491 lines 2245/3036 branches 378/378 functions, BSim17/26. Existing PR16 hosted run 37180492931 for exact commit succeeded unit, coverage, BSim, tests and firmware; release skipped. docs/development/pb-053-preparation-results-20261004.md records evidence. PB-053 stays Blocked, no criteria checked or guest lifecycle acceptance; r16/r17 retained Disconnect leaves both Device1 Connected true through 10s, MGMT AddDevice Failed (0x03) unexplained and guest ownership/result-accounting defects unstaged. No physical/codec/release proof.
+
+2026-10-04 owner explicitly resumed deep investigation. Previous Blocked disposition was premature: retained-state reconnect and runner safety/accounting defects are internal engineering work, not a proved external access blocker. Resume existing refined implementation plan, preserve every failed run and acceptance bound, repair safe ownership/accounting before additional guest runs, then isolate actual retained reconnect and AddDevice failures with timestamped guest-only traffic. No host adapter/kernel mutation, downloads/installers, source/vendor edits, or PB-051 held inputs are implied. Commit reviewed verified checkpoints and push existing PR16 with hosted checks; full item remains open until all public lifecycle and accounting criteria pass.
+
+2026-10-04 owned-process phase 1 (not guest acceptance): new scripts/bluez_host_process.py implements run_owned bounded process-group execution, output cap/hash, structured failure, signal cancellation, descendant cleanup and handler restoration; new tests/unit/bluez_host_process/test_bluez_host_process.py uses real Linux child/descendant/harness processes, cap, invalid paths and spawn failure. First focused run failed two cancellation subtests because log buffer hid ready handshake and emitted ResourceWarning from early-return scandir; flush per chunk and close scandir iterator fixed both. Final python3 -m unittest discover -s tests/unit/bluez_host_process -p test_*.py -v: 6 tests OK; git diff --check passed. No guest/QEMU/Bluetooth run, runner integration, acceptance, stage or commit. Existing unrelated dirty files untouched.
+
+2026-10-04 owned-process review fixes (still not guest acceptance): run_owned now checks monotonic deadline and cancellation on both leader-exit and post-cleanup pipe drains, updates first-signal cancellation during cleanup, and seals final outcome before handler restoration. Added real SIGTERM-ignoring child plus descendant SIGKILL escalation, repeated external SIGTERM then SIGINT while group cleanup active, and ordered stdout/stderr hash assertions. First -W error::ResourceWarning test attempt failed only repeated-signal readiness because cancellation correctly stopped log pumping; test now uses authored child signal-handler marker independent of bounded log. Final python3 -W error::ResourceWarning -m unittest discover -s tests/unit/bluez_host_process -p test_*.py -v: 9 tests OK, git diff --check passed. No QEMU, Bluetooth, runner integration, stage or commit.
 <!-- SECTION:NOTES:END -->
