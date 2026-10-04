@@ -109,3 +109,38 @@ and result-validation/accounting review defects. It stays unstaged and is not
 accepted as safe host-lane tooling. Further source-matched host-stack diagnosis
 and runner safety/accounting refinement needed before resuming PB-053. This
 blocker does not change PB-051 owner pause or any codec/physical proof boundary.
+
+## Clean preparation checkpoint and existing PR gate
+
+Scoped preparation and Blocked-state records committed at
+`16e69844774a5e4fc0771448dfc00ee142d64417`
+(`PB-053: harden local emulator preparation and record scope blockers`). No
+guest scaffolding or user-owned unrelated changes were included. Clean detached
+worktree `/tmp/opencode/pb053-preparation-candidate-r1` at that exact SHA ran
+the full NCS v3.4.1 canonical gate:
+
+```text
+TEST_OUTPUT_DIR=/tmp/opencode/pb053-preparation-canonical-r1 bash scripts/test-all.sh
+Gate complete: 85 PASS / 0 FAIL / 85 TOTAL
+```
+
+Full raw log `/tmp/opencode/pb053-preparation-canonical-r1.log` SHA-256
+`4a8f046c5f45e0171ed7c1ada9b3dc9096e4ff2cccbfe051696bc0556ca4a3e2`.
+Coverage output `/tmp/opencode/pb053-preparation-canonical-r1/coverage/`;
+numeric-summary.json SHA-256
+`8dc908a9939b7d0a67f5950ff3dce74e9c08376e4e874eb2bec39636b0f6cef4`.
+Baseline SHA-256 unchanged:
+`5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed76de7a`.
+Baseline enforcement zero errors: 5049/5491 lines, 2245/3036 branches,
+378/378 functions. Canonical BSim 17 scenarios/26 runs passed. Existing
+`native_sim` CMake `device_support.cmake:34` unsupported-SoC notice retained;
+no compiler/Kconfig warnings or other CMake warning identified. Preparation
+Python child passed within canonical gate.
+
+Existing draft PR #16 at this SHA: hosted run
+https://github.com/qarnet/le-audio-receiver/actions/runs/37180492931
+completed success. `test-unit`, `test-heavy (coverage)`, `test-heavy (bsim)`,
+aggregate `tests` and `firmware` succeeded; `release` skipped. This verifies
+the scoped preparation checkpoint, not the failed retained-state host lane,
+physical RF, codec, I2S, analog or release acceptance. PB-053 stays Blocked;
+no acceptance criteria were checked, PR merge or release performed.

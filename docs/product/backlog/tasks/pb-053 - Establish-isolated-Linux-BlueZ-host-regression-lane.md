@@ -4,7 +4,7 @@ title: Establish isolated Linux BlueZ host regression lane
 status: Blocked
 assignee: []
 created_date: '2026-10-03 04:40'
-updated_date: '2026-10-04 05:00'
+updated_date: '2026-10-04 06:25'
 labels:
   - 'size:M'
   - 'area:testing'
@@ -104,4 +104,6 @@ Correction: previous note contains accidental ANSI color delimiters around Suppo
 2026-10-04 preparation hardening PASS: five focused real compiler/process tests; pinned BlueZ source 4dc15be8ee3f7422d447087f1893d215575cb2c8 clean; exclusive /tmp/opencode/pb053-emulator-build-r3 contains 23 warning-free compiler logs, 23 header depfiles, link/version logs, binary SHA256 06611569862825010327200c354377428e996dade36d96c1a4872eb20ed0083c and build-record SHA256 84f6d2cbf4a1f5144091526ab66fc0bb39cc0ebec90e8be4e51968532ecb8448. docs/development/pb-053-preparation-results-20261004.md holds evidence. PB-053 remains Blocked, not accepted: guest r16/r17 retained-state Disconnect completed but both Device1 Connected stayed true through 10s; MGMT AddDevice Failed (0x03) cause unknown; fresh2 not run. Unaccepted guest scaffold has signal/ownership/result-accounting review defects; do not stage/ship. Need source-matched kernel/BlueZ/controller diagnosis and guest safety/accounting repair before new isolated lifecycle acceptance. No guest run in preparation phase, no timeout/acceptance waiver, no CI/physical/codec claims.
 
 2026-10-04 scope recovery: see docs/development/pb-053-preparation-results-20261004.md for retained preparation results. Guest r16/r17 retained-state Disconnect returned, but both Device1 Connected properties stayed true through the 10-second deadline; BlueZ/kernel management AddDevice Failed (0x03) remains undiagnosed and fresh2 never ran. Unstaged guest runner has signal, ownership and result-accounting review defects; do not stage or ship it. Existing Blocked status stands; no guest lifecycle acceptance or waiver.
+
+2026-10-04 clean preparation checkpoint: scoped commit 16e69844774a5e4fc0771448dfc00ee142d64417, clean detached /tmp/opencode/pb053-preparation-candidate-r1 full NCS3.4.1 canonical 85 PASS/0 FAIL/85 TOTAL. Raw /tmp/opencode/pb053-preparation-canonical-r1.log SHA256 4a8f046c5f45e0171ed7c1ada9b3dc9096e4ff2cccbfe051696bc0556ca4a3e2; baseline unchanged SHA256 5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed76de7a, numeric 5049/5491 lines 2245/3036 branches 378/378 functions, BSim17/26. Existing PR16 hosted run 37180492931 for exact commit succeeded unit, coverage, BSim, tests and firmware; release skipped. docs/development/pb-053-preparation-results-20261004.md records evidence. PB-053 stays Blocked, no criteria checked or guest lifecycle acceptance; r16/r17 retained Disconnect leaves both Device1 Connected true through 10s, MGMT AddDevice Failed (0x03) unexplained and guest ownership/result-accounting defects unstaged. No physical/codec/release proof.
 <!-- SECTION:NOTES:END -->
