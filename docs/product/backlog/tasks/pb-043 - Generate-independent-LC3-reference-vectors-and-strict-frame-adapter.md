@@ -1,9 +1,10 @@
 ---
 id: PB-043
 title: Generate independent LC3 reference vectors and strict frame adapter
-status: Backlog
+status: Blocked
 assignee: []
 created_date: '2026-10-03 02:33'
+updated_date: '2026-10-04 05:00'
 labels:
   - 'size:M'
   - 'area:testing'
@@ -48,3 +49,9 @@ Selected reference container/version; approved storage/redistribution and retent
 - [ ] #4 Manifest binds input recipe/hash, tool and normative versions, codec shape, frame/sample counts, state history, alignment/delay/padding and payload/PCM hashes; existing same-library corpus remains retained.
 - [ ] #5 DUT output cannot overwrite expected reference data, and artifact use/storage complies with the approved rights contract.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-04 scope recovery: PB-043 waits for PB-042 approved independent LC3 tooling and rights before vectors or adapter can be accepted. No reference execution, vectors or skip waiver claimed.
+<!-- SECTION:NOTES:END -->

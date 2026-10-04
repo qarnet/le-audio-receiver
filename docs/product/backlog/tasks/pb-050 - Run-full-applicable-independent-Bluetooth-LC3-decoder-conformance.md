@@ -1,9 +1,10 @@
 ---
 id: PB-050
 title: Run full applicable independent Bluetooth LC3 decoder conformance
-status: Backlog
+status: Blocked
 assignee: []
 created_date: '2026-10-03 02:33'
+updated_date: '2026-10-04 05:00'
 labels:
   - 'size:L'
   - 'area:testing'
@@ -49,3 +50,9 @@ Exact applicability/version set, complete corpus and comparison metrics; referen
 - [ ] #4 DUT-native, actual-target and full product qualification claims are distinct; upstream reports or host-only results cannot stand in for unexecuted target evidence.
 - [ ] #5 Existing fast regressions, thresholds and historical corpus remain intact, and reference/corpus handling follows approved rights and retention constraints.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-04 scope recovery: PB-050 waits for PB-044 independent decoder validation and approved applicable decoder/corpus/tool lane. No complete conformance claim or skip waiver.
+<!-- SECTION:NOTES:END -->

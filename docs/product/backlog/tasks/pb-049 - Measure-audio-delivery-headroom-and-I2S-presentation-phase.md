@@ -1,9 +1,10 @@
 ---
 id: PB-049
 title: Measure audio delivery headroom and I2S presentation phase
-status: Backlog
+status: Blocked
 assignee: []
 created_date: '2026-10-03 02:33'
+updated_date: '2026-10-04 05:00'
 labels:
   - 'size:L'
   - 'area:testing'
@@ -50,3 +51,9 @@ Chosen media reference, clock mapping/calibration and uncertainty budget; suppor
 - [ ] #4 Source send acceptance, controller scheduling and receiver/wire observation are not conflated or used to prove their own mapping.
 - [ ] #5 Any needed production presentation behavior change is surfaced for separate owner refinement rather than silently implemented by measurement research.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-04 scope recovery: PB-049 waits for PB-048 fresh sample-identified I2S evidence; PB-046 is Done. No delivery-headroom or presentation-phase acceptance and no skip waiver.
+<!-- SECTION:NOTES:END -->

@@ -1,9 +1,10 @@
 ---
 id: PB-047
 title: Prove fresh exact LC3 SDU content and per-stream delivery
-status: Backlog
+status: Blocked
 assignee: []
 created_date: '2026-10-03 02:33'
+updated_date: '2026-10-04 05:00'
 labels:
   - 'size:L'
   - 'area:testing'
@@ -49,3 +50,9 @@ Receive observation/retention design; byte/hash trust and collision policy; stim
 - [ ] #4 Freshness mechanism preserves valid LC3 SDU formatting and bounded lifecycle/resource ownership; malformed diagnostics and timeout/cancel/restart fail safely.
 - [ ] #5 Acceptance includes fresh physical peer evidence, not only synthetic logs or simulator traces, and makes no decoded PCM, timing or analog claim.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-04 scope recovery: PB-047 waits for PB-043 independent reference content and fresh physical prerequisites before per-stream peer delivery acceptance. No simulator or send-completion substitution and no skip waiver.
+<!-- SECTION:NOTES:END -->

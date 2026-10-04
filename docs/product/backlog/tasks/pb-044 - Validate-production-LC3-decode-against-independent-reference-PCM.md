@@ -1,9 +1,10 @@
 ---
 id: PB-044
 title: Validate production LC3 decode against independent reference PCM
-status: Backlog
+status: Blocked
 assignee: []
 created_date: '2026-10-03 02:33'
+updated_date: '2026-10-04 05:00'
 labels:
   - 'size:M'
   - 'area:testing'
@@ -48,3 +49,9 @@ Selected applicable comparison normalization/alignment and tolerances; target ex
 - [ ] #4 Corrupt/truncated content, wrong channel or state history and incorrect reset/reconnect behavior fail the intended public-boundary checks, with successful valid recovery demonstrated.
 - [ ] #5 Loss cases prove output geometry, channel isolation and recovery without assuming universal bit-identical PLC; native and actual target evidence are labeled separately.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-04 scope recovery: PB-044 waits for PB-043 independent vectors and strict frame adapter before production decoder comparison. No independent PCM acceptance or skip waiver claimed.
+<!-- SECTION:NOTES:END -->

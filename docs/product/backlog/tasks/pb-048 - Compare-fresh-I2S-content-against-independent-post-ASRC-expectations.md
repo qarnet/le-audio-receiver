@@ -1,9 +1,10 @@
 ---
 id: PB-048
 title: Compare fresh I2S content against independent post-ASRC expectations
-status: Backlog
+status: Blocked
 assignee: []
 created_date: '2026-10-03 02:33'
+updated_date: '2026-10-04 05:00'
 labels:
   - 'size:L'
   - 'area:testing'
@@ -53,3 +54,9 @@ Actual word-decoder/capture identity; exposure and synchronization of public con
 - [ ] #4 Startup, stop/reconnect, reset and current supported CPU/offload/fallback transitions have correct observable output continuity/accounting within refined bounds.
 - [ ] #5 Electrical safety and bounded capture/diagnostic cleanup are retained; result distinguishes digital content from presentation timing, DAC presence and analog quality.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-04 scope recovery: PB-048 waits for PB-041 fresh harness identity and safety decision, PB-044 independent PCM, and PB-047 exact fresh delivery; PB-045 is Done. No physical I2S-content claim or skip waiver.
+<!-- SECTION:NOTES:END -->

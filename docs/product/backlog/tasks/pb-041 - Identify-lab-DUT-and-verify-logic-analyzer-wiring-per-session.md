@@ -1,9 +1,10 @@
 ---
 id: PB-041
 title: Identify lab DUT and verify logic-analyzer wiring per session
-status: Backlog
+status: Blocked
 assignee: []
 created_date: '2026-09-25 20:45'
+updated_date: '2026-10-04 05:00'
 labels:
   - 'size:L'
   - 'area:hil'
@@ -63,3 +64,9 @@ Which exact DAC breakout and analyzer model/input limits are connected, and is a
 - [ ] #8 Firmware-role mismatch or unsupported diagnostic capability fails with an actionable reason, without automatic flashing or shell traffic on HCI H4. Both supported diagnostic-capable board roles are covered by public protocol tests.
 - [ ] #9 Regression tests exercise encoded command/capture boundaries, stale nonce, channel permutation, invalid input, busy, timeout, cancellation and restart. Physical acceptance challenges both freshly discovered boards and confirms actual wire mapping; simulator-only or mock-call evidence cannot substitute.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-04 scope recovery: active nonce-output acceptance requires current physical analog mute/downstream-disconnection and ground/input-limit attestation plus owner decision whether unchanged three-wire wiring with explicit unknown DAC presence is accepted or added sense/return mechanism required. docs/testing/logic-analyzer-setup.md:62-81,167-179,198-210 and296-306 prohibit guessing these; 2026-09-27 attestation is historical. No new active hardware diagnostics or automatic presence claim authorized by unresolved wiring. Firmware/host shape and physical acceptance stay held pending those consequential safety/product decisions; not merely unknown Kconfig.
+<!-- SECTION:NOTES:END -->
