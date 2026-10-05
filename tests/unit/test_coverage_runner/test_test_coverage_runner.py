@@ -10,7 +10,9 @@ Run directly:
 """
 
 import json
+import glob
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -787,6 +789,9 @@ class TestAllGatePhaseSelection(unittest.TestCase):
         os.makedirs(self.scripts)
         os.makedirs(self.bin)
         os.makedirs(self.home)
+        os.makedirs(self.output)
+        self.synthetic_ascs_containers = set()
+        self.addCleanup(self._cleanup_synthetic_ascs)
 
         self._copy_gate()
         self._write_fixture_scripts()
@@ -800,6 +805,7 @@ class TestAllGatePhaseSelection(unittest.TestCase):
                 "PHASE_EVENT_LOG": self.events_path,
                 "TEST_OUTPUT_DIR": self.output,
                 "ZEPHYR_BASE": "/fake/zephyr",
+                "FAKE_ASCS_FIXTURE_ROOT": self.root,
             }
         )
 
@@ -874,6 +880,20 @@ printf 'bsim\\n' >> "$PHASE_EVENT_LOG"
             executable=True,
         )
         self._write_file(
+            os.path.join(self.scripts, "ascs-bsim-run.sh"),
+            """#!/usr/bin/env bash
+set -euo pipefail
+: "${ASCS_OUTPUT_ROOT:?new ASCS child output required}"
+case "$ASCS_OUTPUT_ROOT" in /tmp/le-audio-ascs.*/run) ;; *) exit 3 ;; esac
+[ ! -e "$ASCS_OUTPUT_ROOT" ] && [ ! -L "$ASCS_OUTPUT_ROOT" ] || exit 3
+mkdir "$ASCS_OUTPUT_ROOT"
+printf '%s\\n' "$FAKE_ASCS_FIXTURE_ROOT" > "$ASCS_OUTPUT_ROOT/marker"
+printf 'ascs\\n' >> "$PHASE_EVENT_LOG"
+[ "${FAKE_FAIL:-}" != "ascs" ]
+""",
+            executable=True,
+        )
+        self._write_file(
             os.path.join(self.bin, "west"),
             """#!/usr/bin/env bash
 set -euo pipefail
@@ -915,6 +935,17 @@ if os.environ.get("FAKE_FAIL") == "python":
         with open(self.events_path, "r", encoding="utf-8") as fh:
             return fh.read().splitlines()
 
+    def _cleanup_synthetic_ascs(self):
+        for container in self.synthetic_ascs_containers:
+            marker = os.path.join(container, "run", "marker")
+            if os.path.isfile(marker):
+                with open(marker, encoding="utf-8") as stream:
+                    if stream.read().strip() == self.root:
+                        shutil.rmtree(container)
+
+    def _links(self):
+        return sorted(glob.glob(os.path.join(self.output, "ascs-*")))
+
     def _run(self, args=(), fail=None, resolve_environment=False):
         with open(self.events_path, "w", encoding="utf-8"):
             pass
@@ -931,6 +962,11 @@ if os.environ.get("FAKE_FAIL") == "python":
             env=env,
             timeout=120,
         )
+        for container in re.findall(
+            r"ASCS evidence container: (/tmp/le-audio-ascs\.[^\s]+) ", proc.stdout
+        ):
+            if os.path.isfile(os.path.join(container, "run", "marker")):
+                self.synthetic_ascs_containers.add(container)
         return proc.returncode, proc.stdout + proc.stderr
 
     def test_invalid_phase_forms_fail_before_environment_resolution(self):
@@ -962,16 +998,30 @@ if os.environ.get("FAKE_FAIL") == "python":
             "matrix:--repo-root %s --coverage-json %s"
             % (self.repo, os.path.join(self.output, "coverage", "coverage.json")),
             "bsim",
+            "ascs",
         ]
         rc, out = self._run()
         self.assertEqual(rc, 0, out)
         self.assertEqual(self._events(), expected)
-        self.assertIn("Gate complete: 6 PASS / 0 FAIL / 6 TOTAL", out)
+        self.assertIn("Gate complete: 7 PASS / 0 FAIL / 7 TOTAL", out)
+        first_link = self._links()
+        self.assertEqual(len(first_link), 1)
+        self.assertTrue(os.path.islink(first_link[0]))
+        first_target = os.path.realpath(first_link[0])
+        self.assertEqual(
+            first_target,
+            os.path.join(next(iter(self.synthetic_ascs_containers)), "run"),
+        )
+        self.assertTrue(os.path.isfile(os.path.join(first_link[0], "marker")))
 
         rc, out = self._run(("--phase", "all"))
         self.assertEqual(rc, 0, out)
         self.assertEqual(self._events(), expected)
-        self.assertIn("Gate complete: 6 PASS / 0 FAIL / 6 TOTAL", out)
+        self.assertIn("Gate complete: 7 PASS / 0 FAIL / 7 TOTAL", out)
+        self.assertEqual(len(self._links()), 2)
+        self.assertTrue(os.path.islink(first_link[0]))
+        self.assertEqual(os.path.realpath(first_link[0]), first_target)
+        self.assertTrue(os.path.isfile(os.path.join(first_link[0], "marker")))
 
     def test_unit_phase_runs_only_unit_children(self):
         rc, out = self._run(("--phase", "unit"))
@@ -993,11 +1043,57 @@ if os.environ.get("FAKE_FAIL") == "python":
         )
         self.assertIn("Gate complete: 2 PASS / 0 FAIL / 2 TOTAL", out)
 
-    def test_bsim_phase_runs_only_bsim(self):
+    def test_bsim_phase_runs_both_mandatory_children(self):
         rc, out = self._run(("--phase", "bsim"))
         self.assertEqual(rc, 0, out)
-        self.assertEqual(self._events(), ["bsim"])
-        self.assertIn("Gate complete: 1 PASS / 0 FAIL / 1 TOTAL", out)
+        self.assertEqual(self._events(), ["bsim", "ascs"])
+        self.assertIn("Gate complete: 2 PASS / 0 FAIL / 2 TOTAL", out)
+
+    def test_ascs_failure_retains_link_and_fails_aggregate_after_stage1(self):
+        rc, out = self._run(("--phase", "bsim"), fail="ascs")
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(self._events(), ["bsim", "ascs"])
+        self.assertIn("Gate complete: 1 PASS / 1 FAIL / 2 TOTAL", out)
+        links = self._links()
+        self.assertEqual(len(links), 1)
+        self.assertTrue(os.path.islink(links[0]))
+        self.assertEqual(
+            os.path.realpath(links[0]),
+            os.path.join(next(iter(self.synthetic_ascs_containers)), "run"),
+        )
+        self.assertTrue(os.path.isfile(os.path.join(links[0], "marker")))
+
+    def test_stage1_failure_still_runs_mandatory_ascs(self):
+        rc, out = self._run(("--phase", "bsim"), fail="bsim")
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(self._events(), ["bsim", "ascs"])
+        self.assertIn("Gate complete: 1 PASS / 1 FAIL / 2 TOTAL", out)
+        self.assertEqual(len(self._links()), 1)
+        self.assertTrue(os.path.isfile(os.path.join(self._links()[0], "marker")))
+
+    def test_bsim_without_test_output_dir_keeps_external_ascs_container(self):
+        env = dict(self.env)
+        env.pop("TEST_OUTPUT_DIR")
+        with open(self.events_path, "w", encoding="utf-8"):
+            pass
+        proc = subprocess.run(
+            ["bash", self.test_all, "--phase", "bsim"],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(self._events(), ["bsim", "ascs"])
+        candidates = re.findall(
+            r"ASCS evidence container: (/tmp/le-audio-ascs\.[^\s]+) ", proc.stdout
+        )
+        self.assertEqual(len(candidates), 1)
+        container = candidates[0]
+        with open(os.path.join(container, "run", "marker"), encoding="utf-8") as stream:
+            self.assertEqual(stream.read().strip(), self.root)
+        self.synthetic_ascs_containers.add(container)
 
     def test_selected_phase_continues_after_child_failure_and_fails(self):
         rc, out = self._run(("--phase", "unit"), fail="twister")

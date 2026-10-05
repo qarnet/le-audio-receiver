@@ -14,6 +14,7 @@
 #      — zero-hit function enforcement, public API inventory, outcome ledger
 #   6. BabbleSim Stage 1 (canonical 17-scenario T4+R7 BAP matrix, scenarios
 #      1–9 run twice, remaining eight once; deterministic across runs)
+#   7. Additive mandatory ASCS public protocol matrix (60 cases)
 #
 # All suite discovery comes from scripts/test_inventory.py (the single
 # filesystem classification source shared with test-coverage.sh and
@@ -25,7 +26,7 @@
 #   ./scripts/test-all.sh                 # all phases (historical default)
 #   ./scripts/test-all.sh --phase unit    # Twister, exec-only, Python
 #   ./scripts/test-all.sh --phase coverage # coverage baseline, then matrix
-#   ./scripts/test-all.sh --phase bsim    # Stage 1 once
+#   ./scripts/test-all.sh --phase bsim    # Stage 1, then ASCS protocol
 #   ./scripts/test-all.sh --phase all     # all phases
 #
 # CI owns logical worker selection: test-unit runs the unit phase, test-heavy
@@ -256,6 +257,25 @@ run_bsim_stage1() {
         bash "$SCRIPT_DIR/bsim-stage1-run.sh" || true
 }
 
+run_ascs_matrix() {
+    # ASCS runner requires an ABSENT run root and refuses prior PB-051
+    # evidence. Retain the new container, separate from TMP_ROOT cleanup.
+    local container output link
+    container="$(mktemp -d /tmp/le-audio-ascs.XXXXXX)" || \
+        die "cannot allocate exclusive ASCS evidence container"
+    output="$container/run"
+    printf 'ASCS evidence container: %s (run: %s)\n' "$container" "$output"
+    if [ -n "$TEST_OUTPUT_DIR" ]; then
+        [ -d "$TEST_OUTPUT_DIR" ] || die "TEST_OUTPUT_DIR must exist for ASCS retained link: $TEST_OUTPUT_DIR"
+        link="$TEST_OUTPUT_DIR/ascs-$(basename "$container")"
+        ln -sT -- "$output" "$link" || die "cannot create exclusive ASCS artifact link: $link"
+        printf 'ASCS artifact link: %s -> %s\n' "$link" "$output"
+    fi
+    run_one "bsim: ascs-protocol" \
+        env NIX_HARDENING_ENABLE="" ASCS_OUTPUT_ROOT="$output" \
+        bash "$SCRIPT_DIR/ascs-bsim-run.sh" || true
+}
+
 # ================================================================
 parse_args "$@"
 
@@ -296,6 +316,7 @@ case "$PHASE" in
         # Missing prerequisites therefore fail the gate through the runner's
         # own checks.
         run_bsim_stage1
+        run_ascs_matrix
         ;;
     all)
         run_twister_suites
@@ -308,6 +329,7 @@ case "$PHASE" in
         # Missing prerequisites therefore fail the gate through the runner's
         # own checks.
         run_bsim_stage1
+        run_ascs_matrix
         ;;
 esac
 

@@ -13,6 +13,7 @@ target_sources(app PRIVATE
   src/main.c
   src/app_lifecycle.c
   src/bt_bap.c
+  src/bt_audio_ltv_guard.c
   src/bt_pairing_policy.c
   src/audio_decode.c
   src/audio_stream_session.c
@@ -27,6 +28,7 @@ target_sources(app PRIVATE
   src/stream_lifecycle.c
   src/audio_offload.c
 )
+target_link_options(app INTERFACE -Wl,--wrap=bt_audio_data_parse)
 
 zephyr_sources_ifdef(CONFIG_AUDIO_PERF_MEASUREMENT src/audio_perf.c)
 
