@@ -1,10 +1,10 @@
 ---
 id: PB-053
 title: Establish isolated Linux BlueZ host regression lane
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-10-03 04:40'
-updated_date: '2026-10-05 02:49'
+updated_date: '2026-10-05 04:14'
 labels:
   - 'size:M'
   - 'area:testing'
@@ -38,10 +38,10 @@ Available virtualization/kernel/test binaries, compatible exact revisions, appro
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Selected exact kernel/config/BlueZ/emulator/harness/rights contract identifies available prerequisites and fails readiness explicitly for unavailable required capabilities.
-- [ ] #2 Bounded real isolated host tests retain encoded public behavior, raw logs and version/case provenance without changing unrelated workstation adapters.
-- [ ] #3 Fresh/retained state, restart, timeout/cancellation and ownership cleanup are verified through public outcomes and preserve immutable previous evidence.
-- [ ] #4 Required-case accounting rejects incomplete runs, and reports distinguish host simulation from physical nRF RF, codec, I2S and analog acceptance.
+- [x] #1 Selected exact kernel/config/BlueZ/emulator/harness/rights contract identifies available prerequisites and fails readiness explicitly for unavailable required capabilities.
+- [x] #2 Bounded real isolated host tests retain encoded public behavior, raw logs and version/case provenance without changing unrelated workstation adapters.
+- [x] #3 Fresh/retained state, restart, timeout/cancellation and ownership cleanup are verified through public outcomes and preserve immutable previous evidence.
+- [x] #4 Required-case accounting rejects incomplete runs, and reports distinguish host simulation from physical nRF RF, codec, I2S and analog acceptance.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -153,4 +153,12 @@ Strict ledger review refinement: pinned callback-derived transport event matchin
 2026-10-05 documentation-phase checkpoint (not clean-gate acceptance): docs/testing/isolated-bluez-host-lane.md records pinned machine-specific private guest contract, explicit exclusive prepare/check/lane commands, caps and virtual-versus-physical limits. docs/development/pb-053-host-lane-results-20261005.md records immutable /tmp/opencode/pb053-accounted-lane-r5, pinned R32 preparation digest 086b7eadcec769d5595af0408422b305dd3278827476d60e29a2693dd0e32356, actual 9/9 external cases, 9/9 accountant, four intentional negative controls, two independent 18/18 public checks with 48/48 exact frames per guest, raw monitor/drop-unknown and narrowly source-backed unsuppressed log diagnostics. Separate R31 outer cancellation has real owned cleanup but is not exact-R32-image proof. docs/development/pb-053-host-lane-final-gate-handoff-20261005.md lists intended scoped files and future clean detached candidate /tmp/opencode/pb053-host-lane-candidate-r1 plus canonical TEST_OUTPUT_DIR=/tmp/opencode/pb053-host-lane-canonical-r1 gate. This phase ran no gate, VM, prepare, commit, stage, push or hosted CI; no criteria checked. PB-053 remains In Progress until actual clean/hosted gates and PR review; PB-051 hold and user-owned edits untouched.
 
 2026-10-05 final-R32 outer cancellation follow-up and gate authorization: immutable /tmp/opencode/pb053-outer-cancellation-r2 holds independent SIGINT/SIGTERM outer-lane tests on exact prepared R32 image. Source SHA256 136ec18d019883328faadb2814e2fb6616739b1d6475f2a5b4e18622915284c2; SIGINT supervisor/suite-record SHA256 a9e144541037c6b95695f078e00983a2b768e9e60562158f68bb53cb7e792772 / 4c73d58eacfd46a982a3ac3de7d7831209094abeeaee7511d2e0656d27d1ee67; SIGTERM dafbb5bb4c88a61ca6802ce966824246a7ca5a2aec6a10edd2b94526471ce189 / 450ca2521bbc8c13d02c7b012106b19890fe3f9934622dac8a32fa3885cfe8f3. Both controls adopted/reaped actual QEMU descendants with subreaper flags restored0/0, pidfds closed, no errors/emergency cleanup/surviving groups; expected lane exit1/suite false, not nine-case acceptance. Older R31 proof retained separately. Documentation corrected for PB-051 outside-lane status (pause lifted separately), PAC size diagnostics eight across four families, stale-handle decoded PAC count80 not actual-record count, and source path src/shared/gatt-client.c. Owner authorized scoped PB-053 commit, clean detached candidate, canonical gate, normal push to existing PR16 and hosted checks. No PB-051 execution or merge; PB-053 stays In Progress with all criteria unchecked until gate evidence review.
+
+2026-10-05 evidence review by acceptance criterion: #1 pinned 7.1.5 kernel/config/modules, QEMU11.0.2, BlueZ5.87, clean pinned emulator source/binary and private GPL/LGPL notice retention, fixed root/capability checks and explicit failure without downloads or vendor LC3 rights claim; docs/testing/isolated-bluez-host-lane.md and R32 manifest digest 086b7eadcec769d5595af0408422b305dd3278827476d60e29a2693dd0e32356. #2 real manually selected R5 guest root /tmp/opencode/pb053-accounted-lane-r5 holds two normal boots with encoded schema2 public behavior, raw monitor/serial and source/version hashes; no workstation adapter mutation. #3 three fresh1/retained/fresh2 public phases per boot, valid bond persistence/reset, exact 48 frames, actual holds, timeout, ownership and separate R32 SIGINT/SIGTERM outer descendant controls /tmp/opencode/pb053-outer-cancellation-r2; R3 failure retained. #4 nine mandatory JUnit cases 9 pass, zero fail/error/skip, independent inventory SHA 1de02a5083330284600ac740ab21a1f35ff76e5411377beb029ea251d324f276 and PB-052 accountant 9/9 plus four intentional negative controls. Clean source f2ea4b4b113aeff75d74daaafd2e5f4eeb8c8e96 passed focused99/99 and canonical93/0/93, frozen baseline unchanged SHA 5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed76de7a, BSim17/26; hosted run37259413628 exact head all test-unit/coverage/bsim/tests/firmware success, release skipped. PB-053 is virtual host-stack proof only; physical RF/codec/PCM/I2S/analog/release and human merge remain separate.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Established a pinned private Linux 7.1.5 / BlueZ 5.87 / QEMU 11.0.2 host regression lane with guest-only emulated controllers, bounded exclusive evidence and strict public schema2 lifecycle/ISO accounting. Manual R5 external suite passed 9/9 with independent PB-052 reconciliation and four negative controls; R32 outer cancellation and immutable failure preservation verified. Clean detached commit f2ea4b4b113aeff75d74daaafd2e5f4eeb8c8e96 passed 99 focused tests, canonical 93 PASS / 0 FAIL / 93 TOTAL, unchanged frozen coverage baseline and BSim17/26; hosted run https://github.com/qarnet/le-audio-receiver/actions/runs/37259413628 passed unit, coverage, BSim, tests and firmware, release skipped. Four criteria checked from scoped evidence; Done recorded in existing draft PR #16, with human merge official acceptance. No physical RF, independent LC3 decoder, PCM/I2S, analog or release claim.
+<!-- SECTION:FINAL_SUMMARY:END -->
