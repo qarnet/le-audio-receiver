@@ -36,7 +36,7 @@ def _group_live(pgid):
     return False
 
 
-def run_owned(argv, log_path, timeout, max_log_bytes=33554432):
+def run_owned(argv, log_path, timeout, max_log_bytes=33554432, env=None, cwd=None):
     """Run argv with bounded output and owned-group cleanup; return evidence record."""
     if (
         not isinstance(argv, (list, tuple))
@@ -132,6 +132,8 @@ def run_owned(argv, log_path, timeout, max_log_bytes=33554432):
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                env=env,
+                cwd=cwd,
             )
             result["pid"] = proc.pid
             assert proc.stdout is not None

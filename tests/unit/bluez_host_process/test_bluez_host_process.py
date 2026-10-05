@@ -76,6 +76,56 @@ class OwnedProcessTests(unittest.TestCase):
         self.assertEqual(record["bytes_logged"], len(payload))
         self.assertEqual(record["log_sha256"], hashlib.sha256(payload).hexdigest())
 
+    def test_explicit_child_environment_isolated_from_parent(self):
+        sentinel = "PB053_PARENT_ONLY_TEST_SENTINEL"
+        selected = "PB053_CHILD_SELECTED_TEST_VALUE"
+        previous = os.environ.get(sentinel)
+        os.environ[sentinel] = "parent-only-value"
+        try:
+            before = dict(os.environ)
+            path = self.root / "child-environment"
+            script = (
+                "import json,os; print(json.dumps({"
+                f"'selected':os.environ.get({selected!r}),"
+                f"'sentinel_present':{sentinel!r} in os.environ"
+                "}))"
+            )
+            record = run_owned(
+                [sys.executable, "-c", script],
+                path,
+                2,
+                env={selected: "guest-private-value"},
+            )
+            self.assertTrue(record["ok"], record)
+            self.assertEqual(
+                json.loads(path.read_text()),
+                {"selected": "guest-private-value", "sentinel_present": False},
+            )
+            self.assertEqual(dict(os.environ), before)
+        finally:
+            if previous is None:
+                os.environ.pop(sentinel, None)
+            else:
+                os.environ[sentinel] = previous
+
+    def test_real_child_uses_explicit_cwd_and_env(self):
+        directory = self.root / "child-cwd"
+        directory.mkdir()
+        output = self.root / "cwd-log"
+        record = run_owned(
+            [
+                sys.executable,
+                "-c",
+                "import os,json; print(json.dumps([os.getcwd(),os.getenv('PB053_TEST')]))",
+            ],
+            output,
+            2,
+            env={"PB053_TEST": "selected"},
+            cwd=directory,
+        )
+        self.assertTrue(record["ok"], record)
+        self.assertEqual(json.loads(output.read_text()), [str(directory), "selected"])
+
     def test_timeout_and_detached_descendant(self):
         for exit_leader in (False, True):
             with self.subTest(exit_leader=exit_leader):

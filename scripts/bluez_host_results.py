@@ -7,6 +7,7 @@ import re
 import select
 import socket
 import struct
+import uuid
 
 
 PUBLIC_CASES = frozenset(
@@ -86,6 +87,11 @@ STAGE_FIELDS = {
 }
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 ADDRESS = re.compile(r"[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}\Z")
+ADAPTER = re.compile(r"/org/bluez/hci[0-9]+\Z")
+DEVICE = re.compile(r"/org/bluez/hci[0-9]+/dev_(?:[0-9A-Fa-f]{2}_){5}[0-9A-Fa-f]{2}\Z")
+SOURCE_UUID = "00002bcb-0000-1000-8000-00805f9b34fb"
+SINK_UUID = "00002bc9-0000-1000-8000-00805f9b34fb"
+LC3_CONFIG = "02010802020103047800050301000000"
 CAPTURE_CAP = 4 * 1024 * 1024
 MONITOR_READY = "PB053_MONITOR_READY "
 MONITOR_RESULT = "PB053_MONITOR_RESULT "
@@ -232,7 +238,23 @@ def validate_capture(text):
     return {**summary, "opcode_counts": opcodes}
 
 
-def final_result(ok, kernel, controllers, stages, error):
+def valid_run_id(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value) is not None
+
+
+def valid_boot_id(value):
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", value) is None
+    ):
+        return False
+    try:
+        return str(uuid.UUID(value)) == value
+    except ValueError:
+        return False
+
+
+def final_result(ok, kernel, controllers, stages, error, run_id, boot_id, scenario):
     return {
         "schema_version": 1,
         "ok": ok,
@@ -240,7 +262,29 @@ def final_result(ok, kernel, controllers, stages, error):
         "controllers": controllers,
         "stages": stages,
         "error": error,
+        "run_id": run_id,
+        "boot_id": boot_id,
+        "scenario": scenario,
     }
+
+
+def validate_hold_ready(result, expected_run_id):
+    exact_keys(result, ("run_id", "boot_id", "actors"), "Hold readiness")
+    require(
+        valid_run_id(expected_run_id)
+        and result["run_id"] == expected_run_id
+        and valid_boot_id(result["boot_id"]),
+        "Hold identity invalid",
+    )
+    actors = result["actors"]
+    require(
+        isinstance(actors, dict)
+        and set(actors) == {"dbus", "monitor", "emulator", "bluez-fresh1"}
+        and all(positive_int(pid) for pid in actors.values())
+        and len(set(actors.values())) == 4,
+        "Hold actor map invalid",
+    )
+    return result
 
 
 def require(condition, reason):
@@ -258,6 +302,30 @@ def pairs_unique(pairs):
 
 def reject_constant(value):
     raise ValueError(f"Invalid JSON constant: {value}")
+
+
+def complete_marker_lines(content: bytes, prefix: bytes, max_line_bytes=4096):
+    """Return complete LF-framed marker rows from a growing byte stream."""
+    require(
+        isinstance(content, bytes)
+        and isinstance(prefix, bytes)
+        and bool(prefix)
+        and prefix.endswith(b" ")
+        and type(max_line_bytes) is int
+        and max_line_bytes > 0,
+        "Invalid marker framing inputs",
+    )
+    rows = content.split(b"\n")
+    complete = []
+    for row in rows[:-1]:
+        row = row.removesuffix(b"\r")
+        if row.startswith(prefix):
+            require(len(row) <= max_line_bytes, "Marker row too large")
+            complete.append(row)
+    trailing = rows[-1]
+    if trailing.startswith(prefix):
+        require(len(trailing) <= max_line_bytes, "Marker row too large")
+    return complete
 
 
 def decode_marker(text, prefix, max_bytes):
@@ -313,6 +381,30 @@ def ordered_event(events, key):
     return [(i, item) for i, item in enumerate(events) if key in item]
 
 
+def device_state(value, path, adapter, address):
+    exact_keys(
+        value,
+        ("Address", "Adapter", "Paired", "Bonded", "Connected", "ServicesResolved"),
+        "Device1 snapshot",
+    )
+    require(
+        isinstance(address, str)
+        and ADDRESS.fullmatch(address)
+        and isinstance(path, str)
+        and DEVICE.fullmatch(path)
+        and path.startswith(adapter + "/dev_")
+        and path.rsplit("/dev_", 1)[1].replace("_", ":").upper() == address.upper()
+        and isinstance(value["Address"], str)
+        and value["Address"].upper() == address.upper()
+        and value["Adapter"] == adapter
+        and all(
+            type(value[key]) is bool
+            for key in ("Paired", "Bonded", "Connected", "ServicesResolved")
+        ),
+        "Device1 identity/state invalid",
+    )
+
+
 def validate_public(result, expected_state, stimulus, require_success=True):
     exact_keys(
         result,
@@ -320,7 +412,7 @@ def validate_public(result, expected_state, stimulus, require_success=True):
         "Public",
     )
     require(
-        type(result["schema_version"]) is int and result["schema_version"] == 1,
+        type(result["schema_version"]) is int and result["schema_version"] == 2,
         "Public schema mismatch",
     )
     require(
@@ -368,6 +460,143 @@ def validate_public(result, expected_state, stimulus, require_success=True):
         not any("failed_frame" in item or "unexpected_iso" in item for item in events),
         "Public transport failure event",
     )
+    identities = ordered_event(events, "adapters")
+    require(len(identities) == 1, "Public adapter identity missing/duplicated")
+    identity_at, identity = identities[0]
+    exact_keys(identity, ("adapters", "addresses"), "Adapter identity")
+    adapters, addresses = identity["adapters"], identity["addresses"]
+    require(
+        isinstance(adapters, list)
+        and len(adapters) == 2
+        and all(isinstance(path, str) and ADAPTER.fullmatch(path) for path in adapters)
+        and len(set(adapters)) == 2
+        and isinstance(addresses, list)
+        and len(addresses) == 2
+        and all(isinstance(addr, str) and ADDRESS.fullmatch(addr) for addr in addresses)
+        and len({addr.upper() for addr in addresses}) == 2,
+        "Public adapter identity invalid",
+    )
+    initial_events = ordered_event(events, "initial_devices")
+    require(
+        len(initial_events) == 1 and identity_at < initial_events[0][0],
+        "Initial Device1 inventory missing/out of order",
+    )
+    initial_at, initial = initial_events[0]
+    exact_keys(initial, ("initial_devices",), "Initial devices")
+    devices = initial["initial_devices"]
+    require(isinstance(devices, dict), "Initial Device1 inventory invalid")
+    for path, props in devices.items():
+        require(
+            isinstance(path, str) and DEVICE.fullmatch(path),
+            "Initial Device1 path invalid",
+        )
+        if path.startswith(adapters[0] + "/"):
+            device_state(props, path, adapters[0], addresses[1])
+        elif path.startswith(adapters[1] + "/"):
+            device_state(props, path, adapters[1], addresses[0])
+        else:
+            raise ValueError("Initial Device1 adapter invalid")
+    registrations = [
+        (i, item)
+        for i, item in enumerate(events)
+        if "endpoint" in item and "transport" not in item
+    ]
+    require(
+        len(registrations) == 2 and initial_at < min(i for i, _ in registrations),
+        "Endpoint registrations missing/out of order",
+    )
+    expected_registration = {
+        "/pb053/source": (adapters[0], SOURCE_UUID),
+        "/pb053/sink": (adapters[1], SINK_UUID),
+    }
+    require(
+        all(isinstance(item.get("endpoint"), str) for _, item in registrations)
+        and {item["endpoint"] for _, item in registrations}
+        == set(expected_registration),
+        "Endpoint registration paths invalid",
+    )
+    for _, item in registrations:
+        exact_keys(
+            item, ("endpoint", "adapter", "uuid", "supported_uuids"), "Registration"
+        )
+        adapter, uuid = expected_registration[item["endpoint"]]
+        require(
+            item["adapter"] == adapter
+            and item["uuid"] == uuid
+            and isinstance(item["supported_uuids"], list)
+            and all(isinstance(u, str) for u in item["supported_uuids"])
+            and uuid in item["supported_uuids"],
+            "Public endpoint UUID registration invalid",
+        )
+    discovered = ordered_event(events, "discovered")
+    require(
+        len(discovered) == 1 and max(i for i, _ in registrations) < discovered[0][0],
+        "Discovery missing/out of order",
+    )
+    discovered_at, discovery = discovered[0]
+    exact_keys(
+        discovery,
+        (
+            "discovered",
+            "address",
+            "adapter",
+            "discovering_before_stop",
+            "discovering_after_stop",
+        ),
+        "Discovery",
+    )
+    require(
+        discovery["adapter"] == adapters[0]
+        and discovery["address"] == addresses[1]
+        and discovery["discovering_before_stop"] is True
+        and discovery["discovering_after_stop"] is False,
+        "Discovery state invalid",
+    )
+    paired = ordered_event(events, "paired")
+    require(
+        len(paired) == 1 and discovered_at < paired[0][0],
+        "Pairing missing/out of order",
+    )
+    paired_at, pairing = paired[0]
+    exact_keys(
+        pairing, ("paired", "reciprocal", "local", "remote", "operation"), "Pairing"
+    )
+    peer, reciprocal = pairing["paired"], pairing["reciprocal"]
+    require(
+        peer != reciprocal
+        and peer == discovery["discovered"]
+        and pairing["operation"]
+        == ("Pair" if expected_state == "fresh" else "Connect"),
+        "Pair/Connect identity invalid",
+    )
+    device_state(pairing["local"], peer, adapters[0], addresses[1])
+    device_state(pairing["remote"], reciprocal, adapters[1], addresses[0])
+    require(
+        all(
+            pairing[key][state] is True
+            for key in ("local", "remote")
+            for state in ("Paired", "Bonded", "Connected", "ServicesResolved")
+        ),
+        "Paired Device1 state incomplete",
+    )
+    for path, props in devices.items():
+        if expected_state == "fresh":
+            require(
+                props["Paired"] is False and props["Bonded"] is False,
+                "Fresh Device1 inventory contains bond",
+            )
+    if expected_state == "retained":
+        require(
+            peer in devices and reciprocal in devices, "Retained peers absent initially"
+        )
+        for path in (peer, reciprocal):
+            require(
+                devices[path]["Paired"] is True
+                and devices[path]["Bonded"] is True
+                and devices[path]["Connected"] is False
+                and devices[path]["ServicesResolved"] is False,
+                "Retained bond state invalid",
+            )
     frames = ordered_event(events, "frame")
     require(len(frames) == 16, "Expected exactly 16 transport frames")
     for number, (_, item) in enumerate(frames):
@@ -415,6 +644,10 @@ def validate_public(result, expected_state, stimulus, require_success=True):
         )
     mapping = {item["endpoint"]: item["transport"] for _, item in transports}
     source, sink = mapping["/pb053/source"], mapping["/pb053/sink"]
+    require(
+        source.startswith(peer + "/") and sink.startswith(reciprocal + "/"),
+        "Transport path not owned by paired peer",
+    )
     callbacks = [
         (i, item)
         for i, item in enumerate(events)
@@ -448,18 +681,39 @@ def validate_public(result, expected_state, stimulus, require_success=True):
             "SetConfiguration properties must be string",
         )
     require(
+        max(i for i, _ in registrations) < min(i for i, _ in callbacks)
+        and paired_at < min(i for i, _ in transports),
+        "Public registration/pairing transport order invalid",
+    )
+    require(
         all(
             isinstance(path, str) and path.startswith("/org/bluez/")
             for path in (source, sink)
         )
         and source != sink
         and all(
-            isinstance(item.get("callback_properties"), str)
-            and isinstance(item.get("transport_properties"), str)
-            for _, item in transports
+            isinstance(item.get("callback_properties"), str) for _, item in transports
         ),
         "Transport callback evidence invalid",
     )
+    for _, item in transports:
+        props = item["transport_properties"]
+        exact_keys(
+            props,
+            ("Codec", "Configuration", "Device", "UUID", "State"),
+            "MediaTransport1 GetAll",
+        )
+        require(
+            type(props["Codec"]) is int
+            and props["Codec"] == 6
+            and props["Configuration"] == LC3_CONFIG
+            and props["Device"]
+            == (peer if item["endpoint"] == "/pb053/source" else reciprocal)
+            and props["UUID"]
+            == (SOURCE_UUID if item["endpoint"] == "/pb053/source" else SINK_UUID)
+            and props["State"] == "idle",
+            "Public MediaTransport1 state invalid",
+        )
     acquired = ordered_event(events, "acquired")
     require(
         len(acquired) == 2
@@ -483,6 +737,10 @@ def validate_public(result, expected_state, stimulus, require_success=True):
         >= 120
         and max(i for i, _ in acquired) < frames[0][0],
         "Transport acquisition incomplete",
+    )
+    require(
+        max(i for i, _ in transports) < min(i for i, _ in acquired),
+        "Public transport acquisition order invalid",
     )
     release, closed, revoked, inactive = (
         ordered_event(events, key)
@@ -512,13 +770,14 @@ def validate_public(result, expected_state, stimulus, require_success=True):
         and revoked[0][1].get("revoked") == sink
         and revoked[0][1].get("state") == "idle"
         and type(revoked[0][1].get("eof")) is bool
-        and type(revoked[0][1].get("pollhup")) is bool
+        and revoked[0][1].get("pollhup") is True
         and type(revoked[0][1].get("poll_flags")) is int
         and revoked[0][1]["poll_flags"] >= 0
+        and bool(revoked[0][1]["poll_flags"] & select.POLLHUP)
+        and not revoked[0][1]["poll_flags"] & select.POLLNVAL
         and (
-            revoked[0][1].get("eof") is True
-            or revoked[0][1].get("pollhup") is True
-            and bool(revoked[0][1]["poll_flags"] & select.POLLHUP)
+            revoked[0][1]["eof"] is False
+            or bool(revoked[0][1]["poll_flags"] & select.POLLIN)
         ),
         "Sink revocation not observed",
     )
@@ -551,6 +810,112 @@ def validate_public(result, expected_state, stimulus, require_success=True):
         < min(i for i, _ in inactive),
         "Lease cleanup order invalid",
     )
+    disconnects = ordered_event(events, "disconnect")
+    require(
+        len(disconnects) == 2
+        and [item.get("disconnect") for _, item in disconnects] == [peer, reciprocal]
+        and min(i for i, _ in disconnects) > max(i for i, _ in inactive),
+        "Peer disconnect replies missing/out of order",
+    )
+    for _, item in disconnects:
+        exact_keys(item, ("disconnect", "reply", "time_ns"), "Disconnect")
+        require(
+            isinstance(item["reply"], str) and positive_int(item["time_ns"]),
+            "Disconnect reply invalid",
+        )
+    (source_at, source_disconnect), (reciprocal_at, reciprocal_disconnect) = disconnects
+    require(
+        source_disconnect["time_ns"] < reciprocal_disconnect["time_ns"],
+        "Disconnect reply times invalid",
+    )
+    snapshots = ordered_event(events, "disconnect_states")
+    require(len(snapshots) >= 3, "Disconnect state samples missing")
+    previous_time = source_disconnect["time_ns"]
+    prior_stable = False
+    for position, sample in snapshots:
+        exact_keys(sample, ("disconnect_states", "time_ns"), "Disconnect sample")
+        require(
+            positive_int(sample["time_ns"]) and sample["time_ns"] > previous_time,
+            "Disconnect sample time invalid",
+        )
+        previous_time = sample["time_ns"]
+        states = sample["disconnect_states"]
+        exact_keys(states, (peer, reciprocal), "Disconnect peers")
+        device_state(states[peer], peer, adapters[0], addresses[1])
+        device_state(states[reciprocal], reciprocal, adapters[1], addresses[0])
+        if source_at < position < reciprocal_at and not prior_stable:
+            prior_stable = (
+                not states[peer]["Connected"] and not states[reciprocal]["Connected"]
+            )
+        if prior_stable and position > source_at:
+            require(
+                states[peer]["Connected"] is False
+                and states[reciprocal]["Connected"] is False,
+                "Peer reconnected during disconnect evidence",
+            )
+        if position > reciprocal_at:
+            require(
+                sample["time_ns"] > reciprocal_disconnect["time_ns"],
+                "Disconnect sample precedes reply",
+            )
+    require(
+        prior_stable
+        and source_at < snapshots[0][0] < reciprocal_at
+        and snapshots[-1][0] > reciprocal_at,
+        "Stable pre/post reciprocal disconnect evidence absent",
+    )
+    observation = ordered_event(events, "disconnect_observation")
+    require(len(observation) == 1, "Disconnect observation missing/duplicated")
+    observation_at, wrapper = observation[0]
+    exact_keys(wrapper, ("disconnect_observation",), "Observation")
+    summary = wrapper["disconnect_observation"]
+    exact_keys(
+        summary,
+        ("peers", "start_ns", "end_ns", "samples", "all_disconnected"),
+        "Disconnect observation",
+    )
+    require(
+        summary["peers"] == [peer, reciprocal]
+        and positive_int(summary["start_ns"])
+        and positive_int(summary["end_ns"])
+        and summary["start_ns"] > reciprocal_disconnect["time_ns"]
+        and summary["end_ns"] - summary["start_ns"] >= 500000000
+        and type(summary["samples"]) is int
+        and summary["samples"] >= 2
+        and summary["all_disconnected"] is True
+        and snapshots[-1][0] < observation_at,
+        "Disconnect observation invalid",
+    )
+    window = [
+        sample
+        for position, sample in snapshots
+        if reciprocal_at < position < observation_at
+        and summary["start_ns"] <= sample["time_ns"] <= summary["end_ns"]
+    ]
+    require(
+        len(window) == summary["samples"]
+        and window[-1]["time_ns"] == summary["end_ns"]
+        and snapshots[-1][1]["time_ns"] == summary["end_ns"]
+        and window[-1]["time_ns"] - summary["start_ns"] >= 500000000
+        and all(
+            s["disconnect_states"][path]["Connected"] is False
+            for s in window
+            for path in (peer, reciprocal)
+        ),
+        "Disconnect window sample evidence invalid",
+    )
+    cleanup = [
+        (i, item)
+        for i, item in enumerate(events)
+        if item.get("cleanup") == "peer disconnect"
+    ]
+    require(
+        len(cleanup) == 1
+        and observation_at < cleanup[0][0]
+        and cleanup[0][1].get("ok") is True
+        and cleanup[0][1] == {"cleanup": "peer disconnect", "ok": True},
+        "Peer disconnect cleanup missing/out of order",
+    )
     return result
 
 
@@ -571,14 +936,30 @@ def hashes(value):
         )
 
 
-def validate_guest(result, stimulus):
+def validate_guest(result, stimulus, expected_run_id, expected_scenario):
     exact_keys(
         result,
-        ("schema_version", "ok", "kernel", "controllers", "stages", "error"),
+        (
+            "schema_version",
+            "ok",
+            "kernel",
+            "controllers",
+            "stages",
+            "error",
+            "run_id",
+            "boot_id",
+            "scenario",
+        ),
         "Guest",
     )
     require(
-        type(result["schema_version"]) is int
+        valid_run_id(expected_run_id)
+        and expected_scenario in ("normal", "hold")
+        and result["run_id"] == expected_run_id
+        and valid_boot_id(result["boot_id"])
+        and result["scenario"] == expected_scenario
+        and expected_scenario == "normal"
+        and type(result["schema_version"]) is int
         and result["schema_version"] == 1
         and result["ok"] is True
         and result["kernel"] == "7.1.5"
@@ -756,6 +1137,48 @@ def validate_guest(result, stimulus):
             == 1,
             "Per-phase adapter/ISO readiness missing",
         )
+    public_results = [item["result"] for _, item in public]
+    identities = [
+        next(event for event in result["events"] if "adapters" in event)
+        for result in public_results
+    ]
+    pairings = [
+        next(event for event in result["events"] if "paired" in event)
+        for result in public_results
+    ]
+    require(
+        all(identity == identities[0] for identity in identities[1:])
+        and all(
+            (pairing["paired"], pairing["reciprocal"])
+            == (pairings[0]["paired"], pairings[0]["reciprocal"])
+            for pairing in pairings[1:]
+        ),
+        "Public phase adapter/peer identity changed",
+    )
+    retained_initial = next(
+        event["initial_devices"]
+        for event in public_results[1]["events"]
+        if "initial_devices" in event
+    )
+    fresh2_initial = next(
+        event["initial_devices"]
+        for event in public_results[2]["events"]
+        if "initial_devices" in event
+    )
+    peers = (pairings[0]["paired"], pairings[0]["reciprocal"])
+    require(
+        all(
+            path in retained_initial
+            and retained_initial[path]["Paired"] is True
+            and retained_initial[path]["Bonded"] is True
+            for path in peers
+        )
+        and all(
+            device["Paired"] is False and device["Bonded"] is False
+            for device in fresh2_initial.values()
+        ),
+        "Retained/reset Device1 lifecycle invalid",
+    )
     for item, actor in ((phase[1], "bluez-fresh1"), (phase[4], "bluez-retained")):
         position, stage = item
         require(
@@ -780,7 +1203,7 @@ def validate_guest(result, stimulus):
         and reset["original_hashes"] == preserved["hashes"],
         "Guest state history invalid",
     )
-    fresh_events = public[0][1]["result"]["events"]
+    fresh_events = public_results[0]["events"]
     identity = [e for e in fresh_events if "adapters" in e]
     require(
         len(identity) == 1
