@@ -3284,6 +3284,37 @@
     "scripts/flpr_stall_gate.py"
    ],
    "stateful": true
+  },
+  {
+   "source": "src/bt_audio_ltv_guard.c",
+   "classification": "direct",
+   "suites": [
+    {
+     "name": "ltv_bounds",
+     "evidence": "direct"
+    }
+   ],
+   "public_outcomes": [
+    {
+     "api": "__wrap_bt_audio_data_parse",
+     "outcome": "0",
+     "witness": "test_valid_entries_and_cancel"
+    },
+    {
+     "api": "__wrap_bt_audio_data_parse",
+     "outcome": "-EINVAL",
+     "witness": "test_metadata_length_validation"
+    },
+    {
+     "api": "__wrap_bt_audio_data_parse",
+     "outcome": "-ECANCELED",
+     "witness": "test_cancellation_before_invalid_suffix"
+    }
+   ],
+   "state_transitions": [],
+   "function_exclusions": [],
+   "hardware_acceptance": [],
+   "stateful": false
   }
  ]
 }

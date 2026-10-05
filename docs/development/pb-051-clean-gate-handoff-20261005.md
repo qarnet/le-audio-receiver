@@ -67,6 +67,12 @@ New files to add:
 - `tests/ascs_bsim/receiver/main.c`
 - `tests/ascs_bsim/receiver/prj.conf`
 - `tests/ascs_bsim/receiver/sysbuild.cmake`
+- `tests/test-matrix.json` (one added `src/bt_audio_ltv_guard.c` entry:
+  direct `ltv_bounds` suite, `stateful: false`, empty transitions/
+  exclusions/acceptance, three `__wrap_bt_audio_data_parse` outcomes
+  witnessed by existing `ltv_bounds` tests; this file was omitted from
+  the first checkpoint and the canonical matrix failed for exactly that
+  omission)
 - `tests/unit/ascs_results/test_ascs_results.py`
 - `tests/unit/ascs_runner/test_ascs_runner.py`
 - `tests/unit/bsim_link_env/test_bsim_link_env.py`
@@ -200,7 +206,14 @@ build clean with the wrap verified. Any failure is evidence, not a waiver;
 no skip rule, no baseline loosening. No flash, no hardware acceptance, no
 release: those stay separate.
 
-Review this manifest before the commit is prepared. The commit must stage
-exactly the listed files (with the one exec bit), reference PB-051 in the
-message, and only then run the clean gate above before any hosted-CI
-push to PR 16.
+Canonical gate failure record (2026-10-05, immutable, never retried or
+amended): the first checkpoint `af83365` omitted
+`scripts/check-ascs-results.py` and the `src/bt_audio_ltv_guard.c`
+manifest entry, so its canonical run at `/tmp/opencode/pb051-canonical-r1.log`
+(SHA-256 `1aedc228a6a1a86aa30afc4932e35395d1fc89c66db1d3f72078444d52debc46`)
+and retained ASCS record `/tmp/le-audio-ascs.s547IF/run` completed
+`94 PASS / 4 FAIL / 98 TOTAL` with all four failures rooted in those two
+omissions; that run stays accepted=false evidence. The completion commit
+adds exactly those two items; a fresh candidate, output root, raw log and
+fw-build log (all `-r2`, verified absent before use) carry the only
+authoritative rerun.
