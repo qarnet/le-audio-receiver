@@ -445,11 +445,83 @@ correction note above; those runs remain historical, not acceptance).
 - The local clean-commit canonical gate (software) AND the production
   wrap-verified receiver CPUAPP+FLPR build (BUILD ONLY) are now complete at
   final-source commit `33310f0` (see the section above). The latest hosted
-  CI on PR 16 remains **PENDING**; this document does not claim it. Because
+  CI on PR 16 remains **PENDING** from this section's original date; the
+  2026-10-06 final section below records the actual completed state
+  (historical text kept, not a current claim). Because
   the guard wrapper linkage changes production link behavior, any later
   physical use still requires a fresh identity, role provisioning and the
   usual safety boundaries.
-- No acceptance criterion checkbox is checked by this document; criteria
-  move only through the PR gate after human product-owner merge.
-- Earlier roots listed above remain immutable; no root was deleted,
-  overwritten or reused.
+- Earlier roots listed above remain documented as dated historical
+  evidence (see the 2026-10-06 disclosure below for the one prelaunch
+  ASCS container that the executor reported removing); no root is
+  deleted, overwritten or reused by any later work.
+
+## Final pass and source/version boundaries (2026-10-05/06)
+
+The track completed through the existing PR gate. Final state, exact and
+current:
+
+- Latest passing hosted CI on PR 16 (PB-051 content combined with the
+  owner-approved PB-045 prefix scope): head
+  `2e642642b765fc27ade7dbefbf2e25c559022710`, run `37461484949`,
+  all five required contexts SUCCESS (`test-unit`,
+  `test-heavy (coverage)`, `test-heavy (bsim)`, `tests`, `firmware`),
+  `release` SKIPPED (pull_request). The hosted bsim lane returned the
+  retained receiver `build-warning-verdict.json` (artifact root
+  `/tmp/opencode/pb051-hosted-bsim-37461484949`) accepted=true with
+  exactly the four recognized capability-probe records (configure lines
+  8886 static supported False, 8997 `-Wl,-N` False, 9042 orphan-warn
+  True, 9082 orphan-error False), each carrying both exact pinned SDK
+  source hashes.
+- Local canonical gate: cold-cache native phase `Gate complete:
+  2 PASS / 0 FAIL / 2 TOTAL` (raw
+  `/tmp/opencode/pb051-cold-bsim-r1.log` SHA-256
+  `48bac5c7e74b67ba804ca4eb8ab7e06787c4aa41c0d8f6ff16a3ee6dd83373dd`,
+  sealed suite
+  `8ce5546c1c9e77732bd333026da3f8de3a411193b9b08c41901aeacc0fd7a018`,
+  run id `a251985ac7594862a6f38a4b75b50cdb`) and full
+  `Gate complete: 98 PASS / 0 FAIL / 98 TOTAL` (raw
+  `/tmp/opencode/pb051-canonical-r5.log` SHA-256
+  `a067d6fe19b25fed0d65692e852d2d61d6fbdf258eedc1e52edc426df1309630`,
+  sealed suite `4cf1f433d03e56e6419c8207df93915fab587bb069e6ad7183151
+  fd9869f5c47`, run id `e992a189943b4759be45ebda889337ee`), both from
+  the detached clean candidate at
+  `e132fd274087fee3d78177b52304cfea20b96033` + the test-only
+  portability commit. Every accepted lane run seals the exact declared
+  matrix: 60 cases / 65 render phases / 259 raw exchanges / 269 response
+  records across all six families; hosted run 37461484949's
+  `ascs-le-audio-ascs.BMBtz5` suite record accepted=true, run id
+  `74fd0f6aea774a0a8a7c9503cee72e79`, same exact totals.
+- Source/version boundaries (unchanged, exact): production receiver
+  sources are the `33310f0` build identity (CPUAPP
+  `70f01610a45583625ce131851e7a0a297c7626a821ae9ae3b6e1662fd8786a77`,
+  FLPR `62ba69d41cc142db729d2f1ba0d032d21d4db33bae4facf7825248f75e64caaf`,
+  build contract 73 assertions 0 failed, GNU wrap proof at two real
+  callsites); the SDK/toolchain pins stay Zephyr
+  `33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6` / nrf
+  `b20f8619ba9a5530f8c34b0a130d829947cfe55d` /
+  bundle `8285d8ad56`; the frozen policy anchor
+  `addede19018af76f8ecb759b30f6297ad95501d2152b20c268423e4fdb8ea90c`
+  and coverage
+  baseline `5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed
+  76de7a` plus the additive sidecar
+  `30814793c111583030bcdba24485d0c14a56b4c47e3429e66808aee4024b3166`
+  are intact. LC3plus remains excluded; the frozen BSim Stage 1
+  17-scenario/26-run recipe, HIL limits and PCM metric limits are
+  unchanged.
+- Agent-side completion is recorded and Done through the PR gate (the
+  earlier sentence that criteria could only be checked after a human
+  merge was misleading and is corrected by this section: the agent
+  records Done through the PR gate, and the human product-owner PR
+  merge remains the official, human-only acceptance act).
+- Execution-deviation disclosure (truthful): one prelaunch cold-bsim
+  attempt allocated ASCS container
+  `/tmp/le-audio-ascs.sTgQ0p` was reported removed by the executor
+  after the prelaunch fatal missing-output-dir abort; the container
+  path is now absent on disk, so its contents cannot be re-verified
+  and it is NOT claimed as a sealed failed record and never presented
+  as retained acceptance evidence. It is not used for any acceptance;
+  the canonical r5, cold-r1 and hosted 37461484949 records above are
+  separate complete accepted evidence. The first attempt/retry report
+  remains preserved transparently in the dated history; nothing was
+  restored or fabricated, and no further roots or logs are deleted.

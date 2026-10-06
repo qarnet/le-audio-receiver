@@ -473,3 +473,59 @@ The existing cold-native r5 and canonical r5 proofs remain source
 identical for runtime behavior (test-only repair); the hosted CI observe
 after the repair commit is the remaining verification before anything is
 Done.
+
+## Final hosted record proof (2026-10-06, run 37461484949)
+
+Hosted run `37461484949` for exact head
+`2e642642b765fc27ade7dbefbf2e25c559022710`: all five required contexts
+SUCCESS (`test-unit`, `test-heavy (coverage)`, `test-heavy (bsim)`,
+`tests`, `firmware`) and `release` SKIPPED. The successful hosted bsim
+artifact (delegator-downloaded, read-only,
+`/tmp/opencode/pb051-hosted-bsim-37461484949`) carries the passing
+cold-probe record proof:
+
+- `scenarios/build/receiver/build-warning-verdict.json`: accepted=true,
+  `capability_probe_dispositions` holds exactly the four recognized
+  records: configure line 8886 `check_C__fuse_ld_bfd__static`
+  (exit 1, supported False,
+  `capability-test-failed-expected-missing-static-libc`), line 8997
+  `check_C__fuse_ld_bfd__Wl__N` (exit 1, False,
+  `...-missing-static-gcc_s`), line 9042
+  `check_C__fuse_ld_bfd__Wl___orphan_handling_warn` (exit 0, True,
+  `capability-test-warn-supported`), line 9082
+  `check_C__fuse_ld_bfd__Wl___orphan_handling_error` (exit 1, False,
+  `...-expected-orphan-error`); every record carries both pinned SDK
+  hashes (`linker_flags.cmake`
+  `c476ef56c83deb6553a852218fd70fd921aa587a51d66d31082c234159735a26`,
+  `extensions.cmake`
+  `6cacb57208f801f9062eac5b75a411d1be0ed7de2a250843ae0334dd3a94a9f3`),
+  so the exact four probe dispositions executed and recorded on the
+  actual hosted lane.
+- Integration-record path correction (actual, verified from that
+  retained artifact): the per-role records live at
+  `build/<role>/<role>-capability-probes.json`
+  (e.g. `ascs-le-audio-ascs.BMBtz5/build/receiver/
+  receiver-capability-probes.json`); the suite record's top-level field
+  is a two-key dictionary `{"receiver": [...], "client": [...]}` (not a
+  list). On this hosted run local caching again resolved the capability
+  probes without live diagnostics, so both role records are `[]` and the
+  suite-record map is exactly `{receiver: [], client: []}`. The sealed
+  hosted ASCS suite record (retained at
+  `ascs-le-audio-ascs.BMBtz5/suite-record.json`) is accepted=true with
+  SHA-256
+  `ba3772c65564a97039061e48b291a3b015215b8b39f778a765de2a1ff1ee4776`,
+  run id `74fd0f6aea774a0a8a7c9503cee72e79` and the exact totals
+  60 cases/65 render phases/259 raw exchanges/269 response records.
+  The claims never extend to "the entire SDK is pinned"; only the two
+  exact support files are hash-pinned and read by the grammar module.
+
+This passing hosted record plus the retained failed runs
+(`37422469265`, `37432566147`, `37437769198`) close the disposition
+evidence chain: four exact purpose-test capability events with SDK-hash
+verification, everything else still a hard failure. One cold-bsim
+prelaunch ASCS container (`/tmp/le-audio-ascs.sTgQ0p`) was reported
+removed by the executor after the prelaunch fatal missing-output-dir
+abort; that path is now absent on disk, its contents cannot be
+re-verified, it is NOT claimed as a sealed failed record and it is not
+part of any acceptance. Nothing was restored, fabricated or further
+deleted (no roots or logs were removed after that reported removal).
