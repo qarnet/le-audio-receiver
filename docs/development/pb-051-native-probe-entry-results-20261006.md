@@ -121,5 +121,34 @@ The host harness is a cmake/compiler probe proof only; it is not a full
 NCS build claim. The full real native matrix/gate over all four consumer
 fixtures is the separate full canonical gate.
 
-Status: not Done, no commit yet, no full gate/hardware action. PB-051
-notes updated; awaiting review of this exact repair.
+## Clean canonical gate verification (2026-10-06, commit 1868f4a)
+
+After the comment trim, commit `1868f4ac52f4552fb6e1b383bde4a6fa7beba296`
+(`PB-051: give native compiler probes an explicit entry`) and a fresh
+clean detached worktree `/tmp/opencode/pb051-clean-candidate-r4`
+(tracked/untracked clean before the gate; source bytes verified against
+the commit), the full canonical gate ran once from the candidate workdir
+with exclusive noclobber raw log `/tmp/opencode/pb051-canonical-r4.log`
+(SHA-256 `1b71d4c7334d95d24cb6a1f23350a09bc5a00a3fbd6aec548de8554dc7cc68d3`),
+`GATE_EXIT=0`, `Gate complete: 98 PASS / 0 FAIL / 98 TOTAL`, Stage 1
+unchanged 17 scenarios/26 runs strict-checked, frozen-population coverage
+exactly 5049/5491 lines, 2245/3036 branches, 378/378 functions (frozen
+baseline unchanged, SHA-256 `5bb01f95afc12c0771086a537cb70c92d20f7d96c8b
+9b4323528b6d9ed76de7a`), additive sidecar enforced at exactly 13/13
+lines, 12/12 branches, 1/1 functions and direct matrix PASS. The actual
+canon/ASCS configure logs retained under
+`/tmp/le-audio-ascs.ig3DqI/run/build/{receiver,client}/.../CMakeConfigureLog.yaml`
+contain zero `entry symbol _start` occurrences (warning grammar unchanged;
+the strict checker accepted the builds because no warning exists). The
+whole `pb051-canonical-r4.log` contains zero `_start` strings. The sealed
+ASCS lane record at `/tmp/le-audio-ascs.ig3DqI/run` carries suite-record
+SHA-256 `0380273a64880ad61f0b73bc33b2274087982068eb2da0ade47046cf120cba26`
+with accepted=true, run_id `0ac278db67204b6ab4d1a1413f1333d3`, exact totals
+60 cases/65 render phases/259 raw exchanges/269 response records and the
+clean-commit worktree (dirty inventory digest `e3b0c442...b7852b855`).
+Production sources are unchanged since `33310f0`'s receiver build
+(app+FLPR ELF hash `70f01610...6a77` and `62ba69d4...4caaf` and the
+contract/wrap proofs referenced by the results document remain
+source-identical), so the hosted firmware job is the re-verification
+path; no local production rebuild was performed in this phase. No
+hardware, no release, not Done.
