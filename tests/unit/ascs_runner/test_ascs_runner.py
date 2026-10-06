@@ -1365,3 +1365,152 @@ int main(int argc, char **argv) {
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HostCmakeProbeEntry(unittest.TestCase):
+    """Actual host-CMake capability harness for the new -Wl,--entry=main
+    probe fix.  Uses the installed cmake/ninja (missing tool is a hard
+    failure, not a skip); never runs the produced probe binaries."""
+
+    TOOLCHAIN_BIN = Path(
+        "/home/thomas-workstation/ncs/toolchains/8285d8ad56/usr/local/bin"
+    )
+
+    def _tool(self, name):
+        found = shutil.which(name)
+        if found is None:
+            candidate = self.TOOLCHAIN_BIN / name
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+            self.fail(f"required tool {name!r} not installed")
+        return found
+
+    def _env(self, compiler):
+        libc32, gcc32 = resolve_library_dirs(compiler)
+        env = os.environ.copy()
+        env["NIX_LDFLAGS"] = f"-L{libc32} -L{gcc32} " + env.get("NIX_LDFLAGS", "")
+        return env
+
+    def _write_probe(self, root, *, with_entry):
+        root.mkdir(parents=True, exist_ok=True)
+        source = root / "probe.c"
+        source.write_text(
+            "int main(void) { return 0; }\n"
+            if with_entry
+            # Baseline probe also needs main; the difference
+            # is only CMAKE_REQUIRED_LINK_OPTIONS.
+            else "int main(void) { return 0; }\n"
+        )
+        project = root / "CMakeLists.txt"
+        if with_entry:
+            project.write_text(
+                "cmake_minimum_required(VERSION 3.20.0)\n"
+                "project(probe C)\n"
+                "include(CheckCCompilerFlag)\n"
+                'set(CMAKE_REQUIRED_FLAGS "-fuse-ld=bfd")\n'
+                'set(CMAKE_REQUIRED_LINK_OPTIONS "-nostdlib")\n'
+                'list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-Wl,--entry=main")\n'
+                'check_c_compiler_flag("" HAS_NOSTDLIB)\n'
+                'message(NOTICE "RESULT_HAS_NOSTDLIB=${HAS_NOSTDLIB}")\n'
+            )
+        else:
+            project.write_text(
+                "cmake_minimum_required(VERSION 3.20.0)\n"
+                "project(probe C)\n"
+                "include(CheckCCompilerFlag)\n"
+                'set(CMAKE_REQUIRED_FLAGS "-fuse-ld=bfd")\n'
+                'set(CMAKE_REQUIRED_LINK_OPTIONS "-nostdlib")\n'
+                'check_c_compiler_flag("" HAS_NOSTDLIB)\n'
+                'message(NOTICE "RESULT_HAS_NOSTDLIB=${HAS_NOSTDLIB}")\n'
+            )
+        return source
+
+    def _configure(self, root, env, cache):
+        configure = subprocess.run(
+            [
+                self._tool("cmake"),
+                "-G",
+                "Ninja",
+                f"-DCMAKE_C_FLAGS=-m32",
+                f"-DCMAKE_MAKE_PROGRAM:FILEPATH={self._tool('ninja')}",
+                "-S",
+                str(root),
+                "-B",
+                str(cache),
+                "-DCMAKE_C_COMPILER=gcc",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(root),
+            timeout=120,
+        )
+        return configure
+
+    def test_probe_warning_removed_by_entry_option(self):
+        base = self.base if hasattr(self, "base") else None
+        with tempfile.TemporaryDirectory(prefix="pb051-probe-") as tempdir:
+            root = Path(tempdir)
+            env = self._env("gcc")
+            baseline_dir = root / "baseline"
+            fixed_dir = root / "fixed"
+            self._write_probe(root, with_entry=True)
+            # Baseline: run a second project dir with the no-entry variant.
+            baseline_root = root / "baseline-project"
+            baseline_dir.parent.mkdir(exist_ok=True)
+            self._write_probe(baseline_root, with_entry=False)
+            baseline = self._configure(baseline_root, env, baseline_dir)
+            self.assertEqual(
+                0,
+                baseline.returncode,
+                baseline.stdout + baseline.stderr,
+            )
+            baseline_yaml = list(
+                baseline_dir.rglob("CMakeFiles/CMakeConfigureLog.yaml")
+            )
+            self.assertTrue(baseline_yaml, baseline_dir)
+            raw = baseline_yaml[0].read_bytes()
+            # Known intentional negative fixture: baseline probe prints the
+            # exact _start warning with exit 0.
+            self.assertIn(b"cannot find entry symbol _start", raw)
+            self.assertIn(b"exitCode: 0", raw)
+            # Fixed probe: HAS_NOSTDLIB must be TRUE with no warning.
+            fixed = self._configure(root, env, fixed_dir)
+            self.assertEqual(0, fixed.returncode, fixed.stdout + fixed.stderr)
+            fixed_yaml = list(fixed_dir.rglob("CMakeFiles/CMakeConfigureLog.yaml"))
+            self.assertTrue(fixed_yaml)
+            # Cached HAS_NOSTDLIB truth lives in CMakeCache.txt; NOTICE
+            # output can be stripped by CMake's internal checks.
+            cache = (fixed_dir / "CMakeCache.txt").read_text()
+            self.assertIn("HAS_NOSTDLIB:INTERNAL=1", cache)
+            fixed_log = fixed_yaml[0].read_bytes()
+            self.assertNotIn(b"cannot find entry symbol", fixed_log)
+            # Only probe link carries the entry option: the configure
+            # scratch try_compile line includes -Wl,--entry=main.
+            self.assertIn(b"-Wl,--entry=main", fixed_log)
+
+    def test_inspect_warnings_still_rejects_start_warning(self):
+        # Independent checker unchanged: a synthetic yaml with the _start
+        # warning must keep being rejected.
+        from ascs_bsim_run import inspect_warnings
+
+        sdk = (
+            self.base
+            if hasattr(self, "base")
+            else Path(tempfile.mkdtemp(prefix="pb051-inspect-"))
+        )
+        raw = (
+            "\n".join(
+                "warning: " + text for text in BUILD_PROFILE["receiver_experimental"]
+            )
+            + f"\nCMake Warning at {sdk}/nrf/cmake/device_support.cmake:34 (message):\n"
+            "  SoC native is not supported by this release.\n"
+        )
+        yaml_with_warning = (
+            'buildResult:\n  variable: "check_C__fuse_ld_bfd__nostdlib"\n'
+            "  stdout: |\n"
+            "    ld.bfd: warning: cannot find entry symbol _start; defaulting to 00001000\n"
+            "  exitCode: 0\n"
+        ).encode()
+        with self.assertRaisesRegex(ValueError, "probe=check_C__fuse_ld_bfd__nostdlib"):
+            inspect_warnings(raw.encode(), b"", "receiver", sdk, yaml_with_warning)

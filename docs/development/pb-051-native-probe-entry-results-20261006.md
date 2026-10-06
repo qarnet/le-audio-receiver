@@ -1,0 +1,125 @@
+# PB-051 native probe entry results (2026-10-06)
+
+Source-grounded repair for the hosted-run bsim build-diagnostic failure;
+no warning waiver, no checker-whitelist change, no SDK edit.
+
+## Hosted run identity (37422469265)
+
+Workflow run 37422469265 on the exact pushed PR #16 head
+`d7f2e4c6ae5728cad371fe13ec101892f40c853f`
+(https://github.com/qarnet/le-audio-receiver/pull/16). Result: `test-unit`
+SUCCESS, `test-heavy (coverage)` SUCCESS, `firmware` SUCCESS, `release`
+SKIPPED (pull_request), but `test-heavy (bsim)` FAILED (and the aggregate
+`tests` job FAILED as designed on a failed child). The exact console
+artifacts retained by the executor:
+
+- Whole-run console: /tmp/opencode/pb051-pr16-hosted-run.log (SHA-256
+  a038e853712f0c36f28fc54ee81b7c5d7045afcd856609a8d216dc1d68293e40).
+- Failed-job raw log (gh run view --log-failed): /tmp/opencode/
+  pb051-pr16-bsim-failed.log (SHA-256
+  910914d4cd462a85c3d7c461a2a6938feff2d437feb42fcd7a1dea6eefdc5211).
+- Delegator-downloaded hosted artifact root, read-only:
+  /tmp/opencode/pb051-hosted-bsim-37422469265/ with
+  ascs-le-audio-ascs.4xWrnx/ (the ASCS lane container) and scenarios/
+  (the Stage 1 build tree). The exact configure YAML with the failing
+  probe at lines 8875-8888 is
+  /tmp/opencode/pb051-hosted-bsim-37422469265/scenarios/build/receiver/
+  cmake-configure.yaml: variable `check_C__fuse_ld_bfd__nostdlib`,
+  ninja steps
+  `[1/2] gcc -Dcheck_C__fuse_ld_bfd__nostdlib ... -m32 -fuse-ld=bfd
+  -nostdlib -o ...src.c.obj -c .../TryCompile-4HW76o/src.c` and
+  `[2/2] gcc -m32 -fuse-ld=bfd -nostdlib ...src.c.obj -o cmTC_04d51`,
+  followed on line 8883 by
+  `/nix/store/i7mdvmliqcb5lz0nqija8rq55vws6gi8-binutils-2.44/bin/ld.bfd:
+  warning: cannot find entry symbol _start; defaulting to 00001000`
+  and `exitCode: 0`. The identical probe appears in the ASCS receiver
+  tree under ascs-le-audio-ascs.4xWrnx/.
+- Retained identity hashes from that tree: cmake-configure.yaml
+  193ae1ca85843ea79d531cfd52f5fc6cd2f08c9977c4bb6e9cb9a747dd9d3875,
+  cmake.out 3cc8f88dc4aa73d28fcf733f2ae6b149cd9eaa3ee5520eb916734a4064d73067,
+  ninja.out 0e26454dfa70cb1b78382d11e7bb1c0d52186ddf5b0efe93a550779eacdcdf39,
+  resolved.config 8f34c79176d71d9c88ddb53356ae308cd55b085d8f93091ce360cc5d4b9a4ba7.
+
+## Source-grounded probe mechanism (installed sources, read-only)
+
+- /home/thomas-workstation/ncs/toolchains/8285d8ad56/usr/local/share/
+  cmake-4.2/Modules/Internal/CheckFlagCommonConfig.cmake (lines 13+):
+  `CMAKE_CHECK_FLAG_COMMON_INIT` sets the C probe source to
+  `int main(void) { return 0; }`.
+- /home/thomas-workstation/ncs/v3.4.1/zephyr/cmake/linker/ld/
+  linker_flags.cmake (lines 10-17): the `baremetal` linker property lists
+  `-nostdlib` (among others); this reaches the probe when the property
+  loop appends it to the required-flags set.
+- /home/thomas-workstation/ncs/v3.4.1/zephyr/cmake/linker/ld/target.cmake
+  (lines 12-13): `-fuse-ld=bfd` is appended to `CMAKE_REQUIRED_FLAGS` when
+  the bfd linker is in use, matching the hosted probe's variable name
+  `check_C__fuse_ld_bfd__nostdlib` (check_ + empty option + `_C_` +
+  required flags).
+- /home/thomas-workstation/ncs/toolchains/8285d8ad56/usr/local/share/
+  cmake-4.2/Modules/Internal/CheckSourceCompiles.cmake (lines 74-76 and
+  104-109): `CMAKE_REQUIRED_LINK_OPTIONS` are applied by `try_compile`
+  as probe `LINK_OPTIONS` (final-target options are unaffected),
+  while other required state flows into the probe's compile definitions.
+
+## Direct probe reproduction (executor-authored, host only)
+
+Exact authored probe source and outputs (delegator artifacts, read-only;
+both links produce an ELF32 i386 object):
+
+- /tmp/opencode/pb051-probe-entry-20261006.c - the authored probe main.
+- /tmp/opencode/pb051-probe-entry-unset-20261006.log - the baseline link
+  with -fuse-ld=bfd -nostdlib reproduces the exact
+  `warning: cannot find entry symbol _start; defaulting to 00001000`
+  line; ELF at /tmp/opencode/pb051-probe-entry-unset-20261006.elf.
+- /tmp/opencode/pb051-probe-entry-main-20261006.log - the same link with
+  the additional `-Wl,--entry=main` is empty (no warning); ELF at
+  /tmp/opencode/pb051-probe-entry-main-20261006.elf.
+
+## Repair: probe-only entry option in the four native fixture CMakeLists
+
+After the existing `CMAKE_{C,CXX,ASM}_FLAGS_INIT ... -m32` lines and
+before `find_package(Zephyr REQUIRED ...)` in all four
+(tests/bsim/CMakeLists.txt, tests/bsim/client/CMakeLists.txt,
+tests/ascs_bsim/receiver/CMakeLists.txt,
+tests/ascs_bsim/client/CMakeLists.txt):
+
+```
+list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-Wl,--entry=main")
+```
+
+With an accurate comment describing the probe mechanism. Scope is the
+compiler-capability probe link only: CMake's
+`Internal/CheckSourceCompiles.cmake` applies
+`CMAKE_REQUIRED_LINK_OPTIONS` exclusively to `try_compile` LINK_OPTIONS,
+never to final targets; `target_link_options`,
+`CMAKE_EXE_LINKER_FLAGS`, the SDK, the warning-checker whitelist, the
+production root/physical target, matrix policy and scenarios are all
+untouched. The warning is not suppressed and exit 0 with a warning is not
+accepted: the probe simply stops emitting a meaningless entry-symbol
+warning because it now has an explicit `--entry=main`.
+
+## Focused harness proof (installed cmake/ninja host-CMake)
+
+New `HostCmakeProbeEntry` tests in tests/unit/ascs_runner/
+test_ascs_runner.py (missing tool is a hard failure, never a skip):
+
+- A real host-CMake configure of a standalone probe project with
+  `-DCMAKE_C_FLAGS=-m32`, `CMAKE_REQUIRED_FLAGS "-fuse-ld=bfd"` and
+  `CMAKE_REQUIRED_LINK_OPTIONS "-nostdlib"` reproduces the exact
+  baseline `_start`-warning-with-exit-0 shape in its
+  CMakeConfigureLog (known intentional negative fixture); the same
+  project with the additional `-Wl,--entry=main` link option records
+  `HAS_NOSTDLIB:INTERNAL=1` in CMakeCache.txt and its configure log
+  contains `-Wl,--entry=main` while containing no
+  `cannot find entry symbol` line. Probe binaries are never executed.
+- The independent build-diagnostic checker is unchanged and still
+  rejects a synthetic CMakeConfigureLog carrying this `_start` warning
+  (`probe=check_C__fuse_ld_bfd__nostdlib`), so no checker exemption is
+  needed and none exists.
+
+The host harness is a cmake/compiler probe proof only; it is not a full
+NCS build claim. The full real native matrix/gate over all four consumer
+fixtures is the separate full canonical gate.
+
+Status: not Done, no commit yet, no full gate/hardware action. PB-051
+notes updated; awaiting review of this exact repair.

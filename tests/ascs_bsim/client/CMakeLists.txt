@@ -4,6 +4,10 @@ set(CONF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../../bsim/client/prj.conf;${CMAKE_CU
 set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} -m32")
 set(CMAKE_CXX_FLAGS_INIT "${CMAKE_CXX_FLAGS_INIT} -m32")
 set(CMAKE_ASM_FLAGS_INIT "${CMAKE_ASM_FLAGS_INIT} -m32")
+# CMake capability probes provide main but may link with -nostdlib.
+# Give those probe links an entry point without changing final targets.
+# CMAKE_REQUIRED_LINK_OPTIONS is consumed only by try_compile checks.
+list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-Wl,--entry=main")
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(ascs_client)
 target_sources(app PRIVATE ../../bsim/client/src/main.c ../../bsim/client/src/bsim_tx.c
