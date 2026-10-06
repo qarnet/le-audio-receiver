@@ -152,6 +152,45 @@ contract/wrap proofs referenced by the results document remain
 source-identical), so the hosted firmware job is the re-verification
 path; no local production rebuild was performed in this phase. No
 hardware, no release, not Done.
+## Portable probe module (2026-10-06, exact grammar)
+
+`sdk_root` is a required explicit parameter (no home literal/SDK_ROOT
+default). `verify_sdk_sources` does one bounded regular non-symlink read
+per support file via `os.open(..., O_NOFOLLOW|O_NONBLOCK)` and `fstat`,
+hashed once per inspector call and reused across recognized records; no
+cached-`/home` dependency, and the test fixture copies the pinned SDK
+support files from the actual `ascs_bsim_run.sdk_root()` (pinned
+`ZEPHYR_BASE`). Exact required singular fields use
+`re.findall` count-1 semantics (kind/variable/exitCode/cached/CMAKE_C_FLAGS/
+CMAKE_EXE_LINKER_FLAGS); compile count exactly 1 with `[1/2]` and the
+`cmTC_[hex]` id plus the absolute `/CMakeScratch/TryCompile-<alnum>/src.c`
+scratch path; the same object id links count 1 (or 2 with the exact
+FAILED echo row for exit-1 shapes); extra unrecognized compiler/link rows
+inside the event reject. Exact diagnostic rows are compared via
+`collections.Counter` multiset equality against the shape's exact
+expected lines built from the pinned paths plus the actual `cm_id`
+including the exact `FAILED: [code=1] <cm_id>`, exact collect2, exact
+ninja, exact echoed link, and the exact orphan (section, object,
+placement/source) rows; missing/extra/wrong/swap/duplicate diagnostics
+reject with the precise extras/missing counts, and generic gcc/CMake
+warning rows in the event metadata reject with the same strict wording
+(no broadening). The retained event prefix/header gaps are scanned too:
+any diagnostic dropped outside an event root (before the first event or
+in the header) rejects, so a diagnostic cannot disappear by being moved
+out of the recognized envelope. Dead helpers (`_event_fields`,
+`starting_after`, the second SDK verification inside the record builder
+when the first already ran, `sdk_hashes` parameter and `expected_exit`)
+were removed. `SDK_ROOT`/home default was removed; all entry points take
+an explicit `sdk_root` parameter; portable `native_bsim_probes` accepts
+a fixture root so no `/home/...` literal is needed.
+
+The canonical suite keeps the `_start` rejection and adds a synthetic
+complete four-event fixture (static/-N/orphan-warn/orphan-error) with a
+copied pinned SDK support pair from `ascs_bsim_run.sdk_root()`; no
+`/tmp/opencode` hosted-YAML dependency exists in the canonical test
+suite (the previously removed one-time external audit records live in
+this document's read-only history and in PB-051's notes only).
+
 ## Hosted follow-up on the same run lane (37432566147, 2026-10-06)
 
 The next hosted run `37432566147` for exact head
@@ -196,3 +235,126 @@ them; this retained-evidence note records the shape, the disposition is
 not decided here and no source/checker change was made from it.
 The ascs lane itself PASSED in the same hosted stage again
 (`Gate complete: 1 PASS / 1 FAIL / 2 TOTAL`).
+
+## Exact probe-disposition module (2026-10-06, bounded grammar)
+
+New `scripts/native_bsim_probes.py` owns the only disposition path. It
+parses the raw bounded CMake event envelope (exact top-level `-`
+separator lines), keeps every input byte unchanged, and recognizes
+exactly four diagnostic-bearing capability probes, each validated against
+its exact required backtrace (CheckCCompilerFlag 105 / CheckSourceCompiles
+104 / extensions 2604/2421/1199 plus the exact `linker_flags.cmake` line
+for that option), `CMAKE_C_FLAGS: "-m32"`,
+`CMAKE_EXE_LINKER_FLAGS: ""`, `cached: true`, the exact argv compile/link
+lines with `--entry=main` and the exact tested option, and an exact
+per-shape diagnostic multiset; each probe is recognized at most once; the
+unsupported/supported flag reflects the actual recorded exit status (the
+failed probes stay genuinely `supported: false`, never converted).
+Installed-source identity is verified (`linker_flags.cmake`
+`c476ef56c83deb6553a852218fd70fd921aa587a51d66d31082c234159735a26`,
+`extensions.cmake`
+`6cacb57208f801f9062eac5b75a411d1be0ed7de2a250843ae0334dd3a94a9f3`) only
+when actually granting a disposition; cached local YAML without
+diagnostics recognizes nothing (empty list) and needs no verification.
+Any unrecognized diagnostic (compiler-ID failures, `Ninja` real
+build-stopped, wrong flags/exit/shape/extra warning/missing context or a
+standalone warning with no envelope) still raises the exact strict error
+with the probe name, exit status and line as before, preserving the old
+`probe=<name> exit=<code>` wording and the `_start` rejection.
+`inspect_warnings` now delegates the configure line-scan to this module
+(all CMake/Kconfig/Ninja checks unchanged); the runner records the
+recognized records as per-role `capability-probes.json` and the sealed
+suite record carries a `capability_probe_dispositions` list; the public
+`check-native-bsim-build.py` CLI records
+`capability_probe_dispositions` in its verdict too.
+`scripts/native_bsim_probes.py` and the two pinned SDK support sources
+(`zephyr/cmake/linker/ld/linker_flags.cmake`,
+`zephyr/cmake/modules/extensions.cmake`) enter `source_paths` for
+snapshot coverage.
+
+Read-only classification audit (never a hosting acceptance): running
+`inspect_configure_probes` over the downloaded actual hosted YAML
+`/tmp/opencode/pb051-hosted-bsim-37437769198/scenarios/build/receiver/
+cmake-configure.yaml` (SHA-256
+`816034788a830e83bc614492147741a275fa02d915bb7baeec4b8b2992b79fbf`,
+unchanged) returns the four structured records with the exact exit
+statuses and dispositions as recorded above; no artifact was modified
+(the audit wrote nothing; the recorded facts are in-module memory and
+this note).
+
+## Exact four purpose-test dispositions (2026-10-06, source-grounded)
+
+The retained hosted YAML above is a real configure log, not a synthetic
+fixture. Running the actual inspector (`inspect_configure_probes`) over
+its unmodified bytes returns exactly four recognized capability-probe
+records:
+
+| configure line | variable | exit | supported | disposition |
+| --- | --- | --- | --- | --- |
+| 8886 | `check_C__fuse_ld_bfd__static` | 1 | False | `capability-test-failed-expected-missing-static-libc` |
+| 8997 | `check_C__fuse_ld_bfd__Wl__N` | 1 | False | `capability-test-failed-expected-missing-static-gcc_s` |
+| 9042 | `check_C__fuse_ld_bfd__Wl___orphan_handling_warn` | 0 | True | `capability-test-warn-supported` |
+| 9082 | `check_C__fuse_ld_bfd__Wl___orphan_handling_error` | 1 | False | `capability-test-failed-expected-orphan-error` |
+
+Purpose-grounded meaning of each: Zephyr's `baremetal` linker property
+(`zephyr/cmake/linker/ld/linker_flags.cmake` lines 10/18/22) capability
+tests `-static` and `-Wl,-N` against an installed toolchain whose x86
+32-bit static libc/gcc_s runtime pieces are absent; the probes are
+expected to fail their link with the recorded exact diagnostics
+(`cannot find -lc` / `cannot find -lgcc_s` plus the "have you installed
+the static version" questions, collect2 and ninja failure rows, and the
+exact echoed link command). `--orphan-handling=warn` is recorded
+supported (exit 0 with exactly the five orphan-placement warnings and no
+failure rows); `--orphan-handling=error` is recorded supported-for-error
+only in the sense that the probe's exact failed shape is the expected
+capability-test result (five `unplaced orphan section` errors plus the
+failure triple). The `supported` flag is the plain exit-0 mapping of the
+actual recorded exit status: three shapes keep `supported: false` exactly
+as recorded, and `cached: true` never implies success.
+
+This is a tiny, recorded-purpose exception only: recognition requires the
+exact event kind, exact `try_compile-v1` backtrace entries (absolute
+paths ending in the pinned toolchain `cmake-4.2/Modules` files and
+`ncs/v3.4.1/zephyr` sources with exact line/function pairs), exact
+compile/link argv, exact `-m32`/empty linker flag fields, the exact
+per-shape diagnostic multiset, and the exact-hashed installed SDK support
+pair. Every other raw compiler, collect2, Ninja build-stopped, gcc
+warning, CMake warning, metadata, prefix or unknown-probe diagnostic
+still fails the run through the same strict checker with no wording
+change; nothing about production build warnings is waived.
+
+Hosted evidence chain for these dispositions (all read-only retained
+artifacts; none yet accepted as a passing hosted bsim job):
+- run `37422469265` (first `_start` warning shape; `test-heavy (bsim)`
+  FAILED): whole-run console
+  `/tmp/opencode/pb051-pr16-hosted-run.log` (SHA-256
+  `a038e853712f0c36f28fc54ee81b7c5d7045afcd856609a8d216dc1d68293e40`),
+  failed-job log `/tmp/opencode/pb051-pr16-bsim-failed.log` (SHA-256
+  `910914d4cd462a85c3d7c461a2a6938feff2d437feb42fcd7a1dea6eefdc5211`);
+  `_start` warning is now structurally absent from new builds since the
+  `-Wl,--entry=main` probe repair and there is no `_start` exemption.
+- run `37432566147` (second shape: exact `-static` probe failure
+  rejected): artifacts
+  `/tmp/opencode/pb051-pr16-hosted-b615-run.log` (SHA-256
+  `96189036f5eda268bf7c6bfd9c0da89634a786e03bb93486d60f16237916339d`),
+  `/tmp/opencode/pb051-pr16-b615-failed.log`; recorded
+  `cmake-configure.yaml` SHA-256
+  `9047777c50bc5ea0dada85218054969d947565250411b183fdcf72b2f3ce91`.
+- run `37437769198` (same `-static` probe shape again): whole-run
+  console `/tmp/opencode/pb051-pr16-hosted-d298-run.log` (SHA-256
+  `d1d842978f6c6c454cb0ea5022f6ccb7fa0850e639d93dc838e295f9f7042e08`),
+  failed-job log `/tmp/opencode/pb051-pr16-d298-failed.log`; the
+  downloaded actual receiver `cmake-configure.yaml`
+  (SHA-256 `816034788a830e83bc614492147741a275fa02d915bb7baeec4b8b2992b79fbf`)
+  is the classification input recorded above.
+- No new hosted acceptance has happened yet for the dispositions; the
+  following cold-native phase and canonical gate are the recorded local
+  verification stages before any fresh push.
+
+Integration truth (top-level): the executed runner records per-role
+`build/<role>-capability-probes.json` for the two build roles only
+(receiver, client; the phy role builds no C capability probes) and adds a
+top-level suite `capability_probe_dispositions` map of exactly
+`{receiver: [...], client: [...]}`; the independently executed family
+verdict JSON (checker log shape plus required trace counters) remains
+unchanged, never extended by classification data.

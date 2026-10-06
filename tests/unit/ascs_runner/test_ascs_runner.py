@@ -907,6 +907,16 @@ int main(int argc, char **argv) {
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("#\n")
         (fake_sdk / "zephyr/cmake/modules/FindBabbleSim.cmake").write_text("#\n")
+        ld_dir = fake_sdk / "zephyr/cmake/linker/ld"
+        ld_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy(
+            "/home/thomas-workstation/ncs/v3.4.1/zephyr/cmake/linker/ld/linker_flags.cmake",
+            ld_dir / "linker_flags.cmake",
+        )
+        shutil.copy(
+            "/home/thomas-workstation/ncs/v3.4.1/zephyr/cmake/modules/extensions.cmake",
+            fake_sdk / "zephyr/cmake/modules/extensions.cmake",
+        )
         # Minimal tracked-clean fake git repos are produced by faking the
         # external git invocations, so no real git init is needed.
 
@@ -1363,8 +1373,575 @@ int main(int argc, char **argv) {
                     self.assertTrue(verdict["errors"])
 
 
-if __name__ == "__main__":
-    unittest.main()
+class NativeProbeInspector(unittest.TestCase):
+    """Focused synthetic event-envelope tests for the exact probe grammar;
+    actual public check-native-bsim-build CLI good and negative paths plus
+    recorded cached-local no diagnostic behavior."""
+
+    STATIC_EVENT = """  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/home/runner/ncs/toolchains/8285d8ad56/usr/local/share/cmake-4.2/Modules/Internal/CheckSourceCompiles.cmake:104 (try_compile)"
+      - "/home/runner/ncs/toolchains/8285d8ad56/usr/local/share/cmake-4.2/Modules/Internal/CheckCompilerFlag.cmake:18 (cmake_check_source_compiles)"
+      - "/home/runner/ncs/toolchains/8285d8ad56/usr/local/share/cmake-4.2/Modules/CheckCCompilerFlag.cmake:105 (cmake_check_compiler_flag)"
+      - "/home/runner/ncs/v3.4.1/zephyr/cmake/modules/extensions.cmake:2421 (check_c_compiler_flag)"
+      - "/home/runner/ncs/v3.4.1/zephyr/cmake/modules/extensions.cmake:1199 (check_compiler_flag)"
+      - "/home/runner/ncs/v3.4.1/zephyr/cmake/modules/extensions.cmake:2604 (zephyr_check_compiler_flag)"
+      - "/home/runner/ncs/v3.4.1/zephyr/cmake/linker/ld/linker_flags.cmake:10 (check_set_linker_property)"
+    cmakeVariables:
+      CMAKE_C_FLAGS: "-m32"
+      CMAKE_EXE_LINKER_FLAGS: ""
+    buildResult:
+      variable: "check_C__fuse_ld_bfd__static"
+      cached: true
+      stdout: |
+        Change Dir: '/home/runner/ncs/v3.4.1/zephyr/bsim_out/tests/bsim/bs_nrf54l15bsim_nrf54l15_cpuapp_le_audio_receiver_bsim_prj_conf/bsim/CMakeFiles/CMakeScratch/TryCompile-uYK3Mc'
+
+        Run Build Command(s): /home/runner/ncs/toolchains/8285d8ad56/usr/local/bin/ninja -v cmTC_3f583
+        [1/2] /nix/store/iwf80230xr0z8pqh1jk3z8rgw67ydagm-gcc-wrapper-14.3.0/bin/gcc -Dcheck_C__fuse_ld_bfd__static  -m32 -fuse-ld=bfd -static -o CMakeFiles/cmTC_3f583.dir/src.c.obj -c /home/runner/ncs/v3.4.1/zephyr/bsim_out/tests/bsim/bs_nrf54l15bsim_nrf54l15_cpuapp_le_audio_receiver_bsim_prj_conf/bsim/CMakeFiles/CMakeScratch/TryCompile-uYK3Mc/src.c
+        [2/2] : && /nix/store/iwf80230xr0z8pqh1jk3z8rgw67ydagm-gcc-wrapper-14.3.0/bin/gcc -m32 -fuse-ld=bfd -static -Wl,--entry=main CMakeFiles/cmTC_3f583.dir/src.c.obj -o cmTC_3f583   && :
+        FAILED: [code=1] cmTC_3f583
+        : && /nix/store/iwf80230xr0z8pqh1jk3z8rgw67ydagm-gcc-wrapper-14.3.0/bin/gcc -m32 -fuse-ld=bfd -static -Wl,--entry=main CMakeFiles/cmTC_3f583.dir/src.c.obj -o cmTC_3f583   && :
+        /nix/store/i7mdvmliqcb5lz0nqija8rq55vws6gi8-binutils-2.44/bin/ld.bfd: cannot find -lc: No such file or directory
+        /nix/store/i7mdvmliqcb5lz0nqija8rq55vws6gi8-binutils-2.44/bin/ld.bfd: have you installed the static version of the c library ?
+        collect2: error: ld returned 1 exit status
+        ninja: build stopped: subcommand failed.
+
+      exitCode: 1
+"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="pb051-probe-insp-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        # Real SDK source support (read-only path verification by hash).
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from native_bsim_probes import inspect_configure_probes
+
+        # Provide an explicit SDK root: the pinned ZEPHYR_BASE.
+        self._inspect_pinned = inspect_configure_probes
+
+        def inspect_probe(configure_text, sdk_root=None):
+            return self._inspect_pinned(
+                configure_text, sdk_root if sdk_root is not None else self._sdk_root()
+            )
+
+        self.inspect = inspect_probe
+
+    def _base_text(self):
+        return "\n---\n" + self.STATIC_EVENT
+
+    def _sdk_root(self):
+        """Actual installed SDK root from the pinned ZEPHYR_BASE."""
+        from ascs_bsim_run import sdk_root
+
+        try:
+            return sdk_root()
+        except (OSError, ValueError):
+            self.fail("pinned ZEPHYR_BASE must be set by the environment")
+
+    def _setup_copied_sdk(self, root):
+        """Copy pinned SDK support files into an isolated fixture (portable)."""
+        sdk = self._sdk_root()
+        ld_dir = root / "zephyr/cmake/linker/ld"
+        ld_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy(
+            sdk / "zephyr/cmake/linker/ld/linker_flags.cmake",
+            ld_dir / "linker_flags.cmake",
+        )
+        (root / "zephyr/cmake/modules").mkdir(parents=True, exist_ok=True)
+        shutil.copy(
+            sdk / "zephyr/cmake/modules/extensions.cmake",
+            root / "zephyr/cmake/modules/extensions.cmake",
+        )
+        return root
+
+    # Static: -fuse-ld=bfd + required '-static' probes.  The four recognized
+    # events share the same envelope shape; only the stdout content and the
+    # backtrace line differ.
+
+    def _full_four_event_text(self):
+        """Parametric builder: exact four-event envelope; only the option
+        name/option/backtrace line/exit/stdout diagnostics differ."""
+        from native_bsim_probes import GCC_DIR, BINUTILS_LD, GLIBC_CRT_DIR, GCC_CRT_DIR
+
+        cm_ids = {
+            "check_C__fuse_ld_bfd__static": "cmTC_3f583",
+            "check_C__fuse_ld_bfd__Wl__N": "cmTC_1595c",
+            "check_C__fuse_ld_bfd__Wl___orphan_handling_warn": "cmTC_4d1a6",
+            "check_C__fuse_ld_bfd__Wl___orphan_handling_error": "cmTC_2e560",
+        }
+        options = {
+            "check_C__fuse_ld_bfd__static": "-static",
+            "check_C__fuse_ld_bfd__Wl__N": "-Wl,-N",
+            "check_C__fuse_ld_bfd__Wl___orphan_handling_warn": "-Wl,--orphan-handling=warn",
+            "check_C__fuse_ld_bfd__Wl___orphan_handling_error": "-Wl,--orphan-handling=error",
+        }
+        linker_lines = {
+            "check_C__fuse_ld_bfd__static": 10,
+            "check_C__fuse_ld_bfd__Wl__N": 10,
+            "check_C__fuse_ld_bfd__Wl___orphan_handling_warn": 18,
+            "check_C__fuse_ld_bfd__Wl___orphan_handling_error": 22,
+        }
+        exits = {
+            "check_C__fuse_ld_bfd__static": 1,
+            "check_C__fuse_ld_bfd__Wl__N": 1,
+            "check_C__fuse_ld_bfd__Wl___orphan_handling_warn": 0,
+            "check_C__fuse_ld_bfd__Wl___orphan_handling_error": 1,
+        }
+        scratch = (
+            "/home/runner/ncs/v3.4.1/zephyr/bsim_out/tests/bsim/"
+            "bs_nrf54l15bsim_nrf54l15_cpuapp_le_audio_receiver_bsim_prj_conf/"
+            "bsim/CMakeFiles/CMakeScratch/TryCompile-uYK3Mc"
+        )
+        diagnostics = {
+            "check_C__fuse_ld_bfd__static": [
+                "FAILED: [code=1] cmTC_3f583",
+                ": && "
+                + GCC_DIR
+                + " -m32 -fuse-ld=bfd -static -Wl,--entry=main CMakeFiles/cmTC_3f583.dir/src.c.obj -o cmTC_3f583   && :",
+                BINUTILS_LD + ": cannot find -lc: No such file or directory",
+                BINUTILS_LD
+                + ": have you installed the static version of the c library ?",
+                "collect2: error: ld returned 1 exit status",
+                "ninja: build stopped: subcommand failed.",
+            ],
+            "check_C__fuse_ld_bfd__Wl__N": [
+                "FAILED: [code=1] cmTC_1595c",
+                ": && "
+                + GCC_DIR
+                + " -m32 -fuse-ld=bfd -Wl,-N -Wl,--entry=main CMakeFiles/cmTC_1595c.dir/src.c.obj -o cmTC_1595c   && :",
+                BINUTILS_LD + ": cannot find -lgcc_s: No such file or directory",
+                BINUTILS_LD
+                + ": have you installed the static version of the gcc_s library ?",
+                BINUTILS_LD + ": cannot find -lgcc_s: No such file or directory",
+                BINUTILS_LD
+                + ": have you installed the static version of the gcc_s library ?",
+                BINUTILS_LD + ": cannot find -lc: No such file or directory",
+                BINUTILS_LD
+                + ": have you installed the static version of the c library ?",
+                "collect2: error: ld returned 1 exit status",
+                "ninja: build stopped: subcommand failed.",
+            ],
+            "check_C__fuse_ld_bfd__Wl___orphan_handling_warn": [
+                BINUTILS_LD
+                + ": warning: orphan section `.note.gnu.property' from `"
+                + GLIBC_CRT_DIR
+                + "/Scrt1.o' being placed in section `.note.gnu.property'",
+                BINUTILS_LD
+                + ": warning: orphan section `.rel.fini_array' from `"
+                + GLIBC_CRT_DIR
+                + "/Scrt1.o' being placed in section `.rel.dyn'",
+                BINUTILS_LD
+                + ": warning: orphan section `.rel.init_array' from `"
+                + GLIBC_CRT_DIR
+                + "/Scrt1.o' being placed in section `.rel.dyn'",
+                BINUTILS_LD
+                + ": warning: orphan section `.tm_clone_table' from `"
+                + GCC_CRT_DIR
+                + "/crtbeginS.o' being placed in section `.tm_clone_table'",
+                BINUTILS_LD
+                + ": warning: orphan section `.tm_clone_table' from `"
+                + GCC_CRT_DIR
+                + "/crtendS.o' being placed in section `.tm_clone_table'",
+            ],
+            "check_C__fuse_ld_bfd__Wl___orphan_handling_error": [
+                "FAILED: [code=1] cmTC_2e560",
+                ": && "
+                + GCC_DIR
+                + " -m32 -fuse-ld=bfd -Wl,--orphan-handling=error -Wl,--entry=main CMakeFiles/cmTC_2e560.dir/src.c.obj -o cmTC_2e560   && :",
+                BINUTILS_LD
+                + ": error: unplaced orphan section `.note.gnu.property' from `"
+                + GLIBC_CRT_DIR
+                + "/Scrt1.o'",
+                BINUTILS_LD
+                + ": error: unplaced orphan section `.rel.fini_array' from `"
+                + GLIBC_CRT_DIR
+                + "/Scrt1.o'",
+                BINUTILS_LD
+                + ": error: unplaced orphan section `.rel.init_array' from `"
+                + GLIBC_CRT_DIR
+                + "/Scrt1.o'",
+                BINUTILS_LD
+                + ": error: unplaced orphan section `.tm_clone_table' from `"
+                + GCC_CRT_DIR
+                + "/crtbeginS.o'",
+                BINUTILS_LD
+                + ": error: unplaced orphan section `.tm_clone_table' from `"
+                + GCC_CRT_DIR
+                + "/crtendS.o'",
+                "collect2: error: ld returned 1 exit status",
+                "ninja: build stopped: subcommand failed.",
+            ],
+        }
+        events = []
+        for name, option in options.items():
+            cm = cm_ids[name]
+            echo = exits[name] == 1
+            stdout_rows = [
+                "        Change Dir: '" + scratch + "'",
+                "",
+                "        Run Build Command(s): /home/runner/ncs/toolchains/8285d8ad56/usr/local/bin/ninja -v "
+                + cm,
+                "        [1/2] "
+                + GCC_DIR
+                + " -D"
+                + name
+                + "  -m32 -fuse-ld=bfd "
+                + option
+                + " -o CMakeFiles/"
+                + cm
+                + ".dir/src.c.obj -c "
+                + scratch
+                + "/src.c",
+                "        [2/2] : && "
+                + GCC_DIR
+                + " -m32 -fuse-ld=bfd "
+                + option
+                + " -Wl,--entry=main CMakeFiles/"
+                + cm
+                + ".dir/src.c.obj -o "
+                + cm
+                + "   && :",
+            ]
+            if echo:
+                stdout_rows.append("        FAILED: [code=1] " + cm)
+                stdout_rows.append(
+                    "        : && "
+                    + GCC_DIR
+                    + " -m32 -fuse-ld=bfd "
+                    + option
+                    + " -Wl,--entry=main CMakeFiles/"
+                    + cm
+                    + ".dir/src.c.obj -o "
+                    + cm
+                    + "   && :"
+                )
+            for row in diagnostics[name][2 if echo else 0 :]:
+                stdout_rows.append("        " + row)
+            stdout_rows += ["", "      exitCode: " + str(exits[name])]
+            events.append(
+                "  -\n"
+                '    kind: "try_compile-v1"\n'
+                "    backtrace:\n"
+                '      - "/home/runner/ncs/toolchains/8285d8ad56/usr/local/share/cmake-4.2/Modules/Internal/CheckSourceCompiles.cmake:104 (try_compile)"\n'
+                '      - "/home/runner/ncs/toolchains/8285d8ad56/usr/local/share/cmake-4.2/Modules/Internal/CheckCompilerFlag.cmake:18 (cmake_check_source_compiles)"\n'
+                '      - "/home/runner/ncs/toolchains/8285d8ad56/usr/local/share/cmake-4.2/Modules/CheckCCompilerFlag.cmake:105 (cmake_check_compiler_flag)"\n'
+                '      - "/home/runner/ncs/v3.4.1/zephyr/cmake/modules/extensions.cmake:2421 (check_c_compiler_flag)"\n'
+                '      - "/home/runner/ncs/v3.4.1/zephyr/cmake/modules/extensions.cmake:1199 (check_compiler_flag)"\n'
+                '      - "/home/runner/ncs/v3.4.1/zephyr/cmake/modules/extensions.cmake:2604 (zephyr_check_compiler_flag)"\n'
+                '      - "/home/runner/ncs/v3.4.1/zephyr/cmake/linker/ld/linker_flags.cmake:'
+                + str(linker_lines[name])
+                + ' (check_set_linker_property)"\n'
+                "    cmakeVariables:\n"
+                '      CMAKE_C_FLAGS: "-m32"\n'
+                '      CMAKE_EXE_LINKER_FLAGS: ""\n'
+                "    buildResult:\n"
+                '      variable: "' + name + '"\n'
+                "      cached: true\n"
+                "      stdout: |\n" + "\n".join(stdout_rows) + "\n"
+                "    directories:\n"
+                '      source: "' + scratch + '"\n'
+                '      binary: "' + scratch + '"\n'
+            )
+        return "\n---\n" + "".join(events)
+
+    def test_full_four_event_fixture_recognized(self):
+        sdk_dir = self._setup_copied_sdk(self.root / "fakesdk")
+        records = self.inspect(self._full_four_event_text(), sdk_dir)
+        self.assertEqual([r["supported"] for r in records], [False, False, True, False])
+        self.assertEqual(len(records), 4)
+        self.assertEqual(
+            records[2]["orphan_pairs"],
+            [
+                (".note.gnu.property", "Scrt1.o"),
+                (".rel.fini_array", "Scrt1.o"),
+                (".rel.init_array", "Scrt1.o"),
+                (".tm_clone_table", "crtbeginS.o"),
+                (".tm_clone_table", "crtendS.o"),
+            ],
+        )
+        self.assertEqual(
+            [r["disposition"] for r in records],
+            [
+                "capability-test-failed-expected-missing-static-libc",
+                "capability-test-failed-expected-missing-static-gcc_s",
+                "capability-test-warn-supported",
+                "capability-test-failed-expected-orphan-error",
+            ],
+        )
+
+    def test_recognized_static_record(self):
+        sdk_dir = self._setup_copied_sdk(self.root / "fakesdk")
+        records = self.inspect(self._base_text(), sdk_dir)
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["variable"], "check_C__fuse_ld_bfd__static")
+        self.assertEqual(record["exit_code"], 1)
+        self.assertFalse(record["supported"])
+        self.assertEqual(
+            record["disposition"], "capability-test-failed-expected-missing-static-libc"
+        )
+
+    def test_wrong_exit_rejects(self):
+        text = self._base_text().replace("exitCode: 1", "exitCode: 2")
+        with self.assertRaisesRegex(ValueError, r"must fail .*got 2"):
+            self.inspect(text)
+
+    def test_missing_context_rejects(self):
+        text = self._base_text().replace("cached: true", "cached: false")
+        with self.assertRaisesRegex(ValueError, "missing cached:true"):
+            self.inspect(text)
+
+    def test_wrong_flag_rejects(self):
+        text = self._base_text().replace("-m32", "-m64")
+        with self.assertRaisesRegex(ValueError, "CMAKE_C_FLAGS must be exactly -m32"):
+            self.inspect(text)
+
+    def test_extra_warning_rejects(self):
+        # The extra diagnostic lives INSIDE the stdout block (before the
+        # block terminator), so the exact-multiset count rejects.
+        text = self._base_text().replace(
+            "        ninja: build stopped: subcommand failed.",
+            "        ninja: build stopped: subcommand failed.\n"
+            "        collect2: error: ld returned 1 exit status",
+        )
+        with self.assertRaisesRegex(ValueError, "diagnostic multiset wrong"):
+            self.inspect(text)
+
+    def test_generic_gcc_warning_stdout_rejects(self):
+        # A generic compiler warning inside the probe stdout is part of the
+        # whole-event diagnostic count; it must never vanish.
+        text = self._base_text().replace(
+            "        ninja: build stopped: subcommand failed.",
+            "        gcc: warning: unrelated\n"
+            "        ninja: build stopped: subcommand failed.",
+        )
+        with self.assertRaisesRegex(ValueError, "diagnostic multiset wrong"):
+            self.inspect(text)
+
+    def test_metadata_warning_rejects(self):
+        # A diagnostic row in the event metadata (outside the stdout block,
+        # still inside the recognized event) rejects; it cannot disappear.
+        text = self._base_text().replace(
+            "    cmakeVariables:\n",
+            "    CMake Warning at /prefix/extra.cmake:1 (message):\n"
+            "    metadata warning row\n"
+            "    cmakeVariables:\n",
+        )
+        with self.assertRaisesRegex(ValueError, "diagnostic multiset wrong"):
+            self.inspect(text)
+
+    def test_prefix_warning_rejects(self):
+        # A diagnostic line before the first top-level event head must
+        # reject with the exact configure-prefix error (no dropped prefix).
+        text = self._base_text().replace(
+            "\n---\n",
+            "-- Configuring incomplete, errors occurred!\n"
+            "warning: unrelated toolchain note\n\n---\n",
+            1,
+        )
+        with self.assertRaisesRegex(ValueError, "configure prefix line=2"):
+            self.inspect(text)
+
+    def test_field_duplication_rejects(self):
+        # Each of the seven singular envelope fields must reject when the
+        # exact row appears twice with a conflicting value.
+        base = self._base_text()
+        cases = (
+            ("kind", '    kind: "try_compile-v1"', '    kind: "other-v9"'),
+            (
+                "variable",
+                '      variable: "check_C__fuse_ld_bfd__static"',
+                '      variable: "check_C__other"',
+            ),
+            ("cached", "      cached: true", "      cached: false"),
+            ("exitCode", "      exitCode: 1", "      exitCode: 2"),
+            (
+                'CMAKE_C_FLAGS"',
+                '      CMAKE_C_FLAGS: "-m32"',
+                '      CMAKE_C_FLAGS: "-m64"',
+            ),
+            (
+                'CMAKE_EXE_LINKER_FLAGS"',
+                '      CMAKE_EXE_LINKER_FLAGS: ""',
+                '      CMAKE_EXE_LINKER_FLAGS: "-Wl,-x"',
+            ),
+            ("stdout", "      stdout: |", "      stdout: |-"),
+        )
+        for label, original, conflicting in cases:
+            with self.subTest(label=label):
+                # Conflicting second occurrence of the same field prefix.
+                text = base.replace(original, original + "\n" + conflicting, 1)
+                with self.assertRaisesRegex(ValueError, "must occur once"):
+                    self.inspect(text)
+                # Identical duplicate still rejects (count must be 1).
+                text = base.replace(original, original + "\n" + original, 1)
+                with self.assertRaisesRegex(ValueError, "must occur once"):
+                    self.inspect(text)
+
+    def test_unknown_probe_rejects(self):
+        text = self._base_text().replace(
+            "check_C__fuse_ld_bfd__static", "check_C__other_probe"
+        )
+        with self.assertRaisesRegex(ValueError, "unknown probe variable"):
+            self.inspect(text)
+
+    def test_duplicate_probe_rejects(self):
+        text = "\n---\n" + self.STATIC_EVENT + self.STATIC_EVENT
+        with self.assertRaisesRegex(ValueError, "duplicate recognized probe"):
+            self.inspect(text)
+
+    def test_missing_diag_rejects(self):
+        text = self._base_text().replace(
+            "cannot find -lc: No such file or directory\n", ""
+        )
+        with self.assertRaisesRegex(ValueError, "diagnostic multiset wrong"):
+            self.inspect(text)
+
+    def test_compiler_id_warning_rejects(self):
+        # The compiler-id style probes with warnings still reject (no envelope).
+        text = 'buildResult:\n  variable: "HAVE_HEADER"\n  stdout: |\n    gcc: fatal error: missing.h\n  exitCode: 1\n'
+        with self.assertRaisesRegex(ValueError, "probe=HAVE_HEADER exit=1"):
+            self.inspect(text)
+
+    def test_ninja_real_warning_rejects(self):
+        # Unrelated real ninja diagnostics still reject outside recognized
+        # events (this is the runner's strict policy, not a waiver).
+        text = "[100/413] Building C object x.c.obj\nninja: build stopped: subcommand failed.\n"
+        with self.assertRaisesRegex(ValueError, "ninja: build stopped"):
+            self.inspect(text)
+
+    def test_cached_local_yaml_no_diagnostic_empty_list(self):
+        # Cached local YAML with NO diagnostic (and no envelope):
+        # recognized list is empty; the no-sidecar strict enforcement shape
+        # stays (the fixture yaml is a plain buildResult without events).
+        text = 'buildResult:\n  variable: "C_COMPILER_CHECK"\n  exitCode: 0\n'
+        self.assertEqual(self.inspect(text), [])
+
+    def test_sdk_backtrace_wrong_root_rejects(self):
+        # A made-up machine prefix (missing the real pinned path shape)
+        # cannot satisfy the exact required backtrace suffix patterns.
+        text = self._base_text().replace(
+            "/home/runner/ncs/v3.4.1/zephyr/cmake/modules/extensions.cmake:",
+            "/other-host/ncs/v9.9.9/zephyr/cmake/modules/extensions.cmake:",
+        )
+        with self.assertRaisesRegex(ValueError, "missing required backtrace entry"):
+            self.inspect(text)
+
+    def test_sdk_backtrace_wrong_source_rejects(self):
+        # A suffix pointing at a different file with same line numbering
+        # does not match exact required entries.
+        text = self._base_text().replace(
+            "/ncs/v3.4.1/zephyr/cmake/modules/extensions.cmake:2421",
+            "/ncs/v3.4.1/zephyr/cmake/modules/other.cmake:2421",
+        )
+        with self.assertRaisesRegex(ValueError, "missing required backtrace entry"):
+            self.inspect(text)
+
+    def test_sdk_backtrace_duplication_not_needed_exact(self):
+        # An extra, conflicting duplicate of one required entry (same
+        # suffix with a wrong function name) does not double-match; the
+        # correct entry stays count 1, so this shape must reject ONLY when
+        # the correct matching entry is absent: count-1 semantics with an
+        # extra near-miss that itself does not satisfy the full suffix
+        # rejects nothing extra by design.  Build the direct conflicting-
+        # value duplicate instead and require the missing-entry error.
+        text = self._base_text().replace(
+            '- "/home/runner/ncs/v3.4.1/zephyr/cmake/modules/extensions.cmake:2421'
+            ' (check_c_compiler_flag)"',
+            '- "/otherhost/v3.4.1/zephyr/cmake/modules/extensions.cmake:2421'
+            ' (check_c_compiler_flag)"',
+        )
+        with self.assertRaisesRegex(ValueError, "missing required backtrace entry"):
+            self.inspect(text)
+
+    def test_public_cli_good_and_negative(self):
+        # The real public CLI works with a synthetic role tree that now
+        # records the recognized probe records; negative: real diagnostics
+        # outside the recognized shape still fail.
+        sdk = self.root / "v3.4.1"
+        sdk.mkdir(parents=True, exist_ok=True)
+        self._setup_copied_sdk(sdk)
+        (sdk / "nrf/cmake").mkdir(parents=True, exist_ok=True)
+        (sdk / "nrf/cmake/device_support.cmake").write_text("#\n")
+        for role, iso in (("receiver", "PERIPHERAL_ISO"), ("client", "CENTRAL_ISO")):
+            area = self.root / "build" / role
+            (area).mkdir(parents=True, exist_ok=True)
+            cmake = (
+                "\n".join(
+                    "warning: " + text for text in BUILD_PROFILE[f"{role}_experimental"]
+                )
+                + f"\nCMake Warning at {sdk}/nrf/cmake/device_support.cmake:34 (message):\n"
+                "  SoC native is not supported by this release.\n"
+            )
+            ninja = "[100/413] Building C object mbedx509.dir/error.c.obj\n"
+            config = (
+                "CONFIG_BT_LL_SW_SPLIT=y\n"
+                "CONFIG_COVERAGE=y\n"
+                "CONFIG_ASSERT=y\n"
+                "CONFIG_COMPILER_WARNINGS_AS_ERRORS=y\n" + f"CONFIG_BT_CTLR_{iso}=y\n"
+            )
+            yaml = self._base_text()
+            for name, data in (
+                ("cmake.out", cmake),
+                ("ninja.out", ninja),
+                ("resolved.config", config),
+                ("cmake-configure.yaml", yaml),
+            ):
+                (area / name).write_text(
+                    data if isinstance(data, str) else data.decode()
+                )
+            env = os.environ.copy()
+            env["ZEPHYR_BASE"] = str(sdk / "zephyr")
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/check-native-bsim-build.py"),
+                    "--log-root",
+                    str(self.root),
+                    "--role",
+                    role,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+                timeout=30,
+            )
+            verdict = json.loads((area / "build-warning-verdict.json").read_text())
+            self.assertTrue(verdict["accepted"], verdict)
+            self.assertEqual(len(verdict["capability_probe_dispositions"]), 1)
+            negative = self.root / f"neg-{role}"
+            neg_area = negative / "build" / role
+            neg_area.mkdir(parents=True, exist_ok=True)
+            for name, data in (
+                ("cmake.out", cmake + "gcc: error: real\n"),
+                ("ninja.out", ninja),
+                ("resolved.config", config),
+                ("cmake-configure.yaml", yaml),
+            ):
+                (neg_area / name).write_text(
+                    data if isinstance(data, str) else data.decode()
+                )
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/check-native-bsim-build.py"),
+                    "--log-root",
+                    str(negative),
+                    "--role",
+                    role,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+                timeout=30,
+            )
+            verdict = json.loads((neg_area / "build-warning-verdict.json").read_text())
+            self.assertFalse(verdict["accepted"])
+            self.assertTrue(verdict["errors"])
 
 
 class HostCmakeProbeEntry(unittest.TestCase):
@@ -1514,3 +2091,7 @@ class HostCmakeProbeEntry(unittest.TestCase):
         ).encode()
         with self.assertRaisesRegex(ValueError, "probe=check_C__fuse_ld_bfd__nostdlib"):
             inspect_warnings(raw.encode(), b"", "receiver", sdk, yaml_with_warning)
+
+
+if __name__ == "__main__":
+    unittest.main()

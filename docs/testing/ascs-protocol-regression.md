@@ -109,6 +109,27 @@ build-warning checker retains the raw bounded logs plus the configure YAML
 identity. Expected argparse diagnostics from negative CLI tests are
 authored inputs, not suppressed warnings.
 
+Narrow recorded-purpose exception (2026-10-06): the configure-log scan in
+`scripts/native_bsim_probes.py` recognizes exactly four diagnostic-bearing
+CMake capability-probe events (`check_C__fuse_ld_bfd__static`,
+`check_C__fuse_ld_bfd__Wl__N`,
+`check_C__fuse_ld_bfd__Wl___orphan_handling_warn`,
+`check_C__fuse_ld_bfd__Wl___orphan_handling_error`). Each recognition is
+bounded to the full event envelope shape: exact required backtrace
+entries, exact `CMAKE_C_FLAGS: "-m32"`, exact empty
+`CMAKE_EXE_LINKER_FLAGS`, exact compile/link argv with `-Wl,--entry=main`,
+exact per-shape diagnostic multiset, and a verified installed SDK source
+pair (`linker_flags.cmake`/`extensions.cmake` exact SHA-256 pins). These
+are purpose-test dispositions of Zephyr's own linker capability probes,
+not a production warning waiver: every compiler or Ninja diagnostic
+outside those exact events stays a hard failure, unrecognized diagnostics
+inside or outside the envelope still reject with the strict error, failed
+probes stay `supported: false`, and `cached: true` never implies success.
+The runner retains per-role `capability-probes.json` records for the two
+build roles (receiver, client) plus a top-level suite
+`capability_probe_dispositions` map; family verdicts carry the unchanged
+checker JSON shape.
+
 ## Exclusive output and retention
 
 The public entry point requires a new absolute external

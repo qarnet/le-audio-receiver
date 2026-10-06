@@ -62,9 +62,10 @@ def check(root, role):
             raise ValueError(
                 f"{role}: resolved native controller/coverage profile drift"
             )
-        inspect_warnings(
+        probes = inspect_warnings(
             raw["cmake.out"], raw["ninja.out"], role, sdk, raw["cmake-configure.yaml"]
         )
+        verdict["capability_probe_dispositions"] = probes
         verdict["sdk_root"] = str(sdk)
         verdict["accepted"] = True
     except (OSError, ValueError, KeyError, UnicodeError) as exc:

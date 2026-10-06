@@ -31,6 +31,7 @@ from ascs_results import (
 from bluez_host_descendants import DescendantScope, _stat
 from bluez_host_guest import exclusive
 from bluez_host_process import run_owned
+from native_bsim_probes import inspect_configure_probes
 
 REPO = Path(__file__).resolve().parent.parent
 POLICY = REPO / "tests/ascs_bsim/cases.json"
@@ -818,8 +819,14 @@ def source_paths(sdk):
         "scripts/bsim-env.sh",
         "scripts/bsim_link_env.py",
         "scripts/check-bsim-runtime.py",
+        "scripts/native_bsim_probes.py",
     ):
         paths.add(REPO / rel)
+    for rel in (
+        "zephyr/cmake/linker/ld/linker_flags.cmake",
+        "zephyr/cmake/modules/extensions.cmake",
+    ):
+        paths.add(sdk / rel)
     for stem in (
         "bsim_48k_10ms_120b_l",
         "bsim_48k_10ms_120b_r",
@@ -965,27 +972,11 @@ def inspect_warnings(cmake_raw, ninja_raw, role, sdk, configure_raw=b""):
         not DIAGNOSTIC.search(stripped) and not DIAGNOSTIC.search(ninja),
         f"{role}: unlisted CMake/Ninja diagnostic",
     )
-    lines = configure.splitlines()
-    for index, line in enumerate(lines):
-        if DIAGNOSTIC.search(line):
-            prior = "\n".join(lines[max(0, index - 50) : index])
-            variables = re.findall(r'^\s*variable:\s*"?([^"\s]+)', prior, re.M)
-            probe = (
-                variables[-1]
-                if variables
-                else (
-                    "CMakeCCompilerId"
-                    if "CMakeCCompilerId" in prior
-                    else "compiler-id/unknown"
-                )
-            )
-            following = "\n".join(lines[index + 1 : index + 35])
-            exit_code = re.search(r"^\s*exitCode:\s*(-?\d+)", following, re.M)
-            raise ValueError(
-                f"{role}: CMakeConfigureLog probe={probe} "
-                f"exit={exit_code.group(1) if exit_code else 'unknown'} "
-                f"line={index + 1}: {line.strip()}"
-            )
+    # Configure-diagnostic disposition: recognized capability-probe
+    # diagnostics come back as structured records (exact SDK-source-verified
+    # shapes); anything unrecognized still raises the same strict error.
+    probe_records = inspect_configure_probes(configure, sdk)
+    return probe_records
 
 
 def copy_image(src, dest, role):
@@ -1196,13 +1187,16 @@ def execute(root, timeout, cancel, sdk):
                     "copy": identity(configure_raw, configure_copy),
                 },
             )
-            inspect_warnings(
+            probe_records = inspect_warnings(
                 _regular_snapshot(str(work / "cmake.log"), BUILD_CAP),
                 _regular_snapshot(str(work / "ninja.log"), BUILD_CAP),
                 role,
                 sdk,
                 configure_raw,
             )
+            inspected = work / f"{role}-capability-probes.json"
+            write_json(inspected, probe_records)
+            result.setdefault("capability_probe_dispositions", {})[role] = probe_records
             config = work / role / "zephyr/.config"
             insist(config.is_file(), f"{role} resolved config absent")
             shutil.copyfile(config, work / "resolved.config")
