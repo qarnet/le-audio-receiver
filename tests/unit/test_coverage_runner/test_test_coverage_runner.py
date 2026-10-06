@@ -49,6 +49,10 @@ FAKE_GCOVR = """#!/usr/bin/env python3
 import json, os, shutil, sys
 
 args = sys.argv[1:]
+log = os.environ.get("FAKE_GCOVR_ARGS_LOG")
+if log:
+    with open(log, "a") as fh:
+        fh.write("\\x00".join(args) + "\\n")
 if args and args[0] == "--version":
     print("gcovr 8.4")
     sys.exit(0)
@@ -80,6 +84,123 @@ for path in (out_txt, out_html):
             fh.write("x")
 sys.exit(0)
 """
+
+# Fake gcovr with the real gcovr-8.4 internal-function filter emulated:
+# function entries whose name starts "__" are removed from every produced
+# json unless --include-internal-functions is in argv.  Trace inputs
+# recorded to FAKE_GCOVR_ARGS_LOG exactly like the basic fake above.
+FAKE_GCOVR_FILTERING = """#!/usr/bin/env python3
+import json, os, sys
+
+args = sys.argv[1:]
+log = os.environ.get("FAKE_GCOVR_ARGS_LOG")
+if log:
+    with open(log, "a") as fh:
+        fh.write("\\x00".join(args) + "\\n")
+if args and args[0] == "--version":
+    print("gcovr 8.4")
+    sys.exit(0)
+
+keep_internal = "--include-internal-functions" in args
+out_json = out_sum = None
+for a in args:
+    if a.startswith("--json="):
+        out_json = a[len("--json="):]
+    elif a.startswith("--json-summary="):
+        out_sum = a[len("--json-summary="):]
+
+
+def load(path):
+    if path and os.path.exists(path):
+        with open(path, "rb") as fh:
+            return json.load(fh)
+    template = os.environ.get("FAKE_COVERAGE_JSON")
+    if template and os.path.exists(template):
+        with open(template, "rb") as fh:
+            return json.load(fh)
+    return {"gcovr/format_version": "8.4", "files": []}
+
+
+def filter_files(data):
+    if keep_internal:
+        return data["files"]
+    files = []
+    for f in data.get("files", []):
+        f = dict(f)
+        f["functions"] = [
+            fn
+            for fn in f.get("functions", [])
+            if not fn.get("name", "").startswith("__")
+        ]
+        files.append(f)
+    return files
+
+
+if out_json and "--add-tracefile" in args:
+    merged = {}
+    for a in args:
+        if a.endswith(".json") and "trace_" in a:
+            for f in filter_files(load(a)):
+                entry = dict(f)
+                existing = merged.setdefault(f["file"], entry)
+                if existing is not entry:
+                    continue
+    with open(out_json, "w") as fh:
+        json.dump({"gcovr/format_version": "8.4", "files": list(merged.values())}, fh)
+elif out_json:
+    with open(out_json, "w") as fh:
+        json.dump({"gcovr/format_version": "8.4", "files": filter_files(load(None))}, fh)
+if out_sum:
+    if "--add-tracefile" in args:
+        merged = {}
+        names = {}
+        for a in args:
+            if a.endswith(".json") and "trace_" in a:
+                for f in filter_files(load(a)):
+                    prev = names.get(f["file"], {"functions": [], "lines": []})
+                    functions = prev["functions"] + [
+                        fn
+                        for fn in f.get("functions", [])
+                        if fn.get("name") not in {
+                            e.get("name") for e in prev["functions"]
+                        }
+                    ]
+                    lines = prev["lines"] + [
+                        ln
+                        for ln in f.get("lines", [])
+                        if ln.get("line_number")
+                        not in {e.get("line_number") for e in prev["lines"]}
+                    ]
+                    names[f["file"]] = {
+                        "file": f["file"],
+                        "functions": functions,
+                        "lines": lines,
+                    }
+        summary_files = []
+        for f in names.values():
+            summary_files.append(
+                {
+                    "file": f["file"],
+                    "lines": {
+                        "covered": sum(1 for l in f["lines"] if l.get("count")),
+                        "total": len(f["lines"]),
+                    },
+                    "functions": {
+                        "covered": sum(
+                            1 for fn in f["functions"] if fn.get("execution_count")
+                        ),
+                        "total": len(f["functions"]),
+                    },
+                }
+            )
+        summary = {"files": summary_files}
+    else:
+        summary = {"files": []}
+    with open(out_sum, "w") as fh:
+        json.dump(summary, fh)
+sys.exit(0)
+"""
+
 
 COVERAGE_TEMPLATE = {
     "gcovr/format_version": "8.4",
@@ -124,7 +245,15 @@ MANIFEST = {
 
 
 class RunnerFixture:
-    def __init__(self, dirty=False, manifest=None, exec_suite=None, no_c_suites=False):
+    def __init__(
+        self,
+        dirty=False,
+        manifest=None,
+        exec_suite=None,
+        no_c_suites=False,
+        additions=None,
+        extra_sources=(),
+    ):
         self.root = tempfile.mkdtemp(prefix="t7covrun-")
         self.repo = os.path.join(self.root, "repo")
         os.makedirs(os.path.join(self.repo, "scripts"))
@@ -169,11 +298,19 @@ class RunnerFixture:
         os.makedirs(os.path.join(self.repo, "tests"), exist_ok=True)
         with open(os.path.join(self.repo, "tests", "test-matrix.json"), "w") as fh:
             json.dump(manifest or MANIFEST, fh)
+        if additions is not None:
+            with open(
+                os.path.join(self.repo, "tests", "coverage-additions.json"), "w"
+            ) as fh:
+                json.dump(additions, fh)
         os.makedirs(os.path.join(self.repo, "src"))
         with open(os.path.join(self.repo, "src", "foo.c"), "w") as fh:
             fh.write("int foo(void) { return 0; }\n")
         with open(os.path.join(self.repo, "src", "bar.c"), "w") as fh:
             fh.write("int bar(void) { return 0; }\n")
+        for name in extra_sources:
+            with open(os.path.join(self.repo, "src", name), "w") as fh:
+                fh.write("int %s(void) { return 0; }\n" % name[: -len(".c")])
 
         # git repo with an initial commit (clean state)
         env = dict(os.environ)
@@ -533,6 +670,493 @@ class RunnerBaseline(unittest.TestCase):
         self.assertIn("baseline file missing from current population: src/bar.c", out)
 
 
+class RunnerAdditionsSidecar(unittest.TestCase):
+    """Additive independent coverage contract: tests/coverage-additions.json
+    pins new sources with exact reference metrics while the frozen baseline
+    stays byte-for-byte unchanged.  Real shell, fake tools, sidecar anchored
+    to the fixture's own computed baseline hash (never the project
+    literal)."""
+
+    def _fixture(self):
+        fx = RunnerFixture(
+            additions=None,
+            extra_sources=("bt_audio_ltv_guard.c",),
+        )
+        self.addCleanup(fx.cleanup)
+        return fx
+
+    def _rewrite_sidecar(self, fx, data):
+        with open(os.path.join(fx.repo, "tests", "coverage-additions.json"), "w") as fh:
+            json.dump(data, fh)
+        subprocess.run(["git", "-C", fx.repo, "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", fx.repo, "commit", "-q", "-m", "sidecar update"], check=True
+        )
+
+    def _register_guard_in_manifest(self, fx):
+        manifest = json.loads(json.dumps(MANIFEST))
+        manifest["entries"].append(
+            {
+                "source": "src/bt_audio_ltv_guard.c",
+                "classification": "direct",
+                "stateful": False,
+                "suites": [{"name": "fake_suite", "evidence": "direct"}],
+                "public_outcomes": [
+                    {
+                        "api": "__wrap_bt_audio_data_parse",
+                        "outcome": "0",
+                        "witness": "test_foo",
+                    }
+                ],
+                "state_transitions": [],
+                "function_exclusions": [],
+                "hardware_acceptance": [],
+            }
+        )
+        with open(os.path.join(fx.repo, "tests", "test-matrix.json"), "w") as fh:
+            json.dump(manifest, fh)
+        subprocess.run(["git", "-C", fx.repo, "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", fx.repo, "commit", "-q", "-m", "manifest guard"], check=True
+        )
+
+    def _anchor(self, fx, baseline_path):
+        import hashlib
+
+        with open(baseline_path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+
+    def _coverage_template_with_guard(
+        self, fx, *, guard_covered=13, guard_branches=12, guard_functions=1
+    ):
+        # Extend the template with a guard file whose data comes from the
+        # fake gcovr boundary; guard line/branch/function totals 13/12/1.
+        template = json.loads(json.dumps(COVERAGE_TEMPLATE))
+        guard_lines = [
+            {"line_number": i, "count": 1 if i <= guard_covered else 0, "branches": []}
+            for i in range(1, 14)
+        ]
+        guard_lines[12]["branches"] = [
+            {"count": guard_branches, "fallthrough": False, "throw": False}
+            for _ in range(12)
+        ]
+        guard_functions = [
+            {
+                "name": "__wrap_bt_audio_data_parse",
+                "execution_count": guard_functions,
+            }
+        ]
+        template["files"].append(
+            {
+                "file": "src/bt_audio_ltv_guard.c",
+                "lines": guard_lines,
+                "functions": guard_functions,
+            }
+        )
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        return template
+
+    def _write_additions(
+        self, fx, *, anchor="computed", reference=(13, 13, 12, 12, 1, 1)
+    ):
+        lines_c, lines_t, br_c, br_t, fn_c, fn_t = reference
+        data = {
+            "schema_version": 1,
+            "frozen_baseline_sha256": anchor,
+            "files": {
+                "src/bt_audio_ltv_guard.c": {
+                    "lines": [lines_c, lines_t],
+                    "branches": [br_c, br_t],
+                    "functions": [fn_c, fn_t],
+                }
+            },
+        }
+        with open(os.path.join(fx.repo, "tests", "coverage-additions.json"), "w") as fh:
+            json.dump(data, fh)
+        subprocess.run(["git", "-C", fx.repo, "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", fx.repo, "commit", "-q", "-m", "additions sidecar"],
+            check=True,
+        )
+        return data
+
+    def test_valid_frozen_plus_addition_passes(self):
+        fx = self._fixture()
+        template = self._coverage_template_with_guard(fx)
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(0, rc, out)
+        anchor = self._anchor(fx, baseline)
+        self._register_guard_in_manifest(fx)
+        self._write_additions(fx, anchor=anchor)
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertEqual(0, rc, out)
+        self.assertIn("baseline enforcement PASS", out)
+        with open(os.path.join(_out := fx.root, "out", "run-manifest.json")) as fh:
+            manifest = json.load(fh)
+        self.assertTrue(manifest["coverage_additions_sha256"], "additions recorded")
+        numeric = None
+        with open(os.path.join(fx.root, "out", "numeric-summary.json"), "rb") as fh:
+            numeric = json.load(fh)
+        self.assertTrue(numeric.get("addition_sidecar"))
+        # Separate frozen vs additive display present in the run log.
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertIn("numeric frozen-population", out)
+        self.assertIn("numeric additive-sidecar", out)
+
+    def test_original_regression_not_hidden_by_perfect_addition(self):
+        fx = self._fixture()
+        template0 = self._coverage_template_with_guard(fx)
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template0, fh)
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(0, rc, out)
+        anchor = self._anchor(fx, baseline)
+        self._register_guard_in_manifest(fx)
+        self._write_additions(fx, anchor=anchor)
+        # Make the original src/foo.c regressed below its frozen ratio
+        # (1/2 lines) while the additive guard stays perfect, proving the
+        # perfect addition cannot hide a frozen-population regression.
+        template = self._coverage_template_with_guard(fx)
+        for f in template["files"]:
+            if f["file"].endswith("foo.c"):
+                f["lines"] = [
+                    dict(f["lines"][0], count=1),
+                    dict(f["lines"][-1], count=0),
+                ]
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertNotEqual(0, rc)
+        self.assertIn("src/foo.c lines below baseline", out)
+
+    def test_addition_uncovered_metric_rejects(self):
+        fx = self._fixture()
+        template = self._coverage_template_with_guard(
+            fx, guard_covered=12, guard_branches=0
+        )
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(0, rc, out)
+        anchor = self._anchor(fx, baseline)
+        self._write_additions(fx, anchor=anchor)
+        self._register_guard_in_manifest(fx)
+        # Current run: guard present but one line uncovered (+ no
+        # branches at all, both below the additive reference).
+        template = self._coverage_template_with_guard(
+            fx, guard_covered=12, guard_branches=0
+        )
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertNotEqual(0, rc)
+        self.assertIn("below additive reference", out)
+
+    def test_zero_or_missing_addition_metrics_reject(self):
+        fx = self._fixture()
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(0, rc, out)
+        anchor = self._anchor(fx, baseline)
+        self._write_additions(fx, anchor=anchor)
+        # Current coverage: guard file totally absent from coverage
+        # (e.g. filtered), so additive source has no instrumented metric.
+        template = json.loads(json.dumps(COVERAGE_TEMPLATE))
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertNotEqual(0, rc)
+        self.assertIn(
+            "additive source missing from current run: src/bt_audio_ltv_guard.c",
+            out,
+        )
+
+    def test_unknown_third_source_rejects_without_sidecar(self):
+        fx = RunnerFixture(extra_sources=("bt_audio_ltv_guard.c",))
+        self.addCleanup(fx.cleanup)
+        # Baseline freezes the original population only; a later manifest
+        # registration brings a guarded new source into the current
+        # population with NO sidecar: the unknown-new-source rule catches
+        # it even though its coverage is perfect.
+        template = self._coverage_template_with_guard(fx)
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(0, rc, out)
+        self._register_guard_in_manifest(fx)
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertNotEqual(0, rc)
+        self.assertIn("new file in current population not in baseline", out)
+
+    def test_overlapping_sidecar_entry_rejects(self):
+        fx = self._fixture()
+        template = self._coverage_template_with_guard(fx)
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(0, rc, out)
+        anchor = self._anchor(fx, baseline)
+        self._register_guard_in_manifest(fx)
+        data = self._write_additions(fx, anchor=anchor)
+        data["files"]["src/foo.c"] = {
+            "lines": [1, 1],
+            "branches": [1, 1],
+            "functions": [1, 1],
+        }
+        self._rewrite_sidecar(fx, data)
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertNotEqual(0, rc)
+        self.assertIn("invalid additions sidecar", out)
+        self.assertIn("overlap the frozen baseline population", out)
+
+    def _prepare_valid_flow(self, fx, *, guard_covered=13, guard_branches=12):
+        """Baseline first, then guard manifest + sidecar; returns sidecar dict."""
+        template = self._coverage_template_with_guard(
+            fx, guard_covered=guard_covered, guard_branches=guard_branches
+        )
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(0, rc, out)
+        anchor = self._anchor(fx, baseline)
+        self._register_guard_in_manifest(fx)
+        self._write_additions(fx, anchor=anchor)
+        return baseline
+
+    def _run_and_out(self, fx, baseline):
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        return rc, out
+
+    def test_empty_sidecar_file_rejects(self):
+        fx = RunnerFixture(extra_sources=("bt_audio_ltv_guard.c",))
+        self.addCleanup(fx.cleanup)
+        baseline = self._prepare_valid_flow(fx)
+        path = os.path.join(fx.repo, "tests", "coverage-additions.json")
+        open(path, "w").close()
+        subprocess.run(["git", "-C", fx.repo, "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", fx.repo, "commit", "-q", "-m", "empty"], check=True
+        )
+        rc, out = self._run_and_out(fx, baseline)
+        self.assertNotEqual(0, rc)
+        self.assertIn("invalid additions sidecar", out)
+        self.assertIn("file is empty", out)
+
+    def test_sidecar_dangling_symlink_rejects(self):
+        fx = RunnerFixture(extra_sources=("bt_audio_ltv_guard.c",))
+        self.addCleanup(fx.cleanup)
+        baseline = self._prepare_valid_flow(fx)
+        path = os.path.join(fx.repo, "tests", "coverage-additions.json")
+        os.remove(path)
+        os.symlink(os.path.join(fx.root, "does-not-exist.json"), path)
+        subprocess.run(["git", "-C", fx.repo, "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", fx.repo, "commit", "-q", "-m", "symlink"], check=True
+        )
+        rc, out = self._run_and_out(fx, baseline)
+        self.assertNotEqual(0, rc)
+        self.assertIn("invalid additions sidecar", out)
+        self.assertIn("open failed", out)
+
+    def test_sidecar_directory_rejects(self):
+        fx = RunnerFixture(extra_sources=("bt_audio_ltv_guard.c",))
+        self.addCleanup(fx.cleanup)
+        baseline = self._prepare_valid_flow(fx)
+        path = os.path.join(fx.repo, "tests", "coverage-additions.json")
+        os.remove(path)
+        os.mkdir(path)
+        subprocess.run(["git", "-C", fx.repo, "add", "-A"], check=True)
+        subprocess.run(["git", "-C", fx.repo, "commit", "-q", "-m", "dir"], check=True)
+        rc, out = self._run_and_out(fx, baseline)
+        self.assertNotEqual(0, rc)
+        self.assertIn("invalid additions sidecar", out)
+        self.assertIn("not a regular file", out)
+
+    def test_sidecar_nonfinite_constant_rejects(self):
+        fx = RunnerFixture(extra_sources=("bt_audio_ltv_guard.c",))
+        self.addCleanup(fx.cleanup)
+        baseline = self._prepare_valid_flow(fx)
+        path = os.path.join(fx.repo, "tests", "coverage-additions.json")
+        with open(path, "w") as fh:
+            fh.write(
+                '{\n  "schema_version": 1,\n  "frozen_baseline_sha256": "x",\n'
+                '  "files": {"src/bt_audio_ltv_guard.c": {"lines": [13, 13],'
+                ' "branches": [NaN, 12], "functions": [1, 1]}}\n}\n'
+            )
+        subprocess.run(["git", "-C", fx.repo, "add", "-A"], check=True)
+        subprocess.run(["git", "-C", fx.repo, "commit", "-q", "-m", "nan"], check=True)
+        rc, out = self._run_and_out(fx, baseline)
+        self.assertNotEqual(0, rc)
+        self.assertIn("invalid additions sidecar", out)
+        self.assertIn("nonfinite JSON constant", out)
+
+    def test_sidecar_top_level_list_rejects(self):
+        fx = RunnerFixture(extra_sources=("bt_audio_ltv_guard.c",))
+        self.addCleanup(fx.cleanup)
+        baseline = self._prepare_valid_flow(fx)
+        path = os.path.join(fx.repo, "tests", "coverage-additions.json")
+        with open(path, "w") as fh:
+            fh.write("[]\n")
+        subprocess.run(["git", "-C", fx.repo, "add", "-A"], check=True)
+        subprocess.run(["git", "-C", fx.repo, "commit", "-q", "-m", "list"], check=True)
+        rc, out = self._run_and_out(fx, baseline)
+        self.assertNotEqual(0, rc)
+        self.assertIn("top-level additions must be an object", out)
+
+    def test_sidecar_metrics_list_rejects(self):
+        fx = RunnerFixture(extra_sources=("bt_audio_ltv_guard.c",))
+        self.addCleanup(fx.cleanup)
+        baseline = self._prepare_valid_flow(fx)
+        path = os.path.join(fx.repo, "tests", "coverage-additions.json")
+        anchor = self._anchor(fx, baseline)
+        with open(path, "w") as fh:
+            fh.write(
+                '{\n  "schema_version": 1,\n  "frozen_baseline_sha256": "%s",\n'
+                '  "files": {"src/bt_audio_ltv_guard.c": ["lines", "branches"]}\n}\n'
+                % anchor
+            )
+        subprocess.run(["git", "-C", fx.repo, "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", fx.repo, "commit", "-q", "-m", "list2"], check=True
+        )
+        rc, out = self._run_and_out(fx, baseline)
+        self.assertNotEqual(0, rc)
+        self.assertIn("metrics must be an object", out)
+
+    def test_sidecar_path_traversal_rejects(self):
+        fx = RunnerFixture(extra_sources=("bt_audio_ltv_guard.c",))
+        self.addCleanup(fx.cleanup)
+        baseline = self._prepare_valid_flow(fx)
+        path = os.path.join(fx.repo, "tests", "coverage-additions.json")
+        anchor = self._anchor(fx, baseline)
+        with open(path, "w") as fh:
+            fh.write(
+                '{\n  "schema_version": 1,\n  "frozen_baseline_sha256": "%s",\n'
+                '  "files": {"src/../src/bt_audio_ltv_guard.c": \n'
+                '    {"lines": [13, 13], "branches": [12, 12], "functions": [1, 1]}}\n}\n'
+                % anchor
+            )
+        subprocess.run(["git", "-C", fx.repo, "add", "-A"], check=True)
+        subprocess.run(["git", "-C", fx.repo, "commit", "-q", "-m", "trav"], check=True)
+        rc, out = self._run_and_out(fx, baseline)
+        self.assertNotEqual(0, rc)
+        self.assertIn("unsafe path component", out)
+
+    def test_additive_one_of_thirteen_below_reference_rejects(self):
+        fx = RunnerFixture(extra_sources=("bt_audio_ltv_guard.c",))
+        self.addCleanup(fx.cleanup)
+        baseline = self._prepare_valid_flow(fx)
+        template = self._coverage_template_with_guard(fx, guard_covered=1)
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        rc, out = self._run_and_out(fx, baseline)
+        self.assertNotEqual(0, rc)
+        self.assertIn("below additive reference: current 1/13 vs reference 13/13", out)
+
+    def test_additive_bool_current_metrics_reject(self):
+        fx = RunnerFixture(extra_sources=("bt_audio_ltv_guard.c",))
+        self.addCleanup(fx.cleanup)
+        baseline = self._prepare_valid_flow(fx)
+        template = self._coverage_template_with_guard(fx)
+        for f in template["files"]:
+            if f["file"].endswith("bt_audio_ltv_guard.c"):
+                f["lines"] = True
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        rc, out = self._run_and_out(fx, baseline)
+        self.assertNotEqual(0, rc)
+        # bool type in current metrics cannot be counted; the exact path
+        # is a zero-totals record rejected with the additive-minimum
+        # error (no skipped record, no pass).
+        self.assertNotIn("baseline enforcement PASS", out)
+        self.assertIn("total below minimum", out)
+
+    def test_additive_zero_functions_reject(self):
+        fx = RunnerFixture(extra_sources=("bt_audio_ltv_guard.c",))
+        self.addCleanup(fx.cleanup)
+        baseline = self._prepare_valid_flow(fx)
+        template = self._coverage_template_with_guard(fx, guard_functions=0)
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        rc, out = self._run_and_out(fx, baseline)
+        self.assertNotEqual(0, rc)
+        self.assertIn("below additive reference: current 0/1 vs reference 1/1", out)
+
+    def test_sidecar_anchor_drift_rejects(self):
+        fx = self._fixture()
+        self._register_guard_in_manifest(fx)
+        self._coverage_template_with_guard(fx)
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(0, rc, out)
+        self._write_additions(fx, anchor="0" * 64)
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertNotEqual(0, rc)
+        self.assertIn("does not match actual baseline SHA", out)
+
+    def test_sidecar_malformed_rejects(self):
+        fx = self._fixture()
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(0, rc, out)
+        with open(os.path.join(fx.repo, "tests", "coverage-additions.json"), "w") as fh:
+            fh.write('{"schema_version": true, "files": {}}')  # scalar bool
+        subprocess.run(["git", "-C", fx.repo, "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", fx.repo, "commit", "-q", "-m", "malformed"], check=True
+        )
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertNotEqual(0, rc)
+        self.assertIn("invalid additions sidecar", out)
+
+    def test_sidecar_duplicate_key_rejects(self):
+        fx = self._fixture()
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(0, rc, out)
+        anchor = self._anchor(fx, baseline)
+        raw = (
+            '{\n  "schema_version": 1,\n'
+            '  "frozen_baseline_sha256": "%s",\n'
+            '  "files": {},\n'
+            '  "files": {}\n}\n' % anchor
+        )
+        with open(os.path.join(fx.repo, "tests", "coverage-additions.json"), "w") as fh:
+            fh.write(raw)
+        subprocess.run(["git", "-C", fx.repo, "add", "-A"], check=True)
+        subprocess.run(["git", "-C", fx.repo, "commit", "-q", "-m", "dup"], check=True)
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertNotEqual(0, rc)
+        self.assertIn("duplicate JSON key", out)
+
+    def test_missing_new_source_sidecar_fails(self):
+        # New source is in the current population/run but no sidecar
+        # describes it: the strict unknown-new-file rule still rejects.
+        fx = RunnerFixture(extra_sources=("bt_audio_ltv_guard.c",))
+        self.addCleanup(fx.cleanup)
+        template = self._coverage_template_with_guard(fx)
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        baseline = os.path.join(fx.root, "baseline.json")
+        rc, out, _ = fx.run("--write-baseline", baseline)
+        self.assertEqual(0, rc, out)
+        self._register_guard_in_manifest(fx)
+        with open(fx.coverage_template, "w") as fh:
+            json.dump(template, fh)
+        rc, out, _ = fx.run("--baseline", baseline, "--clean-output")
+        self.assertNotEqual(0, rc)
+        self.assertIn("new file in current population not in baseline", out)
+
+
 class RunnerToolVersionEnforcement(unittest.TestCase):
     """Baseline gcovr/gcov version enforcement (R0): recorded versions are
     compared in baseline mode, absent fields stay accepted, --write-baseline
@@ -697,6 +1321,134 @@ class RunnerInventoryDiscovery(unittest.TestCase):
         rc, out, _ = fx.run("--report-only")
         self.assertNotEqual(0, rc)
         self.assertIn("test_inventory.py", out)
+
+
+class RunnerTraceFlags(unittest.TestCase):
+    """Per-suite gcovr trace flags: only the ltv_bounds trace (and the
+    final merge) carries --include-internal-functions; every other suite
+    trace keeps the default filtering.  The fake gcovr emulates the real
+    gcovr 8.4 "__"-name filter boundary; recorded argv and surviving
+    fixture __wrap data are checked without any real build."""
+
+    def _suites_fixture(self):
+        fx = RunnerFixture()
+        self.addCleanup(fx.cleanup)
+        for suite in ("fake_suite", "ltv_bounds"):
+            os.makedirs(os.path.join(fx.repo, "tests", "unit", suite), exist_ok=True)
+            with open(
+                os.path.join(fx.repo, "tests", "unit", suite, "testcase.yaml"),
+                "w",
+            ) as fh:
+                fh.write(
+                    "tests:\n  unit.%s:\n"
+                    "    platform_allow: native_sim/native/64\n" % suite
+                )
+            with open(
+                os.path.join(fx.repo, "tests", "unit", suite, "CMakeLists.txt"),
+                "w",
+            ) as fh:
+                fh.write("cmake_minimum_required(VERSION 3.20.0)\nproject(x)\n")
+        return fx
+
+    @staticmethod
+    def _recorded_invocations(args_log):
+        with open(args_log) as fh:
+            return [line.split("\x00") for line in fh.read().splitlines() if line]
+
+    def test_ltv_bounds_trace_and_merge_carry_flag_others_not(self):
+        with tempfile.TemporaryDirectory(prefix="t7cov-args-") as tempdir:
+            fx = self._suites_fixture()
+            args_log = os.path.join(tempdir, "gcovr-args.txt")
+            fx.env["FAKE_GCOVR_ARGS_LOG"] = args_log
+            rc, out, output = fx.run("--report-only")
+            self.assertEqual(0, rc, out)
+            invocations = self._recorded_invocations(args_log)
+            traces = [inv for inv in invocations if "--object-directory" in inv]
+            merges = [
+                inv for inv in invocations if any("--add-tracefile" == a for a in inv)
+            ]
+            self.assertEqual(len(merges), 1, invocations)
+            by_suite = {}
+            for inv in traces:
+                json_arg = next(
+                    a[len("--json=") :] for a in inv if a.startswith("--json=")
+                )
+                name = os.path.basename(json_arg)
+                self.assertTrue(
+                    name.startswith("trace_") and name.endswith(".json"), inv
+                )
+                by_suite[name] = inv
+            self.assertEqual(
+                sorted(by_suite),
+                sorted(["trace_fake_suite.json", "trace_ltv_bounds.json"]),
+            )
+            # Exactly the ltv_bounds trace relaxes the internal filter.
+            self.assertIn(
+                "--include-internal-functions",
+                by_suite["trace_ltv_bounds.json"],
+            )
+            self.assertNotIn(
+                "--include-internal-functions",
+                by_suite["trace_fake_suite.json"],
+            )
+            # And only ltv_bounds: plain fixture suites carry no flag.
+            self.assertEqual(
+                [inv for inv in traces if "--include-internal-functions" in inv],
+                [by_suite["trace_ltv_bounds.json"]],
+            )
+            # Merge carries the literal flag exactly once.
+            self.assertEqual(merges[0].count("--include-internal-functions"), 1)
+
+    def test_wrap_line_survives_to_numeric_summary(self):
+        with tempfile.TemporaryDirectory(prefix="t7cov-wrap-") as tempdir:
+            fx = self._suites_fixture()
+            template = json.loads(json.dumps(COVERAGE_TEMPLATE))
+            template["files"].append(
+                {
+                    "file": "src/bt_audio_ltv_guard.c",
+                    "lines": [{"line_number": 13, "count": 1, "branches": []}],
+                    "functions": [
+                        {
+                            "name": "__wrap_bt_audio_data_parse",
+                            "execution_count": 1,
+                        }
+                    ],
+                }
+            )
+            with open(fx.coverage_template, "w") as fh:
+                json.dump(template, fh)
+            # Filtering fake replaces the basic fake: __-functions survive
+            # only where the runner actually relaxed the flag.
+            path = os.path.join(fx.bin, "gcovr")
+            with open(path, "w") as fh:
+                fh.write(FAKE_GCOVR_FILTERING)
+            os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR)
+            args_log = os.path.join(tempdir, "gcovr-args.txt")
+            fx.env["FAKE_GCOVR_ARGS_LOG"] = args_log
+            rc, out, output = fx.run("--report-only")
+            self.assertEqual(0, rc, out)
+            with open(os.path.join(output, "coverage-summary.json")) as fh:
+                summary = json.load(fh)
+            wrapper = [
+                f
+                for f in summary.get("files", [])
+                if f.get("file", "").endswith("bt_audio_ltv_guard.c")
+            ]
+            self.assertEqual(1, len(wrapper), summary)
+            self.assertEqual(
+                wrapper[0].get("functions"), {"covered": 1, "total": 1}, wrapper[0]
+            )
+            self.assertEqual(
+                wrapper[0].get("lines"), {"covered": 1, "total": 1}, wrapper[0]
+            )
+            # Negative control inside the same summary: the filtered
+            # fixture function names still appear with nonzero counts.
+            plain = [
+                f
+                for f in summary.get("files", [])
+                if f.get("file", "").endswith("foo.c")
+            ]
+            self.assertEqual(plain[0].get("functions"), {"covered": 1, "total": 1})
 
 
 class TestAllGateOutputRoot(unittest.TestCase):

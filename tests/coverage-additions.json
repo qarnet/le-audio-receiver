@@ -1,0 +1,11 @@
+{
+ "schema_version": 1,
+ "frozen_baseline_sha256": "5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed76de7a",
+ "files": {
+  "src/bt_audio_ltv_guard.c": {
+   "lines": [13, 13],
+   "branches": [12, 12],
+   "functions": [1, 1]
+  }
+ }
+}

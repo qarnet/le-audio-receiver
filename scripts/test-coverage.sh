@@ -259,7 +259,19 @@ for suite in "${all_suites[@]}"; do
     [ "$gcda_count" -gt 0 ] \
         || die "no .gcda after run for $suite — host libgcov did not write data"
 
+    # Per-suite trace flags. Only the ltv_bounds suite traces its guard
+    # wrapper with gcovr's internal-function filter relaxed: the guard's
+    # sole function is __wrap_bt_audio_data_parse, which the default
+    # "__" prefix filter drops (gcovr 8.4 exclusions._function_can_be_excluded).
+    # Old per-suite traces keep the default filter, so the historical
+    # frozen population is unchanged; the final merge below re-adds the
+    # flag only for reading the already-relaxed trace files.
+    suite_trace_args=()
+    if [ "$suite" = "ltv_bounds" ]; then
+        suite_trace_args+=(--include-internal-functions)
+    fi
     gcovr_json "$TRACE_DIR/trace_$suite.json" \
+        "${suite_trace_args[@]}" \
         --object-directory "$build_dir" \
         || die "gcovr trace failed for $suite"
 
@@ -279,6 +291,7 @@ done
 
 "$GCOVR" --root "$REPO_ROOT" --gcov-executable "$GCOV" \
     --merge-mode-functions=separate "${PARSE_ERROR_FLAGS[@]}" \
+    --include-internal-functions \
     --filter "$REPO_ROOT/src/" \
     "${merge_args[@]}" \
     --json="$OUTPUT_DIR/coverage.json" \
@@ -329,7 +342,19 @@ by_path = {f["file"]: f for f in cov.get("files", [])}
 files = {}
 for src in population:
     rec = by_path.get(src)
-    if rec is None:
+    if rec is None or not isinstance(rec, dict):
+        continue
+    if not isinstance(rec.get("lines", []), list) or not isinstance(
+        rec.get("functions", []), list
+    ):
+        # Non-list metric types cannot be counted; record zero totals so
+        # later enforcement rejects them with the exact valid_pair error
+        # instead of a TypeError mid-summary.
+        files[src] = {
+            "lines": [0, 0],
+            "branches": [0, 0],
+            "functions": [0, 0],
+        }
         continue
     # Map function -> excluded flags of its lines (GCOVR_EXCL blocks).
     lines_by_fn = {}
@@ -377,6 +402,7 @@ summary = {
     "totals": totals,
     "exclusions": {"numeric_population": excluded, "reasons": exclusion_reasons},
 }
+summary["addition_sidecar"] = None
 with open(os.path.join(out_dir, "numeric-summary.json"), "w", encoding="utf-8") as fh:
     json.dump(summary, fh, indent=2, sort_keys=True)
     fh.write("\n")
@@ -414,7 +440,10 @@ manifest = {
     "gcovr_version": gcovr_ver,
     "gcov_version": gcov_ver,
     "gcovr_merge_mode_functions": "separate",
+    "gcovr_internal_function_filter": "relaxed-only-for-ltv_bounds-trace",
     "filter": [os.path.join(repo, "src/")],
+    "coverage_additions_sha256": None,
+    "coverage_additions": None,
     "suites": [{"name": s, "kind": "exec-only" if s in exec_only else "twister",
                 "command": "west build --no-sysbuild -b native_sim/native/64 -d BUILD tests/unit/%s -p -- -DCONFIG_COVERAGE=y; BUILD/zephyr/zephyr.exe" % s,
                 "status": "ok", "config": "CONFIG_COVERAGE=y"} for s in suites],
@@ -460,8 +489,25 @@ PYEOF
     fi
 elif [ "$MODE" = "baseline" ]; then
     [ -f "$BASELINE_PATH" ] || die "baseline not found: $BASELINE_PATH"
-    python3 - "$OUTPUT_DIR/numeric-summary.json" "$BASELINE_PATH" "$GCOVR_VERSION" "$GCOV_VERSION" <<'PYEOF' || die "baseline enforcement failed"
-import json, sys
+    # Optional additive non-regression sidecar (the sole path is
+    # tests/coverage-additions.json; no environment override is offered).
+    # It pins independently selected new sources with exact reference
+    # metrics while the frozen baseline stays byte-for-byte unchanged.
+    # Presence uses -e or -L: a dangling symlink, directory or empty path
+    # is invalid, not absent.
+    ADDITIONS_JSON="$REPO_ROOT/tests/coverage-additions.json"
+    if ! [ -e "$ADDITIONS_JSON" ] && ! [ -L "$ADDITIONS_JSON" ]; then
+        ADDITIONS_JSON=""
+    fi
+    python3 - "$OUTPUT_DIR/numeric-summary.json" "$BASELINE_PATH" \
+        "$GCOVR_VERSION" "$GCOV_VERSION" \
+        "$OUTPUT_DIR/run-manifest.json" \
+        "${ADDITIONS_JSON}" <<'PYEOF' || die "baseline enforcement failed"
+import hashlib
+import json
+import os
+import stat
+import sys
 
 
 def ge(a, b):
@@ -469,11 +515,163 @@ def ge(a, b):
     return a[0] * b[1] >= b[0] * a[1]
 
 
-summary_path, baseline_path, cur_gcovr, cur_gcov = sys.argv[1:5]
+def fail_additions(exc, sidecar_path):
+    """One explicit error and exit; never silently ignore a bad sidecar."""
+    print("error: invalid additions sidecar %s: %s" % (sidecar_path, exc))
+    print("baseline enforcement: 1 error(s)")
+    sys.exit(1)
+
+
+def duplicate_pairs(pairs):
+    seen = set()
+    result = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError("duplicate JSON key %r" % key)
+        seen.add(key)
+        result[key] = value
+    return result
+
+
+def reject_constant(value):
+    raise ValueError("nonfinite JSON constant %r" % value)
+
+
+def read_sidecar_bounded(path, limit=65536):
+    """One bounded raw read; returns (data, sha256) from the same snapshot."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        raise ValueError("open failed: %s" % exc) from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("not a regular file")
+        if info.st_size > limit:
+            raise ValueError(
+                "size %d exceeds %d bytes" % (info.st_size, limit)
+            )
+        with os.fdopen(fd, "rb") as fh:
+            fd = None
+            data = fh.read(limit + 1)
+        if len(data) == 0:
+            raise ValueError("file is empty")
+        if len(data) > limit:
+            raise ValueError(
+                "read %d exceeds %d bytes" % (len(data), limit)
+            )
+        return data, (hashlib.sha256(data).hexdigest() if data else None)
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def valid_pair(value, label, minimum_total=1):
+    if type(value) is not list or len(value) != 2:
+        raise ValueError("%s must be a [covered, total] pair" % label)
+    covered, total = value
+    bad = [item for item in (covered, total) if type(item) is not int]
+    if bad:
+        raise ValueError("%s has non-int members %r" % (label, bad))
+    if covered < 0 or covered > total:
+        raise ValueError("%s covered outside 0..total" % label)
+    if total < minimum_total:
+        raise ValueError("%s total below minimum %d" % (label, minimum_total))
+    return covered, total
+
+
+def safe_source(src, label):
+    if (
+        type(src) is not str
+        or not src.startswith("src/")
+        or not src.endswith(".c")
+        or "\\" in src
+    ):
+        raise ValueError("%s %r must be a relative src/*.c path" % (label, src))
+    parts = src.split("/")
+    if any(p in ("", "..", ".") for p in parts):
+        raise ValueError("%s %r has an unsafe path component" % (label, src))
+    return src
+
+
+summary_path, baseline_path, cur_gcovr, cur_gcov, manifest_path, additions_raw = (
+    sys.argv[1:7]
+)
+
 with open(summary_path, "r", encoding="utf-8") as fh:
     cur = json.load(fh)
-with open(baseline_path, "r", encoding="utf-8") as fh:
-    base = json.load(fh)
+with open(baseline_path, "rb") as fh:
+    baseline_bytes = fh.read()
+base = json.loads(baseline_bytes)
+
+if not additions_raw:
+    # Legacy path: sidecar genuinely absent; enforcement stays exactly as
+    # before with no additions record in the run reports.
+    additions = None
+    additions_sha = None
+    additions_record = None
+else:
+    try:
+        raw, additions_sha = read_sidecar_bounded(additions_raw)
+        data = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=duplicate_pairs,
+            parse_constant=reject_constant,
+        )
+        if type(data) is not dict:
+            raise ValueError("top-level additions must be an object")
+        keys = set(data)
+        if keys != {"schema_version", "frozen_baseline_sha256", "files"}:
+            raise ValueError(
+                "keys must be exactly schema_version, frozen_baseline_sha256, "
+                "files: got %r" % sorted(keys)
+            )
+        if type(data["schema_version"]) is not int or data["schema_version"] != 1:
+            raise ValueError("schema_version must be int 1 (bool is not int)")
+        anchor = data["frozen_baseline_sha256"]
+        if (
+            type(anchor) is not str
+            or len(anchor) != 64
+            or any(c not in "0123456789abcdef" for c in anchor)
+        ):
+            raise ValueError("anchor must be exactly 64 lowercase hex")
+        actual_anchor = hashlib.sha256(baseline_bytes).hexdigest()
+        if anchor != actual_anchor:
+            raise ValueError(
+                "anchor %r does not match actual baseline SHA %s"
+                % (anchor, actual_anchor)
+            )
+        if type(data["files"]) is not dict or not data["files"]:
+            raise ValueError("files must be a nonempty object")
+        additions = {}
+        for src, metrics in data["files"].items():
+            safe_source(src, "additions source")
+            if type(metrics) is not dict:
+                raise ValueError("additions %s metrics must be an object" % src)
+            if set(metrics) != {"lines", "branches", "functions"}:
+                raise ValueError(
+                    "additions %s metrics keys must be exactly lines, branches, "
+                    "functions" % src
+                )
+            additions[src] = {
+                metric: valid_pair(
+                    metrics[metric], "additions %s %s" % (src, metric)
+                )
+                for metric in ("lines", "branches", "functions")
+            }
+        overlap = set(additions) & set(base["population"])
+        if overlap:
+            fail_additions(
+                "additions sources overlap the frozen baseline population: %s"
+                % sorted(overlap),
+                additions_raw,
+            )
+    except (ValueError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        fail_additions(exc, additions_raw)
+    additions_record = {
+        "sha256": additions_sha,
+        "path": "tests/coverage-additions.json",
+    }
 
 errors = []
 
@@ -505,44 +703,185 @@ for tool, cur_ver, base_key in (
 
 cur_pop = set(cur["population"])
 base_pop = set(base["population"])
-for src in sorted(base_pop - cur_pop):
-    errors.append("baseline file missing from current population: %s" % src)
-for src in sorted(cur_pop - base_pop):
-    errors.append("new file in current population not in baseline: %s" % src)
+addition_keys = set(additions) if additions is not None else set()
+
+if additions is not None:
+    required_population = base_pop | addition_keys
+    missing_label = "required population source missing from current run: %s"
+    extra_label = (
+        "new file in current population not in baseline or additions: %s"
+    )
+else:
+    required_population = base_pop
+    missing_label = "baseline file missing from current population: %s"
+    extra_label = "new file in current population not in baseline: %s"
+for src in sorted(required_population - cur_pop):
+    errors.append(missing_label % src)
+for src in sorted(cur_pop - required_population):
+    errors.append(extra_label % src)
+
+# Frozen-population ratios come ONLY from current records of base_pop
+# sources, so a perfectly covered additive source can never mask a
+# frozen-population regression; every metric is validated first
+# (minimum_total=0 keeps legitimate 0/0 branches legal) and a missing or
+# invalid metric is an explicit error, never silently skipped.
+frozen_records = {}
+for src in sorted(base_pop):
+    rec = cur["files"].get(src)
+    if rec is None:
+        errors.append("current file missing for frozen population source: %s" % src)
+        continue
+    validated = {}
+    for metric in ("lines", "branches", "functions"):
+        try:
+            validated[metric] = valid_pair(
+                rec.get(metric), "frozen %s %s" % (src, metric), minimum_total=0
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            validated[metric] = None
+    frozen_records[src] = validated
+frozen_totals = {"lines": [0, 0], "branches": [0, 0], "functions": [0, 0]}
+for src in sorted(base_pop):
+    validated = frozen_records.get(src)
+    if validated is None or not all(v is not None for v in validated.values()):
+        continue
+    for metric in frozen_totals:
+        covered, total = validated[metric]
+        frozen_totals[metric][0] += covered
+        frozen_totals[metric][1] += total
 
 for metric in ("lines", "branches"):
-    if not ge(cur["totals"][metric], base["totals"][metric]):
+    if not ge(frozen_totals[metric], base["totals"][metric]):
         errors.append(
-            "overall %s below baseline: current %d/%d vs baseline %d/%d"
+            "frozen-population overall %s below baseline: current %d/%d vs baseline %d/%d"
             % (
                 metric,
-                cur["totals"][metric][0],
-                cur["totals"][metric][1],
+                frozen_totals[metric][0],
+                frozen_totals[metric][1],
                 base["totals"][metric][0],
                 base["totals"][metric][1],
             )
         )
 
-for src in sorted(base_pop & cur_pop):
+for src in sorted(frozen_records):
+    validated = frozen_records[src]
+    if validated is None or not all(v is not None for v in validated.values()):
+        continue
+    base_rec = base["files"].get(src, {})
     for metric in ("lines", "branches", "functions"):
-        c = cur["files"].get(src, {}).get(metric)
-        b = base["files"].get(src, {}).get(metric)
-        if c is None or b is None:
+        ref = base_rec.get(metric)
+        if ref is None:
+            errors.append("%s %s baseline metric missing" % (src, metric))
             continue
-        if not ge(c, b):
+        if not ge(validated[metric], ref):
             errors.append(
                 "%s %s below baseline: current %d/%d vs baseline %d/%d"
-                % (src, metric, c[0], c[1], b[0], b[1])
+                % (
+                    src,
+                    metric,
+                    validated[metric][0],
+                    validated[metric][1],
+                    ref[0],
+                    ref[1],
+                )
+            )
+
+# Additive sources: present, nonzero-validated metrics with the exact
+# reference minimum totals and the ratio via the same cross
+# multiplication (bool/string/missing/nonpositive all reject).
+additive_totals = {"lines": [0, 0], "branches": [0, 0], "functions": [0, 0]}
+additive_records = {}
+for src in sorted(addition_keys):
+    ref = additions[src]
+    rec = cur["files"].get(src)
+    if rec is None:
+        errors.append("additive source missing from current run: %s" % src)
+        continue
+    validated = {}
+    for metric in ("lines", "branches", "functions"):
+        ref_covered, ref_total = ref[metric]
+        try:
+            covered, total = valid_pair(
+                rec.get(metric),
+                "additive %s %s" % (src, metric),
+                minimum_total=ref_total,
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        if not ge((covered, total), (ref_covered, ref_total)):
+            errors.append(
+                "%s %s below additive reference: current %d/%d vs reference %d/%d"
+                % (src, metric, covered, total, ref_covered, ref_total)
+            )
+        validated[metric] = (covered, total)
+        additive_totals[metric][0] += covered
+        additive_totals[metric][1] += total
+    additive_records[src] = validated
+
+# Separate truthful per-group metric display alongside the combined
+# totals already shown by the numeric summary step.
+if additions is not None:
+    for label, records, totals in (
+        ("frozen-population", frozen_records, frozen_totals),
+        ("additive-sidecar", additive_records, additive_totals),
+    ):
+        for metric in ("lines", "branches", "functions"):
+            covered, total = totals[metric]
+            print(
+                "numeric %s %s: %d/%d" % (label, metric, covered, total)
             )
 
 for e in sorted(errors):
     print("error: %s" % e)
 print("baseline enforcement: %d error(s)" % len(errors))
+
+# Update the current-run report files only after validation completed.
+# Reports are NEW current-run artifacts, so recording the validated
+# sidecar identity and the per-group totals there is safe; a legacy
+# report-only run never carries an enforced-sidecar claim.
+try:
+    with open(manifest_path, "r", encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    manifest["coverage_additions_sha256"] = (
+        additions_record["sha256"] if additions_record is not None else None
+    )
+    manifest["coverage_additions"] = (
+        additions_record["path"] if additions_record is not None else None
+    )
+    with open(manifest_path, "r+", encoding="utf-8") as fh:
+        fh.seek(0)
+        json.dump(manifest, fh, indent=2, sort_keys=True)
+        fh.truncate()
+        fh.write("\n")
+except (OSError, ValueError, KeyError) as exc:
+    print("note: run manifest additions record skipped: %s" % exc)
+
+try:
+    numeric_summary = json.load(open(summary_path, encoding="utf-8"))
+    if additions is not None:
+        numeric_summary["addition_sidecar"] = additions_record["path"]
+        numeric_summary["addition_sidecar_sha256"] = additions_sha
+        numeric_summary["frozen_population_totals"] = frozen_totals
+        numeric_summary["additive_sidecar_totals"] = additive_totals
+    with open(summary_path, "r+", encoding="utf-8") as fh:
+        fh.seek(0)
+        json.dump(numeric_summary, fh, indent=2, sort_keys=True)
+        fh.truncate()
+        fh.write("\n")
+except (OSError, ValueError, KeyError) as exc:
+    print("note: numeric summary additions fields skipped: %s" % exc)
+
+print("additions sidecar sha256: %s" % (additions_sha or "null"))
 sys.exit(1 if errors else 0)
 PYEOF
-    echo "baseline enforcement PASS (against $BASELINE_PATH)"
+    if [ -n "${ADDITIONS_JSON}" ]; then
+        echo "baseline enforcement PASS (against $BASELINE_PATH and additions sidecar)"
+    else
+        echo "baseline enforcement PASS (against $BASELINE_PATH)"
+    fi
 fi
-
 # ---------- summary ----------
 echo ""
 echo "=== coverage summary ($OUTPUT_DIR) ==="

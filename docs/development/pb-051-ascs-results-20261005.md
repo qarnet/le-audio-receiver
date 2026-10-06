@@ -239,6 +239,87 @@ All under `python3 -W error::ResourceWarning -m unittest discover -s <dir>
   `tests/unit/bluez_host_descendants` 4/4.
 - `bash -n scripts/ascs-bsim-run.sh` and `git diff --check` clean.
 
+## Additive coverage contract (2026-10-05, measured-data grounded)
+
+The frozen baseline `tests/coverage-baseline.json` stays byte-for-byte
+unchanged (SHA-256
+`5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed76de7a`). A
+separate additive sidecar `tests/coverage-additions.json` pins newly added
+sources with exact reference metrics measured from real instrumented code;
+this is an independent strict non-regression contract, never a baseline
+"refresh", never an exclusion, never a waiver.
+
+Measured provenance (read back from the retained instrumented artifacts in
+the delegator-owned root `/tmp/opencode/pb051-guard-coverage-r1`, dated
+2026-10-05; a host instrumented measurement, not a physical or on-target
+claim):
+
+- Real west build of `tests/unit/ltv_bounds` for
+  `native_sim/native/64` with `CONFIG_COVERAGE=y` plus an actual
+  `zephyr.exe` run: build log SHA-256
+  `a27301d070ac58e3d6c2b97c07d11c802b9997f840be1638d97d3f20b24ed067`,
+  run log SHA-256
+  `e7578bd0dc8249d13d72e6796a9989deb8a7cdc7dd8a24571b68446699959337`,
+  12/0/12 ztest result retained.
+- gcovr 8.4 invocation with `--include-internal-functions` over the
+  retained build: `guard-coverage.json` SHA-256
+  `e0815292de225af235e075a6c047b082b14e6d70a72bceabb7fc9dbb6dff33b3`,
+  summary SHA-256
+  `90198ee0ed9a0bbc33cadf23cfc0ccf2be72d4a79e885e2ec90925b6bd8bd861`;
+  measured `src/bt_audio_ltv_guard.c`: lines 13/13, branches 12/12,
+  functions 1/1 (all 100%), guard source SHA-256
+  `d0f482830a7f9bf9d19490c800bf232675e179e441f75e46358db9f834f8a09a`.
+- Toolchain: pinned GCC 14.3 / gcov (GCC) 14.3.0 / gcovr 8.4 (verified
+  through the dev shell); only the documented native-only SoC CMake
+  product notice plus the native test fake-entropy banner; no compiler or
+  Kconfig warnings.
+
+Why the earlier numeric summary showed 0/0/0 for the guard: gcovr 8.4's
+default internal-function filter (installed
+`gcovr/configuration.py` option `exclude_internal_functions`, exposed by
+`--include-internal-functions` as its opposite;
+`gcovr/exclusions/__init__.py` `_function_can_be_excluded`) drops every
+function whose mangled or demangled name starts with `__`. The guard's
+sole symbol is exactly `__wrap_bt_audio_data_parse`, so its whole function
+coverage was filtered at trace collection. This corrects the earlier
+inaccurate claim that the guard had zero instrumentable logic: the per-entry
+validation branches are ordinary instrumentable code; the data was hidden
+by the name-based filter, not by any property of the logic itself. The
+retained failed r2 run stays historical evidence.
+
+Runner behavior after the fix: only the `ltv_bounds` suite trace relaxes
+the filter; the final merge re-adds the flag so the already-relaxed trace
+data survives into the reports; all other suite traces keep the default
+filtering, so previously filtered historical internals are not restored
+and the frozen population's measured metrics are unchanged. The baseline
+enforcement accepts an optional `tests/coverage-additions.json` sidecar:
+
+- Strictly decoded (duplicate keys and non-finite constants rejected,
+  one bounded non-follow regular read from the sole path
+  `tests/coverage-additions.json`, never a second unbounded re-open,
+  at most 64 KiB, empty file/dangling symlink/directory/oversized all
+  explicit errors; no environment override is offered and only a truly
+  absent path takes the legacy no-sidecar enforcement path); no silent
+  fallback to ignoring it.
+- Exact schema: int 1 (not bool), exact anchor equal to the actual
+  SHA-256 of the supplied frozen baseline file, nonempty `files` with
+  `src/*.c` keys disjoint from the frozen population, metrics exactly
+  lines/branches/functions with `[covered, total]` int pairs,
+  0 <= covered <= total and total > 0.
+- Required current population becomes frozen UNION additions; a missing
+  original, a missing addition or a further unknown new source all fail.
+- Frozen-population overall AND per-file ratios are computed only over
+  current frozen-population records, so a perfectly covered additive
+  source can never mask a regression in the frozen 36; missing records
+  are errors, never skipped.
+- Additive sources must have present, nonzero, valid current metrics with
+  the exact reference totals and ratios (the measured guard reference is
+  13/13, 12/12, 1/1); no 0/0 pass, no automatic population growth, no
+  missing-sidecar exception.
+- The run manifest records the sidecar's SHA-256 (or null); the separate
+  frozen-population and additive-sidecar displays make the combined
+  totals in the numeric summary truthfully attributable.
+
 ## Explicit boundaries and pending gates
 
 - The matrix is a host-executed protocol and lifecycle lane against the
