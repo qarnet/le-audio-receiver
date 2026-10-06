@@ -152,3 +152,47 @@ contract/wrap proofs referenced by the results document remain
 source-identical), so the hosted firmware job is the re-verification
 path; no local production rebuild was performed in this phase. No
 hardware, no release, not Done.
+## Hosted follow-up on the same run lane (37432566147, 2026-10-06)
+
+The next hosted run `37432566147` for exact head
+`b6158d4e8456e2a64a632c0f9d62c6de0d579e80` still failed
+`test-heavy (bsim)` (and the aggregate `tests`), with `test-unit`
+SUCCESS, `test-heavy (coverage)` SUCCESS, `firmware` SUCCESS and
+`release` SKIPPED as designed. The exact retained raw artifacts:
+
+- Whole-run console: /tmp/opencode/pb051-pr16-hosted-b615-run.log
+  (SHA-256 96189036f5eda268bf7c6bfd9c0da89634a786e03bb93486d60f16237916339d).
+- Failed-job raw log: /tmp/opencode/pb051-pr16-b615-failed.log.
+- Receiver build identities from the runner: cmake-configure.yaml
+  9047777c50bc5ea0dada85218054969d947565250411b183fdcf72b662f3ce91
+  (759663 bytes), cmake.out
+  63997ddab0ea79bf5edfc6de1320d31a930fa1d850e2b3aa40fde4636eed6a60,
+  ninja.out fbfcec21ea72f0d42aeb5862252b5ab28b2b7a4e02814d023f796c78aec16c71,
+  resolved.config 8f34c79176d71d9c88ddb53356ae308cd55b085d8f93091ce360cc5d4
+  b9a4ba7.
+
+Changed failure shape (previous `_start` warning is gone; the probe
+grammar is unchanged and no waiver was applied): the checker now reports
+
+```
+ValueError: receiver: CMakeConfigureLog probe=check_C__fuse_ld_bfd__static
+exit=1 line=8918: FAILED: [code=1] cmTC_03a39
+```
+
+Read-only reproduction with the exact host gcc wrapper
+(iwf80230xr0z8pqh1jk3z8rgw67ydagm-gcc-wrapper-14.3.0, binutils 2.44), the
+same `-m32 -fuse-ld=bfd -static` probe shape on the same authored probe
+source: the link fails with
+`/nix/store/i7mdvmliqcb5lz0nqija8rq55vws6gi8-binutils-2.44/bin/ld.bfd:
+cannot find -lc: No such file or directory` and
+`have you installed the static version of the c library ?` (log
+/tmp/opencode/pb051-probe-static-nostdlib-20261006.log); the
+`-nostdlib -static -Wl,--entry=main` combination itself builds clean
+(/tmp/opencode/pb051-probe-static-main-20261006.log, static ELF32 i386).
+Local gate r4 never surfaces this probe because the local Zephyr try
+compile capability cache (ToolchainCapabilityDatabase) short-circuits the
+baremetal-property probes, while the hosted runner has no cache and runs
+them; this retained-evidence note records the shape, the disposition is
+not decided here and no source/checker change was made from it.
+The ascs lane itself PASSED in the same hosted stage again
+(`Gate complete: 1 PASS / 1 FAIL / 2 TOTAL`).
