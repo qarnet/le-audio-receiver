@@ -358,3 +358,76 @@ top-level suite `capability_probe_dispositions` map of exactly
 `{receiver: [...], client: [...]}`; the independently executed family
 verdict JSON (checker log shape plus required trace counters) remains
 unchanged, never extended by classification data.
+
+## Committed cold native verification (2026-10-06, r5 gates)
+
+Commit `e132fd274087fee3d78177b52304cfea20b96033` (`PB-051: distinguish
+exact native capability probe outcomes`; 7 files +1380 -26: new
+`scripts/native_bsim_probes.py`, tightened `ascs_bsim_run.py` +
+`check-native-bsim-build.py`, `ascs_runner` test additions, the probe
+results doc, the public raw-warning policy paragraph and the PB-051
+task notes) verified through two clean-candidate gates from detached
+worktree `/tmp/opencode/pb051-clean-candidate-r5` (tracked/untracked
+status clean, source bytes equal the commit):
+- Cold native phase (cache truly cold; new exclusive
+  `XDG_CACHE_HOME=/tmp/opencode/pb051-cold-cache-r1` created empty,
+  `TEST_OUTPUT_DIR=/tmp/opencode/pb051-cold-bsim-r1`):
+  `Gate complete: 2 PASS / 0 FAIL / 2 TOTAL`, raw log
+  `/tmp/opencode/pb051-cold-bsim-r1.log` SHA-256
+  `48bac5c7e74b67ba804ca4eb8ab7e06787c4aa41c0d8f6ff16a3ee6dd83373dd`;
+  Stage 1 exact 17 scenarios/26 runs strict-checked; ASCS suite sealed at
+  `/tmp/opencode/pb051-cold-bsim-r1/ascs-le-audio-ascs.JXFgW5/run`
+  (`suite-record.json` SHA-256
+  `8ce5546c1c9e77732bd333026da3f8de3a411193b9b08c41901aeacc0fd7a018`,
+  accepted true, run_id `a251985ac7594862a6f38a4b75b50cdb`, exact totals
+  60 cases/65 render phases/259 raw exchanges/269 response records, dirty
+  digest `e3b0c...b855`). One FATAL-then-retry happened inside this phase
+  only for the missing retained-link directory
+  (`TEST_OUTPUT_DIR must exist for ASCS retained link`): the first
+  attempt's ASCS container `/tmp/le-audio-ascs.sTgQ0p` was sealed-failed
+  and deleted, then the directory was created and the whole phase reran
+  once from an unchanged worktree; the surviving cold evidence is the
+  second container only.
+- Capability events on this local cold/native run: the local capability
+  path produced zero diagnostic-bearing probe events (both build roles'
+  `receiver-capability-probes.json`/`client-capability-probes.json` are
+  `[]`). The cold cache
+  `/tmp/opencode/pb051-cold-cache-r1/zephyr/ToolchainCapabilityDatabase`
+  (54 entries, `log.txt`
+  `41a6bcceba64e7b311f18618d2b9a22a362f4c02ff96610abce11b5b32e2d14c`)
+  carries the four exact fuse_ld_bfd probe keys from Zephyr's hardcoded
+  list (`-static` 0, `-Wl,-N` 0,
+  `--orphan-handling=warn` 1, `--orphan-handling=error` 0), so the local
+  capability probes resolved through the known-results cache path instead
+  of re-running real link probes; the recognized/recorded four-event
+  disposition therefore exercises on real hosted-style logs (the
+  delegation audit and the delegated classification above) and the local
+  acceptance proves the grammar rejects nothing and records nothing on
+  warm-cache local builds (both empty-list records retained).
+- Full normal canonical gate on the same candidate after the cold phase
+  (normal cache; also exactly once):
+  `Gate complete: 98 PASS / 0 FAIL / 98 TOTAL`, raw log
+  `/tmp/opencode/pb051-canonical-r5.log` SHA-256
+  `a067d6fe19b25fed0d65692e852d2d61d6fbdf258eedc1e52edc426df1309630`;
+  frozen 36 population numeric coverage exactly
+  5049/5491 lines, 2245/3036 branches, 378/378 functions (frozen
+  baseline bytes/hash unchanged, SHA-256 `5bb01f95afc12c0771086a537cb70
+  c92d20f7d96c8b9b4323528b6d9ed76de7a`), additive sidecar exactly
+  13/13 lines, 12/12 branches, 1/1 functions (sidecar SHA-256
+  `30814793c111583030bcdba24485d0c14a56b4c47e3429e66808aee4024b3166`),
+  direct matrix PASS (0 errors), Stage 1 unchanged 17 scenarios/26 runs
+  strict-checked, and the sealed ASCS suite at
+  `/tmp/opencode/pb051-canonical-r5/ascs-le-audio-ascs.nkQNwh/run`
+  (`suite-record.json` SHA-256
+  `4cf1f433d03e56e6419c8207df93915fab587bb069e6ad7183151fd9869f5c47`,
+  accepted true, run_id `e992a189943b4759be45ebda889337ee`, exact totals
+  60/65/259/269, dirty digest `e3b0c...b855`), both roles'
+  `capability-probes.json` `[]` and the top-level map exactly
+  `{receiver: [], client: []}` with the unchanged per-family verdict
+  shapes. Local builds again produced no probe diagnostics; the four
+  dispositions remain sourced from the retained hosted logs.
+
+Production sources unchanged since `33310f0`'s receiver build (the
+existing 73-assertion build contract and wrap proofs remain the exact
+source evidence); no hardware action and no production image rebuild was
+part of either gate. Not Done; hosted push/CI observe happens separately.
