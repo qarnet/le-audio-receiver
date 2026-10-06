@@ -872,6 +872,10 @@ int main(int argc, char **argv) {
 
         import ascs_bsim_run as runner
 
+        # The two SDK support files must come from the ACTIVELY pinned
+        # installed SDK root (sdk_root()), never a hardcoded machine path.
+        real_sdk = sdk_root()
+
         fake_sdk = self.base / "v3.4.1"
         (fake_sdk / "zephyr/cmake/modules").mkdir(parents=True)
         (fake_sdk / "nrf").mkdir()
@@ -910,11 +914,11 @@ int main(int argc, char **argv) {
         ld_dir = fake_sdk / "zephyr/cmake/linker/ld"
         ld_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy(
-            "/home/thomas-workstation/ncs/v3.4.1/zephyr/cmake/linker/ld/linker_flags.cmake",
+            real_sdk / "zephyr/cmake/linker/ld/linker_flags.cmake",
             ld_dir / "linker_flags.cmake",
         )
         shutil.copy(
-            "/home/thomas-workstation/ncs/v3.4.1/zephyr/cmake/modules/extensions.cmake",
+            real_sdk / "zephyr/cmake/modules/extensions.cmake",
             fake_sdk / "zephyr/cmake/modules/extensions.cmake",
         )
         # Minimal tracked-clean fake git repos are produced by faking the
@@ -1949,14 +1953,14 @@ class HostCmakeProbeEntry(unittest.TestCase):
     probe fix.  Uses the installed cmake/ninja (missing tool is a hard
     failure, not a skip); never runs the produced probe binaries."""
 
-    TOOLCHAIN_BIN = Path(
-        "/home/thomas-workstation/ncs/toolchains/8285d8ad56/usr/local/bin"
-    )
-
     def _tool(self, name):
         found = shutil.which(name)
         if found is None:
-            candidate = self.TOOLCHAIN_BIN / name
+            # Active SDK root + pinned toolchain bundle from sdk_root(),
+            # never a hardcoded machine path.
+            candidate = (
+                sdk_root().parent / "toolchains" / "8285d8ad56" / "usr/local/bin" / name
+            )
             if candidate.is_file() and os.access(candidate, os.X_OK):
                 return str(candidate)
             self.fail(f"required tool {name!r} not installed")

@@ -431,3 +431,45 @@ Production sources unchanged since `33310f0`'s receiver build (the
 existing 73-assertion build contract and wrap proofs remain the exact
 source evidence); no hardware action and no production image rebuild was
 part of either gate. Not Done; hosted push/CI observe happens separately.
+
+## Hosted run on 1c91667 and test-only portability repair (2026-10-06)
+
+Hosted run `37456367506` for pushed head
+`1c9166709cb4919cb2bda01ca4d86c6aafd69cc4`:
+`test-heavy (bsim)` SUCCESS, `test-heavy (coverage)` SUCCESS (the
+capability-probe grammar and records passed the hosted bsim/coverage
+lanes), `test-unit` FAILED with exactly one error and `tests` aggregate
+FAILED as designed (`firmware`/`release` SKIPPED). The one failing unit
+test is the lifecycle fixture's own portability bug,
+`test_execute_real_lifecycle_runtime_boundaries`:
+`FileNotFoundError: /home/thomas-workstation/ncs/v3.4.1/zephyr/cmake/
+linker/ld/linker_flags.cmake`
+(the mock-SDK setup had hardcoded the local machine SDK path in the
+earlier edit; retained trace in
+`/tmp/opencode/pb051-pr16-e132-failed.log`). The grammar module, the
+runner, the checker and all production behavior are unchanged; this is
+an ordinary failing test, not an owner blocker and not a gate-source
+problem.
+
+Repair, scoped exactly to `tests/unit/ascs_runner/test_ascs_runner.py`:
+1. `test_execute_real_lifecycle_runtime_boundaries` now resolves
+   `real_sdk = sdk_root()` before any fake-env patches and copies the
+   two SDK support files from the actively pinned installed SDK root
+   instead of the machine literal.
+2. `HostCmakeProbeEntry` dropped the fixed `TOOLCHAIN_BIN` class
+   constant; the `_tool` fallback now resolves
+   `sdk_root().parent/toolchains/8285d8ad56/usr/local/bin/<name>` with
+   `shutil.which` still first, so the pinned active SDK bundle wins from
+   the environment, never a hard path.
+
+Focused verification: direct file
+`python3 -W error::ResourceWarning tests/unit/ascs_runner/
+test_ascs_runner.py` and unittest discovery both `Ran 43 tests OK`;
+`ascs_results` 13/13 OK; `git diff --check` clean; the test file greps
+zero `/home/thomas-workstation` and zero `/tmp/opencode` literals.
+Post-repair SHA-256:
+`3f867e18f029a4aa84b996cf5536df45c997e16e9f410b6f506a4e2e88a68325`.
+The existing cold-native r5 and canonical r5 proofs remain source
+identical for runtime behavior (test-only repair); the hosted CI observe
+after the repair commit is the remaining verification before anything is
+Done.
