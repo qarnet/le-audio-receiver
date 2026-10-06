@@ -217,3 +217,24 @@ omissions; that run stays accepted=false evidence. The completion commit
 adds exactly those two items; a fresh candidate, output root, raw log and
 fw-build log (all `-r2`, verified absent before use) carry the only
 authoritative rerun.
+## Dated completion note (2026-10-05, no plan rewrite)
+
+The planned gate above completed at commit `33310f0f37069221872bc17ba131b68
+9d832e2f`: canonical gate 98/0/98 from `/tmp/opencode/pb051-clean-candidate-r3`
+with the raw log
+`/tmp/opencode/pb051-canonical-r3.log` (SHA-256
+`0bba01fe0d3dbca3fadcb8d7432689a4ae20d0f56c2bc3cbe0bcebbb44aa5aad`), the
+additions sidecar enforced exactly (13/13, 12/12, 1/1), Stage 1 unchanged
+17/26 strict-checked, the sealed ASCS matrix
+`f0c8d2c7f53494bfebcb8fca14634b92ff07508a8cdc878e2ed753106ef341ca` at
+60/65/259/269 and the production build (`fw-build-54l15`, BUILD ONLY) with
+raw log
+`/tmp/opencode/pb051-canonical-r3-fw-build.log` (SHA-256
+`6103590b912dfc0f74e1be85e20539063f20f1758a650216a414ddada3d1efd8`), the
+build contract (`73 assertions, 0 failed`, log
+`/tmp/opencode/pb051-canonical-r3-build-contract.log` SHA-256
+`b405f421936422c61c17fea5829a63ed0b6db657a1bd86b8196f464db876a7db`) and the
+actual ARM wrap proof
+(`/tmp/opencode/pb051-canonical-r3-wrap-proof.log` SHA-256
+`383d6f8d4d1ac6d795a3c6e7c54004a76eda67f08d97527aa24812bd29f6ab39`).
+Hosted CI on PR 16 remains outside this note.

@@ -320,20 +320,135 @@ enforcement accepts an optional `tests/coverage-additions.json` sidecar:
   frozen-population and additive-sidecar displays make the combined
   totals in the numeric summary truthfully attributable.
 
+## Clean canonical gate and production build (commit 33310f0, 2026-10-05)
+
+The local clean gate is now **complete** at exact final-source commit
+`33310f0f37069221872bc17ba131b6893d832e2f` (`PB-051: preserve frozen
+coverage and enforce instrumented guard`). Only the hosted CI run on PR 16
+remains outside this document.
+
+Committed source identity: the runner carries the race-repair source
+(`scripts/ascs_bsim_run.py` SHA-256
+`811da2c768b75df0e976fe136247904765bcbe74b96ea18aaa043fe709acd821`) and
+`scripts/test-coverage.sh` SHA-256
+`91e29a87ee50d162cae134ff7ae108c33bcdbd42077993fce3712709046308c1`
+(post-cleanup form with context-managed reads and the single-snapshot
+baseline anchor); `tests/coverage-additions.json` SHA-256
+`30814793c111583030bcdba24485d0c14a56b4c47e3429e66808aee4024b3166`;
+post-repair runner-suite source `tests/unit/test_coverage_runner/
+test_test_coverage_runner.py` SHA-256
+`8b1279de249af164739027bfb7aabff04d7d2ef7a827c975fc1c5a9c9e48d807`.
+
+Clean candidate: `/tmp/opencode/pb051-clean-candidate-r3` (detached worktree
+at exactly that commit; tracked/untracked status clean before the gates;
+source bytes verified against the commit).
+
+Whole canonical gate, once, from the candidate workdir, exclusive
+noclobber raw log `/tmp/opencode/pb051-canonical-r3.log` (SHA-256
+`0bba01fe0d3dbca3fadcb8d7432689a4ae20d0f56c2bc3cbe0bcebbb44aa5aad`),
+`GATE_EXIT=0`:
+
+- `Gate complete: 98 PASS / 0 FAIL / 98 TOTAL` and every child green.
+- Frozen population coverage (separately displayed alongside the additive
+  group, `numeric frozen-population ...`):
+  lines **5049/5491**, branches **2245/3036**, functions **378/378**,
+  equal to the frozen numeric metrics with the frozen baseline file still
+  byte-for-byte SHA-256
+  `5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed76de7a`
+  and `baseline enforcement: 0 error(s)`; the combined truthful totals are
+  5062/5504 lines, 2257/3048 branches, 379/379 functions over a 37-file
+  population.
+- Additive sidecar enforced at exactly the measured values: lines **13/13**,
+  branches **12/12**, functions **1/1** for `src/bt_audio_ltv_guard.c`
+  (guard source SHA-256
+  `d0f482830a7f9bf9d19490c800bf232675e179e441f75e46358db9f834f8a09a`),
+  recorded in `run-manifest.json` (`coverage_additions_sha256`) and
+  `numeric-summary.json` (`addition_sidecar`, sidecar SHA-256, separate
+  `frozen_population_totals` / `additive_sidecar_totals` groups) with the
+  internal-function-filter disposition pinned as
+  `relaxed-only-for-ltv_bounds-trace`.
+- `matrix: manifest + coverage.json` PASS with `0 error(s), 0 note(s)`.
+- `bsim: stage1` PASS: unchanged 17 scenarios / 26 runs, strict-checked.
+- `bsim: ascs-protocol` PASS with the complete current-source matrix
+  sealed at `/tmp/le-audio-ascs.cicaWA/run`; terminal `suite-record.json`
+  SHA-256
+  `f0c8d2c7f53494bfebcb8fca14634b92ff07508a8cdc878e2ed753106ef341ca`,
+  accepted=true, run_id `f567e010d7f0458c873a0aa2112bc46c`, zero errors and
+  zero cancellation, exact totals **60 cases / 65 render phases / 259 raw
+  exchanges / 269 response records**, all six families accepted
+  (control 7/7/21/21 `c261d2a18048...`, metadata 13/14/67/67
+  `910977b8c3df...`, codec_qos 7/7/27/27 `cb00fd4e4616...`, lifecycle
+  19/23/91/91 `1159e531f1fb...`, dual 10/10/42/52 `159b1d8f46d6...`,
+  reconnect 4/4/11/11 `c46a30aac8e1...`), clean-commit worktree (dirty
+  status inventory digest `e3b0c442...b7852b855` = empty status listing)
+  and unchanged runtime identities (`libCryptov1` `c6cff2c6...374c`).
+
+Production build proof (BUILD ONLY, no flash, same clean candidate):
+
+- `fw-build-54l15` exit 0; raw log
+  `/tmp/opencode/pb051-canonical-r3-fw-build.log` SHA-256
+  `6103590b912dfc0f74e1be85e20539063f20f1758a650216a414ddada3d1efd8`
+  containing exactly the two approved dispositions (`warning:
+  Experimental symbol BT_CONN_TX_NOTIFY_WQ is enabled.` and the CMake
+  informational `__ASSERT() statements are globally ENABLED`) and no
+  other compiler/Kconfig/linker/runtime warning.
+- Final images/maps (rehashed from the actual paths): CPUAPP
+  `build/nrf54l15/pb051-clean-candidate-r3/zephyr/zephyr.elf` SHA-256
+  `70f01610a45583625ce131851e7a0a297c7626a821ae9ae3b6e1662fd8786a77`,
+  map
+  `d8cc22928fc67bb1f00bfc091d718ca1b78612129c735b98bd63a48fde2d1c03`;
+  FLPR `build/nrf54l15/flpr/zephyr/zephyr.elf` SHA-256
+  `62ba69d41cc142db729d2f1ba0d032d21d4db33bae4facf7825248f75e64caaf`,
+  flpr map `e7e88c88...188e9` (FLPR build retained).
+- Build contract: `python3 scripts/check-build-contract.py --nrf54l15
+  build/nrf54l15` from the candidate, exit 0, raw log
+  `/tmp/opencode/pb051-canonical-r3-build-contract.log` SHA-256
+  `b405f421936422c61c17fea5829a63ed0b6db657a1bd86b8196f464db876a7db`,
+  `73 assertions, 0 failed`, `BUILD CONTRACT PASSED` (including
+  `CONFIG_BT_CONN_TX_NOTIFY_WQ` stack/priority and
+  `CONFIG_WARN_EXPERIMENTAL=y` retention).
+- Actual ARM wrap proof, external log
+  `/tmp/opencode/pb051-canonical-r3-wrap-proof.log` SHA-256
+  `383d6f8d4d1ac6d795a3c6e7c54004a76eda67f08d97527aa24812bd29f6ab39`
+  (actual installed `arm-zephyr-eabi-objdump` GNU 2.43.1 from the pinned
+  toolchain bundle on the rehashed final CPUAPP ELF, actual tool output;
+  not fabricated): `nm` shows `__wrap_bt_audio_data_parse` at `0x0001a72c`
+  and the real SDK parser `bt_audio_data_parse` at `0x000477c4`; the
+  wrapper's disassembly contains its inner `bl 477c4
+  <bt_audio_data_parse>` (at wrapper offset `1a74a`, per-entry forward
+  loop) and the production `src/bt_bap.c` `lc3_config` callsites at
+  `0x19160` and `0x19222` execute `bl 1a72c
+  <__wrap_bt_audio_data_parse>` - two real production callsites bound
+  through the wrapper, not merely symbol presence. `zephyr.map` binds
+  `.text.__wrap_bt_audio_data_parse` (0x0001a72c) and
+  `.text.bt_audio_data_parse` (0x000477c4) exactly.
+
+Earlier failed/cancelled clean-gate attempts stay immutable evidence:
+checkpoint `af83365`'s canonical run at
+`/tmp/opencode/pb051-canonical-r1.log` (SHA-256
+`1aedc228a6a1a86aa30afc4932e35395d1fc89c66db1d3f72078444d52debc46`,
+94/4/98, missing checker + missing manifest entry) and packaging
+`a067d8a`'s run at `/tmp/opencode/pb051-canonical-r2.log` (SHA-256
+`d941099c697822c3c6c938f2409dc7c9bb7bf504c91a5f9f9b0ec737f523cb54`,
+97/1/98, frozen-baseline population conflict) plus their retained ASCS
+records; the current-sidecar and filter semantics were produced by those
+findings and verified by the 33310f0 gate (the r2 numeric guard 0/0/0 was
+the gcovr 8.4 `__`-name collection filter, now corrected per the
+correction note above; those runs remain historical, not acceptance).
+
 ## Explicit boundaries and pending gates
 
 - The matrix is a host-executed protocol and lifecycle lane against the
   production receiver integration inside BabbleSim. Not established:
   physical RF, physical I2S/DAC output, LC3 conformance against
   independent vectors, FLPR offload behavior, release acceptance.
-- Clean-commit canonical gate (software) and latest hosted CI on PR 16 are
-  **PENDING**; the r3 matrix ran on the dirty continuation tree with the
-  pre-race-fix runner and does not claim them. Because the guard wrapper
-  linkage (`-Wl,--wrap=bt_audio_data_parse` on the production app root)
-  changes production link behavior, the clean canonical gate must also
-  build the physical receiver CPUAPP/FLPR images (build only, no flash)
-  and prove the linker wrap applies with zero new build diagnostics before
-  any later physical use.
+- The local clean-commit canonical gate (software) AND the production
+  wrap-verified receiver CPUAPP+FLPR build (BUILD ONLY) are now complete at
+  final-source commit `33310f0` (see the section above). The latest hosted
+  CI on PR 16 remains **PENDING**; this document does not claim it. Because
+  the guard wrapper linkage changes production link behavior, any later
+  physical use still requires a fresh identity, role provisioning and the
+  usual safety boundaries.
 - No acceptance criterion checkbox is checked by this document; criteria
   move only through the PR gate after human product-owner merge.
 - Earlier roots listed above remain immutable; no root was deleted,

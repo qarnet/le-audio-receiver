@@ -164,6 +164,44 @@ traces: the CLI is fail-closed on every input.
   publication; no family after the cancellation is started and a sealed
   record with the signal is published.
 
+## Additive coverage sidecar
+
+`tests/coverage-additions.json` (sole path; the gate reads exactly
+`repo/tests/coverage-additions.json`, no environment override is offered)
+adds a separately accounted strict non-regression contract for newly added
+sources while the frozen `tests/coverage-baseline.json` stays byte-for-byte
+unchanged. Field semantics:
+
+- `schema_version`: exactly the int `1` (a JSON boolean is rejected).
+- `frozen_baseline_sha256`: exactly 64 lowercase hex characters matching
+  the actual SHA-256 of the supplied frozen baseline file; a drifted anchor rejects
+  rejects.
+- `files`: a nonempty object; keys are relative `src/*.c` paths (a leading
+  `src/`, the `.c` suffix, no backslash, no empty, `.` or `..` component),
+  and none may overlap the frozen population; each value holds exactly the
+  metrics `lines`, `branches` and `functions` with `[covered, total]`
+  integer pairs (`0 <= covered <= total`, `total > 0`).
+- Decoding is strict: duplicate JSON keys and non-finite constants reject,
+  and the gate performs exactly one bounded non-follow regular read
+  (at most 64 KiB, an empty file/dangling symlink/directory/oversize are
+  explicit errors, never an absent-sidecar fallback); only a genuinely
+  missing path takes the legacy no-additions path.
+- Enforcement shape: the required current population is the frozen
+  baseline UNION the sidecar keys, so a missing original, a missing
+  addition or a further unknown new source all fail; the frozen
+  population's overall and per-file ratios are computed exclusively over
+  current frozen-population records (a perfectly covered addition cannot
+  mask a frozen regression, and missing records error rather than skip);
+  each additive source must reach its exact reference totals and ratios
+  by the same integer cross multiplication (the measured guard reference
+  is 13/13 lines, 12/12 branches, 1/1 functions); no `0/0` pass and no
+  automatic population growth.
+- The sidecar's SHA-256 (or `null`) is recorded in `run-manifest.json`
+  (`coverage_additions_sha256`, `coverage_additions`) and the current-run
+  `numeric-summary.json` records the sidecar identity plus separate
+  `frozen_population_totals` / `additive_sidecar_totals` groups, so the
+  displayed combined totals remain truthfully attributable to both groups.
+
 ## Non-claims
 
 Passing this matrix is a host-executed protocol and lifecycle regression
