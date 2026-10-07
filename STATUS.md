@@ -1,4 +1,33 @@
-# STATUS: le-audio-receiver, 2026-10-01
+# STATUS: le-audio-receiver, 2026-10-07
+
+## Verified current state (2026-10-07 wrap-up snapshot)
+
+Independent-validation track (PR 16, open and mergeable, not merged):
+27 commits `0c9d2391f8532684e5014225b82749f0d930ce6e..c64cbcf37ac2b7e6b0060df0d854897a1c431522`; the latest head passed hosted run
+`37468117709` with `test-unit`, `test-heavy (coverage)`,
+`test-heavy (bsim)`, aggregate `tests` and `firmware` SUCCESS and
+`release` SKIPPED. Five track items are Done through the PR gate
+(PB-045, PB-046, PB-051, PB-052, PB-053) with their result docs; eight
+stay held or dependency-held (PB-041, PB-042 active owner decisions;
+PB-043/044/047/048/049/050 dependency-held). Production behavior changed
+exactly twice in this scope: the signed negative-ppm rounding repair in
+`src/audio_asrc.c` and the always-linked per-entry LTV guard via GNU
+`--wrap` in `src/bt_audio_ltv_guard.c` (same-object SDK calls are
+explicitly outside the wrap). Latest local verification at the same
+source: full canonical 98/0/98
+(`/tmp/opencode/pb051-canonical-r5.log`, SHA
+`a067d6fe19b25fed0d65692e852d2d61d6fbdf258eedc1e52edc426df1309630`),
+cold-cache native phase 2/0/2, Stage 1 pin 17 scenarios/26 runs, ASCS
+matrix exactly 60/65/259/269, frozen 36-file coverage baseline unchanged
+(SHA `5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed76de7a`) at 5049/5491 lines, 2245/3036 branches,
+378/378 functions, additive guard sidecar 13/13, 12/12, 1/1, and the
+73-assertion resolved build contract plus ARM wrap proof at the
+unchanged `33310f0` production source identity. Snapshot with exact
+boundaries, holds and evidence links:
+`docs/development/independent-validation-pr-wrap-up-20261007.md`.
+The backlog remains the sole live ledger.
+
+## Historical migration checkpoint (2026-10-01/02)
 
 PR wrap-up (2026-10-02): PB-019 and PB-033 through PB-040 have PR-gated Done
 transitions in the combined migration PR; official acceptance waits for human
@@ -8,7 +37,9 @@ roots are absent in this session; committed result reports and hashes remain.
 Fresh PR-preparation checks and evidence boundaries:
 `docs/development/nrf54l15-migration-pr-wrap-up-20261002.md`.
 
-Current clean validation checkpoint: `104e67a` includes source peer-enqueue
+### Dated migration checkpoint 104e67a (2026-10-01)
+
+Dated clean migration validation checkpoint `104e67a` includes source peer-enqueue
 scheduling guard and fresh FLPR reload, notification, heartbeat and idle-worker
 repairs. Production code is `e478e59`; `104e67a` adds partial IPC registration
 rollback/retry coverage without changing production code. Source margins remain

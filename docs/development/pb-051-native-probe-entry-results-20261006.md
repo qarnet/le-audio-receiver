@@ -376,7 +376,7 @@ status clean, source bytes equal the commit):
   `/tmp/opencode/pb051-cold-bsim-r1.log` SHA-256
   `48bac5c7e74b67ba804ca4eb8ab7e06787c4aa41c0d8f6ff16a3ee6dd83373dd`;
   Stage 1 exact 17 scenarios/26 runs strict-checked; ASCS suite sealed at
-  `/tmp/opencode/pb051-cold-bsim-r1/ascs-le-audio-ascs.JXFgW5/run`
+  `/tmp/opencode/pb051-cold-bsim-r1/ascs-le-audio-ascs.JXFgW5/`
   (`suite-record.json` SHA-256
   `8ce5546c1c9e77732bd333026da3f8de3a411193b9b08c41901aeacc0fd7a018`,
   accepted true, run_id `a251985ac7594862a6f38a4b75b50cdb`, exact totals
@@ -417,7 +417,7 @@ status clean, source bytes equal the commit):
   `30814793c111583030bcdba24485d0c14a56b4c47e3429e66808aee4024b3166`),
   direct matrix PASS (0 errors), Stage 1 unchanged 17 scenarios/26 runs
   strict-checked, and the sealed ASCS suite at
-  `/tmp/opencode/pb051-canonical-r5/ascs-le-audio-ascs.nkQNwh/run`
+  `/tmp/opencode/pb051-canonical-r5/ascs-le-audio-ascs.nkQNwh/`
   (`suite-record.json` SHA-256
   `4cf1f433d03e56e6419c8207df93915fab587bb069e6ad7183151fd9869f5c47`,
   accepted true, run_id `e992a189943b4759be45ebda889337ee`, exact totals
@@ -529,3 +529,23 @@ abort; that path is now absent on disk, its contents cannot be
 re-verified, it is NOT claimed as a sealed failed record and it is not
 part of any acceptance. Nothing was restored, fabricated or further
 deleted (no roots or logs were removed after that reported removal).
+
+## Citation-path correction (2026-10-07)
+
+The 2026-10-06 cold-native section quoted the two sealed suite records
+as `.../ascs-le-audio-ascs.JXFgW5/run/suite-record.json` and
+`.../ascs-le-audio-ascs.nkQNwh/run/suite-record.json`; those quoted
+paths carried an extraneous `/run` segment. The actual retained
+symlinked evidence roots already point at the run directory itself, so
+the correct cite paths are:
+
+- `/tmp/opencode/pb051-cold-bsim-r1/ascs-le-audio-ascs.JXFgW5/
+  suite-record.json`, SHA-256
+  `8ce5546c1c9e77732bd333026da3f8de3a411193b9b08c41901aeacc0fd7a018`
+- `/tmp/opencode/pb051-canonical-r5/ascs-le-audio-ascs.nkQNwh/
+  suite-record.json`, SHA-256
+  `4cf1f433d03e56e6419c8207df93915fab587bb069e6ad7183151fd9869f5c47`
+
+Both correct paths were read back and rehashed before this correction
+(same bytes/hashes as originally recorded; only the quoted directory
+path shape was wrong, never the hashes, run ids or totals).

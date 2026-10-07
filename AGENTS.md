@@ -61,6 +61,64 @@ Nordic samples are the best learning resource:
 
 ## Autonomous execution and hard blockers
 
+### Restart checkpoint (2026-10-07, current, read this first)
+
+Worktree snapshot for the independent-validation track. On restart (new
+session, compaction or owner-requested resume), read first, in order: this
+checkpoint, `docs/development/independent-validation-pr-wrap-up-20261007.md`,
+the backlog (`docs/product/backlog/`, the sole live ledger) and the live PR 16
+state. Do not assume this block is stale without checking the PR.
+
+- PR 16 (`feature/independent-firmware-validation`, draft, OPEN, mergeable;
+  merge base `origin/main` `0c9d2391`, head `c64cbcf`) carries 27
+  track commits. Completion-head hosted run `37468117709` (verified via
+  the GitHub run status, artifact not downloaded or read): `test-unit`,
+  `test-heavy (coverage)`, `test-heavy (bsim)`, aggregate `tests` and
+  `firmware` all SUCCESS, `release` SKIPPED. The wrap-up itself lands
+  after a separate docs-only commit; the live PR state is the authority
+  for the final head (a snapshot commit cannot cite itself).
+- Done through the PR gate (5): PB-045, PB-046, PB-051, PB-052, PB-053.
+  Do not resume them. Evidence links in the wrap-up doc; official
+  acceptance stays with the pending human product-owner merge.
+- Held/dependency-held (8): PB-041 (incoming ADC model/input-limits/safe
+  wiring) and PB-042 (owner Windows access/tool readiness plus a separate
+  explicit rights/EULA decision) are active owner holds; PB-043/044/047/
+  048/049/050 stay dependency-held behind PB-042 (physical ones also behind
+  PB-041). Do not start them without owner direction.
+- Final code/CI proof: canonical 98/0/98 at exact head
+  `e132fd274087fee3d78177b52304cfea20b96033`, raw log
+  `/tmp/opencode/pb051-canonical-r5.log` (SHA-256
+  `a067d6fe19b25fed0d65692e852d2d61d6fbdf258eedc1e52edc426df1309630`),
+  cold-cache native phase 2/0/2, Stage 1 pinned exactly 17 scenarios/26
+  runs, ASCS lane exactly 60 cases/65 render phases/259 raw exchanges/269
+  response records, frozen 36-file baseline SHA-256
+  `5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed76de7a`
+  unchanged at lines 5049/5491, branches 2245/3036, functions 378/378,
+  additive guard sidecar 13/13 lines, 12/12 branches, 1/1 functions. The
+  only later source change is the test-only portability repair with
+  focused 43/13 suites plus hosted proof (not a full gate at the later
+  head). The 73-assertion resolved build contract plus ARM wrap proof
+  were proved at the recorded `33310f0` production source identity; the
+  hosted firmware job rechecks the build contract and does not assert
+  byte-identical image equality per run. The recorded board image was
+  last verified as the pure parser diagnostic image; current physical
+  state is not freshly queried.
+- Safety and rights stays binding: no new hardware action without fresh
+  identity/role provisioning; the physical board carries the pure parser
+  diagnostic image, no current role/probe mapping; PB-042 laptop
+  availability is not EULA acceptance; LC3plus excluded.
+- Physical evidence, release/FR4/FR5 and full LC3 conformance stay
+  separate; agent completion is PR-gated only; human product-owner merge
+  of PR 16 is official acceptance. Never merge or publish as an agent.
+- Unrelated dirty worktree data stays excluded from track commits:
+  user-owned PB-013 file edits, PB-041/PB-042 files, `opencode.json`,
+  `AGENTS.md` extra historical notes and `.codebase-memory/`.
+- External evidence availability is rechecked per session; the recorded
+  execution deviation stands exactly as documented in the wrap-up (the
+  allocated prelaunch ASCS container `/tmp/le-audio-ascs.sTgQ0p` was
+  reported removed, its contents are unverifiable, and no absence proof
+  of any older record is claimed). Do not delete further roots/logs.
+
 ### Persistent independent-validation todo scope (owner direction 2026-10-03)
 
 Treat this selected scope as a persistent todo list across compactions and
