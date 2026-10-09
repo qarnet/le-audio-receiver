@@ -30,7 +30,20 @@ hardware was used for this document.
   SHA-256 `784bdfa23ca5be117d307ab1be9fa916aad64d3da0cda4de2dfb4deda61ade6b`.
   Source under test: `src/bt_audio_ltv_guard.c`
   (`__wrap_bt_audio_data_parse` forwarding valid entries to
-  `__real_bt_audio_data_parse`), linked via `-Wl,--wrap=bt_audio_data_parse`.
+  `__real_bt_audio_data_parse`), linked via
+  `-Wl,--wrap=bt_audio_data_parse`.
+  Native guard executable identities are preserved in Git history at
+  revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`
+  (`docs/development/pb-051-per-entry-ltv-guard-handoff-20261005.md`,
+  dated native-link verification, distinct from the later ARM
+  production proof below): final native executable
+  `build/zephyr/zephyr.exe` carried both the real
+  `bt_audio_data_parse` at `0x403bab` and `__wrap_bt_audio_data_parse`
+  at `0x403c4a` with disassembly calls into the wrapper; native
+  executable SHA-256
+  `90d720996bb11fe5f9d787adb4fdad781e33cc7ca0e1b42ac0239970e32196ef`;
+  intermediate `build/zephyr/zephyr.elf` SHA-256
+  `cad0420376afe11474318a95f2ab5fc7b4d2ef9b2fdf610695f9cd01271d3f67`.
 
 ## Physical reviewed pure-parser run r4 (CPUAPP diagnostic image)
 
@@ -525,3 +538,388 @@ current:
   separate complete accepted evidence. The first attempt/retry report
   remains preserved transparently in the dated history; nothing was
   restored or fabricated, and no further roots or logs are deleted.
+
+## Historical diagnostic provenance (2026-10-05)
+
+This appendix preserves dated diagnostic identities (artifact paths,
+SHA-256 hashes, observed values) carried by the retained PB-051 handoff
+documents at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`
+(cited per subsection below as historical Git-history citations, not
+current-file dependencies). It restates those quoted facts so the
+historical identities survive; it adds no new execution, rerun, or
+recheck. Every path/hash below is a description retained from the cited
+handoff text, read on 2026-10-08, and is NOT fresh artifact validation.
+Accounting limits are stated per stage, not generalized: the early
+one-case wire-baseline, wire-owned and focused-family diagnostic runners
+did not record individual peer numeric exit codes (even where cohort
+waits returned zero), while the later owned procedure and full-matrix
+runs carry per-actor process records in their retained roots. Early
+partial trials are not full matrix acceptance; later owned failed and
+full runs should only be interpreted at their exact recorded source and
+outcome. Execution order below follows the dated 2026-10-05/06 work
+stages; it is not a permission or disposition statement about any
+handoff document. Where the completed backlog note for PB-051 under
+`docs/product/backlog/completed/` (file name starts with
+`pb-051 - ASCS-protocol-rejection`) already documents an item in richer
+dated context, this appendix cites
+the handoff that carried the exact artifact identity and defers the
+chronological narrative to that note; nothing is duplicated into a new
+coordination report.
+
+### Earlier physical pure-parser baseline (2/1/3)
+
+Historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`: `docs/development/pb-051-parser-resume-baseline-handoff-20261005.md`:
+
+- Diagnostic image SHA-256 `14105caa24b1088e37187701fb59471ab13ab661389061b66f8c1ddff6f94496`.
+- UART capture SHA-256 `d34754a6a67b36e78c31a4678367bf757a0a17b47ba8b7985a04e676696a677c`.
+- SDK parser source identity: `source-hashes.json` pinned
+  `.../subsys/bluetooth/audio/audio.c` SHA-256 `07b0b016ba518dbdb7f324c9948dbfd19619569f62f216aa75cde2e88e574d1d`.
+- Result: standalone NCS v3.4.1 CPUAPP diagnostic reported 2 pass /
+  1 fail / 0 skip / total 3; the exact-end missing-value case returned
+  `ret=0 exposed=1 value=aa` for a padded, logically short input.
+  Handoff also claimed `verdict.json`, `source-hashes.json` and
+  `uart.log` under `/tmp/opencode/pb051-ltv-physical-baseline/` were
+  present at that time (dated claim, not rechecked now). These are
+  historical pure-parser observations, not current device identity, not
+  a new flash, and not encoded ASCS execution.
+
+### Wire baseline R1
+
+Historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`: `docs/development/pb-051-wire-baseline-handoff-20261005.md`:
+
+- Export-copy failure before client/peer launch; the original r1 export
+  copy explanation was later corrected to a missing sysbuild export (see
+  the source diagnosis row below); no MTU/request/response/state or
+  recovery proof existed at this root.
+- Owner records in `/tmp/opencode/pb051-wire-baseline-owner-r1/`:
+  `process-record.json` SHA-256 `95f44cbbbedba8a3aa089a94875f8d00cf162468dc687c7153d6f045787e7c08`,
+  `scope-record.json` SHA-256 `c4f0794de3b1b0595168284d731d1a82e671817f095dbc3ca9810cf966b5bcc1`.
+- Receiver build logs retained then at
+  `/home/thomas-workstation/ncs/v3.4.1/zephyr/bsim_out/tests/ascs_bsim/receiver/bs_nrf54l15bsim_nrf54l15_cpuapp_ascs_receiver/`
+  (historical machine path only, not a universal setup instruction):
+  `cmake.out` SHA-256 `2502259d2eebd47a33b54bc3b145eace51c32afc0e79703b0033ef1e5fe213e8`,
+  `ninja.out` SHA-256 `d6ec420928f981140fd0054ff9d5b36383555eed281b50c90a076fc425f4bcb9`.
+
+### Wire baseline R2 (before guard)
+
+Historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`: `docs/development/pb-051-sysbuild-export-handoff-20261005.md`:
+
+- R2 hit the Kconfig 251-versus-69 range failure before peers launched;
+  no wire proof. Corrected diagnosis: missing sysbuild export, not a
+  background build race.
+- Owner records in `/tmp/opencode/pb051-wire-baseline-owner-r2/`:
+  `process-record.json` SHA-256 `a1a6dd073c9b7928077cf59677aa470e678322b67a2759f164dce609e2d4d046`,
+  `scope-record.json` SHA-256 `1ae007bd992e61d0a0fa252e89a69f3107a2ee34c704ebc0cb6e3573531567b3`.
+- Build artifacts in `/tmp/opencode/pb051-wire-baseline-r2/`:
+  `receiver-cmake.out` `c8629eac09c3755440d30066a084f3461835ac07d343e381fbc767bfe394459d`,
+  `receiver-ninja.out` `b80b3635a521be539a08ec3bf1e24980fb05d2f5354326b08e5ff1fc91c76cfe`,
+  `receiver.config` `95a9e883abc0e17225e3d453f3036216b498d2ea1ec1d41bbfd65c41066c5821`,
+  `client-cmake.out` `025ef9d52dd8054f4441773e3b9e68f70805fae1b405ff911c61d9d155f3ac56`.
+- Prechange source archive `/tmp/opencode/pb051-build-repair-prechange-r1/`
+  (receiver `cmake.out`/`ninja.out`/`receiver.config` plus source
+  path/hash `record.json`; record SHA-256 `e8630fda024566b808cc01ee2fed4d167a4a60cb9e6db5043a32ee410d817b93`);
+  its cmake/ninja digests matched the first attempt and its config
+  SHA-256 equals the r2 receiver.config value above.
+
+### Wire baseline R3 (before guard)
+
+Historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`: `docs/development/pb-051-client-mtu-controller-handoff-20261005.md`:
+
+- R3 pre-request client error `-5` for the
+  metadata_length_validation case; the run ended before any encoded
+  request, and the MTU negotiation outcome is unverified (no negotiated
+  MTU value was logged; the handoff records "No logged negotiated MTU,
+  raw encoded request, CP response, ASE state comparison, valid
+  recovery, or ASCS verdict"). Exact failing client
+  line: `d_01: @00:00:10.636924 ERROR:
+  (CMAKE_SOURCE_DIR/client.c:534): ASCS_CLIENT
+  case=metadata_length_validation error=-5 assertions=0 phases=0`
+  followed by `d_01: @00:00:10.636924  The TESTCASE FAILED (test return
+  code 2)`. Receiver retained its independent `255/251/65/255` config
+  values in the same order (ACL RX 255, controller 251, L2CAP 65, ISO
+  255).
+- Owner records in `/tmp/opencode/pb051-wire-baseline-owner-r3/`:
+  `process-record.json` SHA-256 `9f50297dcc92dcaead2090fec0f1a67465e7f9a4662c7acc7add88332b85dc24`,
+  `scope-record.json` SHA-256 `7796fff1b02fbe10870ea9315f3b217f178a9768f1200cc8a866c03f674d5d01`.
+- Build/raw artifacts in `/tmp/opencode/pb051-wire-baseline-r3/`:
+  `receiver-cmake.out` `48cf45d6cc951c397676a4c755d8e5c6133e080274cda19d09bfa91444e546e4`,
+  `receiver-ninja.out` `fad901acd6a179b25a31ea0e241dc8deee077f72fbf519f5e2917f2df184e13a`,
+  `receiver.config` `95a9e883abc0e17225e3d453f3036216b498d2ea1ec1d41bbfd65c41066c5821`,
+  `client-cmake.out` `61a5aee67de12e586d0946ac161fe4e9da8d9a288ee7936430a04c1c62a5d849`,
+  `client-ninja.out` `7bda6c2b2f724a3c53c88e9116cda05df8fd2529f5d0594306c15455f68577fd`,
+  `client.config` `e41bf8290281f90e6d421bb56cdd2828bb9e56830926db3d13314497bc91250b`,
+  `receiver.log` `4e876a7802e3d57a596ae06aadc19f59457c26e2c5868d4ee4f1da3e80f673ce`,
+  `client.log` `6e0ce0c877d41eb33f14e0410677307702c3d80083723c5c32fb38ef5f61dd8d`,
+  `phy.log` `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+  (empty file hash).
+
+### Wire baseline R4 (before guard)
+
+Historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`: `docs/development/pb-051-cp-subscription-handoff-20261005.md`:
+
+- R4 actual request returned success where rejection was expected
+  (client error `-74`, `ASCS_CP generation=1 raw=0301010000` at
+  `00:00:07.176844`, opcode 03 success 00/00 rather than required
+  rejection 0c/00); no preservation or recovery proof. The PHY log is
+  empty (same empty-file SHA-256 as above), the runner returned 2, and
+  no individual PHY exit code was recorded.
+- Owner records in `/tmp/opencode/pb051-wire-baseline-owner-r4/`:
+  `process-record.json` SHA-256 `89eee346bf16b51ece8caa709322cf2d62d0e8316494bbda1307ffe511fd3485`,
+  `scope-record.json` SHA-256 `7b4f43edb3759e5bbf7f6bb5d12ee7327ac66c3b4c3963eaa98a90f01ff3279d`.
+- Build/raw artifacts in `/tmp/opencode/pb051-wire-baseline-r4/`:
+  `receiver-cmake.out` `48cf45d6cc951c397676a4c755d8e5c6133e080274cda19d09bfa91444e546e4`,
+  `receiver-ninja.out` `47021c5e96cb065cb880554ed0b18e9a70c06bbb0ce9f26b42f2148e11ea5e66`,
+  `receiver.config` `95a9e883abc0e17225e3d453f3036216b498d2ea1ec1d41bbfd65c41066c5821`,
+  `client-cmake.out` `4740a5c407564d3daececf103a565a39987e45f4cc535cf39ff5dab371fe69cc`,
+  `client-ninja.out` `ac104cecb668ca4b90fd0790db9dadd7132b069a4e4f125fe76fbd5414396a44`,
+  `client.config` `e41bf8290281f90e6d421bb56cdd2828bb9e56830926db3d13314497bc91250b`,
+  `client.log` `0b0e93a054d5821f10eff62b99849fa62dedb35c56004a8824e9f58a5928c520`,
+  `receiver.log` `2d4f20c637a41550c0cb5e1e61fd844bc2b60c8219278c21439cf5f0a2e5bc`,
+  `phy.log` `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+
+### Wire-owned R1 (post-guard early diagnostic)
+
+Historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`: `docs/development/pb-051-wire-ownership-ledger-handoff-20261005.md`:
+
+- Valid Enable returned helper CP notifications labeled transaction 0;
+  both ASEs reached state 4; the independent TX audit logged 30
+  successful sends each with unregister code 0; receiver logged
+  `ASCS_RENDER phase=1 pushes=27`; the receiver sink checked nonzero
+  separate-channel energy, distinct stereo samples, correct sample
+  geometry and no bad pushes. Pair these values only with the
+  pre-adjustment client image below; a client source change followed
+  R1 and canonical notes already record that the R1 image does not
+  cover the changed source. The R1 helper used transaction-zero CP
+  labels that the later procedure-owner repair superseded; retain this
+  run as early one-case diagnostic context only (also not a timeout,
+  cancel, reconnect or full matrix acceptance).
+- Owner records in `/tmp/opencode/pb051-wire-owned-owner-r1/`:
+  `process-record.json` SHA-256 `c10c1140e10ace99370d62fcea7a666d3e969adedb078010056b940fcf3996d3`,
+  `scope-record.json` SHA-256 `063f68b67f2650e70388c524964c01c048d6347747ab094ffd10119c3af12c1e`.
+- Raw images/logs: `/tmp/opencode/pb051-wire-owned-r1/client.log` `20a4b74748a2ce0865cfe4fd0159e080785bb5e8e258edd6f86a1eeaae30402d`,
+  `receiver.log` `adba0e6ad5c06f593d27229921a7aeddccb0669833e32bafc1efe3829cb6151d`,
+  `phy.log` `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`;
+  receiver image `f5b0c1c3bb4b4bece9b04adb0bee48a1de6083fc2968191d8d600b30c68e9e6e`;
+  client image `8a0ca5134ca5d2aa2794199045c53f64210ea76185f986557cf931f643ef4066`.
+
+### Wire-owned R2 (post-guard second one-case diagnostic)
+
+Historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`: `docs/development/pb-051-wire-ownership-ledger-handoff-20261005.md`:
+
+- Receiver image identity stayed `f5b0c1c3bb4b4bece9b04adb0bee48a1de6083fc2968191d8d600b30c68e9e6e`;
+  the client source had been adjusted between R1 and R2 (canonical
+  notes record the required fresh verification for that change; this
+  run is not full matrix acceptance).
+- Owner/source records in `/tmp/opencode/pb051-wire-owned-owner-r2/`:
+  `process-record.json` SHA-256 `ba4b3358217f4024978817e1a67ae0442a41f37b565502b6f08e1936bf929a2e`,
+  `scope-record.json` SHA-256 `bab8835eb7b4a9819c70021d65691e5f1ef6c4697fc68ec04e8552e32114d67c`,
+  `source-record.json` SHA-256 `e525bd93e824c68fab4aa3351ae958b0f1be7ade57132b9bd8c837f69736fdeb`.
+- Raw logs/build outputs in `/tmp/opencode/pb051-wire-owned-r2/`:
+  `client.log` `5da1d0b192b1063e7fcf98fe3633c62558e72ec49e7d44fe8c6cb82e665910c1`,
+  `receiver.log` `adba0e6ad5c06f593d27229921a7aeddccb0669833e32bafc1efe3829cb6151d`,
+  `phy.log` `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`,
+  `client-cmake.out` `4740a5c407564d3daececf103a565a39987e45f4cc535cf39ff5dab371fe69cc`,
+  `client-ninja.out` `63e8d70c4be1e62a88153c1dd1879098abe063824c0c1b42700db4b615c0db4b`,
+  `receiver-cmake.out` `c8629eac09c3755440d30066a084f3461835ac07d343e381fbc767bfe394459d`,
+  `receiver-ninja.out` `7ed22269b70d53dab9e1c014b213356384ebc60bad593db22595ec5e7cc0b46a`.
+
+### Focused family matrices r1 (post-guard; metadata also r2)
+
+- Accounting limit for this early focused-family diagnostic runner: it
+  did not record individual peer numeric exit codes; each run's child
+  waits completed successfully (zero) except where noted. All focused
+  runs in this subsection used receiver image SHA-256
+  `f5b0c1c3bb4b4bece9b04adb0bee48a1de6083fc2968191d8d600b30c68e9e6e`
+  (it binds the receiver image for every focused family diagnostic
+  below). The two completion
+  timestamps below are the recorded historical wall times of those runs
+  and are not new limits.
+
+- Metadata r1 from historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`, `docs/development/pb-051-metadata-matrix-handoff-20261005.md`:
+  completion at 66.187224 seconds of simulation within the existing
+  240-second ticker; one unexpected `metadata_updated` warning despite
+  client exit zero (the observer repair r2 followed). Owner records:
+  `process-record.json` `e819d64c5344df85c6f28c01e94cbca0bd2ce1357bc75052e56c25f1c8739500`,
+  `scope-record.json` `1ecb8f460fecd9a24e9e7c5b851903621f749eb0f4734f422992f92d69ef7fcb`,
+  `source-record.json` `ca10c9882efe340c9edac4d83e637ef1002226435f88ba3abcced8e00a86fe52`
+  in `/tmp/opencode/pb051-metadata-matrix-owner-r1/`. Raw/build:
+  `receiver.log` `279bf8e33c26fc1f97e975161bcacc98a8a158cfc7631ad2aff1e2b5cf212a57`,
+  `phy.log` (empty) `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`,
+  `client-cmake.out` `4740a5c407564d3daececf103a565a39987e45f4cc535cf39ff5dab371fe69cc`,
+  `client-ninja.out` `8df207c4a1b4f1507e6833c7e201b93f4f2ae3c45037c1205c3ba3b55e64bd11`,
+  `receiver-cmake.out` `c8629eac09c3755440d30066a084f3461835ac07d343e381fbc767bfe394459d`,
+  `receiver-ninja.out` `20f3529d6fd96c97f350b11494620ba0779eefa6031f02a8a046bbcd1bbe3bfa`
+  in `/tmp/opencode/pb051-metadata-matrix-r1/`.
+- Metadata r2 (repair) from the same handoff: owner records
+  `process-record.json` `b2b7e4b84e26877783d4104181b0be8ef82f97a0456b087537b2305a0edbc089`,
+  `scope-record.json` `00c9c52e9a1f6a6504e9f9814e76fb09a436bb6de6dbfbdb5bdb39b06c4b1429`,
+  `source-record.json` `c9068c10566a9bc029d7bb759aa6c8f5af747cca642a212a0a989a0b44155eac`
+  in `/tmp/opencode/pb051-metadata-matrix-owner-r2/`; raw/build in
+  `/tmp/opencode/pb051-metadata-matrix-r2/`:
+  `receiver.log` `279bf8e33c26fc1f97e975161bcacc98a8a158cfc7631ad2aff1e2b5cf212a57`,
+  `phy.log` (empty) same, `client-cmake.out` `1519e81606edb1fd161fe152c5f44a6db04d800cb21f21e8bbb90ba0b033eae3`,
+  `client-ninja.out` `3ee5f451fa0f980b0c575b043e4577835856a57907ccd0b6974833c5953ceef8`,
+  `receiver-cmake.out` `c8629eac09c3755440d30066a084f3461835ac07d343e381fbc767bfe394459d`,
+  `receiver-ninja.out` `9eea5e5a8e61a883191f70f0f6eb32a8a236587bbe1a35e92eef1c066cd2eced`.
+- Codec/QoS r1 from historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`, `docs/development/pb-051-codec-qos-matrix-handoff-20261005.md`:
+  owner records `process-record.json` `847ce089b8239cd17fd6f7f5c247fcf05b37e8c5463f066324f5242379403c4b`,
+  `scope-record.json` `0948bdaccafabc152df24876a36186b1f89f1f0b386aad3b7794b7a9c34bd4bb`,
+  `source-record.json` `64d7d7611b4877ecfcd0c062afba248f41efdd7bf654a7fee76551f9e16cf3e4`
+  in `/tmp/opencode/pb051-codec-qos-owner-r1/`; raw/build in
+  `/tmp/opencode/pb051-codec-qos-r1/`:
+  `receiver.log` `f11dab5ede702ae6484fc066686f796b623c88f06b7c15eae0f4215328b80d6b`,
+  `phy.log` (empty) same, `client-cmake.out` `4740a5c407564d3daececf103a565a39987e45f4cc535cf39ff5dab371fe69cc`,
+  `client-ninja.out` `283f770f8bd0aa04ad1f190693fa786aba031d057aadb9c71a6f4f5dc64b9ad2`,
+  `receiver-cmake.out` `c8629eac09c3755440d30066a084f3461835ac07d343e381fbc767bfe394459d`,
+  `receiver-ninja.out` `87695c332a72d37cb2c1d52aab268b535121282b6cf901c30c2a3b4f9f582827`.
+  Public case counts 7/7/27/27 equal the frozen codec_qos family row.
+- Lifecycle r1 from historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`, `docs/development/pb-051-lifecycle-matrix-handoff-20261005.md`:
+  completion at `00:01:53.157224`, before the original 240-second
+  bound, with no simulator ticker increase. Public case counts 19
+  cases / 91 raw exchanges / 23 response records equal the frozen
+  lifecycle row. Owner records
+  `process-record.json` `b56616efb8267cc1dcfb8f53b56497dd76651cd956ac4d7a2568dcad7b5f1efa`,
+  `scope-record.json` `a061c853ef58796f4dd544fe693e2e86d930b8e3b00ea20a871adb95528d7e38`,
+  `source-record.json` `d791ae6079fd9d9aff32ea2feff42e99c080dcf5bfeb183fcd811b75c334e6dc`
+  in `/tmp/opencode/pb051-lifecycle-owner-r1/`; raw/build in
+  `/tmp/opencode/pb051-lifecycle-r1/`:
+  `receiver.log` `4979e3375b314d27d1d993fb17ef4200ecaf5310752ed11e6491e499c01f09e3`,
+  `phy.log` (empty) same, `client-cmake.out` `00e7b31331668985e9dbef2180501b365e16c59f51a4e389f16a5a18b1659ecf`,
+  `client-ninja.out` `83754c0f96163f061af0e9dd3a74576a587156c0f7c035855c4d0b77b2b2565f`,
+  `receiver-cmake.out` `c8629eac09c3755440d30066a084f3461835ac07d343e381fbc767bfe394459d`,
+  `receiver-ninja.out` `b6cce7256c845cfe9b77a02e47e94f62b097f19e39a7f25ee42cbd92c723066b`.
+- Dual r1 from historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`, `docs/development/pb-051-dual-ase-matrix-handoff-20261005.md`:
+  owner records `process-record.json` `be0288cf785fe338827c14ff8884ea86dec89ff68975ad58488bf73d0577a415`,
+  `scope-record.json` `318d2808d670697b812466752d347611a523ab0248ce537cac1c46283a7d3f99`,
+  `source-record.json` `44376b2441f44c7780e98ad735fe264b7f327e69d8fc06d85af09aa3f8465ff2`
+  in `/tmp/opencode/pb051-dual-owner-r1/`; raw/build in
+  `/tmp/opencode/pb051-dual-r1/`:
+  `receiver.log` `d6190d6f2fc49e58857958b2a898439639e3624ba920c325116ca73ccfedda85`,
+  `phy.log` (empty) same, `client-cmake.out` `4740a5c407564d3daececf103a565a39987e45f4cc535cf39ff5dab371fe69cc`,
+  `client-ninja.out` `e3bf137f53f20812b7e01c18d65f0bae6379cc00796df11224ad5c59f7965157`,
+  `receiver-cmake.out` `c8629eac09c3755440d30066a084f3461835ac07d343e381fbc767bfe394459d`,
+  `receiver-ninja.out` `aa5db2f5f4017d304623ff5af55d8ab529dd9addabbebebb3b774b7eb9fe64bb`.
+  Public case counts 10 cases / 42 raw exchanges / 52 records equal the
+  frozen dual row.
+- Control framing r1 from historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`, `docs/development/pb-051-control-framing-matrix-handoff-20261005.md`:
+  owner records `process-record.json` `410ceca6ea8c9fe1a6545dd1555de311375077ce1a2a6bbd8b40924329cbdaf8`,
+  `scope-record.json` `4696f3a71c37e14625a463dc363273d6fc094b399b0ddc0b1a04bd541f2ac732`,
+  `source-record.json` `387ea24d707ce0f89d863cf9eedc7b290d7d04482bddfce49b8e30116f3bc2ec`
+  in `/tmp/opencode/pb051-control-framing-owner-r1/`; raw/build in
+  `/tmp/opencode/pb051-control-framing-r1/`:
+  `receiver.log` `642c4e369ad569757f2142d2e44d4ba360aebfb9e385b67c6afb2775dad1635a`,
+  `phy.log` (empty) same, `client-cmake.out` `49d5226d38e7fc6fd274b986cb4759d5ad8e5b5b0403e4a54f77989ceee36bc6`,
+  `client-ninja.out` `4e55a810076fd1c9a0462e304f1076bbe1eccc1c7b9d8d18f921a05d782aae5e`,
+  `receiver-cmake.out` `2502259d2eebd47a33b54bc3b145eace51c32afc0e79703b0033ef1e5fe213e8`,
+  `receiver-ninja.out` `96b817649088f1b397d0f5303b908e13104bb690f797106c50043a8bbebceacc`.
+  Public case counts 7/7/21/21 equal the frozen control row.
+- Reconnect r1 from historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`, `docs/development/pb-051-reconnect-matrix-handoff-20261005.md`:
+  five distinct generation contexts (generations 1..5), owned CP
+  retirement, public ACL disconnect, both-released callback barrier,
+  group deletion, fresh discovery with MTU 65 and both Idle ASEs,
+  partial A-CIS source acceptance of exactly 10 frames with unregister
+  0 and no stereo or peer-delivery claim; public case counts 4 cases /
+  11 raw exchanges / 11 records equal the frozen reconnect row. The
+  old unicast group is deleted through the public API with only `-EBUSY`
+  retried within five seconds; the client resets its endpoint cache and
+  the connection/MTU/security/sink-discovery semaphores before each
+  fresh connect. Owner records in `/tmp/opencode/pb051-reconnect-owner-r1/`:
+  `process-record.json` `aa8f2494d78fb098c314f8a1b4546da906ff85671572f42449c0e0e7ac72c6af`,
+  `scope-record.json` `56cb79d14f4f920a2b722054f1eefe6ace02477a26134a39867b1591dee57670`,
+  `source-record.json` `e46e399db0487078a412d48f10d9f0be1fb50bee0a90d540629f093028f358f4`;
+  raw/build in `/tmp/opencode/pb051-reconnect-r1/`:
+  `receiver.log` `90782b1f4d83820d6888df081ab120ced2e596a8b86ff489d44b99923ea4c16a`,
+  `phy.log` (empty) same, `client-cmake.out` `4740a5c407564d3daececf103a565a39987e45f4cc535cf39ff5dab371fe69cc`,
+  `client-ninja.out` `9fb140ee3f1226cc270685dd31b43dd0cfe12f1d8dc3071245a53e3b081a2969`,
+  `receiver-cmake.out` `2502259d2eebd47a33b54bc3b145eace51c32afc0e79703b0033ef1e5fe213e8`,
+  `receiver-ninja.out` `940693e7f2d21c8ed20344bbca2a87cf6211b5dc69b24bca5432f71d109e1a8c`.
+
+### Failed procedure matrix (five-family partial)
+
+Historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`: `docs/development/pb-051-stream-procedure-owner-handoff-20261005.md`:
+
+- Five families ran (control, metadata, codec_qos, lifecycle, dual) with
+  reconnect failing at generation 3 with client `-ENOMEM` before
+  TX/render. Logged procedure `BEGIN` counts across those five were 56,
+  113, 71, 234 and 86 respectively; helper counts 35, 46, 44, 143 and
+  44; raw counts 21, 67, 27, 91 and 42. The owned client image then was `4edd4e87d2e631a8123f9f6ca560f013fc1440ba6df30fd9d1a017a3e13ae5e0`,
+  receiver `2d76431521f2f437bedfe83a20863b9b079f668c748e1aaae27ddfa168ad0daa`,
+  PHY `5a6919e710a8811e70d10c9beb619a776cd797e23a943697893fe212f70bbda6`.
+  Raw client log SHA-256 `202dd5f128eee536926b6f7cefde5755a2e0ebf60c4f38125ef9924532a03189`;
+  cohort result SHA-256 `4fb827087e9eb2ccbde57ce85299a53904a3c26b5029c8c7378f828b875a2b11`.
+- Local procedure IDs in these logs are run-local diagnostics, not wire
+  transaction IDs; ASCS notifications cannot cryptographically
+  distinguish byte-identical delayed replies. This appendix repeats the
+  limit alongside the guide's interpretation section.
+- The observed `-ENOMEM` placement is consistent with a source-grounded
+  fixture explanation; the individual failing call has no own raw
+  return marker in that log, so callsite attribution there is
+  source-grounded reasoning, not an independently measured callsite.
+- Accounting limit for this later owned procedure runner: unlike the
+  early focused diagnostics above, it retains per-actor process records
+  in its root. Earlier handoff said "all nine process records"; that
+  count described only some rows. The complete six-family actor count is
+  eighteen, as recorded in the current lane guide and results; do not
+  propagate nine.
+
+### Native ABI smoke and linker environment (dated machine evidence)
+
+Historical sources at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`: `docs/development/pb-051-native-probe-abi-handoff-20261005.md` and
+`docs/development/pb-051-native-link-search-handoff-20261005.md`:
+
+- R1 linker environment observed then: `gcc -m32 -print-file-name`
+  reported `libc.so` under
+  `/nix/store/yhawd8dka2563b5mg3vjm5h14sw5lv95-glibc-multi-2.40-224/lib/32`
+  and a 64-bit `libgcc_s.so.1` under
+  `/nix/store/yygma80xg8axc2df157lvdnf181zhx7s-gcc-14.3.0-lib/lib64`;
+  the helper checked four ELF32 i386 glibc siblings and selected the
+  verified GCC `/nix/store/yygma80xg8axc2df157lvdnf181zhx7s-gcc-14.3.0-lib/lib`.
+  These are observed evidence paths from that date, never production
+  hardcodes.
+- R1 review finding (fixed later): the original fixed GCC query captured
+  output in memory before checking its 64 KiB limit and accepted
+  nonempty stderr below that limit; the current bounded contract is in
+  the lane guide's resolver section.
+- R1 focused public-boundary controls: ResourceWarning-as-error unit run
+  seven methods passed; new negative controls reject exit-zero compiler
+  stderr and space-containing paths; authored compiler fixtures flood
+  stdout/stderr in repeated 4096-byte writes or stall with a live child
+  and each is rejected with no live descendant left.
+- r2 smoke root `/tmp/opencode/pb051-native-link-smoke-r2`: authored
+  `main.c`, separate full compile/run stdout and stderr, ELF32 i386
+  executable, `record.json` with real search directories, old/new flags,
+  header and exit codes; `gcc -m32 -Wall -Werror` compile/link and
+  executable returned 0 with zero bytes on each captured stream; ELF
+  header `7f454c4601010100000000000000000003000300` confirms 32-bit
+  little-endian i386. Neither canonical nor ASCS matrix was rerun, so
+  actual receiver/client Ninja warning removal was unverified.
+- ABI smoke evidence from historical source at Git revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`, `docs/development/pb-051-native-probe-abi-handoff-20261005.md`:
+  compiler ID YAML declares `Build flags: -m32` at
+  line 4374 and `C_COMPILER_SUPPORTS_WFORMAT_SIGNEDNESS` uses `-m32` at
+  lines 7356 and 7367-7368; `file -L` identifies the compiler ID probe
+  and the outer receiver executable as ELF32 i386; the one-shot
+  smoke-record SHA-256 is `42b3c9ca5aa6f7cc9f18791828c71e14364af0190682072917994dcd126d42f3`.
+
+### Historical individual peer exits and empty PHY logs
+
+Across the early one-case wire-baseline, wire-owned and focused-family
+runs above (each documented in its own subsection with its cited
+historical source), the then-current diagnostic runner recorded no
+per-peer numeric exit codes (even where all child waits returned zero);
+the individual statements
+`child waits returned zero`/`no separate numeric per-peer exit-code
+records` appear verbatim in each cited handoff. The later owned
+procedure and full-matrix runs are different tools and do carry per-actor
+records. The `phy.log` hash
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` is the
+empty-file SHA-256 and recurs because those runs captured a zero-byte PHY
+log; the same value appears in the reproduced Git-history citation tables
+(at revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`) from, among others,
+`docs/development/pb-051-codec-qos-matrix-handoff-20261005.md` and
+`docs/development/pb-051-dual-ase-matrix-handoff-20261005.md`. Early
+partial trials are not full-matrix acceptance; the later owned failed and
+full runs (procedure r1, full r2, audit r2, and the clean-gate and hosted
+records) should be interpreted only at their exact recorded source and
+outcome. All path/hash pairs in this appendix bind evidence identities as of
+2026-10-05 and were not rechecked against external artifact availability
+during this update.

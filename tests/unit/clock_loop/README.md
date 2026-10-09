@@ -59,3 +59,15 @@ wrap Zephyr's 32-bit cycle-based displayed summary duration; use 64-bit referenc
 timestamps and per-scenario horizons for model time, not summary duration.
 Wall-clock runtime in focused execution was about 209 seconds. Do not shorten
 horizons, omit scenarios or relax bounds to fit CI; investigate ordinary failures.
+
+## Envelope and horizon rationale
+
+Declared PCLK cases are 0 and +/-1000 ppm, including a step; source cases are
+0 and +/-100 ppm. Separate jitter is +/-1000 us and processing delay 2000 us.
+At worst selected source skew, the 150 ppm integral rail leaves 50 ppm authority,
+about 2.38 frames/s. Removing four 480-frame startup blocks takes about 807 s,
+which motivates 900 s settling plus a 1000 s horizon. These are modeled stimuli,
+not physical full-clamp guarantees. After settling, post-push depth 10..12 comes
+from 16 slabs minus the 6-free target, plus one submitted descriptor and one
+descriptor of quantization allowance. Window-rate bounds use queued-word spread,
+including partial current descriptor, not a blanket ppm tolerance.

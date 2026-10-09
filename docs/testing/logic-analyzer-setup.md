@@ -28,7 +28,7 @@ Bullets below describe the initial documentation-only checkpoint, before the
   has been implemented by this documentation task.
 - Scope: identify fixture, board roles and observed wires. PCM fidelity, ASRC
   stability and transport timing belong to the separate
-  [audio validation handoff](../development/audio-validation-handoff-20260925.md).
+  [independent audio validation plan](../development/independent-audio-validation-plan.md).
 
 ## Current wiring: single authoritative declaration
 
@@ -290,8 +290,10 @@ does not preserve all timing information and may use a nominal rate.
   input-only I2S, regulator output and hardware mute; current breakout still unverified.
 
  Current harness does **not** observe source HCI UART RX P1.8. Do not treat this
- I2S setup as closing PB-019's UART-wire observability requirement. See
- `docs/development/nrf54l15-observability-resume-20260925.md:96-154` separately.
+ I2S setup as closing PB-019's UART-wire observability requirement. See the
+ PB-019 report's preserved observability boundaries
+ (`docs/development/pb-019-hci-resume-results.md`; the 2026-09-25
+ observability snapshot this line cited was retired at Git rev `a94f010`).
 
 ## 2026-09-27 observed passive I2S session (addendum)
 

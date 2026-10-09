@@ -11,8 +11,9 @@ falsified: the NULL-event mechanism does not respond to provisioning depth
 SDC data-provisioning mode (sequence-number/time-of-arrival pinning with a
 per-event arrival margin), and the fix is the documented preferred mode:
 timestamps. This run is the plan's allowed single fix-validation rerun; it
-is not acceptance, and the next hardware run is ModeA12 under its own
-handoff (`docs/development/system-hil-rh3-modea12-tsmode-handoff.md`).
+is not acceptance, and the next hardware run was ModeA12 (executed outcome
+in `system-hil-rh3-modea12-tsmode-result.md`; its execution handoff was
+retired in the 2026-10-08 reconciliation).
 
 ## Scope and immutable evidence
 

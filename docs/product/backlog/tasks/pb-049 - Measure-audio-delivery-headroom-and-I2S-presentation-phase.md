@@ -36,7 +36,7 @@ Define source/controller/receiver/output timing relationships and an event ledge
 Do not access SDC-owned RADIO, equate HCI submit/completion timestamps with airtime, derive self-referential offsets as truth, redefine advertised presentation behavior without owner decision, or claim analog/end-to-end source ADC timing from I2S alone. LC3-only: no LC3plus implementation, source, vectors or licensing assumptions. Preserve existing regression fixtures, frozen HIL/PCM limits and immutable evidence. No public release, Bluetooth qualification or unrelated PB-013 feature claim.
 
 ### Technical context
-src/audio_timing_nrf54.c, src/audio_i2s.c, scripts/hil/receiver.py and docs/development/audio-validation-handoff-20260925.md. Existing first ISO anchor supports clock measurements, not proven per-block presentation scheduling.
+src/audio_timing_nrf54.c, src/audio_i2s.c, scripts/hil/receiver.py and docs/development/independent-audio-validation-plan.md. Existing first ISO anchor supports clock measurements, not proven per-block presentation scheduling.
 Research: docs/development/independent-firmware-validation-research-20261003.md
 
 ### Open questions

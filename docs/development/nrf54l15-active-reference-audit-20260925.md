@@ -5,7 +5,7 @@
 This is a reference-hygiene audit of the dirty primary repository, not a
 clean-commit gate, physical HCI qualification, or PB-038 integration acceptance.
 The current migration and physical evidence boundaries are recorded in
-`nrf54l15-only-continuation-20260925.md` and `pb-037-retirement-results.md`.
+`docs/development/nrf54l15-migration-verification-results-20261001.md` (the 2026-09-25 continuation snapshot was retired at Git rev `a94f010`) and `pb-037-retirement-results.md`.
 No hardware action, firmware build, commit, backlog status change, or baseline
 rewrite was performed for this audit. Prior fixed-image passes do not erase the
 later production-HCI error: the final six-case repeat stopped on Mode A with

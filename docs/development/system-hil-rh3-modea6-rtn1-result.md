@@ -240,3 +240,27 @@ The normal source CPUAPP and merged hashes match the pre-existing normal
 identities. Restoration did not flash either target; `images.json` remains the
 authoritative last-flashed diagnostic tuple. Post-restoration free space was
 `163741626368` bytes, above the 80 GiB gate.
+
+## 2026-10-08 handoff-reconciliation note (ModeA3/ModeA4 status preserved)
+
+The retired ModeA3/ModeA4 handoff facts that no result report recorded:
+
+- `docs/development/system-hil-rh3-modea3-result.md` never existed. The
+  ModeA3 row produced no outcome, counters, hashes, run execution, or
+  acceptance; nothing may be invented for it.
+- The ModeA3 handoff carried two internally contradictory historical accounts
+  of the SW-split Kconfig path: its revised header said
+  `BT_CTLR_READ_ISO_LINK_QUALITY_SUPPORT` is a no-prompt bool with no selector
+  anywhere in NCS v3.3.0 (verified there), while its older amendment said the
+  dependency was already satisfied via `BT_LL_SW_SPLIT` selecting
+  `BT_CTLR_CENTRAL_ISO_SUPPORT` and the blocker was only the un-set visible
+  symbol. The source-side `isoq` design stayed deferred either way; the
+  handoff was later marked DORMANT and SUPERSEDED after the fixture moved to
+  SDC (ModeA10, 2026-09-07). Both accounts are preserved as historical
+  research that is at least partially false or uncertain; neither is a
+  verified current NCS v3.4.1 fact.
+- ModeA4's layout-policy hypothesis was killed pre-build by free evidence:
+  the hci_ipc central base config already set
+  `CONFIG_BT_CTLR_CONN_ISO_LOW_LATENCY_POLICY=y`, the SW-split source had
+  always run compact layout, the overlay line was reverted, and no hardware
+  was spent. No hardware result can be claimed for that phase.

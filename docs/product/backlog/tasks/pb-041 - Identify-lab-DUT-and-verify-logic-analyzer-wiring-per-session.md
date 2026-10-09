@@ -13,7 +13,7 @@ labels:
 dependencies: []
 references:
   - docs/testing/logic-analyzer-setup.md
-  - docs/development/audio-validation-handoff-20260925.md
+  - docs/development/independent-audio-validation-plan.md
 priority: p2
 type: feature
 ordinal: 38000
@@ -46,7 +46,7 @@ Preferred design: host arms bounded capture, sends fresh per-attempt nonce to on
 
 Three-wire BCLK/WSEL/DIN has no DAC identity/ACK. MCU output readback, input loading and rail-high cannot distinguish functional DAC from open connector or powered harness. A new sense/ID connection or safe analog return is a design decision, not an implemented capability. Software PCM mute does not protect arbitrary pin patterns; no current MCU-driven analog DAC mute was found.
 
-Related, not automatic dependencies: PB-033 session foundation; PB-035/PB-036 HIL integration; PB-023/PB-025 analog qualification. Separate audio testing handoff: docs/development/audio-validation-handoff-20260925.md.
+Related, not automatic dependencies: PB-033 session foundation; PB-035/PB-036 HIL integration; PB-023/PB-025 analog qualification. Active audio validation plan: docs/development/independent-audio-validation-plan.md.
 
 ### Open questions
 Which exact DAC breakout and analyzer model/input limits are connected, and is analyzer ground confirmed? Which analog mute or downstream-disconnection procedure is safe? Does the user require an added hardware presence sensor/ID or analog return for automatic DAC attachment proof, or accept explicit unknown plus physical attestation with unchanged wiring? Which diagnostics must be available in each firmware role, especially HCI mode? Fix command schema, waveform amplitude/duration, acquisition limits and evidence-schema version during refinement. Keep Backlog until these consequential safety/product choices are resolved.

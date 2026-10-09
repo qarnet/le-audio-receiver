@@ -272,8 +272,11 @@ PB-019 AC2 and AC3 now unchecked; AC1 and AC4 remain checked, AC5 pending
 audit. XIAO status: **Prototype / qualification incomplete**. Investigate and
 repair UART boundary, repeat production-image six cases. This failure is
 engineering work, not a technical hard blocker. Raw btmon/RAM/core evidence
-may contain bond keys; do not stage or upload. Current state and clean-gate
-authority boundary: `nrf54l15-only-continuation-20260925.md`.
+may contain bond keys; do not stage or upload. Current-state and clean-gate
+authority boundary: the dated migration-verification report
+(`docs/development/nrf54l15-migration-verification-results-20261001.md`;
+the 2026-09-25 continuation snapshot this line cited was retired at Git rev
+`a94f010`).
 
 ## 2026-09-25 audited SDK bounce-prepare compatibility repair (software only)
 
@@ -332,6 +335,87 @@ Verification (no hardware actions or commit):
 
 Parent review required before any controlled, uninstrumented physical repeat.
 Neither host replay nor build qualifies HCI or closes PB-019 AC2/AC3.
+
+## 2026-10-08 preservation appendix: rejected UART-defect experiments and negative facts
+
+> Historical reconciliation appended during the independent-validation
+> documentation pass. PR-era chronology snapshots (`nrf54l15-only-resume-
+> 20260924.md`, `nrf54l15-only-continuation-20260925.md`, the observability
+> checkpoint of 2026-09-25, and the 2026-10-02 PR wrap-up, all at Git rev
+> `a94f010`) recorded rejected-experiment details and boundary authority; the
+> retained facts are preserved in this report and in the 2026-10-08 appendix
+> of `docs/development/nrf54l15-migration-verification-results-20261001.md`.
+> Those snapshots are coordination history, not current permissions; the old
+> do-not-use-manual-hardware command chain is obsolete and is not carried
+> forward (the standing hardware authority in AGENTS.md and the milestones
+> plan governs hardware work). No new experiment was run and no conclusion
+> changed.
+
+### UART SDK defect and 502→112 threshold workaround (historical, NCS v3.3.0)
+
+The original interrupt-driven H4 sample used one-byte RX DMA and stalled
+during streaming; the replacement uses continuous async RX with TIMER-backed
+bounce buffers (1024-byte total buffer, 4000 us switch-latency budget).
+Setting that budget alone did not work: physical SWD captured assertion
+`uart_nrfx_uarte.c:1270`, `bounce_limit < bounce_buf_len`, with a runtime
+threshold of **502** despite the requested 4000 us budget. NCS v3.3.0's
+static initializer applied the microseconds-to-bytes conversion twice and
+then overwrote the correctly computed runtime value during async
+initialization. The application therefore calls `uart_config_get()` and
+reapplies the configuration with `uart_configure()` before RX starts,
+computing the correct threshold **112** for a 512-byte half-buffer at
+1 Mbaud/4000 us; SWD verified 112. No SDK file was modified; assertions and
+warnings were not suppressed. Key evidence roots:
+`pb019-async-stall-core-03` through `-06` (failed state) and
+`pb019-async-corrected-threshold` (fixed threshold). An early debugger probe
+used unsupported Tcl `mrw` and stopped before its resume command; the next
+probe resumed the board. That diagnostic helper requires hardening before
+reuse. The threshold 112 is also why the later bounce-prepare false-repair
+window is exactly "old slot below 112": the corrected runtime threshold, not
+an arbitrary constant.
+
+### Rejected sensitivity experiments: none established a root cause
+
+1. UART idle timeout 100 us instead of 1000 us did not improve peer
+   delivery; 1000 us was restored.
+2. In-memory NCP timestamps proved the nRF submitted completion events to
+   UART about every 10 ms while Linux received bursts of six roughly
+   50–60 ms apart. This locates the observed batching downstream of event
+   dequeue, not inside SDC; it does not prove which downstream component
+   batches.
+3. A real-buffer-backed 20-credit bridge queue/proxy was implemented and
+   tested as a sensitivity probe. It did not improve receiver delivery and
+   was fully removed: no `iso_credit.c/.h`, no event rewriting, no virtual
+   credit accounting; `BT_ISO_TX_BUF_COUNT` restored to 6.
+4. Source ISO link quality showed 50 flushed versus 3 unacknowledged packets
+   in one midstream snapshot, supporting missed scheduling/deadlines rather
+   than attributing all loss to over-air errors. Counters are not a direct
+   receiver-SDU count, and `hcitool cmd` may print the first unrelated HCI
+   event; use the matching Command Complete in `btmon.log`, not that short
+   output.
+
+Relevant runs: `pb019-xiao-h4-quality-02`, `pb019-xiao-h4-ncp-trace-01`,
+`pb019-ncp-trace-core-01`, `pb019-xiao-h4-async-audio-09` (rejected credit
+proxy experiment). Temporary NCP instrumentation was removed. Together with
+the 2026-09-25 records above, these experiments **do not individually or
+jointly resolve the insertion/deletion fault**; "trace perturbation" (the
+RAM-trace six-case pass) and "unknown cause" remain separate unresolved
+historical findings, neither retroactively fixed by the generated
+driver-sentinel repair. The sentinel eliminates only the stale old-slot
+false-replacement class; no per-historical-fault root cause is claimed.
+
+### Aborted six-case run accounting (2026-09-24 session)
+
+The user-aborted `120`-seconds-per-case run retained exactly five completed
+case records and one sixth case that had started (UART activity) but has no
+completed CLI record or terminal stream summary. It is an interrupted
+partial run, not six-case acceptance. Sampled PLC deltas (78→194 with
+rendered frames 1082→21082) are the real-loss evidence for the interrupted
+Mode A reconnect; rounded `(0%)` UART percentages are never treated as zero
+loss - compare exact counter deltas. Detached `sudo`/`btattach` and
+`sudo`/`btmon` descendant groups of the abort were cleaned up after fresh
+probe enumeration, verifying the owned adapter's lab address `C0:AA:BB:CC:
+DD:EE`; only that adapter was touched.
 
 ## 2026-09-25 clean gate and latest candidate: physical qualification still fails
 

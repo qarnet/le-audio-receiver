@@ -33,7 +33,7 @@ Review actual Bluetooth LC3 tool/package identities, applicable specification/er
 Do not choose Wine, Windows or CI topology before refinement, accept legal terms on the owner's behalf, run unapproved downloads/installers, or copy restricted reference material into the repository. LC3-only: no LC3plus implementation, source, vectors or licensing assumptions. Preserve existing regression fixtures, frozen HIL/PCM limits and immutable evidence. No public release, Bluetooth qualification or unrelated PB-013 feature claim.
 
 ### Technical context
-opencode.json exposes the read-only Bluetooth library. Its README.md, ASSESSMENT.md and LC3_Reference_Binary/Readme.txt distinguish package/script/binary versions and container format. Existing docs/development/audio-validation-handoff-20260925.md supplies prior technical context.
+opencode.json exposes the read-only Bluetooth library. Its README.md, ASSESSMENT.md and LC3_Reference_Binary/Readme.txt distinguish package/script/binary versions and container format. Existing docs/development/independent-audio-validation-plan.md supplies prior technical context.
 Research: docs/development/independent-firmware-validation-research-20261003.md
 
 ### Open questions

@@ -1,5 +1,13 @@
 # PB-053: local emulator preparation checkpoint (2026-10-04)
 
+Historical qualification: this 2026-10-04 report records only the
+preparation-stage state of that date. PB-053 later progressed through guest
+lifecycle work to a completed host lane; see
+`docs/development/pb-053-host-lane-results-20261005.md`. The original
+2026-10-04 Blocked verdict is the then-state, not the current item status. The
+r16 and r17 failures recorded below remain failures; their underlying cause
+was never diagnosed and is not claimed as resolved anywhere in this report.
+
 ## Scope and verdict
 
 Local-only pinned BlueZ emulator preparation **PASS**. PB-053 isolated host
@@ -19,6 +27,22 @@ compiler version and exact command/log per operation, and writes outcome,
 completed commands and binary identity to exclusive output. Compiler and link
 operations run in owned sessions with scoped cancellation and bounded TERM/KILL
 group cleanup. No warnings suppressed; `-Wall -Werror` remains enabled.
+
+The feature-macro flag is source-aware, never a global define. The first
+build attempt (r1) failed exactly because common `-D_GNU_SOURCE` collided
+with `emulator/serial.c`'s own line-start `#define _GNU_SOURCE` and GCC raised
+a macro redefinition error under `-Wall -Werror` (retained `/tmp/opencode/pb053-emulator-build-r1/01.log`);
+eight of the 23 translation units define the macro themselves
+(`emulator/serial.c`, `emulator/bthost.c`, `emulator/phy.c`,
+`lib/bluetooth/hci.c`, `src/shared/mainloop.c`,
+`src/shared/mainloop-notify.c`, `src/shared/util.c`, `src/shared/ecc.c`).
+Applying one global flag before all 23 units would keep failing those units,
+so `source_macro_flags()` now inspects each unit's bytes and omits the flag
+when the unit already defines `_GNU_SOURCE`, or supplies `-D_GNU_SOURCE`
+otherwise. The focused compiler test in
+`tests/unit/bluez_host_prepare/test_bluez_host_prepare.py` compiles both a
+self-defining and a compiler-defined translation unit with real `cc` under
+`-Wall -Werror`.
 
 ## Real preparation and public-boundary checks
 
@@ -109,6 +133,70 @@ and result-validation/accounting review defects. It stays unstaged and is not
 accepted as safe host-lane tooling. Further source-matched host-stack diagnosis
 and runner safety/accounting refinement needed before resuming PB-053. This
 blocker does not change PB-051 owner pause or any codec/physical proof boundary.
+
+## Retained kernel binary evidence and readiness diagnostics (2026-10-04, preserved 2026-10-08)
+
+Facts below are retained from the dated 2026-10-04 retained-power diagnostic
+handoff, superseded in runtime mechanics but unique as evidence provenance.
+They remain historical session claims, not newly reverified current behavior
+and not resolved r16/r17 causation (the r17 disassembly proves a queue/reject
+path, not that this caused the later persistent connected state; no claim of
+R16/R17 cause being fixed or fully proved follows).
+
+R17 HCI shows successful Disconnect of CIS0100 and ACL0001, followed by three
+successful LE Extended Create Connection commands from hci0. Public Disconnect
+failure is reconnect after actual teardown, not controller rejection.
+Pinned BlueZ `src/adapter.c:5902-5908` removes the device from the daemon
+connect_list after failed AddDevice, so a later public Disconnect skips kernel
+removal because the daemon believes the device absent. Installed kernel 7.1.5
+module was inspected through anonymous in-memory ELF disassembly, no
+source/module changes:
+
+- `hci_cmd_sync_queue` at text 5f049 tests hdev+60 bit2, clear returns -100.
+- `add_device` calls hci_conn_params_set at 32f68, queues at 32fb6; negative
+  result completes MGMT 0033 Failed (0x03) and frees pending records at
+  32fe8/32ff5 without params rollback.
+- Bit2 corresponds to `HCI_RUNNING` in available Linux 7.3 source; the name is
+  a source analogy only. Byte/branch/order are exact dated 7.1.5 binary proof
+  recorded in that handoff; neither the analogy name nor the 7.1.5 branch
+  semantics have been independently reverified since. No claim follows that a
+  later repair "fixed and proved" the R16/R17 cause.
+- Compressed actual module SHA-256
+  `dfc0f5099eeefddd5ad265d8f1a4e62405ac1234c5bf4400e75e9ab2ba3ed7f2`.
+
+Readiness shell limits and runtime profile from the same dated handoff and
+readiness handoff, retained verbatim context: the running kernel was 7.1.5;
+`/run/booted-system/kernel` (not `/run/current-system/kernel`) was the only
+generation-safe bzImage source. The exact pinned kernel/module store paths,
+matching `/proc/config.gz`, QEMU 11.0.2 KVM path and BusyBox 1.37.0
+shell-only pinned path remain recorded in the host guide and
+`scripts/bluez_host_guest.py` pins rather than relisted here. The shell-only
+BusyBox provides no mount or modprobe applets, so the exact staged `mount`
+and `modprobe` executables, the daemon's experimental keys,
+dbus-daemon/dbus-send, `btmgmt` and `btmon` were added in the
+readiness/runtime profile. Guest-only VHCI and the private bus
+state contract remain those of the host guide. Verified binaries available in
+the staged BlueZ root included `/nix/store/8l7syi03wm19x41yvarswrqzz7jq404r-bluez-5.87/bin/btmgmt`
+and `btmon`, with `btmgmt --help` advertising `--index`/`--timeout` and
+power/info commands, and `btmon --help` options `-T`, `-M`, `-P`, `-c`, `-C`.
+One interactive host help command timed out during lookup; no controller
+mutation was requested and the process was closed; never repeat interactive
+host management commands, all actual mgmt traffic goes inside the guarded
+guest only.
+
+The `btmgmt` / `btmon` staged-binary paths and the semantic btmon monitor
+profile were later superseded by the guest-only Python collector and the
+current host guide profile, but this record proves the dated capability checks
+and their exact binary identities were reviewed and retained as evidence.
+Related diagnostic handoff classifications retained: the daemon restart
+prepower hypothesis (restart powers adapters down, then loads retained
+autoconnect records before power-on, leaving kernel parameters enabled after
+queue rejection) was never proved causation; R18 later observed actual MGMT
+AddDevice success under the prepowered readiness repair, and R19 passed all
+three fresh/retained/fresh child flows with actual disconnect quiescence, but
+those observational successes must not be promoted into a resolved-cause
+claim: the R16/R17 underlying cause remains undiagnosed here, and R19's
+stronger wording is retained as historical diagnostic interpretation.
 
 ## Clean preparation checkpoint and existing PR gate
 

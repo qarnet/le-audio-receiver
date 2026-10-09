@@ -1,20 +1,26 @@
-# Firmware CI canonical test gate plan
+# Firmware CI gate contract and historical design
 
 > **PB-040 SDK override (2026-09-25):** Current repository CI workflow pins
 > NCS v3.4.1, toolchain bundle `8285d8ad56` and the matching verified
 > container digest. [PB-040 results](ncs-3.4.1-upgrade-results.md) record the
-> clean local software gate and workflow contract tests; no hosted v3.4.1 CI
-> execution is claimed. v3.3.0 pins and hosted runs below are historical.
+> clean local software gate and workflow contract tests. Later hosted v3.4.1
+> closure is recorded in `pb-051-native-probe-entry-results-20261006.md` and
+> completed PB-051. v3.3.0 pins and hosted runs below remain historical.
 >
-> **Current migration note (2026-09-25):** PR 11's dual-target run and
+> **Historical migration note (2026-09-25):** PR 11's dual-target run and
 > 65-child topology below are historical acceptance for that commit, not
 > current migration gates. Hosted workflow/release facts are not changed by
 > dirty-tree diagnostics. Current build-contract CLI supports `--nrf54l15`
 > only; nRF5340 local checks and DK fixture requirements were retired on the
 > uncommitted continuation tree. XIAO standalone source and XIAO HCI roles
 > replace the DK source and prior dongle, sequentially on the second XIAO.
-> Canonical clean-commit coverage/full gate and physical acceptance remain
-> pending. See `AGENTS.md` and `docs/development/pb-037-retirement-results.md`.
+> That pending diagnostic state was superseded by clean migration verification
+> in `nrf54l15-migration-verification-results-20261001.md`.
+
+This document retains the CI dependency, trust, artifact and public gate
+contract, plus failed-run evidence behind it. PR 11/12 implementation is
+complete; the original monolithic design below is not a new execution plan.
+The parallelization amendment and executable workflow control current scheduling.
 
 Status: accepted implementation and plan of record for PR 11. Date:
 2026-08-10. Corrected after the first hosted runs; every correction was
@@ -62,14 +68,14 @@ draft releases for nRF54L15 only. The 2026-09-12 optional `--nrf5340`
 local-validation assumption is superseded by the migration note above;
 historical hosted evidence remains unchanged.
 
-## Goal
+## Original monolithic goal (superseded by parallelization)
 
 Make every pull request and every protected `main` merge pass the repository's
 canonical software gate before the active nRF54L15 release firmware build can
 start. A failed test gate must prevent firmware packaging, artifact upload, and
 draft-release creation.
 
-## Grounded current state
+## Historical design inputs
 
 - `.github/workflows/firmware-build.yml` has one `firmware` job followed by a
   trusted-`main` `release` job. The firmware job initializes an exact NCS v3.3.0
@@ -387,3 +393,23 @@ and firmware ID `10308350180` (`sha256:7c3b313916dc32b2813f0f1825be42ed9c461ab3b
 Test artifacts retain seven days; firmware retains 14 days. PR 12 was CLEAN at
 `463fa6b`; active ruleset `20658259` remains unchanged, requiring exact
 contexts `tests` and `firmware` without a strict latest-main requirement.
+
+### Worker split rationale and gate interface
+
+The unit worker is a separate job because a dependency on a matrix job waits
+for every matrix child. Putting unit, coverage and BSim in one matrix would
+prevent firmware from starting after unit alone. A coverage or BSim failure may
+leave a firmware artifact, but aggregate `tests` fails and release stays blocked.
+Normal unit execution remains separate from coverage-instrumented execution;
+instrumentation is not a substitute for the normal build/runtime boundary.
+
+`scripts/test-all.sh` defaults to `--phase all`. It accepts one `--phase` with
+`all`, `unit`, `coverage` or `bsim`. Missing values, duplicate phase options,
+unknown options and positional arguments fail before environment resolution or
+suite execution. Unit runs inventory-discovered C and Python suites; coverage
+runs baseline enforcement then the matrix checker; BSim runs Stage 1 then the
+additive ASCS lane. Any child failure makes the selected phase fail.
+
+The historical monolithic timing breakdown also measured Python at about 54 s,
+BSim compile at 3m17s, scenarios at 8m23s and firmware at 5m17s. These are dated
+measurements from the PR 12 investigation, not current duration guarantees.

@@ -63,7 +63,10 @@ candidates (78.9%) were already clean; only 115 were rewritten.
   updated to 17 scenarios / 26 runs; the "no expansion planned"
   contradiction removed.
 - `docs/development/workstation-transfer-status.md`: marked as a
-  historical snapshot with a pointer to the P8/STATUS current state.
+  historical snapshot with a pointer to the P8/STATUS current state
+  (retired 2026-10-08 at Git rev `a94f010` or later; its unique T7 facts
+  are preserved in the dated appendix of
+  `docs/development/refactor-r10-results.md`).
 - `docs/testing/coverage-matrix.md`: Python inventory 16 → 19, gate
   children 59 → 62, current suite counts corrected against the sources
   (lifecycle 33, timing_nrf54 21, audio_shell 14, audio_shell_noperf 11,

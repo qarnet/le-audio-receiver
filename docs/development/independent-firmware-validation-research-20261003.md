@@ -207,8 +207,8 @@ No existing product item was rewritten or duplicated.
 | S1 | [PB-042: LC3-only reference tooling and rights](../product/backlog/tasks/pb-042%20-%20Establish-LC3-only-independent-reference-tooling-and-rights.md) | None |
 | S2 | [PB-043: Independent vectors and frame adapter](../product/backlog/tasks/pb-043%20-%20Generate-independent-LC3-reference-vectors-and-strict-frame-adapter.md) | PB-042 |
 | S3 | [PB-044: Production decoder independent comparison](../product/backlog/tasks/pb-044%20-%20Validate-production-LC3-decode-against-independent-reference-PCM.md) | PB-043 |
-| S4 | [PB-045: Independent ASRC oracle](../product/backlog/tasks/pb-045%20-%20Add-independent-ASRC-arithmetic-and-full-waveform-oracle.md) | None |
-| S5 | [PB-046: Closed-loop clock recovery](../product/backlog/tasks/pb-046%20-%20Validate-closed-loop-clock-recovery-with-independent-timed-output.md) | PB-045 |
+| S4 | [PB-045: Independent ASRC oracle](../product/backlog/completed/pb-045%20-%20Add-independent-ASRC-arithmetic-and-full-waveform-oracle.md) | None |
+| S5 | [PB-046: Closed-loop clock recovery](../product/backlog/completed/pb-046%20-%20Validate-closed-loop-clock-recovery-with-independent-timed-output.md) | PB-045 |
 | S6 | [PB-047: Fresh exact SDU content/delivery](../product/backlog/tasks/pb-047%20-%20Prove-fresh-exact-LC3-SDU-content-and-per-stream-delivery.md) | PB-043 |
 | S7 | [PB-048: Independent fresh I2S content](../product/backlog/tasks/pb-048%20-%20Compare-fresh-I2S-content-against-independent-post-ASRC-expectations.md) | PB-041, PB-044, PB-045, PB-047 |
 | S8 | [PB-049: Headroom and presentation phase](../product/backlog/tasks/pb-049%20-%20Measure-audio-delivery-headroom-and-I2S-presentation-phase.md) | PB-048, PB-046 |

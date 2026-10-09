@@ -85,4 +85,4 @@ integration. Final runner smoke
 `/tmp/opencode/hil-runs/pb035-final-runner-smoke-20260925-r1` passed with six
 guarded identity checks, restored standalone source and receiver images; service
 exit 0 and empty cgroup. Prior r1 failure stays intact. See
-`nrf54l15-only-continuation-20260925.md` for pending clean gate.
+`docs/development/nrf54l15-migration-verification-results-20261001.md` for the recorded clean-gate boundary (the 2026-09-25 continuation snapshot this line cited was retired at Git rev `a94f010`).

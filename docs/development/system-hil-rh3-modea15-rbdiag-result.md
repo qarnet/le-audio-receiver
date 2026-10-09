@@ -109,7 +109,30 @@ outstanding target plus margin, ~4), bounding how far ahead of the
 controller's own schedule the host may queue. This reproduces the
 ModeA12 delivery regime (few future pins in the controller) keyed to
 the controller grid instead of the host clock (no offset learning, no
-drift, no stale-pin guard). One fix-validation run under its own
-handoff (`docs/development/system-hil-rh3-modea16-rbbound-handoff.md`). Preserve
-this evidence root and do not rerun this ID. Use the controller-clock result for
-the current implementation and next gate.
+drift, no stale-pin guard). One fix-validation run followed (the ModeA16
+phase; executed outcome in `system-hil-rh3-modea16-rbbound-result.md`; its
+execution handoff was retired in the 2026-10-08 reconciliation). Preserve
+this evidence root and do not rerun this ID. Use the controller-clock result
+for the current implementation and next gate.
+
+## 2026-10-08 handoff-reconciliation note (response-size constraint preserved)
+
+The retired ModeA15 handoff's warning note recorded a documented protocol
+constraint this result does not carry: current successful status records use
+compact `tx.anchor`, `tx.pin`, `tx.skip`, `tx.lead`, and `tx.sync` fields, and
+failed command responses use `"tx":null` to preserve the fixed 1024-byte
+HIL1 protocol line. The handoff also sized the historical six-additive-field
+schema (`rb_first`, `rb_min`, `rb_max`, `rb_last`, `rb_cnt`, `pin_last`)
+against a 512-byte `streams_json` scratch with a single stream at about 250
+bytes and two streams at about 500 bytes; that sizing was a design estimate
+for the retired schema, not the current one.
+
+Distinguish estimate from current schema (code-checked 2026-10-08, not claimed
+by the retired handoff): the implemented status snapshot emits `tx` as
+`{"anchor":..,"pin":..,"skip":..,"lead":{"min":[..],"max":[..],"under":[..]},
+"sync":[[..]]}` per stream, failed command responses render `"tx":null`, and
+the fixed `HIL_SOURCE_OUTPUT_LINE_SIZE` 1024-byte bound is pinned by the
+retained unit test asserting a maximum-ID rejection line stays inside it
+(`tests/unit/hil_source_app/src/test_hil_source_app.c`). The historical
+six-field `rb_*`/`pin_last` schema of this run is retired; it appears only in
+this run's evidence and the run's tables above.

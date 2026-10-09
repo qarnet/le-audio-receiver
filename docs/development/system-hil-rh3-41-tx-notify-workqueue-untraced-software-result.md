@@ -109,3 +109,30 @@ Only the existing `build/nrf54l15` path was reused, with no extra build tree or
 storage cleanup.
 
 The completed physical execution is recorded in the [canonical H41 result](system-hil-rh3-41-tx-notify-workqueue-untraced-result.md).
+
+## Historical RH3-41 software-phase rationale
+
+Preparation rationale recorded by the RH3-41 software planning handoff that
+predates this result (provenance: Git rev `a94f010`, for example
+`git show a94f010:docs/development/system-hil-rh3-41-tx-notify-workqueue-untraced-handoff.md`).
+NCS v3.3.0-historical diagnostic facts only, not current v3.4.1 production
+behavior or approval to replay any configuration.
+
+The no-trace build exists to isolate the H40 workqueue experiment
+from H40's trace instrumentation; H40's 1536-byte stack was exercised once but
+H40 also carried trace instrumentation and only a 104-byte CPUAPP RAM margin,
+so H40 cannot establish untraced behavior. Before the build, the then-normal
+image had 2148 bytes between `_image_ram_end 0x2002779c` and the `0x20028000`
+RAM limit, so the upstream default 2048-byte stack plus the H40-observed
+0x128-byte queue object could not be assumed to fit; the H40-tested 1536-byte
+diagnostic stack size was reused, not chosen as a production stack size. The
+required report content included the observed `_image_ram_end` and remaining
+bytes to `0x20028000` without calling that margin production-safe, the private-
+workqueue `nm` and initializer disassembly proof, normal restoration with exact
+normal hashes, an explicit statement that a later physical run needs a separate
+reviewed plan, and no fabricated hash or RAM value; on failure, restore normal
+output first, then stop and report, and do not create a success result
+document. The historical upstream-default facts: `Kconfig:160-187` makes the
+option experimental, dependent on `BT_CONN_TX`, defaulting stack to
+`SYSTEM_WORKQUEUE_STACK_SIZE` and priority to 8; `conn.c:283-290,4652-4669`
+starts static `conn_tx_workq` at cooperative priority 8.

@@ -149,7 +149,10 @@ with final marker
 `PB031_P0B_CROSS_PLATFORM_PASS environments=3 runs=6 records_per_run=26 identity_order_equal=true evaluations_expected=true`.
 Full reviewed AMD, Intel, and ARM report hashes, ARM fresh-identity/build/flash
 evidence, production restoration, and repair-review results are recorded in
-`docs/development/portable-lc3-pcm-oracle-p0b-threshold-handoff.md`.
+`docs/development/pb-031-portable-pcm-results.md` (consolidated from the
+retired records, citable at Git revision
+`a94f010de00e25d4a2433f7b4c56b31a5377446e` as
+`a94f010:docs/development/portable-lc3-pcm-oracle-p0b-threshold-handoff.md`).
 
 P0c adds schema-3 payload-identity and PLC-aware calibration before P2 resumes.
 Receiver controller sequence is diagnostic only and cannot select source fixture
@@ -179,7 +182,11 @@ slot0 is expected with `CONFIG_USE_DT_CODE_PARTITION=n`, and production
 partitions remain unchanged. Clean `262805e` cpuapp and FLPR were rebuilt,
 flashed, verified, and booted without warning or error. P2 is unblocked.
 Detailed evidence is in
-`docs/development/portable-lc3-pcm-oracle-p0c-handoff.md`. No acceptance
+`docs/development/pb-031-portable-pcm-results.md` (consolidated from the
+retired records, citable at Git revision
+`a94f010de00e25d4a2433f7b4c56b31a5377446e` as
+`a94f010:docs/development/portable-lc3-pcm-oracle-p0c-handoff.md`). No
+acceptance
 checkbox is completed by P0c alone.
 
 P0e reconnect correction accepted on 2026-09-18 at implementation commit

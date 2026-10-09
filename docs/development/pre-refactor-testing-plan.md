@@ -1,10 +1,15 @@
-# Pre-refactor behavior and testing plan
+# Historical pre-refactor behavior baseline and acceptance evidence
 
 Status: **T0–T8 COMPLETE (accepted 2026-07-31..2026-08-04)** — the plan was
 accepted for phased implementation on 2026-07-31 and every phase is now
 complete; it is superseded by `docs/development/refactor-plan.md` (accepted
 plan of record, R0–R10).  The dated phase evidence below (including the
 21-child and 41-child gate records) is preserved as historical evidence.
+
+This retained baseline defines what the refactor had to preserve and records
+the original verification boundaries. It is not active work. Current contracts
+live in `../testing/behavior-contract.md`, and dated physical acceptance in
+`../testing/pre-refactor-hardware-baseline.md`.
 
 ## Goal
 
@@ -343,7 +348,9 @@ exact commit `8f7bfca` from a detached fresh clone on
 elapsed 816 s (13m36s), **zero Kconfig assigned-value warnings**, zero
 compiler warnings.  Observed evidence, warning classification, and
 provenance: `STATUS.md` (T7 section),
-`docs/development/workstation-transfer-status.md`,
+`docs/development/refactor-r10-results.md` (dated T7 run-record appendix;
+the transfer-status snapshot this line cited was retired at Git rev
+`a94f010`),
 `docs/testing/coverage-matrix.md` (numeric baseline).
 Committed `tests/coverage-baseline.json`: lines 3070/3503, branches
 1332/1921, functions 182/182 (100%) in the 23-file numeric population.
@@ -438,7 +445,8 @@ state-machine improvements, readability work, and diagnostic improvements.
    `c6adce8`/`4a31324`, warning-fix commit `8f7bfca`); canonical gate
     observed exact `41 PASS / 0 FAIL / 41 TOTAL`, exit 0, elapsed 816 s
     (13m36s), zero Kconfig assigned-value warnings (see `STATUS.md` T7
-   section and `docs/development/workstation-transfer-status.md`).
+   section and the `docs/development/refactor-r10-results.md` dated T7
+   run-record appendix).
 9. T8 — hardware baseline freeze — **ACCEPTED (2026-08-04)** — both
    hardware matrices pass on the exact final production code `971e6a4`
    (nRF54L15 + nRF5340/E83; coverage-baseline `1a5842d`, coverage docs

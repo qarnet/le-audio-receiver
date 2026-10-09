@@ -181,3 +181,84 @@ same exact commit reran the full one-command gate and ended exactly
 clone remained clean. Log:
 `/tmp/opencode/pb-033-canonical-gate-clone.log`. This satisfies acceptance
 criterion #5.
+
+## 2026-10-08 preservation appendix: retired handoff design facts
+
+> The phase 1/2/3A handoffs, the phase 3B execution handoff, the retry-1
+> repair handoff, and the PB-032 policy handoff were retired in the
+> documentation reconciliation of 2026-10-08. Unique design facts not already
+> stated above are preserved here verbatim in meaning. They are historical
+> design/method context (NCS v3.3.0 where noted), not current instructions:
+> v3.4.1 and the later migration reports take precedence where they differ.
+
+### Phase 1 session-binding design rationale (identity, safety, review repair)
+
+Grounding facts behind the session identity contract:
+
+- Probe family and volatile tty paths cannot select roles; raw AP/FICR
+  evidence supplements the probe table. Live read-only scans on both boards
+  returned identical family signatures (AP0 `0x84770001`, AP1 `0x84770001`,
+  AP2 `0x32880000`, AP3 `0x00000000`, PART `0x00054b15`, raw VARIANT
+  `0x41414330`/`AAC0`); DPIDR `0x6ba02477`. Live serials remain session
+  evidence only and must never become a committed role mapping. XIAO tty
+  interfaces expose VID `2886`, PID `0066`, interface `02`, with
+  `ID_SERIAL_SHORT` equal to the CMSIS-DAP probe serial; `/dev/ttyACM*`
+  numbering is observation only. `nix-nrf probes` scans AP0-AP3 internally
+  but its public table prints only DPIDR/PART/printable VARIANT, so the
+  repository owns an explicit-probe OpenOCD call to retain raw AP values.
+- Exact FICR addresses used after `chip.dap apcsw 0x01000000 0x01000000`:
+  INFO.PART `0x00FFC31C`, INFO.VARIANT `0x00FFC320`.
+- Read-only phase allowed no reset, halt, program, or write-memory command.
+- Manifest exact bytes, hashes, strict schema, and the exclusive 0400 file
+  lifecycle (O_CREAT|O_EXCL|O_NOFOLLOW, fsync file and directory, never
+  overwrite) were designed before any target action.
+- Phase-1 review repair gate (recorded defect classes, all fixed before the
+  physical phase): snapshot/parse race on fixture/binding bytes, float
+  values comparing equal to integer schema fields, trailing-newline session
+  IDs, and custom-root `/`/repository-overlap path comparison that
+  special-cased `/` incorrectly. Repair required byte-oriented parsers,
+  exact JSON integer types, full-match session-ID grammar, path-component
+  root rejection, and regressions for input drift before session-directory
+  creation.
+
+### Phase 2 source-port design decisions (SDK v3.3.0 context)
+
+- Controller time split: the source reads Zephyr-owned direct GRTC; it adds
+  no private GRTC channel, compare channel, GPPI link, IPC transport, or
+  SYS_INIT hook, and does not transplant the nRF5340 HFCLK divider. The
+  `hil_source_controller_time_get` contract deliberately preserves the
+  modulo-`2^32` microsecond API used by signed-delta scheduling (32-bit wrap
+  is handled by the callers), with readiness/errors (`-ENODEV` when GRTC not
+  ready, `-EINVAL` on NULL) preserved; no nRF53-era `-EIO` epoch-fault path.
+- No custom SDC assertion handler: the default integrated-host fatal path
+  retains file/line evidence.
+- Explicit `--no-sysbuild` is required for the single-image source build:
+  omission accidentally selected `sysbuild_default` (the tree contains
+  `Kconfig.sysbuild`) and produced `app/zephyr/`, `domains.yaml`, and a
+  merged image instead of the intended single artifact shape.
+- Overlay/resource safety: stock buttons and SPI flash are disabled to avoid
+  UART/RF-switch pin collisions; the source overlay excludes every receiver
+  peripheral block (I2S/FLPR/TIMER20/pdm/LEDs/ADC/IMU/battery/pairing nodes).
+
+### Phase 3A runner-checkpoint design facts
+
+- Six ordered identity checks guard setup, both serial opens, source flash,
+  receiver flash, and the row action; prior snapshots cannot be overwritten.
+- Tty renumbering before an open may succeed (identity is udev/USB, not the
+  `/dev/ttyACM*` node); post-open drift must fail before the guarded action
+  and close owned descriptors.
+- Boot markers and the exact source hello remain required before the first
+  clean-state command: a manifest schema proves the session contract, not
+  that a matching image is actually flashed and booted.
+- Original artifact mode was nRF5340-only and the XIAO local inventory
+  initially excluded CPUNET (historical; superseded by PB-036's XIAO
+  single-CPUAPP artifact contract).
+
+### Retry-1 rejected build-path options (historical SDK v3.3.0 diagnosis)
+
+Rejected alternatives to the `APP_DIR` source alias, retained so nobody
+re-derives them against a different SDK expecting the same behavior: no
+`APP_DIR_NAME` and no command-line `DEFAULT_IMAGE` override existed in that
+SDK; the sysbuild default-domain name derives from the CMake `APP_DIR`
+basename before any environment fallback. The alias workaround is a
+version-specific artifact of that SDK behavior, not a general build rule.

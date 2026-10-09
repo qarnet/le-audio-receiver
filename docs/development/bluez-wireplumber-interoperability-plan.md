@@ -1,5 +1,11 @@
 # Standard BlueZ/WirePlumber interoperability plan
 
+This is the retained desktop interoperability acceptance specification and dated
+BZ1-BZ3 evidence, not an active implementation plan. Current host setup lives in
+`../linux-le-audio-host-setup.md`; `phase2-stock-desktop-gate-results.md` and
+`phase3-results.md` retain actual execution. Hardware qualification and newer
+adapter work remain separate backlog items.
+
 ## Goal
 
 Normal Linux desktop discovers, pairs, connects, exposes, and streams audio to

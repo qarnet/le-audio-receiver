@@ -19,6 +19,27 @@ authored from the frozen inventory, never copied from device-under-test
 logs; the independent checker re-derives every expected request/response
 from the policy file and rejects any drift.
 
+## Specification and provenance notes
+
+Normative background used when this lane was specified (2026-10-04) is
+ASCS v1.0, adopted 2021-09-14, read from the official HTML at
+https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/23166-ASCS-html5/out/en/index-en.html;
+that is a dated-citation label, not a claim about a newer revision or
+formal qualification. The Zephyr BSim lane negotiates MTU 65 and does
+not reproduce the exact-MTU-64 client ordering case from the BlueZ
+survey context that motivated the lane. Release-to-Idle recovery was
+chosen because production has no `.reconfig` callback; ASCS v1.0 also
+permits a Cached Codec Configured completion, so this lane is not a
+universal conformance claim. Every negative encoded request is a real
+GATT write over the wire; a high-level helper's local refusal is not
+wire proof. The receiver exposure in force is the existing profile
+(2 sink, 0 source, metadata capacity 16) enforced by the current
+policy; this lane does not duplicate that configuration.
+
+The original refinement document is preserved only in Git history at
+revision `a94f010de00e25d4a2433f7b4c56b31a5377446e`
+(`docs/development/pb-051-encoded-ascs-refinement-20261004.md`).
+
 ## Independent inventory and digest
 
 The policy lives in `tests/ascs_bsim/cases.json` with a caller-supplied
@@ -32,7 +53,7 @@ docs never quote device output as expected data.
 
 ## Source, tool, image and actor accounting
 
-Before any build the runner records SHA-256 pins for the exact Zephyr and
+Before any build the runner verifies exact Zephyr and
 nrf SDK HEADs (`33fa6a7aac6a4401d16a67cb9f27a3483fa02dd6`,
 `b20f8619ba9a5530f8c34b0a130d829947cfe55d`), the toolchain bundle
 `8285d8ad56`, cmake/ninja/gcc binaries, repo HEAD and full `git status`
@@ -47,7 +68,8 @@ and the 15 consumed component headers (`libUtilv1/src/*.h` 11 files plus
 bounded lane-only source pin of the selected surface above, not an
 SDK-wide or whole-components freeze and not a proved complete dependency
 closure; the frozen set is exactly what `source_paths()` currently
-enumerates and the suite fails if it grows or shrinks silently.
+enumerates at run start; the suite rejects changes to that captured population
+within the run. It does not compare population across separate runs.
 
 Each family gets three independent actor processes (receiver, client, PHY)
 through a supervised worker cohort with pidfd-checked cleanup. Every actor
@@ -56,6 +78,47 @@ cleanup faults, no unexpected live descendants) before the separate
 protocol checker runs. Eighteen zero-exit actors per full matrix and six
 clean cohort scopes are the acceptance baseline; a single unhealthy actor
 fails the suite without any fabricated or laundered partial record.
+
+## Cohort caller contract
+
+The supervised worker cohort (`run_cohort` in `scripts/ascs_bsim_run.py`)
+holds one explicit contract for every caller, verified by the runner unit
+suite (`tests/unit/ascs_runner`) and used unchanged by `public_main`:
+
+- Public entry point arguments are a new absolute external output path,
+  the caller-supplied policy digest and one `--timeout` for the whole
+  cohort; the accepted per-cohort range is a 30 to 600 second integer
+  (the `ascs-bsim-run.sh` wrapper passes no `--timeout` and the runner
+  default is 300; any value outside 30..600 is an argparse error).
+- After all three leader workers exit, inherited pipe ends stay
+  selectable; the cohort bounds the drain of any inherited stdout for two
+  more seconds. A still-readable inherited pipe after that bound is a
+  failure so the cohort's `DescendantScope` can clean adopted detached
+  descendants.
+- On error the cleanup ladder is SIGTERM with a six-second grace, then
+  SIGKILL with one further second, followed by bounded per-worker waits
+  and captured cleanup faults; nothing escapes unrecorded.
+- Each cohort runs inside a `DescendantScope`, and worker birth identity
+  is checked against the runner's pid plus a pidfd handle, so a reaped or
+  recycled pid can never substitute for a real worker.
+
+## Result interpretation limits
+
+Local procedure IDs in the client logs are run-local diagnostics for
+correlating `ASCS_PROCEDURE_BEGIN`/`END` pairs, not ASCS wire transaction
+IDs. ASCS notifications carry no nonce or sequence echo, so two
+byte-identical delayed replies cannot be cryptographically distinguished
+by any listener; pairing a local procedure ID with a notification is an
+ordering-plausibility judgment, not proof of causation. The same limit
+applies to the sealed execution records: they are trusted local evidence
+of what this host produced, not cryptographic attestation; synthetic
+unit execution records never qualify as actual BabbleSim evidence.
+
+The independent checker parses only timestamped, prefixed Zephyr BSim
+peer lines (`d_NN: @HH:MM:SS.microseconds`), requiring monotonic BSim
+time per role. The checker hashes the original raw bytes, not cleaned
+text, and strictly decodes UTF-8 for analysis; it strips only ANSI SGR
+escape sequences and rejects any remaining ESC byte in the cleaned text.
 
 ## Exact families and counts
 
@@ -81,20 +144,92 @@ recovery stream sends exactly 30 frames per stream; retention semantics
 pin the retained TX result, explicitly forget it (with a real EBUSY guard
 while the stream is active) and verify the result is gone.
 
+## Retained TX-audit ownership (`bsim_tx_forget_result`)
+
+The public test-fixture API `bsim_tx_forget_result(stream)` in
+`tests/bsim/client/src/bsim_tx.c` releases exactly one caller-owned,
+already drained retained audit result. Its refusal contract: null stream
+returns `-EINVAL`, an unknown stream (no retained audit) returns
+`-ENODATA`, and a stream that is still active or that still has an
+in-flight send returns `-EBUSY`. It never releases an active or in-flight
+audit, and it only touches slots whose `in_flight` count is zero under
+the audit lock; the caller must have unregistered (drained) first. The
+unchanged canonical Stage 1 cases never call this API. Additive ASCS
+generation retirement calls it explicitly after draining: each generation
+copies and logs the actual retained send count/FNV *before* forgetting
+and checks its two streams independently, whichever state each stream is
+in (a never-used stream must return `result=-ENODATA, forget=-ENODATA`;
+a used stream must match the retained values, then show `forget=0` and
+`result=-ENODATA` again). The ASCS release path never relies on address
+recycling: there is no pool growth, no automatic eviction on
+re-registration, and no private pointer identity acceptance. The forget
+step retires audit ownership after the CP/IO drain but before the
+generation drops its held connection reference.
+
 ## Wrapper same-object scope limits
 
 `src/bt_audio_ltv_guard.c` is linked through GNU ld `--wrap` on
 `bt_audio_data_parse`. It validates each LTV entry's full logical length in
 the caller's buffer and forwards only individually valid entries to the
-real installed SDK parser. `--wrap` works by leaving
-`bt_audio_data_parse` undefined in the link unit, so only cross-object
-references are redirected; same-object calls that resolve internally
-inside the Zephyr build (any caller compiled into the same translation
-unit/object as the SDK definition) are not intercepted and are outside
-this guard's scope. There is no SDK-wide interception guarantee; the guard
-holds only for the link units where the wrap flag is actually applied.
+real installed SDK parser. GNU ld `--wrap` redirects undefined references
+to `bt_audio_data_parse` in the input object files to the wrapper; the
+final ELF contains the SDK `bt_audio_data_parse` symbol and
+`__wrap_bt_audio_data_parse`. The source-level
+`__real_bt_audio_data_parse` call resolves to the SDK symbol.
+Same-object internally resolved SDK calls
+are not intercepted and are outside this guard's scope. There is no
+SDK-wide interception guarantee; the guard holds only for the link units
+where the wrap flag is actually applied.
 `tests/unit/ltv_bounds/` compiles the wrapper through the public audio.h
-API with guard on by default (test-only `PB051_LTV_GUARD=OFF` retains th
+API with guard on by default; test-only `PB051_LTV_GUARD=OFF` keeps the
+unmodified SDK parser baseline, and the production guard remains always
+linked in the receiver builds. The suite's five added public parser
+methods cover, through the `bt_audio_data_parse` API only, these boundary
+types: a missing type byte at the logical end, a missing value after an
+already delivered prefix, a callback cancellation before an invalid
+suffix, a full 255-length entry versus a logically short padded buffer,
+and null/empty/valid retry after the invalid input.
+
+## Native BSim link library resolver (`scripts/bsim_link_env.py`)
+
+The lane resolves its native ELF32 runtime-link directories with a fixed,
+bounded public contract in `scripts/bsim_link_env.py`:
+
+- Query only the two fixed GCC `-m32 -print-file-name=` runtime library
+  names, `libc.so` and `libgcc_s.so.1`. Every query runs through the
+  existing `bluez_host_guest.run_bounded_command` generic process owner
+  with a fresh `TemporaryDirectory`, separate 64 KiB stdout and stderr
+  caps and a 10-second production deadline; successful stdout is read
+  only after the command exits.
+- Reject: any stderr output, a nonzero exit, a stdout/stderr cap breach,
+  a deadline expiry, and a path that is empty, relative, or contains
+  whitespace or control characters (the compiler output must name exactly
+  one absolute path; a shell-quoted assignment alone cannot preserve
+  spaces in the subsequent `NIX_LDFLAGS` flag list).
+- `libc.so` may legitimately be a linker script, so the reported `libc.so`
+  is only anchored: the resolved directory is validated by checking four
+  ELF32 i386 runtime siblings (`libc.so.6`, `libm.so`, `libdl.so`,
+  `libpthread.so`) separately.
+- For `libgcc_s.so.1` the compiler-reported file may be 64-bit; the
+  resolver therefore tests these candidates in order,
+  `reported`, `reported.parent / '32' / name`,
+  `reported.parent.parent / 'lib' / name`,
+  `reported.parent.parent / 'lib32' / name`, and selects the first
+  verified ELF32 match.
+- Each candidate is validated as real ELF32 i386 little-endian content:
+  the candidate symlink is resolved, opened with
+  `O_NONBLOCK | O_NOFOLLOW`, `fstat` requires a regular file on that
+  descriptor, then the read is bounded to the 20-byte ELF header
+  checking the ELF magic, the ELFCLASS32 class, the little-endian byte
+  order, and the EM_386 machine fields only. This header check is not an
+  `e_type`/DSO format validation and proves no full shared-object
+  closure. No nonregular or unbounded read ever happens.
+- Printed flags are `-L<libc_dir> -L<gcc_dir>` prefixed onto the existing
+  `NIX_LDFLAGS` so previously set flags are preserved, then exported
+  through a shell-quoted assignment.
+- No invented source-closure claim: this resolver pins link-time library
+  directories only; it neither freezes nor verifies the full dependency
+  closure of any image.
 
 ## Raw warning policy
 
@@ -130,6 +265,51 @@ build roles (receiver, client) plus a top-level suite
 `capability_probe_dispositions` map; family verdicts carry the unchanged
 checker JSON shape.
 
+## Reconnect generation caller contract
+
+Reconnect cases accept a new generation only after both old stream
+releases finish, the old unicast group is deleted through the public API
+with only `-EBUSY` retried (bounded to five seconds from delete-retry
+start), and the old generation context is safely retired. These
+retirement-order facts complete that contract (from
+`tests/ascs_bsim/client/client.c`, `retire`/`retire_tx_audits`, and
+`tests/bsim/client/src/bsim_tx.c`):
+
+- The five-second retirement deadline covers the GATT cleanup only: no
+  pending discovery/read/write/subscribe operation and no live CP
+  subscription (the unsubscribe is issued first when one exists) before
+  `retire_tx_audits` runs. Expiry is a `retirement_expired` error, not an
+  extension. The audit TX drain is a separate bound: each registered
+  stream's unregister waits for slot idle with its own
+  `BSIM_TX_IDLE_WAIT_MS` of 1000 ms per stream (`bsim_tx.c:64`,
+  `tx_wait_idle`), not the five-second budget, and the source defines no
+  recheck of the GATT deadline after the audit phase. The two bounds are
+  separate and no atomic or hard wall-clock guarantee covers their sum.
+- The retained result is read back and its send count/FNV logged before
+  the forget call; each stream is checked in whichever state it is in: a
+  never-used stream must return `result=-ENODATA, forget=-ENODATA`; a
+  used stream must match the retained values, then show `forget=0` and
+  `result=-ENODATA` again.
+- Audit ownership retires after the CP/IO drain but before the held
+  connection reference drop; on drain failure the closing generation
+  keeps its held ref so a later retire can finish the partially cleaned
+  generation.
+- Every generation's extra `bt_conn_ref` is held through bounded
+  retirement and released only after every outstanding operation, CP
+  closure, and terminal callback completes: `bt_gatt_cancel` (`void`,
+  `gatt.h`) neither frees params nor suppresses terminal callbacks, so
+  the stable per-generation storage is retired only after terminal
+  callbacks; old callbacks retain their originating generation and fail
+  closed rather than being relabeled as current.
+
+Before each fresh connection the client clears its old endpoint cache
+(`sink_eps`) and resets the connection, MTU-exchange, security and
+sink-discovery semaphores, then requires a fresh public
+connect/security/discovery, a negotiated MTU of exactly 65, and both
+newly read Idle ASE states. Eight generation contexts
+(`WIRE_GENERATIONS 8`) back the four reconnect cases plus recovery
+streams per case without any address-recycling assumption.
+
 ## Exclusive output and retention
 
 The public entry point requires a new absolute external
@@ -140,7 +320,22 @@ records, worker/cohort records and the sealed execution record; hashes and
 paths are inside `suite-record.json`. Failed runs keep all raw evidence the
 same way; cancelled runs seal one corrective failure record. Evidence
 directories are write-once: subsequent runs must use a new root; the
-previous accepted matrix stays immutable for later comparison.
+previous accepted matrix stays immutable for later comparison. All prior
+exclusive roots are kept regardless of run outcome; nothing is deleted,
+overwritten or reused.
+
+When the gate runs this matrix under `scripts/test-all.sh`, the ASCS run
+root is allocated first inside a fresh exclusive container (absent before
+allocation, kept even when the run fails), and only then is an optional
+retained-symlink published: when `TEST_OUTPUT_DIR` is set (the gate
+requires it to be an existing absolute directory for the ASCS lane), the
+uniquely named symlink is created under it pointing at that run path
+*before* any child is launched. The approved pinned `upload-artifact`
+action searches with `followSymbolicLinks: true`, so the hosted artifact
+upload follows the retained link rather than copying; this is a trusted
+pin, not a substitute for the retained raw evidence. When `TEST_OUTPUT_DIR`
+is unset the run has no symlink at all; the run directory itself stays the
+sole retained evidence root either way.
 
 ## Running the lane
 
@@ -195,8 +390,7 @@ unchanged. Field semantics:
 
 - `schema_version`: exactly the int `1` (a JSON boolean is rejected).
 - `frozen_baseline_sha256`: exactly 64 lowercase hex characters matching
-  the actual SHA-256 of the supplied frozen baseline file; a drifted anchor rejects
-  rejects.
+   the actual SHA-256 of the supplied frozen baseline file; a drifted anchor rejects.
 - `files`: a nonempty object; keys are relative `src/*.c` paths (a leading
   `src/`, the `.c` suffix, no backslash, no empty, `.` or `..` component),
   and none may overlap the frozen population; each value holds exactly the

@@ -58,4 +58,4 @@ No clean-commit source archive provenance or physical **exact source artifact**
 RH4-compatible acceptance was performed. Dirty-tree baseline enforcement
 stopped before builds; a clean exact commit requires explicit local commit
 authorization. Do not substitute the fixed-image RH3 matrix or host resolver
-tests for AC4. See `nrf54l15-only-continuation-20260925.md`.
+tests for AC4. See `docs/development/nrf54l15-migration-verification-results-20261001.md` (the 2026-09-25 continuation snapshot was retired at Git rev `a94f010`).

@@ -128,3 +128,30 @@ has since been run and passed; the completed run is recorded in the
 [canonical H42 result](system-hil-rh3-42-bap-enable-trace-result.md). The
 software phase itself performed no hardware action and this result makes no
 retry, production adoption, or workqueue conclusion.
+
+## Historical RH3-42 software-phase rationale
+
+Preparation rationale recorded by the RH3-42 software planning handoff that
+predates this result (provenance: Git rev `a94f010`, for example
+`git show a94f010:docs/development/system-hil-rh3-42-bap-enable-trace-software-handoff.md`).
+NCS v3.3.0-historical diagnostic facts only, not current v3.4.1 production
+behavior or approval to replay any configuration.
+
+The marker discriminator exists because H41 could not distinguish
+receiver `stream_enabled_cb()` never running from it running and
+`bt_bap_stream_start()` returning a result while the source still did not
+observe remote enabled completion. The installed-source ordering grounding
+(ASCS status notification attempts before `stream_ops.enabled` via
+`ase_enter_state_enabling()`, peripheral sink routed to
+`bt_bap_unicast_server_start()` which does not block on peer observation, and
+source `sem_enabled` given only from the remote enabled callback before CIS
+connect) is recorded in the canonical H42 result's historical planning
+section. The
+exact marker implementation requirement: `stream_enabled_cb()` keeps
+`int err = bt_bap_stream_start(s);` first, the `CONFIG_HIL_BAP_ENABLE_TRACE`-
+gated `LOG_INF` follows directly after that call, must not mutate state,
+schedule work, block, allocate, change an error, or alter lifecycle order, and
+normal builds must compile it out completely. No new unit test was required:
+the two real target builds prove enabled and compiled-out configurations, and
+fragile tests of a private static callback, logger-call count, or Kconfig text
+were explicitly rejected.

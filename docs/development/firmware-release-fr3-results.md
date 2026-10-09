@@ -1,6 +1,6 @@
 # FR3 results — automatic draft release creation
 
-Accepted: 2026-08-09.  Handoff
+Accepted: 2026-08-09. Historical handoff at Git revision `a94f010`:
 `docs/development/firmware-release-fr3-acceptance-handoff.md`; implementation
 commit `8ef8a80` (`ci: create draft releases from version tags`); review
 corrections `a3eef05` (`fix: validate draft release metadata checks`),
@@ -132,3 +132,30 @@ FR3 `ACCEPTED`.  At FR3 closeout, FR4-FR5 remained planned in
 BLOCKED, see `docs/development/firmware-release-fr4-results.md`.  FR3
 created a private, unpublished, untagged draft release only; no git tag,
 published binary, hardware acceptance, MCUboot, or DFU exists yet.
+
+## Draft creation failure and provenance boundaries
+
+`scripts/prepare-draft-release.py` validates the complete release archive set
+independently of packager internals. It rejects malformed metadata, control
+characters, non-main workflow refs, mismatched manifests, members and checksums
+before creating output. Deterministic provenance and notes exclude timestamps,
+runner paths, usernames and tokens. The public validator tests remain the exact
+schema and failure-contract witness; artifact digests and provenance are not
+signatures, cryptographic attestations, MCUboot or DFU proof.
+
+If `gh release create` creates a draft before an asset upload fails, the next
+run encounters an existing release. Without a VERSION-triggered release request,
+CI skips creation and verification; with that request it fails on collision.
+CI never repairs, erases or replaces the partial draft. Recovery requires human
+inspection and an explicit decision.
+Trusted-main runs are not cancelled by newer pushes because cancellation during
+release creation can leave that partial state. Local preparation uses private
+sibling staging and atomic rename, with the same possible orphan-on-kill limit
+as packaging.
+
+An earlier correction checkpoint at `a3eef05` passed the historical 65-child
+local gate; PR run `31330373763` passed firmware and skipped release. This is
+separate from trusted-main draft creation and hardware acceptance. The historical
+annotated `v0.0.1` tag was unrelated. No present tag or artifact availability is
+inferred from those observations. Later candidate history and open acceptance
+live in `firmware-release-plan.md` and PB-007.

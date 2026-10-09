@@ -1,8 +1,10 @@
 # FR1 results — deterministic factory-firmware packager
 
-Accepted: 2026-08-09.  Handoff `docs/development/firmware-release-fr1-handoff.md`;
+Accepted: 2026-08-09. Historical handoff at Git revision `a94f010`:
+`docs/development/firmware-release-fr1-handoff.md`;
 implementation commit `f3cd4c4` (`feat: add deterministic firmware packager`);
-review-fix handoff `docs/development/firmware-release-fr1-fix-handoff.md`;
+historical review-fix handoff at the same revision:
+`docs/development/firmware-release-fr1-fix-handoff.md`;
 correction commit `1671a9f` (`fix: handle firmware packaging I/O failures`);
 acceptance commit (this document's commit) `docs: record FR1 packaging error fix`.
 
@@ -149,3 +151,34 @@ FR1 `ACCEPTED` at original implementation plus review correction.  FR2-FR5
 remain planned in `docs/development/firmware-release-plan.md`.  The smoke
 package is evidence that the packager handles the real build outputs; it is
 not a release.
+
+## Packaging boundaries retained from FR1
+
+The CLI takes `--version`, `--git-commit`, `--ncs-version`, `--build-root` and
+`--output-dir`. Version text is canonical numeric `MAJOR.MINOR.PATCH`; commit
+identity is exactly 40 lowercase hexadecimal characters. All inputs must pass
+validation before output creation. Existing caller-owned output is never
+overwritten or removed. Build inputs and flashing notes must be direct regular
+files, not symlinks even when their targets lie inside the expected tree.
+
+Intel HEX validation checks record syntax, declared byte counts, checksums and
+exactly one terminal EOF. Non-EOF types, including extended/start-address
+records, receive generic structural checks only. Flashing notes must be valid
+UTF-8. Package members, manifest
+schema, compression, ordering and checksum grammar are enforced independently
+by `scripts/test_package_firmware_release.py`; historical two-target mapping is
+not the current nRF54L15-only release tuple. Notes use extraction-portable links;
+they do not establish a clean-machine public flashing method, owned by PB-008.
+
+Handled write errors attempt removal of the uniquely owned temporary sibling;
+cleanup errors are suppressed. Regression tests prove removal for exercised
+write failures, not every filesystem failure. Atomic rename
+keeps the final directory from becoming partially populated. A killed process
+can leave its private staging sibling; handled-error regression evidence is not
+proof of cleanup after SIGKILL. This distinction prevents claiming stronger
+cancellation behavior than the filesystem boundary provides.
+
+The later inventory-prose review found dated 62-child results presented as
+current after the 63-child correction. Historical counts remain attached to
+their commits; current inventory comes from `scripts/test_inventory.py`, not
+copied phase totals. FR2-FR5 status above describes FR1 closeout only.

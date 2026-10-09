@@ -14,9 +14,8 @@ negative fails even while enqueue capture remains correct. Full frame conservati
 includes cancelled stop tail. Fifteen-descriptor capacity, fractional word-clock
 credit, timed full-queue wakeup and atomic clock steps are modeled explicitly.
 
-Refined envelope and derivation:
-`docs/development/pb-046-clock-model-refinement-20261003.md`. Suite/public-boundary
-and ledger details: `tests/unit/clock_loop/README.md`. No codec/LC3plus, physical
+Refined envelope, derivation, suite/public-boundary and ledger details:
+`tests/unit/clock_loop/README.md`. No codec/LC3plus, physical
 clock/IPC/FLPR, RF, analog, presentation or release acceptance is inferred.
 Production source and board settings remain unchanged. Frozen baseline, HIL/PCM
 limits and canonical BSim 17/26 are preserved.
@@ -138,3 +137,24 @@ passed. Watch log SHA-256:
 The Done transition ships in existing PR #16; human merge is official acceptance.
 This closes the declared software-model clock/caller contract, not physical
 frequency, IPC/FLPR, source ADC, RF, analog, presentation or release acceptance.
+
+## Preliminary model evidence and limits
+
+The completed refinement is Git history at `a94f010`, path
+`docs/development/pb-046-clock-model-refinement-20261003.md`. Its lasting
+envelope and horizon basis now lives in the suite README. The earlier external
+prototype linked public drift and ASRC with board 2000/150 tuning, but used a
+16-entry exploratory FIFO with no real sink, asynchronous DMA or full waveform
+oracle. Positive 480/360 scenarios stayed finite with depth 10..12 at 1000 s;
+correction-disabled +/-1000 ppm cases failed queue bounds. This was feasibility,
+not PB-046 acceptance. Frequency input was thread-context 1 Hz; elapsed-reference
+time and fractional frame credit drove output independently of source pushes.
+
+Dated successful diagnostic logs were
+`/tmp/opencode/pb046-clock-research-build-r3.log`, SHA-256
+`48dd895db8eb90e8f120e3a5a0a5d658f77fb07d1af430e233eb1b4f034d9740`, and
+`/tmp/opencode/pb046-clock-research-run-r3.log`, SHA-256
+`2533b5476176e9309c22b08d854a984429807392ae7bdcdfdb9906c6a2e6150e`.
+First attempt had fortify-at-O0 diagnostics and did not exit its idle native app;
+later builds removed only incompatible native fortify modes and exited explicitly.
+These historical path/hash claims are not fresh availability or rehash proof.

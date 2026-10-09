@@ -171,3 +171,42 @@ The smallest next investigation requires a new reviewed plan. That plan must
 distinguish receiver enable callback and start behavior from source
 enabled-completion observation before any further hardware work or production
 action.
+
+## Historical RH3-41 planning observations
+
+Observations recorded by the RH3-41 planning handoffs that predate this result
+and are not repeated in the sections above (provenance: Git rev `a94f010`, for
+example `git show a94f010:docs/development/system-hil-rh3-41-tx-notify-workqueue-untraced-handoff.md`).
+All are NCS v3.3.0-historical diagnostic facts, not current v3.4.1 production
+behavior, acceptance, or approval to replay any configuration.
+
+### Software-phase isolation rationale and 2148-byte pre-build headroom
+
+The H41 software planning handoff scoped one no-trace diagnostic receiver image with
+Zephyr's private connection TX-notify workqueue enabled, separating the H40
+workqueue experiment from H40's trace instrumentation before any later physical
+plan. H40's `1536`-byte private queue stack was physically exercised once, but
+H40 also enabled trace instrumentation and linked with only 104 bytes of CPUAPP
+RAM margin, so it cannot establish behavior without that instrumentation.
+
+Installed NCS v3.3.0 grounded the diagnostic configuration:
+`zephyr/subsys/bluetooth/host/Kconfig:160-187` makes
+`CONFIG_BT_CONN_TX_NOTIFY_WQ` experimental, dependent on `BT_CONN_TX`,
+defaulting its stack to `SYSTEM_WORKQUEUE_STACK_SIZE` and priority to 8;
+`zephyr/subsys/bluetooth/host/conn.c:283-290,4652-4669` starts the static
+`conn_tx_workq` at cooperative priority 8. The then-normal nRF54L15 image had
+only 2148 bytes between `_image_ram_end 0x2002779c` and the `0x20028000` RAM
+limit, so the upstream default 2048-byte stack plus the H40-observed 0x128-byte
+queue object could not be assumed to fit; the H40-tested diagnostic stack size
+of 1536 bytes was reused. That was not a production stack decision.
+
+### Software-result scope boundary
+
+The software result proved only that the exact diagnostic configuration builds,
+links, and can be followed by normal local output restoration: no hardware, no
+HIL execution, no production-safety, root-cause, audio-health, or production
+configuration claim. Its 316-byte remaining margin is a diagnostic observation,
+not a production-safety claim. The disk gate was `free_gib=101.3` before the
+diagnostic build and after normal restoration, both passing the 80 GiB minimum,
+with only the existing `build/nrf54l15` path reused and no extra build tree or
+storage cleanup.

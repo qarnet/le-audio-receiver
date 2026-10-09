@@ -152,6 +152,33 @@ unproven source-fixture change. The focused native regression proved exactly
 three sends per stream, ledger order `0, 1, 0, 1, 0, 1`, and no fourth send
 before a sent callback.
 
+2026-10-08 handoff-reconciliation note (predecessor evidence preserved): the
+retired source-depth correction handoff retained the exact predecessor
+observations motivating target three, with its NCS v3.3.0 sample-file
+references (historical, not current v3.4.1 facts):
+`hil/source/app/prj.conf:14` set `CONFIG_BT_ISO_TX_BUF_COUNT=6`,
+`hil/source/app/overlay-nrf5340_cpunet_iso-bt_ll_sw_split.conf:16` set
+`CONFIG_BT_CTLR_ISO_TX_BUFFERS=6`, the resolved CPUNET configuration
+confirmed both were six with two ISOAL sources and two streams in one CIG,
+`zephyr/samples/bluetooth/hci_ipc/nrf5340_cpunet_iso_central-bt_ll_sw_split.conf`
+lines 34-38 documented the completed-packet pipeline requirement (host and
+controller ISO TX buffer counts equal or greater; Number of Completed Packets
+returned one ISO interval later), and
+`zephyr/samples/bluetooth/bap_unicast_client/src/stream_tx.c:69-123`
+documented the six-buffer pool-fill producer behavior. Recorded
+predecessor-run numbers: `rh3-20260821-02-iso-link-quality-fix` completed all
+source submissions and callbacks (12644 per stream, zero send failures) but
+took `139.556 s` from source `streaming` to `scored_complete` versus the
+`126.440 s` target; receiver SDC link quality reported
+`rx_unreceived=14041` and `13968` for the two CISes with one CRC error total
+and only 119 and 115 valid SDUs (about 99 percent PLC); the older
+`rh3-20260815-08` Mode A row showed the same approximately `139.434 s`
+source duration and about 99 percent PLC without any failed-CIS warning, so
+that one transient warning could not explain the persistent loss. Source
+sent callbacks remained controller completion credit only
+(`zephyr/include/zephyr/bluetooth/iso.h:765-775`: completion may mean
+enqueue, on-air transmission, or flush), never receiver-delivery proof.
+
 Current source artifacts after the failed-CIS retry and Mode A source-depth
 corrections are
 software-verified only, not RH3 acceptance or hardware proof:
@@ -498,6 +525,28 @@ immutable failed evidence. Do not retry, reuse, overwrite, or claim RH3
 acceptance from this run. The proposed post-start slab-backpressure repair has
 no hardware proof.
 
+2026-10-08 handoff-reconciliation note (nrfx evidence preserved): the retired
+slab-backpressure handoff owned the historical descriptor-versus-memory
+evidence for this failure, with exact NCS v3.3.0 source references
+(historical, not current v3.4.1 facts):
+`zephyr/drivers/i2s/Kconfig.nrfx` defines `CONFIG_I2S_NRFX_TX_BLOCK_COUNT` as
+a descriptor-queue length; `zephyr/drivers/i2s/i2s_nrfx.c:503-564` transfers
+slab-block ownership only after a successful `k_msgq_put()`;
+`start_transfer()` at `:567-617` removes the first descriptor but keeps its
+slab block in `last_tx_buffer`, so descriptor dequeue does not free PCM
+memory; `data_handler()` at `:239-293` frees a completed TX block only after
+nrfx reports it released; and `zephyr/include/zephyr/kernel.h:5833-5855`
+specifies `k_mem_slab_alloc()` (`K_NO_WAIT` returns `-ENOMEM`, an expired
+finite wait returns `-EAGAIN`). The handoff's sizing rationale: the first
+post-start output can consume block 16 before any DMA release, so the second
+output hits the existing no-wait allocation and drops; the reservoir was
+sized to cover RH3-08's `142362 us` Mode B callback gap plus render work
+(about 150 ms), so startup depth must not shrink; and the nRF54L15 build used
+`161668/163840` bytes of RAM, so no extra 1924-byte PCM slab block was added.
+The stable finite post-start wait / startup-and-repeat non-wait / ownership
+behavior is carried by the I2S-002/I2S-003/I2S-006 contracts in
+`docs/testing/behavior-contract.md`.
+
 ## Physical RH3 direct diagnostic `rh3-20260821-03-modea-depth-fix`
 
 Immutable direct Mode A diagnostic, not acceptance. Exact evidence root:
@@ -511,9 +560,25 @@ at `165419 ms`. Cleanup recorded `command_id='parse-error' run_id='unbound'`,
 an unresolved host-cleanup diagnostic, not a firmware root-cause claim.
 
 Receiver loss remained high: slot 0 `rx_valid=137`, `rx_lost=14310`; slot 1
-  `rx_valid=135`, `rx_lost=14249`. This earlier run was one physical diagnostic
-  execution, but no acceptance result. A later lifecycle-split direct diagnostic
-  is recorded below; this earlier run remains non-acceptance.
+`rx_valid=135`, `rx_lost=14249`. This earlier run was one physical diagnostic
+execution, but no acceptance result. A later lifecycle-split direct diagnostic
+is recorded below; this earlier run remains non-acceptance.
+
+2026-10-08 handoff-reconciliation note (input provenance preserved): the
+retired depth-fix physical handoff pinned its exact four-image local-build
+input tuple, to be matched before any hardware action and never rebuilt:
+source CPUAPP `f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333`,
+source CPUNET `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`,
+receiver CPUAPP `6607e71c06c5b73db8b3eeaf2162e1088858c62acbccdb3cd0213badc62750d4`,
+receiver FLPR
+`45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+Matching identities proved reviewed local images only; they did not prove
+RH3, transport, audio, analog, release, or root-cause acceptance. The
+software phase behind this row had passed native source-app Twister `68/68`
+and `fw-build-hil-source` with no hardware result yet. The named state
+report records the failed receiver-tail query and severe loss; the planned
+direct diagnostic must never be represented as successful acceptance, and
+source completion callbacks remained credit, not delivery.
 
 ## RH3 direct runner diagnostic `rh3-20260822-01-modea-tail-order-cleanup`
 
@@ -1348,6 +1413,24 @@ is not a retry of RH3-04, and is not acceptance evidence. No RF, controller,
 payload-size, scheduling, source, receiver, audio, or root-cause conclusion
 follows. Do not retry this diagnostic.
 
+2026-10-08 handoff-reconciliation note (provenance preserved): the retired
+selected-layout physical handoff retained the historical preset and
+packing provenance and one otherwise unnamed scratch build root (historical
+facts, not current v3.4.1 claims): the NCS v3.3.0
+`BT_BAP_LC3_UNICAST_PRESET_48_4_1` macro supplied each Mode A
+front-left/front-right stream with unframed 10,000 us interval, 120-byte
+SDU, RTN 5, 20 ms transport latency, 40,000 us presentation delay, and 2M
+PHY preference; the HIL source constructs the group with
+`BT_ISO_PACKING_SEQUENTIAL`; and `bt_iso_chan_get_info()` reports selected
+values after CIS establishment. Its exact input identities table
+(`6607e71c...` receiver-era versus `d8e5708...` telemetry-image two-tuple)
+proved reviewed local inputs only, never hardware or acceptance evidence.
+The preflight's expected host test counts were RH2 `154/154` and capture
+`19/19`; the Nix dirty-tree notice was retained environment state, not a
+source/compiler diagnostic; and the scratch build root
+`/tmp/le-audio-receiver-iso-selected-shell54.jpGre5` was named as retained
+environment state and not to be removed.
+
 ## RH3 direct runner diagnostic `rh3-20260822-10-modeb-7p5-selected-layout`
 
 Immutable direct selected-layout Mode B 7.5 ms diagnostic, not a matrix run,
@@ -1466,3 +1549,704 @@ this diagnostic is twenty: fifteen failed, one cancelled, and four passed
 direct controls. The target-three source image has received eleven direct
 physical diagnostics. The unexpected receiver fatal, missing summary, and
 missing post-stop FLPR snapshot are blockers for any acceptance interpretation.
+
+## Historical ISO RX trace mechanisms and interpretation limits
+
+Historical NCS v3.3.0 records for the RH3-30 through RH3-39 ISO RX trace
+diagnostics: mechanism behavior, exact identities, and interpretation limits
+observed at the time. The historical handoff texts remain provenance sources
+for retained observations and stay recoverable at Git rev `a94f010`, for
+example
+`git show a94f010:docs/development/system-hil-rh3-30-sdc-hci-receive-disposition-trace-execution-handoff.md`.
+Every fact in this section is NCS v3.3.0-historical diagnostic evidence. It is
+not current v3.4.1 production behavior, acceptance, or approval to replay any
+configuration, and the cited `conn.c`, `sched.c`, `sem.c`, `work.c`, and
+`iso.c` line anchors refer to the installed NCS v3.3.0 source of that time,
+not the current SDK tree.
+
+The trace gates remain in this repository's `Kconfig` (default off) and the
+trace fragments remain in `tests/hil/`, but quoted SHA-256 values bind the
+historical fragment versions recorded by the listed runs, not the present
+files. The disposition fragment is the concrete example: H34/H35 recorded
+`8f945656ea4f2ed6801a7a24166a01ec40f6183b15695b74358a31e5a3634dd8` and RH3-36
+later updated the same path to the schema-16 content
+`aa8d87a615516433fb1d8e59b7b79a189e7bb34a909551144799c05d35d71ab8`. Historical
+handoffs record former fragment identities; recover matching fragment bytes
+from their actual historical commits, not from the current file. The historical
+gate-name chain behind the per-run fragments is
+`CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE`, then
+`CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_RECEIVE_DISPOSITION`,
+`CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME`,
+`CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_DISPOSITION`,
+`CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH`,
+`CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE`,
+`CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE_PEND`,
+and
+`CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_ISO_RX_LIFETIME_TX_NOTIFY_FLUSH_SEMAPHORE_PEND_SCHED_GIVE`,
+with `CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_WORK_STATE_SNAPSHOT` and
+`CONFIG_HIL_SDC_HCI_REMOVE_ISO_PATH_TRACE_SCHEDULER_UNLOCK` left unset in every
+retained trace config of this chain. The historical
+normal nRF54L15 build shape for the whole chain was
+`CONFIG_BT_RECV_WORKQ_BT=y`, `CONFIG_BT_RX_PRIO=8`, `CONFIG_BT_CONN_TX=y`,
+`CONFIG_SYSTEM_WORKQUEUE_PRIORITY=-1`, `# CONFIG_BT_CONN_TX_NOTIFY_WQ is not
+set`; trace fragments additionally pinned
+`CONFIG_SHELL_BACKEND_SERIAL_LOG_LEVEL_INF=y` and
+`CONFIG_LOG_RUNTIME_FILTERING=n`, the H39 fragment temporarily enabled
+`CONFIG_TRACING=y`, `CONFIG_TRACING_USER=y`, and `CONFIG_TRACING_THREAD=y`
+with normal builds remaining tracing-disabled, and the trace runs prohibited
+shell `log` commands (`CONFIG_LOG_CMDS`) and evidence mutation.
+
+### RH3-30 first receive-work disposition outcomes
+
+RH3-29 (`rh3-20260823-29-sdc-hci-yield-switch-trace`)
+proved MPSL switched in twice during the sender's first post-unlock yield while
+target receive work cleared, and did not observe `hci_internal_msg_get` or
+command completion. RH3-30 (run
+`rh3-20260824-30-sdc-hci-receive-disposition-trace`) then observed exactly one
+first receive-work
+transaction with four target-owned outcome names: retained ISO message cannot
+obtain `BT_BUF_ISO_IN`; HCI fetch returns an error before allocation; fetched
+EVT, DATA, or ISO message cannot obtain its matching host buffer; or normal
+fetched and delivered target completion. A generic zero-status retrieval marker
+inside `fetched_buffer_unavailable` records controller event retrieval only; it
+is not successful host command delivery. Proof requires cross-object
+disassembly, not wrapper symbol listing alone, and no wrapper may be added for
+`hci_driver_receive_process` because its same-object work-handler call is not
+an eligible GNU ld `--wrap` reference.
+
+Grounded NCS v3.3.0 lifetime facts: `nrf/subsys/bluetooth/controller/hci_driver.c:522-548`
+allocates one `BT_BUF_ISO_IN` buffer before delivering an ISO HCI packet to the
+host; `hci_driver.c:690-713` retains that ISO packet and stops fetching later
+messages when allocation returns NULL, and a later ISO-buffer free resubmits
+MPSL receive work; `zephyr/subsys/bluetooth/host/iso.c` defines the fixed
+`iso_rx_pool` with exactly `CONFIG_BT_ISO_RX_BUF_COUNT` entries; the retained
+ISO retry wakes only after a `BT_BUF_ISO_IN` free notification. The normal
+resolution was `CONFIG_BT_ISO_RX=y`, `CONFIG_BT_ISO_RX_MTU=251`,
+`CONFIG_BT_ISO_RX_BUF_COUNT=3`, with ELF pool sizes `_net_buf_iso_rx_pool` 0x54,
+`net_buf_data_iso_rx_pool` 0x318, and `iso_info_data` 0x18.
+
+Identities: historical normal receiver baseline CPUAPP
+`07fdbecd4d3e0eb01891fc31e6b2f5e3f29b703e1171fe40d839911dc9913dd0`, FLPR
+`45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`; trace
+fragment `tests/hil/receiver-sdc-remove-iso-path-receive-disposition.conf`
+at the version recorded for this run, SHA-256
+`32c8ff503a1bf84d1c6120d31a05f76f0d0ccd2668e93e238ae605eaf6f48660`.
+The trace CPUAPP hash was deliberately not predeclared: uncommitted dirty-tree
+diagnostic source was built once, its SHA-256 recorded before hardware, and the
+runner retained the exact image hash in `images.json`.
+
+### RH3-31 six-buffer headroom experiment
+
+Run `rh3-20260824-31-sdc-hci-iso-rx6-trace` tested whether extra host pool
+headroom lets a pending `0x206f` completion past the retained ISO packet.
+
+For that NCS build each additional ISO RX pool entry cost 300 bytes (28-byte
+`net_buf`, 264-byte data chunk, 8-byte ISO info); six entries added 900 bytes
+relative to the normal three. The candidate fragment
+`tests/hil/receiver-sdc-remove-iso-path-receive-disposition-rx6.conf`
+at the version recorded for this run, SHA-256
+`33e61b0a5fa90b9b6b0d8e1c0e184f3c54f66c386a6318d8219a439f9d9c1187`,
+produced candidate receiver CPUAPP
+`6b7db600ab63047588e18f0543a4b04ac2724d5c698efe0eb4468209f0255795` with FLPR
+unchanged. `scripts/check-build-contract.py` was not run against
+temporary trace builds; it correctly pins the production three-buffer value.
+The 20 ms nRF54L15 post-start I2S slab wait can delay BT RX work, but
+RH3-30 did not prove that wait is the sole exhaustion cause; the wait, I2S
+logic, host driver, controller configuration, and production ISO RX count were
+not changed.
+
+Bounded interpretation rules: a first scoped
+`kind=rx type=32 buffer_available=1` with no retained-unavailable, a complete
+receiver summary, and no `0x206f` timeout/fatal would support the headroom
+hypothesis for that row only; `buffer_available=1` with another failure proves
+only the immediate allocation changed, not a repair; another
+`retained_iso_buffer_unavailable` result disproves six-buffer sufficiency for
+the sampled transaction; and a missing later completion marker alone does not
+prove command failure. RH3-31 used the reviewed six-entry pool and still failed
+at session end with `missing receiver stream summary slot(s): [0]`, then hit
+the `0x206f` timeout and halted, disproving six buffers as sufficient
+headroom for that transaction without proving why all entries were held.
+
+### RH3-32 bounded lifetime tracking and pre-stream failure
+
+RH3-32 (run `rh3-20260824-32-sdc-hci-iso-rx-lifetime-trace`, failed at session
+end like RH3-31) moved back to the normal three-buffer configuration and
+tracked every
+post-session-start successful ISO RX allocation plus only the matching final
+`net_buf_unref()` release: bounded fixed atomic counters and pointer CAS only,
+never dereferencing a buffer after its real final unref, `outstanding` never
+deliberately driven below zero or above capacity, and at most four diagnostic
+logs per session (arm, disable snapshot, unavailable snapshot, first free after
+unavailable). Adjacent counter samples are explicitly not a lock-held
+transaction and must not be presented as one. Schema 13 keeps all lifetime data
+optional so legacy no-lifetime traces stay valid. `CONFIG_NET_BUF_LOG=n` was
+required because NCS exposes `net_buf_unref` as an external wrappable symbol
+only in that configuration, and proof required the disassembled
+`bt_conn_reset_rx_state -> __wrap_net_buf_unref` edge, not symbol listing.
+
+Identities: reproduced normal CPUAPP
+`e67265c14faa7a9e860178f65f6b50d6d96c56d6956a490300c620a112b2267f` (two pristine
+trace-disabled builds) differs from the historical `07fdbe...` RH3-30-era
+baseline; neither hash proves hardware or artifact acceptance. Trace fragment
+`tests/hil/receiver-sdc-remove-iso-path-iso-rx-lifetime.conf` at the version
+recorded for this run, SHA-256
+`484ed01b6323b264206430d56142cc689ffac1d662b2c358e87cbd58ebda1b15`.
+
+Unarmed-wrapper physical run `rh3-20260824-32-sdc-hci-iso-rx-lifetime-trace`
+failed before stream and before lifetime arm: the source stayed `connecting`
+for 20.031 seconds, then reported `first_errno=-116` (`-ETIMEDOUT`), while the
+receiver logged `Security changed: level 1 err 9` and disconnected with reason
+`0x3e` (`BT_HCI_ERR_CONN_FAIL_TO_ESTAB`; err 9 is
+`BT_SECURITY_ERR_UNSPECIFIED`); no arm or allocation marker exists. The
+follow-up functional unarmed-forwarding native test (reset, init one buffer
+with `ref == 1U`, one `__wrap_net_buf_unref()` call forwarding exactly once
+with the observer seeing one call and ref dropping to zero, zero arm/snapshot/
+first-free/final-unref/tracking-error counts) closed that forwarding-proof gap
+only. It does not prove zero timing cost and RH3-32's failure cannot assign
+cause to trace code, source image, receiver image, RF, or pairing.
+
+### RH3-33 lifetime sample at full occupancy
+
+RH3-33 (run `rh3-20260824-33-sdc-hci-iso-rx-lifetime-trace`) re-observed the
+same lifetime question with a new output ID, run once
+only, with the unchanged trace image
+`1ca02b604cb9baee0837aee72cb3aecb2f6f039120acea83444beafbc6864bd0` (reproducible
+because the added native test does not change the receiver image; the same
+unchanged trace image must match before any hardware work). The H33 sample
+keeps the failed pre-stream H32 failure as separate immutable evidence rather
+than replacing it, and it cannot assign a cause to the trace
+code, the source image, the receiver image, RF, or pairing. Its valid
+schema-13 sample reached fresh Mode B streaming and recorded at disable and at
+the later target allocation:
+
+```text
+capacity=3 outstanding=3 high_water=3 allocations=19488
+final_unrefs=19485 callbacks_active=0 callbacks_total=19485
+```
+
+The subsequent SDC receive-disposition marker reported
+`kind=rx type=32 buffer_available=0 target_busy=0x1`, and no first
+final-unref marker arrived before the `0x206f` command timeout and fatal. This
+proves full tracked ISO RX occupancy and no active project callback at those
+samples only. It does not prove queue position, per-buffer owner, a leak,
+callback-to-unref pairing, or a production bug.
+
+### RH3-34 four-category wrapper-stage observation
+
+RH3-34 (run `rh3-20260824-34-sdc-hci-iso-rx-lifetime-disposition-trace`)
+added a HIL-only wrapper around the internal, non-static
+`bt_conn_recv(struct bt_conn *, struct net_buf *, uint8_t)` declared in
+`zephyr/subsys/bluetooth/host/conn_internal.h:409-414`. The wrapping decision
+was grounded by the existing ISO object's undefined `R_ARM_THM_CALL
+bt_conn_recv` relocation from `hci_iso`, not by symbol presence. Schema-14
+records four mutually exclusive monotonic per-slot categories:
+`undispatched` (no wrapper observation), `host_dispatched` (wrapper entered,
+project callback not started), `app_callback_seen` (`stream_recv()` started),
+and `unclassified` (adjacent atomic slot-state race at allocation or final
+release). No category names a specific NCS dispatch branch: `undispatched`
+means only that this wrapper did not observe `bt_conn_recv()` for that tracked
+pointer, never a specific queue location or owner. The scan is not a lock-held
+transaction; each category and their sum
+stay bounded by capacity, and their sum need not equal the regular lifetime
+`outstanding` counter. Fragment
+`tests/hil/receiver-sdc-remove-iso-path-iso-rx-lifetime-disposition.conf`
+at its H34/H35-era version, SHA-256
+`8f945656ea4f2ed6801a7a24166a01ec40f6183b15695b74358a31e5a3634dd8`;
+RH3-34 trace CPUAPP `2c5616a26ab425cf34f4c97c736f8a41270893f4c08db7065df5f655367f8361`;
+software review 15/15 native, 220 parser, with field and aggregate disposition
+capacity rejection. Its valid schema-14 unavailable snapshot recorded
+`undispatched=2 host_dispatched=1 app_callback_seen=0 unclassified=0` with no
+first-final-unref marker, and it cannot distinguish a call still inside
+`bt_conn_recv()` from one that returned without the project callback.
+
+### RH3-35 host_returned stage
+
+RH3-35 (run `rh3-20260824-35-sdc-hci-iso-rx-dispatch-return-trace`; its
+unavailable snapshot recorded `undispatched=2 host_dispatched=1
+app_callback_seen=0` in four-category grammar) added the monotonic post-return
+stage `host_returned` (wrapper returned
+from `bt_conn_recv()` without project `stream_recv()` start) to separate a
+live dispatch from a returned call. The post-real advancement must preserve any
+higher stage: an `APP_CALLBACK_SEEN` advance made inside real `bt_conn_recv()`
+stays after wrapper return, and a slot cleared by final release before return
+is not revived. Schema-15 parses the new integer field and keeps schema-14
+compatibility: a schema-14 grammar that omits `host_returned` parses with
+`host_returned: None`, while a malformed supplied `host_returned` field is a
+parser error and is not treated as a legacy omission. The trace fragment is the
+same `8f945656...` H34/H35-era file; RH3-35 trace CPUAPP
+`0e96798809047cd862735b829a34a0562fbf2ce8b0c20ca4f2a2a4923e8390bf`. The H34
+disable snapshot had three undispatched and zero host-dispatched; the
+unavailable snapshot had two undispatched and one host-dispatched. An observed
+live `host_returned` slot narrows the question to NCS host behavior after
+`bt_conn_recv()` returned without an app callback; it does not prove the
+specific `bt_iso_recv()` branch, an owner, a leak, or a repair.
+
+### RH3-36 scoped TX-notify flush observation
+
+RH3-36 (run `rh3-20260825-36-sdc-hci-iso-rx-tx-notify-flush-trace`,
+SHA256SUMS 25/25) wrapped only the cross-object `k_work_flush()` (residing
+in `zephyr/kernel/work.c`) while the outer `bt_conn_recv()` wrapper holds a
+live same-thread context (tracked buffer pointer, current thread ID, active
+bit, set and cleared in a fixed order). Its original eight-stage design that
+wrapped `bt_conn_tx_notify` directly was explicitly superseded before
+completion: GNU `--wrap` cannot redirect the same-object
+`bt_conn_recv() -> bt_conn_tx_notify()` call inside NCS
+`zephyr/subsys/bluetooth/host/conn.c`, and that superseded recipe is a
+historical failed design, never an executable or current recommendation.
+
+The initial RH3-36 implementation passed host tests, parser tests, config
+proof, and produced trace CPUAPP
+`b1a91236e72d6499ea413429d2ed2b44098e5406df54747c1cc409bd28af3395`; it then
+failed the required linkage proof. `--wrap=bt_conn_tx_notify` appeared in
+`build.ninja` and the wrapper symbols existed, but target disassembly retained
+the same-object call `bt_conn_recv: bl <bt_conn_tx_notify>`. No trace image was
+flashed, and the local normal build was not restored at that checkpoint. The
+retained requirement: preserve the proven edges
+`hci_iso -> __wrap_bt_conn_recv`,
+`bt_conn_tx_notify -> __wrap_k_work_flush`, and
+`bt_conn_reset_rx_state -> __wrap_net_buf_unref`, and prove that
+`bt_conn_recv` still calls the real `bt_conn_tx_notify`, not a nonexistent
+wrapper. The same-object call must not be interposed by an NCS patch,
+production-code change, or linker flag.
+
+Schema-16 has seven bounded categories (`undispatched`, `host_dispatched`,
+`tx_notify_flush_entered`, `tx_notify_flush_returned`, `host_returned`,
+`app_callback_seen`, `unclassified`); schema-15 five-field lines keep both new
+fields `None`, and schema-14 four-field lines keep `host_returned` plus both
+new fields `None`. At execution time the disposition fragment
+`tests/hil/receiver-sdc-remove-iso-path-iso-rx-lifetime-disposition.conf` had
+been updated to schema-16 content, SHA-256
+`aa8d87a615516433fb1d8e59b7b79a189e7bb34a909551144799c05d35d71ab8`, and the
+expected trace CPUAPP was `cedc7fecbc09cc25af74e05f6515ddeff3db22e847792c14108ea26616d96825`.
+A foreign-flush native-test repair retained the rule that a
+cached pre-foreign-call snapshot proves forwarding but not the post-call stage:
+a fresh session must allocate one tracked buffer, must not invoke
+`__wrap_bt_conn_recv()`, then a foreign flush outside the outer context must
+leave the subsequent disable snapshot at `undispatched=1` with every
+flush/return stage zero, with exact `work`, `sync`, and Boolean forwarding
+retained.
+
+RH3-36's physical run reached source `streaming` and `scored_complete`, armed
+at capacity three, and its unavailable snapshot recorded `outstanding=3
+high_water=3 allocations=19488 final_unrefs=19485 callbacks_active=0
+callbacks_total=19485 undispatched=2 host_dispatched=0
+tx_notify_flush_entered=1 tx_notify_flush_returned=0 host_returned=0
+app_callback_seen=0 unclassified=0`: one scoped flush entered without an
+observed return. The run ended at session end with missing receiver summary
+slot zero, then the receiver showed controller command `0x206f` timeout -11,
+the `hci_core.c:506` assertion, and a kernel oops. The stage
+does not identify a work item owner, prove the flush slept, establish a cycle,
+name a NCS branch, prove a leak, or authorize a repair. The grounded NCS
+contract: `bt_conn_recv -> bt_conn_tx_notify(conn, true) ->
+k_work_submit_to_queue(tx_notify_workqueue_get(), &conn->tx_complete_work) ->
+k_work_flush(&conn->tx_complete_work, &sync)`, and `k_work_flush` calls
+`z_impl_k_sem_take(&sync.flusher.sem, K_FOREVER)` only when `work_flush_locked()`
+reports need_flush. Historical NCS v3.3.0 source anchors: the pre-callback
+TX-notify call sits
+at `conn.c:492-506`, the caller-not-on-TX-workqueue flush branch at
+`conn.c:340-355`, and `k_work_flush()` resides in `zephyr/kernel/work.c`, so
+its cross-object call is link-wrappable.
+
+### RH3-37 generated semaphore-take entry observation
+
+RH3-37 (run `rh3-20260825-37-sdc-hci-iso-rx-tx-notify-flush-semaphore-trace`,
+SHA256SUMS 25/25, source reached `streaming` and `scored_complete`, runner
+failed at session end only) wrapped the generated `z_impl_k_sem_take`, not an
+inline or public
+`k_sem_take` symbol: exact normal ELF disassembly proved the cross-object call
+`k_work_flush: bl z_impl_k_sem_take`. Matching required all of: an active outer
+HIL `bt_conn_recv()` context, the current thread equal to the captured outer
+receive thread, the same tracked ISO RX buffer, the exact captured
+`&sync->flusher.sem` pointer captured by the scoped flush wrapper (never
+dereferencing a null `sync`), and a `K_FOREVER` timeout. Foreign semaphore,
+wrong pointer, or non-`K_FOREVER` calls forwarded exactly once with no stage
+change. Entering the wrapper does not prove a sleep: the semaphore may have a
+positive count, and `z_impl_k_sem_take()` pends only after a zero count and a
+non-`K_NO_WAIT` timeout; absence of wrapper return at a snapshot does not
+identify why completion did not occur. Its unavailable snapshot recorded
+`capacity=3 outstanding=3 high_water=3 allocations=19485 final_unrefs=19482
+callbacks_active=0 callbacks_total=19482 undispatched=2 host_dispatched=0
+tx_notify_flush_entered=0 tx_notify_flush_semaphore_entered=1
+tx_notify_flush_semaphore_returned=0 tx_notify_flush_returned=0 host_returned=0
+app_callback_seen=0 unclassified=0`: the H37 wrapper observed semaphore entry
+without observing its return before the snapshot; it did not establish
+semaphore count, `z_pend_curr()` selection, a completed pend, `pend_locked()`
+execution, thread state, handler state, a deadlock, ownership, a controller
+cause, a leak, or a repair. Identities: HEAD
+`c13fe204e4d7f2b0cdd1dcc4222bf2773b2b51e1`; fragment
+`tests/hil/receiver-sdc-remove-iso-path-iso-rx-lifetime-disposition-flush-semaphore.conf`
+at the version recorded for this run, SHA-256
+`28b5bd26b1e4826e16a067cd766db7e1f45266281a963ff54d192b434f5c2320`; trace
+CPUAPP `d5766415e92b953b5e45c5474d0e6c2062c71fdb3f90c47b3420b30bf00a362d`;
+software acceptance 15 native and 222 RH2 parser passed; link proof included
+`k_work_flush -> __wrap_z_impl_k_sem_take`. Schema-17 adds the semaphore
+entered/returned fields to the disposition grammar.
+
+### RH3-38 z_pend_curr entry observation
+
+RH3-38 (run `rh3-20260825-38-sdc-iso-rx-pend-trace`, `25/25` artifacts,
+schema 18, empty parser/validation errors, source reached streaming and
+scored_complete, runner failed at session end only) wrapped `z_pend_curr()`
+(installed signature
+`__wrap_z_pend_curr(struct k_spinlock *, k_spinlock_key_t, _wait_q_t *,
+k_timeout_t)`) after exact normal receiver disassembly proved the direct call
+target `z_impl_k_sem_take at 0x58e18 ... bl 0x5a88c <z_pend_curr>`. Matching
+required the captured flusher semaphore non-NULL, `wait_q ==
+&captured_sem->wait_q`, `K_FOREVER`, the live exact tracked buffer and thread,
+and the buffer still occupying a tracked lifetime slot; real `lock`, `key`,
+`wait_q`, `timeout`, and result were preserved unchanged, and foreign,
+no-scope, or non-forever calls forwarded untouched. Wrapper entry is not real
+body entry: observing `tx_notify_flush_semaphore_pend_entered=1` with
+`pend_returned=0` does not prove entry to the real `z_pend_curr()` body,
+`pend_locked()` execution, a completed pend, thread state, a handler cause, a
+deadlock, a controller defect, or a repair.
+
+A first 67-character run ID
+`rh3-20260825-38-sdc-hci-iso-rx-tx-notify-flush-semaphore-pend-trace` failed
+`lifecycle.validate_run_id()` (accepts only
+`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`) at `_step_validate()` before fixture-lock
+acquisition, run-directory creation, identity resolution, or any target
+interaction. `scripts/hil/lifecycle.py`'s `HilLifecycleError` was caught by
+`Runner.run()`, so the failed command returned status 1, not the CLI status 2.
+No hardware, identity resolution, flash, reset, serial access, source control,
+or evidence directory was created, and the old ID was never invoked against
+hardware. The executed `rh3-20260825-38-sdc-iso-rx-pend-trace` (37 characters)
+is therefore a new no-hardware-predecessor execution, not a physical retry.
+
+Identities: fragment
+`tests/hil/receiver-sdc-remove-iso-path-iso-rx-lifetime-disposition-flush-semaphore-pend.conf`
+at the version recorded for this run, SHA-256
+`a1b1b4205e92f7506a81a203a36577dcac5522f02f1bee4b99909b76072eade8`;
+trace CPUAPP `158ac6ea96a32ecd50629f5af7c8b4f919f51f42f8247c8ff7b2059ae3eaa32a`;
+direct-link proof chain `hci_iso -> __wrap_bt_conn_recv; bt_conn_recv ->
+bt_conn_tx_notify; bt_conn_tx_notify -> __wrap_k_work_flush; k_work_flush ->
+__wrap_z_impl_k_sem_take; z_impl_k_sem_take -> __wrap_z_pend_curr`; software
+acceptance 18 native and 224 RH2 parser passed; schema-18 adds the two pend
+fields and schemas 14 through 17 still parse with both new fields `None`.
+
+### RH3-39 scheduler-pend hook and give entry
+
+H39 ran as `rh3-20260826-39-sdc-iso-pend-sched-give` with integrity passing
+`25/25` listed artifacts. Its source proof used `add_to_waitq_locked`, not a
+direct `z_pend_curr` disassembly call, because the then-current toolchain kept
+that static helper separate in the linked image.
+
+RH3-39 added two bounded observations without modifying NCS: (1) the built-in
+scheduler-pend user hook via `CONFIG_TRACING_USER=y` (trace-only, no
+production use; the installed NCS v3.3.0 has no user-tracing work-handler
+execution hook), which fires after `z_mark_thread_as_pending()` and before the
+`pended_on` write and wait-queue insertion, because
+`add_to_waitq_locked()` calls `z_mark_thread_as_pending(thread)`, then
+`SYS_PORT_TRACING_FUNC(k_thread, sched_pend, thread)`, then writes `pended_on`
+and inserts into the wait queue, all with `_sched_spinlock` held
+(`zephyr/kernel/sched.c:574-605`; `zephyr/kernel/sched.c:664-684` shows
+`z_pend_curr()` acquiring `_sched_spinlock`, calling `pend_locked()`, releasing
+the caller lock, then calling `z_swap()`; `zephyr/kernel/sem.c:139-158` holds
+the file-static semaphore lock and calls `z_pend_curr(&lock, key,
+&sem->wait_q, timeout)` only after a zero count and a non-`K_NO_WAIT` timeout).
+`zephyr/subsys/tracing/user/tracing_user.c:211-214` maps
+`sys_trace_thread_pend()` to the weak `sys_trace_thread_pend_user()` hook; and
+(2) entry to generated `z_impl_k_sem_give()` for the exact captured
+`&sync.flusher.sem` (source-grounded in
+`zephyr/kernel/work.c:108-116`, where `finalize_flush_locked()` gives the
+stack-local `k_work_sync` flusher barrier semaphore, and
+`zephyr/kernel/sem.c:95-121`, where a give unpends a present waiter, readies
+it, then reschedules or unlocks).
+
+Hook constraints (scheduler-lock context): it may advance a tracked buffer to
+`tx_notify_flush_semaphore_pend_thread_marked_pending` only when armed by a
+matching H38 `z_pend_curr()`, the thread equals the captured outer receive
+thread, the outer context stays active for the captured tracked buffer, and
+that buffer remains in tracked lifetime slots. The hook runs with the scheduler
+lock held and may use only fixed atomics, fixed pointer identity, and bounded
+slot scanning: no log, allocation, locking, work submission, wait, scheduler
+call, semaphore API, queue or field inspection, or `k_current_get()` call. A
+marked-pending observation does not establish `pended_on`, wait-queue
+insertion, `z_swap()`, or sleep completion.
+
+Give-wrapper constraints: the match must not require current-thread
+equality because the expected give occurs in a workqueue thread, not the
+blocked receive thread; it must not dereference `sem`, inspect the semaphore
+count, inspect a work field/handler/queue, or infer a work owner. On an exact
+match it advanced the tracked buffer to
+`tx_notify_flush_semaphore_give_entered`, then called the real give exactly
+once. No give-returned category exists: `z_impl_k_sem_give()` may reschedule
+the higher-priority waiter before a post-real wrapper check, allowing the outer
+context or slot to disappear, so the entry marker is bounded evidence only.
+Static helpers (`pend_locked()`, `add_to_waitq_locked()`,
+`finalize_flush_locked()`, `handle_flush()`, `work_queue_main()`) must never be
+wrapped. Snapshot stages are exclusive and monotonic: a later give stage can
+supersede a visible marked-pending stage, so an absent lower bucket does not
+mean that lower event never occurred.
+
+Identities: fragment
+`tests/hil/receiver-sdc-remove-iso-path-iso-rx-lifetime-disposition-flush-semaphore-pend-sched-give.conf`
+at the version recorded for this run, SHA-256
+`052b98cae2123f79ad01ca3870f94a8711a7670666a37eeced133e38ab61ff45`;
+trace CPUAPP `cd4b569523621a3192f23cb0b1841fcd3c6f3a9909bcd41cdaab90814d4c9675`.
+
+Schema-19 adds both fields. H39's physical run reached `streaming` and
+`scored_complete`, failed only at session end with `missing receiver stream
+summary slot(s): [0]`, and its valid schema-19 unavailable snapshot recorded
+`capacity=3 outstanding=3 high_water=3 allocations=19485 final_unrefs=19482
+callbacks_active=0 callbacks_total=19482 undispatched=2 host_dispatched=0
+tx_notify_flush_semaphore_pend_thread_marked_pending=1
+tx_notify_flush_semaphore_give_entered=0` with all flush, semaphore, and pend
+enter/return stages zero, then the receiver reported `Controller
+unresponsive, command opcode 0x206f timeout with err -11` with the current
+thread on `sysworkq`. No outcome proves wait-queue insertion, handler
+identity or ownership, give return, waiter resumption, deadlock, controller
+defect, or a production repair.
+
+## Historical early RH0/RH1 review findings
+
+All identities below refer to Git rev `a94f010`-era handoff provenance and
+historical NCS v3.3.0 / nRF5340DK fixture implementations. No number is
+freshly revalidated raw evidence, an accepted test total, or a current
+recipe. The RH0/RH1 contract invariants live in `system-hil-milestones.md`
+("Historical RH0/RH1 implementation invariants"); FixtureLock tests and
+BAP/APP source comments stay primary in-source contracts.
+
+### Historical RH0 review findings
+
+First RH0 review: 52 RH0 tests, pytest 8.4.2, and pyserial 3.5 reported
+passing, yet the focused review reproduced real acceptance defects. Retained:
+
+1. Logical fixture schema accepted an extra role beyond the exact
+   `receiver`/`source` (plus capability-dependent `capture`) contract.
+2. Rejected HIL1 transition mutated `firmware_id` and `last_monotonic`; a
+   status record at segment 9 followed by segment 0 was accepted, violating
+   segment monotonicity; future-segment records were not rejected once a
+   current segment existed.
+3. A cleanup callback raising `KeyboardInterrupt` prevented older callbacks
+   from running; body `KeyboardInterrupt` plus cleanup failure would be
+   invalid inside `ExceptionGroup` rather than `BaseExceptionGroup`.
+4. A pre-existing `<output-root>/.locks` symlink was followed, allowing lock
+   file creation outside the selected output root.
+5. Four `ResourceWarning` diagnostics from unclosed evidence files, forbidden
+   by the project warning policy.
+6. No test covered a write-stage failure after one metadata file was updated;
+   `finalize_evidence()` could leave a new `SHA256SUMS` beside an old or failed
+   `MANIFEST.md`.
+
+False positive proofs in the original RH0 tests (retained so future test work
+does not repeat them):
+
+1. Cleanup tests registered the failing callback before the successful older
+   callback, so LIFO executed success before failure; the `['ok']` assertion
+   proved success without proving execution order.
+2. The staging-failure test failed the first staging call, never proving the
+   first staged file is removed when a second staging call fails.
+3. The snapshot-failure test claimed snapshot-boundary coverage, but replacing
+   `SHA256SUMS` with a directory failed earlier during evidence enumeration,
+   not through the snapshot I/O seam.
+
+Later-round checkpoint totals (not freshly revalidated): 68 tests after round
+1, 72 warning-free after round 2, RH0 accepted at 72 on completion.
+
+### Historical RH1A review findings
+
+Initial RH1A review: 32 control and 20 signal tests passing, nine defects
+reproduced; combined with round-2 boundary corrections:
+
+| # | Finding (historical wording, condensed) | Class |
+|---|---|---|
+| 1 | Parser wrote command, IDs, peer/config fields into caller output before all validation; valid header plus invalid peer/mode/profile/count/seed/reconnect returned failure with partially mutated output | partial output mutation |
+| 2 | Parser placed roughly 6 KiB decoded string storage on stack (`str[512]` per known key), unsuitable for target shell reuse | stack budget |
+| 3 | Nested object/array skipping counted brackets equally without validating inner JSON grammar, so malformed nesting classified `wrong_type` instead of `syntax` | malformed nested JSON misclassified |
+| 4 | State counter wrappers formed `&st->counters[stream]` before stream-index validation | pre-bounds address formed |
+| 5 | `counter_submit_scored()` incremented scored but not total submitted count; passing run possible with scored greater than total | scored greater than total false pass |
+| 6 | `configure()` mutated configuration after terminal despite immutable post-terminal snapshot contract | terminal config mutation |
+| 7 | Signal stage could enter scored before exact preamble completion on every channel, so tests exercised fresh encoder state, not the real preamble lifecycle | premature stage / fake fresh state versus real preamble |
+| 8 | Scored entry chose first target from an unadvanced derived PRNG, advancing only after the first block; contract requires one xorshift update per block consumed by the first block | PRNG first update wrong |
+| 9 | Generator accepted `--write --check` with write silently winning; doc said I/O error exits 2 while implementation returned 1 | generator write-over-check / IO exit mismatch |
+| 10 | Round 2: `hil_source_signal_render()` multiplied `samples * sizeof(int16_t)` unguarded; on 32-bit target `samples=UINT32_MAX` wrapped the size calculation before capacity rejection | 32-bit size overflow; reject samples greater than SIZE_MAX/sizeof(int16_t) before multiply |
+| 11 | Round 2 repair contract: return `-ENOSPC` with encoder and output unchanged on that rejection | 32-bit overflow repair contract |
+| 12 | Round 2: unknown key longer than 16 decoded bytes returned `range` from key buffer before unknown-key classification; schema promises `unknown_key` for every unknown key within the 511-byte line | long unknown keys |
+| 13 | Round 2 repair contract: consume and validate the long key without large per-key storage, parse its value fully, then return `unknown_key` within bound; malformed value still returns `syntax` (lexical validity precedes schema class) | long-unknown-key repair contract |
+
+Later-round checkpoint totals (not fresh evidence): 38 control, 21 signal, 76
+Python tests after round 1; inventory 65 across rounds. Historical NCS v3.3.0
+note preserved: upstream `json_obj_parse()` accepted unknown, duplicate, and
+trailing content, motivating the repository parser; that installed-SDK claim
+concerns the historical NCS tree and is not current-SDK verified.
+
+### Historical RH1B observed fault catalog
+
+First RH1B review: fake native path passed while the real production firmware
+could not transmit because TX streams were never attached. Full thirteen-item
+observed-fault catalog (condensed from the `## Grounded defects` list, lines
+38-71 of the first review-fix handoff at the cited rev):
+
+| # | Fault (condensed) | Class |
+|---|---|---|
+| 1 | `hil_source_tx_attach()` had no caller; `tx_stream_count` stayed zero; first production send returned `-EINVAL`; cleanup set `tx_stopped` with no segment reactivation | missing TX attach / reactivate |
+| 2 | Raw `printk("DBG TS ...")` in every sent callback raced queued HIL1 output, violating single-writer ownership | printk/log race |
+| 3 | `CONFIG_SHELL_STACK_SIZE=2048` while dispatch nested strict-parser state plus status/hello buffers beyond the budget | shell stack budget |
+| 4 | Output line capacity 768 could not honor accepted 63-byte command IDs and 64-byte run IDs; two-stream status already exceeded 768 with maximum IDs | max-ID status above 768 |
+| 5 | `CONFIG_NCS_BOOT_BANNER=y` remained resolved, creating non-HIL1 serial text | boot banner |
+| 6 | One global Mode A TX activity time: healthy callbacks on one CIS could mask a stuck outstanding queue on the other forever | one CIS masks stall |
+| 7 | `sem_configured`/`sem_disabled`/`sem_released` signaled by ASCS response listeners rather than successful endpoint-state callbacks; release received both listener and `stream_ops.released` signals, so one stream could consume another's completion token | listeners duplicate completion tokens |
+| 8 | Sink ASEs are server-started; code swallowed `-EINVAL`/`-EBADMSG` from `bt_bap_stream_start()` as success | start errors swallowed |
+| 9 | Backend callback/status fields unsynchronized across Bluetooth RX, worker, and shell threads | backend races |
+| 10 | Stop-aware wait helper short-circuited cleanup waits after stop; cleanup could reset backend state and return terminal while disable/release/disconnect were still pending | stop skipped cleanup wait |
+| 11 | `idle` reset `sem_run_done` after requesting stop, losing a racing worker completion (15-second stall); on timeout it also started a second cleanup concurrently with worker cleanup | idle completion / concurrent cleanup |
+| 12 | Worker state/record helpers called without `app_mutex`, racing status dispatch; record submission failure jumped to abort with `err == 0`, losing first errno | unlocked app state / lost record errno |
+| 13 | `hil_source_bap_init()` ignored both auth callback registration return values | ignored auth register return |
+
+Historical capacity notes, superseded within the same phase, not current
+recipes: 8-line queue with 768-byte lines was the review-era baseline; the
+first correction set 1024-byte lines; Mode A outstanding target later changed
+from two to three per active stream (depth notes earlier in this file).
+
+### Historical RH1B second- and third-review findings
+
+Second review (after first correction build and 49-case native suite):
+
+| # | Finding (condensed) |
+|---|---|
+| 1 | `connected_cb()` gave `sem_connected` even when the callback connection was not `default_conn` (wrong connection recorded as success) |
+| 2 | PASS state committed before terminal record submission; on submission failure FAIL terminalization was rejected because the snapshot was already an inactive PASS; later status could report pass without a terminal record |
+| 3 | Group pointer cleared before `bt_bap_unicast_group_delete()`; failed delete leaked the group, blocked retry, and falsely reported the group absent |
+| 4 | Configure, stop, and unpair handlers discarded status-emission errors and returned success (response failures ignored) |
+| 5 | Discovery endpoint/completion callbacks did not filter the exact active connection (unfiltered discovery) |
+| 6 | Security did not verify level at least L2 plus the exact configured peer bond; `bt_conn_set_security()` may return zero as a no-op on bonded reconnect without a new callback, causing a false 20-second timeout |
+| 7 | Cleanup did not reset/read `op_error` around disable/release; an ASCS rejection could look like successful completion, losing `-EBADMSG` as first cleanup error |
+| 8 | Several backend operations copied `default_conn` under spinlock, then called a Bluetooth API after unlock without a temporary connection reference; disconnect callback could unref concurrently |
+| 9 | Cleanup-order test checked counts, not cross-phase order; record-submission test started from a scripted backend `-EIO`, not from record submission; no test covered PASS terminal submission failure, so failure causes were misattributed |
+
+Third review (after second correction passed 56 native cases and build):
+
+| # | Finding (condensed) |
+|---|---|
+| 1 | Bonded reconnect with no `security_changed` callback: coordinator woke on the stale security semaphore but rejected level zero, because `security_level_now` was segment-reset and only updated by the callback; the fake's always-L2 default masked this (cached level not updated) |
+| 2 | Start-ACK failure path re-acquired `app_mutex` while dispatch already held it, causing permanent deadlock when the queue was full or the formatter failed |
+| 3 | Two idle branches cast status emission to void; idle/output failure left responses unpropagated |
+| 4 | Parse-error handling could read/write `run_state.active`/`runtime_error` outside the app mutex |
+| 5 | Object unrefs under the backend spinlock remained in two configure/QoS branches; the ownership rule's sole exception is the intentional atomic `bt_conn_ref()` acquisition guard that makes a post-unlock call safe |
+
+Historical accuracy notes: the claim that NCS v3.3.0 `json_obj_parse()` accepts
+unknown, duplicate, and trailing content was grounding for the repository
+parser, not a current-SDK verified fact. The historical "header generation
+wording" observation was a wording mismatch without proof of an actually
+missing generation token; the dead generation variable was removed as a
+write-only pseudo-guard, not a source fix.
+
+## Historical early RH3 diagnostic rationale
+
+This section preserves the August 2026 NCS v3.3.0 investigation, not current
+SDK behavior or permission to replay retired configurations. Original texts are
+recoverable from Git revision `a94f010`. Raw `/tmp/opencode/hil-runs` evidence is
+absent in this session; measurements and checksum counts below are
+document-attributed observations, not newly rehashed evidence.
+
+### Startup, retry and callback evidence
+
+The RH3-09 reservoir change used fifteen prefilled blocks without growing the
+PCM slab. At the then-measured 47619 Hz drain rate, eleven blocks did not cover
+an observed roughly 110 ms Mode B startup gap. Driver descriptors store
+pointer/size pairs, not more PCM; transactional ownership still matters.
+Historical RAM reached 161668/163840 B with slab size `0x7840`. Dirty report-only
+coverage could diagnose the change but could not replace the frozen baseline.
+
+The later 20 ms slab wait was finite backpressure, not real-time safety proof:
+it could delay Bluetooth RX work. RH3-10 source completed both streams at
+`sub=12644 sc=12000 cb=12644 sf=0`; offload reported `submit=success=14035`,
+with zero decode/I2S/reset/push failures. Yet the raw receiver warning
+`[00:51:08.410,510] <wrn> bt_conn: conn 0x2000f6d8 failed to establish. RF noise?`
+fell between Stream[0] start and Stream[1] start at `00:51:08.719,081`.
+The bounded same-CIS retry recovered establishment; strict log scanning correctly
+failed. Recovery granted no warning exemption or RF-cause conclusion.
+
+ISO `sent` completion can follow enqueue, transmission or flush, not peer
+delivery. Flags classify only delivered callbacks: historical HCI INVALID mapped
+to ERROR and NOP to LOST. Absent callbacks cannot be counted by that adapter.
+The earlier Mode A record had 12348 submissions per stream, 116 valid receiver
+SDUs and `decoded=28006 plc=27890`; one assembler overflow did not explain it.
+
+### Runtime-filtered HCI trace failures
+
+RH3-12 `rh3-20260822-12-runtime-filtered-hci-remove-iso-path-trace` retained
+23/23 checksums but failed before trace configuration with `log: command not
+found`. Firmware lacked LOG_CMDS. Pre-stream DEBUG risked overflowing the 4 KiB
+deferred ring. RH3-13 armed core/driver DEBUG on first `lc3_disable`, requiring
+nonnegative source IDs, one arm, both levels 4, no post-arm drops and a post-arm
+`0x206f` send. A pre-arm send cannot satisfy that transaction's evidence gate.
+
+Historical normal CPUAPP changed from
+`d8e57082564cca70ae00d4d0a4653a00b34743c08075685e2ffea7721ce8a723` to
+`27df0345258b9d410b102f75f0b6b614e7fbc50856de9d23b946802e0411a0df`;
+RH3-13 trace CPUAPP was
+`f32fd4452f943bedbacaba4bb8a305c1489ac7d9e4c5c39faa874b9d410f813c`,
+fragment `receiver-hci-remove-iso-path.conf` SHA-256
+`33f7c2fb49773e8811dfabf09471b6670414bfb5fc2d3fdee1a4f46182b50dc9`.
+Source CPUAPP stayed
+`f0e1c5ab74c1ce53c3c5bda1f1082026971e9c81d6e36f9967f6abb789a21333`,
+source CPUNET `4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`,
+receiver FLPR `45ab8d15e1656ed82f0e5d20d2b0f39abad77b3f220b2d6bfe2a2378d9bddee2`.
+Local build restoration was not board restoration.
+
+RH3-13 later failed session end with a missing summary, retaining 25/25
+checksums. The exact UART prompt hid drop records from the earlier parser;
+arbitrary foreign prefixes are not eligible. A relative SHA256SUMS check outside
+its evidence root was an interpretation error, not corrupt evidence. Native
+weak entropy imply produced an empty driver library when fake entropy was
+disabled; the helper needed no runtime entropy. These were test-local repairs,
+not production entropy changes or general warning waivers.
+
+RH3-14 preflight stopped on reserved-memory bus/unit-address warnings before
+runner invocation, run directory, JUnit, flash or reset. Repair preserved memory
+ranges and phandles; normal local outputs were restored. A plan is not execution.
+
+### Diagnostic eligibility and interpretation
+
+Public read-only ISO link-quality opcode `0x2075` supplies seven counters for a
+live CIS. App LOST cannot distinguish missing HCI, CRC or unreceived causes.
+Historical SW Split source lacked that public query route. Private ISO handles
+and direct RADIO access were not alternatives. An RX-only `can_recv` filter
+dependent on BT_AUDIO_TX wrongly excluded live sink CISes: local `-128` differed
+from public handle `-ENOTCONN` and SDC status `0x02` mapped to `-EIO`. Removing
+that filter retained strict live-sink and response validation. Historical
+checkpoints were 45 native, 141 host and 96 build checks, not current counts.
+
+Selected C-to-P fields came from cached establishment events. Host-v1 central
+latency truncation and unrelated fallback fields were excluded. Max PDU is not
+SDU length; PHY 1/2/4 means 1M/2M/Coded, and interval/flush values use 1.25 ms.
+NSE 6, BN 1, FT 1 describes opportunities, not observed retransmissions. Equal
+byte rates across 10/7.5 ms still change latency, frame size and ASRC path.
+
+The header-only native seam needed buffer macros through `audio.h`/`buf.h`
+assertions but no runtime driver, crypto or entropy. Child ISO options assigned
+with disabled BT_CONN/ISO parents caused warnings. The fully BT-off proposal
+failed compile; later type/header-only config corrected it. Enum references and
+reordered suffix rejection were proved separately from ledger indentation.
+Historical preflight cited 134 host, 47 native and 96 build checks, with DTS
+warnings later repaired. Source images
+`b40d03d1db49c990c87cd9406834e898a360bd581dd36453d2e40bdfaf3f3317` and
+`4e4b82f5de3e4789d85912db34b54a06a53e439bea14634ac59efe4e641f8f48`
+were unchanged by that receiver-only build. Partition-manager, SW Split,
+advanced-feature and watchdog notices belonged to old configs, not v3.4.1.
+
+### Collection ordering and fault windows
+
+A four-second usable tail, about 4.067 s in historical alignment, was too short
+for synchronous ISO HCI work followed by a second active-offload query. Adopted
+ordering collects active offload before scored completion, live ISO during tail
+and STOPPED diagnostics after teardown. The old collector returned after first
+Mode A summary even when both were in raw UART. Required slots, later faults
+and duplicates must all be checked. A moving single pending transaction can
+prove serialized progress; static submit=success+1 cannot. Historical 8 ms lock
+and submit-before-commit ordering explain why adjacent samples need care.
+
+Named recovery comparisons normalize an omitted Runtime line to zero only
+there. Normal stop resets probation_success progress; cumulative probation_cleared
+remains evidence. Submit non-regression and other faults stay checked. Zero-wait
+cleanup drains queued records before sending STOP/IDLE; queued parse-error/unbound
+after PASS remains a retained cleanup failure, never silently discarded.
+
+Expected hang warnings are allowed only as complete lines wholly inside retained
+raw-byte injection/recovery bounds. Boundary-crossing, identical pre/post-window,
+unrelated or stall-row warnings fail. The fixed two-pass matrix has no arbitrary
+skip, repetition or row-list escape hatch. CLI success/failure/cancellation/config
+statuses are 0/1/130/2; runner-caught validation can instead produce row status 1.
+Artifact plumbing and later v3.4.1 session helpers do not prove PB-007 acceptance.

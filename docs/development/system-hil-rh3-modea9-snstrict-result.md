@@ -138,6 +138,20 @@ documented dirty-tree notice, global `__ASSERT()` notice, required SW Split
 controller informational notices, and the receiver's documented empty
 `drivers__watchdog` library warning.
 
+> [!WARNING]
+> 2026-10-08 record-integrity limit (preserved, not normalized): the source
+> CPUNET SHA-256 strings above are internally inconsistent. The Build 1
+> column reads `696d4c4f320c56e9ddde1d040f9a8cf3ee3251e8c673432f043e0866448a8aec`
+> (64 hex chars) while the Build 2 column and the `images.json` table read
+> `696d4c4f320c56e9ddde1d040f9a8cf3251e8c673432f043e0866448a8aec` (61 hex
+> chars, missing two characters). The literal strings disagree and two are
+> too short to be valid SHA-256, so the "Byte-identical" cell and this
+> CPUNET hash must not be used as clean build-determinism or flashed-image
+> identity proof for this run. The literal strings are preserved verbatim;
+> no guessed hash is substituted and no raw run root is available for
+> re-verification. This numerical record defect does not affect the decoded
+> run observations quoted elsewhere in this record.
+
 ## Runner outcome and frozen limits
 
 The source completed its full lifecycle with terminal `verdict="pass"`:
