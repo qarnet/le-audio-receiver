@@ -195,6 +195,31 @@ missing post-stop FLPR snapshot is an evidence limit only; it does not replace
 or weaken the runner's limits verdict. Next work is controller/buffer
 diagnostics. Do not rerun or reuse this ID.
 
+### 2026-10-08 handoff-reconciliation note (runner-support contract preserved)
+
+The retired runner-support handoff recorded the diagnostic-only public
+contract this run then exercised, quoted here as dated design history:
+
+- The repaired runner accepts an offload-disabled receiver image only for
+  direct `run` invocations via `--allow-offload-disabled`; matrix paths never
+  pass the flag and matrix rows always use the production image.
+- Active validation in the `48_4_1` branch requires the exact-zero data plane
+  `submit == 0 and success == 0` in this mode (a nonzero submit is an error);
+  the `48_3_1` branch already expected zero, and all other validations (state
+  ACTIVE, fault fields, recovery fields) stay identical.
+- The post-stop validator accepts terminal `submit == 0 and success == 0` for
+  `48_4_1` in the same mode; nonzero submit/success remains an error, and the
+  production default still requires `submit >= 1`.
+- The flag is bool-checked (non-bool rejected) and recorded in the row
+  evidence (`row.json` carries `"allow_offload_disabled": true` only when
+  set).
+
+Code check 2026-10-08: these semantics exist in the retained runner sources
+(`scripts/hil/receiver.py` `_validate_active_offload` and the post-stop
+validator threading, `scripts/hil/runner.py` row evidence, `scripts/hil/cli.py`
+flag), so the quoted contract is verified implemented behavior; the quoted
+wording itself stays historical.
+
 ## Integrity and raw identity
 
 Read-only `sha256sum --check SHA256SUMS` passed all `24/24` retained entries.

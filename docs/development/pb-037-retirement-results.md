@@ -62,4 +62,7 @@ require a clean exact commit`. No clean-gate pass or new baseline is claimed.
 Exhaustive active-reference and historical-comment classification remains
 unfinished; preserve historical material. Explicit local commit authority is
 needed before clean exact-commit acceptance, not before continued technical
-investigation. See `nrf54l15-only-continuation-20260925.md`.
+investigation. See
+`docs/development/nrf54l15-migration-verification-results-20261001.md`
+(the 2026-09-25 continuation snapshot this line cited was retired at Git rev
+`a94f010`).

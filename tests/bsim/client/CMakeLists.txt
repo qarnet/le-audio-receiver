@@ -1,6 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 cmake_minimum_required(VERSION 3.20.0)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Native BSim peers are ELF32; align initial CMake probes with verified 32-bit library paths.
+set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} -m32")
+set(CMAKE_CXX_FLAGS_INIT "${CMAKE_CXX_FLAGS_INIT} -m32")
+set(CMAKE_ASM_FLAGS_INIT "${CMAKE_ASM_FLAGS_INIT} -m32")
+# CMake capability probes provide main but may link with -nostdlib.
+# Give those probe links an entry point without changing final targets.
+# CMAKE_REQUIRED_LINK_OPTIONS is consumed only by try_compile checks.
+list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-Wl,--entry=main")
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(bap_unicast_client_bsim)
 

@@ -129,7 +129,8 @@ Stage 1 matrix, run counts, and pinned hashes live in
 > 0 FAIL / 41 TOTAL`**, script exit 0, elapsed 816 s (13m36s), **zero
 > Kconfig assigned-value warnings** and zero compiler warnings.  Observed
 > evidence, warning classification, and log provenance: `STATUS.md` (T7
-> section) and `docs/development/workstation-transfer-status.md`.
+> section) and the `docs/development/refactor-r10-results.md` dated T7
+> run-record appendix.
 > The **historical T8 accepted 47-child composition** (28 twister + 4
 > exec-only + 12 Python + coverage + matrix + BSim) is the T8 gate
 > described below; the **FR1 accepted 63-child composition** (35 twister
@@ -244,7 +245,8 @@ on the exact commits `c6adce8`/`4a31324`; the canonical 41-child gate
 acceptance on `8f7bfca` (warning-fix commit) is **ACCEPTED (2026-08-02)**:
 observed exact `41 PASS / 0 FAIL / 41 TOTAL`, elapsed 816 s (13m36s),
 zero Kconfig assigned-value warnings (see `STATUS.md` T7 section and
-`docs/development/workstation-transfer-status.md`).
+the `docs/development/refactor-r10-results.md` dated T7 run-record
+appendix).
 
 ## Baseline refreshes after T7 (never lowered)
 

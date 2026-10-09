@@ -163,6 +163,11 @@ eval "$(nrfutil sdk-manager toolchain env --toolchain-bundle-id 8285d8ad56 --as-
     echo "ERROR: Failed to source NCS toolchain environment" >&2
     exit 1
 }
+if ! link_env="$(python3 "$SCRIPT_DIR/bsim_link_env.py")"; then
+    echo "ERROR: cannot resolve native BSim ELF32 link paths" >&2
+    exit 1
+fi
+eval "$link_env"
 
 # Native-simulator builds use -O0. Keep Nix hardening enabled except for its
 # incompatible fortify modes, which inject _FORTIFY_SOURCE at -O0.
@@ -198,6 +203,70 @@ sysbuild=1
 # shellcheck source=/dev/null
 source "${ZEPHYR_BASE}/tests/bsim/compile.source"
 
+# Own raw build output before compile.source redirects CMake/Ninja logs.
+if [ -n "$BSIM_LOG_ROOT" ]; then
+    LOGROOT="$BSIM_LOG_ROOT"
+else
+    LOGROOT="$(mktemp -d "${TMPDIR:-/tmp}/bsim_t4_XXXXXX")"
+fi
+OVERALL_FAIL=0
+ACTIVE_BUILD_ROLE=""
+ACTIVE_BUILD_APP=""
+ACTIVE_BUILD_EXE=""
+
+retain_build_files() {
+    local role="$1" app_path="$2" exe="$3"
+    local build_dir="$WORK_DIR/$app_path/$exe"
+    local destination="$LOGROOT/build/$role" source name
+    mkdir -p "$destination"
+    for name in cmake.out ninja.out; do
+        source="$build_dir/$name"
+        if [ -f "$source" ]; then
+            [ ! -e "$destination/$name" ] || { echo "ERROR: retained $role/$name exists" >&2; return 1; }
+            cp -- "$source" "$destination/$name"
+        fi
+    done
+    for name in resolved.config cmake-configure.yaml; do
+        if [ "$role" = "receiver" ]; then
+            case "$name" in
+                resolved.config) source="$build_dir/bsim/zephyr/.config" ;;
+                *) source="$build_dir/bsim/CMakeFiles/CMakeConfigureLog.yaml" ;;
+            esac
+        else
+            case "$name" in
+                resolved.config) source="$build_dir/client/zephyr/.config" ;;
+                *) source="$build_dir/client/CMakeFiles/CMakeConfigureLog.yaml" ;;
+            esac
+        fi
+        if [ -f "$source" ]; then
+            [ ! -e "$destination/$name" ] || { echo "ERROR: retained $role/$name exists" >&2; return 1; }
+            cp -- "$source" "$destination/$name"
+        fi
+    done
+}
+
+cleanup() {
+    local status=$?
+    trap - EXIT
+    if [ -n "$ACTIVE_BUILD_ROLE" ]; then
+        retain_build_files "$ACTIVE_BUILD_ROLE" "$ACTIVE_BUILD_APP" "$ACTIVE_BUILD_EXE" || status=1
+    fi
+    # Caller-owned external logs are never deleted. Private successful logs
+    # keep the existing cleanup contract; failures preserve raw evidence.
+    if [ -z "$BSIM_LOG_ROOT" ] && [ "$status" -eq 0 ] && [ "$OVERALL_FAIL" -eq 0 ] && \
+       [ "$KEEP_LOGS" != "1" ]; then
+        rm -rf "$LOGROOT"
+    else
+        echo ""
+        echo "Logs preserved at: $LOGROOT"
+        if [ -z "$BSIM_LOG_ROOT" ]; then
+            echo "  (set BSIM_KEEP_LOGS=1 to keep logs on success too)"
+        fi
+    fi
+    exit "$status"
+}
+trap cleanup EXIT
+
 # ---- Compile receiver (device 0) ----
 echo "=== Compile receiver (tests/bsim) ==="
 app="tests/bsim"
@@ -208,8 +277,12 @@ exe_name="bs_${BOARD_TS}_le_audio_receiver_bsim_prj_conf"
 snippet="bt-ll-sw-split"
 conf_overlay="${REPO_ROOT}/tests/bsim/overlay-bt_ll_sw_split.conf"
 export app app_root BOARD_ROOT conf_file exe_name snippet conf_overlay
+ACTIVE_BUILD_ROLE="receiver"; ACTIVE_BUILD_APP="$app"; ACTIVE_BUILD_EXE="$exe_name"
 compile
 wait_for_background_jobs
+retain_build_files "$ACTIVE_BUILD_ROLE" "$ACTIVE_BUILD_APP" "$ACTIVE_BUILD_EXE"
+ACTIVE_BUILD_ROLE=""
+python3 "$SCRIPT_DIR/check-native-bsim-build.py" --log-root "$LOGROOT" --role receiver
 
 RECV_BIN="${BSIM_OUT_PATH}/bin/${exe_name}"
 if [ ! -x "$RECV_BIN" ]; then
@@ -227,8 +300,12 @@ exe_name="bs_${BOARD_TS}_bsim_client_bsim_prj_conf"
 snippet="bt-ll-sw-split"
 conf_overlay="${REPO_ROOT}/tests/bsim/client/overlay-bt_ll_sw_split.conf"
 export app BOARD_ROOT exe_name snippet conf_overlay
+ACTIVE_BUILD_ROLE="client"; ACTIVE_BUILD_APP="$app"; ACTIVE_BUILD_EXE="$exe_name"
 compile
 wait_for_background_jobs
+retain_build_files "$ACTIVE_BUILD_ROLE" "$ACTIVE_BUILD_APP" "$ACTIVE_BUILD_EXE"
+ACTIVE_BUILD_ROLE=""
+python3 "$SCRIPT_DIR/check-native-bsim-build.py" --log-root "$LOGROOT" --role client
 
 CLIENT_BIN="${BSIM_OUT_PATH}/bin/${exe_name}"
 if [ ! -x "$CLIENT_BIN" ]; then
@@ -238,32 +315,6 @@ fi
 echo "Client: $CLIENT_BIN"
 python3 "$SCRIPT_DIR/check-bsim-runtime.py" --root "$BSIM_OUT_PATH" \
     --peer "$RECV_BIN" --peer "$CLIENT_BIN"
-
-# ---- Private log root ----
-if [ -n "$BSIM_LOG_ROOT" ]; then
-    LOGROOT="$BSIM_LOG_ROOT"
-else
-    LOGROOT="$(mktemp -d "${TMPDIR:-/tmp}/bsim_t4_XXXXXX")"
-fi
-OVERALL_FAIL=0
-
-cleanup() {
-    local status=$?
-
-    # A caller-provided BSIM_LOG_ROOT is never deleted: it is caller-owned
-    # output and is always preserved, success or failure.
-    if [ -z "$BSIM_LOG_ROOT" ] && [ "$status" -eq 0 ] && [ "$OVERALL_FAIL" -eq 0 ] && \
-       [ "$KEEP_LOGS" != "1" ]; then
-        rm -rf "$LOGROOT"
-    else
-        echo ""
-        echo "Logs preserved at: $LOGROOT"
-        if [ -z "$BSIM_LOG_ROOT" ]; then
-            echo "  (set BSIM_KEEP_LOGS=1 to keep logs on success too)"
-        fi
-    fi
-}
-trap cleanup EXIT
 
 # ---- Run one simulation with strict per-scenario parsing ----
 # Sets concise global numerical metrics and LAST_PUSHES on success.

@@ -11,8 +11,8 @@
  * Tests include:
  *  - Identity N exact frames every call
  *  - Cross-block ramp: prev→first interpolation at boundary
- *  - Global continuous coordinates: independent float64 ref
- *  - Exact chunking invariance (same global stream, different partitions)
+ *  - Cross-instance determinism (not an independent arithmetic oracle)
+ *  - Coarse chunk count regression (full waveform: asrc_oracle suite)
  *  - Signed extreme interpolation
  *  - Rate/ppm/null errors, transactional state
  *  - Production capacity bounds
@@ -302,7 +302,7 @@ ZTEST(asrc, test_chunking_invariance_480_vs_irregular)
 		     total_2chunk, total_4chunk, (long long)diff);
 }
 
-/* ── 6.  Global continuous coordinates — independent float64 ref ──── */
+/* ── 6.  Cross-instance determinism, retained historical test name ─── */
 
 ZTEST(asrc, test_global_continuous_ref)
 {
@@ -444,6 +444,33 @@ ZTEST(asrc, test_negative_ppm_more_frames)
 		tn += p;
 	}
 	zassert_true(tn > t0, "-2000 more: %zu > %zu", tn, t0);
+}
+
+ZTEST(asrc, test_negative_ppm_fractional_known_samples)
+{
+	/* Independent global-coordinate result at output frame 443:
+	 * nominal step = 2^31 ticks; -2000 ppm delta = -4294967 ticks;
+	 * x = 443 * (2^31 - 4294967) / 2^32.
+	 * Alternating full-scale stereo, nearest/ties-away interpolation:
+	 * L=-29033, R=29032. The old positive-half negative-delta rounding
+	 * produced L=-29032, R=29031. No private phase inspection. */
+	struct audio_asrc ctx;
+	static int16_t in[960], out[2000];
+	size_t consumed, produced;
+	int16_t left, right;
+
+	for (size_t i = 0; i < 480; i++) {
+		in[2 * i] = i % 2 ? INT16_MIN : INT16_MAX;
+		in[2 * i + 1] = i % 2 ? INT16_MAX : INT16_MIN;
+	}
+	zassert_equal(audio_asrc_init(&ctx, 1, 2), 0);
+	zassert_equal(audio_asrc_process(&ctx, in, 480, out, 1000, -2000, 0, 0, false, &consumed,
+					 &produced, &left, &right),
+		      0);
+	zassert_equal(consumed, 480);
+	zassert_true(produced > 443);
+	zassert_equal(out[886], -29033);
+	zassert_equal(out[887], 29032);
 }
 
 /* ── 10. Long-run / capacity / deterministic ─────────────────────── */

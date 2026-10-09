@@ -120,3 +120,21 @@ If ModeA14 fails with a new or unexplained signature, the timestamp-mode
 line reaches the plan's consecutive-failure stop point and requires
 user redesign review. Everything stays uncommitted pending a passing
 row. Preserve this evidence root; do not rerun this ID.
+
+## 2026-10-08 handoff-reconciliation note (software-race repair provenance preserved)
+
+The retired ModeA13 handoff recorded a software race and its repair that this
+run's build proof did not state: an early-callback race exposed by the native
+suite. The send applies `seq`/`outstanding`/`submitted`/`pin`/`readback-due`
+bookkeeping under the mutex BEFORE the backend call and rolls everything back
+on failure. The same handoff also kept, from the ModeA12 session, the
+send-driven readback chain (every successful send marks a readback due; the
+readback resyncs `tx_ts_next` monotonically to `assigned + interval`, base
+learned at the first readback after the untimestamped first SDU), the pinned
+sends with spec-advance plus rollback on failure, and the prefix rule (no
+further sends until a stream's base is learned; bounded wait on the readback
+wake). That software verification (native Twister 70/70, byte-identical
+pristine builds, the hashes quoted above) does not carry over: the hardware
+outcome here cannot validate the proposed no-gate semantics on hardware
+either way, because the delivery collapsed; the earlier attribution in this
+record was itself falsified by ModeA14.

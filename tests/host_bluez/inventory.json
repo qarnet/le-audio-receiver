@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "suite": "pb053-isolated-bluez-host",
+  "profile": "pytest-xunit2-v1",
+  "producer": {"name": "pytest", "version": "8.4.2"},
+  "required": [
+    ["tests.host_bluez.test_host_lane", "test_public_phase[fresh1]"],
+    ["tests.host_bluez.test_host_lane", "test_public_phase[retained]"],
+    ["tests.host_bluez.test_host_lane", "test_public_phase[fresh2]"],
+    ["tests.host_bluez.test_host_lane", "test_daemon_restart_state_and_disappearance"],
+    ["tests.host_bluez.test_host_lane", "test_delivery_content_accounting"],
+    ["tests.host_bluez.test_host_lane", "test_signal_cancellation[SIGINT]"],
+    ["tests.host_bluez.test_host_lane", "test_signal_cancellation[SIGTERM]"],
+    ["tests.host_bluez.test_host_lane", "test_timeout_owned_vm"],
+    ["tests.host_bluez.test_host_lane", "test_fresh_guest_repetition"]
+  ],
+  "exclusions": [],
+  "prerequisites": ["prepared-runtime", "kvm-qemu", "pinned-producer"],
+  "prerequisite_rationale": "Local explicit runtime and actual private guest execution; no physical or codec acceptance"
+}

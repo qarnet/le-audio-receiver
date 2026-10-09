@@ -63,6 +63,18 @@ int bsim_tx_register(struct bt_bap_stream *bap_stream, const struct bsim_tx_conf
 /** Unregister a stream from TX (stops sending on it). */
 int bsim_tx_unregister(struct bt_bap_stream *bap_stream);
 
+/**
+ * Explicitly retire a drained stream's retained TX result.
+ * Results remain available after unregister until the caller invokes this;
+ * canonical clients never retire them implicitly.
+ *
+ * @retval 0 The inactive audit was forgotten.
+ * @retval -EINVAL stream is NULL.
+ * @retval -ENODATA No retained result belongs to stream.
+ * @retval -EBUSY stream remains registered or its audit has in-flight TX.
+ */
+int bsim_tx_forget_result(const struct bt_bap_stream *stream);
+
 /** Pause payload sending on one stream (transport PSN still advances per tick). */
 void bsim_tx_pause(struct bt_bap_stream *bap_stream);
 

@@ -37,7 +37,9 @@ current instructions or new behavior requirements.
 - BUILD-007 current resolved checker accepts nRF54L15 receiver app + FLPR
   only, rejects `--nrf5340`, and reported **69 assertions, 0 failed** on
   the dirty diagnostic build (see `docs/development/pb-037-retirement-results.md`
-  and `nrf54l15-only-continuation-20260925.md`). The historical 76/79/95/96
+  and `docs/development/nrf54l15-migration-verification-results-20261001.md`;
+  the 2026-09-25 continuation snapshot was retired at Git rev `a94f010`).
+  The historical 76/79/95/96
   dual-target totals, old image domains and mutation inventory below are
   not current checker requirements. BUILD-006's old `nrf-probes` command is
   historical; current session-bound roles resolve via `nix-nrf probes` and

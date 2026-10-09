@@ -44,7 +44,7 @@ validation and full 20-child two-pass matrix.
 ### Technical context
 
 See docs/development/system-hil-milestones.md RH4 and release line,
-docs/development/system-hil-rh4-artifact-handoff.md, and
+docs/development/pb-036-source-artifact-results.md, and
 docs/development/firmware-release-plan.md FR4.
 
 ### Open questions

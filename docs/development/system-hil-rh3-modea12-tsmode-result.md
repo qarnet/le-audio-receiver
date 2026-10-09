@@ -22,10 +22,11 @@ schedule. The follow-up fix removes the entire host-side time gate
 pace the stream: early submission of a pinned SDU is safe per the SDC
 documentation (the controller holds it for its pinned event; only a past
 timestamp is flushed), and the outstanding target bounds the queue so
-pinned SDUs always carry the arrival margin. This is ModeA13 under its
-own handoff (`docs/development/system-hil-rh3-modea13-tsnogate-handoff.md`).
-This run is not acceptance; the timestamp-mode change stays uncommitted
-pending a passing row.
+pinned SDUs always carry the arrival margin. This was ModeA13 (executed
+outcome in `system-hil-rh3-modea13-tsnogate-result.md`; its execution
+handoff was retired in the 2026-10-08 reconciliation). This run is not
+acceptance; the timestamp-mode change stays uncommitted pending a passing
+row.
 
 ## Scope and immutable evidence
 

@@ -66,6 +66,18 @@
    "classification": "direct",
    "suites": [
     {
+     "name": "clock_loop",
+     "evidence": "direct"
+    },
+    {
+     "name": "asrc_oracle",
+     "evidence": "direct"
+    },
+    {
+     "name": "audio_i2s_asrc_oracle",
+     "evidence": "direct"
+    },
+    {
      "name": "asrc",
      "evidence": "direct"
     },
@@ -229,6 +241,10 @@
    "classification": "direct",
    "suites": [
     {
+     "name": "clock_loop",
+     "evidence": "direct"
+    },
+    {
      "name": "drift",
      "evidence": "direct"
     },
@@ -283,6 +299,14 @@
    "source": "src/audio_i2s.c",
    "classification": "direct",
    "suites": [
+    {
+     "name": "clock_loop",
+     "evidence": "direct"
+    },
+    {
+     "name": "audio_i2s_asrc_oracle",
+     "evidence": "direct"
+    },
     {
      "name": "audio_i2s",
      "evidence": "direct"
@@ -590,6 +614,14 @@
    "source": "src/audio_offload.c",
    "classification": "direct",
    "suites": [
+    {
+     "name": "clock_loop",
+     "evidence": "direct"
+    },
+    {
+     "name": "audio_i2s_asrc_oracle",
+     "evidence": "direct"
+    },
     {
      "name": "audio_offload",
      "evidence": "direct"
@@ -1838,6 +1870,14 @@
    "source": "src/flpr_audio_process.c",
    "classification": "direct",
    "suites": [
+    {
+     "name": "clock_loop",
+     "evidence": "direct"
+    },
+    {
+     "name": "audio_i2s_asrc_oracle",
+     "evidence": "direct"
+    },
     {
      "name": "flpr_audio_process",
      "evidence": "direct"
@@ -3244,6 +3284,37 @@
     "scripts/flpr_stall_gate.py"
    ],
    "stateful": true
+  },
+  {
+   "source": "src/bt_audio_ltv_guard.c",
+   "classification": "direct",
+   "suites": [
+    {
+     "name": "ltv_bounds",
+     "evidence": "direct"
+    }
+   ],
+   "public_outcomes": [
+    {
+     "api": "__wrap_bt_audio_data_parse",
+     "outcome": "0",
+     "witness": "test_valid_entries_and_cancel"
+    },
+    {
+     "api": "__wrap_bt_audio_data_parse",
+     "outcome": "-EINVAL",
+     "witness": "test_metadata_length_validation"
+    },
+    {
+     "api": "__wrap_bt_audio_data_parse",
+     "outcome": "-ECANCELED",
+     "witness": "test_cancellation_before_invalid_suffix"
+    }
+   ],
+   "state_transitions": [],
+   "function_exclusions": [],
+   "hardware_acceptance": [],
+   "stateful": false
   }
  ]
 }

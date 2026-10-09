@@ -94,13 +94,14 @@ surviving archived files.
 Not moved at R10 (active links then): all refactor results; the
 remaining refactor handoffs R3–R9; `pre-refactor-testing-plan.md` and
 the pre-refactor T0/T1/T5/T6/T7 handoffs linked from STATUS/
-`workstation-transfer-status`/`refactor-r2-results`/`check-test-matrix.py`;
+`workstation-transfer-status` (retired 2026-10-08)/`refactor-r2-results`/`check-test-matrix.py`;
 `phase2-stock-desktop-gate-results.md`; `phase3-results.md`;
 `bluez-wireplumber-interoperability-plan.md`; the Phase 1 execution
 handoff and the linked BZ2/BZ3 handoffs; the dongle probe-selection fix
 handoff; the Xiao RF-switch fix handoff; `bsim-stage0/1-results.md`;
-`workstation-transfer-status.md`; all phase 4/5 results; phase 6 stage
-0/1/4a-runtime/4b/5 results.
+`workstation-transfer-status.md` (retired 2026-10-08, Git rev `a94f010`
+or later; T7 facts preserved in this file's dated appendix); all phase
+4/5 results; phase 6 stage 0/1/4a-runtime/4b/5 results.
 
 ## G1 — canonical, on the clean `6934d9e`
 
@@ -156,7 +157,8 @@ Results:
 
 The final acceptance commit — this document's correction commit — is
 docs-only (results doc + acceptance marks in
-plan/STATUS/AGENTS/README/`workstation-transfer-status`).  Per the R10
+plan/STATUS/AGENTS/README and the retired transfer-status snapshot,
+Git rev `a94f010` or later).  Per the R10
 handoff, the canonical `./scripts/test-all.sh` was re-run on the exact
 corrected final commit (this document's correction commit) — **55 PASS /
 0 FAIL / 55 TOTAL**, exit 0, gate log recorded against this exact HEAD.
@@ -230,3 +232,35 @@ DPIDR `0x6ba02477`, PART `0x00005340`, VARIANT `QKAA`).
 No mass erase, no APPROTECT recovery, no security-policy change, no
 audibility claim.  Worktree clean at every commit; `git diff --check`
 clean.  Repo left clean on `handoff/workstation-transfer`.
+
+## Dated historical appendix (added 2026-10-08; T7 run-record reconciliation)
+
+> Reconciles the retired workstation-transfer coordination packet's unique
+> T7 facts. Historical record only: none of the numbers below are current
+> gate inventory. The current canonical gate is the independent-validation
+> track's 98-child result; refactor-era totals remain accepted evidence for
+> their own commits.
+
+- The T7-era accepted canonical gate was observed exactly **41 PASS /
+  0 FAIL / 41 TOTAL** (25 Twister + 4 exec-only + 9 Python + coverage +
+  matrix + BSim) on commit `8f7bfca` in 816 s. This exact run's full raw
+  stdout/stderr log was a transient `/tmp` capture that was **removed after
+  evidence extraction**; the raw log is no longer available. The durable
+  record is the committed evidence (result line, exit 0, elapsed runtime,
+  commit `8f7bfcadde2cfd6446f5493bff7b88c6aa9d5a02`, date 2026-08-02,
+  workstation context) in
+  `STATUS.md`'s T7 section and `docs/testing/coverage-matrix.md`.
+  The earlier review-intermediate record (`b342aae`) had classified 2
+  upstream Zephyr Kconfig `CONFIG_LOG=n`-overridden-by-`select LOG_OUTPUT`
+  assigned-value warnings as accepted; review rejected that classification
+  and the fix commit `8f7bfca` removed those `CONFIG_LOG=n` lines, which is
+  why the exact accepted run cites zero Kconfig assigned-value warnings.
+- Coverage-checkout nuance: at T7 acceptance `test-coverage.sh` required a
+  real `.git` directory, so the accepted run used a detached fresh clone and
+  linked worktrees could not host the gate. Later (PB-045 era, 2026-10) the
+  coverage runner was made git-aware and accepts linked Git worktrees; see
+  the PB-045 result document. Git bundles always carried commits only, so
+  uncommitted work was never bundle-transferable; that caveat is unchanged.
+- Full per-run detail of the T7/T8-era transfer state stays in
+  `workstation-transfer-status.md` (including its own dated 2026-10-08
+  appendix). This appendix adds no new gate, no rerun, and no acceptance.

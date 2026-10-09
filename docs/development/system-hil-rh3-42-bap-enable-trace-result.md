@@ -197,3 +197,72 @@ reuse its run ID or evidence root, or adopt its untraced workqueue
 configuration or callback marker in production. No causal conclusion, repair,
 or production change follows from this result. H41 remains undiagnosed. Any
 further hardware, causal, or production work requires a new reviewed plan.
+
+## Historical RH3-42 planning observations
+
+Observations recorded by the RH3-42 planning handoffs that predate this result
+and are not repeated in the sections above (provenance: Git rev `a94f010`, for
+example `git show a94f010:docs/development/system-hil-rh3-42-bap-enable-trace-software-handoff.md`).
+All are NCS v3.3.0-historical diagnostic facts, not current v3.4.1 production
+behavior, acceptance, or approval to replay any configuration.
+
+### Design grounding: ASCS notify-before-enabled and source sem_enabled ordering
+
+The H42 software planning handoff grounded the marker discriminator in installed NCS
+v3.3.0 source: H41 reached receiver `lc3_enable()` but the source never observed
+remote enabled completion, and H41 retained no `Stream[0] started` log, so the
+receiver could not distinguish (1) `stream_enabled_cb()` never ran from (2) it
+ran and `bt_bap_stream_start()` returned a result while the source still did
+not observe remote enabled completion. The exact installed-source order:
+
+1. `zephyr/subsys/bluetooth/audio/ascs.c:2327-2385` calls the receiver
+   `bt_bap_unicast_server_cb.enable`, then schedules ASE `ENABLING` state.
+2. `ascs.c:513-605` attempts the ASE status notification before invoking
+   `stream_ops.enabled` through `ase_enter_state_enabling()`.
+3. `src/bt_bap.c:1180-1187` (at the H41-era source) called
+   `bt_bap_stream_start()` but logged only a nonzero return.
+4. `zephyr/subsys/bluetooth/audio/bap_stream.c:893-931` routes a peripheral
+   sink to `bt_bap_unicast_server_start()`.
+5. `zephyr/subsys/bluetooth/audio/bap_unicast_server.c:130-156` returns
+   immediately after either setting `receiver_ready` or scheduling the
+   streaming state if ISO is already connected; it does not block on peer
+   observation.
+6. Source `hil/source/app/src/hil_source_bap.c:492-499` gives `sem_enabled`
+   only from its remote `stream_ops.enabled` callback, and the source
+   coordinator `hil/source/app/src/hil_source_app.c:935-956` waits that
+   semaphore before attempting CIS connect.
+
+Therefore one post-return receiver marker is sufficient to prove callback
+entry-and-return with the exact start result, and nothing more.
+
+### Marker implementation contract retained
+
+In `src/bt_bap.c`, only `stream_enabled_cb()` was modified. Keep
+`int err = bt_bap_stream_start(s);` first, then the compile-time-gated marker:
+
+```c
+#if defined(CONFIG_HIL_BAP_ENABLE_TRACE)
+	LOG_INF("HIL BAP enable: stream[%zu] start=%d", sink_idx(s), err);
+#endif
+```
+
+The marker must appear after return, not before the call, so one line proves
+callback return and carries the exact API result. It must not mutate state,
+schedule work, block, allocate, change an error, or alter lifecycle order, and
+normal builds must compile it out completely. Existing nonzero-error `LOG_ERR`
+and all behavior remain unchanged. No new unit test was required: the two real
+target builds prove the enabled and compiled-out configurations, and fragile
+tests of a private static callback, logger-call count, or Kconfig text were
+explicitly rejected.
+
+### Interpretation limits for the executed row
+
+The executed row is fresh Mode B `48_3_1`. One marker with `start=0` proves
+only receiver callback return success; it does not prove the source received
+the enabled state or isolate a transport cause. One marker with a negative
+value proves only the exact local start return error. The missing marker is
+inconclusive: the callback could be absent or the marker could be unretained;
+it does not prove a receiver root cause. More than one marker is retained
+evidence: do not choose a preferred one or rerun H42. H41 and H42 are not
+identical images (H42 adds the marker), so the H41-failed/H42-passed contrast
+proves neither a trace effect nor workqueue causation.

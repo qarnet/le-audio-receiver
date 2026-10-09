@@ -373,3 +373,29 @@ does not prove DAC pin activity, analog output, audibility, or stereo channel
 mapping. It also does not cover 7.5 ms or immutable release assets. RH3-7p5
 remains open. Next transport gate is RH4 against exact candidate archives when
 such assets exist.
+
+## Diagnostic limits and 2026-10-08 handoff reconciliation
+
+This section records dated limits of this synthesis and factual content
+preserved from the retired ModeA handoffs. Nothing here adds an executed run,
+a current-SDK claim, or an acceptance verdict.
+
+- The seven-run ModeA12-18 chain above diagnosed this history's scheduler
+  configurations only; its classifications are historical.
+- ModeA3 has no result report: `system-hil-rh3-modea3-result.md` never
+  existed and no outcome, counters, hashes, run execution, or acceptance may
+  be claimed for it. Its handoff contained two contradictory historical
+  accounts of the SW-split `BT_CTLR_READ_ISO_LINK_QUALITY_SUPPORT` Kconfig
+  path (a revised header claiming no selector exists in NCS v3.3.0 versus an
+  older amendment claiming the dependency was already satisfied); both are
+  preserved as historical research that is at least partially false or
+  uncertain, not as verified current v3.4.1 SDK facts. ModeA4's layout-policy
+  hypothesis was killed pre-build because the source base configuration was
+  already low latency; that phase consumed no hardware.
+- Source-host scheduling boundary (historical ModeA12 design context):
+  synchronous HCI commands (`bt_hci_cmd_send_sync`, used by
+  `hci_vs_sdc_iso_read_tx_timestamp`) are thread-context-only. The
+  completion callback path (`hil_source_app_tx_sent`) runs in the BT RX
+  thread and must never send synchronous HCI; the readback happens in the TX
+  worker loop, never in the callback. The ISO conn handle is resolved once
+  per segment and cached so the send path stays allocation-free.

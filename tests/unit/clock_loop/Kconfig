@@ -1,0 +1,5 @@
+source "Kconfig.zephyr"
+config AUDIO_DRIFT_OUTPUT_CLAMP
+    int "Model uses production output clamp"
+config AUDIO_DRIFT_PHASE_INTEGRAL_CLAMP
+    int "Model uses production phase integral clamp"

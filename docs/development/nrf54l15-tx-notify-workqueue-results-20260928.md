@@ -118,3 +118,13 @@ Full clean-matrix and remaining repository gates have not run for this repair.
 The original `25a5cbf` receiver and source ZIPs retain their archived
 hashes and must not be overwritten. Any later exact-artifact qualification
 requires **new** images and a new artifact set.
+
+## Historical trace-chain boundary
+
+The RH3-30 through RH3-39 ISO RX trace diagnostics in historical NCS v3.3.0
+builds recorded the `CONFIG_BT_CONN_TX_NOTIFY_WQ=n` tracing facts above; they
+are trace history, not the current receiver policy recorded in the sections
+above. Their mechanism and interpretation-limit facts are retained in the
+"Historical ISO RX trace mechanisms and interpretation limits" section of
+[system-hil-rh3-software-status.md](system-hil-rh3-software-status.md) and in
+the historical planning sections of the H40/H41/H42 result documents.

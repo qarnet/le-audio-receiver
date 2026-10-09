@@ -732,6 +732,37 @@ int bsim_tx_unregister(struct bt_bap_stream *bap_stream)
 	return tx_wait_idle(s);
 }
 
+int bsim_tx_forget_result(const struct bt_bap_stream *stream)
+{
+	if (stream == NULL) {
+		return -EINVAL;
+	}
+	k_mutex_lock(&tx_lock, K_FOREVER);
+	struct bsim_tx_audit *audit = tx_audit_lookup_locked(stream);
+
+	if (audit == NULL) {
+		k_mutex_unlock(&tx_lock);
+		return -ENODATA;
+	}
+	for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
+		struct bsim_tx_stream *slot = &tx_streams[i];
+
+		if (slot->bap_stream == stream || (slot->audit == audit && slot->in_flight != 0U)) {
+			k_mutex_unlock(&tx_lock);
+			return -EBUSY;
+		}
+	}
+	for (size_t i = 0U; i < ARRAY_SIZE(tx_streams); i++) {
+		if (tx_streams[i].audit == audit) {
+			/* The corresponding candidate is inactive and drained. */
+			tx_streams[i].audit = NULL;
+		}
+	}
+	memset(audit, 0, sizeof(*audit));
+	k_mutex_unlock(&tx_lock);
+	return 0;
+}
+
 void bsim_tx_pause(struct bt_bap_stream *bap_stream)
 {
 	k_mutex_lock(&tx_lock, K_FOREVER);

@@ -1,6 +1,6 @@
 # System HIL milestones
 
-## Current platform amendment (2026-09-25; migration pending)
+## Current platform amendment (migration verified 2026-10-01)
 
 The approved PB-035/PB-036/PB-038 all-nRF54L15 migration supersedes only
 the 2026-09-03 decision to retain the nRF5340DK fixture and any forward-looking
@@ -12,9 +12,12 @@ sequential reflash, never at the same time as standalone source. Each run
 uses an exact external `--session-manifest` binding both live roles, with
 six identity revalidations and capture before reset. Current image tuple is
 three images: receiver CPUAPP + FLPR and source CPUAPP. See `AGENTS.md`,
-`docs/development/nrf54l15-only-resume-20260924.md`, and PB-035/PB-036
-results for current diagnostic status; full migration and matrix acceptance
-are not yet proven.
+`docs/development/nrf54l15-migration-verification-results-20261001.md`,
+and the PB-035/PB-036 results for the retained migration evidence. Clean
+`104e67a` software, builds and the 73-check build contract passed; its exact
+local-artifact matrix passed 20/20 with 120 ordered identity checks. This is
+local migration verification, not RH4/FR4 acceptance of published candidate
+assets or analog output. The old resume snapshot is Git history at `a94f010`.
 
 This amendment does **not** alter the frozen 20-row two-pass matrix, 7.5 ms
 support decision, receiver transport limits, lifecycle and fault cases,
@@ -30,7 +33,7 @@ evidence. RH3-7p5 is CLOSED by its three-stage re-baseline (2026-09-11: mono,
 Mode B, and Mode A `48_3_1` rows all passed on the fixed 128 MHz
 controller-clock fixture), and by user decision 2026-09-11 the three 7.5 ms rows
 are REINSTATED in the mandatory matrix (see that phase). The reinstated matrix
-requires one fresh two-pass acceptance run under this revision. RH4 is next
+was later verified through the migration report cited above. RH4 is next
 and waits for exact candidate archives. Analog extensions remain separate.
 Scope decisions recorded 2026-09-03 still apply: nRF54L15 is the only production
 receiver target and the nRF5340 release track is eliminated from this plan
@@ -312,6 +315,139 @@ failure use the same bounded cleanup path. Cleanup failure changes row verdict
 to failed but never deletes primary evidence. Unit tests must inject failure
 after every side effect and prove no owned process, descriptor, lock, or active
 stream survives.
+
+### Mode A 1b session-end raw scan
+
+The historical `rh3-modea1b-20260903-offload-disabled` run and matrix child
+`rh3-matrix-20260903-r.p1.r2.rh3.fresh_mode_a_48_4_1.80dd38b48348` diagnostics
+exposed this collection defect; commits `f0ae6d8` then `d8a7ed2` repaired the
+runner. Current behavior is defined by `scripts/hil/runner.py` and the
+regression references below. See
+`docs/development/system-hil-rh3-modea1b-result.md` for the dated diagnostic
+record. The fixture defect, not the receiver, caused the original capture
+miss: the `scored_complete` tail hook's prompt-bounded `bt iso quality`
+command (15 s window) also consumed the teardown burst (Disable, both stream
+summaries, stopped, Release, Disconnected) into the tail transcript, so a
+session-entry offset scan starts after those bytes and cannot see them.
+
+- Capture each segment's summary scan base from the live receiver console
+  (`bytes_received()`) immediately BEFORE that segment's tail collection, so
+  the scanned byte range includes both the live queue and the tail-transcript
+  window. Reconnect segment N must not scan segment N-1's byte range.
+- The live wait stays first and unchanged. If the wait cannot produce the
+  required summaries, scan the retained raw evidence from the segment base;
+  the receiver prints each slot's summary once per stream lifetime, so the
+  earliest complete summary per slot within the segment's byte range is the
+  segment's summary. A duplicate within one scanned raw window is kept
+  (first wins) and is not a protocol violation; the live path keeps its own
+  duplicate detection.
+- Raw-derived summaries are validated with identity: slot presence, range,
+  zero-field, and frozen `validate_stream_transport` enforcement identical to
+  live summaries, applied AFTER the raw scan's first-per-slot selection; the
+  live path keeps its own duplicate detection. Missing slots fail with a
+  failure detail that names the missing slots and the number of scanned bytes.
+  The raw read accessor is read-only: it must not
+  mutate decode-failure state or any counter.
+- Verification references (existing regression tests in
+  `tests/hil/rh2_test.py`, not a claim of a new run):
+  `test_session_end_raw_evidence_fallback_rescues_tail_swallowed_summary`,
+  `test_session_end_raw_evidence_fallback_enforces_tail_swallowed_limits`,
+  `test_session_end_raw_evidence_fallback_proves_missing_summary`,
+  `test_session_end_raw_evidence_fallback_scopes_reconnect_segments`, and
+  `test_session_end_raw_evidence_fallback_keeps_first_tail_summary_per_slot`.
+- No behavioral acceptance relaxation: the original Mode A 1b row failure
+  stands as a failure, and the frozen transport limits are unchanged.
+
+### Historical RH0/RH1 implementation invariants
+
+Established source contracts of the historical RH0/RH1 implementations (Git
+rev `a94f010` provenance, historical NCS v3.3.0 and nRF5340DK fixtures), not
+current-target recipes; check current source before claiming a current
+guarantee. Related: Fixture lifecycle, Source serial protocol.
+
+1. Exclusive fixture lock: `.locks` is checked before any lock write and must
+   be a real non-symlink directory directly under the canonical output root;
+   anything else fails closed with nothing written outside the output root,
+   and no auto stale removal exists. Lock files are named by fixture-ID
+   SHA-256, created atomically with `O_CREAT | O_EXCL` mode 0600 and fsynced,
+   carrying token, PID, host, and creation time. Release unlinks only when
+   the on-disk token still equals the owner token; foreign or malformed
+   content raises `LockReleaseError` and is left untouched.
+2. HIL1 tracker protocol: a malformed `HIL1 ` prefix is rejected and is not a
+   normal `Log ` output line. Acceptance is byte-atomic: a rejected record
+   leaves identity and monotonic-time fields unchanged, and a future-segment
+   record is rejected once a current segment exists. Pre-state records use
+   segment 0; `state` alone advances to current or current+1 under the
+   teardown/reconnect rules; skips and regressions fail for every kind; a
+   terminal record must carry the current segment. `status` uses a command ID
+   distinct from the start command ID, `ack`/`state`/`terminal` keep the
+   start ID, and post-terminal status is accepted, other than permitted
+   status replies under distinct command IDs, without advancing state. For
+   each exact matched firmware, run, and reconnect segment, the tracker
+   rejects duplicate terminal events, command/run mismatch, missing fields,
+   backward state transitions, counter regressions, and unsolicited output
+   after a terminal verdict.
+3. Evidence publication: payload files are immutable, validated, and hashed
+   only as regular contained non-symlink files. Hashed-metadata ordering is
+   sorted by relative path, with `SHA256SUMS` and `MANIFEST.md` excluded from
+   their own hash list. Validate and hash every payload, then stage complete
+   `SHA256SUMS` and `MANIFEST.md` before replacing either. Staging failure
+   preserves both prior states, including prior absence. A failure after one
+   replacement rolls both files back to their exact prior states (absence
+   preserved, owned temporary files removed, none left behind); a valid
+   previous manifest is never rewritten as a failed one, and a best-effort
+   failed manifest is permitted only when no prior manifest exists.
+   Cancellation rolls back and propagates the original exception; a secondary
+   cleanup error cannot hide the first. The validate command performs no
+   filesystem mutation; prepare retains the exact supplied JSON bytes.
+4. Source flat JSON parser: parses a bounded byte span (511-byte lines) with
+   no allocation and no input mutation; caller output bytes stay unchanged on
+   failure. Simple JSON escapes are accepted and `\u` is rejected. Nested
+   object/array grammar is validated with matching delimiters and bounded
+   depth, so malformed nesting is `syntax`, while valid nesting inside a
+   scalar field is `wrong_type`. Lexical validity precedes schema class: an
+   unknown key with a malformed value is `syntax`, unknown keys stay
+   `unknown_key` within the line bound. Stable error classes: `ok`,
+   `too_long`, `syntax`, `unknown_key`, `duplicate_key`, `missing_key`,
+   `wrong_type`, `range`, `unsupported_value`; error names never leak input
+   contents. The record envelope accepts only trusted compile-generated
+   `data_json`, rejects CR/LF/NUL, requires nonempty object delimiters, and
+   leaves caller output empty on any failure with nonzero capacity.
+5. Source state and codec: stream and counter indices are validated before
+   any pointer is formed. Scored submission increments total and scored
+   counts atomically only after both overflow checks, so scored can never
+   exceed total. Terminal snapshots are immutable until reset or the next
+   successful start; configure cannot mutate them. Stage bounds use
+   subtraction so huge counts cannot wrap, and the 32-bit render check
+   rejects `samples > SIZE_MAX / sizeof(int16_t)` before multiplying,
+   returning `-ENOSPC` with encoder and output unchanged. Codec inputs are
+   prevalidated before the first `lc3_encode`; an unexpected codec failure is
+   fatal and leaves the context unusable, never silently retried or rolled
+   back.
+6. Source BAP/APP firmware (source comments already carry the full detail;
+   recorded as ownership rules): ASCS response listeners only record the first
+   rejection and wake the worker once, while successful endpoint-state
+   callbacks are the only success completion gates, so no stream consumes
+   another stream's completion token. Sink ASEs are server-started and the
+   central never calls `bt_bap_stream_start()`; the coordinator worker owns
+   all blocking BAP and cleanup work. PASS state commits only after the output
+   queue accepts the terminal record, never on UART delivery; shell status
+   cannot observe the intermediate state because the app mutex stays held.
+   Start-ACK failure occurs with the app mutex already held: no reacquisition,
+   no worker launch, immutable terminal FAIL with first errno `-EIO`, visible
+   to a later status query. The backend spinlock never covers a Bluetooth API
+   call, unref, or wait; copied pointers act after unlock, with the single
+   exception of the intentional atomic `bt_conn_ref()` acquisition that makes
+   a post-unlock call safe; a temporary reference is not a second long-lived
+   owner, and no `bt_conn_unref()` runs under the lock. Group pointers are
+   retained for retry after a failed delete; a sibling stream's per-stream
+   progress cannot mask a stall; cleanup waits do not bail because a stop or
+   error already exists, and idle never starts a concurrent cleanup.
+   Security requires the exact bond address type plus L2, not a broad bond
+   count; an already-secured reconnect with no callback may return success
+   only after the cached level is updated before waking. Parse-error/unbound
+   records cannot fake an active identity; unpair targets the exact peer,
+   never NULL; idle state is volatile and never erases bonds.
 
 ## Resource and identity contract
 
@@ -995,8 +1131,9 @@ rerun on the changed build.
 
 ## Recommendation
 
-Current phase in sequence: RH4 preparation. RH3 has current 10 ms acceptance.
-Do not install NCS v3.4.0. Do not start RH4 hardware until exact candidate
+Current product sequencing is RH4 preparation. Use pinned NCS v3.4.1; historical
+10/7.5 ms and later migration evidence remain bound to their image tuples.
+Do not start RH4 hardware until exact candidate
 receiver and HIL-source archives exist and pass artifact validation. MA and SA
 remain separate analog extensions. Keep verdict names distinct so
 transport/runtime or mono smoke cannot be mistaken for stereo output
@@ -1020,3 +1157,19 @@ Consequences:
   assessment), but they carry no release obligation and no HIL obligation.
 - The earlier FR4 failure on the nRF5340 mono acceptance is closed as
   consequence of this elimination, not as a diagnosed fix.
+
+## Capture qualification contract
+
+Optional mono/stereo capture needs an accepted qualification, not a passing
+packet counter. Qualification binds capability, fixture/capture identity,
+metadata SHA-256 and at least two 130 s runs with WAV/result hashes, canonical
+UTC timestamps and pass outcomes. `accepted_by` is a nonempty human-controlled
+identifier, a policy requirement rather than authenticated identity proof.
+Limits cover every required capability metric with finite numeric bounds:
+min/max for range metrics, min only for minimum metrics, max only for maximum
+metrics;
+unknown/missing metrics, NaN and Infinity fail. Qualification and referenced
+evidence must be hash-verified regular non-symlink paths outside the repository.
+The runner never writes or auto-accepts qualification. Placeholder examples
+cannot qualify a fixture. PB-023/PB-025 own the remaining physical qualification;
+PB-024/PB-026 own their distinct output matrices.

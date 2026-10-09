@@ -1,6 +1,6 @@
 # FR2 results — reproducible firmware build CI
 
-Accepted: 2026-08-09.  Handoff
+Accepted: 2026-08-09. Historical handoff at Git revision `a94f010`:
 `docs/development/firmware-release-fr2-handoff.md`; implementation commit
 `a54e17d` (`ci: build and package receiver firmware`); review-fix correction
 `117bc92` (`fix: upload packaged firmware from workspace`); hosted environment
@@ -132,3 +132,27 @@ FR2 `ACCEPTED`.  FR3-FR5 remain planned in
 only; no tag, GitHub Release, published binary, hardware acceptance, MCUboot,
 or DFU exists yet.  The final hosted run after this acceptance commit must
 still pass before the PR 8 review gate closes.
+
+## Version and workspace rationale
+
+`scripts/project-version.py` resolves its default VERSION relative to the
+script, not the caller's directory. The five-field Zephyr VERSION contract uses
+canonical decimal major/minor/patch values in 0..255, `VERSION_TWEAK = 0` and
+empty `EXTRAVERSION`. Duplicate, unknown or missing keys, symlink input and
+invalid UTF-8 fail with stable diagnostics. These constraints keep the public
+three-part artifact version distinct from Zephyr's broader version syntax.
+
+CPUAPP application headers derive from root VERSION. Companion source roots do
+not imply the same generated header; the package manifest binds their compatible
+tuple. `actions/upload-artifact` inputs resolve from `$GITHUB_WORKSPACE`, unlike
+run steps with `working-directory`. The correction fixed this mismatch and
+rejects extra top-level directories as well as wrong regular-file counts.
+Multiple release-set files need one archive artifact; single-file unarchived
+upload cannot carry that set.
+
+The build-only job does not accept the J-Link license or install its gated
+package. That is a rights boundary, not a missing build prerequisite. Export
+`ZEPHYR_BASE` after `west init`: a pre-set value can change workspace resolution,
+and `west zephyr-export` does not set later Actions process environments.
+Historical pins, warning dispositions and dual-target counts above stay dated;
+current executable workflow uses NCS v3.4.1 and nRF54L15 only.

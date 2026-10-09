@@ -254,9 +254,12 @@ reviewed handoff and must preserve this evidence unchanged.
 ## Correction note (appended 2026-09-07, after the ModeA9 SN_STRICT validation)
 
 The "scored-onset correlation" conclusion above is WRONG and is superseded by
-the corrected analysis recorded in
-`docs/development/system-hil-session-state-20260904.md` and validated by
-`docs/development/system-hil-rh3-modea9-snstrict-result.md`. The per-second
+the corrected analysis validated by
+`docs/development/system-hil-rh3-modea9-snstrict-result.md` (the 2026-09-04
+session-state snapshot this note cited was retired at Git rev `a94f010`;
+its corrected analysis is preserved in the 2026-10-08 appendix of
+`docs/development/nrf54l15-migration-verification-results-20261001.md`).
+The per-second
 HILRX lines log `t=<k_uptime/1000>` (uptime since boot), not time since
 streaming start; streaming began at uptime ~9 s. Corrected profile: delivery
 was never healthy (first nine events LOST, 23% LOST in the best second),
@@ -268,3 +271,30 @@ time across profiles). The supported mechanism is progressive ISO-AL
 strict-sequencing payload expiry under a completion-paced host, not scored
 content. All original observations, counters, hashes, and tables above are
 retained unchanged; only this conclusion is corrected.
+
+### 2026-10-08 handoff-reconciliation note (layered observations preserved)
+
+The retired ModeA5-8 execution handoffs repeated a "layered evidence picture"
+built on this run's original (later corrected) scored-onset framing. The
+underlying per-run observations remain valid, but the framing is not; do not
+carry forward content-trigger, RF-margin, or host-exhaustion inferences as
+settled causes:
+
+- Layer framing (as then stated): 2M delivered 76-90% of the 144-SDU
+  preamble across the rx6/rtn1/control runs (`rx_valid` 113/109/130), while
+  1M delivered the full preamble (144/144, ModeA7, see
+  `system-hil-rh3-modea7-phy1m-result.md`); every then-failing run appeared
+  to die at or within 30 ms of the first scored SDU at both PHYs, both RX
+  pool depths, both RTN values, and with FLPR on and off.
+- Two candidate triggers were named for the then-believed layer (b): scored
+  payload content and the source host's TX submission regime (pre-queued
+  preamble burst versus the scored-phase completion-paced loop at
+  outstanding target 3).
+- The correction above supersedes the framing: delivery was actually
+  progressive from stream start, the "last valid seq 140 vs scored onset seq
+  144" alignment was coincidence, and the later ModeA9 SN_STRICT validation
+  recovered delivery 90x by disabling strict ISO-AL sequencing, isolating
+  the mechanism as payload expiry, not content or RF margin. ModeA8's
+  pacing change (target 6) and ModeA7's 1M PHY also did not restore
+  delivery; those runs' own result documents hold the runner-validated
+  numbers.

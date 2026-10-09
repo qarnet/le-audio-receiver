@@ -145,6 +145,28 @@ The receiver warning and the partial source progress do not establish an
 environment or product classification. This run is not RH3 acceptance, audio
 acceptance, a transport verdict, or a root-cause diagnosis.
 
+### 2026-10-08 handoff-reconciliation note (predecessor provenance preserved)
+
+The retired ModeA1 execution handoff additionally recorded this predecessor
+context, which this result did not repeat. It is a historical observation, not
+the outcome of the proposed isolation, and correlation is not causation:
+
+- Named open product defect from the first RH3 matrix attempt
+  (`rh3-matrix-20260903-rh3a`, commit `ea73413`): fresh Mode A `48_4_1`
+  delivered `rx_valid=135/133` of `12644` expected per stream (98.9% loss,
+  `crc_error<=1`, controller `rx_unreceived~=14300` per CIS) while the source
+  scored-complete and terminal-passed; the same-row mono (single CIS)
+  delivered perfectly (`rx_valid=12644`, `plc=12`). The full retained
+  summaries and validator wording are in the `rh3-matrix-20260903-rh3a`
+  result record.
+- The FLPR offload active snapshot of that failed matrix child froze at
+  `submit=116` (~1.2 s into streaming), which coincided with the starvation
+  onset. Coincidence only: the offload-disabled ModeA2 rerun reproduced the
+  collapse without FLPR data-plane traffic.
+- The RH3b raw-evidence fallback (commit `f0ae6d8`) guaranteed truthful
+  summary capture, so that run's limits verdict is trustworthy in both
+  directions.
+
 ## Integrity and raw identity
 
 Read-only `SHA256SUMS` verification passed all 23 retained entries. The root

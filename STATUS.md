@@ -1,14 +1,46 @@
-# STATUS: le-audio-receiver, 2026-10-01
+# STATUS: le-audio-receiver, 2026-10-07
+
+## Verified current state (2026-10-07 verified snapshot)
+
+Independent-validation track (PR 16, open and mergeable, not merged):
+27 commits `0c9d2391f8532684e5014225b82749f0d930ce6e..c64cbcf37ac2b7e6b0060df0d854897a1c431522`; the latest head passed hosted run
+`37468117709` with `test-unit`, `test-heavy (coverage)`,
+`test-heavy (bsim)`, aggregate `tests` and `firmware` SUCCESS and
+`release` SKIPPED. Five track items are Done through the PR gate
+(PB-045, PB-046, PB-051, PB-052, PB-053) with their result docs; eight
+stay held or dependency-held (PB-041, PB-042 active owner decisions;
+PB-043/044/047/048/049/050 dependency-held). Production behavior changed
+exactly twice in this scope: the signed negative-ppm rounding repair in
+`src/audio_asrc.c` and the always-linked per-entry LTV guard via GNU
+`--wrap` in `src/bt_audio_ltv_guard.c` (same-object SDK calls are
+explicitly outside the wrap). Latest local verification at the same
+source: full canonical 98/0/98
+(`/tmp/opencode/pb051-canonical-r5.log`, SHA
+`a067d6fe19b25fed0d65692e852d2d61d6fbdf258eedc1e52edc426df1309630`),
+cold-cache native phase 2/0/2, Stage 1 pin 17 scenarios/26 runs, ASCS
+matrix exactly 60/65/259/269, frozen 36-file coverage baseline unchanged
+(SHA `5bb01f95afc12c0771086a537cb70c92d20f7d96c8b9b4323528b6d9ed76de7a`) at 5049/5491 lines, 2245/3036 branches,
+378/378 functions, additive guard sidecar 13/13, 12/12, 1/1, and the
+73-assertion resolved build contract plus ARM wrap proof at the
+unchanged `33310f0` production source identity. The backlog remains
+the sole live ledger.
+
+## Historical migration checkpoint (2026-10-01/02)
 
 PR wrap-up (2026-10-02): PB-019 and PB-033 through PB-040 have PR-gated Done
 transitions in the combined migration PR; official acceptance waits for human
 merge. Prior local firmware verification below remains exact `104e67a`, not
 a fresh hardware rerun at the PR closure commit. Prior external raw lab run
 roots are absent in this session; committed result reports and hashes remain.
-Fresh PR-preparation checks and evidence boundaries:
-`docs/development/nrf54l15-migration-pr-wrap-up-20261002.md`.
+Fresh PR-preparation checks and chronology were recorded in the retired PR
+wrap-up snapshot (Git rev `a94f010`, path
+`docs/development/nrf54l15-migration-pr-wrap-up-20261002.md`); its evidence
+boundaries are preserved in
+`docs/development/nrf54l15-migration-verification-results-20261001.md`.
 
-Current clean validation checkpoint: `104e67a` includes source peer-enqueue
+### Dated migration checkpoint 104e67a (2026-10-01)
+
+Dated clean migration validation checkpoint `104e67a` includes source peer-enqueue
 scheduling guard and fresh FLPR reload, notification, heartbeat and idle-worker
 repairs. Production code is `e478e59`; `104e67a` adds partial IPC registration
 rollback/retry coverage without changing production code. Source margins remain
@@ -49,10 +81,13 @@ PB-019 HCI UART fault remains open; PB-041 nonce identification not implemented.
 No new code, gate rerun, full matrix, analog or release acceptance claimed.
 Older pause and board facts below are dated historical snapshots.
 
-User-paused observability handoff (RTT or logic analyzer pending):
-`docs/development/nrf54l15-observability-resume-20260925.md`. This is current
-resume entrypoint; software upgrade verification does not qualify HCI hardware
-or complete migration.
+User-paused observability checkpoint (RTT or logic analyzer pending), dated
+2026-09-25: retired snapshot (Git rev `a94f010`, path
+`docs/development/nrf54l15-observability-resume-20260925.md`), retained as
+history; its facts are preserved in
+`docs/development/nrf54l15-migration-verification-results-20261001.md`. The
+migration verification report owns the current boundary; software upgrade
+verification does not qualify HCI hardware or complete migration.
 
 ## PB-040 NCS v3.4.1 clean local software verification (2026-09-25)
 
@@ -134,7 +169,7 @@ for operational instructions. Later diagnostic records:
 `docs/development/pb-019-hci-resume-results.md`,
 `pb-034-primary-repair-results.md`, `pb-035-source-matrix-results.md`,
 `pb-036-source-artifact-results.md`, `pb-037-retirement-results.md`, and
-`nrf54l15-only-continuation-20260925.md` (latest authority and HCI correction).
+`docs/development/nrf54l15-migration-verification-results-20261001.md`.
 
 - XIAO nRF54L15 receiver is sole production target: DK target plus XIAO overlay,
   CPUAPP + FLPR. Second XIAO alternates standalone source (DK target, direct
@@ -597,7 +632,8 @@ violations. Verification: `py_compile` pass, `scripts/test_hil_runner.py`
 receiver summary now emits a healthy full-grammar line (extended RX fields
 present, values above every row's floor), and four existing retention-shape
 tests were updated to healthy values without weakening their assertions.
-Evidence: `docs/development/system-hil-rh3a-transport-limits-handoff.md`.
+Frozen contract: `docs/development/system-hil-milestones.md`, receiver
+transport limits. Original planning is Git history at revision `a94f010`.
 
 **First RH3a matrix attempt (hardware):** one runner-owned attempt,
 `rh3-matrix-20260903-rh3a`, returned status `1`; its aggregate result is
@@ -1371,8 +1407,10 @@ induce it deterministically); the exact gap behavior is covered by the
 sessions documented in `docs/testing/pre-refactor-hardware-baseline.md`, and
 the new runs prove zero regressions — documented, not a
 hardware activation claim.  Full evidence:
-`docs/testing/pre-refactor-hardware-baseline.md`.  Transfer/status handoff:
-`docs/development/workstation-transfer-status.md`.
+`docs/testing/pre-refactor-hardware-baseline.md`.  Transfer/status snapshot:
+retired as `docs/development/workstation-transfer-status.md` (Git rev
+`a94f010`); its unique T7 run-record facts are reconciled in the dated
+appendix of `docs/development/refactor-r10-results.md`.
 
 **Phase T0 — behavior contract and honest coverage map** — ACCEPTED (2026-07-31).
 

@@ -121,3 +121,123 @@ reflashed to the normal image.
 
 H40 must not be retried. Any later hardware or production phase requires a new
 reviewed plan.
+
+## Historical RH3-40 planning observations
+
+Observations recorded by the RH3-40 planning handoffs that predate this result
+and are not repeated in the sections above (provenance: Git rev `a94f010`, for
+example `git show a94f010:docs/development/system-hil-rh3-40-tx-notify-workqueue-handoff.md`).
+All are NCS v3.3.0-historical
+diagnostic facts, not current v3.4.1 production behavior, acceptance, or
+approval to replay any configuration.
+
+### Source-derived circular-wait hypothesis
+
+The RH3-40 planning handoff derived this bounded circular-wait hypothesis from
+installed NCS v3.3.0 source, including a distinction later evidence preserved:
+
+```text
+sysworkq state-transition work
+  -> waits for 0x206f Command Complete
+  -> Command Complete waits behind retained incoming ISO HCI message
+  -> retained ISO message waits for an ISO RX buffer
+  -> BT RX WQ bt_conn_recv() waits for tx_complete_work on sysworkq
+```
+
+Its grounding points: `zephyr/subsys/bluetooth/audio/ascs.c:513-605` runs ASE
+state transitions from `state_transition_work_handler()` and
+`ascs_ep_set_state()` schedules that work (ascs.c:702-710);
+`zephyr/kernel/work.c:1132-1141` implements `k_work_schedule()` on
+`&k_sys_work_q`; on streaming exit `ascs.c:408-428` calls
+`bt_bap_remove_iso_data_path()`, `bap_iso.c:215-235` calls
+`bt_iso_remove_data_path()`, and `iso.c:346-379` sends synchronous HCI
+opcode `0x206f` with `bt_hci_cmd_send_sync()`; `hci_core.c:461-508` waits on a
+stack-local command semaphore, and with `CONFIG_BT_TX_PROCESSOR_THREAD=y` the
+sysworkq special path (474-501) is not selected and line 505 blocks the
+state-transition work; with `CONFIG_BT_RECV_WORKQ_BT=y`,
+`CONFIG_BT_CONN_TX=y`, and `BT_CONN_TX_NOTIFY_WQ` unset, `conn.c:283-290`
+selects `&k_sys_work_q` and `conn.c:340-355` submits then blocks in
+`k_work_flush()`; `kernel/work.c:458-488` waits on the stack-local flush
+semaphore only when the target work is queued or running;
+`nrf/subsys/bluetooth/controller/hci_driver.c:522-548,690-713` retains an ISO
+HCI message after `BT_BUF_ISO_IN` allocation failure and does not fetch the
+later cached command-complete message until an ISO RX buffer frees;
+`hci_internal.c:1859-1875` returns the cached command complete before asking
+SDC for another message; and `host/buf.c:62-67,145-151` re-signals that
+retained HCI driver work only when an ISO RX buffer is freed. Command Complete
+itself uses `sync_evt_pool` (`buf.c:154-180`), so the block is head-of-line
+ordering in the SDC adapter, not command-complete allocation from the ISO pool.
+
+The handoff also recorded that upstream Zephyr PR #79258 describes
+`CONFIG_BT_CONN_TX_NOTIFY_WQ` as improving Bluetooth independence from
+`sysworkq` while recording callback-context and testing considerations. This
+hypothesis is an observation-level experiment rationale only; it was not
+confirmed by a repaired row and does not prove workqueue ownership, cause, a
+general repair, or production safety.
+
+### 408-byte noinit overflow before the 1536 stack reduction
+
+The first H40 trace build failed before final CPUAPP linking:
+
+```text
+zephyr/zephyr_pre0.elf section `noinit' will not fit in region `RAM'
+region `RAM' overflowed by 408 bytes
+```
+
+Its pre-link map (`build/nrf54l15/le-audio-receiver/zephyr/zephyr_pre0.map`)
+proved `RAM limit 0x20028000`, failed `_image_ram_end 0x20028198` (overflow
+0x198 = 408 bytes), the `conn_tx_workq` control object at 0x128 bytes, and the
+`conn.c` private noinit stack at 0x800 bytes (2048). Installed NCS v3.3.0
+defines the private queue stack through
+`CONFIG_BT_CONN_TX_NOTIFY_WQ_STACK_SIZE` (`zephyr/subsys/bluetooth/host/Kconfig:169-187`,
+`zephyr/subsys/bluetooth/host/conn.c:4652-4669`), which has a Kconfig prompt
+when `BT_CONN_TX_NOTIFY_WQ=y`. Reducing only that trace-only queue stack from
+2048 to 1536 removes 512 bytes; with all other resolved H40 settings unchanged,
+the projected image end was `0x20027f98`, 104 bytes inside RAM. `1536` was the
+largest simple reduction that restored fit. It remains a diagnostic-only
+experimental stack size; it is not a stack-health claim, does not authorize
+production adoption of `BT_CONN_TX_NOTIFY_WQ`, and must not be copied to normal
+board or application configuration.
+
+### Trace fragment hash and trace-image link size
+
+The executed H40 trace fragment
+`tests/hil/receiver-sdc-remove-iso-path-tx-notify-wq.conf` at the version
+recorded for this run, SHA-256
+`b8b3c47a58cd6f71714999eedac83ec27e6e114c0ec242aeeda8cc44537aa32a`. The H40
+trace CPUAPP linked at 163736 / 163840 bytes with the 104-byte RAM margin
+recorded above.
+
+### Disassembly annotation does not bind data-address literals
+
+The RH3-40 link-proof-correction handoff required a fragile match:
+
+```bash
+"$toolchain_objdump" -d --disassemble=bt_conn_tx_notify "$trace_elf" | rg 'conn_tx_workq'
+```
+
+It produced no text. This does not disprove the configuration: ARM linked
+disassembly does not necessarily annotate a data-address literal with its local
+symbol name, even when the compile-time `#if` branch selected it. The proof
+must instead use all three grounded facts: the resolved `.config` has
+`CONFIG_BT_CONN_TX_NOTIFY_WQ=y`; exact installed `conn.c:283-290` selects
+`&conn_tx_workq` under that compile-time condition (the `&k_sys_work_q` branch
+is excluded); and the linked ELF `nm` contains the private queue object, its
+stack, and `bt_conn_tx_workq_init`, with `conn.c:4652-4669` initializing and
+starting that exact queue. Disassemble the private queue initializer, where
+call symbols are stable, not the data-address selection inside
+`bt_conn_tx_notify()`.
+
+### Trace-fragment warning-suppression boundary
+
+The RH3-40 planning handoff permitted `CONFIG_WARN_EXPERIMENTAL=n` only
+inside the H40 trace fragment, with the recorded reason of preventing the
+deliberate, upstream-marked experimental Kconfig notice from violating
+repository warning policy, and required the normal restoration to prove
+`CONFIG_WARN_EXPERIMENTAL=y` with `BT_CONN_TX_NOTIFY_WQ` disabled. The 1536
+stack, the `WARN_EXPERIMENTAL=n` value, and the 408-byte overflow repair are
+dated NCS v3.3.0 trace-fragment facts. They are not current production policy;
+the current nRF54L15 repair is the separate, later receiver-only configuration
+recorded in
+[nrf54l15-tx-notify-workqueue-results-20260928.md](nrf54l15-tx-notify-workqueue-results-20260928.md)
+with `CONFIG_WARN_EXPERIMENTAL=y` kept visible.

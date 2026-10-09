@@ -110,6 +110,19 @@ CPUAPP hashes are HEAD-dependent because `cmake/version.cmake` embeds
 execution HEAD and, for a flashed diagnostic image, repeat this two-build
 proof. They must not reuse an absolute CPUAPP hash from this record.
 
+### 2026-10-08 handoff-reconciliation note (identity-contract provenance preserved)
+
+The retired original `system-hil-rh3-modea1b-execution-handoff.md` pinned
+absolute CPUAPP hashes; its amendment
+(`system-hil-rh3-modea1b-execution-handoff-amended.md`) replaced them because
+the pins were structurally impossible to satisfy: every CPUAPP image hash is
+HEAD-dependent, so pins recorded at an earlier commit can never match after a
+new commit. The first ModeA1b attempt correctly stopped on this mismatch
+before touching hardware; no hardware run was consumed. That pre-hardware stop
+is recorded here only, not in any run evidence, because no run root exists for
+the aborted attempt. The amended identity contract (execution-time derivation
+plus the two-build determinism proof above) is what this run's hashes follow.
+
 ## Outcome, raw per-slot data, and limits
 
 Exact failed boundary and detail:
@@ -194,7 +207,70 @@ This execution does not establish either intended binary arm:
 Stop here. Do not rerun this ID or use raw telemetry as acceptance evidence.
 Next work needs a reviewed runner fix for receiver-summary collection ordering
 and host proof that the summaries are captured before a later authorized row.
-Root cause subsequently identified and fixed in RH3c; see `docs/development/system-hil-rh3c-full-raw-scan-handoff.md`.
+Root cause subsequently identified and fixed in RH3c (commit `d8a7ed2`, full
+segment raw-evidence scan); see the maintained collection contract in
+`docs/development/system-hil-milestones.md` ("Mode A 1b session-end raw scan"
+subsection) and the dated historical rationale below.
+
+## Historical summary-capture defect and software repair
+
+The historical handoff diagnostics exposed this collection defect; the runner
+commits referenced below repaired it. Current behavior is defined by
+`scripts/hil/runner.py` and the regression references in the maintained
+collection contract.
+
+Historical evidence root `/tmp/opencode/hil-runs` was unavailable during this
+documentation review. Timeline and root-cause statements below come from the
+retained repository reports and the retired historical source documents, not
+from freshly rehashed raw evidence.
+
+The runner fix chain has two dated stages; both facts are historical
+interpretations of this run, and neither changes the fail-closed outcome above.
+
+1. The RH3b raw-evidence fallback (commit `f0ae6d8`, "validate session-end
+   summaries from retained raw evidence") added the raw fallback using the
+   existing slot presence, duplication, range, zero-field, and frozen
+   transport-limit checks. Its later scan-base and duplicate-selection
+   corrections belong to RH3c below. Its
+   60 s `SUMMARY_TIMEOUT` delay hypothesis for
+   why the summaries were missed was a diagnostic-era interpretation only, not
+   the final root cause, and its provisional "dual-CIS product defect"
+   interpretation was likewise not a final causal conclusion: the
+   controller-clock fixture report subsequently withdrew the proposed
+   SDC-defect and host-exhaustion claims for that diagnostic era.
+2. The RH3c full-segment scan (commit `d8a7ed2`, "scan full segment raw
+   evidence for stream summaries") later established the actual root cause,
+   consistent with this run's retained evidence: the `scored_complete` tail
+   hook issues the
+   prompt-bounded receiver command `bt iso quality` (15 s window), the
+   source's teardown Disable burst arrives while that command is still
+   collecting lines waiting for its prompt, and `command_receiver` consumes the
+   Disable, both stream summaries, stopped, Release, and Disconnected lines
+   into the tail transcript `receiver-status.txt`. Session-end then begins
+   after those bytes, so a session-entry offset scan can never see them. The
+   fix captures the scan base per segment immediately BEFORE that segment's
+   tail collection and keeps the first complete summary per slot within the
+   segment's byte range.
+
+Dated timeline anchors recorded in the retained reports, without changing the
+recorded failure (a post-burst tail of 333 bytes): streaming began at uptime
+`00:16:57`; the receiver's `PCLK diag[140]` diagnostic line printed at
+`00:19:18.8`; the `bt iso quality` block followed immediately; the Disable
+burst printed at `00:19:21.47` with both stream
+summaries at `00:19:21.468` and `00:19:21.608`, inside the prompt-bounded
+collection window.
+
+Matrix-child corroboration, cited without copying the canonical excerpt: child
+`rh3-matrix-20260903-r.p1.r2.rh3.fresh_mode_a_48_4_1.80dd38b48348` retained
+slot 0 `SDUs=135 decoded=28726 plc=28458 rx_lost=14305 rx_no_ts=85` and slot 1
+`SDUs=133 decoded=0 plc=0 rx_lost=14244 rx_no_ts=8` against 12644 expected
+submitted SDUs per stream; see `docs/development/system-hil-rh3-matrix-20260903-result.md`
+for the canonical excerpt and frozen-limit wording. The original row fail
+remains a fail; no post-hoc acceptance, new hardware run, or new result
+document is claimed from this repair. The retired historical handoff texts
+remain recoverable from Git history
+(`git show f0ae6d8:docs/development/system-hil-rh3b-session-end-raw-fallback-handoff.md`
+and `git show d8a7ed2:docs/development/system-hil-rh3c-full-raw-scan-handoff.md`).
 
 ## Integrity and raw identity
 

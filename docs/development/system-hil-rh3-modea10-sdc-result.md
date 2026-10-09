@@ -55,8 +55,10 @@ the remaining PLC-only failure has a single, exactly-attributable mechanism.
 Per the handoff this is the other-boundary arm: record, classify, and either
 fix-firmware-side and rerun once as fix-validation, or stop for user
 decision. The classification below is clean and the fix is the designated
-follow-up lever (the handoff pre-named queue-depth matching as the follow-up
-with its own handoff: `docs/development/system-hil-rh3-modea11-sdc-txout6-handoff.md`).
+follow-up lever (the ModeA10 handoff pre-named queue-depth matching as the
+follow-up: the ModeA11 phase, executed outcome in
+`system-hil-rh3-modea11-sdc-txout6-result.md`; its execution handoff was
+retired in the 2026-10-08 reconciliation).
 
 ## Preflight
 
@@ -70,8 +72,9 @@ The run-time dirty tree contained exactly the ModeA10 fixture rework (new
 `hil/source/app/overlay-nrf5340_cpunet_sdc.conf`, edited
 `hil/source/app/sysbuild.cmake`, comment updates in
 `hil/source/app/boards/nrf5340dk_nrf5340_cpuapp.conf` and
-`hil/source/app/Kconfig.sysbuild`), this handoff
-(`system-hil-rh3-modea10-sdc-handoff.md`), the appended ModeA4 correction
+`hil/source/app/Kconfig.sysbuild`), this run's now-retired ModeA10 handoff
+(recorded 2026-10-08 in `system-hil-rh3-modea10-sdc-result.md`), the appended
+ModeA4 correction
 note, and the pre-existing untracked ModeA3 handoff. `git status --porcelain`
 matched that expectation. Initial free space was `164120100864` bytes, above
 the `80 GiB` gate. Run-ID validation passed (run directory and external
@@ -280,10 +283,49 @@ scheduling margin. The lever is the committed Kconfig
 fragment (`tests/hil/source-txout6.conf`) is committed from the ModeA8
 phase, and ModeA8 hardware already proved the live queue reaches `out=5` at
 target 6. The ModeA10 handoff explicitly deferred queue-depth matching to a
-follow-up handoff: `docs/development/system-hil-rh3-modea11-sdc-txout6-handoff.md`
+follow-up (the ModeA11 phase; its executed outcome is
+`system-hil-rh3-modea11-sdc-txout6-result.md`, its execution handoff retired
+in the 2026-10-08 reconciliation)
 (ModeA11). One fix-validation rerun on the same row is authorized by this
 handoff's other-boundary arm; no blind retry occurs because the mechanism is
 classified and the fix targets it.
+
+### 2026-10-08 handoff-reconciliation note (SDK provenance and constraints preserved)
+
+The retired ModeA10 handoff carried design-context facts this result did not
+repeat. All are historical NCS v3.3.0 research, not current v3.4.1 SDK facts:
+
+- Decision-record provenance for choosing SDC: `BT_LL_SOFTDEVICE` (default y
+  on nRF5340 cpunet) selects `BT_CTLR_CENTRAL_ISO_SUPPORT`; SDC central ISO
+  was BAP-tested per nrfxlib's
+  `softdevice_controller/doc/isochronous_channels.rst`; Nordic ships the
+  same shape in `nrf/applications/nrf5340_audio/` (SDC netcore plus BAP
+  unicast client host); the receiver's own SDC-peripheral dongle history
+  already passed this exact Mode B 240-byte shape (`SDUs=11659, plc=2`);
+  the DRGN-21099 unframed-PDU limitation did not block the frozen shapes
+  (10000 us and 7500 us both qualify); and the upstream
+  `bap_unicast_client` sample used SW-split only because upstream Zephyr
+  cannot depend on the NCS-only precompiled SDC library (a
+  licensing-distribution artifact, not a technical limitation). No shipped
+  hci_ipc cpunet conf used SDC, so this repository owned the new SDC
+  overlay.
+- Stack-size constraint (explicit assignments versus conditional defaults,
+  with exact source references): the hci_ipc `prj.conf` base set
+  `MAIN_STACK_SIZE=512`, `SYSTEM_WORKQUEUE_STACK_SIZE=512`, and
+  `HEAP_MEM_POOL_SIZE=4096`; SDC selects larger conditional defaults
+  (`nrf/Kconfig.nrf:68` `MAIN_STACK_SIZE default 1128 if BT_LL_SOFTDEVICE`;
+  `SYSTEM_WORKQUEUE_STACK_SIZE` default 2048). Kconfig conditional defaults
+  do not override explicit assignments; the escalation path was documented
+  as raising the overlay to 2048/2048/8192 (the nrf5340_audio netcore
+  values) with the change recorded in a result. This was a documented
+  constraint discussion, never a measured overflow or proof that any
+  suggested size was used; the resolved configuration proof above is the
+  final assignment record for this run.
+- TX-power nuance: the handoff claimed SDC on nRF5340 defaulted to the
+  supported +3 dBm; the build-stage correction above records the actual
+  rule (default is 0 dBm and `CONFIG_BT_CTLR_TX_PWR_PLUS_3=y` was added
+  explicitly). The result's claim governs; the handoff's claim is
+  historical and was wrong.
 
 ## Integrity and raw identity
 

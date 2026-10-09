@@ -31,8 +31,8 @@ limits; the decode suite does not hard-code them.
 
 ## Portable BSim corpus
 
-P0a provides four logical streams with 128 continuous LC3 codec frames each.
-P1 embeds only their `.lc3` files in the BabbleSim client. Each file is raw
+The corpus has four logical streams with 128 continuous LC3 codec frames
+each. The BabbleSim client embeds only their `.lc3` files. Each file is raw
 concatenated per-frame LC3 data. The `.pcm` file remains a diagnostic
 comparison anchor for portable numerical acceptance, not a byte-exact
 decoded-output acceptance threshold.
@@ -62,11 +62,11 @@ The manifest is schema version 2. It records historical corpus origin NCS
 `48bbd3eacd36e99a57317a0a4867002e0b09e183`, exact generator flags, geometry,
 binary SHA-256 values, and the sole calibration-policy object: maximum absolute
 error `2048`, maximum RMS error `512`, and minimum correlation Q15 `32750`.
-P2 applies this policy at the BSim sink boundary, and P3 applies the same
-manifest-owned policy at the real `audio_decode_sdu()` fixture boundary.
+The BSim sink boundary applies this policy, and the real
+`audio_decode_sdu()` fixture suite applies the same manifest-owned policy.
 Decoded PCM bytes and CRC values are not pass/fail values in either suite.
 
-### P1 BSim transport contract
+### BSim transport contract
 
 `tests/bsim/client/CMakeLists.txt` uses Zephyr's
 `generate_inc_file_for_target()` for exactly these four `.lc3` files. The
@@ -93,13 +93,17 @@ ordering, malformed-byte substitution, omission, duplication, reordering,
 payload corruption, count drift, and corpus exhaustion without using
 CPU-dependent decoded-PCM hashes.
 
-`invalid_sdu_resume_10ms` is one bounded temporary PCM gap. Its schema omits
-`known.full`, but retains `known.total = 108`, exact client transport hash and
-101-send count, one malformed observer event, one decoder error, 100 resumed
-pushes, and all lifecycle checks. Former runtime TX skipped LC3 encoder history
+`invalid_sdu_resume_10ms` carries a bounded temporary PCM gap record: its
+schema entry omits `known.full`. Former runtime TX skipped LC3 encoder history
 for logical frame 20; corpus TX encodes frame 20 before truncating that SDU to
-119 bytes, so later valid decoder history changes. P2 owns portable numerical
-PCM acceptance for this path.
+119 bytes, so later valid decoder history changes, and no decoded-PCM hash may
+repin that CPU-specific difference. Portable numerical PCM acceptance for this
+path is owned by the shared stateful-recipe oracle (current native mapping
+binds `skip20_start0_10ms_l`; the malformed frame creates no recipe action and
+the stream resumes at corpus frame 21). The retained historical
+`known.total = 108`, exact client transport hash, 101-send count, one malformed
+observer event, one decoder error, 100 resumed pushes, and lifecycle checks
+describe their dated scenarios and are not current-native totals.
 
 | File | SHA-256 |
 |------|---------|
@@ -122,13 +126,28 @@ including source-manifest provenance, source geometry, action counts, reference
 kind, backing-file size, and SHA-256. The portable manifest remains sole owner
 of numerical PCM limits.
 
-Each recipe replays its measured Stage 1 decoder history. PLC outputs advance
-decoder history but are not stored or compared numerically. Corpus outputs are
-stored in recipe order. Mode A 7.5 ms has 113 actions per channel: left has PLC
-actions 0 through 11, corpus frame 0 at action 12, then corpus frames 1 through
-100; right has PLC actions 0 through 9, corpus frame 0 at action 10, PLC
-actions 11 and 12, then corpus frames 1 through 100. First fully source-valid
-sink push is action 13.
+Each recipe replays its decoder history. PLC outputs advance decoder history
+but are not stored or compared numerically. Corpus outputs are stored in recipe
+order. There are fifteen recipes in exact order; recipes 1 through 9 below are
+the historical measured Stage 1 histories and remain the calibration
+population. Recipes 10 through 15 model the current nRF54L15BSim native
+mapping, where native startup has zero PLC (append after the immutable
+historical population; see `docs/development/pb-034-primary-repair-results.md`
+and `docs/testing/portable-lc3-pcm-oracle.md`; dated phase evidence at
+`docs/development/pb-031-portable-pcm-results.md`, sourced from the retired
+records at Git revision
+`a94f010de00e25d4a2433f7b4c56b31a5377446e`).
+
+The historical Mode A 7.5 ms recipes are measured asymmetric histories: left
+has PLC actions 0 through 11, corpus frame 0 at action 12, then corpus frames
+1 through 100; right has PLC actions 0 through 9, corpus frame 0 at action 10,
+PLC actions 11 and 12, then corpus frames 1 through 100. For those recipes the
+first fully source-valid sink push is action 13. One startup-history caveat
+binds recipe interpretation: a good first frame's output can equal the
+portable reference after fresh-decoder startup PLC, but that equality does
+not reset the decoder's PLC PRNG seed; later loss and recovery outputs carry
+the retained state (see the stateful trace table below and the
+`stateful-startup-history` negative control).
 
 | Recipe | Exact decoder action history | Reference |
 |--------|------------------------------|-----------|
@@ -141,24 +160,46 @@ sink push is action 13.
 | `skip20_10ms_l` | 8 PLC, corpus 0 through 19, then 21 through 100 | generated trace |
 | `loss48x18_10ms_r` | 8 PLC, corpus 0 through 47, 18 PLC, then 48 through 81 | generated trace |
 | `start7_10ms_l` | 7 PLC, corpus 0 through 99 | portable 10 ms left PCM, frame 0 |
+| `start0_10ms_l` | corpus 0 through 99 | portable 10 ms left PCM, frame 0 |
+| `start0_10ms_r` | corpus 0 through 99 | portable 10 ms right PCM, frame 0 |
+| `start0_7p5ms_l` | corpus 0 through 99 | portable 7.5 ms left PCM, frame 0 |
+| `start0_7p5ms_r` | corpus 0 through 99 | portable 7.5 ms right PCM, frame 0 |
+| `skip20_start0_10ms_l` | corpus 0 through 19, then 21 through 100 | generated trace |
+| `loss48x18_start0_10ms_r` | corpus 0 through 47, 18 PLC, then 48 through 81 | generated trace |
+
+Current generated-trace derivation from the exact manifest above: the
+fifteen recipes carry five generated `generated-pcm` backing files (the Mode
+A 7.5 ms right trace plus four zero-start-family traces); ten recipes
+reference the four portable PCM files directly. The current calibration record
+count is 46 (26 original prefix records plus 15 stateful-valid plus 5
+mutations including the `stateful-startup-history` PRNG rejection).
 
 Fresh-decoder startup PLC produces silence in pinned liblc3 and first valid
-decode resets that state. Therefore six normal-start recipes reference existing
-portable PCM directly and do not duplicate its bytes. The Mode A 7.5 ms right
-recipe decodes corpus frame 0 before two PLC actions, so later source-valid
-output carries state that portable PCM cannot represent. It and other
-state-changing histories have generated traces:
+decode resets that state. Therefore normal-start recipes reference existing
+portable PCM directly and do not duplicate its bytes. Histories with
+state-changing midstream or post-valid PLC have generated traces:
 
 | File | Size | SHA-256 |
 |------|-----:|----------|
 | `stateful_48k_7p5ms_modea_start_r.pcm` | 72720 B | `d76724f3392321a4ce959a00867ae40d82bcb93854099ec5d9abc8c01239d858` |
 | `stateful_48k_10ms_skip20_l.pcm` | 96000 B | `cead2e59efb32c78cb87818c710ca727082fd9bb9137bb8255b4f1e37d9be024` |
 | `stateful_48k_10ms_loss48x18_r.pcm` | 78720 B | `19087061a5f3d74d6d9631b7c5ba100fce358615cbffde322692ae65cc6e91be` |
+| `stateful_48k_10ms_skip20_start0_l.pcm` | 96000 B | `cead2e59efb32c78cb87818c710ca727082fd9bb9137bb8255b4f1e37d9be024` |
+| `stateful_48k_10ms_loss48x18_start0_r.pcm` | 78720 B | `40204f38b2a359c3d4348131b5900bc1d065fda4423173c6eee5839c1ddf3fbd` |
 
-The three generated traces total 247440 B. Calibration proves every source stream
-has 128 distinct LC3 payloads and same-duration left/right streams have no
+The five generated backing files total 422160 B on disk. Note: recipes
+`skip20_10ms_l` and `skip20_start0_10ms_l` declare distinct generated
+backing files whose checked-in contents are byte-identical (`cead2e59…`),
+because a one-frame skip without a mid-history PLC burst leaves later valid
+frames byte-identical; the loss recipes' contents differ
+(`19087061…` versus `40204f38…`) because the 18-frame PLC burst changes
+later decoder state through the persistent PLC PRNG seed. Calibration
+proves every source stream has 128 distinct LC3 payloads and same-duration
+left/right streams have no
 byte-identical payload. Exact payload bytes select fixture sequence; receiver
-controller sequence remains diagnostic only.
+controller sequence remains diagnostic only. Current oracle contract:
+`docs/testing/portable-lc3-pcm-oracle.md`; consolidated dated evidence:
+`docs/development/pb-031-portable-pcm-results.md`.
 
 Regenerate or verify stateful traces from any directory with:
 
@@ -166,8 +207,9 @@ Regenerate or verify stateful traces from any directory with:
 bash tests/fixtures/lc3/generate_stateful_references.sh
 ```
 
-Default mode generates all three traces into temporary files, validates all
-checked-in source and stateful hashes, and requires byte-identical candidates.
+Default mode generates all five manifest-declared generated traces into
+temporary files, validates all checked-in source and stateful hashes, and
+requires byte-identical candidates.
 It does not rewrite checked-in traces. Intentional stateful-reference review
 uses:
 
@@ -176,9 +218,10 @@ bash tests/fixtures/lc3/generate_stateful_references.sh --rebase-stateful
 ```
 
 Rebase mode still rejects source corpus or existing checked-in trace mismatch.
-It stages all three generated traces before a rollback-protected replacement
-transaction and prints a reminder to update this README and the stateful
-manifest. Existing destinations retain their permissions and backups. Only the
+It stages all five manifest-declared generated traces before a
+rollback-protected replacement transaction and prints a reminder to update
+this README and the stateful manifest. Existing destinations retain their
+permissions and backups. Only the
 manifest-declared Mode A 7.5 ms generated trace may be absent during explicit
 rebase; it is created with normal non-executable permissions and removed if a
 later transaction step fails. Neither mode edits a manifest.
@@ -186,12 +229,12 @@ later transaction step fails. Neither mode edits a manifest.
 ## ARM calibration image
 
 `tests/calibration/lc3_pcm_oracle` is a standalone diagnostic Zephyr image
-for PB-031 ARM measurement. It embeds all eight portable-corpus files and three
+for PB-031 ARM measurement. It embeds all eight portable-corpus files and five
 generated stateful PCM traces in flash, uses the checked-in integer
 `pcm_oracle` comparator unchanged, reads portable-manifest-owned limits at
 configure time, validates the stateful manifest and backing hashes at configure
-time, validates all nine recipes, and keeps bounded static work buffers plus one
-liblc3 decoder state in RAM. It does not change production behavior.
+time, validates all fifteen recipes, and keeps bounded static work buffers
+plus one liblc3 decoder state in RAM. It does not change production behavior.
 
 The reviewed schema-1 calibration rerun uses `CONFIG_MAIN_STACK_SIZE=8192`.
 The first ARM execution resolved its main stack to 1024 bytes and faulted in
@@ -203,7 +246,7 @@ assertion settings.
 
 The image enables `CONFIG_THREAD_ANALYZER=y`,
 `CONFIG_THREAD_ANALYZER_USE_PRINTK=y`, and `CONFIG_THREAD_NAME=y`. It calls
-`thread_analyzer_print(0U)` after all 39 metric records and immediately before
+`thread_analyzer_print(0U)` after all 46 metric records and immediately before
 the PASS record. `CONFIG_THREAD_ANALYZER_AUTO` remains disabled, so no periodic
 analyzer thread changes the measurement run. Thread names make the report's
 `main` line identify the main-thread `unused` and `usage` values.
@@ -225,18 +268,18 @@ UART capture before any target action, then capture one complete record sequence
 Do not use this build command as a flash command.
 
 Normal UART output is ASCII. PB-031 records have this order; Zephyr's
-human-readable thread-analyzer report appears after the 39 metric records and
+human-readable thread-analyzer report appears after the 46 metric records and
 before PASS:
 
 ```text
 PB031_ARM_BEGIN schema=3 manifest_sha256=<64 lowercase hex> ncs=v3.4.1 liblc3=48bbd3eacd36e99a57317a0a4867002e0b09e183 max_abs_error=2048 max_rms_error=512 min_correlation_q15=32750
 PB031_ARM_SOURCE main_c_sha256=<64 lowercase hex> pcm_oracle_c_sha256=<64 lowercase hex> pcm_oracle_h_sha256=<64 lowercase hex> stateful_manifest_sha256=<64 lowercase hex> stateful_recipe_c_sha256=<64 lowercase hex> stateful_recipe_h_sha256=<64 lowercase hex>
 PB031_METRIC {"record":"metric",...}
-... exactly 39 PB031_METRIC lines, each ending with an `evaluation` string ...
+... exactly 46 PB031_METRIC lines, each ending with an `evaluation` string ...
 Thread analyze:
  main                 : STACK: unused <bytes> usage <bytes> / 8192 (<percent> %); CPU: <percent> %
 ... other thread-analyzer lines ...
-PB031_ARM_PASS metrics=39
+PB031_ARM_PASS metrics=46
 ```
 
 Thread-analyzer lines are not PB-031 protocol records. Retain the complete
@@ -274,8 +317,9 @@ channel swap has max error `65535`, RMS at least `21686`, and correlation
 `-202` or `108`; prior and next frame shifts have max error `65535`, RMS at
 least `21604`, and correlation `79..300`; dead channel has max error `32768`,
 RMS at least `15283`, and correlation `0`; low-correlation synthetic has max
-error `65535`, RMS at least `36158`, and correlation `-9..-2`. These are P0a
-diagnostic facts, not acceptance thresholds or complete parent-plan adversarial
+error `65535`, RMS at least `36158`, and correlation `-9..-2`. These are
+diagnostic facts from that dated early calibration capture, not acceptance
+thresholds or complete parent-plan adversarial
 coverage. At capture time, thresholds remained unset.
 
 The original 1024-byte main-stack fault remains superseded diagnostic evidence.
@@ -299,12 +343,14 @@ four `valid`, two `channel-swap`, then `prior-frame-shift`,
 `next-frame-shift`, `dead-channel`, and `low-correlation-synthetic` for each
 manifest stream in order, followed by `lc3-byte-corruption`,
 `max-error-boundary`, `rms-error-boundary`, and `correlation-boundary` for the
-10 ms left stream. Schema-3 appends nine `stateful-valid` records in recipe
-table order, then `stateful-payload-off-by-one`, `stateful-skip-ignored`,
-`stateful-loss-burst-omitted`, and `stateful-wrong-channel`. The appended ninth
-record is `start7_10ms_l`: 7 PLC actions followed by corpus frames 0 through
-99, with portable 10 ms left PCM from frame 0. Every stateful valid record
-evaluates `pass`; each stateful mutation evaluates `max-error`.
+10 ms left stream. Schema-3 then appends fifteen `stateful-valid` records in
+recipe table order (all fifteen recipes, historical nine then target-native
+six), followed by `stateful-payload-off-by-one`, `stateful-skip-ignored`,
+`stateful-loss-burst-omitted`, `stateful-wrong-channel`, and
+`stateful-startup-history` (`loss48x18_start0_10ms_r` replayed against the
+legacy `loss48x18_10ms_r` reference; the persistent PLC PRNG seed makes that
+wrong reference fail even though the later SDUs match). Every stateful valid
+record evaluates `pass`; each stateful mutation evaluates `max-error`.
 
 On first error, the image emits one line and no PASS line:
 

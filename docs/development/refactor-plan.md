@@ -1,12 +1,18 @@
-# Current-state refactoring plan
+# Historical refactoring design and acceptance contract
 
 > **Historical plan (2026-08-04):** R0-R10 work and its nRF53 parity/build
 > recipes are dated evidence, not active requirements for the all-nRF54L15
 > migration. Preserve its behavioral and lifecycle guidance. For current
-> implementation and pending clean-commit validation, use `AGENTS.md`,
-> `STATUS.md`, and `docs/development/nrf54l15-only-resume-20260924.md`.
+> implementation and retained clean-commit validation, use `AGENTS.md`,
+> `STATUS.md`, and
+> `docs/development/nrf54l15-migration-verification-results-20261001.md`
+> (the 2026-09-24 resume snapshot this line replaced was retired at Git rev
+> `a94f010`).
 
-Status: **accepted plan of record, 2026-08-04**.  Ready for phased execution.
+Status: accepted plan of record, 2026-08-04; R0-R10 implementation complete.
+Retained as the historical ownership/lifecycle design and acceptance contract,
+not instructions to repeat completed phases. Final evidence is
+`refactor-r10-results.md`; current public behavior is `../testing/behavior-contract.md`.
 This plan replaces any refactoring assumptions made before the T0–T8
 behavior-lock track.  It does not replace `docs/design.md` as historical
 architecture/evidence; Phase R0 reconciles that document with current truth.

@@ -110,3 +110,46 @@ not air-side ground truth.
 Preserve both ModeA17/18 evidence roots and do not rerun those IDs. They
 remain valid records of the old scheduler's behavior. The next acceptance
 step is the fixed 14-child `run-rh3-matrix`, not further SDC-defect escalation.
+
+## 2026-10-08 handoff-reconciliation note (documentation provenance and numeric limits preserved)
+
+Two things from the retired ModeA17 handoff remain preserved here without
+normalization:
+
+1. Full SDK-document quote provenance for bounded TX lead windows (research
+   findings, 2026-09-07; historical citations, not current v3.4.1 facts):
+   the nRF Audio production application documents TX lead-time limits via
+   application-specific Kconfig options
+   (`CONFIG_NRF_AUDIO_TX_LEAD_TIME_MIN_US`: "Setting this too low may lead
+   to flushed data. Must be higher than
+   `HCI_ISO_TX_SDU_ARRIVAL_MARGIN_US` plus a margin depending on SoC";
+   `CONFIG_NRF_AUDIO_TX_LEAD_TIME_BASE_US`: "The actual value is the one
+   above + an SDU interval... data is sent too early/fast, and will flush
+   one SDU"), so a submission both too far ahead and too late of its pinned
+   timestamp can be flushed. At the time this classified ModeA13-16 as
+   submitting too far ahead; their HCI completions and receiver counters did
+   not directly prove corresponding controller flushes. DRGN-21605 records
+   that the readback value may be off by 40 us, irrelevant at the 10 ms
+   interval scale. The Nordic-proven submission pattern (nrf
+   `iso_time_sync` sample, central role, nRF53) submits each SDU a fixed
+   ~2-3 ms before its pinned event (`assigned + interval - margin - 1000 us`
+   IPC allowance), and Nordic's own audio application monitors actual lead
+   time against MIN/TGT/BASE bounds (OCT-3754: submitting AT the target
+   limit already causes warnings and possible audible artefacts). The
+   canonical result retains the actual 3000-us-target / 2000-us-minimum
+   scheduling and the schedule-not-air semantics, but not these full
+   citations; they are quoted here as dated provenance. The ModeA13-16
+   host-offset approximation was not the complete mirrored
+   controller-clock sample pattern the later passing fix used.
+2. Transparent numeric-record limits, preserved NOT normalized:
+   - This document's Status header states `rx_lost=19308` while the
+     ModeA17 run details below state `rx_lost=19301`, and the recorded
+     relation `plc = 2 x rx_lost` does not arithmetically hold for
+     `plc=38616` versus `2 x 19301 = 38602` (or `2 x 19308 = 38616`,
+     which matches the header value instead). The arithmetic claim
+     `plc = 2 x rx_lost` is therefore not established for ModeA17 at a
+     single exact value; the two retained observation values
+     (`plc=38616`, `rx_lost=19301`/`19308`) are preserved verbatim above
+     as recorded. Do not use these lines as clean arithmetic proof, do not
+     silently reconcile them, and treat `plc ~= 2 x rx_lost` as the only
+     defensible reading of this historical record.

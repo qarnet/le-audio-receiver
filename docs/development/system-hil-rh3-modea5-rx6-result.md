@@ -46,7 +46,9 @@ Run HEAD was:
 
 Initial free space was `163904032768` bytes (`152.6 GiB`), above the `80 GiB`
 gate. The initial dirty tree contained only the pre-existing untracked
-`system-hil-rh3-modea3-source-isoq-handoff.md` and the requested RX6 handoff.
+`system-hil-rh3-modea3-source-isoq-handoff.md` (retired 2026-10-08; see the
+ModeA3 reconciliation in `system-hil-rh3-modea6-rtn1-result.md`) and the
+requested RX6 handoff.
 The RX6 fragment was created after preflight. No production source changed.
 
 Run-ID validation passed for `rh3-modeb-rx6-20260904` (length `22`). Its run
@@ -235,3 +237,21 @@ CONFIG_AUDIO_OFFLOAD_ASRC=y
 Post-restoration free space was `163873361920` bytes (`152.6 GiB`), above the
 `80 GiB` gate. The normal local build did not flash either target. The runner's
 `images.json` remains authoritative for the last flashed diagnostic image.
+
+## 2026-10-08 handoff-reconciliation note (motivation provenance preserved)
+
+The retired ModeA5 handoff grounded the RX=6 experiment on earlier
+instrument-proven pool-exhaustion evidence absent from this result:
+
+- The repo's ISO RX lifetime trace (H39's trace campaign) captured
+  `buffer_available=False` with `outstanding=capacity` and the teardown
+  circular wait; the H39-era retained records show the unavailable snapshot
+  with `capacity=3 outstanding=3 high_water=3`.
+- Run `rh3-20260824-31-sdc-hci-iso-rx6-trace` (7.5 ms) recorded
+  `retained_iso_buffer_unavailable` with the RX=6 fragment.
+- At that time the RX=6 variable had never been tested at 10 ms with working
+  summary validation; that run predated the RH3b/RH3c capture repairs.
+
+These facts motivated the experiment; this run's verdict (pool depth
+exonerated at six buffers) does not prove pool depth caused the delivery
+collapse in any failing shape.

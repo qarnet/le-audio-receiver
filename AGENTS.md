@@ -61,13 +61,32 @@ Nordic samples are the best learning resource:
 
 ## Autonomous execution and hard blockers
 
+### Independent-validation work
+
+Backlog owns current status, priorities and dependencies. Read completed-item
+summaries and maintained guides in `docs/testing/ascs-protocol-regression.md`,
+`docs/testing/isolated-bluez-host-lane.md` and
+`docs/testing/external-test-result-accounting.md` before resuming work.
+Proposed decisions live in `docs/adr/README.md`. Do not resume completed items
+or dependency-held work based on dated execution notes. Human merge remains
+official acceptance; agents never merge or publish.
+
+### Validation boundaries
+
+Selected framework scope is PB-041 through PB-053. Backlog owns holds and
+dependencies; read it before starting work. LC3plus stays excluded. Windows
+access does not authorize accepting vendor terms or redistributing reference
+tools, corpus or derived output. Physical tests require fresh fixture identity,
+safe wiring and exact image provenance. Software/model evidence does not prove
+RF, analog, presentation, physical FLPR or full codec conformance.
+
 ### Audio validation and fixture-identification continuation
 
 For the analyzer/audio-testing track, start with:
 
 1. `docs/testing/logic-analyzer-setup.md`: sole current analyzer wiring declaration,
    fresh-session identity, capture templates, electrical safety and DAC-presence limits.
-2. `docs/development/audio-validation-handoff-20260925.md`: proposed independent
+2. `docs/development/independent-audio-validation-plan.md`: proposed independent
    codec/ASRC/transport/presentation tests, timestamp ledger and BLE clock mapping.
 3. PB-041 in `docs/product/backlog/tasks/`: separate fixture-identification work.
    Backlog owns status/readiness; documentation is not implementation or acceptance.
@@ -83,44 +102,16 @@ The earlier separate PB-019 pause is historical: explicit final-migration
 direction resumed qualification, and clean v3.4.1 HCI evidence now exists. Do not
 treat the audio research handoff itself as approval for unrelated new features.
 
-### Current migration continuation
+### Migration evidence
 
-For the all-nRF54L15 migration, read
-`docs/development/nrf54l15-source-batch-guard-results-20261001.md`,
-`docs/development/nrf54l15-flpr-fresh-reload-results-20261001.md` and
-`docs/development/nrf54l15-final-reference-audit-20261001.md` for the latest
-repairs and platform audit. Clean `104e67a` software (80/0/80), builds,
-73-check build contract and six HCI cases passed. Its exact local-artifact
-matrix passed 20/20, with 120 ordered identity checks and independently
-rehashed child/aggregate evidence. See
-`docs/development/nrf54l15-migration-verification-results-20261001.md` for
-local completion and separate analog, release and human-acceptance boundaries.
-PR preparation on 2026-10-02 moves completed PB-019 and PB-033 through PB-040
-to Done in the combined PB-039-prefixed PR. Human merge remains official
-acceptance; no merge or release is performed by agents. See
-`docs/development/nrf54l15-migration-pr-wrap-up-20261002.md` for current
-PR lifecycle and evidence-availability boundaries. Do not treat prior raw
-`/tmp/opencode` runs as currently available without checking their presence.
-Earlier `b21c7a7` matrix failed FLPR
-hang recovery after eight passing rows; that failure is retained, not acceptance.
-For dated chronology, read
-`docs/development/nrf54l15-observability-resume-20260925.md` first, then
-`docs/development/nrf54l15-only-resume-20260924.md` as historical context.
-The primary repository on `feature/nrf54l15-only-continuation` owns the work;
-the former `/tmp` worktree is not the execution location. Preserve the current
-uncommitted changes. Its 2026-09-24 pause tables are a historical checkpoint,
-not today's implementation status. Read
-`docs/development/pb-019-hci-resume-results.md`,
-`pb-034-primary-repair-results.md`, `pb-035-source-matrix-results.md`,
-`pb-036-source-artifact-results.md`, and `pb-037-retirement-results.md` for
-later dirty-tree results. None constitutes final clean-commit acceptance.
-Historical evidence and safety rules remain binding.
-
-Latest owner direction (2026-10-01 local date): finish the approved migration,
-use attached lab boards/analyzer and local commits as necessary, and report only
-verified completion or a genuine hard blocker. This does not waive fresh identity,
-immutable evidence, physical safety, frozen acceptance, or the human-only merge
-rule. Preserve user-owned PB-013 edits and private untracked graph/checkpoint data.
+Migration outcomes and limits live in
+`docs/development/nrf54l15-migration-verification-results-20261001.md`,
+`docs/development/nrf54l15-source-batch-guard-results-20261001.md` and
+`docs/development/nrf54l15-flpr-fresh-reload-results-20261001.md`.
+Read the backlog and live PR for current acceptance. Dated image hashes,
+board roles and external paths are not fresh identity or artifact availability.
+Keep failed evidence separate from later clean verification; local migration
+completion is not analog, exact-release-asset or publication acceptance.
 
 Product-owner direction (2026-09-24): carry approved goals through to verified
 completion. Research, diagnosis, grounded software changes, fixture repairs,
@@ -251,9 +242,9 @@ requested.
 ## Plan of record
 
 `docs/development/system-hil-milestones.md` is the accepted plan of record
-for the System HIL track (revised 2026-09-09): nRF54L15 is the only production
+for the System HIL track (revised 2026-09-11): nRF54L15 is the only production
 receiver target, the 10 ms RH3 transport/runtime matrix is accepted at clean
-commit `8123b94`, 7.5 ms is diagnostic-only until RH3-7p5 closes it, receiver
+commit `8123b94`, 7.5 ms was reinstated after RH3-7p5 closure, receiver
 transport limits are frozen and runner-enforced, and reruns are the
 fix-validation mechanism. RH4 waits for exact candidate archives.
 `docs/development/refactor-plan.md` remains the accepted plan of record for the
@@ -261,112 +252,15 @@ refactoring track R0–R10. Read the applicable one before structural changes.
 `docs/design.md` remains the historical architecture and evidence document, not
 an active structural plan.
 
-Historical pre-migration status (not current clean-commit acceptance):
-**canonical gate 74 PASS / 0 FAIL / 74 TOTAL** on clean
-PB-031 P4 commit `d8f2a8e4d5eb0d6a7af2310a2c29e21b08542f22` (41 Twister +
-5 exec-only + 25 Python + coverage + matrix + BSim; the FR2 clean-tree run at
-`75a8093`, the FR1 clean run at
-`1671a9f`, and earlier clean runs recorded in
-`docs/development/documentation-hygiene-behavior-fix-results.md` at
-`b8bd633` and the production-fix canonical run at `f2f9336`, after the
-empty-SDU concealment (`9dc0859`) and 11-block startup reservoir
-(`f2f9336`) fixes — the committed coverage baseline is unchanged),
-coverage population **37** (4969/5427 lines, 2177/2984
-branches, 380/380 functions, gcovr 8.4 / gcov (GCC) 14.3.0, committed
-baseline unchanged), builds 3/3, build contract **96/96**, BSim Stage 1
-pins exact fixture/sequence TX FNV hashes, mono 10 ms `0xC5C840B0`, mono
-7.5 ms `0x2CE69E65`, Mode A 10 ms L/R `0x8980C79D`/`0xDD25CC21`, Mode A
-7.5 ms L/R `0x7D1EAC0F`/`0x001D6366`, Mode B 10 ms `0xE5D37A85`, Mode B
-7.5 ms `0x4D9A9ED7`, and zero-stream `0x811C9DC5`; payload/recipe-aware
-portable PCM metrics are maximum/RMS/minimum-correlation 257/182/32767
-within immutable 2048/512/32750 limits, not byte-identical decoded PCM pins.
-P1–P8 user pairing control ACCEPTED (nRF54L15
-enabled, nRF5340 feature-off), FR1 deterministic firmware packager
-ACCEPTED, FR2 firmware-build CI ACCEPTED (hosted run 31326612845
-PASS; workflow artifacts only, no tag/release/hardware acceptance), and
-FR3 automatic draft-release creation ACCEPTED (final merged hosted run
-`b70b978` PASS with release SKIPPED on unchanged `VERSION`). PR 12 logical
-parallelization is ACCEPTED on hosted run `34725825883` (source HEAD
-`463fa6b57042e026985ffd0a25d1ba0687f651b7`, workflow/artifact merge SHA
-`11c4c6fda43e93d7214f4d463b25b50874342d02`): `test-unit` unblocks
-`firmware`; `test-unit`, `test-heavy (coverage)`, and `test-heavy (bsim)` feed
-aggregate `tests`; `tests` and `firmware` join at trusted-main-only `release`.
-The workers combined to `72 PASS / 0 FAIL / 72 TOTAL`; aggregate `tests` and
-`firmware` passed, `release` was SKIPPED on pull requests, and total run time
-was 26m31s versus 58m02s monolithic. FR4 exact-artifact hardware acceptance is
-**BLOCKED**: historical exact draft `v0.1.0` FAILED mandatory nRF5340 mono
-acceptance. It served as stable harness baseline, then its GitHub draft and
-assets were deleted 2026-09-19; historical failure evidence remains immutable.
-Failed assets were not restored or clobbered. Nothing was published. The local
-replacement preflight passed both targets at `5e7f502` but remains historical
-preflight, not exact-artifact acceptance. The root `VERSION` remains `0.1.0`.
-PR #13 human-merged PB-031 into `main` at
-`b59e1d8f99b8f4e7435c7086bfe81700007b221d`. Trusted-main workflow run
-`35429538264` attempt `1` passed `test-unit`, `test-heavy (coverage)`,
-`test-heavy (bsim)`, aggregate `tests`, `firmware`, and `release`, then created
-active private replacement draft release ID `391991202`: tag label `v0.1.0`,
-title `LE Audio Receiver v0.1.0`, target
-`b59e1d8f99b8f4e7435c7086bfe81700007b221d`, draft `true`, prerelease `false`,
-and `published_at: null`. No `refs/tags/v0.1.0` exists. Exact assets are
-`le-audio-receiver-v0.1.0-nrf54l15-xiao-factory.zip` (627096 bytes, SHA-256
-`bd5fe73636b831e9b685cd20f53704fbe342be60b124f5ae5379dd7969ac9f10`),
-`SHA256SUMS` (117 bytes, SHA-256
-`ea653102fc318d22e0b4b5d3c7b08a05874aa435b73098ea5f65790a913398ff`), and
-`release-provenance.json` (1077 bytes, SHA-256
-`49ca660cc83e99a12e07982f466d5d44f64730e708f162a03582dc60fe157238`).
-Provenance binds version `0.1.0`, NCS `v3.3.0`, run `35429538264` attempt `1`,
-the exact SHA, and the nRF54L15-only factory ZIP. No RH4 or FR4 acceptance has
-run. FR4/FR5 remain blocked until exact active nRF54L15 assets pass acceptance
-through PB-007; nothing published.
-Historical PR 11 (`feature/firmware-release-acceptance`) established
-the monolithic 65-child hosted canonical software gate: in that topology,
-`tests` passed before `firmware`, and `release` followed `firmware`. The job ran
-on the plain host runner inside the locked Nix dev shell with the exact
-NCS v3.3.0 SDK + `911f4c5c26` toolchain installed by pinned
-`nrfutil sdk-manager` 1.16.1.  Hosted attempts `31422292550` (pre-gate
-on the container's incompatible gcov first-line assertion) and
-`31424437357` (BabbleSim build on the dangling `tools/bsim/Makefile`
-symlink) failed; `31426937629` passed the exact Nix/NCS environment,
-coverage baseline, matrix, and the 17-scenario/26-run BabbleSim Stage 1
-but ended `64 PASS / 1 FAIL / 65 TOTAL` solely because the mocked unit
-test `test_enable_pairing_agent` launched a real `bt-agent` through an
-unmocked `subprocess.Popen`.  The process-boundary mocking correction
-landed at `647361c`, and the hosted canonical software gate is ACCEPTED
-on run `31432411543` (PR head `32bdc98`): `tests` job `93598711857`
-SUCCESS with exact console summary `Gate complete: 65 PASS / 0 FAIL /
-65 TOTAL`, `firmware` job `93611002998` SUCCESS started after tests,
-`release` job `93612477731` SKIPPED on pull_request; the active ruleset
-`20658259` requires exact status contexts `tests` and `firmware`. PR 12
-preserves those contexts; `release` remains joined on both and is SKIPPED on
-pull requests. An early
-disk-cleanup step frees only
-well-known preinstalled toolchain caches, the NCS install branches on
-the exact `cache-hit` output of the NCS cache step, never on directory
-presence, and a west population step runs `west update --narrow
--o=--depth=1 --group-filter +babblesim` (the bundle ships bsim_west but
-the root group-filter excludes the `babblesim` components, leaving the
-Makefile symlink dangling).  Plan of record:
-`docs/development/firmware-ci-test-gate-plan.md`.  Protected-main runs,
-draft-release creation, and FR4 hardware acceptance remain separate and
-are not claimed.  Historical baselines: T0–T8 locked
-behavior on production code `971e6a4` (T8 canonical gate **47 PASS /
-0 FAIL / 47 TOTAL**, coverage baseline `1a5842d` (26 files), build
-contract 76/76 — `docs/testing/pre-refactor-hardware-baseline.md`); the
-R0–R10 refactor track closed 2026-08-06 with gate **55 PASS / 0 FAIL /
-55 TOTAL** (31 twister + 5 exec-only + 16 Python + coverage + matrix +
-BSim), coverage population **33** (4024/4402 lines, 1695/2356 branches,
-289/289 functions, committed baseline `54a6b8e`), build contract
-**79/79**, and the full R10 hardware matrix passed on
-both targets.  R8/R9 acceptance details and the final evidence:
-`docs/development/refactor-r10-results.md`, `refactor-r9-results.md`,
-`refactor-r8-results.md`, and `STATUS.md`.
-**BabbleSim Stage 1 is an accepted regular local gate** — the
-**17-scenario** T4+R7 BAP matrix via `scripts/bsim-stage1-run.sh`
-(scenarios 1–9 run twice, 10–17 once = 26 runs), strict PCM oracle,
-deterministic across runs (mono 10 ms `0x22AB5C0D`, Mode A/B 10 ms
-`0xBAE24F7E`, reconnect = fresh mono oracle, `duplicate_release_10ms`).
-Official upstream smoke remains PARTIAL (documented upstream teardown
-disable-race) and is **not** production acceptance.
+Historical software, coverage, matrix and CI counts are retained in
+`STATUS.md` and item result reports, bound to their revisions. Discover current
+unit suites through `scripts/test_inventory.py`; run `scripts/test-all.sh` for
+the complete software gate. Canonical BSim stays 17 scenarios / 26 runs;
+the additive ASCS matrix stays 60 cases / 65 render phases / 259 exchanges /
+269 response records. `tests/coverage-baseline.json` remains frozen; new code
+uses separately measured `tests/coverage-additions.json` entries, never a waiver.
+Manual BlueZ guest execution is separate from the automatic canonical gate.
+Physical builds and `scripts/check-build-contract.py` run separately.
 
 Known behavior question (see `STATUS.md`): nRF54L15 360-frame (7.5 ms) calls
 fall back to cpuapp ASRC because the FLPR payload contract is 480 frames
@@ -377,23 +271,6 @@ exact 360-frame caller fallback; `tests/unit/audio_offload`
 concrete input is 240); `tests/unit/flpr_ring` MAX_INPUT assertions pin the
 480 contract.  Not a new failure and not permission to implement 360-frame
 offload.
-
-Consequences for work in this repo today (2026-09-25):
-
-- PB-032's retained-E83 policy above was superseded by the approved all-nRF54L15
-  migration. XIAO receiver is the only production target. Its DK-target plus
-  XIAO overlay build produces CPUAPP and FLPR; production APLL, E83 board and
-  receiver helpers are removed on the dirty continuation tree. Historical APLL
-  remains test-local; native unit tests remain hardware-independent.
-- Second XIAO alternates standalone source (DK-target, direct GRTC, one
-  CPUAPP image) and Linux HCI controller (XIAO-target, SDC UART H4 1 Mbaud,
-  no flow control). Never treat these roles as simultaneous on one board.
-  Canonical BSim uses two nRF54L15BSim peers with integrated SW Split and
-  client reliability policy. No nRF5340 hardware dependency is an active gate.
-- Fixed-image diagnostics do not complete PB-035/036/037/038, canonical gate,
-  clean coverage baseline, exact-artifact RH4/FR4, analog qualification, or
-  public release. Follow the current backlog and evidence, not the historical
-  gate totals quoted above.
 
 ## Standing lab nRF hardware authority
 

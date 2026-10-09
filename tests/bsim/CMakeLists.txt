@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.20.0)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Native BSim peers are ELF32; align initial CMake probes with verified 32-bit library paths.
+set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} -m32")
+set(CMAKE_CXX_FLAGS_INIT "${CMAKE_CXX_FLAGS_INIT} -m32")
+set(CMAKE_ASM_FLAGS_INIT "${CMAKE_ASM_FLAGS_INIT} -m32")
+# CMake capability probes provide main but may link with -nostdlib.
+# Give those probe links an entry point without changing final targets.
+# CMAKE_REQUIRED_LINK_OPTIONS is consumed only by try_compile checks.
+list(APPEND CMAKE_REQUIRED_LINK_OPTIONS "-Wl,--entry=main")
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(le_audio_receiver_bsim)
 
@@ -96,6 +104,7 @@ configure_file(src/bsim_pcm_limits.h.in
 target_sources(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/main.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/bt_bap.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../src/bt_audio_ltv_guard.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/bt_pairing_policy.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio_decode.c
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src/audio_stream_session.c
@@ -115,6 +124,7 @@ target_sources(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/bsim_test_main.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/bsim_observer.c
 )
+target_link_options(app INTERFACE -Wl,--wrap=bt_audio_data_parse)
 
 target_include_directories(app PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../src
